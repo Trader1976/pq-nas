@@ -149,26 +149,19 @@ def main() -> int:
     valid_path = root / "pqnas_qrauth_v4_test_vectors.md"
     invalid_path = root / "pqnas_qrauth_v4_test_vector_invalid.md"
 
-    # INVALID should fail (vector sanity check)
-    if invalid_path.exists():
-        invalid_md = invalid_path.read_text(encoding="utf-8")
-
-        tampered_req = extract_fenced(invalid_md, "Tampered req_token (used in signing)")
-        wrong_req_hash_b64 = extract_fenced(invalid_md, "Wrong req_hash_b64")
-
-        calc_wrong = b64url_encode_nopad(hashlib.sha256(tampered_req.encode("utf-8")).digest())
-        if calc_wrong != wrong_req_hash_b64:
-            print("INVALID: FAIL (invalid vector file does not match computed wrong hash)")
+    # INVALID PROOF should fail (signature mismatch)
+    invalid_proof_path = root / "pqnas_qrauth_v4_test_vectors_invalid_proof.md"
+    if invalid_proof_path.exists():
+        invp_md = invalid_proof_path.read_text(encoding="utf-8")
+        proof_token_invalid = extract_fenced(invp_md, "proof_token_invalid")
+        try:
+            verify_proof_token(proof_token_invalid, server_pk_b64)
+            print("INVALID_PROOF: FAIL (unexpectedly verified)")
             return 1
-
-        valid_md2 = valid_path.read_text(encoding="utf-8")
-        correct_req = extract_fenced(valid_md2, "req_token")
-        correct_hash = b64url_encode_nopad(hashlib.sha256(correct_req.encode("utf-8")).digest())
-        if correct_hash == wrong_req_hash_b64:
-            print("INVALID: FAIL (wrong hash unexpectedly equals correct hash)")
-            return 1
-
-        print("INVALID: PASS (expected mismatch detected)")
+        except Exception as e:
+            print(f"INVALID_PROOF: PASS ({e})")
+    else:
+        print("INVALID_PROOF: SKIP (file missing)")
 
 
 if __name__ == "__main__":
