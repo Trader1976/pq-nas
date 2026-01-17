@@ -1,0 +1,9 @@
+name: pq_nas
+description: PQ-NAS tools
+version: 0.0.1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  pointycastle: ^3.7.3

@@ -1,0 +1,15 @@
+# PQ-NAS QR-Auth v4 Test Vector — INVALID (tampered req_token)
+This vector MUST FAIL verification. Failure reason: - `req_token` used in signing hash does 
+not match the verified `req_token` ---
+## Original req_token (verified)
+``` 
+eyJhdWQiOiJkbmEtbWVzc2VuZ2VyIiwiY2hhbCI6IkFCRWlNMFJWWm5lSW1hcTd6TjN1X3dBUklqTkVWV1ozaUptcXU4emQ3djgiLCJleHAiOjE3Njg2MjAwNjAsImlhdCI6MTc2ODYyMDAwMCwiaXNzIjoicHEtbmFzIiwibm9uY2UiOiJvYUtqcEtXbXA2aXBxcXVzcmE2dkFBIiwib3JpZ2luIjoiaHR0cHM6Ly9uYXMuZXhhbXBsZS5jb20iLCJzY29wZSI6InBxbmFzLmxvZ2luIiwic2lkIjoiVHI4NVhNYy11ZE9rZzRELUNUT0t1dzQtMGJySFFYX1UiLCJ0eXAiOiJyZXEiLCJ2Ijo0fQ.fMjMoBwaWm07hTLEte1yrIoTUROX0hR7Sgn6V_TOrdlD8tOMXhQei3CwAqawm2oyeTLh_Mo7LVAzK4saHyOMCw 
+```
+## Tampered req_token (used in signing)
+``` 
+eyJhdWQiOiJkbmEtbWVzc2VuZ2VyIiwiY2hhbCI6IkFCRWlNMFJWWm5lSW1hcTd6TjN1X3dBUklqTkVWV1ozaUptcXU4emQ3djgiLCJleHAiOjE3Njg2MjAwNjAsImlhdCI6MTc2ODYyMDAwMCwiaXNzIjoicHEtbmFzIiwibm9uY2UiOiJvYUtqcEtXbXA2aXBxcXVzcmE2dkFBIiwib3JpZ2luIjoiaHR0cHM6Ly9uYXMuZXhhbXBsZS5jb20iLCJzY29wZSI6InBxbmFzLmxvZ2luIiwic2lkIjoiVHI4NVhNYy11ZE9rZzRELUNUT0t1dzQtMGJySFFYX1UiLCJ0eXAiOiJyZXEiLCJ2Ijo0fQ.fMjMoBwaWm07hTLEte1yrIoTUROX0hR7Sgn6V_TOrdlD8tOMXhQei3CwAqawm2oyeTLh_Mo7LVAzK4saHyOMCA 
+```
+## Wrong req_hash_b64
+``` x0UYyYSQsrP_q6b6VyOhjPf60F1rZJRnA0BAoXAkW4Y ``` Expected verifier outcome: - server 
+signature on original req_token: ✅ valid - recomputed req_hash_b64: ❌ mismatch
+- proof signature verification: ❌ FAIL

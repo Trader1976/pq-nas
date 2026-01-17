@@ -1,0 +1,49 @@
+{
+  "roots": [
+    "pq_nas"
+  ],
+  "packages": [
+    {
+      "name": "pq_nas",
+      "version": "0.0.1",
+      "dependencies": [
+        "pointycastle"
+      ],
+      "devDependencies": []
+    },
+    {
+      "name": "pointycastle",
+      "version": "3.9.1",
+      "dependencies": [
+        "collection",
+        "convert",
+        "js"
+      ]
+    },
+    {
+      "name": "convert",
+      "version": "3.1.2",
+      "dependencies": [
+        "typed_data"
+      ]
+    },
+    {
+      "name": "typed_data",
+      "version": "1.4.0",
+      "dependencies": [
+        "collection"
+      ]
+    },
+    {
+      "name": "js",
+      "version": "0.7.2",
+      "dependencies": []
+    },
+    {
+      "name": "collection",
+      "version": "1.19.1",
+      "dependencies": []
+    }
+  ],
+  "configVersion": 1
+}
