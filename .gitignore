@@ -1,0 +1,13 @@
+# Build
+build/
+cmake-build-*/
+
+# CLion
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
