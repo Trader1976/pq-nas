@@ -19,32 +19,54 @@ find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SODIUM REQUIRED libsodium)
 
-# ---- Tool: verify_vectors (C reference verifier) ----
+# ---- Core library ----
+add_library(pqnas_core STATIC
+        core/qrauth_v4.c
+)
+
+target_include_directories(pqnas_core PUBLIC
+        ${CMAKE_SOURCE_DIR}/core
+)
+
+target_include_directories(pqnas_core PRIVATE
+        ${SODIUM_INCLUDE_DIRS}
+)
+
+target_compile_options(pqnas_core PRIVATE
+        ${SODIUM_CFLAGS_OTHER}
+)
+
+target_link_libraries(pqnas_core PRIVATE
+        ${SODIUM_LIBRARIES}
+        OpenSSL::Crypto
+)
+
+# ---- Tool: verify_vectors ----
 add_executable(verify_vectors
         tools/verify_vectors.c
 )
 
 target_include_directories(verify_vectors PRIVATE
         ${SODIUM_INCLUDE_DIRS}
+        ${CMAKE_SOURCE_DIR}/core
 )
 
-target_link_libraries(verify_vectors PRIVATE
-        ${SODIUM_LIBRARIES}
-        OpenSSL::Crypto
-)
-
-# Some distros need this for pkg-config-provided flags
 target_compile_options(verify_vectors PRIVATE
         ${SODIUM_CFLAGS_OTHER}
 )
 
-# Convenience: run from CLion with repo root as working dir
-# (so it finds the .md vector files)
+target_link_libraries(verify_vectors PRIVATE
+        pqnas_core
+        ${SODIUM_LIBRARIES}
+        OpenSSL::Crypto
+)
+
+# Put binaries under build/bin
 set_target_properties(verify_vectors PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
-# ---- Optional: a custom target to run the verifier from build tree ----
+# Convenience: run from build tree with repo root as working dir (finds .md vectors)
 add_custom_target(run_verify_vectors
         COMMAND "${CMAKE_BINARY_DIR}/bin/verify_vectors"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
