@@ -4,6 +4,32 @@ project(pq_nas
         VERSION 0.1.0
         LANGUAGES C CXX
 )
+add_executable(pqnas_server
+        server/src/main.cpp
+        server/src/routes_v4.cc
+        server/src/session_cookie.cc
+        server/src/policy.cc
+)
+
+target_include_directories(pqnas_server PRIVATE
+        ${CMAKE_SOURCE_DIR}/core
+        ${CMAKE_SOURCE_DIR}/server/include
+        ${CMAKE_SOURCE_DIR}/server/third_party
+        ${SODIUM_INCLUDE_DIRS}
+)
+
+target_compile_options(pqnas_server PRIVATE
+        ${SODIUM_CFLAGS_OTHER}
+)
+
+target_link_libraries(pqnas_server PRIVATE
+        pqnas_core
+        ${SODIUM_LIBRARIES}
+        OpenSSL::Crypto
+)
+set_target_properties(pqnas_server PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -71,4 +97,24 @@ add_custom_target(run_verify_vectors
         COMMAND "${CMAKE_BINARY_DIR}/bin/verify_vectors"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         DEPENDS verify_vectors
+)
+
+add_executable(pqnas_keygen
+        tools/keygen.c
+)
+
+target_include_directories(pqnas_keygen PRIVATE
+        ${SODIUM_INCLUDE_DIRS}
+)
+
+target_compile_options(pqnas_keygen PRIVATE
+        ${SODIUM_CFLAGS_OTHER}
+)
+
+target_link_libraries(pqnas_keygen PRIVATE
+        ${SODIUM_LIBRARIES}
+)
+
+set_target_properties(pqnas_keygen PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )

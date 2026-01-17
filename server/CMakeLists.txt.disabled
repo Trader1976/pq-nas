@@ -1,0 +1,28 @@
+cmake_minimum_required(VERSION 3.16)
+project(pqnas_server LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+find_package(Drogon CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SODIUM REQUIRED libsodium)
+
+add_executable(pqnas_server
+        src/main.cc
+        src/routes_v4.cc
+)
+
+target_include_directories(pqnas_server PRIVATE
+        ${SODIUM_INCLUDE_DIRS}
+        ${CMAKE_SOURCE_DIR}/core   # adjust: where qrauth_v4.h is
+)
+
+# Link your static core lib target name (you said: pqnas_core)
+target_link_libraries(pqnas_server PRIVATE
+        Drogon::Drogon
+        OpenSSL::Crypto
+        ${SODIUM_LIBRARIES}
+        pqnas_core
+)

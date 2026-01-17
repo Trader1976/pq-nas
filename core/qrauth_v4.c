@@ -215,3 +215,55 @@ qr_err_t qr_verify_proof_token(
     if (sig_rc != 0) return QR_ERR_PHONE_SIG;
     return QR_OK;
 }
+
+qr_err_t qr_extract_proof_claims(const char *proof_token, qr_proof_claims_t *out) {
+    if (!proof_token || !out) return QR_ERR_FORMAT;
+
+    const char *dot = strchr(proof_token, '.');
+    if (!dot) return QR_ERR_FORMAT;
+
+    size_t payload_b64_len = (size_t)(dot - proof_token);
+    if (payload_b64_len == 0) return QR_ERR_FORMAT;
+
+    char *payload_b64 = (char*)malloc(payload_b64_len + 1);
+    if (!payload_b64) return QR_ERR_FORMAT;
+    memcpy(payload_b64, proof_token, payload_b64_len);
+    payload_b64[payload_b64_len] = 0;
+
+    unsigned char payload_bytes[8192];
+    size_t payload_len = 0;
+    if (b64url_decode(payload_b64, payload_bytes, sizeof(payload_bytes) - 1, &payload_len) != 0) {
+        free(payload_b64);
+        return QR_ERR_B64;
+    }
+    free(payload_b64);
+    payload_bytes[payload_len] = 0;
+
+    const char *jsons = (const char*)payload_bytes;
+
+    // fingerprint
+    char *fp_b64 = json_get_string_dup(jsons, "fingerprint");
+    if (!fp_b64) return QR_ERR_JSON;
+
+    // ts
+    const char *tsp = strstr(jsons, "\"ts\":");
+    long ts = 0;
+    if (tsp) ts = strtol(tsp + 5, NULL, 10);
+
+    if (ts <= 0) {
+        free(fp_b64);
+        return QR_ERR_JSON;
+    }
+
+    size_t n = strlen(fp_b64);
+    if (n == 0 || n >= sizeof(out->fingerprint_b64)) {
+        free(fp_b64);
+        return QR_ERR_JSON;
+    }
+
+    memcpy(out->fingerprint_b64, fp_b64, n + 1);
+    out->ts = ts;
+
+    free(fp_b64);
+    return QR_OK;
+}

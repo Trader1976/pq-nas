@@ -9,20 +9,24 @@ extern "C" {
     // Error codes (0 = success)
     typedef enum {
         QR_OK = 0,
-
         QR_ERR_FORMAT = 10,
         QR_ERR_B64 = 11,
         QR_ERR_JSON = 12,
-
         QR_ERR_SERVER_PK = 20,
         QR_ERR_REQ_SIG = 21,
-
         QR_ERR_REQ_MISMATCH = 30,
         QR_ERR_PK_DECODE = 31,
         QR_ERR_FP_BINDING = 32,
-
         QR_ERR_PHONE_SIG = 40,
     } qr_err_t;
+
+    // Proof claims (extracted from proof_token payload)
+    typedef struct {
+        char fingerprint_b64[128];
+        long ts;
+    } qr_proof_claims_t;
+
+    qr_err_t qr_extract_proof_claims(const char *proof_token, qr_proof_claims_t *out);
 
     // Remove all ASCII whitespace chars from string in-place.
     // Useful for tokens copied from markdown code fences (line-wrapping etc).
