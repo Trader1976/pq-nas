@@ -77,14 +77,18 @@ static char *json_get_string_dup(const char *json, const char *field) {
 qr_err_t qr_verify_req_token(const char *req_token, const unsigned char server_pk_raw[32]) {
     if (!req_token || !server_pk_raw) return QR_ERR_FORMAT;
 
-    const char *dot = strchr(req_token, '.');
+    // Accept optional "v4." prefix: v4.<payload>.<sig>
+    const char *t = req_token;
+    if (strncmp(t, "v4.", 3) == 0) t += 3;
+
+    const char *dot = strchr(t, '.');
     if (!dot) return QR_ERR_FORMAT;
 
     // payload_b64
-    size_t payload_b64_len = (size_t)(dot - req_token);
+    size_t payload_b64_len = (size_t)(dot - t);
     char *payload_b64 = (char*)malloc(payload_b64_len + 1);
     if (!payload_b64) return QR_ERR_FORMAT;
-    memcpy(payload_b64, req_token, payload_b64_len);
+    memcpy(payload_b64, t, payload_b64_len);
     payload_b64[payload_b64_len] = 0;
 
     // sig_b64 is remainder
@@ -121,11 +125,15 @@ qr_err_t qr_verify_proof_token(
 ) {
     if (!proof_token || !req_token_expected || !server_pk_raw) return QR_ERR_FORMAT;
 
-    // verify server signature of expected req token
+    // Helper: accept optional "v4." prefix on tokens for binding/hash
+    const char *req_norm = req_token_expected;
+    if (strncmp(req_norm, "v4.", 3) == 0) req_norm += 3;
+
+    // verify server signature of expected req token (accepts v4. prefix in qr_verify_req_token)
     qr_err_t req_rc = qr_verify_req_token(req_token_expected, server_pk_raw);
     if (req_rc != QR_OK) return req_rc;
 
-    // split proof_token
+    // split proof_token: base64url(payload_json).base64url(phone_sig)
     const char *dot = strchr(proof_token, '.');
     if (!dot) return QR_ERR_FORMAT;
 
@@ -139,11 +147,13 @@ qr_err_t qr_verify_proof_token(
 
     unsigned char proof_payload_bytes[8192];
     size_t proof_payload_len = 0;
-    if (b64url_decode(proof_payload_b64, proof_payload_bytes, sizeof(proof_payload_bytes), &proof_payload_len) != 0) {
+    if (b64url_decode(proof_payload_b64, proof_payload_bytes, sizeof(proof_payload_bytes) - 1, &proof_payload_len) != 0) {
         free(proof_payload_b64);
         return QR_ERR_B64;
     }
     free(proof_payload_b64);
+
+    // Ensure NUL-terminated for crude JSON parsing
     proof_payload_bytes[proof_payload_len] = 0;
 
     unsigned char phone_sig[128];
@@ -152,7 +162,7 @@ qr_err_t qr_verify_proof_token(
         return QR_ERR_B64;
     }
 
-    // crude JSON parsing
+    // crude JSON parsing (v0 vectors only)
     const char *jsons = (const char*)proof_payload_bytes;
 
     char *pk_b64 = json_get_string_dup(jsons, "pk");
@@ -168,13 +178,16 @@ qr_err_t qr_verify_proof_token(
         return QR_ERR_JSON;
     }
 
-    // proof must bind to expected req token
-    if (strcmp(req_in_proof, req_token_expected) != 0) {
+    // proof must bind to expected req token (normalize optional v4. prefix on both)
+    const char *reqp_norm = req_in_proof;
+    if (strncmp(reqp_norm, "v4.", 3) == 0) reqp_norm += 3;
+
+    if (strcmp(reqp_norm, req_norm) != 0) {
         free(pk_b64); free(fp_b64); free(req_in_proof);
         return QR_ERR_REQ_MISMATCH;
     }
 
-    // decode pk
+    // decode pk (Ed25519 test only)
     unsigned char pk_raw[128];
     size_t pk_len = 0;
     if (b64url_decode(pk_b64, pk_raw, sizeof(pk_raw), &pk_len) != 0 || pk_len != 32) {
@@ -193,9 +206,9 @@ qr_err_t qr_verify_proof_token(
         return QR_ERR_FP_BINDING;
     }
 
-    // req_hash_b64 = b64url(SHA256(UTF8(req_token_expected)))
+    // req_hash_b64 = b64url(SHA256(UTF8(req_norm)))
     unsigned char req_hash_bytes[32];
-    sha256((const unsigned char*)req_token_expected, strlen(req_token_expected), req_hash_bytes);
+    sha256((const unsigned char*)req_norm, strlen(req_norm), req_hash_bytes);
 
     char req_hash_b64[256];
     b64url_encode(req_hash_bytes, 32, req_hash_b64, sizeof(req_hash_b64));
@@ -215,6 +228,7 @@ qr_err_t qr_verify_proof_token(
     if (sig_rc != 0) return QR_ERR_PHONE_SIG;
     return QR_OK;
 }
+
 
 qr_err_t qr_extract_proof_claims(const char *proof_token, qr_proof_claims_t *out) {
     if (!proof_token || !out) return QR_ERR_FORMAT;

@@ -6,7 +6,6 @@ project(pq_nas
 )
 add_executable(pqnas_server
         server/src/main.cpp
-        server/src/routes_v4.cc
         server/src/session_cookie.cc
         server/src/policy.cc
 )
@@ -17,6 +16,14 @@ target_include_directories(pqnas_server PRIVATE
         ${CMAKE_SOURCE_DIR}/server/third_party
         ${SODIUM_INCLUDE_DIRS}
 )
+
+target_include_directories(pqnas_server PRIVATE
+        ${CMAKE_SOURCE_DIR}/server/third_party
+)
+target_link_libraries(pqnas_server PRIVATE dl)
+
+find_package(OpenSSL REQUIRED)
+target_link_libraries(pqnas_server PRIVATE OpenSSL::Crypto)
 
 target_compile_options(pqnas_server PRIVATE
         ${SODIUM_CFLAGS_OTHER}

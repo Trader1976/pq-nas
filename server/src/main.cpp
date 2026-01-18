@@ -1,12 +1,32 @@
+// pqnas_server.cpp (v4 stateless QR auth) — cleaned, single-definition, buildable
+// Notes:
+// - Uses libsodium for Ed25519 + base64 (urlsafe + standard).
+// - Uses OpenSSL SHA256 for st_hash (standard base64 with padding, to match Python).
+// - Uses OpenSSL SHA3-512 for fingerprint (sha3_512(pubkey) hex lower), to match Python.
+// - Loads native PQClean verifier from libdna_pq_verify.so (dna_verify_mldsa87).
+// - Keeps canonical JSON rules consistent with the Python v4_tokens.py design.
+//
+// IMPORTANT BUILD NOTES:
+// - Requires: libsodium, OpenSSL (EVP), httplib.h, policy.h, session_cookie.h, qrauth_v4.h
+// - If you see EVP_* not found, ensure you include <openssl/evp.h> and link -lcrypto
+//
+// Debugging:
+// - Everything prints to stderr with std::endl (flush) so you WILL see it in terminal.
+
 #include <iostream>
 #include <string>
 #include <ctime>
 #include <vector>
 #include <cstdlib>
 #include <cstring>
-
+#include <stdexcept>
+#include <cctype>
+#include <dlfcn.h>
+#include <unistd.h>
+#include <limits.h>
 #include <sodium.h>
 #include <openssl/sha.h>
+#include <openssl/evp.h>
 
 extern "C" {
 #include "qrauth_v4.h"
@@ -17,6 +37,10 @@ extern "C" {
 
 // header-only HTTP server
 #include "httplib.h"
+
+// JSON (header-only)
+#include <nlohmann/json.hpp>
+using json = nlohmann::json;
 
 // ---- config ----
 static unsigned char SERVER_PK[32];
@@ -29,6 +53,9 @@ static std::string AUD      = "dna-messenger";
 static std::string SCOPE    = "pqnas.login";
 static std::string APP_NAME = "PQ-NAS";
 
+// v4 app requires rp binding inside st payload
+static std::string RP_ID    = "nas.example.com";  // relying party id (domain)
+
 static int REQ_TTL  = 60;
 static int SESS_TTL = 8 * 3600;
 static int LISTEN_PORT = 8081; // use 8081 to avoid conflicts
@@ -37,23 +64,87 @@ static long now_epoch() { return (long)std::time(nullptr); }
 
 
 
-static std::string url_encode(const std::string& s) {
-    static const char *hex = "0123456789ABCDEF";
-    std::string out;
-    out.reserve(s.size() * 3);
-    for (unsigned char c : s) {
-        if ((c >= 'a' && c <= 'z') ||
-            (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') ||
-            c == '-' || c == '_' || c == '.' || c == '~') {
-            out.push_back((char)c);
-            } else {
-                out.push_back('%');
-                out.push_back(hex[c >> 4]);
-                out.push_back(hex[c & 15]);
-            }
+// -----------------------------------------------------------------------------
+// Native PQ verifier loader (from libdna_lib.so)
+// Symbol: qgp_dsa87_verify
+// Signature (from qgp_dilithium.c):
+//   int qgp_dsa87_verify(const uint8_t* sig, size_t siglen,
+//                        const uint8_t* m,   size_t mlen,
+//                        const uint8_t* pk);
+// Returns 0 on success, non-zero on failure.
+// -----------------------------------------------------------------------------
+
+using qgp_dsa87_verify_fn = int (*)(const uint8_t* sig, size_t siglen,
+                                   const uint8_t* msg, size_t msglen,
+                                   const uint8_t* pk);
+
+static qgp_dsa87_verify_fn load_qgp_dsa87_verify() {
+    static void* h = nullptr;
+    static qgp_dsa87_verify_fn fn = nullptr;
+    if (fn) return fn;
+
+    // Load the library that actually exports qgp_dsa87_verify
+    // If you place libdna_lib.so next to the binary, use exe_dir()+"/libdna_lib.so"
+    h = dlopen("libdna_lib.so", RTLD_NOW);
+    if (!h) throw std::runtime_error(std::string("dlopen failed: ") + dlerror());
+
+    fn = (qgp_dsa87_verify_fn)dlsym(h, "qgp_dsa87_verify");
+    if (!fn) throw std::runtime_error("dlsym failed: qgp_dsa87_verify");
+
+    return fn;
+}
+
+static bool verify_mldsa87_signature_native(const std::vector<unsigned char>& pubkey,
+                                           const std::vector<unsigned char>& msg,
+                                           const std::vector<unsigned char>& sig) {
+    auto fn = load_qgp_dsa87_verify();
+
+    const int rc = fn(
+        sig.data(), sig.size(),
+        msg.data(), msg.size(),
+        pubkey.data()
+    );
+
+    std::cerr << "[pq-verify] qgp_dsa87_verify rc=" << rc
+              << " sig_len=" << sig.size()
+              << " msg_len=" << msg.size()
+              << " pk_len=" << pubkey.size()
+              << "\n" << std::flush;
+
+    // pqcrystals_*_verify returns 0 on success
+    return (rc == 0);
+}
+
+
+// -----------------------------------------------------------------------------
+// Base64 helpers (libsodium)
+// -----------------------------------------------------------------------------
+static std::vector<unsigned char> b64decode_loose(const std::string& in) {
+    std::string s;
+    s.reserve(in.size());
+    for (char c : in) {
+        if (c != '\n' && c != '\r' && c != ' ' && c != '\t') s.push_back(c);
     }
-    return out;
+
+    std::vector<unsigned char> out(s.size() + 8);
+    size_t out_len = 0;
+
+    auto try_variant = [&](int variant) -> bool {
+        out_len = 0;
+        return sodium_base642bin(out.data(), out.size(),
+                                 s.c_str(), s.size(),
+                                 nullptr, &out_len, nullptr,
+                                 variant) == 0;
+    };
+
+    if (try_variant(sodium_base64_VARIANT_ORIGINAL) ||
+        try_variant(sodium_base64_VARIANT_URLSAFE) ||
+        try_variant(sodium_base64_VARIANT_URLSAFE_NO_PADDING)) {
+        out.resize(out_len);
+        return out;
+        }
+
+    throw std::runtime_error("invalid base64");
 }
 
 
@@ -66,78 +157,70 @@ static std::string b64url_enc(const unsigned char* data, size_t len) {
     return out;
 }
 
-static std::string random_b64url(size_t nbytes) {
-    std::string b(nbytes, '\0');
-    randombytes_buf(b.data(), b.size());
-    return b64url_enc((const unsigned char*)b.data(), b.size());
+static std::string b64_std(const unsigned char* data, size_t len) {
+    size_t outLen = sodium_base64_encoded_len(len, sodium_base64_VARIANT_ORIGINAL);
+    std::string out(outLen, '\0');
+    sodium_bin2base64(out.data(), out.size(), data, len, sodium_base64_VARIANT_ORIGINAL);
+    out.resize(std::strlen(out.c_str()));
+    return out;
 }
 
-static bool assert_safe_json_str(const std::string& s) {
-    for (char c : s) {
-        if (c=='"' || c=='\\' || c=='\n' || c=='\r' || c=='\t') return false;
+// sha256 -> standard base64 WITH padding (matches Python base64.b64encode)
+static std::string sha256_b64_std_bytes(const unsigned char* data, size_t len) {
+    unsigned char h[32];
+    SHA256(data, len, h);
+    return b64_std(h, 32);
+}
+static std::string sha256_b64_std_str(const std::string& s) {
+    return sha256_b64_std_bytes(reinterpret_cast<const unsigned char*>(s.data()), s.size());
+}
+
+static bool b64url_decode_to_bytes(const std::string& in, std::string& out) {
+    out.clear();
+    out.resize(in.size() * 3 / 4 + 8);
+    size_t out_len = 0;
+    if (sodium_base642bin(reinterpret_cast<unsigned char*>(out.data()), out.size(),
+                          in.c_str(), in.size(),
+                          nullptr, &out_len, nullptr,
+                          sodium_base64_VARIANT_URLSAFE_NO_PADDING) != 0) {
+        return false;
     }
+    out.resize(out_len);
     return true;
 }
 
-// frozen canonical order/template
-static std::string build_req_payload_canonical(const std::string& sid,
-                                               const std::string& chal,
-                                               const std::string& nonce,
-                                               long iat, long exp) {
-    return std::string("{")
-        + "\"aud\":\"" + AUD + "\","
-        + "\"chal\":\"" + chal + "\","
-        + "\"exp\":" + std::to_string(exp) + ","
-        + "\"iat\":" + std::to_string(iat) + ","
-        + "\"iss\":\"" + ISS + "\","
-        + "\"nonce\":\"" + nonce + "\","
-        + "\"origin\":\"" + ORIGIN + "\","
-        + "\"scope\":\"" + SCOPE + "\","
-        + "\"sid\":\"" + sid + "\","
-        + "\"typ\":\"req\","
-        + "\"v\":4"
-        + "}";
+// -----------------------------------------------------------------------------
+// Misc helpers
+// -----------------------------------------------------------------------------
+static std::string url_encode(const std::string& s) {
+    static const char *hex = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(s.size() * 3);
+    for (unsigned char c : s) {
+        if ((c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~') {
+            out.push_back((char)c);
+        } else {
+            out.push_back('%');
+            out.push_back(hex[c >> 4]);
+            out.push_back(hex[c & 15]);
+        }
+    }
+    return out;
 }
 
-static std::string sign_req_token(const std::string& payload_json) {
-    unsigned char digest[32];
-    SHA256((const unsigned char*)payload_json.data(), payload_json.size(), digest);
-
-    unsigned char sig[64];
-    unsigned long long siglen = 0;
-    crypto_sign_detached(sig, &siglen, digest, 32, SERVER_SK);
-
-    std::string payload_b64 = b64url_enc((const unsigned char*)payload_json.data(), payload_json.size());
-    std::string sig_b64 = b64url_enc(sig, 64);
-    return payload_b64 + "." + sig_b64;
+static std::string random_b64url(size_t nbytes) {
+    std::string b(nbytes, '\0');
+    randombytes_buf(b.data(), b.size());
+    return b64url_enc(reinterpret_cast<const unsigned char*>(b.data()), b.size());
 }
 
-// tiny JSON getters for MVP: "key":"value" and "key":123
-static std::string json_get_str(const std::string& body, const char* key) {
-    std::string pat = std::string("\"") + key + "\":";
-    auto p = body.find(pat);
-    if (p == std::string::npos) return "";
-    p += pat.size();
-    while (p < body.size() && (body[p]==' '||body[p]=='\n'||body[p]=='\r'||body[p]=='\t')) p++;
-    if (p >= body.size() || body[p] != '"') return "";
-    p++;
-    auto q = body.find('"', p);
-    if (q == std::string::npos) return "";
-    return body.substr(p, q - p);
-}
-static int json_get_int(const std::string& body, const char* key) {
-    std::string pat = std::string("\"") + key + "\":";
-    auto p = body.find(pat);
-    if (p == std::string::npos) return 0;
-    p += pat.size();
-    while (p < body.size() && (body[p]==' '||body[p]=='\n'||body[p]=='\r'||body[p]=='\t')) p++;
-    return std::atoi(body.c_str() + p);
-}
-
-static void reply_json(httplib::Response& res, int code, const std::string& json) {
+static void reply_json(httplib::Response& res, int code, const std::string& body_json) {
     res.status = code;
     res.set_header("Content-Type", "application/json");
-    res.body = json;
+    res.body = body_json;
 }
 
 static bool load_env_key(const char* name, unsigned char* out, size_t outLenExpected) {
@@ -150,16 +233,188 @@ static bool load_env_key(const char* name, unsigned char* out, size_t outLenExpe
     return out_len == outLenExpected;
 }
 
+static std::string trim_slashes(std::string s) {
+    while (!s.empty() && s.back() == '/') s.pop_back();
+    return s;
+}
+
+static std::string lower_ascii(std::string s) {
+    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
+    return s;
+}
+
+// -----------------------------------------------------------------------------
+// Fingerprint (sha3-512(pubkey) hex lower) — matches Python
+// -----------------------------------------------------------------------------
+static std::string hex_lower(const unsigned char* b, size_t n) {
+    static const char* hexd = "0123456789abcdef";
+    std::string out;
+    out.resize(n * 2);
+    for (size_t i = 0; i < n; i++) {
+        out[2*i]     = hexd[(b[i] >> 4) & 0xF];
+        out[2*i + 1] = hexd[b[i] & 0xF];
+    }
+    return out;
+}
+
+static std::string fingerprint_from_pubkey_sha3_512_hex(const std::vector<unsigned char>& pubkey) {
+    unsigned char h[64]; // SHA3-512 digest size
+
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) throw std::runtime_error("EVP_MD_CTX_new failed");
+
+    if (EVP_DigestInit_ex(ctx, EVP_sha3_512(), nullptr) != 1 ||
+        EVP_DigestUpdate(ctx, pubkey.data(), pubkey.size()) != 1 ||
+        EVP_DigestFinal_ex(ctx, h, nullptr) != 1) {
+        EVP_MD_CTX_free(ctx);
+        throw std::runtime_error("EVP sha3-512 failed");
+    }
+
+    EVP_MD_CTX_free(ctx);
+    return hex_lower(h, sizeof(h));
+}
+
+// -----------------------------------------------------------------------------
+// v4 token helpers (Ed25519 over canonical JSON bytes)
+// Wire format: v4.<payload_b64url_no_pad>.<sig_b64url_no_pad>
+// -----------------------------------------------------------------------------
+static json verify_token_v4_ed25519(const std::string& token, const unsigned char pk[32]) {
+    auto dot1 = token.find('.');
+    auto dot2 = (dot1 == std::string::npos) ? std::string::npos : token.find('.', dot1 + 1);
+    if (dot1 == std::string::npos || dot2 == std::string::npos) throw std::runtime_error("bad token format");
+
+    std::string prefix      = token.substr(0, dot1);
+    std::string payload_b64 = token.substr(dot1 + 1, dot2 - dot1 - 1);
+    std::string sig_b64     = token.substr(dot2 + 1);
+
+    if (prefix != "v4") throw std::runtime_error("bad token prefix");
+
+    // libsodium decoder tries ORIGINAL then URLSAFE; token uses URLSAFE_NO_PADDING → this works.
+    auto payload_bytes = b64decode_loose(payload_b64);
+    auto sig_bytes     = b64decode_loose(sig_b64);
+
+    if (sig_bytes.size() != crypto_sign_BYTES) throw std::runtime_error("bad signature size");
+
+    if (crypto_sign_verify_detached(sig_bytes.data(),
+                                    payload_bytes.data(),
+                                    (unsigned long long)payload_bytes.size(),
+                                    pk) != 0) {
+        throw std::runtime_error("invalid signature");
+    }
+
+    return json::parse(payload_bytes.begin(), payload_bytes.end());
+}
+
+// Sign token from a JSON object using canonical JSON serialization:
+// - sorted keys (nlohmann json object_t defaults to std::map → sorted)
+// - no whitespace (dump with indent=-1)
+static std::string sign_token_v4_ed25519(const json& payload_obj, const unsigned char sk[64]) {
+    std::string payload = payload_obj.dump(-1, ' ', false, nlohmann::json::error_handler_t::strict);
+
+    unsigned char sig[crypto_sign_BYTES];
+    crypto_sign_detached(sig, nullptr,
+                         reinterpret_cast<const unsigned char*>(payload.data()),
+                         (unsigned long long)payload.size(),
+                         sk);
+
+    std::string p64 = b64url_enc(reinterpret_cast<const unsigned char*>(payload.data()), payload.size());
+    std::string s64 = b64url_enc(sig, sizeof(sig));
+
+    return std::string("v4.") + p64 + "." + s64;
+}
+
+// Canonical bytes for v4 phone signature verification (matches Python _canonical_v4_phone_auth)
+static std::string canonical_v4_phone_auth(const json& sp) {
+    json c;
+    c["expires_at"] = sp.at("expires_at");
+    c["issued_at"]  = sp.at("issued_at");
+    c["nonce"]      = sp.at("nonce");
+    c["origin"]     = sp.at("origin");
+    c["rp_id_hash"] = sp.at("rp_id_hash");
+    c["session_id"] = sp.at("session_id");
+    c["sid"]        = sp.at("sid");
+    c["st_hash"]    = sp.at("st_hash");
+    return c.dump(-1, ' ', false, nlohmann::json::error_handler_t::strict);
+}
+
+// -----------------------------------------------------------------------------
+// Build ST payload canonical JSON (string-built to lock order, matching Python)
+// -----------------------------------------------------------------------------
+static std::string build_req_payload_canonical(
+    const std::string& sid,
+    const std::string& chal,
+    const std::string& nonce,
+    long issued_at,
+    long expires_at
+) {
+    // Python lowercases RP ID before hashing; do the same here.
+    std::string rp = lower_ascii(RP_ID);
+    std::string rp_id_hash = sha256_b64_std_str(rp);
+
+    // IMPORTANT: keep stable/canonical order
+    return std::string("{")
+        + "\"aud\":\"" + AUD + "\","
+        + "\"chal\":\"" + chal + "\","
+        + "\"expires_at\":" + std::to_string(expires_at) + ","
+        + "\"issued_at\":" + std::to_string(issued_at) + ","
+        + "\"iss\":\"" + ISS + "\","
+        + "\"nonce\":\"" + nonce + "\","
+        + "\"origin\":\"" + ORIGIN + "\","
+        + "\"rp_id\":\"" + RP_ID + "\","
+        + "\"rp_id_hash\":\"" + rp_id_hash + "\","
+        + "\"scope\":\"" + SCOPE + "\","
+        + "\"sid\":\"" + sid + "\","
+        + "\"typ\":\"st\","
+        + "\"v\":4"
+        + "}";
+}
+
+static std::string sign_req_token(const std::string& payload_json) {
+    unsigned char sig[crypto_sign_BYTES];
+    unsigned long long siglen = 0;
+
+    crypto_sign_detached(
+        sig, &siglen,
+        reinterpret_cast<const unsigned char*>(payload_json.data()),
+        (unsigned long long)payload_json.size(),
+        SERVER_SK
+    );
+
+    std::string payload_b64 = b64url_enc(reinterpret_cast<const unsigned char*>(payload_json.data()), payload_json.size());
+    std::string sig_b64     = b64url_enc(sig, crypto_sign_BYTES);
+    return "v4." + payload_b64 + "." + sig_b64;
+}
+
+// -----------------------------------------------------------------------------
+// Optional: decode ST payload JSON (debug helper)
+// -----------------------------------------------------------------------------
+static bool decode_st_payload_json(const std::string& st, std::string& payload_json_out) {
+    size_t a = st.find('.');
+    if (a == std::string::npos) return false;
+    size_t b = st.find('.', a + 1);
+    if (b == std::string::npos) return false;
+
+    std::string payload_b64 = st.substr(a + 1, b - (a + 1));
+    std::string payload_bytes;
+    if (!b64url_decode_to_bytes(payload_b64, payload_bytes)) return false;
+
+    payload_json_out.assign(payload_bytes.begin(), payload_bytes.end());
+    return true;
+}
+
+// -----------------------------------------------------------------------------
+// main
+// -----------------------------------------------------------------------------
 int main() {
     if (sodium_init() < 0) {
-        std::cerr << "sodium_init failed\n";
+        std::cerr << "sodium_init failed" << std::endl;
         return 1;
     }
 
     if (!load_env_key("PQNAS_SERVER_PK_B64URL", SERVER_PK, 32) ||
         !load_env_key("PQNAS_SERVER_SK_B64URL", SERVER_SK, 64) ||
         !load_env_key("PQNAS_COOKIE_KEY_B64URL", COOKIE_KEY, 32)) {
-        std::cerr << "Missing/invalid env keys. Run ./build/bin/pqnas_keygen > .env.pqnas then: source .env.pqnas\n";
+        std::cerr << "Missing/invalid env keys. Run ./build/bin/pqnas_keygen > .env.pqnas then: source .env.pqnas" << std::endl;
         return 2;
     }
 
@@ -168,131 +423,255 @@ int main() {
     if (const char* v = std::getenv("PQNAS_AUD")) AUD = v;
     if (const char* v = std::getenv("PQNAS_SCOPE")) SCOPE = v;
     if (const char* v = std::getenv("PQNAS_APP_NAME")) APP_NAME = v;
+    if (const char* v = std::getenv("PQNAS_RP_ID")) RP_ID = v;
     if (const char* v = std::getenv("PQNAS_REQ_TTL")) REQ_TTL = std::atoi(v);
     if (const char* v = std::getenv("PQNAS_SESS_TTL")) SESS_TTL = std::atoi(v);
     if (const char* v = std::getenv("PQNAS_LISTEN_PORT")) LISTEN_PORT = std::atoi(v);
 
     if (const char* p = std::getenv("PQNAS_POLICY_FILE")) {
         if (!policy_load_allowlist(p)) {
-            std::cerr << "Failed policy load: " << p << "\n";
+            std::cerr << "Failed policy load: " << p << std::endl;
             return 3;
         }
     }
 
     httplib::Server srv;
 
-    srv.Post("/api/v4/session", [&](const httplib::Request&, httplib::Response& res) {
-        long iat = now_epoch();
-        long exp = iat + REQ_TTL;
+    // -------------------------------------------------------------------------
+    // Create v4 session (returns qr_uri + st)
+    // -------------------------------------------------------------------------
+    srv.Post("/api/v4/session", [&](const httplib::Request& req, httplib::Response& res) {
+        std::cerr << "[/api/v4/session] hit from "
+                  << (req.remote_addr.empty() ? "?" : req.remote_addr)
+                  << std::endl;
 
-        std::string sid = random_b64url(18);
-        std::string chal = random_b64url(32);
+        long issued_at  = now_epoch();
+        long expires_at = issued_at + REQ_TTL;
+
+        std::string sid   = random_b64url(18);
+        std::string chal  = random_b64url(32);
         std::string nonce = random_b64url(16);
 
-        if (!assert_safe_json_str(AUD) || !assert_safe_json_str(ISS) ||
-            !assert_safe_json_str(ORIGIN) || !assert_safe_json_str(SCOPE) ||
-            !assert_safe_json_str(sid) || !assert_safe_json_str(chal) || !assert_safe_json_str(nonce)) {
-            return reply_json(res, 500, R"({"ok":false,"error":"server_error","message":"unsafe token field"})");
-        }
+        std::string payload  = build_req_payload_canonical(sid, chal, nonce, issued_at, expires_at);
+        std::string st_token = sign_req_token(payload);
 
-        std::string payload = build_req_payload_canonical(sid, chal, nonce, iat, exp);
-        std::string req_token = sign_req_token(payload);
-
-        // MVP: qr_uri returned as a string; browser/renderer can URL-encode if needed
         std::string qr_uri =
-          "dna://auth?v=4&req=" + url_encode(req_token) +
-          "&origin=" + url_encode(ORIGIN) +
-          "&app=" + url_encode(APP_NAME);
+            "dna://auth?v=4&st=" + url_encode(st_token) +
+            "&origin=" + url_encode(ORIGIN) +
+            "&app=" + url_encode(APP_NAME);
 
-        std::string out = std::string("{")
-            + "\"v\":4,"
-            + "\"sid\":\"" + sid + "\","
-            + "\"expires_at\":" + std::to_string(exp) + ","
-            + "\"req\":\"" + req_token + "\","
-            + "\"qr_uri\":\"" + qr_uri + "\""
-            + "}";
+        json out = {
+            {"v", 4},
+            {"sid", sid},
+            {"expires_at", expires_at},
+            {"st", st_token},
+            {"req", st_token},
+            {"qr_uri", qr_uri}
+        };
 
-        reply_json(res, 200, out);
-    });
-
-    srv.Post("/api/v4/verify", [&](const httplib::Request& r, httplib::Response& res) {
-        const std::string& body = r.body;
-
-        int v = json_get_int(body, "v");
-        std::string type = json_get_str(body, "type");
-        std::string req_token = json_get_str(body, "req");
-        std::string proof = json_get_str(body, "proof");
-
-        if (v != 4 || type != "dna.auth.proof" || req_token.empty() || proof.empty()) {
-            return reply_json(res, 400, R"({"ok":false,"error":"bad_request","message":"missing/invalid fields"})");
-        }
-
-        // strip whitespace (copy/paste safety)
-        std::vector<char> rbuf(req_token.begin(), req_token.end()); rbuf.push_back('\0');
-        std::vector<char> pbuf(proof.begin(), proof.end()); pbuf.push_back('\0');
-        qr_strip_ws_inplace(rbuf.data());
-        qr_strip_ws_inplace(pbuf.data());
-
-        qr_err_t rc = qr_verify_proof_token(pbuf.data(), rbuf.data(), SERVER_PK);
-        if (rc != QR_OK) {
-            if (rc == QR_ERR_REQ_SIG || rc == QR_ERR_REQ_MISMATCH || rc == QR_ERR_FP_BINDING || rc == QR_ERR_PHONE_SIG) {
-                return reply_json(res, 403, R"({"ok":false,"error":"not_authorized","message":"verification failed"})");
+        // Debug: print ST payload JSON too (super helpful)
+        {
+            std::string st_payload_json;
+            if (decode_st_payload_json(st_token, st_payload_json)) {
+                std::cerr << "[/api/v4/session] st_payload_json=" << st_payload_json << std::endl;
+            } else {
+                std::cerr << "[/api/v4/session] st_payload_json=DECODE_FAILED" << std::endl;
             }
-            return reply_json(res, 400, R"({"ok":false,"error":"bad_request","message":"invalid token format"})");
         }
 
-        qr_proof_claims_t claims{};
-        rc = qr_extract_proof_claims(pbuf.data(), &claims);
-        if (rc != QR_OK || claims.fingerprint_b64[0] == 0) {
-            return reply_json(res, 400, R"({"ok":false,"error":"bad_request","message":"could not extract claims"})");
-        }
-
-        std::string fp = claims.fingerprint_b64;
-        if (!policy_is_allowed(fp)) {
-            return reply_json(res, 403, R"({"ok":false,"error":"not_authorized","message":"identity_not_allowed"})");
-        }
-
-        long iat = now_epoch();
-        long exp = iat + SESS_TTL;
-        std::string cookieVal;
-        session_cookie_mint(COOKIE_KEY, fp, iat, exp, cookieVal);
-
-        res.set_header("Set-Cookie", ("pqnas_session=" + cookieVal + "; Path=/; HttpOnly; Secure; SameSite=Lax"));
-        reply_json(res, 200, R"({"ok":true,"v":4})");
+        reply_json(res, 200, out.dump());
     });
 
-    srv.Get("/api/v1/me", [&](const httplib::Request& r, httplib::Response& res) {
-        auto it = r.headers.find("Cookie");
-        if (it == r.headers.end()) {
-            return reply_json(res, 401, R"({"ok":false,"error":"unauthorized","message":"missing cookie"})");
-        }
-        const std::string& cookieHdr = it->second;
-        auto p = cookieHdr.find("pqnas_session=");
-        if (p == std::string::npos) {
-            return reply_json(res, 401, R"({"ok":false,"error":"unauthorized","message":"missing session"})");
-        }
-        p += std::strlen("pqnas_session=");
-        auto q = cookieHdr.find(';', p);
-        std::string val = (q == std::string::npos) ? cookieHdr.substr(p) : cookieHdr.substr(p, q - p);
+    // -------------------------------------------------------------------------
+    // Verify v4 response from phone
+    // -------------------------------------------------------------------------
+    srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& res) {
+        std::cerr << "[/api/v4/verify] ENTER len=" << req.body.size()
+                  << " from " << (req.remote_addr.empty() ? "?" : req.remote_addr)
+                  << std::endl;
 
-        std::string fp;
-        long exp = 0;
-        if (!session_cookie_verify(COOKIE_KEY, val, fp, exp)) {
-            return reply_json(res, 401, R"({"ok":false,"error":"unauthorized","message":"invalid session"})");
-        }
-        if (now_epoch() > exp) {
-            return reply_json(res, 401, R"({"ok":false,"error":"unauthorized","message":"expired"})");
-        }
+        auto fail = [&](int code, const std::string& msg, const std::string& detail = "") {
+            std::cerr << "[/api/v4/verify] FAIL " << code << " " << msg;
+            if (!detail.empty()) std::cerr << " detail=" << detail;
+            std::cerr << std::endl;
 
-        std::string out = std::string("{")
-            + "\"ok\":true,"
-            + "\"fingerprint\":\"" + fp + "\","
-            + "\"exp\":" + std::to_string(exp)
-            + "}";
-        reply_json(res, 200, out);
+            json out = {
+                {"ok", false},
+                {"error", (code == 400 ? "bad_request" : "not_authorized")},
+                {"message", msg}
+            };
+            if (!detail.empty()) out["detail"] = detail;
+            reply_json(res, code, out.dump());
+        };
+
+        try {
+            // 1) Parse JSON
+            json body = json::parse(req.body);
+            std::cerr << "[/api/v4/verify] body=" << body.dump(2) << std::endl;
+
+            // Envelope
+            if (body.value("type", "") != "dna.auth.response") {
+                return fail(400, "invalid type", body.value("type",""));
+            }
+            int v = body.value("v", 0);
+            if (v != 4) {
+                return fail(400, "invalid version", std::to_string(v));
+            }
+
+            for (auto k : {"st","fingerprint","signature","signed_payload","pubkey_b64"}) {
+                if (!body.contains(k)) {
+                    return fail(400, std::string("missing field: ") + k);
+                }
+            }
+
+            std::string st         = body.at("st").get<std::string>();
+            std::string claimed_fp = body.at("fingerprint").get<std::string>();
+            std::string sig_b64    = body.at("signature").get<std::string>();
+            std::string pk_b64     = body.at("pubkey_b64").get<std::string>();
+
+            json sp = body.at("signed_payload");
+            if (!sp.is_object()) {
+                return fail(400, "signed_payload must be object");
+            }
+            std::cerr << "[/api/v4/verify] signed_payload=" << sp.dump(2) << std::endl;
+
+            // 2) Verify st (Ed25519)
+            json st_obj;
+            try {
+                st_obj = verify_token_v4_ed25519(st, SERVER_PK);
+                std::cerr << "[/api/v4/verify] st_obj=" << st_obj.dump(2) << std::endl;
+            } catch (const std::exception& e) {
+                return fail(400, "invalid st", e.what());
+            }
+
+            if (st_obj.value("v", 0) != 4 || st_obj.value("typ", "") != "st") {
+                return fail(400, "invalid st claims",
+                            std::string("v=") + std::to_string(st_obj.value("v",0)) + " typ=" + st_obj.value("typ",""));
+            }
+
+            // 3) TTL / time window
+            long now = now_epoch();
+            long st_exp = st_obj.at("expires_at").get<long>();
+            long st_iat = st_obj.at("issued_at").get<long>();
+            std::cerr << "[/api/v4/verify] now=" << now
+                      << " st_iat=" << st_iat
+                      << " st_exp=" << st_exp
+                      << std::endl;
+
+            if (now > st_exp) {
+                return fail(410, "st expired");
+            }
+            if (st_exp <= st_iat) {
+                return fail(400, "invalid st time window");
+            }
+
+            // 4) st_hash binding
+            std::string st_hash = sha256_b64_std_str(st); // standard b64 with padding
+            std::string got_st_hash = sp.value("st_hash", "");
+            std::cerr << "[/api/v4/verify] st_hash expected=" << st_hash
+                      << " got=" << got_st_hash
+                      << std::endl;
+
+            if (got_st_hash != st_hash) {
+                return fail(400, "st_hash mismatch",
+                            std::string("got=") + got_st_hash + " expected=" + st_hash);
+            }
+
+            // 5) Claim mirroring
+            auto req_str = [&](const char* k)->std::string { return sp.at(k).get<std::string>(); };
+            auto req_int = [&](const char* k)->long { return sp.at(k).get<long>(); };
+
+            if (req_str("sid") != st_obj.value("sid",""))
+                return fail(400, "claim mismatch: sid", std::string("sp=") + req_str("sid") + " st=" + st_obj.value("sid",""));
+            if (req_str("origin") != st_obj.value("origin",""))
+                return fail(400, "claim mismatch: origin", std::string("sp=") + req_str("origin") + " st=" + st_obj.value("origin",""));
+            if (req_str("rp_id_hash") != st_obj.value("rp_id_hash",""))
+                return fail(400, "claim mismatch: rp_id_hash", std::string("sp=") + req_str("rp_id_hash") + " st=" + st_obj.value("rp_id_hash",""));
+            if (req_str("nonce") != st_obj.value("nonce",""))
+                return fail(400, "claim mismatch: nonce", std::string("sp=") + req_str("nonce") + " st=" + st_obj.value("nonce",""));
+            if (req_int("issued_at") != st_obj.value("issued_at",0L))
+                return fail(400, "claim mismatch: issued_at");
+            if (req_int("expires_at") != st_obj.value("expires_at",0L))
+                return fail(400, "claim mismatch: expires_at");
+
+            // 6) Origin binding
+            if (trim_slashes(st_obj.at("origin").get<std::string>()) != trim_slashes(ORIGIN)) {
+                return fail(400, "origin mismatch",
+                            std::string("st=") + st_obj.at("origin").get<std::string>() + " cfg=" + ORIGIN);
+            }
+
+            // 7) RP binding via rp_id_hash (deployment config)
+            std::string expected_rp_hash = sha256_b64_std_str(lower_ascii(RP_ID));
+            if (st_obj.at("rp_id_hash").get<std::string>() != expected_rp_hash) {
+                return fail(403, "rp_id_hash mismatch",
+                            std::string("st=") + st_obj.at("rp_id_hash").get<std::string>() + " cfg=" + expected_rp_hash);
+            }
+
+            // 8) Decode inputs
+            std::vector<unsigned char> signature = b64decode_loose(sig_b64);
+            std::vector<unsigned char> pubkey    = b64decode_loose(pk_b64);
+
+            std::cerr << "[/api/v4/verify] decoded sizes: pubkey=" << pubkey.size()
+                      << " sig=" << signature.size()
+                      << std::endl;
+
+            // 9) Identity binding
+            std::string computed_fp = fingerprint_from_pubkey_sha3_512_hex(pubkey);
+            claimed_fp = lower_ascii(claimed_fp);
+
+            std::cerr << "[/api/v4/verify] fingerprint claimed=" << claimed_fp
+                      << " computed=" << computed_fp
+                      << std::endl;
+
+            if (claimed_fp != computed_fp) {
+                return fail(403, "fingerprint_pubkey_mismatch",
+                            std::string("claimed=") + claimed_fp + " computed=" + computed_fp);
+            }
+
+            // 10) Policy
+            if (!policy_is_allowed(computed_fp)) {
+                return fail(403, "identity_not_allowed");
+            }
+
+            // 11) Canonical bytes
+            std::string canonical = canonical_v4_phone_auth(sp);
+            std::vector<unsigned char> canonical_bytes(canonical.begin(), canonical.end());
+
+            std::cerr << "[/api/v4/verify] canonical=" << canonical << std::endl;
+            std::cerr << "[/api/v4/verify] canonical_len=" << canonical_bytes.size() << std::endl;
+            std::string canon_sha = sha256_b64_std_str(canonical);
+            std::cerr << "[/api/v4/verify] canonical_sha256_b64=" << canon_sha << "\n" << std::flush;
+
+            // 12) PQ verify (native)
+            bool ok = verify_mldsa87_signature_native(pubkey, canonical_bytes, signature);
+            std::cerr << "[/api/v4/verify] PQ verify ok=" << (ok ? "true" : "false") << std::endl;
+
+            if (!ok) {
+                return fail(403, "invalid_signature", "PQ verify returned false");
+            }
+
+            // 13) Issue approval token (at)
+            json at_payload = {
+                {"v",4},
+                {"typ","at"},
+                {"sid", st_obj.at("sid")},
+                {"st_hash", st_hash},
+                {"rp_id_hash", st_obj.at("rp_id_hash")},
+                {"fingerprint", computed_fp},
+                {"issued_at", now},
+                {"expires_at", now + 60}
+            };
+            std::string at = sign_token_v4_ed25519(at_payload, SERVER_SK);
+
+            json out = {{"ok",true},{"v",4},{"at",at}};
+            std::cerr << "[/api/v4/verify] SUCCESS issuing at=" << at << std::endl;
+            reply_json(res, 200, out.dump());
+        } catch (const std::exception& e) {
+            return fail(400, "exception", e.what());
+        }
     });
 
-    std::cout << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << "\n";
+    std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
     srv.listen("0.0.0.0", LISTEN_PORT);
     return 0;
 }
