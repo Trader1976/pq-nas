@@ -27,6 +27,10 @@
 #include <sodium.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
+#include <fstream>
+#include <sstream>
+#include <unordered_map>
+#include <mutex>
 
 extern "C" {
 #include "qrauth_v4.h"
@@ -61,6 +65,41 @@ static int SESS_TTL = 8 * 3600;
 static int LISTEN_PORT = 8081; // use 8081 to avoid conflicts
 
 static long now_epoch() { return (long)std::time(nullptr); }
+
+struct ApprovalEntry {
+    std::string cookie_val;   // pqnas_session cookie value (b64url.claims + "." + b64url.mac)
+    std::string fingerprint;  // computed_fp (hex)
+    long expires_at = 0;      // epoch seconds
+};
+
+static std::unordered_map<std::string, ApprovalEntry> g_approvals;
+static std::mutex g_approvals_mu;
+
+static void approvals_prune(long now) {
+    std::lock_guard<std::mutex> lk(g_approvals_mu);
+    for (auto it = g_approvals.begin(); it != g_approvals.end();) {
+        if (now > it->second.expires_at) it = g_approvals.erase(it);
+        else ++it;
+    }
+}
+
+static void approvals_put(const std::string& sid, const ApprovalEntry& e) {
+    std::lock_guard<std::mutex> lk(g_approvals_mu);
+    g_approvals[sid] = e;
+}
+
+static bool approvals_get(const std::string& sid, ApprovalEntry& out) {
+    std::lock_guard<std::mutex> lk(g_approvals_mu);
+    auto it = g_approvals.find(sid);
+    if (it == g_approvals.end()) return false;
+    out = it->second;
+    return true;
+}
+
+static void approvals_pop(const std::string& sid) {
+    std::lock_guard<std::mutex> lk(g_approvals_mu);
+    g_approvals.erase(sid);
+}
 
 
 
@@ -147,6 +186,14 @@ static std::vector<unsigned char> b64decode_loose(const std::string& in) {
     throw std::runtime_error("invalid base64");
 }
 
+static bool read_file_to_string(const std::string& path, std::string& out) {
+    std::ifstream f(path, std::ios::in | std::ios::binary);
+    if (!f) return false;
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    out = ss.str();
+    return true;
+}
 
 
 static std::string b64url_enc(const unsigned char* data, size_t len) {
@@ -437,6 +484,147 @@ int main() {
 
     httplib::Server srv;
 
+const std::string STATIC_LOGIN = "server/src/static/login.html";
+const std::string STATIC_JS    = "server/src/static/pqnas_v4.js";
+
+srv.Get("/", [&](const httplib::Request&, httplib::Response& res) {
+    std::string body;
+    if (!read_file_to_string(STATIC_LOGIN, body)) {
+        res.status = 500;
+        res.set_header("Content-Type", "text/plain");
+        res.body = "Missing static file: " + STATIC_LOGIN;
+        return;
+    }
+    res.status = 200;
+    res.set_header("Content-Type", "text/html; charset=utf-8");
+    res.body = body;
+});
+
+srv.Get("/static/pqnas_v4.js", [&](const httplib::Request&, httplib::Response& res) {
+    std::string body;
+    if (!read_file_to_string(STATIC_JS, body)) {
+        res.status = 500;
+        res.set_header("Content-Type", "text/plain");
+        res.body = "Missing static file: " + STATIC_JS;
+        return;
+    }
+    res.status = 200;
+    res.set_header("Content-Type", "application/javascript; charset=utf-8");
+    res.body = body;
+});
+
+srv.Get("/success", [&](const httplib::Request&, httplib::Response& res) {
+    res.status = 200;
+    res.set_header("Content-Type", "text/html; charset=utf-8");
+    res.body =
+        "<!doctype html><html><body style='font-family:system-ui;padding:24px'>"
+        "<h2>Success</h2>"
+        "<p>You are signed in (pqnas_session cookie set).</p>"
+        "<p><a href=\"/api/v4/me\">Check session</a></p>"
+        "</body></html>";
+});
+
+// Polling endpoint (browser)
+srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& res) {
+    approvals_prune(now_epoch());
+
+    auto sid = req.get_param_value("sid");
+    if (sid.empty()) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing sid"}}).dump());
+        return;
+    }
+
+    ApprovalEntry e;
+    if (!approvals_get(sid, e)) {
+        reply_json(res, 200, json({{"ok",true},{"approved",false}}).dump());
+        return;
+    }
+
+    long now = now_epoch();
+    if (now > e.expires_at) {
+        approvals_pop(sid);
+        reply_json(res, 200, json({{"ok",true},{"approved",false},{"expired",true}}).dump());
+        return;
+    }
+
+    reply_json(res, 200, json({{"ok",true},{"approved",true},{"fingerprint",e.fingerprint}}).dump());
+});
+
+// Consume approval → set cookie in *browser* response
+srv.Post("/api/v4/consume", [&](const httplib::Request& req, httplib::Response& res) {
+    approvals_prune(now_epoch());
+
+    try {
+        json body = json::parse(req.body);
+        std::string sid = body.value("sid", "");
+        if (sid.empty()) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing sid"}}).dump());
+            return;
+        }
+
+        ApprovalEntry e;
+        if (!approvals_get(sid, e)) {
+            reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","not approved"}}).dump());
+            return;
+        }
+
+        long now = now_epoch();
+        if (now > e.expires_at) {
+            approvals_pop(sid);
+            reply_json(res, 410, json({{"ok",false},{"error","expired"},{"message","approval expired"}}).dump());
+            return;
+        }
+
+        approvals_pop(sid); // one-time
+
+        const bool secure = (ORIGIN.rfind("https://", 0) == 0);
+
+        std::string cookie = "pqnas_session=" + e.cookie_val + "; Path=/; HttpOnly; SameSite=Lax";
+        cookie += "; Max-Age=" + std::to_string(SESS_TTL);
+        if (secure) cookie += "; Secure";
+
+        res.set_header("Set-Cookie", cookie);
+        reply_json(res, 200, json({{"ok",true}}).dump());
+    } catch (const std::exception& e) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"},{"detail",e.what()}}).dump());
+    }
+});
+
+// Debug endpoint: verifies pqnas_session cookie
+srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
+    auto it = req.headers.find("Cookie");
+    if (it == req.headers.end()) {
+        reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing cookie"}}).dump());
+        return;
+    }
+
+    const std::string& hdr = it->second;
+    const std::string k = "pqnas_session=";
+    auto pos = hdr.find(k);
+    if (pos == std::string::npos) {
+        reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing pqnas_session"}}).dump());
+        return;
+    }
+    pos += k.size();
+    auto end = hdr.find(';', pos);
+    std::string cookieVal = hdr.substr(pos, (end == std::string::npos) ? std::string::npos : (end - pos));
+
+    std::string fp_b64;
+    long exp = 0;
+    if (!session_cookie_verify(COOKIE_KEY, cookieVal, fp_b64, exp)) {
+        reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","invalid session"}}).dump());
+        return;
+    }
+
+    long now = now_epoch();
+    if (now > exp) {
+        reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","session expired"}}).dump());
+        return;
+    }
+
+    reply_json(res, 200, json({{"ok",true},{"exp",exp},{"fingerprint_b64",fp_b64}}).dump());
+});
+
     // -------------------------------------------------------------------------
     // Create v4 session (returns qr_uri + st)
     // -------------------------------------------------------------------------
@@ -663,6 +851,29 @@ int main() {
             };
             std::string at = sign_token_v4_ed25519(at_payload, SERVER_SK);
 
+            // Mint a browser session cookie (pqnas_session) and store it so the browser can consume it.
+            // fingerprint_b64 = base64(UTF-8 hex fingerprint) with standard base64 (padding ok).
+            std::string fp_b64 = b64_std(reinterpret_cast<const unsigned char*>(computed_fp.data()),
+                                         computed_fp.size());
+
+            std::string cookieVal;
+            long sess_iat = now;
+            long sess_exp = now + SESS_TTL;
+
+            if (session_cookie_mint(COOKIE_KEY, fp_b64, sess_iat, sess_exp, cookieVal)) {
+                ApprovalEntry e;
+                e.cookie_val = cookieVal;
+                e.fingerprint = computed_fp;
+                e.expires_at = now + 120; // browser has 2 minutes to consume
+                approvals_put(st_obj.value("sid",""), e);
+
+                std::cerr << "[/api/v4/verify] approval stored sid=" << st_obj.value("sid","")
+                          << " cookie_exp=" << sess_exp << std::endl;
+            } else {
+                std::cerr << "[/api/v4/verify] WARNING: session_cookie_mint failed" << std::endl;
+            }
+
+
             json out = {{"ok",true},{"v",4},{"at",at}};
             std::cerr << "[/api/v4/verify] SUCCESS issuing at=" << at << std::endl;
             reply_json(res, 200, out.dump());
@@ -670,6 +881,94 @@ int main() {
             return fail(400, "exception", e.what());
         }
     });
+
+    srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
+        // httplib gives raw Cookie header; we parse pqnas_session=...
+        auto it = req.headers.find("Cookie");
+        if (it == req.headers.end()) {
+            reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing cookie"}}).dump());
+            return;
+        }
+
+        const std::string& cookieHdr = it->second;
+        std::string cookieVal;
+
+        // very small cookie parser (enough for pqnas_session)
+        // Looks for "pqnas_session=" then reads until ';' or end.
+        const std::string k = "pqnas_session=";
+        auto pos = cookieHdr.find(k);
+        if (pos == std::string::npos) {
+            reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing pqnas_session"}}).dump());
+            return;
+        }
+        pos += k.size();
+        auto end = cookieHdr.find(';', pos);
+        cookieVal = cookieHdr.substr(pos, (end == std::string::npos) ? std::string::npos : (end - pos));
+
+        std::string fp_b64;
+        long exp = 0;
+        if (!session_cookie_verify(COOKIE_KEY, cookieVal, fp_b64, exp)) {
+            reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","invalid session"}}).dump());
+            return;
+        }
+
+        long now = now_epoch();
+        if (now > exp) {
+            reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","session expired"}}).dump());
+            return;
+        }
+
+        reply_json(res, 200, json({
+            {"ok", true},
+            {"exp", exp},
+            {"fingerprint_b64", fp_b64}
+        }).dump());
+    });
+
+
+
+
+    srv.Post("/api/v4/consume", [&](const httplib::Request& req, httplib::Response& res) {
+    approvals_prune(now_epoch());
+
+    try {
+        json body = json::parse(req.body);
+        std::string sid = body.value("sid", "");
+        if (sid.empty()) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing sid"}}).dump());
+            return;
+        }
+
+        ApprovalEntry e;
+        if (!approvals_get(sid, e)) {
+            reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","not approved"}}).dump());
+            return;
+        }
+
+        long now = now_epoch();
+        if (now > e.expires_at) {
+            approvals_pop(sid);
+            reply_json(res, 410, json({{"ok",false},{"error","expired"},{"message","approval expired"}}).dump());
+            return;
+        }
+
+        // One-time consume
+        approvals_pop(sid);
+
+        // Set cookie: HttpOnly + SameSite=Lax. Add Secure if ORIGIN is https.
+        const bool secure = (ORIGIN.rfind("https://", 0) == 0);
+
+        std::string cookie = "pqnas_session=" + e.cookie_val + "; Path=/; HttpOnly; SameSite=Lax";
+        cookie += "; Max-Age=" + std::to_string(SESS_TTL);
+        if (secure) cookie += "; Secure";
+        res.set_header("Set-Cookie", cookie);
+
+        reply_json(res, 200, json({{"ok",true}}).dump());
+    } catch (const std::exception& e) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"},{"detail",e.what()}}).dump());
+    }
+});
+
 
     std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
     srv.listen("0.0.0.0", LISTEN_PORT);

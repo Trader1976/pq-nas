@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PQ-NAS — Sign in with DNA</title>
+    <style>
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; }
+        .card { max-width: 560px; margin: 0 auto; border: 1px solid #0002; border-radius: 16px; padding: 18px; }
+        .row { margin: 8px 0; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+        .status { margin-top: 12px; padding: 10px; background:#00000008; border-radius: 10px; }
+        .hint { opacity: .85; font-size: 14px; }
+        textarea { width: 100%; min-height: 120px; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <h2 style="margin:0 0 6px 0;">Sign in with DNA</h2>
+
+    <div class="row">Session (sid): <span class="mono" id="sid">issuing…</span></div>
+
+    <div class="row">
+        <div class="hint">Scan with DNA-Messenger → QR Reader.</div>
+    </div>
+
+    <div class="row">
+        <div class="hint">QR URI (for now shown as text; you can later render as SVG/PNG):</div>
+        <textarea id="qruri" class="mono" readonly>(loading…)</textarea>
+    </div>
+
+    <div id="status" class="status">Issuing session…</div>
+</div>
+
+<script src="/static/pqnas_v4.js"></script>
+</body>
+</html>
