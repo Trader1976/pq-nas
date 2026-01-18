@@ -1,134 +1,195 @@
 (() => {
-    const statusEl = document.getElementById("status");
-    const sidEl = document.getElementById("sid");
-    const qrUriEl = document.getElementById("qruri");
-    const qrImg = document.getElementById("qrimg");
+    const el = (id) => document.getElementById(id);
 
-    const btnCopySid = document.getElementById("copySid");
-    const btnCopyQr = document.getElementById("copyQr");
-    const btnNew = document.getElementById("newSession");
+    const statusEl = el("status");
+    const sidEl = el("sid");
+    const qrImg = el("qrimg");
+    const qrUriTa = el("qruri");
 
-    let current = { sid: "", qr_uri: "", st: "" };
-    let pollTimer = null;
+    const copySidBtn = el("copySid");
+    const copyQrBtn = el("copyQr");
+    const newBtn = el("newSession");
+
     let stopped = false;
+    let sid = "";
+    let st = "";
+    let expiresAt = 0; // epoch seconds
+    let countdownTimer = null;
+    let pollTimer = null;
 
-    function setStatus(s) {
-        if (statusEl) statusEl.textContent = s;
+    // ---------- UI helpers ----------
+    function setStatus(msg) {
+        if (statusEl) statusEl.textContent = msg;
     }
 
-    function stop() {
-        stopped = true;
-        if (pollTimer) clearInterval(pollTimer);
-        pollTimer = null;
+    function setBusy(isBusy) {
+        document.body.classList.toggle("busy", !!isBusy);
     }
 
-    async function consumeApproval() {
-        // This is what actually sets the cookie in the browser.
-        const r = await fetch("/api/v4/consume", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            cache: "no-store",
-            body: JSON.stringify({ sid: current.sid }),
-        });
-
-        const txt = await r.text();
-        if (!r.ok) {
-            console.error("consume failed:", r.status, txt);
-            throw new Error("consume failed HTTP " + r.status);
-        }
-        return txt ? JSON.parse(txt) : { ok: true };
+    function fmtMMSS(secs) {
+        secs = Math.max(0, Math.floor(secs));
+        const m = Math.floor(secs / 60);
+        const s = secs % 60;
+        return `${m}:${String(s).padStart(2, "0")}`;
     }
 
-    async function pollStatusOnce() {
-        if (stopped || !current.sid) return;
-
+    async function copyText(text) {
         try {
-            const r = await fetch("/api/v4/status?sid=" + encodeURIComponent(current.sid), { cache: "no-store" });
-            const txt = await r.text();
-            if (!r.ok) {
-                console.error("status error:", r.status, txt);
-                setStatus("Status error HTTP " + r.status);
-                return;
-            }
-
-            const j = JSON.parse(txt);
-            if (j.approved) {
-                stop();
-                setStatus("Approved ✔ Finalizing session…");
-
-                // ✅ IMPORTANT: set cookie in browser by consuming approval
-                await consumeApproval();
-
-                setStatus("Signed in ✔ Redirecting…");
-                window.location.href = "/success";
-                return;
-            }
-
-            if (j.expired) {
-                stop();
-                setStatus("Approval expired — start new session");
-                return;
-            }
-
-            setStatus("Waiting for approval…");
-        } catch (e) {
-            console.error("pollStatusOnce failed:", e);
-            setStatus("Polling error (see console)");
+            await navigator.clipboard.writeText(text);
+            setStatus("Copied ✔");
+            setTimeout(() => setStatus("Waiting for approval…"), 800);
+        } catch {
+            setStatus("Copy failed (browser permission)");
         }
     }
 
+    // ---------- core flow ----------
     async function issueSession() {
         stopped = false;
-        if (pollTimer) clearInterval(pollTimer);
-        pollTimer = null;
+        sid = "";
+        st = "";
+        expiresAt = 0;
 
+        if (sidEl) sidEl.textContent = "(issuing…)";
+        if (qrUriTa) qrUriTa.value = "(loading…)";
+        if (qrImg) qrImg.removeAttribute("src");
+
+        clearInterval(countdownTimer);
+        clearInterval(pollTimer);
+
+        setBusy(true);
         setStatus("Issuing session…");
 
-        try {
-            const r = await fetch("/api/v4/session", { method: "POST", cache: "no-store" });
-            const txt = await r.text();
-            if (!r.ok) {
-                console.error("session error:", r.status, txt);
-                setStatus("Session error HTTP " + r.status);
-                return;
-            }
-
-            const j = JSON.parse(txt);
-            const sid = (j.sid || "").trim();
-            const qr_uri = (j.qr_uri || "").trim();
-            const st = (j.st || "").trim();
-
-            if (!sid || !qr_uri || !st) {
-                console.error("bad session json:", j);
-                setStatus("Bad session response (missing sid/qr_uri/st)");
-                return;
-            }
-
-            current = { sid, qr_uri, st };
-
-            if (sidEl) sidEl.textContent = sid;
-            if (qrUriEl) qrUriEl.value = qr_uri;
-
-            if (qrImg) {
-                qrImg.src = "/api/v4/qr.svg?st=" + encodeURIComponent(st);
-            }
-
-            setStatus("Waiting for approval… (scan QR)");
-            await pollStatusOnce();
-            pollTimer = setInterval(pollStatusOnce, 1000);
-        } catch (e) {
-            console.error("issueSession failed:", e);
-            setStatus("Error: " + e);
+        const r = await fetch("/api/v4/session", { method: "POST", cache: "no-store" });
+        if (!r.ok) {
+            setBusy(false);
+            setStatus("Error issuing session: HTTP " + r.status);
+            return;
         }
+
+        const j = await r.json();
+
+        sid = (j.sid || "").trim();
+        st = (j.st || "").trim();
+        expiresAt = Number(j.expires_at || 0);
+
+        if (sidEl) sidEl.textContent = sid || "(no sid)";
+        if (qrUriTa) qrUriTa.value = (j.qr_uri || "").trim();
+
+        // Render server-side SVG QR (you already have /api/v4/qr.svg?st=...)
+        if (qrImg && st) {
+            qrImg.src = "/api/v4/qr.svg?st=" + encodeURIComponent(st) + "&_=" + Date.now();
+        }
+
+        setBusy(false);
+        setStatus("Waiting for approval…");
+
+        startCountdown();
+        startPolling();
     }
 
-    btnCopySid?.addEventListener("click", async () => {
-        try { await navigator.clipboard.writeText(current.sid || ""); } catch {}
-    });
-    btnCopyQr?.addEventListener("click", async () => {
-        try { await navigator.clipboard.writeText(current.qr_uri || ""); } catch {}
-    });
-    btnNew?.addEventListener("click", () => issueSession());
+    function startCountdown() {
+        if (!expiresAt) return;
 
-    issueSession();
+        const tick = () => {
+            if (stopped) return;
+
+            const now = Math.floor(Date.now() / 1000);
+            const left = expiresAt - now;
+
+            // If you want the countdown visible in the status text:
+            if (left > 0) {
+                setStatus(`Waiting for approval… (expires in ${fmtMMSS(left)})`);
+            } else {
+                stopped = true;
+                setStatus("Expired. Creating a new session…");
+                // auto-refresh after a short pause
+                setTimeout(() => issueSession().catch(console.error), 900);
+            }
+        };
+
+        tick();
+        countdownTimer = setInterval(tick, 250);
+    }
+
+    function startPolling() {
+        if (!sid) return;
+
+        const pollOnce = async () => {
+            if (stopped) return;
+
+            try {
+                const res = await fetch(`/api/v4/status?sid=${encodeURIComponent(sid)}`, { cache: "no-store" });
+                if (!res.ok) return; // transient
+
+                const data = await res.json();
+                // expected: {ok:true, approved:true/false, expired?:true}
+                if (data && data.approved) {
+                    stopped = true;
+                    setBusy(true);
+                    setStatus("Approved ✔ Finalizing…");
+
+                    // Convert approval into real browser cookie
+                    const cres = await fetch("/api/v4/consume", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ sid }),
+                        cache: "no-store",
+                    });
+
+                    if (!cres.ok) {
+                        setBusy(false);
+                        setStatus("Approved, but cookie set failed (HTTP " + cres.status + ")");
+                        return;
+                    }
+
+                    // Redirect only after cookie has been set
+                    window.location.href = "/success";
+                    return;
+                }
+
+                if (data && data.expired) {
+                    stopped = true;
+                    setStatus("Expired. Creating a new session…");
+                    setTimeout(() => issueSession().catch(console.error), 900);
+                    return;
+                }
+            } catch (e) {
+                // ignore transient network errors, keep polling
+                console.debug("poll error", e);
+            }
+        };
+
+        pollOnce();
+        pollTimer = setInterval(pollOnce, 900);
+    }
+
+    // ---------- button wiring ----------
+    if (copySidBtn) {
+        copySidBtn.addEventListener("click", () => {
+            if (!sid) return setStatus("No sid yet");
+            copyText(sid);
+        });
+    }
+
+    if (copyQrBtn) {
+        copyQrBtn.addEventListener("click", () => {
+            const t = qrUriTa ? qrUriTa.value : "";
+            if (!t || t.startsWith("(")) return setStatus("No QR payload yet");
+            copyText(t);
+        });
+    }
+
+    if (newBtn) {
+        newBtn.addEventListener("click", () => {
+            issueSession().catch(console.error);
+        });
+    }
+
+    // Start immediately
+    issueSession().catch((e) => {
+        console.error(e);
+        setBusy(false);
+        setStatus("Error: " + e);
+    });
 })();

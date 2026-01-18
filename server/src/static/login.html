@@ -18,6 +18,111 @@
         .btnrow { display:flex; gap:10px; flex-wrap: wrap; }
         .small { font-size: 12px; opacity:.8; }
         a { color:#8ab4ff; }
+        /* Spinner overlay */
+        .busy .card { opacity: 0.88; }
+        .busy::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.25);
+            backdrop-filter: blur(2px);
+        }
+        .busy::after {
+            content: "";
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            width: 44px;
+            height: 44px;
+            margin-left: -22px;
+            margin-top: -22px;
+            border-radius: 50%;
+            border: 4px solid rgba(255,255,255,0.25);
+            border-top-color: rgba(255,255,255,0.95);
+            animation: spin 0.9s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        body {
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+            padding: 24px;
+            background: #0b0b0c;
+            color: #eafef3;
+        }
+
+        .card {
+            max-width: 640px;
+            margin: 0 auto;
+            border: 1px solid rgba(0, 230, 118, 0.35);
+            border-radius: 18px;
+            padding: 18px;
+            background: #0f1311;
+            box-shadow: 0 0 0 1px rgba(0, 230, 118, 0.12),
+            0 0 40px rgba(0, 230, 118, 0.08);
+        }
+
+        h1 {
+            margin: 0 0 8px 0;
+            font-size: 22px;
+            color: #00e676;
+        }
+        .status {
+            margin-top: 12px;
+            padding: 10px;
+            background: rgba(0, 230, 118, 0.08);
+            border-radius: 12px;
+            border: 1px solid rgba(0, 230, 118, 0.25);
+            color: #9affc7;
+        }
+        button {
+            border-radius: 12px;
+            border: 1px solid rgba(0, 230, 118, 0.45);
+            background: rgba(0, 230, 118, 0.12);
+            color: #9affc7;
+            padding: 10px 12px;
+            cursor: pointer;
+            transition: background .15s ease, box-shadow .15s ease;
+        }
+
+        button:hover {
+            background: rgba(0, 230, 118, 0.22);
+            box-shadow: 0 0 12px rgba(0, 230, 118, 0.35);
+        }
+        #qrimg {
+            width: 320px;
+            max-width: 100%;
+            border-radius: 12px;
+            background: #ffffff;
+            padding: 10px;
+            box-shadow:
+                    0 0 0 1px rgba(0, 230, 118, 0.35),
+                    0 0 20px rgba(0, 230, 118, 0.25);
+        }
+        .busy::after {
+            content: "";
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            width: 44px;
+            height: 44px;
+            margin-left: -22px;
+            margin-top: -22px;
+            border-radius: 50%;
+            border: 4px solid rgba(0, 230, 118, 0.25);
+            border-top-color: #00e676;
+            animation: spin 0.9s linear infinite;
+            box-shadow: 0 0 24px rgba(0, 230, 118, 0.45);
+        }
+        a {
+            color: #00e676;
+        }
+        a:hover {
+            text-shadow: 0 0 6px rgba(0, 230, 118, 0.6);
+        }
+        .qr {
+            display: flex;
+            justify-content: center;
+            margin: 16px 0;
+        }
     </style>
 </head>
 <body>
@@ -27,9 +132,9 @@
     <div class="row small">
         Open <b>DNA-Messenger</b> → <b>QR Reader</b> → scan the QR payload below (we’ll render a real QR image next).
     </div>
-    <div class="row">
-        <div class="small">QR code</div>
-        <img id="qrimg" alt="QR code"
+    <div class="row qr">
+        <img id="qrimg"
+             alt="QR code"
              style="width:320px; max-width:100%; border-radius:12px; background:#fff; padding:10px;" />
     </div>
 
