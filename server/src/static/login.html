@@ -5,31 +5,56 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PQ-NAS — Sign in with DNA</title>
     <style>
-        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; }
-        .card { max-width: 560px; margin: 0 auto; border: 1px solid #0002; border-radius: 16px; padding: 18px; }
-        .row { margin: 8px 0; }
-        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-        .status { margin-top: 12px; padding: 10px; background:#00000008; border-radius: 10px; }
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; background:#0b0b0c; color:#f2f2f3; }
+        .card { max-width: 640px; margin: 0 auto; border: 1px solid #ffffff22; border-radius: 18px; padding: 18px; background:#111114; }
+        h1 { margin: 0 0 8px 0; font-size: 22px; }
+        .row { margin: 10px 0; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; }
+        .status { margin-top: 12px; padding: 10px; background:#ffffff0a; border-radius: 12px; border:1px solid #ffffff14; }
         .hint { opacity: .85; font-size: 14px; }
-        textarea { width: 100%; min-height: 120px; }
+        textarea { width: 100%; min-height: 120px; border-radius: 12px; border: 1px solid #ffffff22; background:#0b0b0c; color:#f2f2f3; padding: 10px; }
+        button { border-radius: 12px; border: 1px solid #ffffff22; background:#ffffff12; color:#f2f2f3; padding: 10px 12px; cursor:pointer; }
+        button:hover { background:#ffffff18; }
+        .btnrow { display:flex; gap:10px; flex-wrap: wrap; }
+        .small { font-size: 12px; opacity:.8; }
+        a { color:#8ab4ff; }
     </style>
 </head>
 <body>
 <div class="card">
-    <h2 style="margin:0 0 6px 0;">Sign in with DNA</h2>
+    <h1>Sign in with DNA</h1>
 
-    <div class="row">Session (sid): <span class="mono" id="sid">issuing…</span></div>
+    <div class="row small">
+        Open <b>DNA-Messenger</b> → <b>QR Reader</b> → scan the QR payload below (we’ll render a real QR image next).
+    </div>
+    <div class="row">
+        <div class="small">QR code</div>
+        <img id="qrimg" alt="QR code"
+             style="width:320px; max-width:100%; border-radius:12px; background:#fff; padding:10px;" />
+    </div>
+
 
     <div class="row">
-        <div class="hint">Scan with DNA-Messenger → QR Reader.</div>
+        <div class="small">Session (sid)</div>
+        <div class="mono" id="sid">(issuing…)</div>
     </div>
 
     <div class="row">
-        <div class="hint">QR URI (for now shown as text; you can later render as SVG/PNG):</div>
+        <div class="small">QR payload (dna://auth…)</div>
         <textarea id="qruri" class="mono" readonly>(loading…)</textarea>
     </div>
 
+    <div class="btnrow">
+        <button id="copySid">Copy sid</button>
+        <button id="copyQr">Copy QR payload</button>
+        <button id="newSession">New session</button>
+    </div>
+
     <div id="status" class="status">Issuing session…</div>
+
+    <div class="row small" style="margin-top:12px;">
+        After approval you’ll be redirected to <span class="mono">/success</span> and a cookie named <span class="mono">pqnas_session</span> will be set.
+    </div>
 </div>
 
 <script src="/static/pqnas_v4.js"></script>

@@ -31,6 +31,10 @@
 #include <sstream>
 #include <unordered_map>
 #include <mutex>
+#include <qrencode.h>
+#include <filesystem>
+#include <unordered_map>
+#include <mutex>
 
 extern "C" {
 #include "qrauth_v4.h"
@@ -50,6 +54,8 @@ using json = nlohmann::json;
 static unsigned char SERVER_PK[32];
 static unsigned char SERVER_SK[64];
 static unsigned char COOKIE_KEY[32];
+
+
 
 static std::string ORIGIN   = "https://nas.example.com";
 static std::string ISS      = "pq-nas";
@@ -101,7 +107,14 @@ static void approvals_pop(const std::string& sid) {
     g_approvals.erase(sid);
 }
 
-
+// Return directory that contains the running executable
+static std::string exe_dir() {
+    char buf[PATH_MAX] = {0};
+    ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n <= 0) return ".";
+    std::string p(buf, (size_t)n);
+    return std::filesystem::path(p).parent_path().string();
+}
 
 // -----------------------------------------------------------------------------
 // Native PQ verifier loader (from libdna_lib.so)
@@ -124,8 +137,10 @@ static qgp_dsa87_verify_fn load_qgp_dsa87_verify() {
 
     // Load the library that actually exports qgp_dsa87_verify
     // If you place libdna_lib.so next to the binary, use exe_dir()+"/libdna_lib.so"
-    h = dlopen("libdna_lib.so", RTLD_NOW);
-    if (!h) throw std::runtime_error(std::string("dlopen failed: ") + dlerror());
+    std::string libpath = exe_dir() + "/libdna_lib.so";
+    h = dlopen(libpath.c_str(), RTLD_NOW);
+    if (!h) throw std::runtime_error(std::string("dlopen failed: ") + libpath + " : " + dlerror());
+
 
     fn = (qgp_dsa87_verify_fn)dlsym(h, "qgp_dsa87_verify");
     if (!fn) throw std::runtime_error("dlsym failed: qgp_dsa87_verify");
@@ -269,6 +284,49 @@ static void reply_json(httplib::Response& res, int code, const std::string& body
     res.set_header("Content-Type", "application/json");
     res.body = body_json;
 }
+
+static std::string qr_svg_from_text(const std::string& text,
+                                   int module_px = 6,
+                                   int margin_modules = 4) {
+    // Encode as 8-bit to avoid surprises; EC level M is a good default.
+    QRcode* qr = QRcode_encodeString8bit(text.c_str(), 0, QR_ECLEVEL_M);
+    if (!qr) throw std::runtime_error("QRcode_encodeString8bit failed");
+
+    const int w = qr->width;
+    const unsigned char* d = qr->data;
+
+    const int size = (w + margin_modules * 2) * module_px;
+    std::string svg;
+    svg.reserve((size_t)size * 10);
+
+    svg += "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
+    svg += "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\"";
+    svg += " width=\"" + std::to_string(size) + "\" height=\"" + std::to_string(size) + "\"";
+    svg += " viewBox=\"0 0 " + std::to_string(size) + " " + std::to_string(size) + "\">\n";
+    svg += "<rect width=\"100%\" height=\"100%\" fill=\"white\"/>\n";
+
+    // Draw modules as black rectangles
+    for (int y = 0; y < w; y++) {
+        for (int x = 0; x < w; x++) {
+            const int idx = y * w + x;
+            const bool dark = (d[idx] & 1) != 0;
+            if (!dark) continue;
+
+            const int xx = (x + margin_modules) * module_px;
+            const int yy = (y + margin_modules) * module_px;
+
+            svg += "<rect x=\"" + std::to_string(xx) + "\" y=\"" + std::to_string(yy) + "\"";
+            svg += " width=\"" + std::to_string(module_px) + "\" height=\"" + std::to_string(module_px) + "\"";
+            svg += " fill=\"black\"/>\n";
+        }
+    }
+
+    svg += "</svg>\n";
+
+    QRcode_free(qr);
+    return svg;
+}
+
 
 static bool load_env_key(const char* name, unsigned char* out, size_t outLenExpected) {
     const char* s = std::getenv(name);
@@ -669,6 +727,39 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
 
         reply_json(res, 200, out.dump());
     });
+    // -------------------------------------------------------------------------
+    // Render QR as SVG for the browser (qr_uri derived from st + config)
+    // GET /api/v4/qr.svg?st=...
+    // -------------------------------------------------------------------------
+    srv.Get("/api/v4/qr.svg", [&](const httplib::Request& req, httplib::Response& res) {
+        auto it = req.params.find("st");
+        if (it == req.params.end() || it->second.empty()) {
+            res.status = 400;
+            res.set_header("Content-Type", "application/json");
+            res.body = json({{"ok", false}, {"error", "bad_request"}, {"message", "missing st"}}).dump();
+            return;
+        }
+
+        const std::string st = it->second;
+
+        // Build dna:// URI exactly like /api/v4/session does
+        const std::string qr_uri =
+            "dna://auth?v=4&st=" + url_encode(st) +
+            "&origin=" + url_encode(ORIGIN) +
+            "&app=" + url_encode(APP_NAME);
+
+        try {
+            const std::string svg = qr_svg_from_text(qr_uri, /*module_px*/ 6, /*margin*/ 4);
+            res.status = 200;
+            res.set_header("Content-Type", "image/svg+xml; charset=utf-8");
+            res.set_header("Cache-Control", "no-store");
+            res.body = svg;
+        } catch (const std::exception& e) {
+            res.status = 500;
+            res.set_header("Content-Type", "application/json");
+            res.body = json({{"ok", false}, {"error", "server_error"}, {"message", e.what()}}).dump();
+        }
+    });
 
     // -------------------------------------------------------------------------
     // Verify v4 response from phone
@@ -881,6 +972,12 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
             return fail(400, "exception", e.what());
         }
     });
+
+
+    // -----------------------------------------------------------------------------
+    // Demo-only approval cache for browser redirect (NOT stateless across nodes)
+    // sid -> expires_at (epoch)
+    // -----------------------------------------------------------------------------
 
     srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
         // httplib gives raw Cookie header; we parse pqnas_session=...
