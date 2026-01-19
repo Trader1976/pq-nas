@@ -62,6 +62,9 @@ add_executable(pqnas_server
         server/src/session_cookie.cc
         server/src/policy.cc
         server/src/audit_log.cc
+        server/src/allowlist.cc
+        server/src/authz.cc
+        server/src/pqnas_util.cc
 )
 
 target_include_directories(pqnas_server PRIVATE

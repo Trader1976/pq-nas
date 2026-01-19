@@ -222,8 +222,3 @@ static void route_me(const drogon::HttpRequestPtr& req,
     cb(resp);
 }
 
-void register_routes() {
-    drogon::app().registerHandler("/api/v4/session", &route_v4_session, {drogon::Post});
-    drogon::app().registerHandler("/api/v4/verify", &route_v4_verify, {drogon::Post});
-    drogon::app().registerHandler("/api/v1/me", &route_me, {drogon::Get});
-}

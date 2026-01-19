@@ -7,8 +7,9 @@ async function loadTail() {
     el.textContent = "Fetch status: " + r.status;
 
     const j = await r.json();
-    el.textContent = "Lines: " + (j.lines ? j.lines.length : 0) + "\n\n" +
-        (j.lines || []).map(l => JSON.stringify(l)).join("\n");
+    el.textContent =
+        "Lines: " + (j.lines?.length || 0) + "\n\n" +
+        (j.lines || []).map(l => JSON.stringify(l, null, 2)).join("\n\n---\n\n");
 }
 
 async function verifyChain() {

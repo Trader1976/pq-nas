@@ -43,12 +43,15 @@ extern "C" {
 #include "qrauth_v4.h"
 }
 
+#include "pqnas_util.h"
+#include "authz.h"
+
 #include "session_cookie.h"
 #include "policy.h"
 
 // header-only HTTP server
 #include "httplib.h"
-
+#include "allowlist.h"
 // JSON (header-only)
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
@@ -81,7 +84,7 @@ static int REQ_TTL  = 60;
 static int SESS_TTL = 8 * 3600;
 static int LISTEN_PORT = 8081; // use 8081 to avoid conflicts
 
-static long now_epoch() { return (long)std::time(nullptr); }
+
 
 struct ApprovalEntry {
     std::string cookie_val;   // pqnas_session cookie value (b64url.claims + "." + b64url.mac)
@@ -181,36 +184,7 @@ static bool verify_mldsa87_signature_native(const std::vector<unsigned char>& pu
 }
 
 
-// -----------------------------------------------------------------------------
-// Base64 helpers (libsodium)
-// -----------------------------------------------------------------------------
-static std::vector<unsigned char> b64decode_loose(const std::string& in) {
-    std::string s;
-    s.reserve(in.size());
-    for (char c : in) {
-        if (c != '\n' && c != '\r' && c != ' ' && c != '\t') s.push_back(c);
-    }
 
-    std::vector<unsigned char> out(s.size() + 8);
-    size_t out_len = 0;
-
-    auto try_variant = [&](int variant) -> bool {
-        out_len = 0;
-        return sodium_base642bin(out.data(), out.size(),
-                                 s.c_str(), s.size(),
-                                 nullptr, &out_len, nullptr,
-                                 variant) == 0;
-    };
-
-    if (try_variant(sodium_base64_VARIANT_ORIGINAL) ||
-        try_variant(sodium_base64_VARIANT_URLSAFE) ||
-        try_variant(sodium_base64_VARIANT_URLSAFE_NO_PADDING)) {
-        out.resize(out_len);
-        return out;
-        }
-
-    throw std::runtime_error("invalid base64");
-}
 
 static bool read_file_to_string(const std::string& path, std::string& out) {
     std::ifstream f(path, std::ios::in | std::ios::binary);
@@ -395,10 +369,7 @@ static std::string trim_slashes(std::string s) {
     return s;
 }
 
-static std::string lower_ascii(std::string s) {
-    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
-    return s;
-}
+
 
 // -----------------------------------------------------------------------------
 // Fingerprint (sha3-512(pubkey) hex lower) — matches Python
@@ -447,8 +418,8 @@ static json verify_token_v4_ed25519(const std::string& token, const unsigned cha
     if (prefix != "v4") throw std::runtime_error("bad token prefix");
 
     // libsodium decoder tries ORIGINAL then URLSAFE; token uses URLSAFE_NO_PADDING → this works.
-    auto payload_bytes = b64decode_loose(payload_b64);
-    auto sig_bytes     = b64decode_loose(sig_b64);
+    auto payload_bytes = pqnas::b64decode_loose(payload_b64);
+    auto sig_bytes     = pqnas::b64decode_loose(sig_b64);
 
     if (sig_bytes.size() != crypto_sign_BYTES) throw std::runtime_error("bad signature size");
 
@@ -505,7 +476,7 @@ static std::string build_req_payload_canonical(
     long expires_at
 ) {
     // Python lowercases RP ID before hashing; do the same here.
-    std::string rp = lower_ascii(RP_ID);
+    std::string rp = pqnas::lower_ascii(RP_ID);
     std::string rp_id_hash = sha256_b64_std_str(rp);
 
     // IMPORTANT: keep stable/canonical order
@@ -593,63 +564,56 @@ int main() {
     if (const char* v = std::getenv("PQNAS_SESS_TTL")) SESS_TTL = std::atoi(v);
     if (const char* v = std::getenv("PQNAS_LISTEN_PORT")) LISTEN_PORT = std::atoi(v);
 
-    if (const char* p = std::getenv("PQNAS_POLICY_FILE")) {
-        if (!policy_load_allowlist(p)) {
-            std::cerr << "Failed policy load: " << p << std::endl;
-            return 3;
-        }
-    }
 
     httplib::Server srv;
 
 
 
-// ---- Audit log (hash-chained JSONL) ----
-const std::string audit_dir = exe_dir() + "/audit";
-try {
-    std::filesystem::create_directories(audit_dir);
-} catch (const std::exception& e) {
-    std::cerr << "[audit] WARNING: create_directories failed: " << e.what() << std::endl;
-}
+	// ---- Audit log (hash-chained JSONL) ----
+	const std::string audit_dir = exe_dir() + "/audit";
+	try {
+	    std::filesystem::create_directories(audit_dir);
+	} catch (const std::exception& e) {
+	    std::cerr << "[audit] WARNING: create_directories failed: " << e.what() << std::endl;
+	}
 
-const std::string audit_jsonl_path = audit_dir + "/pqnas_audit.jsonl";
-const std::string audit_state_path = audit_dir + "/pqnas_audit.state";
+	const std::string audit_jsonl_path = audit_dir + "/pqnas_audit.jsonl";
+	const std::string audit_state_path = audit_dir + "/pqnas_audit.state";
 
-pqnas::AuditLog audit(audit_jsonl_path, audit_state_path);
-
-
-const std::string STATIC_LOGIN = "server/src/static/login.html";
-const std::string STATIC_JS    = "server/src/static/pqnas_v4.js";
-const std::string STATIC_AUDIT_HTML = "server/src/static/admin_audit.html";
-const std::string STATIC_AUDIT_JS   = "server/src/static/admin_audit.js";
+	pqnas::AuditLog audit(audit_jsonl_path, audit_state_path);
 
 
+	const std::string STATIC_LOGIN = "server/src/static/login.html";
+	const std::string STATIC_JS    = "server/src/static/pqnas_v4.js";
+	const std::string STATIC_AUDIT_HTML = "server/src/static/admin_audit.html";
+	const std::string STATIC_AUDIT_JS   = "server/src/static/admin_audit.js";
+
+	const std::string allowlist_path = (std::filesystem::path(exe_dir()) / "allowlist.json").string();
+	pqnas::Allowlist allowlist;
+	allowlist.load(allowlist_path);
 
 
-srv.Get("/", [&](const httplib::Request&, httplib::Response& res) {
-    std::string body;
-    if (!read_file_to_string(STATIC_LOGIN, body)) {
-        res.status = 500;
-        res.set_header("Content-Type", "text/plain");
-        res.body = "Missing static file: " + STATIC_LOGIN;
-        return;
-    }
-    res.status = 200;
-    res.set_header("Content-Type", "text/html; charset=utf-8");
-    res.body = body;
+
+	srv.Get("/", [&](const httplib::Request&, httplib::Response& res) {
+    	std::string body;
+    	if (!read_file_to_string(STATIC_LOGIN, body)) {
+	        res.status = 500;
+    	    res.set_header("Content-Type", "text/plain");
+        	res.body = "Missing static file: " + STATIC_LOGIN;
+        	return;
+    	}
+    	res.status = 200;
+    	res.set_header("Content-Type", "text/html; charset=utf-8");
+    	res.body = body;
 });
 
-srv.Get("/admin/audit", [&](const httplib::Request&, httplib::Response& res) {
-    const std::string body = slurp_file(STATIC_AUDIT_HTML);
-    if (body.empty()) {
-        std::cerr << "[/admin/audit] ERROR: empty body. path=" << STATIC_AUDIT_HTML << std::endl;
-        res.status = 404;
-        res.set_content("missing admin_audit.html", "text/plain");
+srv.Get("/admin/audit", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, nullptr))
         return;
-    }
-    res.set_content(body, "text/html; charset=utf-8");
-});
 
+    res.set_content(slurp_file(STATIC_AUDIT_HTML),
+                    "text/html; charset=utf-8");
+});
 
 srv.Get("/static/admin_audit.js", [&](const httplib::Request&, httplib::Response& res) {
     const std::string body = slurp_file(STATIC_AUDIT_JS);
@@ -691,7 +655,7 @@ srv.Get("/success", [&](const httplib::Request&, httplib::Response& res) {
 
 // Polling endpoint (browser)
 srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& res) {
-    approvals_prune(now_epoch());
+    approvals_prune(pqnas::now_epoch());
 
 
     auto audit_ua = [&]() -> std::string {
@@ -701,7 +665,7 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
 
     auto audit_fail = [&](const std::string& sid, const std::string& reason, int http_code) {
         pqnas::AuditEvent ev;
-        ev.event = "v4.consume_fail";
+        ev.event = "v4.status_fail";
         ev.outcome = "fail";
         if (!sid.empty()) ev.f["sid"] = sid;
         ev.f["reason"] = reason;
@@ -735,7 +699,7 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
         return;
     }
 
-    long now = now_epoch();
+    long now = pqnas::now_epoch();
     if (now > e.expires_at) {
         approvals_pop(sid);
         reply_json(res, 200, json({{"ok",true},{"approved",false},{"expired",true}}).dump());
@@ -747,7 +711,7 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
 
 // Consume approval → set cookie in *browser* response
 srv.Post("/api/v4/consume", [&](const httplib::Request& req, httplib::Response& res) {
-    approvals_prune(now_epoch());
+    approvals_prune(pqnas::now_epoch());
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -782,7 +746,7 @@ srv.Post("/api/v4/consume", [&](const httplib::Request& req, httplib::Response& 
             return;
         }
 
-        long now = now_epoch();
+        long now = pqnas::now_epoch();
         if (now > e.expires_at) {
             approvals_pop(sid);
             audit_fail(sid, "approval_expired", 410);
@@ -982,7 +946,7 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
         return;
     }
 
-    long now = now_epoch();
+    long now = pqnas::now_epoch();
     if (now > exp) {
 		audit_fail("session_expired");
         reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","session expired"}}).dump());
@@ -1000,7 +964,7 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
                   << (req.remote_addr.empty() ? "?" : req.remote_addr)
                   << std::endl;
 
-        long issued_at  = now_epoch();
+        long issued_at  = pqnas::now_epoch();
         long expires_at = issued_at + REQ_TTL;
 
         std::string sid   = random_b64url(18);
@@ -1208,7 +1172,7 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
             }
 
             // 3) TTL / time window
-            long now = now_epoch();
+            long now = pqnas::now_epoch();
             long st_exp = st_obj.at("expires_at").get<long>();
             long st_iat = st_obj.at("issued_at").get<long>();
             std::cerr << "[/api/v4/verify] now=" << now
@@ -1279,7 +1243,7 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
             }
 
             // 7) RP binding via rp_id_hash (deployment config)
-            std::string expected_rp_hash = sha256_b64_std_str(lower_ascii(RP_ID));
+            std::string expected_rp_hash = sha256_b64_std_str(pqnas::lower_ascii(RP_ID));
             if (st_obj.at("rp_id_hash").get<std::string>() != expected_rp_hash) {
                 audit_fail("rp_id_hash_mismatch",
                            std::string("st=") + st_obj.at("rp_id_hash").get<std::string>() + " cfg=" + expected_rp_hash);
@@ -1289,8 +1253,8 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
 
 
             // 8) Decode inputs
-            std::vector<unsigned char> signature = b64decode_loose(sig_b64);
-            std::vector<unsigned char> pubkey    = b64decode_loose(pk_b64);
+            std::vector<unsigned char> signature = pqnas::b64decode_loose(sig_b64);
+            std::vector<unsigned char> pubkey    = pqnas::b64decode_loose(pk_b64);
 
             std::cerr << "[/api/v4/verify] decoded sizes: pubkey=" << pubkey.size()
                       << " sig=" << signature.size()
@@ -1298,7 +1262,7 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
 
             // 9) Identity binding
             std::string computed_fp = fingerprint_from_pubkey_sha3_512_hex(pubkey);
-            claimed_fp = lower_ascii(claimed_fp);
+            claimed_fp = pqnas::lower_ascii(claimed_fp);
             audit_fp = computed_fp; // safe (hash of pubkey)
 
             std::cerr << "[/api/v4/verify] fingerprint claimed=" << claimed_fp
@@ -1314,7 +1278,7 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
 
 
             // 10) Policy
-            if (!policy_is_allowed(computed_fp)) {
+            if (!allowlist.is_allowed(computed_fp)) {
                 audit_fail("policy_deny");
                 return fail(403, "identity_not_allowed");
             }
@@ -1434,97 +1398,6 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
     });
 
 
-    // -----------------------------------------------------------------------------
-    // Demo-only approval cache for browser redirect (NOT stateless across nodes)
-    // sid -> expires_at (epoch)
-    // -----------------------------------------------------------------------------
-
-    srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
-        // httplib gives raw Cookie header; we parse pqnas_session=...
-        auto it = req.headers.find("Cookie");
-        if (it == req.headers.end()) {
-            reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing cookie"}}).dump());
-            return;
-        }
-
-        const std::string& cookieHdr = it->second;
-        std::string cookieVal;
-
-        // very small cookie parser (enough for pqnas_session)
-        // Looks for "pqnas_session=" then reads until ';' or end.
-        const std::string k = "pqnas_session=";
-        auto pos = cookieHdr.find(k);
-        if (pos == std::string::npos) {
-            reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing pqnas_session"}}).dump());
-            return;
-        }
-        pos += k.size();
-        auto end = cookieHdr.find(';', pos);
-        cookieVal = cookieHdr.substr(pos, (end == std::string::npos) ? std::string::npos : (end - pos));
-
-        std::string fp_b64;
-        long exp = 0;
-        if (!session_cookie_verify(COOKIE_KEY, cookieVal, fp_b64, exp)) {
-            reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","invalid session"}}).dump());
-            return;
-        }
-
-        long now = now_epoch();
-        if (now > exp) {
-            reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","session expired"}}).dump());
-            return;
-        }
-
-        reply_json(res, 200, json({
-            {"ok", true},
-            {"exp", exp},
-            {"fingerprint_b64", fp_b64}
-        }).dump());
-    });
-
-
-
-
-    srv.Post("/api/v4/consume", [&](const httplib::Request& req, httplib::Response& res) {
-    approvals_prune(now_epoch());
-
-    try {
-        json body = json::parse(req.body);
-        std::string sid = body.value("sid", "");
-        if (sid.empty()) {
-            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing sid"}}).dump());
-            return;
-        }
-
-        ApprovalEntry e;
-        if (!approvals_get(sid, e)) {
-            reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","not approved"}}).dump());
-            return;
-        }
-
-        long now = now_epoch();
-        if (now > e.expires_at) {
-            approvals_pop(sid);
-            reply_json(res, 410, json({{"ok",false},{"error","expired"},{"message","approval expired"}}).dump());
-            return;
-        }
-
-        // One-time consume
-        approvals_pop(sid);
-
-        // Set cookie: HttpOnly + SameSite=Lax. Add Secure if ORIGIN is https.
-        const bool secure = (ORIGIN.rfind("https://", 0) == 0);
-
-        std::string cookie = "pqnas_session=" + e.cookie_val + "; Path=/; HttpOnly; SameSite=Lax";
-        cookie += "; Max-Age=" + std::to_string(SESS_TTL);
-        if (secure) cookie += "; Secure";
-        res.set_header("Set-Cookie", cookie);
-
-        reply_json(res, 200, json({{"ok",true}}).dump());
-    } catch (const std::exception& e) {
-        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"},{"detail",e.what()}}).dump());
-    }
-});
 
 
     std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
