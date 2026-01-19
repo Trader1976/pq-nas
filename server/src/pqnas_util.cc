@@ -18,6 +18,9 @@ std::string lower_ascii(std::string s) {
     return s;
 }
 
+// NOTE: We only use loose base64 decoding for inputs that are already authenticated
+// by an outer signature check, or where we normalize to canonical bytes immediately.
+// Do NOT use loose decoding for values that influence canonical signed bytes.
 std::vector<unsigned char> b64decode_loose(const std::string& in) {
     std::string s;
     s.reserve(in.size());

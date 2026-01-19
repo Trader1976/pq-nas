@@ -1,17 +1,41 @@
-// pqnas_server.cpp (v4 stateless QR auth) — cleaned, single-definition, buildable
-// Notes:
-// - Uses libsodium for Ed25519 + base64 (urlsafe + standard).
-// - Uses OpenSSL SHA256 for st_hash (standard base64 with padding, to match Python).
-// - Uses OpenSSL SHA3-512 for fingerprint (sha3_512(pubkey) hex lower), to match Python.
-// - Loads native PQClean verifier from libdna_pq_verify.so (dna_verify_mldsa87).
-// - Keeps canonical JSON rules consistent with the Python v4_tokens.py design.
-//
-// IMPORTANT BUILD NOTES:
-// - Requires: libsodium, OpenSSL (EVP), httplib.h, policy.h, session_cookie.h, qrauth_v4.h
-// - If you see EVP_* not found, ensure you include <openssl/evp.h> and link -lcrypto
-//
-// Debugging:
-// - Everything prints to stderr with std::endl (flush) so you WILL see it in terminal.
+/*
+PQ-NAS v4 QR Authentication Server
+=================================
+
+This server implements a device-mediated login flow:
+- Browser requests a v4 "session token" (st) that is Ed25519-signed by this server.
+- Mobile app approves by producing an ML-DSA-87 (Dilithium-class) signature over a canonical payload
+  that binds: (st_hash, fingerprint/pubkey, origin, rp_id, challenge, timestamps).
+- Server verifies all bindings and mints a short-lived browser session cookie.
+
+Security goals (what v4 is designed to guarantee)
+-------------------------------------------------
+1) No shared secrets in the browser: the browser proves approval via a one-time consume + cookie.
+2) Approval is cryptographic: PQ signature (ML-DSA-87) proves possession of the user's private key.
+3) Strong binding:
+   - Approval is bound to the exact session token via SHA-256(st) = st_hash.
+   - Identity is bound via fingerprint <-> public key (SHA3-512(pubkey) hex).
+   - Login is bound to origin + rp_id to prevent cross-site token reuse.
+4) Replay resistance:
+   - session token (st) has expiry and is server-signed (Ed25519).
+   - approval is one-time consumable (consume endpoint) and/or st/checks enforce freshness.
+5) Auditable: every security-relevant decision is logged to a hash-chained JSONL log.
+
+Non-goals / limitations (explicit)
+----------------------------------
+- This does not hide metadata from Cloudflare Tunnel / hosting infrastructure.
+- This does not replace WebAuthn; it provides a QR mediated flow with different UX and deployment tradeoffs.
+- If allowlist.json is compromised, authorization policy can be bypassed even though crypto checks still pass.
+
+Code responsibilities (separation of concerns)
+----------------------------------------------
+- Auth: cryptographic verification and cookie minting.
+- Policy: allowlist roles (user/admin) and endpoint authorization checks.
+- Audit: append-only hash-chained events describing what happened (not why the user intended it).
+
+All verification is fail-closed: any parse/verify/binding mismatch returns an error and logs the failure.
+*/
+
 
 #include <iostream>
 #include <string>
@@ -646,12 +670,20 @@ srv.Get("/success", [&](const httplib::Request&, httplib::Response& res) {
     res.status = 200;
     res.set_header("Content-Type", "text/html; charset=utf-8");
     res.body =
-        "<!doctype html><html><body style='font-family:system-ui;padding:24px'>"
+        "<!doctype html>"
+        "<html>"
+        "<body style='font-family:system-ui;padding:24px'>"
         "<h2>Success</h2>"
         "<p>You are signed in (pqnas_session cookie set).</p>"
-        "<p><a href=\"/api/v4/me\">Check session</a></p>"
+        "<pre id='out'>Checking session…</pre>"
+        "<script>"
+        "fetch('/api/v4/me')"
+        "  .then(r => r.json())"
+        "  .then(j => document.getElementById('out').textContent = JSON.stringify(j, null, 2));"
+        "</script>"
         "</body></html>";
 });
+
 
 // Polling endpoint (browser)
 srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& res) {
@@ -709,7 +741,22 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
     reply_json(res, 200, json({{"ok",true},{"approved",true},{"fingerprint",e.fingerprint}}).dump());
 });
 
-// Consume approval → set cookie in *browser* response
+// -----------------------------------------------------------------------------
+// POST /api/v4/consume  (or GET depending on your implementation)
+//
+// Purpose:
+//   One-time redemption of an already verified approval into an actual browser
+//   session cookie (pqnas_session). Then redirect to /success.
+//
+// Security notes:
+//   - This is intentionally one-time to reduce replay/use-after-approve risk.
+//   - Cookie flags must be strict: HttpOnly + Secure + SameSite=Lax.
+//   - The token/cookie lifetime should be short and independently verified by /me.
+//
+// Audit:
+//   - approval_consumed (ok/fail + reason)
+// -----------------------------------------------------------------------------
+
 srv.Post("/api/v4/consume", [&](const httplib::Request& req, httplib::Response& res) {
     approvals_prune(pqnas::now_epoch());
 
@@ -875,7 +922,22 @@ srv.Get("/api/v4/audit/verify", [&](const httplib::Request&, httplib::Response& 
 
 
 
-// Debug endpoint: verifies pqnas_session cookie
+// -----------------------------------------------------------------------------
+// GET /api/v4/me
+//
+// Purpose:
+//   Validate pqnas_session and return the authenticated identity (fingerprint)
+//   and expiry for the current browser session.
+//
+// Security notes:
+//   - This is the canonical "am I logged in?" check.
+//   - Must verify signature/expiry and (optionally) origin binding depending on design.
+//   - Should never trust client-provided fingerprint without verifying the session token.
+//
+// Audit:
+//   - usually not logged on every request (to avoid log spam), unless in debug mode.
+// -----------------------------------------------------------------------------
+
 srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -956,9 +1018,25 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
     reply_json(res, 200, json({{"ok",true},{"exp",exp},{"fingerprint_b64",fp_b64}}).dump());
 });
 
-    // -------------------------------------------------------------------------
-    // Create v4 session (returns qr_uri + st)
-    // -------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// GET /api/v4/session
+//
+// Purpose:
+//   Issue a short-lived v4 session token ("st") for the browser to embed into QR.
+//
+// Output:
+//   JSON containing st + metadata (expiry, challenge, etc.)
+//   st is Ed25519-signed by this server to prevent client-side tampering.
+//
+// Security notes:
+//   - st is NOT a login by itself; it is only a server-authenticated container.
+//   - st expiry limits replay window.
+//   - st is later bound to approval via st_hash = SHA-256(st) checked in /verify.
+//
+// Audit:
+//   - v4.session_issued (includes st_hash, exp, origin/rp_id context if present).
+// -----------------------------------------------------------------------------
+
     srv.Post("/api/v4/session", [&](const httplib::Request& req, httplib::Response& res) {
         std::cerr << "[/api/v4/session] hit from "
                   << (req.remote_addr.empty() ? "?" : req.remote_addr)
@@ -1050,9 +1128,37 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
         }
     });
 
-    // -------------------------------------------------------------------------
-    // Verify v4 response from phone
-    // -------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// POST /api/v4/verify
+//
+// Purpose:
+//   Verify a mobile approval for a given session token (st) and, on success,
+//   mint a short-lived browser session cookie.
+//
+// Inputs (conceptual):
+//   - st (Ed25519 signed token issued by /session)
+//   - st_hash (SHA-256 of st from the signed payload)
+//   - canonical signed payload (bytes) and its ML-DSA-87 signature
+//   - fingerprint + public key (binding enforced via SHA3-512)
+//
+// Security properties enforced here:
+//   - Authenticity of session token (Ed25519 st signature)
+//   - Binding of approval to that st (st_hash match)
+//   - Canonical payload verification (exact bytes signed)
+//   - Post-quantum signature verification (PQClean ML-DSA-87)
+//   - Identity binding: fingerprint <-> pubkey (SHA3-512)
+//   - Origin + RP ID binding
+//   - Authorization policy (allowlist: user/admin)
+//
+// Side effects:
+//   - Writes audit events (success and failure paths)
+//   - Creates ephemeral "approval" that /consume will redeem one-time
+//
+// Audit:
+//   - verify_attempt, verify_ok / verify_fail (with reason code)
+//   - cookie_minted / approval_created (on success)
+// -----------------------------------------------------------------------------
+
     srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& res) {
         std::cerr << "[/api/v4/verify] ENTER len=" << req.body.size()
                   << " from " << (req.remote_addr.empty() ? "?" : req.remote_addr)
@@ -1111,6 +1217,37 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
 
             audit.append(ev);
         };
+// v4 verification checklist (fail-closed, in this order):
+//
+//  1) Parse request fields and base64-decode inputs (tolerant decode only where intended).
+//     - Reject missing/oversized fields early to prevent CPU/memory abuse.
+//
+//  2) Verify st (server-issued session token) Ed25519 signature.
+//     - Ensures st was minted by us and wasn't tampered with.
+//
+//  3) Compute st_hash = SHA-256(st) and require it matches the st_hash inside the signed payload.
+//     - Binds the mobile approval to this exact browser session token.
+//
+//  4) Canonicalization: reconstruct the exact canonical payload bytes expected to be signed.
+//     - The signature MUST verify against these exact bytes (no "equivalent JSON").
+//     - Prevents ambiguity attacks caused by alternate encodings.
+//
+//  5) Verify ML-DSA-87 signature (PQClean) over canonical payload using the provided public key.
+//     - Provides cryptographic proof that the approver controls the private key.
+//
+//  6) Verify fingerprint <-> pubkey binding:
+//     - fingerprint must equal SHA3-512(pubkey) rendered as lowercase hex (or your defined format).
+//     - Prevents swapping in a different public key while keeping the same claimed identity.
+//
+//  7) Verify origin + rp_id binding.
+//     - Prevents approvals meant for one site from being replayed on another.
+//
+//  8) Enforce allowlist policy (role check):
+//     - fingerprint must exist in allowlist.json with role user/admin.
+//     - This is authorization, separate from cryptographic authenticity.
+//
+//  9) On success: mint short-lived browser session (cookie token) and create one-time approval.
+//     - Audit all security-relevant outputs (but never log private keys / raw secrets).
 
         try {
             // 1) Parse JSON
@@ -1209,6 +1346,9 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
     			return fail(400, "st_hash mismatch",
 	                std::string("got=") + got_st_hash + " expected=" + st_hash);
 	}
+// Failure handling rule:
+// - Return a stable error code (for client UX) and log a precise reason (for audits).
+// - Never leak sensitive internals in the HTTP response body.
 
 
             // 5) Claim mirroring
@@ -1396,8 +1536,6 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
             return fail(400, "exception", e.what());
         }
     });
-
-
 
 
     std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
