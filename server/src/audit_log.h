@@ -2,6 +2,8 @@
 #include <string>
 #include <map>
 #include <mutex>
+#include <vector>
+#include <deque>
 
 namespace pqnas {
 

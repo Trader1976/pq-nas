@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>PQ-NAS Audit</title>
+    <style>
+        body { font-family: monospace; background:#111; color:#ddd; margin: 16px; }
+        header { display:flex; gap:12px; align-items:center; margin-bottom:12px; }
+        button { padding:6px 10px; }
+        pre { white-space: pre-wrap; word-break: break-word; }
+    </style>
+</head>
+<body>
+<header>
+    <div>PQ-NAS Audit (tail)</div>
+    <button onclick="loadTail()">Reload</button>
+    <button onclick="verifyChain()">Verify chain</button>
+</header>
+
+<pre id="log">Loading…</pre>
+<script src="/static/admin_audit.js"></script>
+</body>
+</html>

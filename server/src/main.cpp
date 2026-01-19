@@ -38,6 +38,7 @@
 
 #include "audit_log.h"
 #include "audit_fields.h"
+
 extern "C" {
 #include "qrauth_v4.h"
 }
@@ -56,7 +57,15 @@ using json = nlohmann::json;
 static unsigned char SERVER_PK[32];
 static unsigned char SERVER_SK[64];
 static unsigned char COOKIE_KEY[32];
+static std::string exe_dir();
 
+
+const std::string REPO_ROOT = std::filesystem::weakly_canonical(
+    std::filesystem::path(exe_dir()) / ".." / ".."
+).string();
+
+const std::string STATIC_AUDIT_HTML = (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_audit.html").string();
+const std::string STATIC_AUDIT_JS   = (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_audit.js").string();
 
 
 static std::string ORIGIN   = "https://nas.example.com";
@@ -273,6 +282,11 @@ static std::string url_encode(const std::string& s) {
         }
     }
     return out;
+}
+
+static std::string trim_nl(std::string s) {
+    while (!s.empty() && (s.back()=='\n' || s.back()=='\r')) s.pop_back();
+    return s;
 }
 
 static std::string trim_ws(std::string s) {
@@ -512,6 +526,14 @@ static std::string build_req_payload_canonical(
         + "}";
 }
 
+static std::string slurp_file(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f.good()) return "";
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+
 static std::string sign_req_token(const std::string& payload_json) {
     unsigned char sig[crypto_sign_BYTES];
     unsigned long long siglen = 0;
@@ -583,9 +605,6 @@ int main() {
 
 
 // ---- Audit log (hash-chained JSONL) ----
-// Default paths (can later be made configurable):
-//   server/audit/pqnas_audit.jsonl
-//   server/audit/pqnas_audit.state
 const std::string audit_dir = exe_dir() + "/audit";
 try {
     std::filesystem::create_directories(audit_dir);
@@ -593,14 +612,19 @@ try {
     std::cerr << "[audit] WARNING: create_directories failed: " << e.what() << std::endl;
 }
 
-pqnas::AuditLog audit(
-    audit_dir + "/pqnas_audit.jsonl",
-    audit_dir + "/pqnas_audit.state"
-);
+const std::string audit_jsonl_path = audit_dir + "/pqnas_audit.jsonl";
+const std::string audit_state_path = audit_dir + "/pqnas_audit.state";
+
+pqnas::AuditLog audit(audit_jsonl_path, audit_state_path);
 
 
 const std::string STATIC_LOGIN = "server/src/static/login.html";
 const std::string STATIC_JS    = "server/src/static/pqnas_v4.js";
+const std::string STATIC_AUDIT_HTML = "server/src/static/admin_audit.html";
+const std::string STATIC_AUDIT_JS   = "server/src/static/admin_audit.js";
+
+
+
 
 srv.Get("/", [&](const httplib::Request&, httplib::Response& res) {
     std::string body;
@@ -614,6 +638,32 @@ srv.Get("/", [&](const httplib::Request&, httplib::Response& res) {
     res.set_header("Content-Type", "text/html; charset=utf-8");
     res.body = body;
 });
+
+srv.Get("/admin/audit", [&](const httplib::Request&, httplib::Response& res) {
+    const std::string body = slurp_file(STATIC_AUDIT_HTML);
+    if (body.empty()) {
+        std::cerr << "[/admin/audit] ERROR: empty body. path=" << STATIC_AUDIT_HTML << std::endl;
+        res.status = 404;
+        res.set_content("missing admin_audit.html", "text/plain");
+        return;
+    }
+    res.set_content(body, "text/html; charset=utf-8");
+});
+
+
+srv.Get("/static/admin_audit.js", [&](const httplib::Request&, httplib::Response& res) {
+    const std::string body = slurp_file(STATIC_AUDIT_JS);
+    if (body.empty()) {
+        std::cerr << "[/static/admin_audit.js] ERROR: empty body. path=" << STATIC_AUDIT_JS << std::endl;
+        res.status = 404;
+        res.set_content("missing admin_audit.js", "text/plain");
+        return;
+    }
+    res.set_content(body, "application/javascript; charset=utf-8");
+});
+
+
+
 
 srv.Get("/static/pqnas_v4.js", [&](const httplib::Request&, httplib::Response& res) {
     std::string body;
@@ -795,6 +845,70 @@ srv.Post("/api/v4/consume", [&](const httplib::Request& req, httplib::Response& 
         reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"},{"detail",e.what()}}).dump());
     }
 });
+
+srv.Get("/api/v4/audit/tail", [&](const httplib::Request& req, httplib::Response& res) {
+    int n = 200;
+    if (req.has_param("n")) {
+        try { n = std::stoi(req.get_param_value("n")); } catch (...) {}
+    }
+    n = std::max(1, std::min(1000, n));
+
+    std::ifstream f(audit_jsonl_path);
+    std::deque<json> q;
+    std::string line;
+
+    if (f.good()) {
+        while (std::getline(f, line)) {
+            if (line.empty()) continue;
+            try {
+                q.push_back(json::parse(line));
+                if ((int)q.size() > n) q.pop_front();
+            } catch (...) {
+                // ignore malformed line
+            }
+        }
+    }
+
+    json out;
+    out["ok"] = true;
+    out["lines"] = json::array();
+    for (auto& j : q) out["lines"].push_back(j);
+
+    reply_json(res, 200, out.dump());
+});
+
+
+
+
+srv.Get("/api/v4/audit/verify", [&](const httplib::Request&, httplib::Response& res) {
+    std::string state = trim_nl(slurp_file(audit_state_path));
+
+    std::string last_hash;
+    {
+        std::ifstream f(audit_jsonl_path);
+        std::string line, last;
+        if (f.good()) {
+            while (std::getline(f, line)) {
+                if (!line.empty()) last = line;
+            }
+        }
+        if (!last.empty()) {
+            try {
+                json j = json::parse(last);
+                last_hash = j.value("line_hash", "");
+            } catch (...) {}
+        }
+    }
+
+    bool ok = (!state.empty() && !last_hash.empty() && state == last_hash);
+
+    reply_json(res, 200, json{
+        {"ok", ok},
+        {"state", state},
+        {"last_line_hash", last_hash}
+    }.dump());
+});
+
 
 
 // Debug endpoint: verifies pqnas_session cookie

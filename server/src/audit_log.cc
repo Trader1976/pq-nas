@@ -5,6 +5,9 @@
 #include <iomanip>
 #include <chrono>
 #include <ctime>
+#include <vector>
+#include <deque>
+
 
 #include <openssl/sha.h>
 
