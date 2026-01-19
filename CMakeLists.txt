@@ -61,6 +61,7 @@ add_executable(pqnas_server
         server/src/main.cpp
         server/src/session_cookie.cc
         server/src/policy.cc
+        server/src/audit_log.cc
 )
 
 target_include_directories(pqnas_server PRIVATE

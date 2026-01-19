@@ -36,6 +36,8 @@
 #include <unordered_map>
 #include <mutex>
 
+#include "audit_log.h"
+#include "audit_fields.h"
 extern "C" {
 #include "qrauth_v4.h"
 }
@@ -273,6 +275,37 @@ static std::string url_encode(const std::string& s) {
     return out;
 }
 
+static std::string trim_ws(std::string s) {
+    while (!s.empty() && (s.front()==' ' || s.front()=='\t')) s.erase(s.begin());
+    while (!s.empty() && (s.back()==' ' || s.back()=='\t')) s.pop_back();
+    return s;
+}
+
+static std::string header_value(const httplib::Request& req, const char* name) {
+    auto it = req.headers.find(name);
+    return (it == req.headers.end()) ? "" : it->second;
+}
+
+static std::string first_xff_ip(const std::string& xff) {
+    auto comma = xff.find(',');
+    return trim_ws((comma == std::string::npos) ? xff : xff.substr(0, comma));
+}
+
+static std::string client_ip(const httplib::Request& req) {
+    std::string cf = trim_ws(header_value(req, "CF-Connecting-IP"));
+    if (!cf.empty()) return cf;
+
+    std::string xff = header_value(req, "X-Forwarded-For");
+    if (!xff.empty()) {
+        std::string ip = first_xff_ip(xff);
+        if (!ip.empty()) return ip;
+    }
+
+    return req.remote_addr.empty() ? "?" : req.remote_addr;
+}
+
+
+
 static std::string random_b64url(size_t nbytes) {
     std::string b(nbytes, '\0');
     randombytes_buf(b.data(), b.size());
@@ -327,6 +360,11 @@ static std::string qr_svg_from_text(const std::string& text,
     return svg;
 }
 
+static std::string get_header(const httplib::Request& req, const char* name) {
+  auto it = req.headers.find(name);
+  if (it == req.headers.end()) return "";
+  return it->second;
+}
 
 static bool load_env_key(const char* name, unsigned char* out, size_t outLenExpected) {
     const char* s = std::getenv(name);
@@ -542,6 +580,25 @@ int main() {
 
     httplib::Server srv;
 
+
+
+// ---- Audit log (hash-chained JSONL) ----
+// Default paths (can later be made configurable):
+//   server/audit/pqnas_audit.jsonl
+//   server/audit/pqnas_audit.state
+const std::string audit_dir = exe_dir() + "/audit";
+try {
+    std::filesystem::create_directories(audit_dir);
+} catch (const std::exception& e) {
+    std::cerr << "[audit] WARNING: create_directories failed: " << e.what() << std::endl;
+}
+
+pqnas::AuditLog audit(
+    audit_dir + "/pqnas_audit.jsonl",
+    audit_dir + "/pqnas_audit.state"
+);
+
+
 const std::string STATIC_LOGIN = "server/src/static/login.html";
 const std::string STATIC_JS    = "server/src/static/pqnas_v4.js";
 
@@ -586,8 +643,38 @@ srv.Get("/success", [&](const httplib::Request&, httplib::Response& res) {
 srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& res) {
     approvals_prune(now_epoch());
 
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& sid, const std::string& reason, int http_code) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.consume_fail";
+        ev.outcome = "fail";
+        if (!sid.empty()) ev.f["sid"] = sid;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http_code);
+		// Always-safe last-hop IP (tunnel will often show 127.0.0.1)
+		ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+		// Cloudflare / proxy-provided client IP info (record-only; don't "trust" it)
+		auto it_cf = req.headers.find("CF-Connecting-IP");
+		if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+		auto it_xff = req.headers.find("X-Forwarded-For");
+		if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+		// User-Agent
+		ev.f["ua"] = audit_ua();
+
+        audit.append(ev);
+    };
+
     auto sid = req.get_param_value("sid");
     if (sid.empty()) {
+		audit_fail("", "missing_sid", 400);
         reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing sid"}}).dump());
         return;
     }
@@ -612,16 +699,35 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
 srv.Post("/api/v4/consume", [&](const httplib::Request& req, httplib::Response& res) {
     approvals_prune(now_epoch());
 
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& sid, const std::string& reason, int http_code) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.consume_fail";
+        ev.outcome = "fail";
+        if (!sid.empty()) ev.f["sid"] = sid;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http_code);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        ev.f["ua"] = audit_ua();
+        audit.append(ev);
+    };
+
     try {
         json body = json::parse(req.body);
         std::string sid = body.value("sid", "");
         if (sid.empty()) {
+            audit_fail("", "missing_sid", 400);
             reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing sid"}}).dump());
             return;
         }
 
         ApprovalEntry e;
         if (!approvals_get(sid, e)) {
+            audit_fail(sid, "not_approved", 404);
             reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","not approved"}}).dump());
             return;
         }
@@ -629,29 +735,115 @@ srv.Post("/api/v4/consume", [&](const httplib::Request& req, httplib::Response& 
         long now = now_epoch();
         if (now > e.expires_at) {
             approvals_pop(sid);
+            audit_fail(sid, "approval_expired", 410);
             reply_json(res, 410, json({{"ok",false},{"error","expired"},{"message","approval expired"}}).dump());
             return;
         }
 
-        approvals_pop(sid); // one-time
+        // One-time consume
+        approvals_pop(sid);
 
+        // AUDIT: consume ok (no cookie value)
+        {
+            pqnas::AuditEvent ev;
+            ev.event = "v4.consume_ok";
+            ev.outcome = "ok";
+            ev.f["sid"] = sid;
+            if (!e.fingerprint.empty()) ev.f["fingerprint"] = e.fingerprint;
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            ev.f["ua"] = audit_ua();
+            audit.append(ev);
+        }
+
+        // Set cookie: HttpOnly + SameSite=Lax. Add Secure if ORIGIN is https.
         const bool secure = (ORIGIN.rfind("https://", 0) == 0);
 
         std::string cookie = "pqnas_session=" + e.cookie_val + "; Path=/; HttpOnly; SameSite=Lax";
         cookie += "; Max-Age=" + std::to_string(SESS_TTL);
         if (secure) cookie += "; Secure";
 
+        // AUDIT: cookie set (no cookie value)
+        {
+            pqnas::AuditEvent ev;
+            ev.event = "v4.cookie_set";
+            ev.outcome = "ok";
+            ev.f["sid"] = sid;
+            if (!e.fingerprint.empty()) ev.f["fingerprint"] = e.fingerprint;
+            ev.f["secure"] = secure ? "true" : "false";
+            ev.f["max_age"] = std::to_string(SESS_TTL);
+			// Always-safe last-hop IP (tunnel will often show 127.0.0.1)
+			ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+			// Cloudflare / proxy-provided client IP info (record-only; don't "trust" it)
+			auto it_cf = req.headers.find("CF-Connecting-IP");
+			if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+			auto it_xff = req.headers.find("X-Forwarded-For");
+			if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+			// User-Agent
+			ev.f["ua"] = audit_ua();
+
+
+            audit.append(ev);
+        }
+
         res.set_header("Set-Cookie", cookie);
         reply_json(res, 200, json({{"ok",true}}).dump());
     } catch (const std::exception& e) {
+        audit_fail("", "bad_json", 400);
         reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"},{"detail",e.what()}}).dump());
     }
 });
 
+
 // Debug endpoint: verifies pqnas_session cookie
 srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& reason) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.me_fail";
+        ev.outcome = "fail";
+        ev.f["reason"] = reason;
+		auto it_cf = req.headers.find("CF-Connecting-IP");
+		if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+		auto it_xff = req.headers.find("X-Forwarded-For");
+		if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        audit.append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& fp_b64, long exp) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.me_ok";
+        ev.outcome = "ok";
+        // fp_b64 is already a derived/encoded identifier; OK to log
+        ev.f["fingerprint_b64"] = pqnas::shorten(fp_b64, 120);
+        ev.f["exp"] = std::to_string(exp);
+		// Always-safe last-hop IP (tunnel will often show 127.0.0.1)
+		ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+		// Cloudflare / proxy-provided client IP info (record-only; don't "trust" it)
+		auto it_cf = req.headers.find("CF-Connecting-IP");
+		if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+		auto it_xff = req.headers.find("X-Forwarded-For");
+		if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+		// User-Agent
+		ev.f["ua"] = audit_ua();
+
+        audit.append(ev);
+    };
+
     auto it = req.headers.find("Cookie");
     if (it == req.headers.end()) {
+		audit_fail("missing_cookie_header");
         reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing cookie"}}).dump());
         return;
     }
@@ -660,6 +852,7 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
     const std::string k = "pqnas_session=";
     auto pos = hdr.find(k);
     if (pos == std::string::npos) {
+		audit_fail("missing_pqnas_session");
         reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing pqnas_session"}}).dump());
         return;
     }
@@ -670,16 +863,18 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_b64;
     long exp = 0;
     if (!session_cookie_verify(COOKIE_KEY, cookieVal, fp_b64, exp)) {
+		audit_fail("cookie_verify_failed");
         reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","invalid session"}}).dump());
         return;
     }
 
     long now = now_epoch();
     if (now > exp) {
+		audit_fail("session_expired");
         reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","session expired"}}).dump());
         return;
     }
-
+	audit_ok(fp_b64, exp);
     reply_json(res, 200, json({{"ok",true},{"exp",exp},{"fingerprint_b64",fp_b64}}).dump());
 });
 
@@ -714,6 +909,22 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
             {"req", st_token},
             {"qr_uri", qr_uri}
         };
+        // AUDIT: session issued (do NOT log st_token itself)
+        {
+            pqnas::AuditEvent ev;
+            ev.event = "v4.session_issued";
+            ev.outcome = "ok";
+            ev.f["sid"] = sid;
+            ev.f["issued_at"] = std::to_string(issued_at);
+            ev.f["expires_at"] = std::to_string(expires_at);
+            ev.f["origin"] = ORIGIN;
+            ev.f["app"] = APP_NAME;
+            ev.f["client_ip"] = client_ip(req);
+			ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr; // optional keep
+            auto it = req.headers.find("User-Agent");
+            ev.f["ua"] = pqnas::shorten(it == req.headers.end() ? "" : it->second);
+            audit.append(ev);
+        }
 
         // Debug: print ST payload JSON too (super helpful)
         {
@@ -783,22 +994,67 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
             reply_json(res, code, out.dump());
         };
 
+        // --- Audit context (avoid secrets) ---
+        std::string audit_sid;
+        std::string audit_st_hash_b64;
+        std::string audit_origin;
+        std::string audit_rp_id_hash;
+        std::string audit_fp; // fingerprint (computed/claimed; safe)
+
+        auto audit_ua = [&]() -> std::string {
+            auto it = req.headers.find("User-Agent");
+            return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+        };
+
+        auto audit_fail = [&](const std::string& reason, const std::string& detail = "") {
+            pqnas::AuditEvent ev;
+            ev.event = "v4.verify_fail";
+            ev.outcome = "fail";
+            if (!audit_sid.empty()) ev.f["sid"] = audit_sid;
+            if (!audit_st_hash_b64.empty()) ev.f["st_hash_b64"] = audit_st_hash_b64;
+            if (!audit_origin.empty()) ev.f["origin"] = audit_origin;
+            if (!audit_rp_id_hash.empty()) ev.f["rp_id_hash"] = audit_rp_id_hash;
+            if (!audit_fp.empty()) ev.f["fingerprint"] = audit_fp;
+            ev.f["reason"] = reason;
+            if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+			// Always-safe last-hop IP (tunnel will often show 127.0.0.1)
+			ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+			// Cloudflare / proxy-provided client IP info (record-only; don't "trust" it)
+			auto it_cf = req.headers.find("CF-Connecting-IP");
+			if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+			auto it_xff = req.headers.find("X-Forwarded-For");
+			if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+			// User-Agent
+			auto it = req.headers.find("User-Agent");
+			ev.f["ua"] = audit_ua();
+
+            audit.append(ev);
+        };
+
         try {
             // 1) Parse JSON
             json body = json::parse(req.body);
-            std::cerr << "[/api/v4/verify] body=" << body.dump(2) << std::endl;
+            std::cerr << "[/api/v4/verify] body keys=" << body.size() << " (redacted)" << std::endl;
+
 
             // Envelope
             if (body.value("type", "") != "dna.auth.response") {
+                audit_fail("bad_type", body.value("type",""));
                 return fail(400, "invalid type", body.value("type",""));
+
             }
             int v = body.value("v", 0);
             if (v != 4) {
+                audit_fail("bad_version", std::to_string(v));
                 return fail(400, "invalid version", std::to_string(v));
             }
 
             for (auto k : {"st","fingerprint","signature","signed_payload","pubkey_b64"}) {
                 if (!body.contains(k)) {
+					audit_fail("missing_field", k);
                     return fail(400, std::string("missing field: ") + k);
                 }
             }
@@ -810,8 +1066,14 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
 
             json sp = body.at("signed_payload");
             if (!sp.is_object()) {
+				audit_fail("signed_payload_not_object");
                 return fail(400, "signed_payload must be object");
             }
+            // Audit: capture safe fields (no secrets)
+            audit_origin = sp.value("origin", "");
+            audit_rp_id_hash = sp.value("rp_id_hash", "");
+            audit_sid = sp.value("sid", "");
+
             std::cerr << "[/api/v4/verify] signed_payload=" << sp.dump(2) << std::endl;
 
             // 2) Verify st (Ed25519)
@@ -820,10 +1082,13 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
                 st_obj = verify_token_v4_ed25519(st, SERVER_PK);
                 std::cerr << "[/api/v4/verify] st_obj=" << st_obj.dump(2) << std::endl;
             } catch (const std::exception& e) {
+				audit_fail("st_ed25519_invalid", e.what());
                 return fail(400, "invalid st", e.what());
             }
 
             if (st_obj.value("v", 0) != 4 || st_obj.value("typ", "") != "st") {
+ 				audit_fail("st_claims_invalid",
+                           std::string("v=") + std::to_string(st_obj.value("v",0)) + " typ=" + st_obj.value("typ",""));
                 return fail(400, "invalid st claims",
                             std::string("v=") + std::to_string(st_obj.value("v",0)) + " typ=" + st_obj.value("typ",""));
             }
@@ -838,43 +1103,63 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
                       << std::endl;
 
             if (now > st_exp) {
+				audit_fail("st_expired");
                 return fail(410, "st expired");
             }
             if (st_exp <= st_iat) {
+				audit_fail("st_time_window_invalid");
                 return fail(400, "invalid st time window");
             }
+			audit_sid = st_obj.value("sid", audit_sid);
+			audit_origin = st_obj.value("origin", audit_origin);
+			audit_rp_id_hash = st_obj.value("rp_id_hash", audit_rp_id_hash);
 
-            // 4) st_hash binding
-            std::string st_hash = sha256_b64_std_str(st); // standard b64 with padding
-            std::string got_st_hash = sp.value("st_hash", "");
-            std::cerr << "[/api/v4/verify] st_hash expected=" << st_hash
-                      << " got=" << got_st_hash
-                      << std::endl;
+			// 4) st_hash binding
+			std::string st_hash = sha256_b64_std_str(st); // standard b64 with padding
+			std::string got_st_hash = sp.value("st_hash", "");
+			audit_st_hash_b64 = st_hash; // safe derived value
 
-            if (got_st_hash != st_hash) {
-                return fail(400, "st_hash mismatch",
-                            std::string("got=") + got_st_hash + " expected=" + st_hash);
-            }
+			std::cerr << "[/api/v4/verify] st_hash expected=" << st_hash
+          		<< " got=" << got_st_hash
+          		<< std::endl;
+
+			if (got_st_hash != st_hash) {
+    			// Avoid logging attacker-controlled long strings; keep it short.
+    			audit_fail("st_hash_mismatch",
+               		std::string("got_len=") + std::to_string(got_st_hash.size()) +
+               		" expected_len=" + std::to_string(st_hash.size()));
+    			return fail(400, "st_hash mismatch",
+	                std::string("got=") + got_st_hash + " expected=" + st_hash);
+	}
+
 
             // 5) Claim mirroring
             auto req_str = [&](const char* k)->std::string { return sp.at(k).get<std::string>(); };
             auto req_int = [&](const char* k)->long { return sp.at(k).get<long>(); };
 
-            if (req_str("sid") != st_obj.value("sid",""))
-                return fail(400, "claim mismatch: sid", std::string("sp=") + req_str("sid") + " st=" + st_obj.value("sid",""));
-            if (req_str("origin") != st_obj.value("origin",""))
-                return fail(400, "claim mismatch: origin", std::string("sp=") + req_str("origin") + " st=" + st_obj.value("origin",""));
-            if (req_str("rp_id_hash") != st_obj.value("rp_id_hash",""))
-                return fail(400, "claim mismatch: rp_id_hash", std::string("sp=") + req_str("rp_id_hash") + " st=" + st_obj.value("rp_id_hash",""));
-            if (req_str("nonce") != st_obj.value("nonce",""))
-                return fail(400, "claim mismatch: nonce", std::string("sp=") + req_str("nonce") + " st=" + st_obj.value("nonce",""));
-            if (req_int("issued_at") != st_obj.value("issued_at",0L))
-                return fail(400, "claim mismatch: issued_at");
-            if (req_int("expires_at") != st_obj.value("expires_at",0L))
-                return fail(400, "claim mismatch: expires_at");
+            if (req_str("sid") != st_obj.value("sid","")){
+				audit_fail("claim_mismatch_sid");
+                return fail(400, "claim mismatch: sid", std::string("sp=") + req_str("sid") + " st=" + st_obj.value("sid",""));}
+            if (req_str("origin") != st_obj.value("origin","")){
+				audit_fail("claim_mismatch_origin");
+                return fail(400, "claim mismatch: origin", std::string("sp=") + req_str("origin") + " st=" + st_obj.value("origin",""));}
+            if (req_str("rp_id_hash") != st_obj.value("rp_id_hash","")){
+				audit_fail("claim_mismatch_ri_id_hash");
+                return fail(400, "claim mismatch: rp_id_hash", std::string("sp=") + req_str("rp_id_hash") + " st=" + st_obj.value("rp_id_hash",""));}
+            if (req_str("nonce") != st_obj.value("nonce","")){
+				audit_fail("claim_mismatch_nonce");
+                return fail(400, "claim mismatch: nonce", std::string("sp=") + req_str("nonce") + " st=" + st_obj.value("nonce",""));}
+            if (req_int("issued_at") != st_obj.value("issued_at",0L)){
+				audit_fail("claim_mismatch_issued_at");
+                return fail(400, "claim mismatch: issued_at");}
+            if (req_int("expires_at") != st_obj.value("expires_at",0L)){
+				audit_fail("claim_mismatch_expires_at");
+                return fail(400, "claim mismatch: expires_at");}
 
             // 6) Origin binding
             if (trim_slashes(st_obj.at("origin").get<std::string>()) != trim_slashes(ORIGIN)) {
+                audit_fail("origin_mismatch",
+                           std::string("st=") + st_obj.at("origin").get<std::string>() + " cfg=" + ORIGIN);
                 return fail(400, "origin mismatch",
                             std::string("st=") + st_obj.at("origin").get<std::string>() + " cfg=" + ORIGIN);
             }
@@ -882,9 +1167,12 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
             // 7) RP binding via rp_id_hash (deployment config)
             std::string expected_rp_hash = sha256_b64_std_str(lower_ascii(RP_ID));
             if (st_obj.at("rp_id_hash").get<std::string>() != expected_rp_hash) {
+                audit_fail("rp_id_hash_mismatch",
+                           std::string("st=") + st_obj.at("rp_id_hash").get<std::string>() + " cfg=" + expected_rp_hash);
                 return fail(403, "rp_id_hash mismatch",
                             std::string("st=") + st_obj.at("rp_id_hash").get<std::string>() + " cfg=" + expected_rp_hash);
             }
+
 
             // 8) Decode inputs
             std::vector<unsigned char> signature = b64decode_loose(sig_b64);
@@ -897,18 +1185,23 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
             // 9) Identity binding
             std::string computed_fp = fingerprint_from_pubkey_sha3_512_hex(pubkey);
             claimed_fp = lower_ascii(claimed_fp);
+            audit_fp = computed_fp; // safe (hash of pubkey)
 
             std::cerr << "[/api/v4/verify] fingerprint claimed=" << claimed_fp
                       << " computed=" << computed_fp
                       << std::endl;
 
             if (claimed_fp != computed_fp) {
+                audit_fail("fingerprint_mismatch",
+                           std::string("claimed=") + pqnas::shorten(claimed_fp) + " computed=" + pqnas::shorten(computed_fp));
                 return fail(403, "fingerprint_pubkey_mismatch",
                             std::string("claimed=") + claimed_fp + " computed=" + computed_fp);
             }
 
+
             // 10) Policy
             if (!policy_is_allowed(computed_fp)) {
+                audit_fail("policy_deny");
                 return fail(403, "identity_not_allowed");
             }
 
@@ -926,6 +1219,7 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
             std::cerr << "[/api/v4/verify] PQ verify ok=" << (ok ? "true" : "false") << std::endl;
 
             if (!ok) {
+				audit_fail("pq_sig_invalid");
                 return fail(403, "invalid_signature", "PQ verify returned false");
             }
 
@@ -957,18 +1251,70 @@ srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
                 e.fingerprint = computed_fp;
                 e.expires_at = now + 120; // browser has 2 minutes to consume
                 approvals_put(st_obj.value("sid",""), e);
+                {
+                    pqnas::AuditEvent ev;
+                    ev.event = "v4.cookie_minted";
+                    ev.outcome = "ok";
+                    ev.f["sid"] = st_obj.value("sid","");
+                    ev.f["st_hash_b64"] = st_hash;
+                    ev.f["rp_id_hash"] = st_obj.value("rp_id_hash","");
+                    ev.f["fingerprint"] = computed_fp;
+                    ev.f["sess_iat"] = std::to_string(sess_iat);
+                    ev.f["sess_exp"] = std::to_string(sess_exp);
+					// Always-safe last-hop IP (tunnel will often show 127.0.0.1)
+					ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+					// Cloudflare / proxy-provided client IP info (record-only; don't "trust" it)
+					auto it_cf = req.headers.find("CF-Connecting-IP");
+					if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+					auto it_xff = req.headers.find("X-Forwarded-For");
+					if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+					// User-Agent
+					ev.f["ua"] = audit_ua();
+
+                    audit.append(ev);
+                }
 
                 std::cerr << "[/api/v4/verify] approval stored sid=" << st_obj.value("sid","")
                           << " cookie_exp=" << sess_exp << std::endl;
             } else {
+                audit_fail("cookie_mint_failed");
                 std::cerr << "[/api/v4/verify] WARNING: session_cookie_mint failed" << std::endl;
             }
 
+            // AUDIT: verify success (do NOT log 'at')
+            {
+                pqnas::AuditEvent ev;
+                ev.event = "v4.verify_ok";
+                ev.outcome = "ok";
+                ev.f["sid"] = st_obj.value("sid","");
+                ev.f["st_hash_b64"] = st_hash;
+                ev.f["origin"] = st_obj.value("origin","");
+                ev.f["rp_id_hash"] = st_obj.value("rp_id_hash","");
+                ev.f["fingerprint"] = computed_fp;
+                // Always-safe last-hop IP (tunnel will often show 127.0.0.1)
+				ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+				// Cloudflare / proxy-provided client IP info (record-only; don't "trust" it)
+				auto it_cf = req.headers.find("CF-Connecting-IP");
+				if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+				auto it_xff = req.headers.find("X-Forwarded-For");
+				if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+				// User-Agent
+				ev.f["ua"] = audit_ua();
+
+                audit.append(ev);
+            }
 
             json out = {{"ok",true},{"v",4},{"at",at}};
             std::cerr << "[/api/v4/verify] SUCCESS issuing at=" << at << std::endl;
             reply_json(res, 200, out.dump());
         } catch (const std::exception& e) {
+ 			audit_fail("exception", e.what());
             return fail(400, "exception", e.what());
         }
     });

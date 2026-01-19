@@ -57,3 +57,11 @@ echo "Poll: curl -s \"${BASE_URL}/api/v4/status?sid=${sid}\" | jq ."
 
 #Then generate a fresh session again:
 #curl -sS -X POST http://127.0.0.1:8081/api/v4/session | jq -r '.qr_uri'
+
+
+#cloudflared tunnel --url http://127.0.0.1:8081
+
+
+#BUILD
+#cmake --build build -j
+#./build/bin/pqnas_server
