@@ -502,6 +502,106 @@ int main() {
                         "text/html; charset=utf-8");
     });
 
+        // Admin landing page (gated)
+    srv.Get("/admin", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) {
+            return;
+        }
+
+        // Simple landing page that calls /api/v4/me and renders it.
+        // Links to audit UI and audit verify endpoint.
+        const char* html = R"HTML(<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PQ-NAS Admin</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, sans-serif; padding: 24px; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; max-width: 980px; }
+    pre { background: #f6f6f6; padding: 12px; border-radius: 10px; overflow: auto; }
+    code { background: #f6f6f6; padding: 2px 6px; border-radius: 8px; }
+    .muted { color: #666; }
+    a { text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    ul { margin: 8px 0 0 18px; }
+    .badge { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+    .badge-admin { background:#2e7d32; color:#fff; }
+    .badge-user { background:#1565c0; color:#fff; }
+    .badge-unknown { background:#666; color:#fff; }
+  </style>
+</head>
+<body>
+    <h2 style="display:flex; gap:10px; align-items:center;">
+    <span>PQ-NAS Admin</span>
+    <span id="roleBadge" class="badge badge-unknown">role: ?</span>
+  </h2>
+  <p class="muted">Gated by <code>require_admin_cookie</code>.</p>
+
+  <div class="card">
+    <h3>/api/v4/me</h3>
+    <div class="muted" id="status">Loading...</div>
+    <pre id="me">(waiting)</pre>
+
+    <h3 style="margin-top: 16px;">Links</h3>
+    <ul>
+      <li><a href="/admin/audit">/admin/audit</a> <span class="muted">(audit UI)</span></li>
+      <li><a href="/api/v4/audit/verify">/api/v4/audit/verify</a> <span class="muted">(verify audit chain)</span></li>
+      <li><a href="/app">/app</a> <span class="muted">(main app)</span></li>
+    </ul>
+  </div>
+
+<script>
+(async () => {
+  const status = document.getElementById("status");
+  const pre = document.getElementById("me");
+
+  try {
+    const r = await fetch("/api/v4/me", { credentials: "include" });
+    const txt = await r.text();
+
+    status.textContent = `HTTP ${r.status}`;
+try {
+  const j = JSON.parse(txt);
+
+  // --- ROLE BADGE (THIS IS THE SNIPPET YOU ASKED ABOUT) ---
+  const badge = document.getElementById("roleBadge");
+  const role = (j && j.role) ? String(j.role) : "";
+
+  if (role === "admin") {
+    badge.textContent = "role: admin";
+    badge.className = "badge badge-admin";
+  } else if (role === "user") {
+    badge.textContent = "role: user";
+    badge.className = "badge badge-user";
+  } else {
+    badge.textContent = "role: ?";
+    badge.className = "badge badge-unknown";
+  }
+  // --- END ROLE BADGE ---
+
+  pre.textContent = JSON.stringify(j, null, 2);
+} catch {
+  pre.textContent = txt;
+}
+
+  } catch (e) {
+    status.textContent = "Failed to fetch /api/v4/me";
+    pre.textContent = String(e);
+  }
+})();
+</script>
+</body>
+</html>)HTML";
+
+        res.status = 200;
+        res.set_header("Content-Type", "text/html; charset=utf-8");
+        res.set_header("Cache-Control", "no-store");
+        res.body = html;
+    });
+
+
+
     srv.Get("/static/admin_audit.js", [&](const httplib::Request&, httplib::Response& res) {
         const std::string body = slurp_file(STATIC_AUDIT_JS);
         if (body.empty()) {
@@ -535,22 +635,47 @@ int main() {
     srv.Get("/app", [&](const httplib::Request&, httplib::Response& res) {
         res.status = 200;
         res.set_header("Content-Type", "text/html; charset=utf-8");
+        res.set_header("Cache-Control", "no-store");
         res.body =
             "<!doctype html><html><body style='font-family:system-ui;padding:24px'>"
             "<h2>PQ-NAS</h2>"
             "<p>Session check:</p>"
-            "<pre id='out'>Loading…</pre>"
-            "<p><a href='/api/v4/admin/ping'>Admin ping</a> (should be 403 unless admin)</p>"
+            "<pre id='out'>Loading...</pre>"
+
+            "<div id='admin_block' style='display:none;margin-top:16px;padding-top:12px;border-top:1px solid #ddd'>"
+            "<h3>Admin</h3>"
+            "<ul>"
+            "  <li><a href='/admin'>/admin</a> (admin landing)</li>"
+            "  <li><a href='/admin/audit'>/admin/audit</a> (audit UI)</li>"
+            "  <li><a href='/api/v4/audit/verify'>/api/v4/audit/verify</a> (verify audit chain)</li>"
+            "  <li><a href='/api/v4/admin/ping'>/api/v4/admin/ping</a> (admin ping)</li>"
+            "</ul>"
+            "</div>"
+
+            "<div id='user_hint' style='display:none;margin-top:16px;padding-top:12px;border-top:1px solid #ddd;color:#666'>"
+            "Signed in as non-admin. No admin links."
+            "</div>"
+
             "<script>"
-            "fetch('/api/v4/me')"
+            "fetch('/api/v4/me', { credentials: 'include' })"
             " .then(async r => ({status:r.status, body: await r.text()}))"
             " .then(x => {"
-            "   try { document.getElementById('out').textContent = JSON.stringify(JSON.parse(x.body), null, 2); }"
-            "   catch { document.getElementById('out').textContent = x.status + '\\n' + x.body; }"
-            " });"
+            "   let j=null;"
+            "   try { j = JSON.parse(x.body); } catch(e) {}"
+            "   if (j) document.getElementById('out').textContent = JSON.stringify(j, null, 2);"
+            "   else document.getElementById('out').textContent = x.status + '\\n' + x.body;"
+            "   if (j && j.ok && j.role === 'admin') {"
+            "     document.getElementById('admin_block').style.display = 'block';"
+            "   } else if (j && j.ok) {"
+            "     document.getElementById('user_hint').style.display = 'block';"
+            "   }"
+            " })"
+            " .catch(e => { document.getElementById('out').textContent = String(e); });"
             "</script>"
             "</body></html>";
     });
+
+
 
     srv.Get("/api/v4/admin/ping", [&](const httplib::Request& req, httplib::Response& res) {
         if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) {
