@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/verify_v4_vectors.dir/tools/verify_v4_vectors.cpp.o -o bin/verify_v4_vectors  libpqnas_core.a -lssl -lsodium -lcrypto /usr/lib/x86_64-linux-gnu/libcrypto.so 

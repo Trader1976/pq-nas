@@ -1,0 +1,8 @@
+/home/timo/CLionProjects/pq-nas/build-release/CMakeFiles/pqnas_core.dir
+/home/timo/CLionProjects/pq-nas/build-release/CMakeFiles/pqnas_server.dir
+/home/timo/CLionProjects/pq-nas/build-release/CMakeFiles/verify_vectors.dir
+/home/timo/CLionProjects/pq-nas/build-release/CMakeFiles/verify_v4_vectors.dir
+/home/timo/CLionProjects/pq-nas/build-release/CMakeFiles/run_verify_vectors.dir
+/home/timo/CLionProjects/pq-nas/build-release/CMakeFiles/pqnas_keygen.dir
+/home/timo/CLionProjects/pq-nas/build-release/CMakeFiles/edit_cache.dir
+/home/timo/CLionProjects/pq-nas/build-release/CMakeFiles/rebuild_cache.dir

@@ -1,0 +1,2 @@
+/usr/bin/ar qc libpqnas_core.a CMakeFiles/pqnas_core.dir/core/qrauth_v4.c.o
+/usr/bin/ranlib libpqnas_core.a

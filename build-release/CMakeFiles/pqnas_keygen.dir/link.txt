@@ -1,0 +1,1 @@
+/usr/bin/cc -O3 -DNDEBUG CMakeFiles/pqnas_keygen.dir/tools/keygen.c.o -o bin/pqnas_keygen  -lsodium 

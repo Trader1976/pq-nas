@@ -55,6 +55,36 @@ target_link_libraries(pqnas_core PRIVATE
 )
 
 # -----------------------------------------------------------------------------
+# Shared v4 verifier library (single source of truth for server + tools)
+# -----------------------------------------------------------------------------
+add_library(pqnas_verify_v4 STATIC
+        server/src/v4_verify_shared.cc
+        server/src/verify_v4_crypto.cc
+        server/src/pqnas_util.cc
+        server/src/authz.cc
+)
+
+target_include_directories(pqnas_verify_v4 PUBLIC
+        ${CMAKE_SOURCE_DIR}/core
+        ${CMAKE_SOURCE_DIR}/server/src
+        ${CMAKE_SOURCE_DIR}/server/include
+        ${CMAKE_SOURCE_DIR}/server/third_party
+        ${SODIUM_INCLUDE_DIRS}
+)
+
+target_compile_options(pqnas_verify_v4 PRIVATE
+        ${SODIUM_CFLAGS_OTHER}
+)
+
+target_link_libraries(pqnas_verify_v4 PUBLIC
+        pqnas_core
+        ${SODIUM_LIBRARIES}
+        OpenSSL::Crypto
+        dl
+)
+
+
+# -----------------------------------------------------------------------------
 # Server (C++ / httplib)
 # -----------------------------------------------------------------------------
 add_executable(pqnas_server
@@ -63,8 +93,6 @@ add_executable(pqnas_server
         server/src/policy.cc
         server/src/audit_log.cc
         server/src/allowlist.cc
-        server/src/authz.cc
-        server/src/pqnas_util.cc
 )
 
 target_include_directories(pqnas_server PRIVATE
@@ -81,8 +109,7 @@ target_compile_options(pqnas_server PRIVATE
 )
 
 target_link_libraries(pqnas_server PRIVATE
-        pqnas_core
-        ${SODIUM_LIBRARIES}
+        pqnas_verify_v4
         ${QRENCODE_LIBRARIES}
         OpenSSL::Crypto
         dl
@@ -92,6 +119,16 @@ set_target_properties(pqnas_server PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
+set(PQNAS_DNA_LIB_SRC "${CMAKE_SOURCE_DIR}/server/third_party/dna/lib/linux/x64/libdna_lib.so")
+
+add_custom_command(TARGET pqnas_server POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${PQNAS_DNA_LIB_SRC}"
+        "$<TARGET_FILE_DIR:pqnas_server>/libdna_lib.so"
+)
+
+
+
 # -----------------------------------------------------------------------------
 # Tool: verify_vectors
 # -----------------------------------------------------------------------------
@@ -100,8 +137,8 @@ add_executable(verify_vectors
 )
 
 target_include_directories(verify_vectors PRIVATE
-        ${SODIUM_INCLUDE_DIRS}
         ${CMAKE_SOURCE_DIR}/core
+        ${SODIUM_INCLUDE_DIRS}
 )
 
 target_compile_options(verify_vectors PRIVATE
@@ -124,6 +161,37 @@ add_custom_target(run_verify_vectors
         DEPENDS verify_vectors
 )
 
+# -----------------------------------------------------------------------------
+# Tool: verify_v4_vectors (JSON protocol freeze; uses shared verifier)
+# -----------------------------------------------------------------------------
+add_executable(verify_v4_vectors
+        tools/verify_v4_vectors.cpp
+)
+target_link_libraries(verify_v4_vectors PRIVATE
+        pqnas_verify_v4
+)
+# Keep output next to other tools
+set_target_properties(verify_v4_vectors PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+
+target_compile_options(verify_v4_vectors PRIVATE
+        ${SODIUM_CFLAGS_OTHER}
+)
+
+target_include_directories(verify_v4_vectors PRIVATE
+        ${CMAKE_SOURCE_DIR}/core
+        ${CMAKE_SOURCE_DIR}/server/src
+        ${CMAKE_SOURCE_DIR}/server/include
+        ${CMAKE_SOURCE_DIR}/server/third_party
+        ${SODIUM_INCLUDE_DIRS}
+)
+
+add_custom_command(TARGET verify_v4_vectors POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${PQNAS_DNA_LIB_SRC}"
+        "$<TARGET_FILE_DIR:verify_v4_vectors>/libdna_lib.so"
+)
 # -----------------------------------------------------------------------------
 # Tool: pqnas_keygen
 # -----------------------------------------------------------------------------

@@ -4,8 +4,9 @@ This document describes the security model, trust boundaries, and design
 decisions of **PQ-NAS v0**.
 
 PQ-NAS is an **identity-first access system**, not a traditional NAS security
-stack. Its primary goal is to demonstrate a **device-mediated, post-quantum–
-capable authentication model** where the browser is never a trust anchor.
+stack. Its primary goal is to demonstrate a **device-mediated,
+post-quantum–capable authentication model** where the browser is never a trust
+anchor.
 
 ---
 
@@ -15,12 +16,13 @@ PQ-NAS is designed under the following assumptions:
 
 ### Assumed Adversaries
 
-- An attacker may:
-    - Control or compromise the browser
-    - Steal browser cookies or local storage
-    - Observe or manipulate network traffic
-    - Attempt replay or token substitution attacks
-    - Attempt to authenticate without owning a valid identity key
+An attacker may:
+
+- Control or compromise the browser
+- Steal browser cookies or local storage
+- Observe or manipulate network traffic
+- Attempt replay or token substitution attacks
+- Attempt to authenticate without owning a valid identity key
 
 ### Trusted Components
 
@@ -43,11 +45,12 @@ The browser is treated as **untrusted transport only**.
 
 - All authentication approvals originate from the user’s mobile device.
 - The user explicitly confirms login on the phone.
-- The phone signs the approval using the user’s DNA identity key.
+- The phone produces a cryptographic proof using the user’s DNA identity key.
 
 ### 3. Cryptographic Proof, Not Assertions
 
 PQ-NAS does not trust:
+
 - Browser claims
 - Client-side state
 - JavaScript-only validation
@@ -64,7 +67,7 @@ All access decisions are based on **server-side cryptographic verification**.
 4. DNA-Messenger scans the QR code.
 5. The user approves the request on the phone.
 6. DNA-Messenger produces a cryptographic proof bound to the request.
-7. PQ-NAS verifies the proof and issues a short-lived session cookie.
+7. PQ-NAS verifies the proof and issues a short-lived browser session cookie.
 
 At no point does the browser authenticate itself.
 
@@ -72,25 +75,36 @@ At no point does the browser authenticate itself.
 
 ## Cryptographic Verification (v4)
 
-Verification is **fail-closed** and performed in the following conceptual order:
+Verification is **fail-closed** and performed conceptually in the following order:
 
-- Server authenticity:
-    - Request token is verified using **Ed25519** (server key).
-- Request binding:
-    - Proof is bound to the *exact* request token via SHA-256 hash.
-- Canonical payload verification:
+- **Server authenticity**
+    - The request token is verified using **Ed25519** (server key).
+- **Request binding**
+    - The proof is bound to the *exact* request token issued by the server.
+- **Canonical payload verification**
     - Signatures are verified over canonical, byte-stable payloads.
-- Identity proof:
+- **Identity proof**
     - User approval is verified using **post-quantum–capable signatures**
       (ML-DSA-87 / Dilithium-class via PQClean).
-- Fingerprint binding:
-    - Identity fingerprint is cryptographically bound to the public key.
-- Origin / relying party binding:
+- **Fingerprint binding**
+    - The identity fingerprint is cryptographically bound to the public key.
+- **Origin / relying party binding**
     - Prevents cross-site or cross-service replay.
-- Policy enforcement:
-    - Fingerprint is checked against the allowlist (user/admin roles).
+- **Policy enforcement**
+    - The fingerprint identity is checked against the allowlist.
 
 Only if **all** checks succeed is access granted.
+
+---
+
+## Identity Representation
+
+After successful verification, the server extracts a canonical identity string
+(`fingerprint_b64`).
+
+- This value uniquely represents the user’s DNA identity.
+- It is treated as an **opaque identifier** outside the verifier.
+- Policy checks, session cookies, and audit logs use this value directly.
 
 ---
 
@@ -102,6 +116,7 @@ PQ-NAS separates **authentication** from **authorization**:
 - Authorization decides *whether* that identity is allowed.
 
 Authorization is enforced via:
+
 - A fingerprint-based allowlist
 - Explicit user/admin roles
 - Fail-closed policy checks
@@ -113,7 +128,7 @@ A cryptographically valid identity may still be denied access.
 ## Session Security
 
 - Browser sessions are represented by **short-lived, signed cookies**.
-- Cookies are issued only after successful verification.
+- Cookies are issued only after successful verification and authorization.
 - Cookie properties:
     - `HttpOnly`
     - `Secure`
@@ -126,12 +141,15 @@ Session cookies are **bearer tokens** and are intentionally short-lived.
 
 ## Stateless Verification
 
-- Cryptographic verification does **not** rely on server-side session state.
-- Request tokens are self-contained and signed.
-- Proof verification can be performed without shared state.
+- Cryptographic verification does **not** rely on server-side authentication
+  session state.
+- Request tokens and proofs are self-contained and signed.
+- Verification can be performed without shared state between requests.
 
 Note:
-- PQ-NAS still maintains **audit logs** and **one-time consume semantics**.
+
+- PQ-NAS intentionally maintains **audit logs** and **one-time consume
+  semantics** to prevent replay and to support accountability.
 - The system is *verification-stateless*, not globally stateless.
 
 ---
@@ -140,17 +158,19 @@ Note:
 
 All security-relevant events are recorded in an append-only audit log:
 
-- Session issuance
+- Request token issuance
 - Verification attempts (success/failure)
-- Policy decisions
+- Authorization decisions
 - Session minting and consumption
 
 Audit logs are:
+
 - Hash-chained
 - Append-only
 - Verifiable for tampering
 
 Audit data is intended for:
+
 - Incident analysis
 - Forensics
 - Security review

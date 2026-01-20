@@ -101,6 +101,26 @@ extern "C" {
         const unsigned char server_pk_raw[32]
     );
 
+    // Verify the v4 phone response JSON body against the issued ST token.
+    // This matches the server /api/v4/verify logic:
+    //
+    // - verify ST signature (Ed25519) with server_pk_raw
+    // - compute st_hash and compare to signed_payload.st_hash
+    // - verify fingerprint <-> pubkey binding (sha3-512 hex)
+    // - canonicalize signed_payload and compute canonical_sha256_b64
+    // - PQ verify (qgp_dsa87_verify) of signature over canonical bytes
+    //
+    // Optional outputs can be NULL.
+    qr_err_t qr_verify_v4_response_json(
+        const char *verify_body_json,
+        const char *st_token,
+        const unsigned char server_pk_raw[32],
+        /*out*/ char out_st_hash_b64[64],              // optional
+        /*out*/ char out_canonical_sha256_b64[64],     // optional
+        /*out*/ char out_fingerprint_hex[129]          // optional
+    );
+
+
 #ifdef __cplusplus
 }
 #endif

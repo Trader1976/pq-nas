@@ -1,18 +1,35 @@
-## QR-Auth v4 — Request Token (req_token)
+## QR-Auth v4 — Request Token (`req`)
 
-The server issues a request token (req_token) when initiating authentication.
+The server issues a request token (`req`) when initiating authentication.
+This token is server-authenticated and short-lived. It is not a login by itself.
 
-Payload (JSON, UTF-8, no whitespace guarantees required):
+### Payload (canonical JSON, UTF-8)
 
-{
-"v": 4,
-"typ": "req",
-"sid": "...",
-"origin": "...",
-"nonce": "...",
-"issued_at": ...,
-"expires_at": ...
-}
+The payload is encoded as **canonical JSON**:
+- stable key order
+- no whitespace
+- exact byte preservation (the server verifies signatures over these exact bytes)
 
-The payload is base64url-encoded (no padding), then signed by the server
-using Ed25519 over SHA-256(payload_bytes).
+Fields included:
+
+- `v` (4)
+- `typ` ("req")
+- `sid` (string)
+- `origin` (HTTPS origin)
+- `nonce` (string)
+- `chal` (string)
+- `aud` (string)
+- `iss` (string)
+- `scope` (string)
+- `iat` (epoch seconds)
+- `exp` (epoch seconds)
+
+### Wire format
+
+base64url_no_pad(payload_json_bytes) "." base64url_no_pad(signature)
+
+
+### Signing rule
+
+- Compute `digest = SHA256(payload_json_bytes)`
+- Compute `signature = Ed25519_sign(digest, server_sk)`
