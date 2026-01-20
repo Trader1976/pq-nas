@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>PQ-NAS Admin</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+        body { font-family: system-ui; padding: 24px; }
+        .card { border:1px solid #ddd; border-radius:12px; padding:16px; max-width:980px; }
+        pre { background:#f6f6f6; padding:12px; border-radius:10px; }
+        .badge { padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+        .admin { background:#2e7d32; color:#fff; }
+        .user { background:#1565c0; color:#fff; }
+        .unknown { background:#666; color:#fff; }
+    </style>
+</head>
+<body>
+<h2 style="display:flex;gap:10px;align-items:center">
+    <span>PQ-NAS Admin</span>
+    <span id="roleBadge" class="badge unknown">role: ?</span>
+</h2>
+
+<div class="card">
+    <h3>/api/v4/me</h3>
+    <div id="status">Loading...</div>
+    <pre id="me">(waiting)</pre>
+
+    <h3 style="margin-top:16px">Links</h3>
+    <ul>
+        <li><a href="/admin/audit">/admin/audit</a></li>
+        <li><a href="/api/v4/audit/verify">/api/v4/audit/verify</a></li>
+        <li><a href="/app">/app</a></li>
+    </ul>
+</div>
+
+<script src="/static/admin.js"></script>
+</body>
+</html>

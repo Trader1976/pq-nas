@@ -104,6 +104,10 @@ const std::string STATIC_ADMIN_HTML =
     (std::filesystem::path(REPO_ROOT) / "server/src/static/admin.html").string();
 const std::string STATIC_ADMIN_JS =
     (std::filesystem::path(REPO_ROOT) / "server/src/static/admin.js").string();
+const std::string STATIC_APP_HTML =
+    (std::filesystem::path(REPO_ROOT) / "server/src/static/app.html").string();
+const std::string STATIC_APP_JS =
+    (std::filesystem::path(REPO_ROOT) / "server/src/static/app.js").string();
 
 static std::string ORIGIN   = "https://nas.example.com";
 static std::string ISS      = "pq-nas";
@@ -506,29 +510,28 @@ int main() {
 
 
     srv.Get("/admin", [&](const httplib::Request& req, httplib::Response& res) {
-       if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) {
-           return;
-       }
+        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
 
-       const std::string body = slurp_file(STATIC_ADMIN_HTML);
-       if (body.empty()) {
-           res.status = 404;
-           res.set_content("missing admin.html", "text/plain");
-           return;
-       }
+        const std::string body = slurp_file(STATIC_ADMIN_HTML);
+        if (body.empty()) {
+            res.status = 404;
+            res.set_content("missing admin.html", "text/plain");
+            return;
+        }
 
-       res.set_header("Cache-Control", "no-store");
-       res.set_content(body, "text/html; charset=utf-8");
-   });
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(body, "text/html; charset=utf-8");
+    });
 
+    srv.Get("/static/app.js", [&](const httplib::Request&, httplib::Response& res) {
+        const std::string body = slurp_file(STATIC_APP_JS);
+        if (body.empty()) { res.status = 404; res.set_content("missing app.js","text/plain"); return; }
+        res.set_content(body, "application/javascript; charset=utf-8");
+    });
 
     srv.Get("/static/admin.js", [&](const httplib::Request&, httplib::Response& res) {
         const std::string body = slurp_file(STATIC_ADMIN_JS);
-        if (body.empty()) {
-            res.status = 404;
-            res.set_content("missing admin.js", "text/plain");
-            return;
-        }
+        if (body.empty()) { res.status = 404; res.set_content("missing admin.js","text/plain"); return; }
         res.set_header("Cache-Control", "no-store");
         res.set_content(body, "application/javascript; charset=utf-8");
     });
@@ -567,47 +570,15 @@ int main() {
     });
 
     srv.Get("/app", [&](const httplib::Request&, httplib::Response& res) {
-        res.status = 200;
-        res.set_header("Content-Type", "text/html; charset=utf-8");
-        res.set_header("Cache-Control", "no-store");
-        res.body =
-            "<!doctype html><html><body style='font-family:system-ui;padding:24px'>"
-            "<h2>PQ-NAS</h2>"
-            "<p>Session check:</p>"
-            "<pre id='out'>Loading...</pre>"
-
-            "<div id='admin_block' style='display:none;margin-top:16px;padding-top:12px;border-top:1px solid #ddd'>"
-            "<h3>Admin</h3>"
-            "<ul>"
-            "  <li><a href='/admin'>/admin</a> (admin landing)</li>"
-            "  <li><a href='/admin/audit'>/admin/audit</a> (audit UI)</li>"
-            "  <li><a href='/api/v4/audit/verify'>/api/v4/audit/verify</a> (verify audit chain)</li>"
-            "  <li><a href='/api/v4/admin/ping'>/api/v4/admin/ping</a> (admin ping)</li>"
-            "</ul>"
-            "</div>"
-
-            "<div id='user_hint' style='display:none;margin-top:16px;padding-top:12px;border-top:1px solid #ddd;color:#666'>"
-            "Signed in as non-admin. No admin links."
-            "</div>"
-
-            "<script>"
-            "fetch('/api/v4/me', { credentials: 'include' })"
-            " .then(async r => ({status:r.status, body: await r.text()}))"
-            " .then(x => {"
-            "   let j=null;"
-            "   try { j = JSON.parse(x.body); } catch(e) {}"
-            "   if (j) document.getElementById('out').textContent = JSON.stringify(j, null, 2);"
-            "   else document.getElementById('out').textContent = x.status + '\\n' + x.body;"
-            "   if (j && j.ok && j.role === 'admin') {"
-            "     document.getElementById('admin_block').style.display = 'block';"
-            "   } else if (j && j.ok) {"
-            "     document.getElementById('user_hint').style.display = 'block';"
-            "   }"
-            " })"
-            " .catch(e => { document.getElementById('out').textContent = String(e); });"
-            "</script>"
-            "</body></html>";
+        const std::string body = slurp_file(STATIC_APP_HTML);
+        if (body.empty()) {
+            res.status = 404;
+            res.set_content("missing app.html", "text/plain");
+            return;
+        }
+        res.set_content(body, "text/html; charset=utf-8");
     });
+
 
 
 

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>PQ-NAS</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+        body { font-family: system-ui; padding: 24px; }
+        pre { background:#f6f6f6; padding:12px; border-radius:10px; }
+        .admin { margin-top:16px; padding-top:12px; border-top:1px solid #ddd; display:none; }
+    </style>
+</head>
+<body>
+<h2>PQ-NAS</h2>
+<p>Session check:</p>
+<pre id="out">Loading...</pre>
+
+<div id="admin_block" class="admin">
+    <h3>Admin</h3>
+    <ul>
+        <li><a href="/admin">/admin</a></li>
+        <li><a href="/admin/audit">/admin/audit</a></li>
+        <li><a href="/api/v4/audit/verify">/api/v4/audit/verify</a></li>
+        <li><a href="/api/v4/admin/ping">/api/v4/admin/ping</a></li>
+    </ul>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

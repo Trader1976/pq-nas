@@ -109,7 +109,6 @@ int main(int argc, char** argv) {
     // Tool should replay crypto; allow policy/binding to be toggled.
     const bool enforce_allowlist = j.value("enforce_allowlist", false);
     const bool enforce_origin_rp = j.value("enforce_origin_rp", false);
-
     int failures = 0;
 
     for (const auto& c : j["cases"]) {
@@ -133,17 +132,18 @@ int main(int argc, char** argv) {
         // Deterministic time for frozen vectors:
         // If vectors.json includes now_unix_sec, use it; otherwise use real time.
 
-// Freeze time for vectors (optional)
-if (j.contains("now_unix_sec")) {
-    cfg.now_unix_sec = j.at("now_unix_sec").get<long>();
-}
+        // Freeze time for vectors (optional)
+        if (j.contains("now_unix_sec")) {
+            cfg.now_unix_sec = j.at("now_unix_sec").get<long>();
+        }
 
-// For vectors: don't require allowlist unless you're explicitly testing policy
-cfg.enforce_allowlist = false;
+		// For vectors: don't require allowlist unless you're explicitly testing policy
+		cfg.enforce_allowlist = enforce_allowlist; //was false before
 
         // For tool runs, we typically want to skip allowlist decisions unless explicitly
         // requested in the vectors file (enforce_allowlist=true). If enforce_allowlist=true
         // we still provide a callback; vectors can fail for other reasons.
+        // Provide callback (only used if enforce_allowlist=true)
         cfg.allowlist_is_allowed = [](const std::string&) { return true; };
 
         if (enforce_origin_rp) {
