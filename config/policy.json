@@ -1,5 +1,8 @@
 {
-  "allow_fingerprints": [
-    "PUT_YOUR_FP_B64URL_HERE"
+  "users": [
+    {
+      "fingerprint": "a8885f40f4c12c85837807021a48d31c1ba657f5aebe809107eccb72ce60024076fd976c34109c78c68614c5d37702225397a3daba099fb16ed4738167bede39",
+      "role": "admin"
+    }
   ]
 }
