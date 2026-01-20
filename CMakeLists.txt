@@ -192,6 +192,32 @@ add_custom_command(TARGET verify_v4_vectors POST_BUILD
         "${PQNAS_DNA_LIB_SRC}"
         "$<TARGET_FILE_DIR:verify_v4_vectors>/libdna_lib.so"
 )
+
+# -----------------------------------------------------------------------------
+# Tool: test_admin_cookie (regression test for cookie+policy admin checks)
+# -----------------------------------------------------------------------------
+add_executable(test_admin_cookie
+        tools/test_admin_cookie.cpp
+        server/src/authz.cc
+        server/src/allowlist.cc
+        server/src/session_cookie.cc
+        server/src/pqnas_util.cc
+)
+
+target_include_directories(test_admin_cookie PRIVATE
+        ${CMAKE_SOURCE_DIR}/server/include
+        ${CMAKE_SOURCE_DIR}/server/third_party
+        ${CMAKE_SOURCE_DIR}/core
+)
+
+target_link_libraries(test_admin_cookie PRIVATE
+        OpenSSL::Crypto
+        sodium
+)
+
+set_target_properties(test_admin_cookie PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
 # -----------------------------------------------------------------------------
 # Tool: pqnas_keygen
 # -----------------------------------------------------------------------------
