@@ -100,6 +100,10 @@ const std::string STATIC_AUDIT_HTML =
     (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_audit.html").string();
 const std::string STATIC_AUDIT_JS =
     (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_audit.js").string();
+const std::string STATIC_ADMIN_HTML =
+    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin.html").string();
+const std::string STATIC_ADMIN_JS =
+    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin.js").string();
 
 static std::string ORIGIN   = "https://nas.example.com";
 static std::string ISS      = "pq-nas";
@@ -495,110 +499,40 @@ int main() {
     });
 
     srv.Get("/admin/audit", [&](const httplib::Request& req, httplib::Response& res) {
-        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) {
-            return;
-        }
-        res.set_content(slurp_file(STATIC_AUDIT_HTML),
-                        "text/html; charset=utf-8");
-    });
-
-        // Admin landing page (gated)
-    srv.Get("/admin", [&](const httplib::Request& req, httplib::Response& res) {
-        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) {
-            return;
-        }
-
-        // Simple landing page that calls /api/v4/me and renders it.
-        // Links to audit UI and audit verify endpoint.
-        const char* html = R"HTML(<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>PQ-NAS Admin</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, sans-serif; padding: 24px; }
-    .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; max-width: 980px; }
-    pre { background: #f6f6f6; padding: 12px; border-radius: 10px; overflow: auto; }
-    code { background: #f6f6f6; padding: 2px 6px; border-radius: 8px; }
-    .muted { color: #666; }
-    a { text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    ul { margin: 8px 0 0 18px; }
-    .badge { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; }
-    .badge-admin { background:#2e7d32; color:#fff; }
-    .badge-user { background:#1565c0; color:#fff; }
-    .badge-unknown { background:#666; color:#fff; }
-  </style>
-</head>
-<body>
-    <h2 style="display:flex; gap:10px; align-items:center;">
-    <span>PQ-NAS Admin</span>
-    <span id="roleBadge" class="badge badge-unknown">role: ?</span>
-  </h2>
-  <p class="muted">Gated by <code>require_admin_cookie</code>.</p>
-
-  <div class="card">
-    <h3>/api/v4/me</h3>
-    <div class="muted" id="status">Loading...</div>
-    <pre id="me">(waiting)</pre>
-
-    <h3 style="margin-top: 16px;">Links</h3>
-    <ul>
-      <li><a href="/admin/audit">/admin/audit</a> <span class="muted">(audit UI)</span></li>
-      <li><a href="/api/v4/audit/verify">/api/v4/audit/verify</a> <span class="muted">(verify audit chain)</span></li>
-      <li><a href="/app">/app</a> <span class="muted">(main app)</span></li>
-    </ul>
-  </div>
-
-<script>
-(async () => {
-  const status = document.getElementById("status");
-  const pre = document.getElementById("me");
-
-  try {
-    const r = await fetch("/api/v4/me", { credentials: "include" });
-    const txt = await r.text();
-
-    status.textContent = `HTTP ${r.status}`;
-try {
-  const j = JSON.parse(txt);
-
-  // --- ROLE BADGE (THIS IS THE SNIPPET YOU ASKED ABOUT) ---
-  const badge = document.getElementById("roleBadge");
-  const role = (j && j.role) ? String(j.role) : "";
-
-  if (role === "admin") {
-    badge.textContent = "role: admin";
-    badge.className = "badge badge-admin";
-  } else if (role === "user") {
-    badge.textContent = "role: user";
-    badge.className = "badge badge-user";
-  } else {
-    badge.textContent = "role: ?";
-    badge.className = "badge badge-unknown";
-  }
-  // --- END ROLE BADGE ---
-
-  pre.textContent = JSON.stringify(j, null, 2);
-} catch {
-  pre.textContent = txt;
-}
-
-  } catch (e) {
-    status.textContent = "Failed to fetch /api/v4/me";
-    pre.textContent = String(e);
-  }
-})();
-</script>
-</body>
-</html>)HTML";
-
-        res.status = 200;
-        res.set_header("Content-Type", "text/html; charset=utf-8");
+        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
         res.set_header("Cache-Control", "no-store");
-        res.body = html;
+        res.set_content(slurp_file(STATIC_AUDIT_HTML), "text/html; charset=utf-8");
     });
+
+
+    srv.Get("/admin", [&](const httplib::Request& req, httplib::Response& res) {
+       if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) {
+           return;
+       }
+
+       const std::string body = slurp_file(STATIC_ADMIN_HTML);
+       if (body.empty()) {
+           res.status = 404;
+           res.set_content("missing admin.html", "text/plain");
+           return;
+       }
+
+       res.set_header("Cache-Control", "no-store");
+       res.set_content(body, "text/html; charset=utf-8");
+   });
+
+
+    srv.Get("/static/admin.js", [&](const httplib::Request&, httplib::Response& res) {
+        const std::string body = slurp_file(STATIC_ADMIN_JS);
+        if (body.empty()) {
+            res.status = 404;
+            res.set_content("missing admin.js", "text/plain");
+            return;
+        }
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(body, "application/javascript; charset=utf-8");
+    });
+
 
 
 
