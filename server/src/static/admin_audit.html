@@ -1,23 +1,428 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="utf-8">
-    <title>PQ-NAS Audit</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>PQ-NAS • Admin Audit</title>
     <style>
-        body { font-family: monospace; background:#111; color:#ddd; margin: 16px; }
-        header { display:flex; gap:12px; align-items:center; margin-bottom:12px; }
-        button { padding:6px 10px; }
-        pre { white-space: pre-wrap; word-break: break-word; }
+        :root{
+            --bg0:#070A0B;
+            --bg1:#0B1011;
+            --card:#0E1516;
+            --card2:#0A0F10;
+            --border:rgba(120,255,205,0.14);
+            --border2:rgba(120,255,205,0.22);
+            --text:#D7E0DD;
+            --muted:#8FA3A0;
+            --green:#55FFB3;
+            --green2:#28D88F;
+            --yellow:#FFD36A;
+            --red:#FF5D6C;
+            --blue:#64B5FF;
+            --shadow:0 14px 40px rgba(0,0,0,0.55);
+            --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+            --radius: 14px;
+        }
+        *{ box-sizing:border-box; }
+        html,body{ height:100%; }
+        body{
+            margin:0;
+            font-family:var(--sans);
+            background:
+                    radial-gradient(900px 500px at 10% -10%, rgba(85,255,179,0.08), transparent 60%),
+                    radial-gradient(700px 420px at 85% 0%, rgba(100,181,255,0.08), transparent 55%),
+                    linear-gradient(180deg, var(--bg0), var(--bg1));
+            color:var(--text);
+        }
+        a{ color:var(--green); text-decoration:none; }
+        .wrap{ max-width:1200px; margin:0 auto; padding:22px 18px 40px; }
+
+        /* Header */
+        .topbar{
+            display:flex; align-items:center; justify-content:space-between;
+            gap:14px; padding:14px 16px; border:1px solid var(--border);
+            border-radius:var(--radius); background:rgba(14,21,22,0.72);
+            box-shadow:var(--shadow);
+            backdrop-filter: blur(6px);
+        }
+        .brand{ display:flex; flex-direction:column; gap:2px; }
+        .brand .title{
+            font-size:16px; letter-spacing:0.2px; font-weight:700;
+            display:flex; align-items:center; gap:10px;
+        }
+        .dot{
+            width:10px; height:10px; border-radius:50%;
+            background:var(--green);
+            box-shadow:0 0 16px rgba(85,255,179,0.75);
+            display:inline-block;
+        }
+        .brand .subtitle{ font-size:12px; color:var(--muted); }
+
+        /* Cards */
+        .grid{
+            display:grid;
+            grid-template-columns: 1.3fr 1fr;
+            gap:14px;
+            margin-top:14px;
+        }
+        .detailActions .pill{
+            max-width: 100%;
+        }
+        .detailActions .pill .v{
+            max-width: 100%;
+            overflow:hidden;
+            text-overflow: ellipsis;
+            display:inline-block;
+        }
+        @media (max-width: 900px){
+            .detail{
+                grid-template-columns: 1fr;   /* ✅ stack */
+            }
+            .detailActions{
+                min-width: 0;
+                flex-direction: row;
+                flex-wrap: wrap;
+                gap: 10px;
+            }
+            .detailActions .btn{
+                flex: 1 1 160px;
+            }
+        }
+        @media (max-width: 980px){ .grid{ grid-template-columns: 1fr; } }
+        .card{
+            border:1px solid var(--border);
+            border-radius:var(--radius);
+            background:rgba(14,21,22,0.72);
+            box-shadow:var(--shadow);
+            backdrop-filter: blur(6px);
+            overflow:hidden;
+        }
+        .card .hd{
+            display:flex; align-items:center; justify-content:space-between;
+            gap:12px;
+            padding:12px 14px;
+            border-bottom:1px solid var(--border);
+            background: linear-gradient(180deg, rgba(85,255,179,0.06), transparent);
+        }
+        .card .hd .h{
+            font-size:13px; color:var(--muted); letter-spacing:0.12em; text-transform:uppercase;
+        }
+        .card .bd{ padding:14px; }
+
+        .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+        .row + .row{ margin-top:10px; }
+
+        .btn{
+            border:1px solid var(--border2);
+            background:rgba(10,15,16,0.65);
+            color:var(--text);
+            padding:9px 11px;
+            border-radius:12px;
+            cursor:pointer;
+            font-weight:650;
+            letter-spacing:0.2px;
+            transition: transform .06s ease, border-color .15s ease, background .15s ease, box-shadow .15s ease;
+            user-select:none;
+        }
+        .btn:hover{ border-color:rgba(85,255,179,0.45); background:rgba(10,15,16,0.85); }
+        .btn:active{ transform: translateY(1px); }
+        .btn.primary{
+            border-color:rgba(85,255,179,0.55);
+            box-shadow: 0 0 0 1px rgba(85,255,179,0.08) inset;
+        }
+        .btn.glow{
+            border-color:rgba(85,255,179,0.65);
+            box-shadow:0 0 0 1px rgba(85,255,179,0.12) inset, 0 0 18px rgba(85,255,179,0.12);
+        }
+
+        .input{
+            border:1px solid var(--border2);
+            background:rgba(10,15,16,0.65);
+            color:var(--text);
+            padding:10px 12px;
+            border-radius:12px;
+            outline:none;
+            min-width: 210px;
+        }
+        .input::placeholder{ color:rgba(143,163,160,0.7); }
+        .input:focus{ border-color:rgba(85,255,179,0.55); box-shadow:0 0 0 3px rgba(85,255,179,0.08); }
+
+        .mono{ font-family:var(--mono); }
+
+        .pill{
+            display:inline-flex; align-items:center; gap:8px;
+            border:1px solid var(--border2);
+            background:rgba(10,15,16,0.6);
+            padding:6px 10px;
+            border-radius:999px;
+            font-size:12px;
+            color:var(--muted);
+            white-space:nowrap;
+        }
+        .pill .k{ color:var(--muted); }
+        .pill .v{ color:var(--text); font-weight:650; }
+        .pill.ok{ border-color:rgba(85,255,179,0.45); color:rgba(85,255,179,0.95); }
+        .pill.fail{ border-color:rgba(255,93,108,0.45); color:rgba(255,93,108,0.95); }
+        .pill.warn{ border-color:rgba(255,211,106,0.45); color:rgba(255,211,106,0.95); }
+        .pill.info{ border-color:rgba(100,181,255,0.45); color:rgba(100,181,255,0.95); }
+        .pill.on{
+            border-color:rgba(85,255,179,0.55);
+            box-shadow:0 0 0 1px rgba(85,255,179,0.10) inset, 0 0 16px rgba(85,255,179,0.10);
+            color:rgba(85,255,179,0.95);
+        }
+
+        .toggle{
+            display:inline-flex; align-items:center; gap:8px;
+            padding:7px 10px;
+            border:1px solid var(--border2);
+            border-radius:999px;
+            background:rgba(10,15,16,0.55);
+            color:var(--muted);
+            user-select:none;
+        }
+        .toggle input{ accent-color: var(--green2); }
+
+        /* Table */
+        .tableWrap{
+            margin-top:14px;
+            border:1px solid var(--border);
+            border-radius:var(--radius);
+            overflow:hidden;                 /* keep this */
+            overflow-x: hidden;              /* ✅ add this line */
+            background:rgba(14,21,22,0.72);
+            box-shadow:var(--shadow);
+            backdrop-filter: blur(6px);
+        }
+
+        table{
+            width:100%;                      /* ✅ ensure this is present */
+            border-collapse:collapse;
+            table-layout:fixed;
+            font-size:13px;
+        }
+        thead th{
+            text-align:left;
+            padding:10px 12px;
+            color:var(--muted);
+            font-size:12px;
+            letter-spacing:0.10em;
+            text-transform:uppercase;
+            border-bottom:1px solid var(--border);
+            background:rgba(10,15,16,0.72);
+
+            /* ✅ Sticky header */
+            position: sticky;
+            top: 0;
+            z-index: 5;
+        }
+        tbody td{
+            padding:10px 12px;
+            border-bottom:1px solid rgba(120,255,205,0.10);
+            vertical-align:top;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+        tbody tr:hover{ background:rgba(85,255,179,0.05); }
+        tbody tr.clickable{ cursor:pointer; }
+
+        .col-idx{ width:56px; }
+        .col-ts{ width:170px; }
+        .col-status{ width:90px; }
+        .col-event{ width:200px; }
+        .col-fp{ width:260px; }
+        .col-sid{ width:160px; }
+        .col-ip{ width:140px; }
+
+        .statusPill{
+            display:inline-flex; align-items:center; justify-content:center;
+            padding:5px 10px;
+            border-radius:999px;
+            font-weight:800;
+            font-size:12px;
+            letter-spacing:0.02em;
+            border:1px solid var(--border2);
+            background:rgba(10,15,16,0.55);
+        }
+        .statusPill.ok{ border-color:rgba(85,255,179,0.45); color:rgba(85,255,179,0.95); }
+        .statusPill.fail{ border-color:rgba(255,93,108,0.45); color:rgba(255,93,108,0.95); }
+        .statusPill.warn{ border-color:rgba(255,211,106,0.45); color:rgba(255,211,106,0.95); }
+        .statusPill.info{ border-color:rgba(100,181,255,0.45); color:rgba(100,181,255,0.95); }
+
+        /* Expanded JSON row */
+        .detailRow td{
+            padding:0;
+            overflow: hidden;     /* ✅ prevents the TD from stretching outside */
+            border-bottom:1px solid rgba(120,255,205,0.12);
+            background:rgba(10,15,16,0.55);
+            white-space:normal;
+        }
+        .detail{
+            padding:12px;
+            display:grid;
+            grid-template-columns: minmax(0, 1fr) 220px; /* ✅ hard clamp right column */
+            gap:12px;
+            align-items:start;
+            width: 100%;
+        }
+        .detail pre{
+            margin:0;
+            padding:12px;
+            border-radius:12px;
+            border:1px solid rgba(120,255,205,0.16);
+            background:rgba(7,10,11,0.72);
+            color:rgba(215,224,221,0.92);
+            font-family:var(--mono);
+            font-size:12px;
+            line-height:1.45;
+            min-width: 0;         /* ✅ critical: allows shrink inside grid */
+            /* ✅ prevent right-side overflow */
+            white-space: pre-wrap;         /* wrap instead of forcing single long lines */
+            word-break: break-word;        /* break long tokens */
+            overflow-wrap: anywhere;       /* break hashes, long UA strings, etc. */
+
+            overflow:auto;
+            max-height: 380px;
+            max-width: 100%;
+        }
+        .detailActions{
+            display:flex;
+            flex-direction:column;
+            gap:8px;
+            align-items:stretch;
+            min-width: 0;         /* ✅ critical */
+            width: 220px;         /* ✅ matches grid clamp */
+        }
+
+        .small{ font-size:12px; color:var(--muted); }
+
+        .note{
+            margin-top:10px;
+            color:var(--muted);
+            font-size:12px;
+            line-height:1.5;
+        }
+        .kbd{
+            font-family:var(--mono);
+            border:1px solid rgba(120,255,205,0.18);
+            border-bottom-color: rgba(120,255,205,0.28);
+            background:rgba(10,15,16,0.65);
+            padding:2px 6px;
+            border-radius:8px;
+            color:rgba(215,224,221,0.88);
+        }
     </style>
 </head>
 <body>
-<header>
-    <div>PQ-NAS Audit (tail)</div>
-    <button onclick="loadTail()">Reload</button>
-    <button onclick="verifyChain()">Verify chain</button>
-</header>
+<div class="wrap">
+    <div class="topbar">
+        <div class="brand">
+            <div class="title"><span class="dot"></span> PQ-NAS Admin • Audit Log</div>
+            <div class="subtitle">Hash-chained JSONL security audit trail (tail + integrity verification)</div>
+        </div>
+        <div class="row">
+        <span id="autoPill" class="pill info" title="Auto-refresh state">
+          <span class="k">Auto:</span> <span class="v">OFF</span>
+        </span>
+            <span id="integrityPill" class="pill warn" title="Integrity verification status">
+          <span class="k">Integrity:</span> <span class="v">unknown</span>
+        </span>
+            <span id="lastFetchPill" class="pill info" title="Last successful tail fetch">
+          <span class="k">Tail:</span> <span class="v">—</span>
+        </span>
+        </div>
+    </div>
 
-<pre id="log">Loading…</pre>
-<script src="/static/admin_audit.js"></script>
+    <div class="grid">
+        <div class="card">
+            <div class="hd">
+                <div class="h">Filters</div>
+                <div class="small">Matches any field (substring, case-insensitive)</div>
+            </div>
+            <div class="bd">
+                <div class="row">
+                    <input id="qEvent" class="input" placeholder="event (e.g. login / policy / verify)" />
+                    <input id="qFp" class="input mono" placeholder="fingerprint…" />
+                    <input id="qSid" class="input mono" placeholder="sid…" />
+                    <input id="qIp" class="input mono" placeholder="ip…" />
+                </div>
+                <div class="row">
+                    <button id="btnClear" class="btn">Clear</button>
+                    <span class="pill">
+              <span class="k">Showing:</span> <span class="v" id="countText">0</span>
+            </span>
+                    <span class="pill">
+              <span class="k">Loaded:</span> <span class="v" id="loadedText">0</span>
+            </span>
+                </div>
+                <div class="note">
+                    Tip: click a row to expand full JSON. Use <span class="kbd">Esc</span> to collapse all.
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="hd">
+                <div class="h">Controls</div>
+                <div class="small">No backend changes • static UI only</div>
+            </div>
+            <div class="bd">
+                <div class="row">
+                    <button id="btnRefresh" class="btn primary">Refresh</button>
+                    <button id="btnVerify" class="btn">Verify integrity</button>
+                    <label class="toggle">
+                        <input id="autoToggle" type="checkbox" />
+                        Auto-refresh
+                    </label>
+                </div>
+
+                <div class="row">
+                    <button id="btnExportJson" class="btn">Export JSON</button>
+                    <button id="btnExportCsv" class="btn">Export CSV</button>
+                </div>
+
+                <div class="row">
+            <span class="pill">
+              <span class="k">Tail N:</span> <span class="v" id="tailNText">200</span>
+            </span>
+                    <input id="tailN" class="input mono" style="width:120px" value="200" />
+                    <span class="pill" title="Auto refresh interval seconds">
+              <span class="k">Every:</span> <span class="v" id="intervalText">3s</span>
+            </span>
+                    <input id="intervalSec" class="input mono" style="width:90px" value="3" />
+                </div>
+
+                <div class="note">
+                    Integrity indicator calls <span class="kbd">/api/v4/audit/verify</span>.
+                    Tail uses <span class="kbd">/api/v4/audit/tail?n=…</span> with <span class="kbd">Cache-Control: no-store</span>.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="tableWrap" style="margin-top:14px">
+        <table>
+            <thead>
+            <tr>
+                <th class="col-idx">#</th>
+                <th class="col-ts">Timestamp</th>
+                <th class="col-status">Status</th>
+                <th class="col-event">Event</th>
+                <th class="col-fp">Fingerprint</th>
+                <th class="col-sid">SID</th>
+                <th class="col-ip">IP</th>
+            </tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+        </table>
+    </div>
+
+    <div class="note" style="margin-top:12px">
+        Expand rows for raw JSON (monospace). This page does not modify the audit log and does not attempt to “fix” anything — it only renders and verifies.
+    </div>
+</div>
+
+<script src="/static/admin_audit.js?v=4"></script>
 </body>
 </html>

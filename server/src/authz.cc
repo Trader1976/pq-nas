@@ -105,12 +105,27 @@ bool require_admin_cookie(const httplib::Request& req,
 
     return true;
 }
+
+
 bool require_admin_cookie_users(const httplib::Request& req,
                                 httplib::Response& res,
                                 const unsigned char cookie_key[32],
-                                const std::string& /*users_path*/,
+                                const std::string& users_path,
                                 const pqnas::UsersRegistry* users)
 {
+    return require_admin_cookie_users_actor(req, res, cookie_key, users_path, users, nullptr);
+}
+
+
+bool require_admin_cookie_users_actor(const httplib::Request& req,
+                                      httplib::Response& res,
+                                      const unsigned char cookie_key[32],
+                                      const std::string& /*users_path*/,
+                                      const pqnas::UsersRegistry* users,
+                                      std::string* out_admin_fp_hex)
+{
+    if (out_admin_fp_hex) out_admin_fp_hex->clear();
+
     // Require cookie header + pqnas_session
     const std::string cookieVal = extract_cookie_value(req, "pqnas_session");
     if (cookieVal.empty()) {
@@ -147,5 +162,7 @@ bool require_admin_cookie_users(const httplib::Request& req,
         return false;
     }
 
+    if (out_admin_fp_hex) *out_admin_fp_hex = fp_hex;
     return true;
 }
+

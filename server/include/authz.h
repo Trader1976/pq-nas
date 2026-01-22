@@ -29,3 +29,10 @@ bool require_admin_cookie_users(const httplib::Request& req,
                                 const std::string& users_path,
                                 const pqnas::UsersRegistry* users);
 
+
+bool require_admin_cookie_users_actor(const httplib::Request& req,
+                                      httplib::Response& res,
+                                      const unsigned char cookie_key[32],
+                                      const std::string& users_path,
+                                      const pqnas::UsersRegistry* users,
+                                      std::string* out_admin_fp_hex);

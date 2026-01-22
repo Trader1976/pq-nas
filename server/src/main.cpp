@@ -562,14 +562,18 @@ int main() {
     });
 
     srv.Get("/admin/audit", [&](const httplib::Request& req, httplib::Response& res) {
-        if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+        std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
         res.set_header("Cache-Control", "no-store");
         res.set_content(slurp_file(STATIC_AUDIT_HTML), "text/html; charset=utf-8");
     });
 
 
     srv.Get("/admin", [&](const httplib::Request& req, httplib::Response& res) {
-        if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+        std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
         const std::string body = slurp_file(STATIC_ADMIN_HTML);
         if (body.empty()) {
             res.status = 404;
@@ -1402,7 +1406,9 @@ srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& r
 
 
 	srv.Get("/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
-    	if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+	    std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
 	    const std::string body = slurp_file(STATIC_USERS_HTML);
 	    if (body.empty()) { res.status = 404; res.set_content("missing admin_users.html","text/plain"); return; }
 	    res.set_header("Cache-Control", "no-store");
@@ -1417,7 +1423,9 @@ srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& r
 	});
 
 	srv.Get("/api/v4/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
-    	if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+	    std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
 
     	res.set_header("Cache-Control", "no-store"); // recommended
 
@@ -1462,7 +1470,9 @@ srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& r
     // POST /api/v4/admin/users/status
     // Body: {"fingerprint":"...","status":"enabled|disabled|revoked"}
     srv.Post("/api/v4/admin/users/status", [&](const httplib::Request& req, httplib::Response& res) {
-        if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+        std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
 
         json j;
         try { j = json::parse(req.body); }
@@ -1499,6 +1509,7 @@ srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& r
             ev.f["fingerprint"] = fp;
             ev.f["status"] = status;
             ev.f["ts"] = now_iso_utc();
+            ev.f["actor_fp"] = actor_fp;
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
             audit.append(ev);
         }
@@ -1518,7 +1529,9 @@ srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& r
 // POST /api/v4/admin/users/upsert
 // Body: {"fingerprint":"...","name":"...","role":"user|admin","notes":"..."}
 srv.Post("/api/v4/admin/users/upsert", [&](const httplib::Request& req, httplib::Response& res) {
-    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
 
     json j;
     try { j = json::parse(req.body); }
@@ -1574,6 +1587,7 @@ srv.Post("/api/v4/admin/users/upsert", [&](const httplib::Request& req, httplib:
         if (!name.empty()) ev.f["name"] = pqnas::shorten(name, 80);
         if (!notes.empty()) ev.f["notes"] = pqnas::shorten(notes, 120);
         ev.f["ts"] = now_iso;
+        ev.f["actor_fp"] = actor_fp;
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
         audit.append(ev);
     }
@@ -1592,7 +1606,9 @@ srv.Post("/api/v4/admin/users/upsert", [&](const httplib::Request& req, httplib:
 
 // POST /api/v4/admin/users/enable   {"fingerprint":"...","role":"user|admin"?,"name":"..."?,"notes":"..."?}
 srv.Post("/api/v4/admin/users/enable", [&](const httplib::Request& req, httplib::Response& res) {
-    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
 
     json j;
     try { j = json::parse(req.body); }
@@ -1634,6 +1650,9 @@ srv.Post("/api/v4/admin/users/enable", [&](const httplib::Request& req, httplib:
         ev.outcome = saved ? "ok" : "fail";
         ev.f["fingerprint"] = fp;
         ev.f["role"] = role;
+        ev.f["ts"] = now_iso_utc();
+        ev.f["actor_fp"] = actor_fp;
+
         if (!name.empty()) ev.f["name"] = pqnas::shorten(name, 80);
         if (!notes.empty()) ev.f["notes"] = pqnas::shorten(notes, 120);
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
@@ -1651,7 +1670,9 @@ srv.Post("/api/v4/admin/users/enable", [&](const httplib::Request& req, httplib:
 
 // POST /api/v4/admin/users/disable  {"fingerprint":"..."}
 srv.Post("/api/v4/admin/users/disable", [&](const httplib::Request& req, httplib::Response& res) {
-    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
 
     json j;
     try { j = json::parse(req.body); }
@@ -1683,6 +1704,8 @@ srv.Post("/api/v4/admin/users/disable", [&](const httplib::Request& req, httplib
         ev.event = "admin.user_disabled";
         ev.outcome = saved ? "ok" : "fail";
         ev.f["fingerprint"] = fp;
+        ev.f["ts"] = now_iso_utc();
+        ev.f["actor_fp"] = actor_fp;
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
         audit.append(ev);
     }
@@ -1726,7 +1749,9 @@ srv.Post("/api/v4/admin/users/disable", [&](const httplib::Request& req, httplib
     // POST /api/v4/admin/users/delete
     // Body: {"fingerprint":"..."}
     srv.Post("/api/v4/admin/users/delete", [&](const httplib::Request& req, httplib::Response& res) {
-        if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+        std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
 
         json j;
         try { j = json::parse(req.body); }
@@ -1761,6 +1786,7 @@ srv.Post("/api/v4/admin/users/disable", [&](const httplib::Request& req, httplib
             ev.outcome = (ok_del && ok_save) ? "ok" : "fail";
             ev.f["fingerprint"] = fp;
             ev.f["ts"] = now_iso_utc();
+            ev.f["actor_fp"] = actor_fp;
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
             audit.append(ev);
         }
