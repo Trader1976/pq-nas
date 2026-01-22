@@ -78,6 +78,7 @@ extern "C" {
 #include "httplib.h"
 #include "allowlist.h"
 #include "v4_verify_shared.h"
+#include "users_registry.h"
 
 // JSON (header-only)
 #include <nlohmann/json.hpp>
@@ -108,6 +109,13 @@ const std::string STATIC_APP_HTML =
     (std::filesystem::path(REPO_ROOT) / "server/src/static/app.html").string();
 const std::string STATIC_APP_JS =
     (std::filesystem::path(REPO_ROOT) / "server/src/static/app.js").string();
+const std::string STATIC_USERS_HTML =
+    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_users.html").string();
+const std::string STATIC_USERS_JS =
+    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_users.js").string();
+static const std::string STATIC_WAIT_APPROVAL_HTML = "server/src/static/wait_approval.html";
+static const std::string STATIC_WAIT_APPROVAL_JS   = "server/src/static/wait_approval.js";
+
 
 static std::string ORIGIN   = "https://nas.example.com";
 static std::string ISS      = "pq-nas";
@@ -130,6 +138,43 @@ struct ApprovalEntry {
 
 static std::unordered_map<std::string, ApprovalEntry> g_approvals;
 static std::mutex g_approvals_mu;
+
+// --- pending admin approval (sid -> reason) ---
+struct PendingEntry {
+    std::string reason;   // e.g. "user_disabled"
+    long expires_at = 0;  // unix epoch seconds
+};
+
+static std::unordered_map<std::string, PendingEntry> g_pending;
+static std::mutex g_pending_mu;
+
+static void pending_prune(long now) {
+    std::lock_guard<std::mutex> lk(g_pending_mu);
+    for (auto it = g_pending.begin(); it != g_pending.end(); ) {
+        if (now > it->second.expires_at)
+            it = g_pending.erase(it);
+        else
+            ++it;
+    }
+}
+
+static void pending_put(const std::string& sid, const PendingEntry& e) {
+    std::lock_guard<std::mutex> lk(g_pending_mu);
+    g_pending[sid] = e;
+}
+
+static bool pending_get(const std::string& sid, PendingEntry& out) {
+    std::lock_guard<std::mutex> lk(g_pending_mu);
+    auto it = g_pending.find(sid);
+    if (it == g_pending.end()) return false;
+    out = it->second;
+    return true;
+}
+
+static void pending_pop(const std::string& sid) {
+    std::lock_guard<std::mutex> lk(g_pending_mu);
+    g_pending.erase(sid);
+}
 
 static void approvals_prune(long now) {
     std::lock_guard<std::mutex> lk(g_approvals_mu);
@@ -404,6 +449,7 @@ static std::string sign_req_token(const std::string& payload_json) {
     return "v4." + payload_b64 + "." + sig_b64;
 }
 
+[[maybe_unused]]
 static bool decode_st_payload_json(const std::string& st, std::string& payload_json_out) {
     size_t a = st.find('.');
     if (a == std::string::npos) return false;
@@ -489,6 +535,19 @@ int main() {
         return 3;
     }
 
+	std::string users_path =
+    	(std::filesystem::path(REPO_ROOT) / "config" / "users.json").string();
+	if (const char* p = std::getenv("PQNAS_USERS_PATH")) {
+	    users_path = p;
+	}
+
+	pqnas::UsersRegistry users;
+	if (!users.load(users_path)) {
+    	std::cerr << "[users] FATAL: failed to load users registry: " << users_path << std::endl;
+    	return 4;
+	}
+
+
     srv.Get("/", [&](const httplib::Request&, httplib::Response& res) {
         std::string body;
         if (!read_file_to_string(STATIC_LOGIN, body)) {
@@ -503,15 +562,14 @@ int main() {
     });
 
     srv.Get("/admin/audit", [&](const httplib::Request& req, httplib::Response& res) {
-        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+        if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
         res.set_header("Cache-Control", "no-store");
         res.set_content(slurp_file(STATIC_AUDIT_HTML), "text/html; charset=utf-8");
     });
 
 
     srv.Get("/admin", [&](const httplib::Request& req, httplib::Response& res) {
-        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
-
+        if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
         const std::string body = slurp_file(STATIC_ADMIN_HTML);
         if (body.empty()) {
             res.status = 404;
@@ -583,54 +641,54 @@ int main() {
 
 
     srv.Get("/api/v4/admin/ping", [&](const httplib::Request& req, httplib::Response& res) {
-        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) {
+        if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) {
             return;
         }
         reply_json(res, 200, json({{"ok",true},{"admin",true}}).dump());
     });
 
-    // Polling endpoint (browser)
-    srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& res) {
-        approvals_prune(pqnas::now_epoch());
+// Polling endpoint (browser)
+srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& res) {
+    // Prune both maps (approvals + pending) up-front so we don't leak memory
+    const long now0 = pqnas::now_epoch();
+    approvals_prune(now0);
+    pending_prune(now0);
 
-        auto audit_ua = [&]() -> std::string {
-            auto it = req.headers.find("User-Agent");
-            return pqnas::shorten(it == req.headers.end() ? "" : it->second);
-        };
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
 
-        auto audit_fail = [&](const std::string& sid, const std::string& reason, int http_code) {
-            pqnas::AuditEvent ev;
-            ev.event = "v4.status_fail";
-            ev.outcome = "fail";
-            if (!sid.empty()) ev.f["sid"] = sid;
-            ev.f["reason"] = reason;
-            ev.f["http"] = std::to_string(http_code);
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+    auto audit_fail = [&](const std::string& sid, const std::string& reason, int http_code) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.status_fail";
+        ev.outcome = "fail";
+        if (!sid.empty()) ev.f["sid"] = sid;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http_code);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
-            auto it_cf = req.headers.find("CF-Connecting-IP");
-            if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
 
-            auto it_xff = req.headers.find("X-Forwarded-For");
-            if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
-            ev.f["ua"] = audit_ua();
-            audit.append(ev);
-        };
+        ev.f["ua"] = audit_ua();
+        audit.append(ev);
+    };
 
-        auto sid = req.get_param_value("sid");
-        if (sid.empty()) {
-            audit_fail("", "missing_sid", 400);
-            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing sid"}}).dump());
-            return;
-        }
+    auto sid = req.get_param_value("sid");
+    if (sid.empty()) {
+        audit_fail("", "missing_sid", 400);
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing sid"}}).dump());
+        return;
+    }
 
-        ApprovalEntry e;
-        if (!approvals_get(sid, e)) {
-            reply_json(res, 200, json({{"ok",true},{"approved",false}}).dump());
-            return;
-        }
-
-        long now = pqnas::now_epoch();
+    // 1) If we have an approval entry, the phone already verified and /consume can succeed.
+    ApprovalEntry e;
+    if (approvals_get(sid, e)) {
+        const long now = pqnas::now_epoch();
         if (now > e.expires_at) {
             approvals_pop(sid);
             reply_json(res, 200, json({{"ok",true},{"approved",false},{"expired",true}}).dump());
@@ -638,7 +696,32 @@ int main() {
         }
 
         reply_json(res, 200, json({{"ok",true},{"approved",true},{"fingerprint",e.fingerprint}}).dump());
-    });
+        return;
+    }
+
+    // 2) Otherwise: if this sid was marked pending (unknown/disabled user), tell browser to show wait page.
+    PendingEntry pe;
+    if (pending_get(sid, pe)) {
+        const long now = pqnas::now_epoch();
+        if (now <= pe.expires_at) {
+            json out = {
+                {"ok", true},
+                {"approved", false},
+                {"pending_admin", true},
+            };
+            // Only include reason if you actually store one (optional)
+            if (!pe.reason.empty()) out["reason"] = pe.reason;
+
+            reply_json(res, 200, out.dump());
+            return;
+        } else {
+            pending_pop(sid);
+        }
+    }
+
+    // 3) Default: not approved (normal "still waiting for phone approval" case)
+    reply_json(res, 200, json({{"ok",true},{"approved",false}}).dump());
+});
 
     // POST /api/v4/consume
     srv.Post("/api/v4/consume", [&](const httplib::Request& req, httplib::Response& res) {
@@ -882,8 +965,9 @@ int main() {
         }
 
         // Policy check (fail-closed)
-        const bool is_admin = allowlist.is_admin(fp_hex);
-        const bool is_user  = is_admin ? true : allowlist.is_allowed(fp_hex);
+        const bool is_admin = users.is_admin_enabled(fp_hex);
+		const bool is_user  = users.is_enabled_user(fp_hex) || is_admin;
+
         if (!is_user) {
             audit_fail("policy_denied");
             reply_json(res, 403, json({{"ok",false},{"error","forbidden"},{"message","policy denied"}}).dump());
@@ -902,66 +986,60 @@ int main() {
         }).dump());
     });
 
-    // POST /api/v4/session
-    srv.Post("/api/v4/session", [&](const httplib::Request& req, httplib::Response& res) {
-        std::cerr << "[/api/v4/session] hit from "
-                  << (req.remote_addr.empty() ? "?" : req.remote_addr)
-                  << std::endl;
+auto session_handler = [&](const httplib::Request& req, httplib::Response& res) {
+    std::cerr << "[/api/v4/session] hit from "
+              << (req.remote_addr.empty() ? "?" : req.remote_addr)
+              << std::endl;
 
-        long issued_at  = pqnas::now_epoch();
-        long expires_at = issued_at + REQ_TTL;
+    long issued_at  = pqnas::now_epoch();
+    long expires_at = issued_at + REQ_TTL;
 
-        std::string sid   = random_b64url(18);
-        std::string chal  = random_b64url(32);
-        std::string nonce = random_b64url(16);
+    std::string sid   = random_b64url(18);
+    std::string chal  = random_b64url(32);
+    std::string nonce = random_b64url(16);
 
-        std::string payload  = build_req_payload_canonical(sid, chal, nonce, issued_at, expires_at);
-        std::string st_token = sign_req_token(payload);
+    std::string payload  = build_req_payload_canonical(sid, chal, nonce, issued_at, expires_at);
+    std::string st_token = sign_req_token(payload);
 
-        std::string qr_uri =
-            "dna://auth?v=4&st=" + url_encode(st_token) +
-            "&origin=" + url_encode(ORIGIN) +
-            "&app=" + url_encode(APP_NAME);
+    std::string qr_uri =
+        "dna://auth?v=4&st=" + url_encode(st_token) +
+        "&origin=" + url_encode(ORIGIN) +
+        "&app=" + url_encode(APP_NAME);
 
-        json out = {
-            {"v", 4},
-            {"sid", sid},
-            {"expires_at", expires_at},
-            {"st", st_token},
-            {"req", st_token},
-            {"qr_uri", qr_uri}
-        };
+    json out = {
+        {"v", 4},
+        {"sid", sid},
+        {"expires_at", expires_at},
+        {"st", st_token},
+        {"req", st_token},
+        {"qr_uri", qr_uri}
+    };
 
-        std::cerr << "[v4_vectors] ST_ISSUED " << st_token << "\n";
-        std::cerr << "[v4_vectors] QR " << qr_uri << "\n";
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.session_issued";
+        ev.outcome = "ok";
+        ev.f["sid"] = sid;
+        ev.f["issued_at"] = std::to_string(issued_at);
+        ev.f["expires_at"] = std::to_string(expires_at);
+        ev.f["origin"] = ORIGIN;
+        ev.f["app"] = APP_NAME;
+        ev.f["client_ip"] = client_ip(req);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it = req.headers.find("User-Agent");
+        ev.f["ua"] = pqnas::shorten(it == req.headers.end() ? "" : it->second);
+        audit.append(ev);
+    }
 
-        {
-            pqnas::AuditEvent ev;
-            ev.event = "v4.session_issued";
-            ev.outcome = "ok";
-            ev.f["sid"] = sid;
-            ev.f["issued_at"] = std::to_string(issued_at);
-            ev.f["expires_at"] = std::to_string(expires_at);
-            ev.f["origin"] = ORIGIN;
-            ev.f["app"] = APP_NAME;
-            ev.f["client_ip"] = client_ip(req);
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            auto it = req.headers.find("User-Agent");
-            ev.f["ua"] = pqnas::shorten(it == req.headers.end() ? "" : it->second);
-            audit.append(ev);
-        }
+    reply_json(res, 200, out.dump());
+};
 
-        {
-            std::string st_payload_json;
-            if (decode_st_payload_json(st_token, st_payload_json)) {
-                std::cerr << "[/api/v4/session] st_payload_json=" << st_payload_json << std::endl;
-            } else {
-                std::cerr << "[/api/v4/session] st_payload_json=DECODE_FAILED" << std::endl;
-            }
-        }
+srv.Get("/api/v4/session", session_handler);
+srv.Post("/api/v4/session", session_handler);
 
-        reply_json(res, 200, out.dump());
-    });
+
+
+
 
     // GET /api/v4/qr.svg?st=...
     srv.Get("/api/v4/qr.svg", [&](const httplib::Request& req, httplib::Response& res) {
@@ -993,192 +1071,265 @@ int main() {
         }
     });
 
-    // POST /api/v4/verify
-    srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& res) {
-        std::cerr << "[/api/v4/verify] ENTER len=" << req.body.size()
-                  << " from " << (req.remote_addr.empty() ? "?" : req.remote_addr)
-                  << std::endl;
+// POST /api/v4/verify
+srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& res) {
+    std::cerr << "[/api/v4/verify] ENTER len=" << req.body.size()
+              << " from " << (req.remote_addr.empty() ? "?" : req.remote_addr)
+              << std::endl;
 
-        auto fail = [&](int code, const std::string& msg, const std::string& detail = "") {
-            std::cerr << "[/api/v4/verify] FAIL " << code << " " << msg;
-            if (!detail.empty()) std::cerr << " detail=" << detail;
-            std::cerr << std::endl;
+    auto fail = [&](int code, const std::string& msg, const std::string& detail = "") {
+        std::cerr << "[/api/v4/verify] FAIL " << code << " " << msg;
+        if (!detail.empty()) std::cerr << " detail=" << detail;
+        std::cerr << std::endl;
 
-            json out = {
-                {"ok", false},
-                {"error", (code == 400 ? "bad_request" : "not_authorized")},
-                {"message", msg}
-            };
-            if (!detail.empty()) out["detail"] = detail;
-            reply_json(res, code, out.dump());
+        json out = {
+            {"ok", false},
+            {"error", (code == 400 ? "bad_request" : "not_authorized")},
+            {"message", msg}
         };
+        if (!detail.empty()) out["detail"] = detail;
+        reply_json(res, code, out.dump());
+    };
 
-        std::string audit_sid;
-        std::string audit_st_hash_b64;
-        std::string audit_origin;
-        std::string audit_rp_id_hash;
-        std::string audit_fp;
+    // --- audit context (filled after verify_v4_json) ---
+    std::string audit_sid;
+    std::string audit_st_hash_b64;
+    std::string audit_origin;
+    std::string audit_rp_id_hash;
+    std::string audit_fp;
 
-        auto audit_ua = [&]() -> std::string {
-            auto it = req.headers.find("User-Agent");
-            return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& reason, const std::string& detail = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.verify_fail";
+        ev.outcome = "fail";
+        if (!audit_sid.empty()) ev.f["sid"] = audit_sid;
+        if (!audit_st_hash_b64.empty()) ev.f["st_hash_b64"] = audit_st_hash_b64;
+        if (!audit_origin.empty()) ev.f["origin"] = audit_origin;
+        if (!audit_rp_id_hash.empty()) ev.f["rp_id_hash"] = audit_rp_id_hash;
+        if (!audit_fp.empty()) ev.f["fingerprint"] = audit_fp;
+        ev.f["reason"] = reason;
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        audit.append(ev);
+    };
+
+    auto audit_info = [&](const std::string& event, const std::string& outcome,
+                          const std::string& reason = "", const std::string& detail = "") {
+        pqnas::AuditEvent ev;
+        ev.event = event;
+        ev.outcome = outcome;
+        if (!audit_sid.empty()) ev.f["sid"] = audit_sid;
+        if (!audit_st_hash_b64.empty()) ev.f["st_hash_b64"] = audit_st_hash_b64;
+        if (!audit_origin.empty()) ev.f["origin"] = audit_origin;
+        if (!audit_rp_id_hash.empty()) ev.f["rp_id_hash"] = audit_rp_id_hash;
+        if (!audit_fp.empty()) ev.f["fingerprint"] = audit_fp;
+
+        if (!reason.empty()) ev.f["reason"] = reason;
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        audit.append(ev);
+    };
+
+    // ISO UTC helper (avoid relying on a missing pqnas::now_iso_utc())
+    auto now_iso_utc = [&]() -> std::string {
+        using namespace std::chrono;
+        auto now = system_clock::now();
+        auto ms  = duration_cast<milliseconds>(now.time_since_epoch()) % 1000;
+
+        std::time_t t = system_clock::to_time_t(now);
+        std::tm tm{};
+        gmtime_r(&t, &tm);
+
+        char buf[64];
+        std::snprintf(buf, sizeof(buf),
+                      "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
+                      tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                      tm.tm_hour, tm.tm_min, tm.tm_sec,
+                      (int)ms.count());
+        return std::string(buf);
+    };
+
+    try {
+        // ---- v4 shared verification (crypto + bindings) ----
+        pqnas::VerifyV4Config cfg;
+        cfg.now_unix_sec = 0;
+        cfg.expected_origin = ORIGIN;
+        cfg.expected_rp_id  = RP_ID;
+
+        // IMPORTANT (Model A):
+        // Let crypto/bindings verify first; enforce users registry *after* we know who it is.
+        cfg.enforce_allowlist = false;
+
+        std::array<unsigned char, 32> server_pk{};
+        std::memcpy(server_pk.data(), SERVER_PK, 32);
+
+        auto vr = pqnas::verify_v4_json(req.body, server_pk, cfg);
+
+        audit_sid         = vr.sid;
+        audit_origin      = vr.origin;
+        audit_rp_id_hash  = vr.rp_id_hash;
+        audit_st_hash_b64 = vr.st_hash_b64;
+        audit_fp          = vr.fingerprint_hex;
+
+        if (!vr.ok) {
+            int http = 400;
+            switch (vr.rc) {
+                case pqnas::VerifyV4Rc::ST_EXPIRED:
+                    http = 410;
+                    break;
+                case pqnas::VerifyV4Rc::RP_ID_HASH_MISMATCH:
+                case pqnas::VerifyV4Rc::FINGERPRINT_MISMATCH:
+                case pqnas::VerifyV4Rc::PQ_SIG_INVALID:
+                    http = 403;
+                    break;
+                // POLICY_DENY should not happen when enforce_allowlist=false, but keep mapping safe:
+                case pqnas::VerifyV4Rc::POLICY_DENY:
+                    http = 403;
+                    break;
+                default:
+                    http = 400;
+                    break;
+            }
+
+            audit_fail(std::string("v4_shared_rc_") + std::to_string((int)vr.rc), vr.detail);
+
+            if (http == 410) return fail(410, "st expired");
+            return fail(http, "verify failed", vr.detail);
+        }
+
+        const bool vectors_mode = (std::getenv("PQNAS_V4_VECTORS") != nullptr);
+        const long at_ttl = vectors_mode ? (10L * 365 * 24 * 3600) : 60L;
+        long now = pqnas::now_epoch();
+
+        const std::string& st_hash     = vr.st_hash_b64;
+        const std::string& computed_fp = vr.fingerprint_hex;
+
+        // ---- Users registry policy (fail-closed) ----
+        const std::string now_iso = now_iso_utc();
+
+        // Unknown user: create disabled record, persist, mark as pending, deny.
+        if (!users.exists(computed_fp)) {
+            const bool created = users.ensure_present_disabled_user(computed_fp, now_iso);
+            const bool saved   = created ? users.save(users_path) : false;
+
+            audit_info("v4.user_auto_created_disabled", "ok",
+                       created ? "created" : "already_exists_race",
+                       saved ? "" : "users_save_failed");
+
+            // NEW: mark this sid as "pending admin approval" so /api/v4/status can surface it
+            // (Browser JS will redirect to /wait-approval when it sees pending_admin=true.)
+            {
+                PendingEntry p;
+                p.expires_at = now + 120; // keep in sync with approvals TTL window
+                pending_put(vr.sid, p);
+            }
+
+            return fail(403, "user disabled");
+        }
+
+        // Known user must be enabled (role user/admin is fine; status must be enabled)
+        if (!users.is_enabled_user(computed_fp)) {
+            audit_info("v4.user_disabled", "fail", "not_enabled");
+
+            // NEW: mark this sid as "pending admin approval" so browser can show wait-approval UX
+            {
+                PendingEntry p;
+                p.expires_at = now + 120; // keep in sync with approvals TTL window
+                pending_put(vr.sid, p);
+            }
+
+            return fail(403, "user disabled");
+        }
+
+        // Update last_seen on successful verify (best-effort persist)
+        const bool touched = users.touch_last_seen(computed_fp, now_iso);
+        const bool saved   = touched ? users.save(users_path) : false;
+
+        if (touched && saved) {
+            audit_info("v4.user_last_seen_updated", "ok");
+        } else if (touched && !saved) {
+            audit_info("v4.user_last_seen_updated", "fail", "users_save_failed");
+        } else {
+            audit_info("v4.user_last_seen_updated", "fail", "touch_failed");
+        }
+
+        // ---- vectors logging ----
+        if (vectors_mode) {
+            std::cerr << "[v4_vectors] FP_HEX " << computed_fp
+                      << " SID " << vr.sid
+                      << " ST_HASH " << st_hash
+                      << "\n";
+            std::cerr << "[v4_vectors] CANON_SHA256_B64 " << vr.canonical_sha256_b64 << "\n";
+        }
+
+        // ---- mint AT (short-lived) ----
+        json at_payload = {
+            {"v",4},
+            {"typ","at"},
+            {"sid", vr.sid},
+            {"st_hash", st_hash},
+            {"rp_id_hash", vr.rp_id_hash},
+            {"fingerprint", computed_fp},
+            {"issued_at", now},
+            {"expires_at", now + at_ttl}
         };
+        std::string at = sign_token_v4_ed25519(at_payload, SERVER_SK);
 
-        auto audit_fail = [&](const std::string& reason, const std::string& detail = "") {
-            pqnas::AuditEvent ev;
-            ev.event = "v4.verify_fail";
-            ev.outcome = "fail";
-            if (!audit_sid.empty()) ev.f["sid"] = audit_sid;
-            if (!audit_st_hash_b64.empty()) ev.f["st_hash_b64"] = audit_st_hash_b64;
-            if (!audit_origin.empty()) ev.f["origin"] = audit_origin;
-            if (!audit_rp_id_hash.empty()) ev.f["rp_id_hash"] = audit_rp_id_hash;
-            if (!audit_fp.empty()) ev.f["fingerprint"] = audit_fp;
-            ev.f["reason"] = reason;
-            if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        if (vectors_mode) {
+            std::cerr << "[v4_vectors] AT_ISSUED " << at << "\n";
+        }
 
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        // ---- mint browser session cookie (stored for /consume) ----
+        std::string cookieVal;
+        long sess_iat = now;
+        long sess_exp = now + SESS_TTL;
 
-            auto it_cf = req.headers.find("CF-Connecting-IP");
-            if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        // Cookie embeds fingerprint as *standard* base64 of UTF-8 fingerprint hex string
+        std::string fp_b64 = pqnas::b64_std(
+            reinterpret_cast<const unsigned char*>(computed_fp.data()),
+            computed_fp.size()
+        );
 
-            auto it_xff = req.headers.find("X-Forwarded-For");
-            if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
-
-            ev.f["ua"] = audit_ua();
-            audit.append(ev);
-        };
-
-        try {
-            pqnas::VerifyV4Config cfg;
-            cfg.now_unix_sec = 0;
-            cfg.expected_origin = ORIGIN;
-            cfg.expected_rp_id  = RP_ID;
-            cfg.enforce_allowlist = true;
-            cfg.allowlist_is_allowed = [&](const std::string& fp_hex) {
-                return allowlist.is_allowed(fp_hex);
-            };
-
-            std::array<unsigned char, 32> server_pk{};
-            std::memcpy(server_pk.data(), SERVER_PK, 32);
-
-            auto vr = pqnas::verify_v4_json(req.body, server_pk, cfg);
-
-            audit_sid = vr.sid;
-            audit_origin = vr.origin;
-            audit_rp_id_hash = vr.rp_id_hash;
-            audit_st_hash_b64 = vr.st_hash_b64;
-            audit_fp = vr.fingerprint_hex;
-
-            if (!vr.ok) {
-                int http = 400;
-                switch (vr.rc) {
-                    case pqnas::VerifyV4Rc::ST_EXPIRED:
-                        http = 410;
-                        break;
-                    case pqnas::VerifyV4Rc::RP_ID_HASH_MISMATCH:
-                    case pqnas::VerifyV4Rc::FINGERPRINT_MISMATCH:
-                    case pqnas::VerifyV4Rc::POLICY_DENY:
-                    case pqnas::VerifyV4Rc::PQ_SIG_INVALID:
-                        http = 403;
-                        break;
-                    default:
-                        http = 400;
-                        break;
-                }
-
-                audit_fail(std::string("v4_shared_rc_") + std::to_string((int)vr.rc), vr.detail);
-
-                if (http == 410) return fail(410, "st expired");
-                return fail(http, "verify failed", vr.detail);
-            }
-
-            const bool vectors_mode = (std::getenv("PQNAS_V4_VECTORS") != nullptr);
-            const long at_ttl = vectors_mode ? (10L * 365 * 24 * 3600) : 60L;
-            long now = pqnas::now_epoch();
-
-            const std::string& st_hash = vr.st_hash_b64;
-            const std::string& computed_fp = vr.fingerprint_hex;
-
-            if (vectors_mode) {
-                std::cerr << "[v4_vectors] FP_HEX " << computed_fp
-                          << " SID " << vr.sid
-                          << " ST_HASH " << st_hash
-                          << "\n";
-                std::cerr << "[v4_vectors] CANON_SHA256_B64 " << vr.canonical_sha256_b64 << "\n";
-            }
-
-            json at_payload = {
-                {"v",4},
-                {"typ","at"},
-                {"sid", vr.sid},
-                {"st_hash", st_hash},
-                {"rp_id_hash", vr.rp_id_hash},
-                {"fingerprint", computed_fp},
-                {"issued_at", now},
-                {"expires_at", now + at_ttl}
-            };
-            std::string at = sign_token_v4_ed25519(at_payload, SERVER_SK);
-
-            if (vectors_mode) {
-                std::cerr << "[v4_vectors] AT_ISSUED " << at << "\n";
-            }
-
-            std::string cookieVal;
-            long sess_iat = now;
-            long sess_exp = now + SESS_TTL;
-
-            // Cookie embeds fingerprint as *standard* base64 of the UTF-8 fingerprint string
-            std::string fp_b64 = pqnas::b64_std(
-                reinterpret_cast<const unsigned char*>(computed_fp.data()),
-                computed_fp.size()
-            );
-
-            if (session_cookie_mint(COOKIE_KEY, fp_b64, sess_iat, sess_exp, cookieVal)) {
-                ApprovalEntry e;
-                e.cookie_val = cookieVal;
-                e.fingerprint = computed_fp;
-                e.expires_at = now + 120;
-                approvals_put(vr.sid, e);
-
-                {
-                    pqnas::AuditEvent ev;
-                    ev.event = "v4.cookie_minted";
-                    ev.outcome = "ok";
-                    ev.f["sid"] = vr.sid;
-                    ev.f["st_hash_b64"] = st_hash;
-                    ev.f["rp_id_hash"] = vr.rp_id_hash;
-                    ev.f["fingerprint"] = computed_fp;
-                    ev.f["sess_iat"] = std::to_string(sess_iat);
-                    ev.f["sess_exp"] = std::to_string(sess_exp);
-
-                    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-
-                    auto it_cf = req.headers.find("CF-Connecting-IP");
-                    if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
-
-                    auto it_xff = req.headers.find("X-Forwarded-For");
-                    if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
-
-                    ev.f["ua"] = audit_ua();
-                    audit.append(ev);
-                }
-
-                std::cerr << "[/api/v4/verify] approval stored sid=" << vr.sid
-                          << " cookie_exp=" << sess_exp << std::endl;
-            } else {
-                audit_fail("cookie_mint_failed");
-                std::cerr << "[/api/v4/verify] WARNING: session_cookie_mint failed" << std::endl;
-            }
+        if (session_cookie_mint(COOKIE_KEY, fp_b64, sess_iat, sess_exp, cookieVal)) {
+            ApprovalEntry e;
+            e.cookie_val  = cookieVal;
+            e.fingerprint = computed_fp;
+            e.expires_at  = now + 120;
+            approvals_put(vr.sid, e);
 
             {
                 pqnas::AuditEvent ev;
-                ev.event = "v4.verify_ok";
+                ev.event = "v4.cookie_minted";
                 ev.outcome = "ok";
                 ev.f["sid"] = vr.sid;
                 ev.f["st_hash_b64"] = st_hash;
-                ev.f["origin"] = vr.origin;
                 ev.f["rp_id_hash"] = vr.rp_id_hash;
                 ev.f["fingerprint"] = computed_fp;
+                ev.f["sess_iat"] = std::to_string(sess_iat);
+                ev.f["sess_exp"] = std::to_string(sess_exp);
 
                 ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
@@ -1192,17 +1343,387 @@ int main() {
                 audit.append(ev);
             }
 
-            json out = {{"ok",true},{"v",4},{"at",at}};
-            std::cerr << "[/api/v4/verify] SUCCESS issuing at=" << at << std::endl;
-            reply_json(res, 200, out.dump());
+            std::cerr << "[/api/v4/verify] approval stored sid=" << vr.sid
+                      << " cookie_exp=" << sess_exp << std::endl;
+        } else {
+            audit_fail("cookie_mint_failed");
+            std::cerr << "[/api/v4/verify] WARNING: session_cookie_mint failed" << std::endl;
         }
-        catch (const std::exception& e) {
-            audit_fail("exception", e.what());
-            return fail(400, "exception", e.what());
+
+        // ---- verify ok audit ----
+        {
+            pqnas::AuditEvent ev;
+            ev.event = "v4.verify_ok";
+            ev.outcome = "ok";
+            ev.f["sid"] = vr.sid;
+            ev.f["st_hash_b64"] = st_hash;
+            ev.f["origin"] = vr.origin;
+            ev.f["rp_id_hash"] = vr.rp_id_hash;
+            ev.f["fingerprint"] = computed_fp;
+
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+            auto it_cf = req.headers.find("CF-Connecting-IP");
+            if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+            auto it_xff = req.headers.find("X-Forwarded-For");
+            if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+            ev.f["ua"] = audit_ua();
+            audit.append(ev);
         }
+
+        json out = {{"ok",true},{"v",4},{"at",at}};
+        std::cerr << "[/api/v4/verify] SUCCESS issuing at=" << at << std::endl;
+        reply_json(res, 200, out.dump());
+    }
+    catch (const std::exception& e) {
+        audit_fail("exception", e.what());
+        return fail(400, "exception", e.what());
+    }
+});
+
+    // GET /wait-approval (static UI)
+    srv.Get("/wait-approval", [&](const httplib::Request&, httplib::Response& res) {
+        const std::string body = slurp_file(STATIC_WAIT_APPROVAL_HTML);
+        if (body.empty()) { res.status = 404; res.set_content("missing wait_approval.html","text/plain"); return; }
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(body, "text/html; charset=utf-8");
     });
 
-    std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
-    srv.listen("0.0.0.0", LISTEN_PORT);
-    return 0;
-}
+    // GET /static/wait_approval.js
+    srv.Get("/static/wait_approval.js", [&](const httplib::Request&, httplib::Response& res) {
+        const std::string body = slurp_file(STATIC_WAIT_APPROVAL_JS);
+        if (body.empty()) { res.status = 404; res.set_content("missing wait_approval.js","text/plain"); return; }
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(body, "application/javascript; charset=utf-8");
+    });
+
+
+
+	srv.Get("/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
+    	if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+	    const std::string body = slurp_file(STATIC_USERS_HTML);
+	    if (body.empty()) { res.status = 404; res.set_content("missing admin_users.html","text/plain"); return; }
+	    res.set_header("Cache-Control", "no-store");
+	    res.set_content(body, "text/html; charset=utf-8");
+	});
+
+	srv.Get("/static/admin_users.js", [&](const httplib::Request&, httplib::Response& res) {
+    	const std::string body = slurp_file(STATIC_USERS_JS);
+    	if (body.empty()) { res.status = 404; res.set_content("missing admin_users.js","text/plain"); return; }
+    	res.set_header("Cache-Control", "no-store");
+    	res.set_content(body, "application/javascript; charset=utf-8");
+	});
+
+	srv.Get("/api/v4/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
+    	if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    	res.set_header("Cache-Control", "no-store"); // recommended
+
+    	json out;
+    	out["ok"] = true;
+    	out["users"] = json::array();
+
+    	for (auto& kv : users.snapshot()) {
+        	auto& u = kv.second;
+        	out["users"].push_back({
+            	{"fingerprint", u.fingerprint},
+            	{"name", u.name},
+            	{"role", u.role},
+            	{"status", u.status},
+            	{"added_at", u.added_at},
+            	{"last_seen", u.last_seen},
+            	{"notes", u.notes}
+        	});
+    	}
+
+    	reply_json(res, 200, out.dump());
+	});
+
+    auto now_iso_utc = []() -> std::string {
+        using namespace std::chrono;
+        auto now = system_clock::now();
+        auto ms  = duration_cast<milliseconds>(now.time_since_epoch()) % 1000;
+
+        std::time_t t = system_clock::to_time_t(now);
+        std::tm tm{};
+        gmtime_r(&t, &tm);
+
+        char buf[64];
+        std::snprintf(buf, sizeof(buf),
+                      "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
+                      tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                      tm.tm_hour, tm.tm_min, tm.tm_sec,
+                      (int)ms.count());
+        return std::string(buf);
+    };
+
+    // POST /api/v4/admin/users/status
+    // Body: {"fingerprint":"...","status":"enabled|disabled|revoked"}
+    srv.Post("/api/v4/admin/users/status", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+        json j;
+        try { j = json::parse(req.body); }
+        catch (...) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+            return;
+        }
+
+        const std::string fp     = j.value("fingerprint", "");
+        const std::string status = j.value("status", "");
+
+        if (fp.empty()) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+            return;
+        }
+
+        if (status != "enabled" && status != "disabled" && status != "revoked") {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid status"}}).dump());
+            return;
+        }
+
+        if (!users.exists(fp)) {
+            reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
+            return;
+        }
+
+        const bool ok_set = users.set_status(fp, status);
+        const bool ok_save = ok_set ? users.save(users_path) : false;
+
+        {
+            pqnas::AuditEvent ev;
+            ev.event = "admin.user_status_set";
+            ev.outcome = (ok_set && ok_save) ? "ok" : "fail";
+            ev.f["fingerprint"] = fp;
+            ev.f["status"] = status;
+            ev.f["ts"] = now_iso_utc();
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            audit.append(ev);
+        }
+
+        if (!ok_set) {
+            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","set_status failed"}}).dump());
+            return;
+        }
+        if (!ok_save) {
+            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
+            return;
+        }
+
+        reply_json(res, 200, json({{"ok",true}}).dump());
+    });
+
+// POST /api/v4/admin/users/upsert
+// Body: {"fingerprint":"...","name":"...","role":"user|admin","notes":"..."}
+srv.Post("/api/v4/admin/users/upsert", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    json j;
+    try { j = json::parse(req.body); }
+    catch (...) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+        return;
+    }
+
+    const std::string fp    = j.value("fingerprint", "");
+    const std::string name  = j.value("name", "");
+    const std::string role  = j.value("role", "user");
+    const std::string notes = j.value("notes", "");
+
+    if (fp.empty()) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+        return;
+    }
+
+    const std::string now_iso = now_iso_utc();
+
+    // Preserve added_at/last_seen/status if user exists; otherwise create disabled by default.
+    pqnas::UserRec u{};
+    bool existed = false;
+
+    if (auto cur = users.get(fp); cur.has_value()) {
+        existed = true;
+        u = *cur;
+    } else {
+        u.fingerprint = fp;
+        u.added_at = now_iso;
+        u.last_seen = "";
+        u.status = "disabled"; // default fail-closed for manual add, admin can Enable
+        u.role = "user";
+        u.name = "";
+        u.notes = "";
+    }
+
+    // Apply fields from request
+    u.name  = name;
+    u.notes = notes;
+    u.role  = role;  // normalized inside upsert()
+
+    const bool ok_upsert = users.upsert(u);
+    const bool ok_save   = ok_upsert ? users.save(users_path) : false;
+
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "admin.user_upsert";
+        ev.outcome = (ok_upsert && ok_save) ? "ok" : "fail";
+        ev.f["fingerprint"] = fp;
+        ev.f["existed"] = existed ? "true" : "false";
+        ev.f["role"] = role;
+        if (!name.empty()) ev.f["name"] = pqnas::shorten(name, 80);
+        if (!notes.empty()) ev.f["notes"] = pqnas::shorten(notes, 120);
+        ev.f["ts"] = now_iso;
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit.append(ev);
+    }
+
+    if (!ok_upsert) {
+        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","upsert failed"}}).dump());
+        return;
+    }
+    if (!ok_save) {
+        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
+        return;
+    }
+
+    reply_json(res, 200, json({{"ok",true}}).dump());
+});
+
+// POST /api/v4/admin/users/enable   {"fingerprint":"...","role":"user|admin"?,"name":"..."?,"notes":"..."?}
+srv.Post("/api/v4/admin/users/enable", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    json j;
+    try { j = json::parse(req.body); }
+    catch (...) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+        return;
+    }
+
+    const std::string fp    = j.value("fingerprint", "");
+    const std::string role  = j.value("role", "user");
+    const std::string name  = j.value("name", "");
+    const std::string notes = j.value("notes", "");
+
+    if (fp.empty()) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+        return;
+    }
+    if (!users.exists(fp)) {
+        reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
+        return;
+    }
+
+    // enable
+    if (!users.set_status(fp, "enabled")) {
+        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","set_status failed"}}).dump());
+        return;
+    }
+
+    // optional updates
+    users.set_role(fp, role);
+    if (!name.empty() || !notes.empty()) users.set_name_notes(fp, name, notes);
+
+    const bool saved = users.save(users_path);
+
+    // audit
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "admin.user_enabled";
+        ev.outcome = saved ? "ok" : "fail";
+        ev.f["fingerprint"] = fp;
+        ev.f["role"] = role;
+        if (!name.empty()) ev.f["name"] = pqnas::shorten(name, 80);
+        if (!notes.empty()) ev.f["notes"] = pqnas::shorten(notes, 120);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit.append(ev);
+    }
+
+    if (!saved) {
+        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
+        return;
+    }
+
+    reply_json(res, 200, json({{"ok",true}}).dump());
+});
+
+
+// POST /api/v4/admin/users/disable  {"fingerprint":"..."}
+srv.Post("/api/v4/admin/users/disable", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    json j;
+    try { j = json::parse(req.body); }
+    catch (...) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+        return;
+    }
+
+    const std::string fp = j.value("fingerprint", "");
+    if (fp.empty()) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+        return;
+    }
+    if (!users.exists(fp)) {
+        reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
+        return;
+    }
+
+    if (!users.set_status(fp, "disabled")) {
+        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","set_status failed"}}).dump());
+        return;
+    }
+
+    const bool saved = users.save(users_path);
+
+    // audit
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "admin.user_disabled";
+        ev.outcome = saved ? "ok" : "fail";
+        ev.f["fingerprint"] = fp;
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit.append(ev);
+    }
+
+    if (!saved) {
+        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
+        return;
+    }
+
+    reply_json(res, 200, json({{"ok",true}}).dump());
+});
+
+    srv.Get("/api/v4/debug/approvals", [&](const httplib::Request&, httplib::Response& res) {
+        json out;
+        out["ok"] = true;
+        out["count"] = 0;
+        out["items"] = json::array();
+
+        long now = pqnas::now_epoch();
+
+        {
+            std::lock_guard<std::mutex> lk(g_approvals_mu);
+            out["count"] = (int)g_approvals.size();
+            for (const auto& kv : g_approvals) {
+                const auto& sid = kv.first;
+                const auto& e = kv.second;
+                out["items"].push_back({
+                    {"sid", sid},
+                    {"sid_len", (int)sid.size()},
+                    {"expires_at", e.expires_at},
+                    {"now", now},
+                    {"ttl_left", (e.expires_at > now) ? (e.expires_at - now) : 0},
+                    {"fingerprint", e.fingerprint}
+                });
+            }
+        }
+
+        reply_json(res, 200, out.dump());
+    });
+
+	std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
+	srv.listen("0.0.0.0", LISTEN_PORT);
+	return 0;
+	}

@@ -1,0 +1,108 @@
+async function apiGet(path) {
+    const r = await fetch(path, { headers: { "Accept": "application/json" } });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.message || j.error || ("HTTP " + r.status));
+    return j;
+}
+
+async function apiPost(path, body) {
+    const r = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify(body)
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.message || j.error || ("HTTP " + r.status));
+    return j;
+}
+
+function $(id) { return document.getElementById(id); }
+
+function pill(status) {
+    const cls = (status || "disabled");
+    return `<span class="pill ${cls}">${cls}</span>`;
+}
+
+function esc(s) {
+    return (s || "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+let allUsers = [];
+
+function render() {
+    const f = ($("filter").value || "").toLowerCase().trim();
+    const rows = allUsers.filter(u => {
+        const hay = [
+            u.fingerprint, u.name, u.notes, u.role, u.status
+        ].join(" ").toLowerCase();
+        return !f || hay.includes(f);
+    });
+
+    const tb = $("tbody");
+    tb.innerHTML = rows.map(u => {
+        return `<tr>
+      <td class="mono">${esc(u.fingerprint)}</td>
+      <td>
+        <div><b>${esc(u.name || "")}</b></div>
+        <div class="muted" style="white-space:pre-wrap;">${esc(u.notes || "")}</div>
+      </td>
+      <td>${esc(u.role || "")}</td>
+      <td>${pill(u.status)}</td>
+      <td class="mono">${esc(u.added_at || "")}</td>
+      <td class="mono">${esc(u.last_seen || "")}</td>
+      <td class="row-actions">
+        <button data-act="enable" data-fp="${esc(u.fingerprint)}">Enable</button>
+        <button data-act="disable" data-fp="${esc(u.fingerprint)}">Disable</button>
+        <button data-act="revoke" data-fp="${esc(u.fingerprint)}">Revoke</button>
+      </td>
+    </tr>`;
+    }).join("");
+
+    tb.querySelectorAll("button").forEach(b => {
+        b.addEventListener("click", async () => {
+            const fp = b.getAttribute("data-fp");
+            const act = b.getAttribute("data-act");
+            const status = (act === "enable") ? "enabled" : (act === "disable") ? "disabled" : "revoked";
+            if (act === "revoke") {
+                if (!confirm("Revoke this user? This hard-blocks login for that fingerprint.")) return;
+            }
+            try {
+                await apiPost("/api/v4/admin/users/status", { fingerprint: fp, status });
+                await refresh();
+            } catch (e) {
+                alert("Failed: " + e.message);
+            }
+        });
+    });
+}
+
+async function refresh() {
+    const j = await apiGet("/api/v4/admin/users");
+    allUsers = (j.users || []).sort((a,b) => (a.fingerprint||"").localeCompare(b.fingerprint||""));
+    render();
+}
+
+async function upsertFromForm() {
+    const fp = ($("fp").value || "").trim();
+    const name = ($("name").value || "").trim();
+    const role = ($("role").value || "user").trim();
+    const notes = ($("notes").value || "").trim();
+
+    if (!fp || fp.length < 32) throw new Error("fingerprint looks invalid");
+    await apiPost("/api/v4/admin/users/upsert", { fingerprint: fp, name, role, notes });
+    $("msg").textContent = "Upsert OK";
+    await refresh();
+}
+
+window.addEventListener("load", async () => {
+    $("btnRefresh").addEventListener("click", refresh);
+    $("filter").addEventListener("input", render);
+    $("btnAdd").addEventListener("click", async () => {
+        $("msg").textContent = "";
+        try { await upsertFromForm(); }
+        catch (e) { $("msg").textContent = "Error: " + e.message; }
+    });
+
+    try { await refresh(); }
+    catch (e) { $("msg").textContent = "Failed to load users: " + e.message; }
+});

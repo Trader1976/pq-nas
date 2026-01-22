@@ -4,6 +4,13 @@
 #include <vector>
 #include <nlohmann/json.hpp>
 
+
+namespace pqnas {
+
+std::string now_iso_utc();
+
+}
+
 namespace pqnas {
 
     long now_epoch();

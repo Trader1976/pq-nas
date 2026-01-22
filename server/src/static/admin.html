@@ -4,33 +4,312 @@
     <meta charset="utf-8">
     <title>PQ-NAS Admin</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
+
     <style>
-        body { font-family: system-ui; padding: 24px; }
-        .card { border:1px solid #ddd; border-radius:12px; padding:16px; max-width:980px; }
-        pre { background:#f6f6f6; padding:12px; border-radius:10px; }
-        .badge { padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; }
-        .admin { background:#2e7d32; color:#fff; }
-        .user { background:#1565c0; color:#fff; }
-        .unknown { background:#666; color:#fff; }
+        :root{
+            --bg: #070a08;
+            --panel: rgba(16, 22, 18, 0.78);
+            --panel2: rgba(10, 14, 11, 0.72);
+            --border: rgba(0, 255, 140, 0.24);
+            --border2: rgba(0, 255, 140, 0.14);
+            --text: rgba(240, 255, 248, 0.92);
+            --muted: rgba(240, 255, 248, 0.68);
+            --accent: rgba(0, 255, 140, 0.92);
+            --accent2: rgba(0, 255, 140, 0.55);
+            --shadow: 0 12px 42px rgba(0,0,0,0.55);
+            --radius: 18px;
+        }
+
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body{
+            margin: 0;
+            color: var(--text);
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial;
+            background:
+                    radial-gradient(1200px 600px at 15% 10%, rgba(0,255,140,0.10), transparent 55%),
+                    radial-gradient(1000px 600px at 85% 20%, rgba(0,255,140,0.06), transparent 60%),
+                    radial-gradient(900px 600px at 50% 90%, rgba(0,255,140,0.05), transparent 60%),
+                    linear-gradient(180deg, #050706, var(--bg));
+            padding: 26px;
+        }
+
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        .wrap{
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        .frame{
+            border: 1px solid var(--border);
+            border-radius: 26px;
+            padding: 18px;
+            background: rgba(0,0,0,0.25);
+            box-shadow: var(--shadow);
+        }
+
+        header{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            padding: 10px 10px 16px 10px;
+        }
+
+        .title{
+            display:flex;
+            align-items:center;
+            gap: 10px;
+            min-width: 0;
+        }
+
+        .title h1{
+            margin: 0;
+            font-size: 22px;
+            letter-spacing: 0.2px;
+            font-weight: 750;
+        }
+
+        .subtitle{
+            margin-top: 4px;
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        .badge{
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            border: 1px solid var(--border2);
+            background: rgba(0,0,0,0.35);
+            color: var(--text);
+            white-space: nowrap;
+        }
+        /* keep your original semantic classes too */
+        .badge.admin { background: rgba(0,255,140,0.12); border-color: rgba(0,255,140,0.28); }
+        .badge.user { background: rgba(90,170,255,0.12); border-color: rgba(90,170,255,0.22); }
+        .badge.unknown { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.14); }
+
+        .grid{
+            display: grid;
+            grid-template-columns: 1.2fr 0.8fr;
+            gap: 14px;
+            padding: 6px 10px 10px 10px;
+        }
+        @media (max-width: 980px){
+            .grid{ grid-template-columns: 1fr; }
+        }
+
+        .card{
+            border: 1px solid var(--border2);
+            border-radius: var(--radius);
+            background: linear-gradient(180deg, var(--panel), rgba(0,0,0,0.18));
+            padding: 16px;
+            box-shadow: 0 10px 32px rgba(0,0,0,0.35);
+            overflow: hidden;
+        }
+        .card h2{
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: var(--muted);
+            font-weight: 750;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .row{
+            display:flex;
+            align-items:center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .statusline{
+            font-size: 14px;
+            color: var(--text);
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.10);
+            background: rgba(0,0,0,0.28);
+        }
+
+        pre{
+            margin: 12px 0 0 0;
+            padding: 12px 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.10);
+            background: rgba(0,0,0,0.32);
+            color: rgba(240,255,248,0.88);
+            overflow: auto;
+            font-size: 12.5px;
+            line-height: 1.35;
+        }
+
+        .nav{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        @media (max-width: 520px){
+            .nav{ grid-template-columns: 1fr; }
+        }
+
+        .btn{
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: rgba(0,0,0,0.30);
+            color: var(--accent);
+            font-weight: 750;
+            letter-spacing: 0.2px;
+            cursor: pointer;
+            text-decoration: none;
+            user-select: none;
+            transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+        }
+        .btn:hover{
+            transform: translateY(-1px);
+            border-color: rgba(0,255,140,0.45);
+            background: rgba(0,255,140,0.06);
+            text-decoration: none;
+        }
+        .btn:active{ transform: translateY(0px); }
+
+        .btn.secondary{
+            border-color: rgba(255,255,255,0.12);
+            color: rgba(240,255,248,0.86);
+        }
+        .btn.secondary:hover{
+            border-color: rgba(255,255,255,0.22);
+            background: rgba(255,255,255,0.05);
+        }
+
+        .hint{
+            color: var(--muted);
+            font-size: 13px;
+            margin-top: 10px;
+            line-height: 1.4;
+        }
+
+        .kvs{
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        .kv{
+            border: 1px solid rgba(255,255,255,0.10);
+            background: rgba(0,0,0,0.24);
+            border-radius: 14px;
+            padding: 10px 12px;
+            display:flex;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .kv .k{
+            color: var(--muted);
+            font-size: 13px;
+        }
+        .kv .v{
+            font-weight: 700;
+            font-size: 13px;
+            color: rgba(240,255,248,0.88);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 65%;
+            text-align: right;
+        }
+
+        footer{
+            padding: 10px 10px 2px 10px;
+            color: rgba(240,255,248,0.55);
+            font-size: 12px;
+        }
     </style>
 </head>
+
 <body>
-<h2 style="display:flex;gap:10px;align-items:center">
-    <span>PQ-NAS Admin</span>
-    <span id="roleBadge" class="badge unknown">role: ?</span>
-</h2>
+<div class="wrap">
+    <div class="frame">
+        <header>
+            <div class="title">
+                <div>
+                    <h1>PQ-NAS Admin</h1>
+                    <div class="subtitle">Manage users, review audit logs, and verify server integrity.</div>
+                </div>
+            </div>
 
-<div class="card">
-    <h3>/api/v4/me</h3>
-    <div id="status">Loading...</div>
-    <pre id="me">(waiting)</pre>
+            <!-- IMPORTANT: keep this id for admin.js -->
+            <span id="roleBadge" class="badge unknown">role: ?</span>
+        </header>
 
-    <h3 style="margin-top:16px">Links</h3>
-    <ul>
-        <li><a href="/admin/audit">/admin/audit</a></li>
-        <li><a href="/api/v4/audit/verify">/api/v4/audit/verify</a></li>
-        <li><a href="/app">/app</a></li>
-    </ul>
+        <div class="grid">
+            <section class="card">
+                <h2>Session status</h2>
+
+                <div class="row">
+                    <!-- IMPORTANT: keep this id for admin.js -->
+                    <div id="status" class="statusline">Loading…</div>
+
+                    <div class="row" style="gap:8px">
+                        <a class="btn" href="/admin/users">Users</a>
+                        <a class="btn secondary" href="/admin/audit">Audit</a>
+                    </div>
+                </div>
+
+                <!-- IMPORTANT: keep this id for admin.js -->
+                <pre id="me">(waiting)</pre>
+
+                <div class="hint">
+                    Tip: If something looks off, open DevTools → Network and confirm <code>/api/v4/me</code> returns 200 and JSON.
+                </div>
+            </section>
+
+            <aside class="card">
+                <h2>Navigation</h2>
+
+                <div class="nav">
+                    <a class="btn" href="/admin/users">User approvals</a>
+                    <a class="btn" href="/admin/audit">Audit log UI</a>
+                    <a class="btn secondary" href="/api/v4/audit/verify">Verify audit chain</a>
+                    <a class="btn secondary" href="/app">Open app</a>
+                </div>
+
+                <div class="kvs">
+                    <div class="kv">
+                        <div class="k">Endpoint</div>
+                        <div class="v">/api/v4/me</div>
+                    </div>
+                    <div class="kv">
+                        <div class="k">Policy</div>
+                        <div class="v">fail-closed</div>
+                    </div>
+                    <div class="kv">
+                        <div class="k">Cache</div>
+                        <div class="v">no-store (admin)</div>
+                    </div>
+                </div>
+
+                <div class="hint">
+                    “Users” is where you enable/disable fingerprints and revoke access. It writes to <code>users.json</code>.
+                </div>
+            </aside>
+        </div>
+
+        <footer>
+            PQ-NAS • Admin UI • static + server-gated
+        </footer>
+    </div>
 </div>
 
 <script src="/static/admin.js"></script>

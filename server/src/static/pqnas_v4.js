@@ -123,6 +123,16 @@
                 if (!res.ok) return; // transient
 
                 const data = await res.json();
+
+                // ---- NEW: pending admin approval ----
+                if (data && data.pending_admin) {
+                    stopped = true;
+                    setBusy(false);
+                    setStatus("Not approved yet — waiting for admin approval.");
+                    window.location.href = `/wait-approval?sid=${encodeURIComponent(sid)}`;
+                    return;
+                }
+
                 // expected: {ok:true, approved:true/false, expired?:true}
                 if (data && data.approved) {
                     stopped = true;

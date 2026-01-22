@@ -62,6 +62,7 @@ add_library(pqnas_verify_v4 STATIC
         server/src/verify_v4_crypto.cc
         server/src/pqnas_util.cc
         server/src/authz.cc
+        server/src/users_registry.cpp
 )
 
 target_include_directories(pqnas_verify_v4 PUBLIC
@@ -93,6 +94,7 @@ add_executable(pqnas_server
         server/src/policy.cc
         server/src/audit_log.cc
         server/src/allowlist.cc
+        server/src/users_registry.cpp
 )
 
 target_include_directories(pqnas_server PRIVATE
@@ -202,17 +204,19 @@ add_executable(test_admin_cookie
         server/src/allowlist.cc
         server/src/session_cookie.cc
         server/src/pqnas_util.cc
+        server/src/users_registry.cpp
 )
 
 target_include_directories(test_admin_cookie PRIVATE
         ${CMAKE_SOURCE_DIR}/server/include
         ${CMAKE_SOURCE_DIR}/server/third_party
         ${CMAKE_SOURCE_DIR}/core
+        ${SODIUM_INCLUDE_DIRS}
 )
 
 target_link_libraries(test_admin_cookie PRIVATE
         OpenSSL::Crypto
-        sodium
+        ${SODIUM_LIBRARIES}
 )
 
 set_target_properties(test_admin_cookie PROPERTIES

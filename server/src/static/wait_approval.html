@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PQ-NAS — Waiting for admin approval</title>
+    <style>
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding:24px; background:#0b0b0c; color:#eafef3; }
+        .card { max-width: 720px; margin:0 auto; border:1px solid rgba(0,230,118,.35); border-radius:18px; padding:18px; background:#0f1311;
+            box-shadow:0 0 0 1px rgba(0,230,118,.12), 0 0 40px rgba(0,230,118,.08); }
+        h1 { margin:0 0 8px 0; font-size:22px; color:#00e676; }
+        .hint { opacity:.9; font-size:14px; line-height:1.4; }
+        .status { margin-top: 12px; padding: 10px; background: rgba(0,230,118,.08); border-radius: 12px; border: 1px solid rgba(0,230,118,.25); color:#9affc7; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; word-break: break-all; }
+        a { color:#00e676; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <h1>Waiting for admin approval</h1>
+
+    <p class="hint">
+        Your DNA identity was received, but this PQ-NAS server requires an administrator to approve new users.
+        Please contact the admin and ask them to enable your fingerprint in <span class="mono">/admin/users</span>.
+    </p>
+
+    <div class="status" id="status">Checking approval status…</div>
+
+    <div style="margin-top:12px" class="hint">
+        Session: <span class="mono" id="sid">(unknown)</span>
+    </div>
+
+    <div style="margin-top:12px" class="hint">
+        When you are approved, this page will automatically continue to sign-in.
+    </div>
+</div>
+
+<script src="/static/wait_approval.js"></script>
+</body>
+</html>

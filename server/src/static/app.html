@@ -4,25 +4,233 @@
     <meta charset="utf-8">
     <title>PQ-NAS</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
+
     <style>
-        body { font-family: system-ui; padding: 24px; }
-        pre { background:#f6f6f6; padding:12px; border-radius:10px; }
-        .admin { margin-top:16px; padding-top:12px; border-top:1px solid #ddd; display:none; }
+        :root{
+            --bg: #070a08;
+            --panel: rgba(16, 22, 18, 0.78);
+            --border: rgba(0, 255, 140, 0.24);
+            --border2: rgba(0, 255, 140, 0.14);
+            --text: rgba(240, 255, 248, 0.92);
+            --muted: rgba(240, 255, 248, 0.68);
+            --accent: rgba(0, 255, 140, 0.92);
+            --shadow: 0 12px 42px rgba(0,0,0,0.55);
+            --radius: 18px;
+        }
+
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body{
+            margin: 0;
+            color: var(--text);
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial;
+            background:
+                    radial-gradient(1200px 600px at 15% 10%, rgba(0,255,140,0.10), transparent 55%),
+                    radial-gradient(1000px 600px at 85% 20%, rgba(0,255,140,0.06), transparent 60%),
+                    linear-gradient(180deg, #050706, var(--bg));
+            padding: 26px;
+        }
+
+        .wrap{ max-width: 1100px; margin: 0 auto; }
+        .frame{
+            border: 1px solid var(--border);
+            border-radius: 26px;
+            padding: 18px;
+            background: rgba(0,0,0,0.25);
+            box-shadow: var(--shadow);
+        }
+
+        header{
+            display:flex;
+            align-items:center;
+            justify-content: space-between;
+            gap: 14px;
+            padding: 10px 10px 16px 10px;
+        }
+
+        .title h1{ margin:0; font-size:22px; font-weight:800; }
+        .subtitle{ margin-top:4px; font-size:13px; color: var(--muted); }
+
+        .badge{
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 750;
+            border: 1px solid var(--border2);
+            background: rgba(0,0,0,0.35);
+            color: var(--text);
+            white-space: nowrap;
+        }
+        .badge.ok { background: rgba(0,255,140,0.12); border-color: rgba(0,255,140,0.28); }
+        .badge.warn { background: rgba(255,190,0,0.12); border-color: rgba(255,190,0,0.22); }
+        .badge.err { background: rgba(255,90,90,0.12); border-color: rgba(255,90,90,0.22); }
+
+        .grid{
+            display:grid;
+            grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+            gap: 14px;
+            padding: 6px 10px 10px 10px;
+        }
+        @media (max-width: 980px){ .grid{ grid-template-columns: 1fr; } }
+
+        .card{
+            border: 1px solid var(--border2);
+            border-radius: var(--radius);
+            background: linear-gradient(180deg, var(--panel), rgba(0,0,0,0.18));
+            padding: 16px;
+            box-shadow: 0 10px 32px rgba(0,0,0,0.35);
+        }
+        .card h2{
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: var(--muted);
+            font-weight: 750;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .row{ display:flex; align-items:center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+        .btn{
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            gap:10px;
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: rgba(0,0,0,0.30);
+            color: var(--accent);
+            font-weight: 750;
+            cursor:pointer;
+            text-decoration:none;
+            user-select:none;
+            transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+        }
+        .btn:hover{
+            transform: translateY(-1px);
+            border-color: rgba(0,255,140,0.45);
+            background: rgba(0,255,140,0.06);
+            text-decoration:none;
+        }
+        .btn.secondary{
+            border-color: rgba(255,255,255,0.12);
+            color: rgba(240,255,248,0.86);
+        }
+        .btn.secondary:hover{
+            border-color: rgba(255,255,255,0.22);
+            background: rgba(255,255,255,0.05);
+        }
+
+        pre{
+            margin: 12px 0 0 0;
+            padding: 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.10);
+            background: rgba(0,0,0,0.32);
+            color: rgba(240,255,248,0.88);
+            overflow:auto;
+            font-size: 12.5px;
+            line-height: 1.35;
+        }
+        /* Critical: allow grid children to shrink instead of forcing overflow */
+        .card { min-width: 0; }
+
+        /* Critical: long base64/hex in JSON must not force page wider */
+        pre{
+            white-space: pre-wrap;      /* wrap long lines */
+            overflow-wrap: anywhere;    /* break long tokens if needed */
+            word-break: break-word;     /* fallback */
+        }
+        .hint{ color: var(--muted); font-size: 13px; margin-top: 10px; line-height: 1.4; }
+
+        .adminLinks{ display:none; margin-top: 10px; }
+        .adminLinks .nav{ display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        @media (max-width: 520px){ .adminLinks .nav{ grid-template-columns: 1fr; } }
+
+        .bigState{
+            display:none;
+            padding: 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(255,255,255,0.10);
+            background: rgba(0,0,0,0.28);
+            margin-top: 10px;
+        }
+        .bigState h3{ margin:0 0 6px 0; font-size: 16px; }
+        .bigState p{ margin:0; color: var(--muted); line-height: 1.45; }
+        code{ color: rgba(240,255,248,0.85); }
     </style>
 </head>
-<body>
-<h2>PQ-NAS</h2>
-<p>Session check:</p>
-<pre id="out">Loading...</pre>
 
-<div id="admin_block" class="admin">
-    <h3>Admin</h3>
-    <ul>
-        <li><a href="/admin">/admin</a></li>
-        <li><a href="/admin/audit">/admin/audit</a></li>
-        <li><a href="/api/v4/audit/verify">/api/v4/audit/verify</a></li>
-        <li><a href="/api/v4/admin/ping">/api/v4/admin/ping</a></li>
-    </ul>
+<body>
+<div class="wrap">
+    <div class="frame">
+        <header>
+            <div class="title">
+                <div>
+                    <h1>PQ-NAS</h1>
+                    <div class="subtitle">Session, role, and access status.</div>
+                </div>
+            </div>
+            <span id="stateBadge" class="badge warn">checking…</span>
+        </header>
+
+        <div class="grid">
+            <section class="card">
+                <h2>Session</h2>
+
+                <div class="row">
+                    <div class="hint" id="statusLine">Loading…</div>
+                    <div class="row" style="gap:8px">
+                        <a class="btn secondary" href="/admin" id="adminHomeBtn" style="display:none">Admin</a>
+                        <button class="btn" id="refreshBtn" type="button">Refresh</button>
+                    </div>
+                </div>
+
+                <div id="state_disabled" class="bigState">
+                    <h3>Waiting for admin approval…</h3>
+                    <p>
+                        Your identity has been received, but your account is currently <b>disabled</b>.
+                        Ask an admin to enable your fingerprint in <code>/admin/users</code>.
+                        This page will update automatically.
+                    </p>
+                </div>
+
+                <div id="state_unauth" class="bigState">
+                    <h3>Not signed in</h3>
+                    <p>
+                        You don’t have a valid session cookie. Go to the login page and scan the QR code to sign in.
+                    </p>
+                    <div style="margin-top:10px">
+                        <a class="btn" href="/">Go to login</a>
+                    </div>
+                </div>
+
+                <pre id="out">Loading…</pre>
+            </section>
+
+            <aside class="card">
+                <h2>Admin tools</h2>
+
+                <div class="hint">
+                    Admin links appear only if your role is <b>admin</b>.
+                </div>
+
+                <div id="admin_block" class="adminLinks">
+                    <div class="nav">
+                        <a class="btn" href="/admin/users">User approvals</a>
+                        <a class="btn" href="/admin/audit">Audit log UI</a>
+                        <a class="btn secondary" href="/api/v4/audit/verify">Verify audit chain</a>
+                        <a class="btn secondary" href="/api/v4/admin/ping">Admin ping</a>
+                    </div>
+                </div>
+
+                <div class="hint">
+                    Tip: <code>/api/v4/me</code> should return JSON. If it returns HTML, you’re probably being redirected or blocked.
+                </div>
+            </aside>
+        </div>
+    </div>
 </div>
 
 <script src="/static/app.js"></script>

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PQ-NAS — Admin Users</title>
+    <style>
+        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding:24px; background:#0b0b0c; color:#eafef3; }
+        .card { max-width: 1100px; margin:0 auto; border:1px solid rgba(0,230,118,.35); border-radius:18px; padding:18px; background:#0f1311;
+            box-shadow:0 0 0 1px rgba(0,230,118,.12), 0 0 40px rgba(0,230,118,.08); }
+        h1 { margin:0 0 8px 0; font-size:22px; color:#00e676; }
+        .muted { opacity:.75; }
+        .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin: 10px 0; }
+        input, select, textarea {
+            border-radius: 12px; border: 1px solid rgba(0,230,118,.35);
+            background: rgba(0,0,0,.25); color:#eafef3; padding:10px 12px;
+        }
+        textarea { min-height: 70px; width: 520px; max-width: 100%; }
+        button {
+            border-radius: 12px; border: 1px solid rgba(0,230,118,.45);
+            background: rgba(0,230,118,.12); color:#9affc7;
+            padding: 10px 12px; cursor: pointer;
+        }
+        button:hover { background: rgba(0,230,118,.22); box-shadow: 0 0 12px rgba(0,230,118,.25); }
+        table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+        th, td { border-top: 1px solid rgba(255,255,255,.10); padding: 10px; vertical-align: top; }
+        th { text-align:left; font-size: 12px; letter-spacing: .03em; text-transform: uppercase; opacity: .8; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; }
+        .pill { display:inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; border:1px solid rgba(255,255,255,.15); }
+        .pill.enabled  { border-color: rgba(0,230,118,.45); color:#9affc7; background: rgba(0,230,118,.10); }
+        .pill.disabled { border-color: rgba(255,255,255,.18); color:#d7d7d9; background: rgba(255,255,255,.06); }
+        .pill.revoked  { border-color: rgba(255,80,80,.50); color:#ffd0d0; background: rgba(255,80,80,.10); }
+        .row-actions { display:flex; gap:8px; flex-wrap:wrap; }
+        #msg { margin-top: 10px; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <h1>Admin — Users</h1>
+    <div class="muted">Enable new users after they scan. Changes are saved to <span class="mono">users.json</span>.</div>
+
+    <div class="row" style="margin-top:14px;">
+        <button id="btnRefresh">Refresh</button>
+        <input id="filter" placeholder="Filter (fingerprint/name/notes/role/status)" style="min-width: 320px; flex:1;" />
+        <div id="msg" class="muted"></div>
+    </div>
+
+    <div class="row" style="margin-top:14px;">
+        <input id="fp" class="mono" placeholder="fingerprint hex" style="min-width: 520px; flex:1;" />
+        <input id="name" placeholder="name" style="min-width: 180px;" />
+        <select id="role">
+            <option value="user">user</option>
+            <option value="admin">admin</option>
+        </select>
+        <button id="btnAdd">Upsert</button>
+    </div>
+
+    <div class="row">
+        <textarea id="notes" placeholder="notes (optional)"></textarea>
+    </div>
+
+    <table>
+        <thead>
+        <tr>
+            <th style="width:34%;">Fingerprint</th>
+            <th style="width:22%;">Name / Notes</th>
+            <th style="width:8%;">Role</th>
+            <th style="width:10%;">Status</th>
+            <th style="width:13%;">Added</th>
+            <th style="width:13%;">Last seen</th>
+            <th style="width:14%;">Actions</th>
+        </tr>
+        </thead>
+        <tbody id="tbody">
+        <!-- filled by JS -->
+        </tbody>
+    </table>
+</div>
+
+<script src="/static/admin_users.js"></script>
+</body>
+</html>

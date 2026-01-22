@@ -6,6 +6,10 @@
 #include <stdexcept>
 #include <vector>
 #include <sodium.h>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+
 
 namespace pqnas {
 
@@ -17,6 +21,26 @@ std::string lower_ascii(std::string s) {
     for (char& c : s) c = (char)std::tolower((unsigned char)c);
     return s;
 }
+
+
+std::string now_iso_utc() {
+    using namespace std::chrono;
+
+    auto now = system_clock::now();
+    auto t = system_clock::to_time_t(now);
+    auto ms = duration_cast<milliseconds>(now.time_since_epoch()) % 1000;
+
+    std::tm tm{};
+    gmtime_r(&t, &tm);
+
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%S")
+        << '.' << std::setw(3) << std::setfill('0') << ms.count()
+        << 'Z';
+
+    return oss.str();
+}
+
 
 // NOTE: We only use loose base64 decoding for inputs that are already authenticated
 // by an outer signature check, or where we normalize to canonical bytes immediately.
