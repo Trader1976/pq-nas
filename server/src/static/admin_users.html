@@ -21,6 +21,17 @@
             background: rgba(0,230,118,.12); color:#9affc7;
             padding: 10px 12px; cursor: pointer;
         }
+        button.danger {
+            border-color: rgba(255,80,80,.6);
+            color: #ffd0d0;
+            background: rgba(255,80,80,.12);
+        }
+
+        button.danger:hover {
+            background: rgba(255,80,80,.25);
+            box-shadow: 0 0 14px rgba(255,80,80,.45);
+        }
+
         button:hover { background: rgba(0,230,118,.22); box-shadow: 0 0 12px rgba(0,230,118,.25); }
         table { width: 100%; border-collapse: collapse; margin-top: 12px; }
         th, td { border-top: 1px solid rgba(255,255,255,.10); padding: 10px; vertical-align: top; }
@@ -32,6 +43,7 @@
         .pill.revoked  { border-color: rgba(255,80,80,.50); color:#ffd0d0; background: rgba(255,80,80,.10); }
         .row-actions { display:flex; gap:8px; flex-wrap:wrap; }
         #msg { margin-top: 10px; }
+
     </style>
 </head>
 <body>

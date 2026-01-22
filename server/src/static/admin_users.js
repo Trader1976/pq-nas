@@ -54,6 +54,7 @@ function render() {
         <button data-act="enable" data-fp="${esc(u.fingerprint)}">Enable</button>
         <button data-act="disable" data-fp="${esc(u.fingerprint)}">Disable</button>
         <button data-act="revoke" data-fp="${esc(u.fingerprint)}">Revoke</button>
+        <button class="danger" data-act="delete" data-fp="${esc(u.fingerprint)}">Delete</button>
       </td>
     </tr>`;
     }).join("");
@@ -62,10 +63,32 @@ function render() {
         b.addEventListener("click", async () => {
             const fp = b.getAttribute("data-fp");
             const act = b.getAttribute("data-act");
-            const status = (act === "enable") ? "enabled" : (act === "disable") ? "disabled" : "revoked";
+
+            if (act === "delete") {
+                const msg =
+                    "Delete this user from users.json?\n\n" +
+                    "This removes the entry entirely (cleanup). " +
+                    "If they scan again, they will re-appear as disabled.";
+                if (!confirm(msg)) return;
+
+                try {
+                    await apiPost("/api/v4/admin/users/delete", { fingerprint: fp });
+                    await refresh();
+                } catch (e) {
+                    alert("Failed: " + e.message);
+                }
+                return;
+            }
+
+            const status =
+                (act === "enable") ? "enabled" :
+                    (act === "disable") ? "disabled" :
+                        "revoked";
+
             if (act === "revoke") {
                 if (!confirm("Revoke this user? This hard-blocks login for that fingerprint.")) return;
             }
+
             try {
                 await apiPost("/api/v4/admin/users/status", { fingerprint: fp, status });
                 await refresh();
@@ -74,6 +97,7 @@ function render() {
             }
         });
     });
+
 }
 
 async function refresh() {

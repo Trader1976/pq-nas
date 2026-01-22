@@ -1723,6 +1723,61 @@ srv.Post("/api/v4/admin/users/disable", [&](const httplib::Request& req, httplib
         reply_json(res, 200, out.dump());
     });
 
+    // POST /api/v4/admin/users/delete
+    // Body: {"fingerprint":"..."}
+    srv.Post("/api/v4/admin/users/delete", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+        json j;
+        try { j = json::parse(req.body); }
+        catch (...) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+            return;
+        }
+
+        const std::string fp = j.value("fingerprint", "");
+        if (fp.empty()) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+            return;
+        }
+
+        if (!users.exists(fp)) {
+            reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
+            return;
+        }
+
+        // Safety: refuse deleting an enabled admin identity (keeps system recoverable)
+        if (users.is_admin_enabled(fp)) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","refusing to delete an enabled admin"}}).dump());
+            return;
+        }
+
+        const bool ok_del  = users.erase(fp);
+        const bool ok_save = ok_del ? users.save(users_path) : false;
+
+        {
+            pqnas::AuditEvent ev;
+            ev.event = "admin.user_deleted";
+            ev.outcome = (ok_del && ok_save) ? "ok" : "fail";
+            ev.f["fingerprint"] = fp;
+            ev.f["ts"] = now_iso_utc();
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            audit.append(ev);
+        }
+
+        if (!ok_del) {
+            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","delete failed"}}).dump());
+            return;
+        }
+        if (!ok_save) {
+            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
+            return;
+        }
+
+        reply_json(res, 200, json({{"ok",true}}).dump());
+    });
+
+
 	std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
 	srv.listen("0.0.0.0", LISTEN_PORT);
 	return 0;
