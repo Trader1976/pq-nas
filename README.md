@@ -1,6 +1,7 @@
 
 <img width="1518" height="1100" alt="pqnas_system" src="https://github.com/user-attachments/assets/0d32cc2d-fdbc-4232-bfab-048a7533a22e" />
-<img width="1518" height="1100" alt="pqnas_system" src="https://github.com/user-attachments/assets/4dd9349a-193f-4a81-8a47-bd7e2d26000c" />
+<img width="1518" height="1100" alt="pqnas_log" src="https://github.com/user-attachments/assets/adbeba5d-b370-4dab-9f6d-46467109d6f9" />
+
 
 
 # PQ-NAS
