@@ -1,3 +1,7 @@
+
+<img width="1518" height="1100" alt="pqnas_system" src="https://github.com/user-attachments/assets/0d32cc2d-fdbc-4232-bfab-048a7533a22e" />
+<img width="1518" height="1100" alt="pqnas_log" src="https://github.com/user-attachments/assets/e4ffa438-b4f6-4823-92bc-6b2b8f7ba7c2" />
+
 # PQ-NAS
 
 **PQ-NAS** is an identity-first, post-quantum–ready personal storage server.
