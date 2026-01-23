@@ -4,6 +4,7 @@
 #include <mutex>
 #include <vector>
 #include <deque>
+#include <atomic>
 
 namespace pqnas {
 
@@ -125,6 +126,24 @@ public:
     */
     void append(const AuditEvent& e);
 
+
+    // Audit verbosity control.
+    //
+    // Ordering: DEBUG < INFO < ADMIN < SECURITY
+    // MinLevel means: "log events with level >= min_level"
+    enum class MinLevel : int {
+        DEBUG    = 0,
+        INFO     = 1,
+        ADMIN    = 2,
+        SECURITY = 3,
+    };
+
+    // Set minimum level. Returns true if accepted, false if invalid.
+    bool set_min_level_str(const std::string& s);
+
+    // Get current minimum level as string (SECURITY/ADMIN/INFO/DEBUG).
+    std::string min_level_str() const;
+
     /*
     Convenience helper: return current UTC timestamp in ISO-8601 format.
 
@@ -133,6 +152,7 @@ public:
     - tests
     - tools that need consistent timestamps
     */
+
     static std::string now_iso_utc();
 
     /*
@@ -148,7 +168,11 @@ public:
     */
     static std::string sha256_hex(const std::string& s);
 
+
 private:
+    // Minimum level of events to record. Default is ADMIN.
+    std::atomic<int> min_level_{static_cast<int>(MinLevel::ADMIN)};
+
     // Path to the JSONL audit log file.
     std::string jsonl_path_;
 

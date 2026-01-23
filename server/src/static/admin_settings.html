@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>PQ-NAS • Admin Settings</title>
+    <style>
+        :root{
+            --bg0:#070A0B;
+            --bg1:#0B1011;
+            --card:#0E1516;
+            --border:rgba(120,255,205,0.14);
+            --border2:rgba(120,255,205,0.22);
+            --text:#D7E0DD;
+            --muted:#8FA3A0;
+            --green:#55FFB3;
+            --green2:#28D88F;
+            --yellow:#FFD36A;
+            --red:#FF5D6C;
+            --blue:#64B5FF;
+            --shadow:0 14px 40px rgba(0,0,0,0.55);
+            --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+            --radius: 14px;
+        }
+        *{ box-sizing:border-box; }
+        html,body{ height:100%; }
+        body{
+            margin:0;
+            font-family:var(--sans);
+            background:
+                    radial-gradient(900px 500px at 10% -10%, rgba(85,255,179,0.08), transparent 60%),
+                    radial-gradient(700px 420px at 85% 0%, rgba(100,181,255,0.08), transparent 55%),
+                    linear-gradient(180deg, var(--bg0), var(--bg1));
+            color:var(--text);
+        }
+        a{ color:var(--green); text-decoration:none; }
+        .wrap{ max-width:980px; margin:0 auto; padding:22px 18px 40px; }
+
+        .topbar{
+            display:flex; align-items:center; justify-content:space-between;
+            gap:14px; padding:14px 16px; border:1px solid var(--border);
+            border-radius:var(--radius); background:rgba(14,21,22,0.72);
+            box-shadow:var(--shadow);
+            backdrop-filter: blur(6px);
+        }
+        .brand{ display:flex; flex-direction:column; gap:2px; }
+        .brand .title{
+            font-size:16px; letter-spacing:0.2px; font-weight:700;
+            display:flex; align-items:center; gap:10px;
+        }
+        .dot{
+            width:10px; height:10px; border-radius:50%;
+            background:var(--green);
+            box-shadow:0 0 16px rgba(85,255,179,0.75);
+            display:inline-block;
+        }
+        .brand .subtitle{ font-size:12px; color:var(--muted); }
+
+        .card{
+            margin-top:14px;
+            border:1px solid var(--border);
+            border-radius:var(--radius);
+            background:rgba(14,21,22,0.72);
+            box-shadow:var(--shadow);
+            backdrop-filter: blur(6px);
+            overflow:hidden;
+        }
+        .card .hd{
+            display:flex; align-items:center; justify-content:space-between;
+            gap:12px;
+            padding:12px 14px;
+            border-bottom:1px solid var(--border);
+            background: linear-gradient(180deg, rgba(85,255,179,0.06), transparent);
+        }
+        .card .hd .h{
+            font-size:13px; color:var(--muted); letter-spacing:0.12em; text-transform:uppercase;
+        }
+        .card .bd{ padding:14px; }
+
+        .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+        .row + .row{ margin-top:12px; }
+
+        .btn{
+            border:1px solid var(--border2);
+            background:rgba(10,15,16,0.65);
+            color:var(--text);
+            padding:9px 11px;
+            border-radius:12px;
+            cursor:pointer;
+            font-weight:650;
+            letter-spacing:0.2px;
+            transition: transform .06s ease, border-color .15s ease, background .15s ease, box-shadow .15s ease;
+            user-select:none;
+        }
+        .btn:hover{ border-color:rgba(85,255,179,0.45); background:rgba(10,15,16,0.85); }
+        .btn:active{ transform: translateY(1px); }
+        .btn.primary{
+            border-color:rgba(85,255,179,0.55);
+            box-shadow: 0 0 0 1px rgba(85,255,179,0.08) inset;
+        }
+
+        .input, select{
+            border:1px solid var(--border2);
+            background:rgba(10,15,16,0.65);
+            color:var(--text);
+            padding:10px 12px;
+            border-radius:12px;
+            outline:none;
+            min-width: 220px;
+        }
+        .input:focus, select:focus{
+            border-color:rgba(85,255,179,0.55);
+            box-shadow:0 0 0 3px rgba(85,255,179,0.08);
+        }
+        .mono{ font-family:var(--mono); }
+
+        .pill{
+            display:inline-flex; align-items:center; gap:8px;
+            border:1px solid var(--border2);
+            background:rgba(10,15,16,0.6);
+            padding:6px 10px;
+            border-radius:999px;
+            font-size:12px;
+            color:var(--muted);
+            white-space:nowrap;
+        }
+        .pill .k{ color:var(--muted); }
+        .pill .v{ color:var(--text); font-weight:650; }
+        .pill.ok{ border-color:rgba(85,255,179,0.45); color:rgba(85,255,179,0.95); }
+        .pill.fail{ border-color:rgba(255,93,108,0.45); color:rgba(255,93,108,0.95); }
+
+        .note{
+            margin-top:10px;
+            color:var(--muted);
+            font-size:12px;
+            line-height:1.5;
+        }
+
+        .toast{
+            display:none;
+            position:fixed;
+            right:16px;
+            bottom:16px;
+            border:1px solid var(--border2);
+            background:rgba(10,15,16,0.85);
+            box-shadow:var(--shadow);
+            border-radius:12px;
+            padding:10px 12px;
+            max-width: min(540px, calc(100vw - 32px));
+            z-index:999;
+        }
+        .toast.show{ display:block; }
+        .toast.ok{ border-color:rgba(85,255,179,0.55); }
+        .toast.fail{ border-color:rgba(255,93,108,0.55); }
+        .toast .t{ font-weight:750; margin-bottom:2px; }
+        .toast .m{ font-size:12px; color:var(--muted); }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="topbar">
+        <div class="brand">
+            <div class="title"><span class="dot"></span> PQ-NAS Admin • Settings</div>
+            <div class="subtitle">Admin-only runtime controls</div>
+        </div>
+        <div class="row">
+            <a class="btn" href="/admin">Back</a>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="hd">
+            <div class="h">Audit verbosity</div>
+            <div class="pill" id="statusPill"><span class="k">Status:</span> <span class="v">loading…</span></div>
+        </div>
+        <div class="bd">
+            <div class="row">
+                <label class="pill"><span class="k">Persisted:</span> <span class="v mono" id="persistedVal">—</span></label>
+                <label class="pill"><span class="k">Runtime:</span> <span class="v mono" id="runtimeVal">—</span></label>
+            </div>
+
+            <div class="row">
+                <select id="levelSelect" aria-label="audit minimum level"></select>
+                <button id="btnSave" class="btn primary">Save</button>
+                <button id="btnReload" class="btn">Reload</button>
+            </div>
+
+            <div class="note">
+                <b>Meaning:</b> DEBUG logs everything • INFO hides noisy lifecycle • ADMIN is default • SECURITY keeps only security-relevant events.
+                <br/>
+                Note: already-written audit lines remain; this only affects what gets appended going forward.
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast">
+        <div class="t" id="toastTitle">—</div>
+        <div class="m" id="toastMsg">—</div>
+    </div>
+</div>
+
+<script src="/static/admin_settings.js?v=1"></script>
+</body>
+</html>

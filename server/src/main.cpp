@@ -519,8 +519,42 @@ int main() {
     const std::string audit_state_path = audit_dir + "/pqnas_audit.state";
     pqnas::AuditLog audit(audit_jsonl_path, audit_state_path);
 
+
+    // ---- Admin settings (audit min level) ----
+    std::string admin_settings_path =
+        (std::filesystem::path(REPO_ROOT) / "config" / "admin_settings.json").string();
+    if (const char* p = std::getenv("PQNAS_ADMIN_SETTINGS_PATH")) {
+        admin_settings_path = p;
+    }
+
+    try {
+        std::ifstream f(admin_settings_path);
+        if (f.good()) {
+            json j = json::parse(f, nullptr, true);
+            std::string lvl = j.value("audit_min_level", "");
+            if (!lvl.empty()) {
+                if (!audit.set_min_level_str(lvl)) {
+                    std::cerr << "[settings] WARNING: invalid audit_min_level in "
+                              << admin_settings_path << std::endl;
+                } else {
+                    std::cerr << "[settings] audit_min_level=" << audit.min_level_str() << std::endl;
+                }
+            }
+        } else {
+            std::cerr << "[settings] no admin_settings.json, default audit_min_level="
+                      << audit.min_level_str() << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[settings] WARNING: failed to load " << admin_settings_path
+                  << ": " << e.what() << std::endl;
+    }
+
+
+
     const std::string STATIC_LOGIN = "server/src/static/login.html";
     const std::string STATIC_JS    = "server/src/static/pqnas_v4.js";
+    const std::string STATIC_ADMIN_SETTINGS    = "server/src/static/admin_settings.html";
+    const std::string STATIC_ADMIN_SETTINGS_JS = "server/src/static/admin_settings.js";
 
     // Option A: fixed policy location in repo, with optional env override
     std::string allowlist_path =
@@ -877,6 +911,109 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
             {"last_line_hash", last_hash}
         }.dump());
     });
+
+        // Admin Settings UI
+    srv.Get("/admin/settings", [&](const httplib::Request& req, httplib::Response& res) {
+        // Gate page itself (admin-only)
+        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
+        std::string body;
+        if (!read_file_to_string(STATIC_ADMIN_SETTINGS, body)) {
+            res.status = 500;
+            res.set_header("Content-Type", "text/plain");
+            res.body = "Missing static file: " + STATIC_ADMIN_SETTINGS;
+            return;
+        }
+        res.status = 200;
+        res.set_header("Content-Type", "text/html; charset=utf-8");
+        res.set_header("Cache-Control", "no-store");
+        res.body = body;
+    });
+
+
+    srv.Get("/static/admin_settings.js", [&](const httplib::Request&, httplib::Response& res) {
+
+        // You can leave JS ungated (like other static files), page is gated anyway.
+        std::string body;
+        if (!read_file_to_string(STATIC_ADMIN_SETTINGS_JS, body)) {
+            res.status = 500;
+            res.set_header("Content-Type", "text/plain");
+            res.body = "Missing static file: " + STATIC_ADMIN_SETTINGS_JS;
+            return;
+        }
+        res.status = 200;
+        res.set_header("Content-Type", "application/javascript; charset=utf-8");
+        res.set_header("Cache-Control", "no-store");
+        res.body = body;
+    });
+
+    // Admin settings API
+    srv.Get("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"audit_min_level", audit.min_level_str()},
+
+            // 🔍 actual runtime value used by AuditLog
+            {"audit_min_level_runtime", audit.min_level_str()},
+
+            {"allowed", json::array({"SECURITY","ADMIN","INFO","DEBUG"})}
+        }.dump());
+
+    });
+
+    srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
+        try {
+            json in = json::parse(req.body);
+
+            std::string lvl = in.value("audit_min_level", "");
+            if (lvl.empty()) {
+                reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","missing audit_min_level"}}.dump());
+                return;
+            }
+
+            const std::string before = audit.min_level_str();
+            if (!audit.set_min_level_str(lvl)) {
+                reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid audit_min_level"}}.dump());
+                return;
+            }
+            const std::string after = audit.min_level_str();
+
+            // Persist to admin_settings.json
+            try {
+                json out{
+                    {"audit_min_level", after}
+                };
+                std::ofstream f(admin_settings_path, std::ios::trunc);
+                f << out.dump(2) << "\n";
+            } catch (const std::exception& e) {
+                // Setting applied in-memory, but persistence failed.
+                reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","failed to save settings"},{"detail",e.what()}}.dump());
+                return;
+            }
+
+            // Audit the change (SECURITY outcome ok)
+            {
+                pqnas::AuditEvent ev;
+                ev.event = "admin.settings_changed";
+                ev.outcome = "ok";
+                ev.f["audit_min_level_before"] = before;
+                ev.f["audit_min_level_after"]  = after;
+                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                auto it = req.headers.find("User-Agent");
+                ev.f["ua"] = pqnas::shorten(it == req.headers.end() ? "" : it->second);
+                audit.append(ev);
+            }
+
+            reply_json(res, 200, json{{"ok",true},{"audit_min_level", after}}.dump());
+        } catch (const std::exception& e) {
+            reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid json"},{"detail",e.what()}}.dump());
+        }
+    });
+
 
     // GET /api/v4/me  (returns role + decoded fingerprint)
     srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {

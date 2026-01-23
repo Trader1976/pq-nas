@@ -65,6 +65,64 @@ static std::string to_hex(const unsigned char* p, size_t n) {
   return out;
 }
 
+  // --- Audit level classification (admin-configurable) ---
+// We do NOT change JSONL schema or hashing logic.
+// This only decides whether an event is appended at all.
+
+static bool parse_level(const std::string& s, int* out) {
+  std::string u;
+  u.reserve(s.size());
+  for (char c : s) u.push_back((char)std::toupper((unsigned char)c));
+
+  if (u == "DEBUG")    { *out = (int)AuditLog::MinLevel::DEBUG;    return true; }
+  if (u == "INFO")     { *out = (int)AuditLog::MinLevel::INFO;     return true; }
+  if (u == "ADMIN")    { *out = (int)AuditLog::MinLevel::ADMIN;    return true; }
+  if (u == "SECURITY") { *out = (int)AuditLog::MinLevel::SECURITY; return true; }
+  return false;
+}
+
+static std::string level_to_string(int lvl) {
+  switch ((AuditLog::MinLevel)lvl) {
+    case AuditLog::MinLevel::DEBUG:    return "DEBUG";
+    case AuditLog::MinLevel::INFO:     return "INFO";
+    case AuditLog::MinLevel::ADMIN:    return "ADMIN";
+    case AuditLog::MinLevel::SECURITY: return "SECURITY";
+  }
+  return "ADMIN";
+}
+
+// Heuristic classification based only on event + outcome.
+// (No schema changes; stable across versions.)
+  static int classify_event_level(const AuditEvent& e) {
+  // Always treat fails/denies as SECURITY.
+  if (e.outcome == "fail" || e.outcome == "deny") {
+    return (int)AuditLog::MinLevel::SECURITY;
+  }
+
+  std::string ev = e.event;
+  for (char& c : ev) c = (char)std::tolower((unsigned char)c);
+
+  // /api/v4/me success is very chatty (UI polls). Treat as INFO.
+  if (ev.find("v4.me_ok") != std::string::npos) return (int)AuditLog::MinLevel::INFO;
+
+  // Admin config changes must always be logged.
+  if (ev.find("admin.") != std::string::npos) {
+    return (int)AuditLog::MinLevel::SECURITY;
+  }
+
+  // Strong security signals:
+  if (ev.find("policy.") != std::string::npos) return (int)AuditLog::MinLevel::SECURITY;
+  if (ev.find("verify")  != std::string::npos) return (int)AuditLog::MinLevel::SECURITY;
+  if (ev.find("revoke")  != std::string::npos) return (int)AuditLog::MinLevel::SECURITY;
+
+  // Noisy lifecycle events:
+  if (ev.find("cookie")  != std::string::npos) return (int)AuditLog::MinLevel::INFO;
+  if (ev.find("session") != std::string::npos) return (int)AuditLog::MinLevel::INFO;
+
+  // Default: operator/admin useful.
+  return (int)AuditLog::MinLevel::ADMIN;
+}
+
 AuditLog::AuditLog(std::string jsonl_path, std::string state_path)
   : jsonl_path_(std::move(jsonl_path)), state_path_(std::move(state_path)) {}
 
@@ -150,6 +208,18 @@ Security note:
 void AuditLog::store_prev_hash_(const std::string& h) {
   std::ofstream f(state_path_, std::ios::trunc);
   f << h << "\n";
+}
+
+
+  bool AuditLog::set_min_level_str(const std::string& s) {
+  int v = 0;
+  if (!parse_level(s, &v)) return false;
+  min_level_.store(v, std::memory_order_relaxed);
+  return true;
+}
+
+  std::string AuditLog::min_level_str() const {
+  return level_to_string(min_level_.load(std::memory_order_relaxed));
 }
 
 /*
@@ -267,6 +337,7 @@ std::string AuditLog::build_json_(const AuditEvent& e,
   return js2.str();
 }
 
+
 /*
 Append one audit event to the JSONL file and advance the chain.
 
@@ -280,7 +351,12 @@ Durability note:
   guarantee fsync-level durability. If you need stronger guarantees, consider
   calling fsync() or writing to a journaling/append-only sink.
 */
-void AuditLog::append(const AuditEvent& e_in) {
+  void AuditLog::append(const AuditEvent& e_in) {
+  // Fast gate: if suppressed, do not touch chain/state at all.
+  const int min_lvl = min_level_.load(std::memory_order_relaxed);
+  const int ev_lvl  = classify_event_level(e_in);
+  if (ev_lvl < min_lvl) return;
+
   std::lock_guard<std::mutex> lk(mu_);
 
   AuditEvent e = e_in;
@@ -291,13 +367,13 @@ void AuditLog::append(const AuditEvent& e_in) {
   std::string content_hash;
   const std::string line = build_json_(e, prev, &content_hash);
 
-  // Append JSONL line (one event per line).
   std::ofstream out(jsonl_path_, std::ios::app);
   out << line << "\n";
   out.flush();
 
-  // Update state with the last committed line_hash.
   store_prev_hash_(content_hash);
 }
+
+
 
 } // namespace pqnas
