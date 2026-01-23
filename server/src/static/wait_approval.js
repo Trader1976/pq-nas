@@ -3,20 +3,35 @@
     const sid = (qs.get("sid") || "").trim();
 
     const sidEl = document.getElementById("sid");
-    const statusEl = document.getElementById("status");
+    const statusText = document.getElementById("statusText");
+    const statusPill = document.getElementById("statusPill");
+    const mainPill = document.getElementById("mainPill");
 
-    function setStatus(msg) {
-        if (statusEl) statusEl.textContent = msg;
+    function setPill(pill, kind, text) {
+        if (!pill) return;
+        pill.className = "pill " + (kind || "");
+        const v = pill.querySelector(".v");
+        if (v) v.textContent = text;
+    }
+
+    function setText(msg) {
+        if (statusText) statusText.textContent = msg;
     }
 
     if (sidEl) sidEl.textContent = sid || "(missing sid)";
+
     if (!sid) {
-        setStatus("Missing sid in URL. Go back and start a new sign-in.");
+        setPill(statusPill, "fail", "missing sid");
+        setPill(mainPill, "fail", "error");
+        setText("Missing sid in URL. Go back and start a new sign-in.");
         return;
     }
 
-    async function poll() {
+    async function pollOnce() {
         try {
+            setPill(statusPill, "warn", "checking…");
+            setText("Checking /api/v4/status…");
+
             const r = await fetch(`/api/v4/status?sid=${encodeURIComponent(sid)}`, {
                 cache: "no-store",
                 credentials: "include",
@@ -25,12 +40,23 @@
             const j = await r.json().catch(() => ({}));
 
             if (!r.ok || !j.ok) {
-                setStatus(`Status error: ${j.message || j.error || ("HTTP " + r.status)}`);
+                setPill(statusPill, "fail", "error");
+                setPill(mainPill, "fail", "error");
+                setText(`Status error: ${j.message || j.error || ("HTTP " + r.status)}`);
+                return;
+            }
+
+            if (j.expired) {
+                setPill(statusPill, "fail", "expired");
+                setPill(mainPill, "fail", "expired");
+                setText("This sign-in request expired. Go back and start again.");
                 return;
             }
 
             if (j.approved) {
-                setStatus("Approved ✔ Finalizing sign-in…");
+                setPill(statusPill, "ok", "approved");
+                setPill(mainPill, "ok", "approved");
+                setText("Approved ✔ Finalizing sign-in…");
 
                 // turn approval into real cookie
                 const cres = await fetch("/api/v4/consume", {
@@ -38,11 +64,14 @@
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ sid }),
                     cache: "no-store",
+                    credentials: "include",
                 });
-                const cj = await cres.json().catch(() => ({}));
 
+                const cj = await cres.json().catch(() => ({}));
                 if (!cres.ok || !cj.ok) {
-                    setStatus(`Approved, but cookie set failed: ${cj.message || cj.error || ("HTTP " + cres.status)}`);
+                    setPill(statusPill, "fail", "cookie failed");
+                    setPill(mainPill, "fail", "error");
+                    setText(`Approved, but cookie set failed: ${cj.message || cj.error || ("HTTP " + cres.status)}`);
                     return;
                 }
 
@@ -50,27 +79,26 @@
                 return;
             }
 
-            if (j.expired) {
-                setStatus("This sign-in request expired. Go back and start again.");
-                return;
-            }
-
             // pending (default)
             if (j.pending_admin) {
-                setStatus("Waiting for admin approval…");
+                setPill(statusPill, "warn", "pending");
+                setPill(mainPill, "warn", "pending");
+                setText("Waiting for admin approval…");
             } else {
-                // if server doesn’t implement pending_admin yet, still show a helpful message
-                setStatus("Waiting for admin approval…");
+                // server might not implement pending_admin -> still show correct message
+                setPill(statusPill, "warn", "waiting");
+                setPill(mainPill, "warn", "waiting");
+                setText("Waiting for admin approval…");
             }
         } catch (e) {
-            setStatus("Network error while checking approval status.");
+            setPill(statusPill, "fail", "network");
+            setPill(mainPill, "fail", "network");
+            setText("Network error while checking approval status.");
         }
     }
 
-    poll();
-    async function loop() {
-        await poll();
-        setTimeout(loop, 1200);
-    }
-    loop();
+    pollOnce();
+    (function loop() {
+        pollOnce().finally(() => setTimeout(loop, 1200));
+    })();
 })();

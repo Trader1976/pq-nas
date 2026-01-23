@@ -5,29 +5,120 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PQ-NAS — Sign in with DNA</title>
     <style>
-        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding: 24px; background:#0b0b0c; color:#f2f2f3; }
-        .card { max-width: 640px; margin: 0 auto; border: 1px solid #ffffff22; border-radius: 18px; padding: 18px; background:#111114; }
-        h1 { margin: 0 0 8px 0; font-size: 22px; }
-        .row { margin: 10px 0; }
-        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; }
-        .status { margin-top: 12px; padding: 10px; background:#ffffff0a; border-radius: 12px; border:1px solid #ffffff14; }
-        .hint { opacity: .85; font-size: 14px; }
-        textarea { width: 100%; min-height: 120px; border-radius: 12px; border: 1px solid #ffffff22; background:#0b0b0c; color:#f2f2f3; padding: 10px; }
-        button { border-radius: 12px; border: 1px solid #ffffff22; background:#ffffff12; color:#f2f2f3; padding: 10px 12px; cursor:pointer; }
-        button:hover { background:#ffffff18; }
-        .btnrow { display:flex; gap:10px; flex-wrap: wrap; }
-        .small { font-size: 12px; opacity:.8; }
-        a { color:#8ab4ff; }
+        :root{
+            --bg: #050712;
+            --fg: #00f0f8;
+            --fg-dim: rgba(0,240,248,0.78);
+            --panel: rgba(255,255,255,0.03);
+            --border: rgba(0,240,248,0.26);
+            --border2: rgba(0,240,248,0.14);
+            --shadow: rgba(0,240,248,0.10);
+            --qr-bg: #ffffff;
+        }
+
+        * { box-sizing: border-box; }
+
+        body{
+            margin: 0;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+            padding: 28px 18px;
+            background: var(--bg);
+            color: var(--fg);
+        }
+
+        .wrap{
+            min-height: calc(100dvh - 56px);
+            display: grid;
+            place-items: center;
+        }
+
+        .card{
+            width: 100%;
+            max-width: 720px;
+            border: 1px solid var(--border);
+            border-radius: 22px;
+            padding: 18px 18px 16px;
+            background: var(--panel);
+            box-shadow:
+                    0 0 0 1px var(--border2),
+                    0 18px 60px rgba(0,0,0,0.35),
+                    0 0 40px var(--shadow);
+        }
+
+        .brand{
+            display: flex;
+            justify-content: center;
+            margin: 8px 0 14px;
+        }
+
+        .brand img{
+            width: min(640px, 100%);
+            height: auto;
+            display: block;
+        }
+
+        h1{
+            margin: 6px 0 6px 0;
+            font-size: 20px;
+            text-align: center;
+            letter-spacing: 0.2px;
+        }
+
+        .hint{
+            text-align: center;
+            color: var(--fg-dim);
+            font-size: 14px;
+            margin: 0 0 14px 0;
+            line-height: 1.45;
+        }
+
+        .qr{
+            display: flex;
+            justify-content: center;
+            margin: 14px 0 10px;
+        }
+
+        #qrimg{
+            width: 320px;
+            max-width: 100%;
+            border-radius: 14px;
+            background: var(--qr-bg);
+            padding: 12px;
+            box-shadow:
+                    0 0 0 1px var(--border),
+                    0 0 22px rgba(0,240,248,0.18);
+        }
+
+        .status{
+            margin-top: 12px;
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid var(--border2);
+            background: rgba(0,240,248,0.06);
+            color: var(--fg);
+            text-align: center;
+            font-size: 14px;
+        }
+
+        .footer{
+            margin-top: 12px;
+            text-align: center;
+            color: rgba(0,240,248,0.55);
+            font-size: 12px;
+            letter-spacing: 0.2px;
+            user-select: none;
+        }
+
         /* Spinner overlay */
-        .busy .card { opacity: 0.88; }
-        .busy::before {
+        .busy .card { opacity: 0.90; }
+        .busy::before{
             content: "";
             position: fixed;
             inset: 0;
             background: rgba(0,0,0,0.25);
             backdrop-filter: blur(2px);
         }
-        .busy::after {
+        .busy::after{
             content: "";
             position: fixed;
             left: 50%;
@@ -37,128 +128,34 @@
             margin-left: -22px;
             margin-top: -22px;
             border-radius: 50%;
-            border: 4px solid rgba(255,255,255,0.25);
-            border-top-color: rgba(255,255,255,0.95);
+            border: 4px solid rgba(0,240,248,0.25);
+            border-top-color: rgba(0,240,248,0.95);
             animation: spin 0.9s linear infinite;
+            box-shadow: 0 0 24px rgba(0,240,248,0.20);
         }
         @keyframes spin { to { transform: rotate(360deg); } }
-        body {
-            font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-            padding: 24px;
-            background: #0b0b0c;
-            color: #eafef3;
-        }
-
-        .card {
-            max-width: 640px;
-            margin: 0 auto;
-            border: 1px solid rgba(0, 230, 118, 0.35);
-            border-radius: 18px;
-            padding: 18px;
-            background: #0f1311;
-            box-shadow: 0 0 0 1px rgba(0, 230, 118, 0.12),
-            0 0 40px rgba(0, 230, 118, 0.08);
-        }
-
-        h1 {
-            margin: 0 0 8px 0;
-            font-size: 22px;
-            color: #00e676;
-        }
-        .status {
-            margin-top: 12px;
-            padding: 10px;
-            background: rgba(0, 230, 118, 0.08);
-            border-radius: 12px;
-            border: 1px solid rgba(0, 230, 118, 0.25);
-            color: #9affc7;
-        }
-        button {
-            border-radius: 12px;
-            border: 1px solid rgba(0, 230, 118, 0.45);
-            background: rgba(0, 230, 118, 0.12);
-            color: #9affc7;
-            padding: 10px 12px;
-            cursor: pointer;
-            transition: background .15s ease, box-shadow .15s ease;
-        }
-
-        button:hover {
-            background: rgba(0, 230, 118, 0.22);
-            box-shadow: 0 0 12px rgba(0, 230, 118, 0.35);
-        }
-        #qrimg {
-            width: 320px;
-            max-width: 100%;
-            border-radius: 12px;
-            background: #ffffff;
-            padding: 10px;
-            box-shadow:
-                    0 0 0 1px rgba(0, 230, 118, 0.35),
-                    0 0 20px rgba(0, 230, 118, 0.25);
-        }
-        .busy::after {
-            content: "";
-            position: fixed;
-            left: 50%;
-            top: 50%;
-            width: 44px;
-            height: 44px;
-            margin-left: -22px;
-            margin-top: -22px;
-            border-radius: 50%;
-            border: 4px solid rgba(0, 230, 118, 0.25);
-            border-top-color: #00e676;
-            animation: spin 0.9s linear infinite;
-            box-shadow: 0 0 24px rgba(0, 230, 118, 0.45);
-        }
-        a {
-            color: #00e676;
-        }
-        a:hover {
-            text-shadow: 0 0 6px rgba(0, 230, 118, 0.6);
-        }
-        .qr {
-            display: flex;
-            justify-content: center;
-            margin: 16px 0;
-        }
     </style>
 </head>
+
 <body>
-<div class="card">
-    <h1>Sign in with DNA</h1>
+<div class="wrap">
+    <div class="card">
+        <div class="brand">
+            <img src="/static/pqnas_logo.png" alt="DNA PQ-NAS — Post Quantum Network Attached Storage" />
+        </div>
 
-    <div class="row small">
-        Open <b>DNA-Messenger</b> → <b>QR Reader</b> → scan the QR payload below (we’ll render a real QR image next).
-    </div>
-    <div class="row qr">
-        <img id="qrimg"
-             alt="QR code"
-             style="width:320px; max-width:100%; border-radius:12px; background:#fff; padding:10px;" />
-    </div>
+        <h1>Sign in with DNA</h1>
+        <div class="hint">
+            Open <b>DNA-Messenger</b> → <b>QR Reader</b> → scan the QR code.
+        </div>
 
+        <div class="qr">
+            <img id="qrimg" alt="QR code" />
+        </div>
 
-    <div class="row">
-        <div class="small">Session (sid)</div>
-        <div class="mono" id="sid">(issuing…)</div>
-    </div>
+        <div id="status" class="status">Issuing session…</div>
 
-    <div class="row">
-        <div class="small">QR payload (dna://auth…)</div>
-        <textarea id="qruri" class="mono" readonly>(loading…)</textarea>
-    </div>
-
-    <div class="btnrow">
-        <button id="copySid">Copy sid</button>
-        <button id="copyQr">Copy QR payload</button>
-        <button id="newSession">New session</button>
-    </div>
-
-    <div id="status" class="status">Issuing session…</div>
-
-    <div class="row small" style="margin-top:12px;">
-        After approval you’ll be redirected to <span class="mono">/success</span> and a cookie named <span class="mono">pqnas_session</span> will be set.
+        <div class="footer">© CPUNK 2026</div>
     </div>
 </div>
 

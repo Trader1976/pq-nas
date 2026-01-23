@@ -12,21 +12,6 @@
     const toastTitle = $("toastTitle");
     const toastMsg = $("toastMsg");
 
-    function setPill(kind, text) {
-        statusPill.className = "pill " + (kind || "");
-        statusPill.innerHTML = `<span class="k">Status:</span> <span class="v">${escapeHtml(text)}</span>`;
-    }
-
-    function showToast(kind, title, msg) {
-        toast.className = "toast show " + (kind || "");
-        toastTitle.textContent = title;
-        toastMsg.textContent = msg || "";
-        window.clearTimeout(showToast._t);
-        showToast._t = window.setTimeout(() => {
-            toast.className = "toast";
-        }, 2400);
-    }
-
     function escapeHtml(s) {
         return String(s ?? "")
             .replaceAll("&", "&amp;")
@@ -34,6 +19,23 @@
             .replaceAll(">", "&gt;")
             .replaceAll('"', "&quot;")
             .replaceAll("'", "&#39;");
+    }
+
+    function setPill(kind, text) {
+        if (!statusPill) return;
+        statusPill.className = "pill " + (kind || "");
+        statusPill.innerHTML = `<span class="k">Status:</span> <span class="v">${escapeHtml(text)}</span>`;
+    }
+
+    function showToast(kind, title, msg) {
+        if (!toast) return;
+        toast.className = "toast show " + (kind || "");
+        if (toastTitle) toastTitle.textContent = title || "";
+        if (toastMsg) toastMsg.textContent = msg || "";
+        window.clearTimeout(showToast._t);
+        showToast._t = window.setTimeout(() => {
+            toast.className = "toast";
+        }, 2400);
     }
 
     async function apiGet() {
@@ -58,6 +60,7 @@
     }
 
     function setOptions(allowed, selected) {
+        if (!levelSelect) return;
         levelSelect.innerHTML = "";
         for (const lvl of allowed) {
             const opt = document.createElement("option");
@@ -69,7 +72,7 @@
     }
 
     async function refresh() {
-        setPill("", "loading…");
+        setPill("warn", "loading…");
         try {
             const j = await apiGet();
 
@@ -77,10 +80,9 @@
             const persisted = j.audit_min_level || "ADMIN";
             const runtime = j.audit_min_level_runtime || persisted;
 
-            persistedVal.textContent = persisted;
-            runtimeVal.textContent = runtime;
+            if (persistedVal) persistedVal.textContent = persisted;
+            if (runtimeVal) runtimeVal.textContent = runtime;
 
-            // Prefer selecting persisted value (what will survive restart)
             setOptions(allowed, persisted);
 
             setPill("ok", "ready");
@@ -91,28 +93,32 @@
         }
     }
 
-    btnReload.addEventListener("click", (ev) => {
-        ev.preventDefault();
-        refresh();
-    });
+    if (btnReload) {
+        btnReload.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            refresh();
+        });
+    }
 
-    btnSave.addEventListener("click", async (ev) => {
-        ev.preventDefault();
-        const lvl = levelSelect.value;
-        btnSave.disabled = true;
-        setPill("", "saving…");
-        try {
-            await apiPost(lvl);
-            showToast("ok", "Saved", `audit_min_level = ${lvl}`);
-            await refresh();
-        } catch (e) {
-            console.error(e);
-            showToast("fail", "Save failed", String(e.message || e));
-            setPill("fail", "error");
-        } finally {
-            btnSave.disabled = false;
-        }
-    });
+    if (btnSave) {
+        btnSave.addEventListener("click", async (ev) => {
+            ev.preventDefault();
+            const lvl = levelSelect ? levelSelect.value : "";
+            btnSave.disabled = true;
+            setPill("warn", "saving…");
+            try {
+                await apiPost(lvl);
+                showToast("ok", "Saved", `audit_min_level = ${lvl}`);
+                await refresh();
+            } catch (e) {
+                console.error(e);
+                showToast("fail", "Save failed", String(e.message || e));
+                setPill("fail", "error");
+            } finally {
+                btnSave.disabled = false;
+            }
+        });
+    }
 
     // init
     refresh();

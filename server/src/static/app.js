@@ -1,15 +1,32 @@
 (() => {
     const out = document.getElementById("out");
-    const adminBlock = document.getElementById("admin_block");
 
-    // New UI elements (from the updated app.html)
     const badge = document.getElementById("stateBadge");
     const statusLine = document.getElementById("statusLine");
     const refreshBtn = document.getElementById("refreshBtn");
-    const adminHomeBtn = document.getElementById("adminHomeBtn");
 
     const stateDisabled = document.getElementById("state_disabled");
     const stateUnauth = document.getElementById("state_unauth");
+
+    const navHome = document.getElementById("nav_home");
+    const navFiles = document.getElementById("nav_files");
+    const navLogs = document.getElementById("nav_logs");
+
+    const navAdmin = document.getElementById("nav_admin");
+    const navUsers = document.getElementById("nav_users");
+    const navAudit = document.getElementById("nav_audit");
+    const navSettings = document.getElementById("nav_settings");
+
+    const navLogin = document.getElementById("nav_login");
+    const navLogout = document.getElementById("nav_logout");
+
+    const wsTitle = document.getElementById("wsTitle");
+    const wsSubtitle = document.getElementById("wsSubtitle");
+    const mainPaneTitle = document.getElementById("mainPaneTitle");
+    const homeBlurb = document.getElementById("homeBlurb");
+
+    const inspectorPane = document.getElementById("inspectorPane");
+    const toggleInspectorBtn = document.getElementById("toggleInspectorBtn");
 
     function show(el, on) {
         if (!el) return;
@@ -20,6 +37,57 @@
         if (!badge) return;
         badge.className = `badge ${kind}`;
         badge.textContent = text;
+    }
+
+    function setActiveNav(activeId) {
+        const ids = ["nav_home", "nav_files", "nav_logs"];
+        for (const id of ids) {
+            const b = document.getElementById(id);
+            if (!b) continue;
+            b.classList.toggle("active", id === activeId);
+        }
+    }
+
+    function setWorkspace(view) {
+        // This is UI-only for now. We don't invent backend calls.
+        if (view === "home") {
+            setActiveNav("nav_home");
+            if (wsTitle) wsTitle.textContent = "Home";
+            if (wsSubtitle) wsSubtitle.textContent = "Session, role, and access status";
+            if (mainPaneTitle) mainPaneTitle.textContent = "Workspace";
+            if (homeBlurb) {
+                homeBlurb.innerHTML =
+                    `This is the PQ-NAS desktop shell. The large pane will later host the file manager, apps, and tools.
+           Use the left menu to switch views. Admin links appear only when your role is <b>admin</b>.`;
+                show(homeBlurb, true);
+            }
+            return;
+        }
+
+        if (view === "files") {
+            setActiveNav("nav_files");
+            if (wsTitle) wsTitle.textContent = "Files";
+            if (wsSubtitle) wsSubtitle.textContent = "File manager (placeholder UI)";
+            if (mainPaneTitle) mainPaneTitle.textContent = "File Manager";
+            if (homeBlurb) {
+                homeBlurb.innerHTML =
+                    `File manager UI will be rendered here later (server-backed).`;
+                show(homeBlurb, true);
+            }
+            return;
+        }
+
+        if (view === "logs") {
+            setActiveNav("nav_logs");
+            if (wsTitle) wsTitle.textContent = "Logs";
+            if (wsSubtitle) wsSubtitle.textContent = "Viewer (placeholder UI)";
+            if (mainPaneTitle) mainPaneTitle.textContent = "Logs";
+            if (homeBlurb) {
+                homeBlurb.innerHTML =
+                    `Log viewer UI will be rendered here later (audit and system logs).`;
+                show(homeBlurb, true);
+            }
+        }
     }
 
     async function loadMe() {
@@ -33,7 +101,6 @@
 
             if (statusLine) statusLine.textContent = `GET /api/v4/me → HTTP ${r.status}`;
 
-            // Try parse JSON even if ct is wrong
             let j = null;
             try { j = JSON.parse(txt); } catch {}
 
@@ -44,8 +111,16 @@
                 const ok = !!j.ok;
 
                 const isAdmin = ok && role === "admin";
-                show(adminBlock, isAdmin);
-                show(adminHomeBtn, isAdmin);
+
+                // show admin-only links
+                show(navAdmin, isAdmin);
+                show(navUsers, isAdmin);
+                show(navAudit, isAdmin);
+                show(navSettings, isAdmin);
+
+                // signed-in vs not-signed-in nav
+                show(navLogin, !ok);
+                // Logout stays visible but is just a link to "/" for now
 
                 if (!r.ok || !ok) {
                     const err = String(j.error || "").toLowerCase();
@@ -57,6 +132,7 @@
                     } else if (r.status === 401 || err.includes("unauthorized") || msg.toLowerCase().includes("unauthorized")) {
                         setBadge("warn", "not signed in");
                         show(stateUnauth, true);
+                        show(navLogin, true);
                     } else {
                         setBadge("err", "error");
                     }
@@ -68,8 +144,12 @@
             }
 
             // Non-JSON body
-            show(adminBlock, false);
-            show(adminHomeBtn, false);
+            show(navAdmin, false);
+            show(navUsers, false);
+            show(navAudit, false);
+            show(navSettings, false);
+            show(navLogin, true);
+
             setBadge("err", "unexpected response");
 
             if (out) {
@@ -77,8 +157,12 @@
                 out.textContent = `${r.status}${ct ? " · " + ct.split(";")[0] : ""}\n\n${body}`;
             }
         } catch (e) {
-            show(adminBlock, false);
-            show(adminHomeBtn, false);
+            show(navAdmin, false);
+            show(navUsers, false);
+            show(navAudit, false);
+            show(navSettings, false);
+            show(navLogin, true);
+
             setBadge("err", "network error");
             if (statusLine) statusLine.textContent = "Failed to load /api/v4/me";
             if (out) out.textContent = String(e && e.stack ? e.stack : e);
@@ -87,7 +171,22 @@
 
     if (refreshBtn) refreshBtn.addEventListener("click", loadMe);
 
+    if (toggleInspectorBtn && inspectorPane) {
+        toggleInspectorBtn.addEventListener("click", () => {
+            const hidden = inspectorPane.style.display === "none";
+            inspectorPane.style.display = hidden ? "" : "none";
+            toggleInspectorBtn.textContent = hidden ? "Hide inspector" : "Show inspector";
+        });
+    }
+
+    if (navHome) navHome.addEventListener("click", () => setWorkspace("home"));
+    if (navFiles) navFiles.addEventListener("click", () => setWorkspace("files"));
+    if (navLogs) navLogs.addEventListener("click", () => setWorkspace("logs"));
+
+    // Default view
+    setWorkspace("home");
+
+    // Load status immediately, then refresh periodically (keeps "waiting for admin" alive)
     loadMe();
-    // Makes "waiting for approval" feel alive
     setInterval(loadMe, 2000);
 })();

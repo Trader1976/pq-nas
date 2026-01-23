@@ -1,230 +1,437 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>PQ-NAS • Admin Audit</title>
+
     <style>
         :root{
-            --bg0:#070A0B;
-            --bg1:#0B1011;
-            --card:#0E1516;
-            --card2:#0A0F10;
-            --border:rgba(120,255,205,0.14);
-            --border2:rgba(120,255,205,0.22);
-            --text:#D7E0DD;
-            --muted:#8FA3A0;
-            --green:#55FFB3;
-            --green2:#28D88F;
-            --yellow:#FFD36A;
-            --red:#FF5D6C;
-            --blue:#64B5FF;
-            --shadow:0 14px 40px rgba(0,0,0,0.55);
+            --bg:#050712;
+            --fg:#00f0f8;
+            --fg-dim: rgba(0,240,248,0.74);
+
+            --panel: rgba(255,255,255,0.03);
+            --panel2: rgba(0,0,0,0.28);
+
+            --border: rgba(0,240,248,0.22);
+            --border2: rgba(0,240,248,0.12);
+
+            --shadow: 0 18px 70px rgba(0,0,0,0.55);
+
+            --radius: 18px;
+            --radius2: 22px;
+
+            --ok: rgba(0,240,248,0.95);
+            --warn: rgba(255,190,0,0.95);
+            --fail: rgba(255,90,90,0.95);
+            --info: rgba(100,181,255,0.95);
+
             --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
-            --radius: 14px;
+            --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
         }
+
         *{ box-sizing:border-box; }
         html,body{ height:100%; }
+
         body{
             margin:0;
             font-family:var(--sans);
             background:
-                    radial-gradient(900px 500px at 10% -10%, rgba(85,255,179,0.08), transparent 60%),
-                    radial-gradient(700px 420px at 85% 0%, rgba(100,181,255,0.08), transparent 55%),
-                    linear-gradient(180deg, var(--bg0), var(--bg1));
-            color:var(--text);
+                    radial-gradient(1200px 700px at 18% 8%, rgba(0,240,248,0.11), transparent 55%),
+                    radial-gradient(1000px 700px at 82% 12%, rgba(0,240,248,0.07), transparent 60%),
+                    linear-gradient(180deg, #04050f, var(--bg));
+            color:var(--fg);
+            overflow: hidden;
         }
-        a{ color:var(--green); text-decoration:none; }
-        .wrap{ max-width:1200px; margin:0 auto; padding:22px 18px 40px; }
 
-        /* Header */
+        a{ color:var(--fg); text-decoration:none; }
+        a:hover{ text-shadow: 0 0 10px rgba(0,240,248,0.25); }
+
+        .desktop{
+            height: 100%;
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 14px;
+            padding: 14px;
+        }
+
+        @media (max-width: 980px){
+            body{ overflow:auto; }
+            .desktop{ grid-template-columns: 1fr; overflow: visible; }
+        }
+
+        /* Sidebar */
+        .sidebar{
+            border: 1px solid var(--border);
+            border-radius: var(--radius2);
+            background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.24));
+            box-shadow: var(--shadow);
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .brand{
+            display:flex;
+            gap: 10px;
+            align-items: center;
+            padding: 10px 10px 14px;
+            border-bottom: 1px solid var(--border2);
+            margin-bottom: 12px;
+        }
+
+        .brand .logoDot{
+            width: 14px; height: 14px;
+            border-radius: 50%;
+            background: var(--fg);
+            box-shadow: 0 0 18px rgba(0,240,248,0.38);
+            flex: 0 0 auto;
+        }
+
+        .brand h1{
+            margin: 0;
+            font-size: 16px;
+            font-weight: 950;
+            letter-spacing: 0.2px;
+        }
+
+        .brand .sub{
+            margin-top: 2px;
+            font-size: 12px;
+            color: var(--fg-dim);
+        }
+
+        .nav{
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 10px 6px;
+            overflow: auto;
+            min-height: 0;
+        }
+
+        .nav .sectionLabel{
+            margin: 10px 6px 2px;
+            font-size: 11px;
+            color: rgba(0,240,248,0.55);
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+        }
+
+        .navbtn{
+            display:flex;
+            align-items:center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid var(--border2);
+            background: rgba(0,0,0,0.22);
+            color: var(--fg);
+            cursor: pointer;
+            user-select:none;
+            text-decoration:none;
+            transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+        }
+
+        .navbtn:hover{
+            transform: translateY(-1px);
+            background: rgba(0,240,248,0.06);
+            border-color: rgba(0,240,248,0.30);
+        }
+
+        .navbtn.active{
+            background: rgba(0,240,248,0.10);
+            border-color: rgba(0,240,248,0.38);
+            box-shadow: 0 0 18px rgba(0,240,248,0.12);
+        }
+
+        .navbtn .k{
+            font-size: 12px;
+            color: rgba(0,240,248,0.55);
+            border: 1px solid rgba(0,240,248,0.16);
+            border-radius: 10px;
+            padding: 2px 8px;
+            background: rgba(0,0,0,0.22);
+        }
+
+        .bottom{
+            border-top: 1px solid var(--border2);
+            margin-top: auto;
+            padding-top: 12px;
+            display:flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .statusCard{
+            border: 1px solid var(--border2);
+            border-radius: 16px;
+            background: rgba(0,0,0,0.22);
+            padding: 10px 12px;
+        }
+
+        .mini{
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--fg-dim);
+            line-height: 1.35;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        /* Workspace */
+        .workspace{
+            border: 1px solid var(--border);
+            border-radius: var(--radius2);
+            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
+            box-shadow: var(--shadow);
+            display:flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+        }
+
         .topbar{
-            display:flex; align-items:center; justify-content:space-between;
-            gap:14px; padding:14px 16px; border:1px solid var(--border);
-            border-radius:var(--radius); background:rgba(14,21,22,0.72);
-            box-shadow:var(--shadow);
-            backdrop-filter: blur(6px);
+            display:flex;
+            align-items:center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border2);
+            background: rgba(0,0,0,0.18);
         }
-        .brand{ display:flex; flex-direction:column; gap:2px; }
-        .brand .title{
-            font-size:16px; letter-spacing:0.2px; font-weight:700;
-            display:flex; align-items:center; gap:10px;
-        }
-        .dot{
-            width:10px; height:10px; border-radius:50%;
-            background:var(--green);
-            box-shadow:0 0 16px rgba(85,255,179,0.75);
-            display:inline-block;
-        }
-        .brand .subtitle{ font-size:12px; color:var(--muted); }
 
-        /* Cards */
-        .grid{
-            display:grid;
-            grid-template-columns: 1.3fr 1fr;
-            gap:14px;
-            margin-top:14px;
+        .crumbs{
+            display:flex;
+            flex-direction: column;
+            min-width: 0;
         }
-        .detailActions .pill{
+
+        .crumbs .title{
+            font-weight: 950;
+            letter-spacing: 0.2px;
+            font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .crumbs .sub{
+            margin-top: 2px;
+            font-size: 12px;
+            color: var(--fg-dim);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .actions{
+            display:flex;
+            align-items:center;
+            gap: 10px;
+            flex: 0 0 auto;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .btn{
+            border: 1px solid rgba(0,240,248,0.28);
+            background: rgba(0,0,0,0.26);
+            color: var(--fg);
+            padding: 10px 12px;
+            border-radius: 14px;
+            cursor:pointer;
+            font-weight: 900;
+            letter-spacing: 0.2px;
+            transition: transform 120ms ease, border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+            user-select:none;
+        }
+        .btn:hover{
+            transform: translateY(-1px);
+            border-color: rgba(0,240,248,0.42);
+            background: rgba(0,240,248,0.07);
+        }
+        .btn:active{ transform: translateY(0px); }
+        .btn.primary{
+            border-color: rgba(0,240,248,0.45);
+            box-shadow: 0 0 0 1px rgba(0,240,248,0.08) inset;
+        }
+        .btn.glow{
+            border-color: rgba(0,240,248,0.55);
+            box-shadow: 0 0 0 1px rgba(0,240,248,0.12) inset, 0 0 18px rgba(0,240,248,0.12);
+        }
+
+        .toggle{
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            padding: 8px 10px;
+            border: 1px solid rgba(0,240,248,0.16);
+            border-radius: 999px;
+            background: rgba(0,0,0,0.22);
+            color: rgba(0,240,248,0.72);
+            user-select:none;
+            font-weight: 850;
+            font-size: 12px;
+        }
+        .toggle input{ accent-color: var(--fg); }
+
+        .pill{
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            border:1px solid rgba(0,240,248,0.16);
+            background:rgba(0,0,0,0.22);
+            padding:6px 10px;
+            border-radius:999px;
+            font-size:12px;
+            color: rgba(0,240,248,0.70);
+            white-space:nowrap;
             max-width: 100%;
         }
-        .detailActions .pill .v{
-            max-width: 100%;
+        .pill .k{ color: rgba(0,240,248,0.62); }
+        .pill .v{
+            color: rgba(0,240,248,0.92);
+            font-weight: 900;
+            max-width: 180px;
             overflow:hidden;
             text-overflow: ellipsis;
             display:inline-block;
+            vertical-align: bottom;
         }
-        @media (max-width: 900px){
-            .detail{
-                grid-template-columns: 1fr;   /* ✅ stack */
-            }
-            .detailActions{
-                min-width: 0;
-                flex-direction: row;
-                flex-wrap: wrap;
-                gap: 10px;
-            }
-            .detailActions .btn{
-                flex: 1 1 160px;
-            }
-        }
-        @media (max-width: 980px){ .grid{ grid-template-columns: 1fr; } }
-        .card{
-            border:1px solid var(--border);
-            border-radius:var(--radius);
-            background:rgba(14,21,22,0.72);
-            box-shadow:var(--shadow);
-            backdrop-filter: blur(6px);
-            overflow:hidden;
-        }
-        .card .hd{
-            display:flex; align-items:center; justify-content:space-between;
-            gap:12px;
-            padding:12px 14px;
-            border-bottom:1px solid var(--border);
-            background: linear-gradient(180deg, rgba(85,255,179,0.06), transparent);
-        }
-        .card .hd .h{
-            font-size:13px; color:var(--muted); letter-spacing:0.12em; text-transform:uppercase;
-        }
-        .card .bd{ padding:14px; }
-
-        .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-        .row + .row{ margin-top:10px; }
-
-        .btn{
-            border:1px solid var(--border2);
-            background:rgba(10,15,16,0.65);
-            color:var(--text);
-            padding:9px 11px;
-            border-radius:12px;
-            cursor:pointer;
-            font-weight:650;
-            letter-spacing:0.2px;
-            transition: transform .06s ease, border-color .15s ease, background .15s ease, box-shadow .15s ease;
-            user-select:none;
-        }
-        .btn:hover{ border-color:rgba(85,255,179,0.45); background:rgba(10,15,16,0.85); }
-        .btn:active{ transform: translateY(1px); }
-        .btn.primary{
-            border-color:rgba(85,255,179,0.55);
-            box-shadow: 0 0 0 1px rgba(85,255,179,0.08) inset;
-        }
-        .btn.glow{
-            border-color:rgba(85,255,179,0.65);
-            box-shadow:0 0 0 1px rgba(85,255,179,0.12) inset, 0 0 18px rgba(85,255,179,0.12);
-        }
+        .pill.ok{ border-color: rgba(0,240,248,0.38); color: rgba(0,240,248,0.95); background: rgba(0,240,248,0.08); }
+        .pill.fail{ border-color: rgba(255,90,90,0.42); color: rgba(255,200,200,0.95); background: rgba(255,90,90,0.10); }
+        .pill.warn{ border-color: rgba(255,190,0,0.38); color: rgba(255,225,170,0.95); background: rgba(255,190,0,0.10); }
+        .pill.info{ border-color: rgba(100,181,255,0.38); color: rgba(195,225,255,0.95); background: rgba(100,181,255,0.08); }
+        .pill.on{ border-color: rgba(0,240,248,0.55); box-shadow: 0 0 0 1px rgba(0,240,248,0.10) inset, 0 0 16px rgba(0,240,248,0.10); }
 
         .input{
-            border:1px solid var(--border2);
-            background:rgba(10,15,16,0.65);
-            color:var(--text);
+            border:1px solid rgba(0,240,248,0.18);
+            background:rgba(0,0,0,0.24);
+            color:rgba(0,240,248,0.92);
             padding:10px 12px;
             border-radius:12px;
             outline:none;
             min-width: 210px;
         }
-        .input::placeholder{ color:rgba(143,163,160,0.7); }
-        .input:focus{ border-color:rgba(85,255,179,0.55); box-shadow:0 0 0 3px rgba(85,255,179,0.08); }
+        .input::placeholder{ color:rgba(0,240,248,0.45); }
+        .input:focus{ border-color:rgba(0,240,248,0.38); box-shadow:0 0 0 3px rgba(0,240,248,0.08); }
 
         .mono{ font-family:var(--mono); }
 
-        .pill{
-            display:inline-flex; align-items:center; gap:8px;
-            border:1px solid var(--border2);
-            background:rgba(10,15,16,0.6);
-            padding:6px 10px;
-            border-radius:999px;
-            font-size:12px;
-            color:var(--muted);
-            white-space:nowrap;
-        }
-        .pill .k{ color:var(--muted); }
-        .pill .v{ color:var(--text); font-weight:650; }
-        .pill.ok{ border-color:rgba(85,255,179,0.45); color:rgba(85,255,179,0.95); }
-        .pill.fail{ border-color:rgba(255,93,108,0.45); color:rgba(255,93,108,0.95); }
-        .pill.warn{ border-color:rgba(255,211,106,0.45); color:rgba(255,211,106,0.95); }
-        .pill.info{ border-color:rgba(100,181,255,0.45); color:rgba(100,181,255,0.95); }
-        .pill.on{
-            border-color:rgba(85,255,179,0.55);
-            box-shadow:0 0 0 1px rgba(85,255,179,0.10) inset, 0 0 16px rgba(85,255,179,0.10);
-            color:rgba(85,255,179,0.95);
+        .content{
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            gap: 14px;
+            padding: 14px;
+            min-height: 0;
+            min-width: 0;
+            overflow: hidden;
         }
 
-        .toggle{
-            display:inline-flex; align-items:center; gap:8px;
-            padding:7px 10px;
-            border:1px solid var(--border2);
-            border-radius:999px;
-            background:rgba(10,15,16,0.55);
-            color:var(--muted);
-            user-select:none;
+        .cards{
+            display:grid;
+            grid-template-columns: 1.25fr 0.95fr;
+            gap: 14px;
+            min-width: 0;
         }
-        .toggle input{ accent-color: var(--green2); }
+        @media (max-width: 1100px){
+            .cards{ grid-template-columns: 1fr; }
+        }
+
+        .card{
+            border:1px solid rgba(0,240,248,0.12);
+            border-radius:var(--radius);
+            background: rgba(0,0,0,0.22);
+            overflow:hidden;
+            min-width: 0;
+        }
+
+        .card .hd{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            padding:12px 14px;
+            border-bottom:1px solid rgba(0,240,248,0.12);
+            background: linear-gradient(180deg, rgba(0,240,248,0.06), transparent);
+        }
+
+        .card .hd .h{
+            font-size:12px;
+            color: rgba(0,240,248,0.60);
+            letter-spacing:0.10em;
+            text-transform:uppercase;
+            font-weight: 900;
+        }
+
+        .card .bd{ padding:14px; }
+
+        .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+        .row + .row{ margin-top:10px; }
+
+        .note{
+            margin-top:10px;
+            color:var(--fg-dim);
+            font-size:12px;
+            line-height:1.5;
+        }
+
+        .kbd{
+            font-family:var(--mono);
+            border:1px solid rgba(0,240,248,0.18);
+            border-bottom-color: rgba(0,240,248,0.28);
+            background:rgba(0,0,0,0.35);
+            padding:2px 6px;
+            border-radius:8px;
+            color:rgba(0,240,248,0.88);
+        }
 
         /* Table */
         .tableWrap{
-            margin-top:14px;
-            border:1px solid var(--border);
+            border:1px solid rgba(0,240,248,0.12);
             border-radius:var(--radius);
-            overflow:hidden;                 /* keep this */
-            overflow-x: hidden;              /* ✅ add this line */
-            background:rgba(14,21,22,0.72);
-            box-shadow:var(--shadow);
-            backdrop-filter: blur(6px);
+            overflow:hidden;
+            background:rgba(0,0,0,0.18);
+            min-width: 0;
+            min-height: 0;
         }
 
         table{
-            width:100%;                      /* ✅ ensure this is present */
+            width:100%;
             border-collapse:collapse;
             table-layout:fixed;
             font-size:13px;
         }
+
         thead th{
             text-align:left;
             padding:10px 12px;
-            color:var(--muted);
-            font-size:12px;
+            color:rgba(0,240,248,0.65);
+            font-size:11px;
             letter-spacing:0.10em;
             text-transform:uppercase;
-            border-bottom:1px solid var(--border);
-            background:rgba(10,15,16,0.72);
-
-            /* ✅ Sticky header */
+            border-bottom:1px solid rgba(0,240,248,0.12);
+            background:rgba(0,0,0,0.22);
             position: sticky;
             top: 0;
             z-index: 5;
         }
+
         tbody td{
             padding:10px 12px;
-            border-bottom:1px solid rgba(120,255,205,0.10);
+            border-bottom:1px solid rgba(0,240,248,0.08);
             vertical-align:top;
             overflow:hidden;
             text-overflow:ellipsis;
             white-space:nowrap;
         }
-        tbody tr:hover{ background:rgba(85,255,179,0.05); }
+
+        tbody tr:hover{ background:rgba(0,240,248,0.05); }
         tbody tr.clickable{ cursor:pointer; }
 
         .col-idx{ width:56px; }
@@ -236,193 +443,245 @@
         .col-ip{ width:140px; }
 
         .statusPill{
-            display:inline-flex; align-items:center; justify-content:center;
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
             padding:5px 10px;
             border-radius:999px;
-            font-weight:800;
+            font-weight:950;
             font-size:12px;
             letter-spacing:0.02em;
-            border:1px solid var(--border2);
-            background:rgba(10,15,16,0.55);
+            border:1px solid rgba(0,240,248,0.16);
+            background:rgba(0,0,0,0.22);
+            color: rgba(0,240,248,0.85);
         }
-        .statusPill.ok{ border-color:rgba(85,255,179,0.45); color:rgba(85,255,179,0.95); }
-        .statusPill.fail{ border-color:rgba(255,93,108,0.45); color:rgba(255,93,108,0.95); }
-        .statusPill.warn{ border-color:rgba(255,211,106,0.45); color:rgba(255,211,106,0.95); }
-        .statusPill.info{ border-color:rgba(100,181,255,0.45); color:rgba(100,181,255,0.95); }
+        .statusPill.ok{ border-color: rgba(0,240,248,0.38); background: rgba(0,240,248,0.08); color: rgba(0,240,248,0.95); }
+        .statusPill.fail{ border-color: rgba(255,90,90,0.42); background: rgba(255,90,90,0.10); color: rgba(255,200,200,0.95); }
+        .statusPill.warn{ border-color: rgba(255,190,0,0.40); background: rgba(255,190,0,0.10); color: rgba(255,225,170,0.95); }
+        .statusPill.info{ border-color: rgba(100,181,255,0.40); background: rgba(100,181,255,0.08); color: rgba(195,225,255,0.95); }
 
         /* Expanded JSON row */
         .detailRow td{
             padding:0;
-            overflow: hidden;     /* ✅ prevents the TD from stretching outside */
-            border-bottom:1px solid rgba(120,255,205,0.12);
-            background:rgba(10,15,16,0.55);
+            overflow: hidden;
+            border-bottom:1px solid rgba(0,240,248,0.10);
+            background:rgba(0,0,0,0.22);
             white-space:normal;
         }
+
         .detail{
             padding:12px;
             display:grid;
-            grid-template-columns: minmax(0, 1fr) 220px; /* ✅ hard clamp right column */
+            grid-template-columns: minmax(0, 1fr) 220px;
             gap:12px;
             align-items:start;
             width: 100%;
         }
+
         .detail pre{
             margin:0;
             padding:12px;
             border-radius:12px;
-            border:1px solid rgba(120,255,205,0.16);
-            background:rgba(7,10,11,0.72);
-            color:rgba(215,224,221,0.92);
+            border:1px solid rgba(0,240,248,0.16);
+            background:rgba(0,0,0,0.32);
+            color:rgba(0,240,248,0.88);
             font-family:var(--mono);
             font-size:12px;
             line-height:1.45;
-            min-width: 0;         /* ✅ critical: allows shrink inside grid */
-            /* ✅ prevent right-side overflow */
-            white-space: pre-wrap;         /* wrap instead of forcing single long lines */
-            word-break: break-word;        /* break long tokens */
-            overflow-wrap: anywhere;       /* break hashes, long UA strings, etc. */
+            min-width: 0;
+
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-wrap: anywhere;
 
             overflow:auto;
             max-height: 380px;
             max-width: 100%;
         }
+
         .detailActions{
             display:flex;
             flex-direction:column;
             gap:8px;
             align-items:stretch;
-            min-width: 0;         /* ✅ critical */
-            width: 220px;         /* ✅ matches grid clamp */
+            min-width: 0;
+            width: 220px;
         }
 
-        .small{ font-size:12px; color:var(--muted); }
+        .small{ font-size:12px; color: rgba(0,240,248,0.62); }
 
-        .note{
-            margin-top:10px;
-            color:var(--muted);
-            font-size:12px;
-            line-height:1.5;
+        .footerline{
+            padding: 10px 14px;
+            border-top: 1px solid var(--border2);
+            color: rgba(0,240,248,0.55);
+            font-size: 12px;
+            text-align: right;
+            user-select: none;
+            background: rgba(0,0,0,0.12);
         }
-        .kbd{
-            font-family:var(--mono);
-            border:1px solid rgba(120,255,205,0.18);
-            border-bottom-color: rgba(120,255,205,0.28);
-            background:rgba(10,15,16,0.65);
-            padding:2px 6px;
-            border-radius:8px;
-            color:rgba(215,224,221,0.88);
+
+        /* Small screens: table scroll */
+        @media (max-width: 980px){
+            .tableWrap{ overflow:auto; }
+            table{ min-width: 980px; }
+            .detail{ grid-template-columns: 1fr; }
+            .detailActions{ width: auto; flex-direction: row; flex-wrap: wrap; }
+            .detailActions .btn{ flex: 1 1 160px; }
         }
     </style>
 </head>
+
 <body>
-<div class="wrap">
-    <div class="topbar">
+<div class="desktop">
+    <!-- Left launcher -->
+    <aside class="sidebar">
         <div class="brand">
-            <div class="title"><span class="dot"></span> PQ-NAS Admin • Audit Log</div>
-            <div class="subtitle">Hash-chained JSONL security audit trail (tail + integrity verification)</div>
-        </div>
-        <div class="row">
-        <span id="autoPill" class="pill info" title="Auto-refresh state">
-          <span class="k">Auto:</span> <span class="v">OFF</span>
-        </span>
-            <span id="integrityPill" class="pill warn" title="Integrity verification status">
-          <span class="k">Integrity:</span> <span class="v">unknown</span>
-        </span>
-            <span id="lastFetchPill" class="pill info" title="Last successful tail fetch">
-          <span class="k">Tail:</span> <span class="v">—</span>
-        </span>
-        </div>
-    </div>
-
-    <div class="grid">
-        <div class="card">
-            <div class="hd">
-                <div class="h">Filters</div>
-                <div class="small">Matches any field (substring, case-insensitive)</div>
-            </div>
-            <div class="bd">
-                <div class="row">
-                    <input id="qEvent" class="input" placeholder="event (e.g. login / policy / verify)" />
-                    <input id="qFp" class="input mono" placeholder="fingerprint…" />
-                    <input id="qSid" class="input mono" placeholder="sid…" />
-                    <input id="qIp" class="input mono" placeholder="ip…" />
-                </div>
-                <div class="row">
-                    <button id="btnClear" class="btn">Clear</button>
-                    <span class="pill">
-              <span class="k">Showing:</span> <span class="v" id="countText">0</span>
-            </span>
-                    <span class="pill">
-              <span class="k">Loaded:</span> <span class="v" id="loadedText">0</span>
-            </span>
-                </div>
-                <div class="note">
-                    Tip: click a row to expand full JSON. Use <span class="kbd">Esc</span> to collapse all.
-                </div>
+            <div class="logoDot" aria-hidden="true"></div>
+            <div style="min-width:0">
+                <h1>Admin</h1>
+                <div class="sub">Audit log • tail + verify</div>
             </div>
         </div>
 
-        <div class="card">
-            <div class="hd">
-                <div class="h">Controls</div>
-                <div class="small">No backend changes • static UI only</div>
-            </div>
-            <div class="bd">
-                <div class="row">
-                    <button id="btnRefresh" class="btn primary">Refresh</button>
-                    <button id="btnVerify" class="btn">Verify integrity</button>
-                    <label class="toggle">
-                        <input id="autoToggle" type="checkbox" />
-                        Auto-refresh
-                    </label>
-                </div>
+        <nav class="nav" aria-label="Admin navigation">
+            <div class="sectionLabel">Admin</div>
+            <a class="navbtn" href="/admin"><span>Overview</span><span class="k">O</span></a>
+            <a class="navbtn" href="/admin/users"><span>User approvals</span><span class="k">U</span></a>
+            <a class="navbtn active" href="/admin/audit"><span>Audit log UI</span><span class="k">D</span></a>
+            <a class="navbtn" href="/admin/settings"><span>Settings</span><span class="k">S</span></a>
 
-                <div class="row">
-                    <button id="btnExportJson" class="btn">Export JSON</button>
-                    <button id="btnExportCsv" class="btn">Export CSV</button>
-                </div>
+            <div class="sectionLabel">App</div>
+            <a class="navbtn" href="/app"><span>Open app</span><span class="k">↩</span></a>
+        </nav>
 
-                <div class="row">
-            <span class="pill">
-              <span class="k">Tail N:</span> <span class="v" id="tailNText">200</span>
+        <div class="bottom">
+            <div class="statusCard">
+                <div style="font-weight:950;">Status</div>
+                <div class="mini">This page only renders and verifies. It never modifies audit log contents.</div>
+
+                <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
+            <span id="autoPill" class="pill info" title="Auto-refresh state">
+              <span class="k">Auto:</span> <span class="v">OFF</span>
             </span>
-                    <input id="tailN" class="input mono" style="width:120px" value="200" />
-                    <span class="pill" title="Auto refresh interval seconds">
-              <span class="k">Every:</span> <span class="v" id="intervalText">3s</span>
-            </span>
-                    <input id="intervalSec" class="input mono" style="width:90px" value="3" />
-                </div>
 
-                <div class="note">
-                    Integrity indicator calls <span class="kbd">/api/v4/audit/verify</span>.
-                    Tail uses <span class="kbd">/api/v4/audit/tail?n=…</span> with <span class="kbd">Cache-Control: no-store</span>.
+                    <span id="integrityPill" class="pill warn" title="Integrity verification status">
+              <span class="k">Integrity:</span> <span class="v">unknown</span>
+            </span>
+
+                    <span id="lastFetchPill" class="pill info" title="Last successful tail fetch">
+              <span class="k">Tail:</span> <span class="v">—</span>
+            </span>
                 </div>
             </div>
         </div>
-    </div>
+    </aside>
 
-    <div class="tableWrap" style="margin-top:14px">
-        <table>
-            <thead>
-            <tr>
-                <th class="col-idx">#</th>
-                <th class="col-ts">Timestamp</th>
-                <th class="col-status">Status</th>
-                <th class="col-event">Event</th>
-                <th class="col-fp">Fingerprint</th>
-                <th class="col-sid">SID</th>
-                <th class="col-ip">IP</th>
-            </tr>
-            </thead>
-            <tbody id="tbody"></tbody>
-        </table>
-    </div>
+    <!-- Right workspace -->
+    <main class="workspace">
+        <div class="topbar">
+            <div class="crumbs">
+                <div class="title">Admin • Audit log</div>
+                <div class="sub">Hash-chained JSONL security audit trail (tail + integrity verification)</div>
+            </div>
 
-    <div class="note" style="margin-top:12px">
-        Expand rows for raw JSON (monospace). This page does not modify the audit log and does not attempt to “fix” anything — it only renders and verifies.
-    </div>
+            <div class="actions">
+                <button id="btnRefresh" class="btn primary" type="button">Refresh</button>
+                <button id="btnVerify" class="btn" type="button">Verify integrity</button>
+                <label class="toggle" title="Auto-refresh tail">
+                    <input id="autoToggle" type="checkbox" />
+                    Auto
+                </label>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="cards">
+                <div class="card">
+                    <div class="hd">
+                        <div class="h">Filters</div>
+                        <div class="small">Matches any field (substring, case-insensitive)</div>
+                    </div>
+                    <div class="bd">
+                        <div class="row">
+                            <input id="qEvent" class="input" placeholder="event (e.g. login / policy / verify)" />
+                            <input id="qFp" class="input mono" placeholder="fingerprint…" />
+                            <input id="qSid" class="input mono" placeholder="sid…" />
+                            <input id="qIp" class="input mono" placeholder="ip…" />
+                        </div>
+                        <div class="row">
+                            <button id="btnClear" class="btn" type="button">Clear</button>
+
+                            <span class="pill" title="Filtered rows shown">
+                  <span class="k">Showing:</span> <span class="v" id="countText">0</span>
+                </span>
+
+                            <span class="pill" title="Rows loaded from tail">
+                  <span class="k">Loaded:</span> <span class="v" id="loadedText">0</span>
+                </span>
+                        </div>
+                        <div class="note">
+                            Tip: click a row to expand full JSON. Use <span class="kbd">Esc</span> to collapse all.
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="hd">
+                        <div class="h">Controls</div>
+                        <div class="small">static UI only</div>
+                    </div>
+                    <div class="bd">
+                        <div class="row">
+                            <button id="btnExportJson" class="btn" type="button">Export JSON</button>
+                            <button id="btnExportCsv" class="btn" type="button">Export CSV</button>
+                        </div>
+
+                        <div class="row">
+                <span class="pill" title="Tail lines to fetch">
+                  <span class="k">Tail N:</span> <span class="v" id="tailNText">200</span>
+                </span>
+                            <input id="tailN" class="input mono" style="width:120px" value="200" />
+
+                            <span class="pill" title="Auto refresh interval seconds">
+                  <span class="k">Every:</span> <span class="v" id="intervalText">3s</span>
+                </span>
+                            <input id="intervalSec" class="input mono" style="width:90px" value="3" />
+                        </div>
+
+                        <div class="note">
+                            Integrity calls <span class="kbd">/api/v4/audit/verify</span>.
+                            Tail uses <span class="kbd">/api/v4/audit/tail?n=…</span> with <span class="kbd">Cache-Control: no-store</span>.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="tableWrap" aria-label="Audit log table">
+                <table>
+                    <thead>
+                    <tr>
+                        <th class="col-idx">#</th>
+                        <th class="col-ts">Timestamp</th>
+                        <th class="col-status">Status</th>
+                        <th class="col-event">Event</th>
+                        <th class="col-fp">Fingerprint</th>
+                        <th class="col-sid">SID</th>
+                        <th class="col-ip">IP</th>
+                    </tr>
+                    </thead>
+                    <tbody id="tbody"></tbody>
+                </table>
+            </div>
+
+            <div class="note" style="margin-top:-2px;">
+                Expand rows for raw JSON (monospace). This page does not modify the audit log and does not attempt to “fix” anything — it only renders and verifies.
+            </div>
+        </div>
+
+        <div class="footerline">© CPUNK 2026</div>
+    </main>
 </div>
 
-<script src="/static/admin_audit.js?v=4"></script>
+<script src="/static/admin_audit.js?v=5"></script>
 </body>
 </html>

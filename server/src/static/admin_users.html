@@ -4,89 +4,517 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PQ-NAS — Admin Users</title>
+
     <style>
-        body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; padding:24px; background:#0b0b0c; color:#eafef3; }
-        .card { max-width: 1100px; margin:0 auto; border:1px solid rgba(0,230,118,.35); border-radius:18px; padding:18px; background:#0f1311;
-            box-shadow:0 0 0 1px rgba(0,230,118,.12), 0 0 40px rgba(0,230,118,.08); }
-        h1 { margin:0 0 8px 0; font-size:22px; color:#00e676; }
-        .muted { opacity:.75; }
-        .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin: 10px 0; }
-        input, select, textarea {
-            border-radius: 12px; border: 1px solid rgba(0,230,118,.35);
-            background: rgba(0,0,0,.25); color:#eafef3; padding:10px 12px;
-        }
-        textarea { min-height: 70px; width: 520px; max-width: 100%; }
-        button {
-            border-radius: 12px; border: 1px solid rgba(0,230,118,.45);
-            background: rgba(0,230,118,.12); color:#9affc7;
-            padding: 10px 12px; cursor: pointer;
-        }
-        button.danger {
-            border-color: rgba(255,80,80,.6);
-            color: #ffd0d0;
-            background: rgba(255,80,80,.12);
+        :root{
+            --bg: #050712;
+            --fg: #00f0f8;
+            --fg-dim: rgba(0,240,248,0.74);
+
+            --panel: rgba(255,255,255,0.03);
+            --panel2: rgba(0,0,0,0.28);
+
+            --border: rgba(0,240,248,0.22);
+            --border2: rgba(0,240,248,0.12);
+
+            --shadow: 0 18px 70px rgba(0,0,0,0.55);
+
+            --radius: 18px;
+            --radius2: 22px;
+
+            --danger: rgba(255,90,90,0.95);
+            --warn: rgba(255,190,0,0.95);
         }
 
-        button.danger:hover {
-            background: rgba(255,80,80,.25);
-            box-shadow: 0 0 14px rgba(255,80,80,.45);
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+
+        body{
+            margin: 0;
+            color: var(--fg);
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial;
+            background:
+                    radial-gradient(1200px 700px at 18% 8%, rgba(0,240,248,0.11), transparent 55%),
+                    radial-gradient(1000px 700px at 82% 12%, rgba(0,240,248,0.07), transparent 60%),
+                    linear-gradient(180deg, #04050f, var(--bg));
+            overflow: hidden;
         }
 
-        button:hover { background: rgba(0,230,118,.22); box-shadow: 0 0 12px rgba(0,230,118,.25); }
-        table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-        th, td { border-top: 1px solid rgba(255,255,255,.10); padding: 10px; vertical-align: top; }
-        th { text-align:left; font-size: 12px; letter-spacing: .03em; text-transform: uppercase; opacity: .8; }
-        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; }
-        .pill { display:inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; border:1px solid rgba(255,255,255,.15); }
-        .pill.enabled  { border-color: rgba(0,230,118,.45); color:#9affc7; background: rgba(0,230,118,.10); }
-        .pill.disabled { border-color: rgba(255,255,255,.18); color:#d7d7d9; background: rgba(255,255,255,.06); }
-        .pill.revoked  { border-color: rgba(255,80,80,.50); color:#ffd0d0; background: rgba(255,80,80,.10); }
-        .row-actions { display:flex; gap:8px; flex-wrap:wrap; }
-        #msg { margin-top: 10px; }
+        a{ color: var(--fg); text-decoration: none; }
+        a:hover{ text-shadow: 0 0 10px rgba(0,240,248,0.25); }
 
+        .desktop{
+            height: 100%;
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 14px;
+            padding: 14px;
+        }
+
+        @media (max-width: 980px){
+            body{ overflow:auto; }
+            .desktop{
+                grid-template-columns: 1fr;
+                overflow: visible;
+            }
+        }
+
+        /* Sidebar */
+        .sidebar{
+            border: 1px solid var(--border);
+            border-radius: var(--radius2);
+            background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.24));
+            box-shadow: var(--shadow);
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .brand{
+            display:flex;
+            gap: 10px;
+            align-items: center;
+            padding: 10px 10px 14px;
+            border-bottom: 1px solid var(--border2);
+            margin-bottom: 12px;
+        }
+
+        .brand .logoDot{
+            width: 14px; height: 14px;
+            border-radius: 50%;
+            background: var(--fg);
+            box-shadow: 0 0 18px rgba(0,240,248,0.38);
+            flex: 0 0 auto;
+        }
+
+        .brand h1{
+            margin: 0;
+            font-size: 16px;
+            font-weight: 950;
+            letter-spacing: 0.2px;
+        }
+        .brand .sub{
+            margin-top: 2px;
+            font-size: 12px;
+            color: var(--fg-dim);
+        }
+
+        .nav{
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 10px 6px;
+            overflow: auto;
+            min-height: 0;
+        }
+
+        .nav .sectionLabel{
+            margin: 10px 6px 2px;
+            font-size: 11px;
+            color: rgba(0,240,248,0.55);
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+        }
+
+        .navbtn{
+            display:flex;
+            align-items:center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid var(--border2);
+            background: rgba(0,0,0,0.22);
+            color: var(--fg);
+            cursor: pointer;
+            user-select:none;
+            text-decoration:none;
+            transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+        }
+
+        .navbtn:hover{
+            transform: translateY(-1px);
+            background: rgba(0,240,248,0.06);
+            border-color: rgba(0,240,248,0.30);
+        }
+
+        .navbtn.active{
+            background: rgba(0,240,248,0.10);
+            border-color: rgba(0,240,248,0.38);
+            box-shadow: 0 0 18px rgba(0,240,248,0.12);
+        }
+
+        .navbtn .k{
+            font-size: 12px;
+            color: rgba(0,240,248,0.55);
+            border: 1px solid rgba(0,240,248,0.16);
+            border-radius: 10px;
+            padding: 2px 8px;
+            background: rgba(0,0,0,0.22);
+        }
+
+        .bottom{
+            border-top: 1px solid var(--border2);
+            margin-top: auto;
+            padding-top: 12px;
+            display:flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .statusCard{
+            border: 1px solid var(--border2);
+            border-radius: 16px;
+            background: rgba(0,0,0,0.22);
+            padding: 10px 12px;
+        }
+
+        .mini{
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--fg-dim);
+            line-height: 1.35;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        /* Workspace */
+        .workspace{
+            border: 1px solid var(--border);
+            border-radius: var(--radius2);
+            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
+            box-shadow: var(--shadow);
+            display:flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .topbar{
+            display:flex;
+            align-items:center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border2);
+            background: rgba(0,0,0,0.18);
+        }
+
+        .crumbs{
+            display:flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        .crumbs .title{
+            font-weight: 950;
+            letter-spacing: 0.2px;
+            font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .crumbs .sub{
+            margin-top: 2px;
+            font-size: 12px;
+            color: var(--fg-dim);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .actions{
+            display:flex;
+            align-items:center;
+            gap: 10px;
+            flex: 0 0 auto;
+        }
+
+        .btn{
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(0,240,248,0.28);
+            background: rgba(0,0,0,0.26);
+            color: var(--fg);
+            font-weight: 900;
+            cursor:pointer;
+            text-decoration:none;
+            user-select:none;
+            transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+        }
+        .btn:hover{
+            transform: translateY(-1px);
+            border-color: rgba(0,240,248,0.42);
+            background: rgba(0,240,248,0.07);
+        }
+        .btn:active{ transform: translateY(0px); }
+
+        .btn.secondary{
+            border-color: rgba(255,255,255,0.12);
+            color: rgba(0,240,248,0.82);
+        }
+        .btn.secondary:hover{
+            border-color: rgba(255,255,255,0.22);
+            background: rgba(255,255,255,0.05);
+        }
+
+        .btn.danger{
+            border-color: rgba(255,90,90,0.45);
+            color: rgba(255,190,190,0.98);
+            background: rgba(255,90,90,0.10);
+        }
+        .btn.danger:hover{
+            border-color: rgba(255,90,90,0.65);
+            background: rgba(255,90,90,0.18);
+            box-shadow: 0 0 18px rgba(255,90,90,0.22);
+        }
+
+        .content{
+            display: grid;
+            grid-template-rows: auto 1fr;
+            gap: 14px;
+            padding: 14px;
+            min-height: 0;
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        .pane{
+            border: 1px solid var(--border2);
+            border-radius: var(--radius);
+            background: rgba(0,0,0,0.22);
+            padding: 14px;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .pane h2{
+            margin: 0 0 10px 0;
+            font-size: 12px;
+            color: rgba(0,240,248,0.60);
+            font-weight: 900;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+        }
+
+        .row{
+            display:flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        input, select, textarea{
+            border-radius: 12px;
+            border: 1px solid rgba(0,240,248,0.22);
+            background: rgba(0,0,0,0.24);
+            color: rgba(0,240,248,0.92);
+            padding: 10px 12px;
+            outline: none;
+        }
+
+        input::placeholder, textarea::placeholder{
+            color: rgba(0,240,248,0.45);
+        }
+
+        textarea{
+            min-height: 70px;
+            width: 520px;
+            max-width: 100%;
+            resize: vertical;
+        }
+
+        .mono{
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 12px;
+            word-break: break-all;
+        }
+
+        .hint{
+            color: var(--fg-dim);
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        /* Table */
+        .tableWrap{
+            border: 1px solid rgba(0,240,248,0.10);
+            border-radius: 16px;
+            overflow: hidden;
+            background: rgba(0,0,0,0.18);
+        }
+
+        table{
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td{
+            border-top: 1px solid rgba(0,240,248,0.10);
+            padding: 10px 10px;
+            vertical-align: top;
+        }
+        th{
+            text-align:left;
+            font-size: 11px;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            color: rgba(0,240,248,0.65);
+            background: rgba(0,0,0,0.22);
+            border-top: none;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+
+        .muted{ color: rgba(0,240,248,0.62); }
+        .row-actions{ display:flex; gap: 8px; flex-wrap: wrap; }
+
+        .pill{
+            display:inline-block;
+            padding: 2px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            border:1px solid rgba(0,240,248,0.14);
+            color: rgba(0,240,248,0.82);
+            background: rgba(0,0,0,0.18);
+        }
+        .pill.enabled  { border-color: rgba(0,240,248,0.30); background: rgba(0,240,248,0.08); }
+        .pill.disabled { border-color: rgba(0,240,248,0.14); background: rgba(255,255,255,0.03); color: rgba(0,240,248,0.72); }
+        .pill.revoked  { border-color: rgba(255,90,90,0.40); background: rgba(255,90,90,0.10); color: rgba(255,200,200,0.95); }
+
+        .footerline{
+            padding: 10px 14px;
+            border-top: 1px solid var(--border2);
+            color: rgba(0,240,248,0.55);
+            font-size: 12px;
+            text-align: right;
+            user-select: none;
+            background: rgba(0,0,0,0.12);
+        }
+
+        /* Small screens: make table horizontally scrollable */
+        @media (max-width: 980px){
+            .tableWrap{ overflow:auto; }
+            table{ min-width: 980px; }
+        }
     </style>
 </head>
+
 <body>
-<div class="card">
-    <h1>Admin — Users</h1>
-    <div class="muted">Enable new users after they scan. Changes are saved to <span class="mono">users.json</span>.</div>
+<div class="desktop">
+    <!-- Left launcher -->
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="logoDot" aria-hidden="true"></div>
+            <div style="min-width:0">
+                <h1>Admin</h1>
+                <div class="sub">Users registry • approvals</div>
+            </div>
+        </div>
 
-    <div class="row" style="margin-top:14px;">
-        <button id="btnRefresh">Refresh</button>
-        <input id="filter" placeholder="Filter (fingerprint/name/notes/role/status)" style="min-width: 320px; flex:1;" />
-        <div id="msg" class="muted"></div>
-    </div>
+        <nav class="nav" aria-label="Admin navigation">
+            <div class="sectionLabel">Admin</div>
+            <a class="navbtn" href="/admin">
+                <span>Overview</span><span class="k">O</span>
+            </a>
+            <a class="navbtn active" href="/admin/users">
+                <span>User approvals</span><span class="k">U</span>
+            </a>
+            <a class="navbtn" href="/admin/audit">
+                <span>Audit log UI</span><span class="k">D</span>
+            </a>
+            <a class="navbtn" href="/admin/settings">
+                <span>Settings</span><span class="k">S</span>
+            </a>
 
-    <div class="row" style="margin-top:14px;">
-        <input id="fp" class="mono" placeholder="fingerprint hex" style="min-width: 520px; flex:1;" />
-        <input id="name" placeholder="name" style="min-width: 180px;" />
-        <select id="role">
-            <option value="user">user</option>
-            <option value="admin">admin</option>
-        </select>
-        <button id="btnAdd">Upsert</button>
-    </div>
+            <div class="sectionLabel">App</div>
+            <a class="navbtn" href="/app">
+                <span>Open app</span><span class="k">↩</span>
+            </a>
+        </nav>
 
-    <div class="row">
-        <textarea id="notes" placeholder="notes (optional)"></textarea>
-    </div>
+        <div class="bottom">
+            <div class="statusCard">
+                <div style="font-weight:900;">Users</div>
+                <div class="mini" id="msg">(loading…)</div>
+            </div>
+        </div>
+    </aside>
 
-    <table>
-        <thead>
-        <tr>
-            <th style="width:34%;">Fingerprint</th>
-            <th style="width:22%;">Name / Notes</th>
-            <th style="width:8%;">Role</th>
-            <th style="width:10%;">Status</th>
-            <th style="width:13%;">Added</th>
-            <th style="width:13%;">Last seen</th>
-            <th style="width:14%;">Actions</th>
-        </tr>
-        </thead>
-        <tbody id="tbody">
-        <!-- filled by JS -->
-        </tbody>
-    </table>
+    <!-- Right workspace -->
+    <main class="workspace">
+        <div class="topbar">
+            <div class="crumbs">
+                <div class="title">Admin — Users</div>
+                <div class="sub">Enable new users after they scan • saved to <span class="mono">users.json</span></div>
+            </div>
+
+            <div class="actions">
+                <button class="btn secondary" id="btnRefresh" type="button">Refresh</button>
+            </div>
+        </div>
+
+        <div class="content">
+            <section class="pane" aria-label="Controls">
+                <h2>Upsert user</h2>
+
+                <div class="row" style="margin-bottom:10px;">
+                    <input id="filter" placeholder="Filter (fingerprint/name/notes/role/status)" style="min-width: 320px; flex:1;" />
+                </div>
+
+                <div class="row" style="margin-bottom:10px;">
+                    <input id="fp" class="mono" placeholder="fingerprint hex" style="min-width: 520px; flex:1;" />
+                    <input id="name" placeholder="name" style="min-width: 180px;" />
+                    <select id="role">
+                        <option value="user">user</option>
+                        <option value="admin">admin</option>
+                    </select>
+                    <button class="btn" id="btnAdd" type="button">Upsert</button>
+                </div>
+
+                <div class="row">
+                    <textarea id="notes" placeholder="notes (optional)"></textarea>
+                    <div class="hint" style="max-width: 420px;">
+                        Use <b>Enable</b> to allow logins, <b>Disable</b> to require approval again, and <b>Revoke</b> to hard-block that fingerprint.
+                        <br><br>
+                        <span style="color: rgba(255,200,200,0.95);">Delete</span> removes the entry entirely (cleanup).
+                    </div>
+                </div>
+            </section>
+
+            <section class="pane" aria-label="Users table" style="min-height:0;">
+                <h2>Users</h2>
+
+                <div class="tableWrap" style="height: calc(100% - 28px);">
+                    <table>
+                        <thead>
+                        <tr>
+                            <th style="width:34%;">Fingerprint</th>
+                            <th style="width:22%;">Name / Notes</th>
+                            <th style="width:8%;">Role</th>
+                            <th style="width:10%;">Status</th>
+                            <th style="width:13%;">Added</th>
+                            <th style="width:13%;">Last seen</th>
+                            <th style="width:14%;">Actions</th>
+                        </tr>
+                        </thead>
+                        <tbody id="tbody">
+                        <!-- filled by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+
+        <div class="footerline">© CPUNK 2026</div>
+    </main>
 </div>
 
 <script src="/static/admin_users.js"></script>

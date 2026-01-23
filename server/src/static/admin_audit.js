@@ -1,14 +1,6 @@
 // PQ-NAS Admin Audit UI (static)
 // - Tail:   GET /api/v4/audit/tail?n=200  -> { lines: [...] }
 // - Verify: GET /api/v4/audit/verify     -> { ok: true/false, ... }
-//
-// Enhancements:
-// - Sticky header (CSS)
-// - Row index column
-// - Better status mapping based on event + ok/error
-// - Integrity auto-poll (every 60s) when Auto-refresh is ON
-// - Auto state pill (Auto: ON/OFF)
-// - Export filtered rows as JSON / CSV
 
 let _all = [];            // all parsed entries
 let _filtered = [];       // filtered view
@@ -90,25 +82,16 @@ function toIp(e) {
     return String(ip);
 }
 
-// ---------- status mapping (improved) ----------
+// ---------- status mapping ----------
 function inferStatus(e) {
-    // 1) explicit booleans
     const ok = pick(e, ["ok", "success", "verified", "allowed"]);
     if (typeof ok === "boolean") return ok ? "ok" : "fail";
-
-    // 2) explicit error fields
     if (pick(e, ["error", "err", "failure", "denied"]) != null) return "fail";
 
-    // 3) event name heuristics
     const ev = String(toEventText(e) || "").toLowerCase();
 
-    // fail-ish
     if (ev.includes("fail") || ev.includes("denied") || ev.includes("reject") || ev.includes("error")) return "fail";
-
-    // ok-ish
     if (ev.includes("ok") || ev.includes("approved") || ev.includes("issued") || ev.includes("minted") || ev.includes("verified")) return "ok";
-
-    // warn-ish (policy / rate / suspicious / replay etc.)
     if (ev.includes("policy") || ev.includes("rate") || ev.includes("suspicious") || ev.includes("replay")) return "warn";
 
     return "info";
@@ -145,7 +128,6 @@ function prettyJson(e) {
     catch (_) { return String(e); }
 }
 
-// Simple HTML escaping to avoid rendering raw audit data as HTML.
 function escapeHtml(s) {
     return String(s ?? "")
         .replaceAll("&", "&amp;")
@@ -185,9 +167,6 @@ function renderTable() {
         tr.className = "clickable";
         tr.dataset.key = k;
 
-        // Row index: show newest-first numbering if desired.
-        // Current tail is typically oldest->newest or newest->oldest depending on backend;
-        // We keep simple 1..N in current view.
         const idxText = String(i + 1);
 
         tr.innerHTML = `
@@ -224,8 +203,8 @@ function buildDetailRow(e, k) {
     <div class="detail">
       <pre class="mono">${escapeHtml(json)}</pre>
       <div class="detailActions">
-        <button class="btn" data-act="copy">Copy JSON</button>
-        <button class="btn" data-act="collapse">Collapse</button>
+        <button class="btn" data-act="copy" type="button">Copy JSON</button>
+        <button class="btn" data-act="collapse" type="button">Collapse</button>
         <div class="small">Row key:</div>
         <div class="pill"><span class="v mono" style="max-width:170px; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(k)}</span></div>
       </div>
@@ -281,7 +260,6 @@ function applyFilters() {
         );
     });
 
-    // collapse expanded if it no longer exists
     if (_expandedKey) {
         const still = _filtered.some((e, i) => rowKey(e, i) === _expandedKey);
         if (!still) _expandedKey = null;
@@ -349,12 +327,10 @@ function startAuto() {
     const sec = clampInt($("intervalSec").value, 1, 3600, 3);
     $("intervalText").textContent = `${sec}s`;
 
-    // Tail refresh interval (user-controlled)
     _autoTimer = setInterval(() => {
         loadTail();
     }, sec * 1000);
 
-    // Integrity verify interval (fixed 60s, only when auto is enabled)
     _verifyTimer = setInterval(() => {
         verifyChain();
     }, 60 * 1000);
@@ -363,7 +339,6 @@ function startAuto() {
 function syncAutoUi() {
     const on = $("autoToggle").checked;
 
-    // auto pill
     const autoPill = $("autoPill");
     if (on) {
         setPill(autoPill, "on", "ON");
@@ -403,7 +378,6 @@ function exportJson() {
 
 function csvEscape(v) {
     const s = String(v ?? "");
-    // RFC4180-ish: quote if contains comma, quote, newline
     if (/[",\n\r]/.test(s)) return `"${s.replaceAll('"', '""')}"`;
     return s;
 }
@@ -412,7 +386,6 @@ function exportCsv() {
     const ts = new Date().toISOString().replaceAll(":", "-");
     const filename = `pqnas-audit-${ts}.csv`;
 
-    // export both “table columns” + raw JSON
     const header = ["idx","timestamp","status","event","fingerprint","sid","ip","raw_json"];
     const rows = _filtered.map((e, i) => {
         const tsText = toTsText(e);

@@ -7,208 +7,345 @@
 
     <style>
         :root{
-            --bg: #070a08;
-            --panel: rgba(16, 22, 18, 0.78);
-            --panel2: rgba(10, 14, 11, 0.72);
-            --border: rgba(0, 255, 140, 0.24);
-            --border2: rgba(0, 255, 140, 0.14);
-            --text: rgba(240, 255, 248, 0.92);
-            --muted: rgba(240, 255, 248, 0.68);
-            --accent: rgba(0, 255, 140, 0.92);
-            --accent2: rgba(0, 255, 140, 0.55);
-            --shadow: 0 12px 42px rgba(0,0,0,0.55);
+            --bg: #050712;
+            --fg: #00f0f8;
+            --fg-dim: rgba(0,240,248,0.74);
+
+            --panel: rgba(255,255,255,0.03);
+            --panel2: rgba(0,0,0,0.28);
+
+            --border: rgba(0,240,248,0.22);
+            --border2: rgba(0,240,248,0.12);
+
+            --shadow: 0 18px 70px rgba(0,0,0,0.55);
+
             --radius: 18px;
+            --radius2: 22px;
+
+            --warn: rgba(255, 190, 0, 0.95);
+            --err: rgba(255, 90, 90, 0.95);
         }
 
         * { box-sizing: border-box; }
         html, body { height: 100%; }
+
         body{
             margin: 0;
-            color: var(--text);
+            color: var(--fg);
             font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial;
             background:
-                    radial-gradient(1200px 600px at 15% 10%, rgba(0,255,140,0.10), transparent 55%),
-                    radial-gradient(1000px 600px at 85% 20%, rgba(0,255,140,0.06), transparent 60%),
-                    radial-gradient(900px 600px at 50% 90%, rgba(0,255,140,0.05), transparent 60%),
-                    linear-gradient(180deg, #050706, var(--bg));
-            padding: 26px;
-        }
-
-        a { color: var(--accent); text-decoration: none; }
-        a:hover { text-decoration: underline; }
-
-        .wrap{
-            max-width: 1100px;
-            margin: 0 auto;
-        }
-
-        .frame{
-            border: 1px solid var(--border);
-            border-radius: 26px;
-            padding: 18px;
-            background: rgba(0,0,0,0.25);
-            box-shadow: var(--shadow);
-        }
-
-        header{
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 14px;
-            padding: 10px 10px 16px 10px;
-        }
-
-        .title{
-            display:flex;
-            align-items:center;
-            gap: 10px;
-            min-width: 0;
-        }
-
-        .title h1{
-            margin: 0;
-            font-size: 22px;
-            letter-spacing: 0.2px;
-            font-weight: 750;
-        }
-
-        .subtitle{
-            margin-top: 4px;
-            font-size: 13px;
-            color: var(--muted);
-        }
-
-        .badge{
-            padding: 6px 12px;
-            border-radius: 999px;
-            font-size: 12px;
-            font-weight: 700;
-            border: 1px solid var(--border2);
-            background: rgba(0,0,0,0.35);
-            color: var(--text);
-            white-space: nowrap;
-        }
-        /* keep your original semantic classes too */
-        .badge.admin { background: rgba(0,255,140,0.12); border-color: rgba(0,255,140,0.28); }
-        .badge.user { background: rgba(90,170,255,0.12); border-color: rgba(90,170,255,0.22); }
-        .badge.unknown { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.14); }
-
-        .grid{
-            display: grid;
-            grid-template-columns: 1.2fr 0.8fr;
-            gap: 14px;
-            padding: 6px 10px 10px 10px;
-        }
-        @media (max-width: 980px){
-            .grid{ grid-template-columns: 1fr; }
-        }
-
-        .card{
-            border: 1px solid var(--border2);
-            border-radius: var(--radius);
-            background: linear-gradient(180deg, var(--panel), rgba(0,0,0,0.18));
-            padding: 16px;
-            box-shadow: 0 10px 32px rgba(0,0,0,0.35);
+                    radial-gradient(1200px 700px at 18% 8%, rgba(0,240,248,0.11), transparent 55%),
+                    radial-gradient(1000px 700px at 82% 12%, rgba(0,240,248,0.07), transparent 60%),
+                    linear-gradient(180deg, #04050f, var(--bg));
             overflow: hidden;
         }
-        .card h2{
-            margin: 0 0 10px 0;
-            font-size: 14px;
-            color: var(--muted);
-            font-weight: 750;
-            letter-spacing: 0.5px;
-            text-transform: uppercase;
+
+        a{ color: var(--fg); text-decoration: none; }
+        a:hover{ text-shadow: 0 0 10px rgba(0,240,248,0.25); }
+
+        .desktop{
+            height: 100%;
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 14px;
+            padding: 14px;
         }
 
-        .row{
+        @media (max-width: 980px){
+            body{ overflow:auto; }
+            .desktop{
+                grid-template-columns: 1fr;
+                overflow: visible;
+            }
+        }
+
+        .sidebar{
+            border: 1px solid var(--border);
+            border-radius: var(--radius2);
+            background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.24));
+            box-shadow: var(--shadow);
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .brand{
             display:flex;
-            align-items:center;
-            justify-content: space-between;
             gap: 10px;
-            flex-wrap: wrap;
+            align-items: center;
+            padding: 10px 10px 14px;
+            border-bottom: 1px solid var(--border2);
+            margin-bottom: 12px;
         }
 
-        .statusline{
-            font-size: 14px;
-            color: var(--text);
-            padding: 10px 12px;
-            border-radius: 14px;
-            border: 1px solid rgba(255,255,255,0.10);
-            background: rgba(0,0,0,0.28);
+        .brand .logoDot{
+            width: 14px; height: 14px;
+            border-radius: 50%;
+            background: var(--fg);
+            box-shadow: 0 0 18px rgba(0,240,248,0.38);
+            flex: 0 0 auto;
         }
 
-        pre{
-            margin: 12px 0 0 0;
-            padding: 12px 12px;
-            border-radius: 14px;
-            border: 1px solid rgba(255,255,255,0.10);
-            background: rgba(0,0,0,0.32);
-            color: rgba(240,255,248,0.88);
-            overflow: auto;
-            font-size: 12.5px;
-            line-height: 1.35;
+        .brand h1{
+            margin: 0;
+            font-size: 16px;
+            font-weight: 900;
+            letter-spacing: 0.2px;
+        }
+        .brand .sub{
+            margin-top: 2px;
+            font-size: 12px;
+            color: var(--fg-dim);
         }
 
         .nav{
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin-top: 10px;
-        }
-        @media (max-width: 520px){
-            .nav{ grid-template-columns: 1fr; }
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 10px 6px;
+            overflow: auto;
+            min-height: 0;
         }
 
-        .btn{
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
+        .nav .sectionLabel{
+            margin: 10px 6px 2px;
+            font-size: 11px;
+            color: rgba(0,240,248,0.55);
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+        }
+
+        .navbtn{
+            display:flex;
+            align-items:center;
+            justify-content: space-between;
             gap: 10px;
             padding: 10px 12px;
             border-radius: 14px;
-            border: 1px solid var(--border);
-            background: rgba(0,0,0,0.30);
-            color: var(--accent);
-            font-weight: 750;
-            letter-spacing: 0.2px;
+            border: 1px solid var(--border2);
+            background: rgba(0,0,0,0.22);
+            color: var(--fg);
             cursor: pointer;
-            text-decoration: none;
-            user-select: none;
+            user-select:none;
+            text-decoration:none;
+            transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+        }
+
+        .navbtn:hover{
+            transform: translateY(-1px);
+            background: rgba(0,240,248,0.06);
+            border-color: rgba(0,240,248,0.30);
+        }
+
+        .navbtn.active{
+            background: rgba(0,240,248,0.10);
+            border-color: rgba(0,240,248,0.38);
+            box-shadow: 0 0 18px rgba(0,240,248,0.12);
+        }
+
+        .navbtn .k{
+            font-size: 12px;
+            color: rgba(0,240,248,0.55);
+            border: 1px solid rgba(0,240,248,0.16);
+            border-radius: 10px;
+            padding: 2px 8px;
+            background: rgba(0,0,0,0.22);
+        }
+
+        .bottom{
+            border-top: 1px solid var(--border2);
+            margin-top: auto;
+            padding-top: 12px;
+            display:flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .statusCard{
+            border: 1px solid var(--border2);
+            border-radius: 16px;
+            background: rgba(0,0,0,0.22);
+            padding: 10px 12px;
+        }
+
+        /* IMPORTANT: keep id="roleBadge" */
+        .badge{
+            display:inline-flex;
+            align-items:center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 900;
+            border: 1px solid var(--border2);
+            background: rgba(0,0,0,0.28);
+            color: var(--fg);
+            white-space: nowrap;
+        }
+        /* keep your original semantic classes too */
+        .badge.admin { border-color: rgba(0,240,248,0.30); background: rgba(0,240,248,0.08); }
+        .badge.user { border-color: rgba(90,170,255,0.22); background: rgba(90,170,255,0.10); color: rgba(205,230,255,0.95); }
+        .badge.unknown { border-color: rgba(0,240,248,0.14); background: rgba(255,255,255,0.03); color: rgba(0,240,248,0.80); }
+
+        .mini{
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--fg-dim);
+            line-height: 1.35;
+        }
+
+        .workspace{
+            border: 1px solid var(--border);
+            border-radius: var(--radius2);
+            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
+            box-shadow: var(--shadow);
+            display:flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .topbar{
+            display:flex;
+            align-items:center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border2);
+            background: rgba(0,0,0,0.18);
+        }
+
+        .crumbs{
+            display:flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        .crumbs .title{
+            font-weight: 950;
+            letter-spacing: 0.2px;
+            font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .crumbs .sub{
+            margin-top: 2px;
+            font-size: 12px;
+            color: var(--fg-dim);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .actions{
+            display:flex;
+            align-items:center;
+            gap: 10px;
+            flex: 0 0 auto;
+        }
+
+        .btn{
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(0,240,248,0.28);
+            background: rgba(0,0,0,0.26);
+            color: var(--fg);
+            font-weight: 900;
+            cursor:pointer;
+            text-decoration:none;
+            user-select:none;
             transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
         }
         .btn:hover{
             transform: translateY(-1px);
-            border-color: rgba(0,255,140,0.45);
-            background: rgba(0,255,140,0.06);
-            text-decoration: none;
+            border-color: rgba(0,240,248,0.42);
+            background: rgba(0,240,248,0.07);
         }
-        .btn:active{ transform: translateY(0px); }
-
         .btn.secondary{
             border-color: rgba(255,255,255,0.12);
-            color: rgba(240,255,248,0.86);
+            color: rgba(0,240,248,0.82);
         }
         .btn.secondary:hover{
             border-color: rgba(255,255,255,0.22);
             background: rgba(255,255,255,0.05);
         }
 
-        .hint{
-            color: var(--muted);
-            font-size: 13px;
-            margin-top: 10px;
-            line-height: 1.4;
+        .content{
+            display:grid;
+            grid-template-columns: 1fr 420px;
+            gap: 14px;
+            padding: 14px;
+            min-height: 0;
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        @media (max-width: 1200px){
+            .content{ grid-template-columns: 1fr; overflow:auto; }
+        }
+
+        .pane{
+            border: 1px solid var(--border2);
+            border-radius: var(--radius);
+            background: rgba(0,0,0,0.22);
+            padding: 14px;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .pane h2{
+            margin: 0 0 10px 0;
+            font-size: 12px;
+            color: rgba(0,240,248,0.60);
+            font-weight: 900;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+        }
+
+        /* IMPORTANT: keep id="status" */
+        .statusline{
+            font-size: 14px;
+            color: rgba(0,240,248,0.92);
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(0,240,248,0.16);
+            background: rgba(0,0,0,0.28);
+        }
+
+        pre{
+            margin: 0;
+            padding: 12px 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.10);
+            background: rgba(0,0,0,0.32);
+            color: rgba(0,240,248,0.88);
+            overflow: auto;
+            font-size: 12.5px;
+            line-height: 1.35;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+            height: calc(100% - 0px);
         }
 
         .kvs{
             display: grid;
             grid-template-columns: 1fr;
             gap: 8px;
-            margin-top: 8px;
+            margin-top: 10px;
         }
+
         .kv{
-            border: 1px solid rgba(255,255,255,0.10);
-            background: rgba(0,0,0,0.24);
+            border: 1px solid rgba(0,240,248,0.12);
+            background: rgba(0,0,0,0.22);
             border-radius: 14px;
             padding: 10px 12px;
             display:flex;
@@ -216,13 +353,13 @@
             gap: 10px;
         }
         .kv .k{
-            color: var(--muted);
+            color: rgba(0,240,248,0.62);
             font-size: 13px;
         }
         .kv .v{
-            font-weight: 700;
+            font-weight: 850;
             font-size: 13px;
-            color: rgba(240,255,248,0.88);
+            color: rgba(0,240,248,0.90);
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -230,61 +367,102 @@
             text-align: right;
         }
 
-        footer{
-            padding: 10px 10px 2px 10px;
-            color: rgba(240,255,248,0.55);
-            font-size: 12px;
+        .hint{
+            color: var(--fg-dim);
+            font-size: 13px;
+            margin-top: 10px;
+            line-height: 1.4;
         }
+
+        .footerline{
+            padding: 10px 14px;
+            border-top: 1px solid var(--border2);
+            color: rgba(0,240,248,0.55);
+            font-size: 12px;
+            text-align: right;
+            user-select: none;
+            background: rgba(0,0,0,0.12);
+        }
+
+        code{ color: rgba(0,240,248,0.86); }
     </style>
 </head>
 
 <body>
-<div class="wrap">
-    <div class="frame">
-        <header>
-            <div class="title">
-                <div>
-                    <h1>PQ-NAS Admin</h1>
-                    <div class="subtitle">Manage users, review audit logs, and verify server integrity.</div>
+<div class="desktop">
+    <!-- Left launcher -->
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="logoDot" aria-hidden="true"></div>
+            <div style="min-width:0">
+                <h1>Admin</h1>
+                <div class="sub">server-gated • static UI</div>
+            </div>
+        </div>
+
+        <nav class="nav" aria-label="Admin navigation">
+            <div class="sectionLabel">Admin</div>
+            <a class="navbtn active" href="/admin">
+                <span>Overview</span><span class="k">O</span>
+            </a>
+            <a class="navbtn" href="/admin/users">
+                <span>User approvals</span><span class="k">U</span>
+            </a>
+            <a class="navbtn" href="/admin/audit">
+                <span>Audit log UI</span><span class="k">D</span>
+            </a>
+            <a class="navbtn" href="/admin/settings">
+                <span>Settings</span><span class="k">S</span>
+            </a>
+            <a class="navbtn" href="/system">
+                <span>System</span><span class="k">Y</span>
+            </a>
+            <div class="sectionLabel">Tools</div>
+            <a class="navbtn" href="/api/v4/audit/verify">
+                <span>Verify audit chain</span><span class="k">V</span>
+            </a>
+            <a class="navbtn" href="/app">
+                <span>Open app</span><span class="k">↩</span>
+            </a>
+        </nav>
+
+        <div class="bottom">
+            <div class="statusCard">
+                <!-- IMPORTANT: keep id="roleBadge" -->
+                <div id="roleBadge" class="badge unknown">role: ?</div>
+                <div class="mini" id="sidebarHint">
+                    Manage users, review audit logs, and verify server integrity.
                 </div>
             </div>
+        </div>
+    </aside>
 
-            <!-- IMPORTANT: keep this id for admin.js -->
-            <span id="roleBadge" class="badge unknown">role: ?</span>
-        </header>
+    <!-- Right workspace -->
+    <main class="workspace">
+        <div class="topbar">
+            <div class="crumbs">
+                <div class="title">Admin overview</div>
+                <div class="sub">Session, role and API status</div>
+            </div>
 
-        <div class="grid">
-            <section class="card">
+            <div class="actions">
+                <a class="btn secondary" href="/admin/users">Users</a>
+                <a class="btn secondary" href="/admin/audit">Audit</a>
+                <a class="btn secondary" href="/admin/settings">Settings</a>
+                <a class="btn secondary" href="/system">System</a>
+                <button class="btn" id="refreshBtn" type="button">Refresh</button>
+            </div>
+        </div>
+
+        <div class="content">
+            <section class="pane" aria-label="Session pane">
                 <h2>Session status</h2>
 
-                <div class="row">
-                    <!-- IMPORTANT: keep this id for admin.js -->
-                    <div id="status" class="statusline">Loading…</div>
-
-                    <div class="row" style="gap:8px">
-                        <a class="btn" href="/admin/users">Users</a>
-                        <a class="btn secondary" href="/admin/audit">Audit</a>
-                        <a class="btn" href="/admin/settings">Settings</a>
-
-                    </div>
-                </div>
-
-                <!-- IMPORTANT: keep this id for admin.js -->
-                <pre id="me">(waiting)</pre>
+                <!-- IMPORTANT: keep id="status" -->
+                <div id="status" class="statusline">Loading…</div>
 
                 <div class="hint">
                     Tip: If something looks off, open DevTools → Network and confirm <code>/api/v4/me</code> returns 200 and JSON.
-                </div>
-            </section>
-
-            <aside class="card">
-                <h2>Navigation</h2>
-
-                <div class="nav">
-                    <a class="btn" href="/admin/users">User approvals</a>
-                    <a class="btn" href="/admin/audit">Audit log UI</a>
-                    <a class="btn secondary" href="/api/v4/audit/verify">Verify audit chain</a>
-                    <a class="btn secondary" href="/app">Open app</a>
                 </div>
 
                 <div class="kvs">
@@ -301,17 +479,20 @@
                         <div class="v">no-store (admin)</div>
                     </div>
                 </div>
+            </section>
 
+            <aside class="pane" aria-label="Inspector pane">
+                <h2>Inspector</h2>
+                <!-- IMPORTANT: keep id="me" -->
+                <pre id="me">(waiting)</pre>
                 <div class="hint">
-                    “Users” is where you enable/disable fingerprints and revoke access. It writes to <code>users.json</code>.
+                    This is the raw response of <code>/api/v4/me</code>.
                 </div>
             </aside>
         </div>
 
-        <footer>
-            PQ-NAS • Admin UI • static + server-gated
-        </footer>
-    </div>
+        <div class="footerline">© CPUNK 2026</div>
+    </main>
 </div>
 
 <script src="/static/admin.js"></script>
