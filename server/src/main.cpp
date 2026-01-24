@@ -61,7 +61,7 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include <array>
 #include <iomanip>
 #include "verify_v4_crypto.h"
-
+#include <functional>
 #include "audit_log.h"
 #include "audit_fields.h"
 
@@ -1298,26 +1298,167 @@ int main()
     const std::string audit_jsonl_path = audit_dir + "/pqnas_audit.jsonl";
     const std::string audit_state_path = audit_dir + "/pqnas_audit.state";
     pqnas::AuditLog audit(audit_jsonl_path, audit_state_path);
-
-
-    // ---- Admin settings (audit min level) ----
+    // declare early so routes can call it
+    std::function<void(const pqnas::AuditEvent&)> audit_append;
+    // ---- Admin settings path (must exist before any helpers use it) ----
     std::string admin_settings_path =
         (std::filesystem::path(REPO_ROOT) / "config" / "admin_settings.json").string();
     if (const char* p = std::getenv("PQNAS_ADMIN_SETTINGS_PATH")) {
         admin_settings_path = p;
     }
 
+    // ---------------------------
+    // Auto-rotation (checked before every audit.append)
+    // ---------------------------
+
+    // in-memory day marker helper (UTC)
+    auto utc_day_yyyymmdd_local = [&]() -> std::string {
+        try {
+            std::time_t tt = std::time(nullptr);
+            std::tm tm{};
+#if defined(_WIN32)
+            gmtime_s(&tm, &tt);
+#else
+            gmtime_r(&tt, &tm);
+#endif
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d",
+                          tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+            return std::string(buf);
+        } catch (...) {
+            return "1970-01-01";
+        }
+    };
+
+    // cache admin_settings.json reads so we don't hit disk on every audit line
+    auto load_admin_settings_cached = [&](const std::string& path) -> json {
+        using clock = std::chrono::steady_clock;
+
+        static clock::time_point last_check = clock::now() - std::chrono::seconds(60);
+        static std::filesystem::file_time_type last_mtime{};
+        static bool last_mtime_valid = false;
+        static json cached = json::object();
+
+        const auto now = clock::now();
+        if (now - last_check < std::chrono::seconds(2)) {
+            return cached;
+        }
+        last_check = now;
+
+        std::error_code ec;
+        const auto mt = std::filesystem::last_write_time(path, ec);
+        const bool mt_ok = !ec;
+
+        const bool changed =
+            !last_mtime_valid ||
+            !mt_ok ||
+            (mt != last_mtime);
+
+        if (!changed) {
+            return cached;
+        }
+
+        // reload
+        json j = json::object();
+        try {
+            std::ifstream f(path);
+            if (f.good()) {
+                f >> j;
+                if (!j.is_object()) j = json::object();
+            }
+        } catch (...) {
+            j = json::object();
+        }
+
+        cached = j;
+        last_mtime_valid = mt_ok;
+        if (mt_ok) last_mtime = mt;
+        return cached;
+    };
+
+    // rotate implementation (single place) — IMPORTANT: no recursion here
+    auto rotate_audit_now_internal = [&](const std::string& reason_tag) -> bool {
+        try {
+            pqnas::AuditLog::RotateOptions opt;
+            pqnas::AuditLog::RotateResult rr;
+            const bool ok = audit.rotate(opt, &rr);
+            if (!ok) return false;
+
+            // Optional: log the rotation itself (best-effort) WITHOUT calling maybe_auto_rotate_before_append()
+            try {
+                pqnas::AuditEvent ev;
+                ev.event = "audit.auto_rotated";
+                ev.outcome = "ok";
+                ev.f["reason"] = reason_tag;
+                ev.f["rotated_jsonl_path"] = rr.rotated_jsonl_path;
+                ev.f["ip"] = "local";
+                audit_append(ev);
+            } catch (...) {}
+
+            return true;
+        } catch (...) {
+            return false;
+        }
+    };
+
+
+    // the actual policy check: call this before audit.append(ev)
+    auto maybe_auto_rotate_before_append = [&]() {
+        json settings = load_admin_settings_cached(admin_settings_path);
+
+        // Expect: settings["audit_rotation"] = { "mode": "...", "max_active_mb": N }
+        json rot = json::object();
+        if (settings.contains("audit_rotation") && settings["audit_rotation"].is_object()) {
+            rot = settings["audit_rotation"];
+        }
+
+        const std::string mode = rot.value("mode", "off");
+        const int max_mb = rot.value("max_active_mb", 512);
+
+        if (mode == "off") return;
+
+        static std::string last_rotated_day = utc_day_yyyymmdd_local();
+
+        // daily trigger (UTC)
+        if (mode == "daily" || mode == "size_or_daily") {
+            const std::string today = utc_day_yyyymmdd_local();
+            if (today != last_rotated_day) {
+                if (rotate_audit_now_internal("daily")) {
+                    last_rotated_day = today;
+                    return; // done
+                }
+            }
+        }
+
+        // size trigger
+        if (mode == "size_mb" || mode == "size_or_daily") {
+            const long long bytes = file_size_bytes_safe(audit_jsonl_path);
+            const long long limit = (long long)max_mb * 1024LL * 1024LL;
+            if (bytes >= 0 && bytes >= limit) {
+                (void)rotate_audit_now_internal("size_mb");
+            }
+        }
+    };
+
+    // OPTIONAL: use this wrapper everywhere instead of calling audit.append(ev) directly
+    audit_append = [&](const pqnas::AuditEvent& ev) {
+        maybe_auto_rotate_before_append();
+        audit.append(ev);
+    };
+
+
+    // ---- Load admin settings once at startup (audit min level) ----
     try {
         std::ifstream f(admin_settings_path);
         if (f.good()) {
             json j = json::parse(f, nullptr, true);
+
             std::string lvl;
-auto it = j.find("audit_min_level");
-if (it != j.end() && it->is_string()) {
-    lvl = it->get<std::string>();
-} else {
-    lvl.clear(); // or keep empty
-}
+            auto it = j.find("audit_min_level");
+            if (it != j.end() && it->is_string()) {
+                lvl = it->get<std::string>();
+            }
+
             if (!lvl.empty()) {
                 if (!audit.set_min_level_str(lvl)) {
                     std::cerr << "[settings] WARNING: invalid audit_min_level in "
@@ -1377,7 +1518,8 @@ std::thread audit_rotator([&]() {
                 ev.outcome = ok ? "ok" : "fail";
                 ev.f["reason"] = reason;
                 ev.f["rotated_jsonl_path"] = ok ? rr.rotated_jsonl_path : "";
-                audit.append(ev);
+                maybe_auto_rotate_before_append();
+                audit_append(ev);
             } catch (...) {}
 
             // Update last_day ONLY when day-based rotate fired (or after any successful rotate)
@@ -1778,7 +1920,8 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        audit.append(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
     };
 
     auto sid = req.get_param_value("sid");
@@ -1844,7 +1987,8 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
             ev.f["http"] = std::to_string(http_code);
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
             ev.f["ua"] = audit_ua();
-            audit.append(ev);
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
         };
 
         try {
@@ -1881,7 +2025,8 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
                 if (!e.fingerprint.empty()) ev.f["fingerprint"] = e.fingerprint;
                 ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
                 ev.f["ua"] = audit_ua();
-                audit.append(ev);
+                maybe_auto_rotate_before_append();
+                audit_append(ev);
             }
 
             const bool secure = (ORIGIN.rfind("https://", 0) == 0);
@@ -1908,7 +2053,8 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
                 if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
                 ev.f["ua"] = audit_ua();
-                audit.append(ev);
+                maybe_auto_rotate_before_append();
+                audit_append(ev);
             }
 
             res.set_header("Set-Cookie", cookie);
@@ -2107,7 +2253,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
             auto it_ua = req.headers.find("User-Agent");
             ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-            audit.append(ev);
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
         } catch (...) {}
 
         reply_json(res, 200, nlohmann::json{
@@ -2479,7 +2626,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
                     ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
                     auto it_ua = req.headers.find("User-Agent");
                     ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-                    audit.append(ev);
+                    maybe_auto_rotate_before_append();
+                    audit_append(ev);
                 } catch (...) {}
             }
 
@@ -2510,7 +2658,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
                     ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
                     auto it_ua = req.headers.find("User-Agent");
                     ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-                    audit.append(ev);
+                    maybe_auto_rotate_before_append();
+                    audit_append(ev);
                 } catch (...) {}
             }
             // ---- audit_rotation (optional) ----
@@ -2540,7 +2689,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
                     ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
                     auto it_ua = req.headers.find("User-Agent");
                     ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-                    audit.append(ev);
+                    maybe_auto_rotate_before_append();
+                    audit_append(ev);
                 } catch (...) {}
             }
 
@@ -2549,7 +2699,7 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
                 reply_json(res, 400, json{
                     {"ok", false},
                     {"error", "bad_request"},
-                    {"message", "nothing to update (provide audit_min_level and/or audit_retention)"}
+                    {"message", "nothing to update (provide audit_min_level and/or audit_retention and/or audit_rotation)"}
                 }.dump());
                 return;
             }
@@ -2634,7 +2784,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
             ev.f["ua"] = audit_ua();
-            audit.append(ev);
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
         };
 
         auto audit_ok = [&](const std::string& fp_b64, long exp, const std::string& role) {
@@ -2654,7 +2805,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
             ev.f["ua"] = audit_ua();
-            audit.append(ev);
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
         };
 
         auto it = req.headers.find("Cookie");
@@ -2763,7 +2915,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
             auto it = req.headers.find("User-Agent");
             ev.f["ua"] = pqnas::shorten(it == req.headers.end() ? "" : it->second);
-            audit.append(ev);
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
         }
 
         reply_json(res, 200, out.dump());
@@ -2847,7 +3000,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
             ev.f["ua"] = audit_ua();
-            audit.append(ev);
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
         };
 
         auto audit_info = [&](const std::string& event, const std::string& outcome,
@@ -2873,7 +3027,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
             ev.f["ua"] = audit_ua();
-            audit.append(ev);
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
         };
 
         // ISO UTC helper (avoid relying on a missing pqnas::now_iso_utc())
@@ -3060,7 +3215,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
                     if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
                     ev.f["ua"] = audit_ua();
-                    audit.append(ev);
+                    maybe_auto_rotate_before_append();
+                    audit_append(ev);
                 }
             } else {
                 audit_fail("cookie_mint_failed");
@@ -3086,7 +3242,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
                 if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
                 ev.f["ua"] = audit_ua();
-                audit.append(ev);
+                maybe_auto_rotate_before_append();
+                audit_append(ev);
             }
 
             json out = {{"ok",true},{"v",4},{"at",at}};
@@ -3218,7 +3375,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             ev.f["ts"] = now_iso_utc();
             ev.f["actor_fp"] = actor_fp;
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            audit.append(ev);
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
         }
 
         if (!ok_set) {
@@ -3314,7 +3472,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             ev.f["ts"] = now_iso;
             ev.f["actor_fp"] = actor_fp;
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            audit.append(ev);
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
         }
 
         if (!ok_upsert) {
@@ -3378,7 +3537,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             if (!name.empty()) ev.f["name"] = pqnas::shorten(name, 80);
             if (!notes.empty()) ev.f["notes"] = pqnas::shorten(notes, 120);
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            audit.append(ev);
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
         }
 
         if (!saved) {
@@ -3426,7 +3586,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             ev.f["ts"] = now_iso_utc();
             ev.f["actor_fp"] = actor_fp;
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            audit.append(ev);
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
         }
 
         if (!saved) {
@@ -3506,7 +3667,8 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             ev.f["ts"] = now_iso_utc();
             ev.f["actor_fp"] = actor_fp;
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            audit.append(ev);
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
         }
 
         if (!ok_del) {
