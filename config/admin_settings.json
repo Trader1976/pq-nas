@@ -7,8 +7,13 @@
     "mode": "files"
   },
   "audit_rotate": {
-    "max_active_mb": 256,
+    "check_interval_sec": 10,
     "daily_utc": true,
-    "check_interval_sec": 10
+    "max_active_mb": 256
+  },
+  "audit_rotation": {
+    "max_active_mb": 1,
+    "mode": "size_mb",
+    "rotate_utc_day": ""
   }
 }

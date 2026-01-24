@@ -461,6 +461,7 @@ static std::vector<ArchivePair> list_rotated_archives_local(const std::string& a
     return out;
 }
 
+
 static nlohmann::json normalize_retention_or_default_local(const nlohmann::json& in_ret) {
     nlohmann::json ret = nlohmann::json::object();
     if (in_ret.is_object()) ret = in_ret;
@@ -2180,6 +2181,17 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
                 {"max_total_mb", 20480}
             };
         }
+        // Rotation defaults (if absent)
+        json rotation = json::object();
+        if (persisted.contains("audit_rotation") && persisted["audit_rotation"].is_object()) {
+            rotation = persisted["audit_rotation"];
+        } else {
+            rotation = json{
+                {"mode", "manual"},        // manual | daily | size_mb | daily_or_size_mb
+                {"max_active_mb", 256},    // used when size-based trigger is enabled
+                {"rotate_utc_day", ""}     // optional: last-rotated UTC day tracker (YYYY-MM-DD)
+            };
+        }
 
 		const long long active_bytes = file_size_bytes_safe(audit_jsonl_path);
 
@@ -2191,7 +2203,7 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
     		{"allowed", json::array({"SECURITY","ADMIN","INFO","DEBUG"})},
 
 		    {"audit_retention", retention},
-
+            {"audit_rotation", rotation},
     		// NEW: active audit file info for UI
     		{"audit_active_path", audit_jsonl_path},
     		{"audit_active_bytes", active_bytes}
@@ -2265,7 +2277,66 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             if (it2 != j.end() && it2->is_string()) return it2->get<std::string>();
             return fallback;
         };
+        auto is_allowed_rotation_mode = [&](const std::string& m) -> bool {
+            return (m == "manual" || m == "daily" || m == "size_mb" || m == "daily_or_size_mb");
+        };
 
+        // Normalize rotation safely (never throws; returns null json on error + sets err)
+        auto normalize_rotation = [&](const json& in_rot, std::string& err) -> json {
+            err.clear();
+
+            if (!in_rot.is_object()) {
+                err = "audit_rotation must be an object";
+                return json();
+            }
+
+            std::string mode = "manual";
+            {
+                auto it2 = in_rot.find("mode");
+                if (it2 != in_rot.end() && !it2->is_null()) {
+                    if (!it2->is_string()) {
+                        err = "audit_rotation.mode must be string";
+                        return json();
+                    }
+                    mode = it2->get<std::string>();
+                }
+            }
+            if (!is_allowed_rotation_mode(mode)) {
+                err = "audit_rotation.mode must be one of: manual, daily, size_mb, daily_or_size_mb";
+                return json();
+            }
+
+            auto get_int = [&](const char* key, int def, int lo, int hi) -> int {
+                auto it2 = in_rot.find(key);
+                if (it2 == in_rot.end() || it2->is_null()) return def;
+
+                if (!it2->is_number_integer()) {
+                    err = std::string("audit_rotation.") + key + " must be integer";
+                    return def;
+                }
+                int v = it2->get<int>();
+                if (v < lo) v = lo;
+                if (v > hi) v = hi;
+                return v;
+            };
+
+            // only used for size-based modes
+            int max_active_mb = get_int("max_active_mb", 256, 1, 10000000);
+            if (!err.empty()) return json();
+
+            // optional tracker field
+            std::string rotate_utc_day = "";
+            {
+                auto it2 = in_rot.find("rotate_utc_day");
+                if (it2 != in_rot.end() && it2->is_string()) rotate_utc_day = it2->get<std::string>();
+            }
+
+            return json{
+                {"mode", mode},
+                {"max_active_mb", max_active_mb},
+                {"rotate_utc_day", rotate_utc_day},
+            };
+        };
         // Normalize retention safely (never throws; returns null json on error + sets err)
         auto normalize_retention = [&](const json& in_ret, std::string& err) -> json {
             err.clear();
@@ -2357,6 +2428,10 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 
             const std::string before_runtime   = audit.min_level_str();
             const std::string before_persisted = get_level_safe(persisted, before_runtime);
+            json before_rotation = json::object();
+            if (persisted.contains("audit_rotation") && persisted["audit_rotation"].is_object()) {
+                before_rotation = persisted["audit_rotation"];
+            }
 
             json before_ret = json::object();
             if (persisted.contains("audit_retention") && persisted["audit_retention"].is_object()) {
@@ -2365,7 +2440,7 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 
             bool changed_level = false;
             bool changed_ret   = false;
-
+            bool changed_rotation = false;
             json patch = json::object();
 
             // ---- audit_min_level (optional) ----
@@ -2438,8 +2513,39 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
                     audit.append(ev);
                 } catch (...) {}
             }
+            // ---- audit_rotation (optional) ----
+            if (in.contains("audit_rotation")) {
+                std::string err;
+                json norm = normalize_rotation(in["audit_rotation"], err);
+                if (!err.empty()) {
+                    reply_json(res, 400, json{
+                        {"ok", false},
+                        {"error", "bad_request"},
+                        {"message", err}
+                    }.dump());
+                    return;
+                }
 
-            if (!changed_level && !changed_ret) {
+                patch["audit_rotation"] = norm;
+                persisted["audit_rotation"] = norm; // for response shaping
+                changed_rotation = true;
+
+                // Audit (best-effort)
+                try {
+                    pqnas::AuditEvent ev;
+                    ev.event = "admin.settings_changed";
+                    ev.outcome = "ok";
+                    ev.f["audit_rotation_before"] = before_rotation.is_null() ? json::object() : before_rotation;
+                    ev.f["audit_rotation_after"]  = norm;
+                    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                    auto it_ua = req.headers.find("User-Agent");
+                    ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
+                    audit.append(ev);
+                } catch (...) {}
+            }
+
+            if (!changed_level && !changed_ret && !changed_rotation) {
+
                 reply_json(res, 400, json{
                     {"ok", false},
                     {"error", "bad_request"},
@@ -2468,17 +2574,31 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             }
 
 		const long long active_bytes = file_size_bytes_safe(audit_jsonl_path);
+        // ---- audit_rotation in response ----
+        json rotation = json::object();
+        if (persisted.contains("audit_rotation") && persisted["audit_rotation"].is_object()) {
+            rotation = persisted["audit_rotation"];
+        } else {
+            rotation = json{
+                {"mode","manual"},
+                {"max_active_mb",256},
+                {"rotate_utc_day",""}
+            };
+        }
 
-		reply_json(res, 200, json{
-    		{"ok", true},
-    		{"audit_min_level", get_level_safe(persisted, audit.min_level_str())},
-    		{"audit_min_level_runtime", audit.min_level_str()},
-    		{"audit_retention", retention},
+        reply_json(res, 200, json{
+            {"ok", true},
 
-    		// NEW: active audit file info for UI
-    		{"audit_active_path", audit_jsonl_path},
-    		{"audit_active_bytes", active_bytes}
-		}.dump());
+            {"audit_min_level", get_level_safe(persisted, audit.min_level_str())},
+            {"audit_min_level_runtime", audit.min_level_str()},
+            {"allowed", json::array({"SECURITY","ADMIN","INFO","DEBUG"})},
+
+            {"audit_retention", retention},
+            {"audit_rotation", rotation},   // <-- ADD THIS
+
+            {"audit_active_path", audit_jsonl_path},
+            {"audit_active_bytes", active_bytes}
+        }.dump());
 
             return;
 
