@@ -127,6 +127,31 @@ public:
     void append(const AuditEvent& e);
 
 
+    // --- Rotation support (audit-only) ---
+    //
+    // Rotation preserves chain continuity by writing a "rotate header" as the first
+    // line of the new active log. That header is hashed with prev_hash equal to
+    // the last line_hash of the previous file.
+    //
+    // This keeps the global history verifiable across files without changing the
+    // JSONL schema or hashing rules.
+
+    struct RotateOptions {
+        // v1: gzip not implemented (no extra deps). Keep false.
+        bool compress_gzip = false;
+    };
+
+    struct RotateResult {
+        std::string rotated_jsonl_path;
+        std::string rotated_state_path;
+
+        // The chain tip of the previous file (anchor stored into the new file header).
+        std::string chain_start_prev_hash_hex;
+    };
+
+    bool rotate(const RotateOptions& opt, RotateResult* out);
+
+
     // Audit verbosity control.
     //
     // Ordering: DEBUG < INFO < ADMIN < SECURITY
@@ -204,7 +229,10 @@ private:
     This is a minimal, controlled JSON escape function.
     It is intentionally not a full JSON serializer.
     */
+
     static std::string json_escape_(const std::string& s);
+
+    static std::string now_compact_utc_ymdhms(); // e.g. 20260123-085247
 
     /*
     Build a JSON object for an audit event and compute its chained hash.

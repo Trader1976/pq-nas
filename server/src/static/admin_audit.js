@@ -65,25 +65,39 @@ function toEventText(e) {
 }
 
 function toFingerprint(e) {
-    const fp = pick(e, ["fingerprint_hex", "fp_hex", "fingerprint", "fp", "fingerprint_b64", "fp_b64"]);
+    const fp =
+        pick(e, ["fingerprint_hex", "fp_hex", "fingerprint", "fp", "fingerprint_b64", "fp_b64"]) ??
+        pick(e && e.f, ["fingerprint_hex", "fp_hex", "fingerprint", "fp", "fingerprint_b64", "fp_b64"]);
     if (fp == null) return "—";
     return String(fp);
 }
 
 function toSid(e) {
-    const sid = pick(e, ["sid", "session_id", "session", "browser_sid", "req_sid"]);
+    const sid =
+        pick(e, ["sid", "session_id", "session", "browser_sid", "req_sid"]) ??
+        pick(e && e.f, ["sid", "session_id", "session", "browser_sid", "req_sid"]);
     if (sid == null) return "—";
     return String(sid);
 }
 
 function toIp(e) {
-    const ip = pick(e, ["ip", "remote_ip", "client_ip", "addr", "remote_addr"]);
+    const ip =
+        pick(e, ["ip", "remote_ip", "client_ip", "addr", "remote_addr"]) ??
+        pick(e && e.f, ["ip", "remote_ip", "client_ip", "addr", "remote_addr", "xff", "cf_ip"]);
     if (ip == null) return "—";
     return String(ip);
 }
 
 // ---------- status mapping ----------
 function inferStatus(e) {
+    // PQ-NAS uses outcome="ok|fail|deny" on most audit lines.
+    const oc = pick(e, ["outcome"]);
+    if (typeof oc === "string") {
+        const o = oc.toLowerCase();
+        if (o === "ok") return "ok";
+        if (o === "fail" || o === "deny") return "fail";
+    }
+
     const ok = pick(e, ["ok", "success", "verified", "allowed"]);
     if (typeof ok === "boolean") return ok ? "ok" : "fail";
     if (pick(e, ["error", "err", "failure", "denied"]) != null) return "fail";
@@ -382,6 +396,20 @@ function csvEscape(v) {
     return s;
 }
 
+function exportJsonFriendlyRow(e, i) {
+    // Keep this stable for operators: flatten common fields while still including raw JSON.
+    return {
+        idx: i + 1,
+        ts: toTsText(e),
+        status: statusLabel(inferStatus(e)),
+        event: toEventText(e),
+        fingerprint: toFingerprint(e),
+        sid: toSid(e),
+        ip: toIp(e),
+        raw: e
+    };
+}
+
 function exportCsv() {
     const ts = new Date().toISOString().replaceAll(":", "-");
     const filename = `pqnas-audit-${ts}.csv`;
@@ -411,29 +439,76 @@ function exportCsv() {
     downloadBlob(filename, "text/csv;charset=utf-8", csv);
 }
 
-// ---------- init ----------
-function wire() {
-    $("btnRefresh").addEventListener("click", () => loadTail());
-    $("btnVerify").addEventListener("click", () => verifyChain());
-    $("btnExportJson").addEventListener("click", () => exportJson());
-    $("btnExportCsv").addEventListener("click", () => exportCsv());
+// ---------- rotate ----------
+const rotateBtn = document.getElementById("btnRotateAudit");
+const rotatePill = document.getElementById("rotateAuditStatus");
 
-    $("btnClear").addEventListener("click", () => {
-        $("qEvent").value = "";
-        $("qFp").value = "";
-        $("qSid").value = "";
-        $("qIp").value = "";
+async function doRotateAudit() {
+    if (!rotateBtn) return;
+
+    if (!confirm("Rotate audit log now?\n\nThis will create a rotated file and write a rotate_header line to the new active log.")) {
+        return;
+    }
+
+    rotateBtn.disabled = true;
+    if (rotatePill) {
+        rotatePill.style.display = "inline-flex";
+        rotatePill.className = "pill info";
+        rotatePill.querySelector(".v").textContent = "rotating…";
+    }
+
+    try {
+        const r = await fetch("/api/v4/admin/rotate-audit", { method: "POST", cache: "no-store" });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || "rotate failed");
+
+        if (rotatePill) {
+            rotatePill.className = "pill ok";
+            rotatePill.querySelector(".v").textContent = "OK";
+            rotatePill.title = j.rotated_jsonl_path || "OK";
+        }
+
+        // Refresh after rotation so the operator immediately sees the new header line.
+        await loadTail();
+        await verifyChain();
+    } catch (e) {
+        if (rotatePill) {
+            rotatePill.className = "pill fail";
+            rotatePill.querySelector(".v").textContent = "ERROR";
+            rotatePill.title = String(e);
+        }
+    } finally {
+        rotateBtn.disabled = false;
+    }
+}
+
+rotateBtn?.addEventListener("click", doRotateAudit);
+
+// ---------- init ----------
+function onClick(id, fn) { const el = $(id); if (el) el.addEventListener("click", fn); }
+function onInput(id, fn) { const el = $(id); if (el) el.addEventListener("input", fn); }
+function onChange(id, fn) { const el = $(id); if (el) el.addEventListener("change", fn); }
+
+function wire() {
+    onClick("btnRefresh", () => loadTail());
+    onClick("btnVerify", () => verifyChain());
+    onClick("btnExportJson", () => exportJson());
+    onClick("btnExportCsv", () => exportCsv());
+
+    onClick("btnClear", () => {
+        if ($("qEvent")) $("qEvent").value = "";
+        if ($("qFp")) $("qFp").value = "";
+        if ($("qSid")) $("qSid").value = "";
+        if ($("qIp")) $("qIp").value = "";
         _expandedKey = null;
         applyFilters();
     });
 
-    for (const id of ["qEvent", "qFp", "qSid", "qIp"]) {
-        $(id).addEventListener("input", () => applyFilters());
-    }
+    for (const id of ["qEvent", "qFp", "qSid", "qIp"]) onInput(id, () => applyFilters());
 
-    $("autoToggle").addEventListener("change", () => syncAuto());
-    $("intervalSec").addEventListener("change", () => syncAuto());
-    $("tailN").addEventListener("change", () => loadTail());
+    onChange("autoToggle", () => syncAuto());
+    onChange("intervalSec", () => syncAuto());
+    onChange("tailN", () => loadTail());
 
     window.addEventListener("keydown", (ev) => {
         if (ev.key === "Escape") {
@@ -442,6 +517,7 @@ function wire() {
         }
     });
 }
+
 
 window.addEventListener("load", async () => {
     wire();

@@ -7,7 +7,7 @@
 #include <ctime>
 #include <vector>
 #include <deque>
-
+#include <filesystem>
 #include <openssl/sha.h>
 
 namespace pqnas {
@@ -154,6 +154,24 @@ std::string AuditLog::now_iso_utc() {
   oss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%S")
       << "." << std::setw(3) << std::setfill('0') << ms.count()
       << "Z";
+  return oss.str();
+}
+
+std::string AuditLog::now_compact_utc_ymdhms() {
+  using namespace std::chrono;
+  auto now = system_clock::now();
+  std::time_t tt = system_clock::to_time_t(now);
+
+  std::tm tm{};
+#if defined(_WIN32)
+  gmtime_s(&tm, &tt);
+#else
+  gmtime_r(&tt, &tm);
+#endif
+
+  std::ostringstream oss;
+  // No ':' so it’s filename-safe everywhere.
+  oss << std::put_time(&tm, "%Y%m%d-%H%M%S");
   return oss.str();
 }
 
@@ -374,6 +392,86 @@ Durability note:
   store_prev_hash_(content_hash);
 }
 
+bool AuditLog::rotate(const RotateOptions& opt, RotateResult* out) {
+  if (out) *out = RotateResult{};
+  if (opt.compress_gzip) {
+    // v1 keeps deps minimal; add gzip later if you want.
+    return false;
+  }
+
+  std::lock_guard<std::mutex> lk(mu_);
+
+  // 1) Read current chain tip from active state (anchor for the new file).
+  const std::string prev_tip = load_prev_hash_();
+
+  // 2) Build rotated filenames.
+  const std::string ts = now_compact_utc_ymdhms();
+
+  auto with_suffix = [&](const std::string& path, const std::string& suffix) -> std::string {
+    // path like ".../pqnas_audit.jsonl" -> ".../pqnas_audit-TS.jsonl"
+    const auto dot = path.rfind('.');
+    if (dot == std::string::npos) return path + suffix; // fallback
+    return path.substr(0, dot) + suffix + path.substr(dot);
+  };
+
+  const std::string rotated_jsonl = with_suffix(jsonl_path_, "-" + ts);
+  const std::string rotated_state = with_suffix(state_path_, "-" + ts);
+
+  // 3) Rename current active files to rotated snapshot (best-effort).
+  //    If files don't exist yet, rotation still creates a new log with a header.
+  try {
+    if (std::filesystem::exists(jsonl_path_)) {
+      std::filesystem::rename(jsonl_path_, rotated_jsonl);
+    }
+  } catch (const std::exception&) {
+    // If rename fails, do not proceed (we might otherwise clobber existing log).
+    return false;
+  }
+
+  try {
+    if (std::filesystem::exists(state_path_)) {
+      std::filesystem::rename(state_path_, rotated_state);
+    }
+  } catch (const std::exception&) {
+    // Try to roll back JSONL rename if we can (best-effort).
+    try {
+      if (std::filesystem::exists(rotated_jsonl) && !std::filesystem::exists(jsonl_path_)) {
+        std::filesystem::rename(rotated_jsonl, jsonl_path_);
+      }
+    } catch (...) {}
+    return false;
+  }
+
+  // 4) Create new active log and write a rotation header as the FIRST line,
+  //    chained from prev_tip (global continuity).
+  AuditEvent hdr;
+  hdr.ts_utc = now_iso_utc();
+  hdr.event = "audit.rotate_header";
+  hdr.outcome = "ok";
+  hdr.f["v"] = "1";
+  hdr.f["chain_start"] = prev_tip;
+  hdr.f["rotated_from_jsonl"] = rotated_jsonl;
+  hdr.f["rotated_from_state"] = rotated_state;
+
+  std::string new_tip;
+  const std::string header_line = build_json_(hdr, prev_tip, &new_tip);
+
+  {
+    std::ofstream outj(jsonl_path_, std::ios::trunc);
+    outj << header_line << "\n";
+    outj.flush();
+  }
+
+  // 5) New active state tip becomes the header line_hash.
+  store_prev_hash_(new_tip);
+
+  if (out) {
+    out->rotated_jsonl_path = rotated_jsonl;
+    out->rotated_state_path = rotated_state;
+    out->chain_start_prev_hash_hex = prev_tip;
+  }
+  return true;
+}
 
 
 } // namespace pqnas

@@ -634,19 +634,32 @@
                         <div class="row">
                             <button id="btnExportJson" class="btn" type="button">Export JSON</button>
                             <button id="btnExportCsv" class="btn" type="button">Export CSV</button>
+                            <button id="btnRotateAudit" class="btn glow" type="button">Rotate audit</button>
+
+                            <span id="rotateAuditStatus" class="pill info" style="display:none;" title="Rotate status">
+            <span class="k">Rotate:</span> <span class="v">—</span>
+        </span>
                         </div>
 
                         <div class="row">
-                <span class="pill" title="Tail lines to fetch">
-                  <span class="k">Tail N:</span> <span class="v" id="tailNText">200</span>
-                </span>
+        <span class="pill" title="Tail lines to fetch">
+            <span class="k">Tail N:</span> <span class="v" id="tailNText">200</span>
+        </span>
                             <input id="tailN" class="input mono" style="width:120px" value="200" />
 
                             <span class="pill" title="Auto refresh interval seconds">
-                  <span class="k">Every:</span> <span class="v" id="intervalText">3s</span>
-                </span>
+            <span class="k">Every:</span> <span class="v" id="intervalText">3s</span>
+        </span>
                             <input id="intervalSec" class="input mono" style="width:90px" value="3" />
                         </div>
+
+                        <div class="note">
+                            Integrity calls <span class="kbd">/api/v4/audit/verify</span>.
+                            Tail uses <span class="kbd">/api/v4/audit/tail?n=…</span> with <span class="kbd">Cache-Control: no-store</span>.
+                        </div>
+                    </div>
+
+
 
                         <div class="note">
                             Integrity calls <span class="kbd">/api/v4/audit/verify</span>.
@@ -682,6 +695,6 @@
     </main>
 </div>
 
-<script src="/static/admin_audit.js?v=5"></script>
+<script src="/static/admin_audit.js?v=6"></script>
 </body>
 </html>

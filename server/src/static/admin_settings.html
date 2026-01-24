@@ -289,6 +289,7 @@
         .pill.ok{ border-color: rgba(0,240,248,0.38); background: rgba(0,240,248,0.08); color: rgba(0,240,248,0.95); }
         .pill.fail{ border-color: rgba(255,90,90,0.42); background: rgba(255,90,90,0.10); color: rgba(255,200,200,0.95); }
         .pill.warn{ border-color: rgba(255,190,0,0.38); background: rgba(255,190,0,0.10); color: rgba(255,225,170,0.95); }
+        .pill.info{ border-color: rgba(100,181,255,0.38); background: rgba(100,181,255,0.08); color: rgba(195,225,255,0.95); }
 
         .input, select{
             border:1px solid rgba(0,240,248,0.18);
@@ -313,6 +314,9 @@
             min-width: 0;
             min-height: 0;
             overflow: auto;
+            display:flex;
+            flex-direction:column;
+            gap: 14px;
         }
 
         .card{
@@ -353,6 +357,46 @@
             line-height:1.5;
         }
 
+        /* Retention preview table */
+        .tableWrap{
+            border:1px solid rgba(0,240,248,0.12);
+            border-radius: 16px;
+            overflow:hidden;
+            background:rgba(0,0,0,0.18);
+            width:100%;
+        }
+        table{
+            width:100%;
+            border-collapse:collapse;
+            table-layout:fixed;
+            font-size:13px;
+        }
+        thead th{
+            text-align:left;
+            padding:10px 12px;
+            color:rgba(0,240,248,0.65);
+            font-size:11px;
+            letter-spacing:0.10em;
+            text-transform:uppercase;
+            border-bottom:1px solid rgba(0,240,248,0.12);
+            background:rgba(0,0,0,0.22);
+            position: sticky;
+            top: 0;
+            z-index: 5;
+        }
+        tbody td{
+            padding:10px 12px;
+            border-bottom:1px solid rgba(0,240,248,0.08);
+            vertical-align:top;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+        .col-name{ width: 52%; }
+        .col-size{ width: 14%; }
+        .col-age{ width: 18%; }
+        .col-reason{ width: 16%; }
+
         /* Toast */
         .toast{
             display:none;
@@ -382,6 +426,8 @@
             user-select: none;
             background: rgba(0,0,0,0.12);
         }
+
+        .hidden { display:none !important; }
     </style>
 </head>
 
@@ -434,6 +480,8 @@
         </div>
 
         <div class="content">
+
+            <!-- Audit verbosity -->
             <div class="card">
                 <div class="hd">
                     <div class="h">Audit verbosity</div>
@@ -460,6 +508,69 @@
                 </div>
             </div>
 
+            <!-- Audit retention -->
+            <div class="card">
+                <div class="hd">
+                    <div class="h">Audit retention</div>
+                    <div class="pill info" id="retentionPill"><span class="k">Policy:</span> <span class="v">—</span></div>
+                </div>
+
+                <div class="bd">
+                    <div class="row">
+                        <select id="retMode" aria-label="Retention mode">
+                            <option value="never">Never delete automatically</option>
+                            <option value="days">Keep last N days (rotated files)</option>
+                            <option value="files">Keep last N rotated files</option>
+                            <option value="size_mb">Keep up to N MB total (rotated files)</option>
+                        </select>
+
+                        <select id="retDays" aria-label="Days to keep" class="hidden">
+                            <option value="30">30 days</option>
+                            <option value="90">90 days</option>
+                            <option value="180">180 days</option>
+                            <option value="365">365 days</option>
+                        </select>
+
+                        <input id="retMaxFiles" class="input mono hidden" style="min-width:180px" type="number" min="1" max="5000" placeholder="max files (e.g. 50)" />
+                        <input id="retMaxMB" class="input mono hidden" style="min-width:180px" type="number" min="1" max="1000000" placeholder="max MB (e.g. 20480)" />
+                    </div>
+
+                    <div class="row">
+                        <button id="btnRetentionSave" class="btn primary" type="button">Save policy</button>
+                        <button id="btnRetentionPreview" class="btn" type="button">Preview prune</button>
+                        <button id="btnRetentionPrune" class="btn" type="button">Run prune now</button>
+
+                        <span class="pill warn" id="retPreviewPill"><span class="k">Preview:</span> <span class="v">—</span></span>
+                    </div>
+
+                    <div class="note">
+                        <b>Safety:</b> retention prunes <b>rotated archive files only</b>. The active audit log (<span class="mono">pqnas_audit.jsonl</span>) is never deleted by retention.
+                    </div>
+
+                    <div class="row" style="margin-top:12px;">
+                        <span class="pill info" id="retSummaryPill"><span class="k">Summary:</span> <span class="v">—</span></span>
+                    </div>
+
+                    <div class="tableWrap" style="margin-top:12px;">
+                        <table>
+                            <thead>
+                            <tr>
+                                <th class="col-name">File</th>
+                                <th class="col-size">Size</th>
+                                <th class="col-age">Modified</th>
+                                <th class="col-reason">Reason</th>
+                            </tr>
+                            </thead>
+                            <tbody id="retTbody"></tbody>
+                        </table>
+                    </div>
+
+                    <div class="note">
+                        Preview is a dry-run: it lists what would be deleted. “Run prune now” deletes only those candidates, and logs an admin audit event.
+                    </div>
+                </div>
+            </div>
+
             <div class="toast" id="toast" role="status" aria-live="polite">
                 <div class="t" id="toastTitle">—</div>
                 <div class="m" id="toastMsg">—</div>
@@ -470,6 +581,6 @@
     </main>
 </div>
 
-<script src="/static/admin_settings.js?v=2"></script>
+<script src="/static/admin_settings.js?v=3"></script>
 </body>
 </html>
