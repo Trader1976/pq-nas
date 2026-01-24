@@ -900,61 +900,6 @@ static std::string build_req_payload_canonical(
         + "\"v\":4"
         + "}";
 }
-static bool save_json_file_pretty_atomic(const std::string& path, const json& j, std::string* err = nullptr) {
-    try {
-        const std::filesystem::path p(path);
-        const std::filesystem::path dir = p.parent_path();
-
-        // Ensure directory exists
-        std::error_code ec;
-        if (!dir.empty()) {
-            std::filesystem::create_directories(dir, ec);
-            if (ec) {
-                if (err) *err = std::string("create_directories failed: ") + ec.message() + " dir=" + dir.string();
-                return false;
-            }
-        }
-
-        const std::string tmp = path + ".tmp";
-
-        // Write tmp
-        {
-            std::ofstream f(tmp, std::ios::trunc);
-            if (!f.good()) {
-                if (err) *err = "open(tmp) failed: " + tmp;
-                return false;
-            }
-            f << j.dump(2) << "\n";
-            f.flush();
-            if (!f.good()) {
-                if (err) *err = "write(tmp) failed: " + tmp;
-                return false;
-            }
-        }
-
-        // Rename tmp -> final (atomic on POSIX if same filesystem)
-        std::filesystem::rename(tmp, path, ec);
-        if (ec) {
-            // Fallback: copy + remove tmp
-            std::error_code ec2;
-            std::filesystem::copy_file(tmp, path, std::filesystem::copy_options::overwrite_existing, ec2);
-            if (ec2) {
-                if (err) *err = std::string("rename failed: ") + ec.message() +
-                                " ; copy_file failed: " + ec2.message() +
-                                " tmp=" + tmp + " dst=" + path;
-                std::filesystem::remove(tmp);
-                return false;
-            }
-            std::filesystem::remove(tmp);
-        }
-
-        return true;
-    } catch (const std::exception& e) {
-        if (err) *err = e.what();
-        return false;
-    }
-}
-
 
 
 static std::string slurp_file(const std::string& path) {
@@ -1615,7 +1560,7 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
         }
     });
 
-    srv.Get("/api/v4/audit/tail", [&](const httplib::Request& req, httplib::Response& res) {
+     srv.Get("/api/v4/audit/tail", [&](const httplib::Request& req, httplib::Response& res) {
         int n = 200;
         if (req.has_param("n")) {
             try { n = std::stoi(req.get_param_value("n")); } catch (...) {}
@@ -1673,7 +1618,7 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
         }.dump());
     });
 
-        // Admin Settings UI
+    // Admin Settings UI
     srv.Get("/admin/settings", [&](const httplib::Request& req, httplib::Response& res) {
         // Gate page itself (admin-only)
         if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
@@ -1696,7 +1641,6 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
         if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) {
             return;
         }
-std::cerr << "[admin.settings] build_marker=ADMIN_SETTINGS_FIX_2026_01_24_A" << std::endl;
 
         pqnas::AuditLog::RotateOptions opt;
         pqnas::AuditLog::RotateResult rr;
@@ -1716,9 +1660,7 @@ std::cerr << "[admin.settings] build_marker=ADMIN_SETTINGS_FIX_2026_01_24_A" << 
         res.set_content(j.dump(2), "application/json; charset=utf-8");
     });
 
-
     srv.Get("/static/admin_settings.js", [&](const httplib::Request&, httplib::Response& res) {
-
         // You can leave JS ungated (like other static files), page is gated anyway.
         std::string body;
         if (!read_file_to_string(STATIC_ADMIN_SETTINGS_JS, body)) {
@@ -1733,408 +1675,348 @@ std::cerr << "[admin.settings] build_marker=ADMIN_SETTINGS_FIX_2026_01_24_A" << 
         res.body = body;
     });
 
-// Admin settings API
-srv.Get("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Response& res) {
-    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+    // Admin settings API
+    srv.Get("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
 
-    auto load_settings_json = [&]() -> json {
-        try {
-            std::ifstream f(admin_settings_path);
-            if (!f.good()) return json::object();
-            json j;
-            f >> j;
-            if (!j.is_object()) return json::object();
-            return j;
-        } catch (...) {
-            return json::object();
-        }
-    };
-
-    // Defaults
-    json persisted = load_settings_json();
-
-    // Persisted min level (file), runtime min level (AuditLog)
-    std::string persisted_lvl = audit.min_level_str();
-	auto it = persisted.find("audit_min_level");
-	if (it != persisted.end() && it->is_string()) {
-	    persisted_lvl = it->get<std::string>();
-	}
-
-    // Retention defaults (if absent)
-    json retention = json::object();
-    if (persisted.contains("audit_retention") && persisted["audit_retention"].is_object()) {
-        retention = persisted["audit_retention"];
-    } else {
-        retention = json{
-            {"mode", "never"},
-            {"days", 90},
-            {"max_files", 50},
-            {"max_total_mb", 20480}
-        };
-    }
-
-    reply_json(res, 200, json{
-        {"ok", true},
-
-        // value from config/admin_settings.json (persisted)
-        {"audit_min_level", persisted_lvl},
-
-        // actual runtime value used by AuditLog
-        {"audit_min_level_runtime", audit.min_level_str()},
-
-        {"allowed", json::array({"SECURITY","ADMIN","INFO","DEBUG"})},
-
-        // persisted retention policy (defaults applied if missing)
-        {"audit_retention", retention}
-    }.dump());
-});
-srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Response& res) {
-    std::cerr << "[admin.settings] Content-Type=" << header_value(req, "Content-Type")
-              << " len=" << req.body.size()
-              << " body=" << pqnas::shorten(req.body, 300)
-              << std::endl;
-
-    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
-
-    // Debug marker to confirm you're running the right binary
-    const char* BUILD_MARKER = "ADMIN_SETTINGS_FIX_2026_01_24_B";
-
-    std::string step = "enter";
-
-    auto load_settings_json = [&]() -> json {
-        try {
-            std::ifstream f(admin_settings_path);
-            if (!f.good()) return json::object();
-            json j;
-            f >> j;
-            if (!j.is_object()) return json::object();
-            return j;
-        } catch (...) {
-            return json::object();
-        }
-    };
-
-    // Merge patch into existing file, write atomically (tmp + rename)
-    auto save_settings_patch = [&](const json& patch) -> bool {
-        try {
-            if (!patch.is_object()) return false;
-
-            json merged = json::object();
-            {
-                std::ifstream in(admin_settings_path);
-                if (in.good()) {
-                    in >> merged;
-                    if (!merged.is_object()) merged = json::object();
-                }
+        auto load_settings_json = [&]() -> json {
+            try {
+                std::ifstream f(admin_settings_path);
+                if (!f.good()) return json::object();
+                json j;
+                f >> j;
+                if (!j.is_object()) return json::object();
+                return j;
+            } catch (...) {
+                return json::object();
             }
-
-            for (auto& it : patch.items()) {
-                merged[it.key()] = it.value();
-            }
-
-            const std::string tmp = admin_settings_path + ".tmp";
-            {
-                std::ofstream f(tmp, std::ios::trunc);
-                if (!f.good()) return false;
-                f << merged.dump(2) << "\n";
-                f.flush();
-                if (!f.good()) return false;
-            }
-
-            std::error_code ec;
-            std::filesystem::rename(tmp, admin_settings_path, ec);
-            if (ec) {
-                std::cerr << "[admin.settings] rename failed: " << ec.message()
-                          << " tmp=" << tmp << " dst=" << admin_settings_path << std::endl;
-                std::filesystem::remove(tmp);
-                return false;
-            }
-
-            return true;
-        } catch (...) {
-            return false;
-        }
-    };
-
-    auto is_allowed_level = [&](const std::string& lvl) -> bool {
-        return (lvl == "SECURITY" || lvl == "ADMIN" || lvl == "INFO" || lvl == "DEBUG");
-    };
-
-    // SAFE accessor for audit_min_level (never throws)
-    auto get_level_safe = [&](const json& j, const std::string& fallback) -> std::string {
-        auto it = j.find("audit_min_level");
-        if (it != j.end() && it->is_string()) return it->get<std::string>();
-        return fallback;
-    };
-
-    // Normalize retention safely (never throws; returns null json on error + sets err)
-    auto normalize_retention = [&](const json& in_ret, std::string& err) -> json {
-        err.clear();
-
-        if (!in_ret.is_object()) {
-            err = "audit_retention must be an object";
-            return json();
-        }
-
-        // mode
-        std::string mode = "never";
-        {
-            auto it = in_ret.find("mode");
-            if (it != in_ret.end() && !it->is_null()) {
-                if (!it->is_string()) {
-                    // IMPORTANT: do NOT throw, do NOT call get<string>()
-                    err = "audit_retention.mode must be string";
-                    return json();
-                }
-                mode = it->get<std::string>();
-            }
-        }
-
-        if (!(mode == "never" || mode == "days" || mode == "files" || mode == "size_mb")) {
-            err = "audit_retention.mode must be one of: never, days, files, size_mb";
-            return json();
-        }
-
-        auto get_int = [&](const char* key, int def, int lo, int hi) -> int {
-            auto it = in_ret.find(key);
-            if (it == in_ret.end() || it->is_null()) return def;
-
-            if (!it->is_number_integer()) {
-                err = std::string("audit_retention.") + key + " must be integer";
-                return def;
-            }
-
-            int v = it->get<int>();
-            if (v < lo) v = lo;
-            if (v > hi) v = hi;
-            return v;
         };
 
-        int days         = get_int("days",         90,    1,       3650);
-        if (!err.empty()) return json();
-        int max_files    = get_int("max_files",    50,    1,      50000);
-        if (!err.empty()) return json();
-        int max_total_mb = get_int("max_total_mb", 20480, 1,   10000000);
-        if (!err.empty()) return json();
-
-        return json{
-            {"mode", mode},
-            {"days", days},
-            {"max_files", max_files},
-            {"max_total_mb", max_total_mb},
-        };
-    };
-
-    try {
-        std::cerr << "[admin.settings] raw body len=" << req.body.size()
-                  << " body=" << pqnas::shorten(req.body, 300)
-                  << " build_marker=" << BUILD_MARKER
-                  << std::endl;
-
-        step = "parse_body";
-
-        if (req.body.empty()) {
-            reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "bad_request"},
-                {"message", "empty request body (expected JSON object)"},
-                {"build_marker", BUILD_MARKER},
-                {"step", step},
-            }.dump());
-            return;
-        }
-
-        json in = json::parse(req.body, nullptr, false);
-        if (in.is_discarded()) {
-            reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "bad_request"},
-                {"message", "invalid json"},
-                {"body_snip", pqnas::shorten(req.body, 200)},
-                {"build_marker", BUILD_MARKER},
-                {"step", step},
-            }.dump());
-            return;
-        }
-
-        if (!in.is_object()) {
-            reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "bad_request"},
-                {"message", "json must be object"},
-                {"build_marker", BUILD_MARKER},
-                {"step", step},
-            }.dump());
-            return;
-        }
-
-        step = "load_persisted";
+        // Defaults
         json persisted = load_settings_json();
-        if (!persisted.is_object()) persisted = json::object();
 
-        const std::string before_runtime   = audit.min_level_str();
-        const std::string before_persisted = get_level_safe(persisted, before_runtime);
-
-        json before_ret = json::object();
-        if (persisted.contains("audit_retention") && persisted["audit_retention"].is_object()) {
-            before_ret = persisted["audit_retention"];
+        // Persisted min level (file), runtime min level (AuditLog)
+        std::string persisted_lvl = audit.min_level_str();
+        auto it = persisted.find("audit_min_level");
+        if (it != persisted.end() && it->is_string()) {
+            persisted_lvl = it->get<std::string>();
         }
 
-        step = "build_patch";
-
-        bool changed_level = false;
-        bool changed_ret   = false;
-
-        json patch = json::object();
-
-        // ---- audit_min_level (optional) ----
-        if (in.contains("audit_min_level")) {
-            if (!in["audit_min_level"].is_string()) {
-                reply_json(res, 400, json{
-                    {"ok", false},
-                    {"error", "bad_request"},
-                    {"message", "audit_min_level must be string"},
-                    {"build_marker", BUILD_MARKER},
-                    {"step", step},
-                }.dump());
-                return;
-            }
-
-            const std::string lvl = in["audit_min_level"].get<std::string>();
-            if (!is_allowed_level(lvl) || !audit.set_min_level_str(lvl)) {
-                reply_json(res, 400, json{
-                    {"ok", false},
-                    {"error", "bad_request"},
-                    {"message", "invalid audit_min_level"},
-                    {"build_marker", BUILD_MARKER},
-                    {"step", step},
-                }.dump());
-                return;
-            }
-
-            patch["audit_min_level"] = lvl;
-            persisted["audit_min_level"] = lvl; // for response shaping
-            changed_level = true;
-        }
-
-        // ---- audit_retention (optional) ----
-        if (in.contains("audit_retention")) {
-            step = "normalize_retention";
-
-            std::string err;
-            json norm = normalize_retention(in["audit_retention"], err);
-            if (!err.empty()) {
-                reply_json(res, 400, json{
-                    {"ok", false},
-                    {"error", "bad_request"},
-                    {"message", err},
-                    {"build_marker", BUILD_MARKER},
-                    {"step", step},
-                }.dump());
-                return;
-            }
-
-            patch["audit_retention"] = norm;
-            persisted["audit_retention"] = norm; // for response shaping
-            changed_ret = true;
-        }
-
-        if (!changed_level && !changed_ret) {
-            reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "bad_request"},
-                {"message", "nothing to update (provide audit_min_level and/or audit_retention)"},
-                {"build_marker", BUILD_MARKER},
-                {"step", step},
-            }.dump());
-            return;
-        }
-
-        step = "save_file";
-        std::cerr << "[admin.settings] patch=" << pqnas::shorten(patch.dump(), 300) << std::endl;
-
-        if (!save_settings_patch(patch)) {
-            reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "server_error"},
-                {"message", "failed to save settings"},
-                {"detail", "atomic write/rename failed (see server stderr)"},
-                {"build_marker", BUILD_MARKER},
-                {"step", step},
-            }.dump());
-            return;
-        }
-
-        // Audit (do not allow audit serialization to crash the request)
-        step = "audit_append";
-        try {
-            pqnas::AuditEvent ev;
-            ev.event = "admin.settings_changed";
-            ev.outcome = "ok";
-
-            if (changed_level) {
-                ev.f["audit_min_level_before"] = before_persisted;
-                ev.f["audit_min_level_after"] = get_level_safe(persisted, audit.min_level_str());
-                ev.f["audit_min_level_runtime_after"] = audit.min_level_str();
-            }
-
-            if (changed_ret) {
-                ev.f["audit_retention_before"] = before_ret.is_null() ? json::object() : before_ret;
-                ev.f["audit_retention_after"]  = persisted["audit_retention"];
-            }
-
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            auto it = req.headers.find("User-Agent");
-            ev.f["ua"] = pqnas::shorten(it == req.headers.end() ? "" : it->second);
-
-            audit.append(ev);
-        } catch (const std::exception& e) {
-            std::cerr << "[admin.settings] audit.append exception: " << e.what() << std::endl;
-            // Do NOT fail the settings save if audit logging fails.
-        }
-
-        // Reply with current state (defaults if missing)
-        step = "reply_ok";
-
+        // Retention defaults (if absent)
         json retention = json::object();
         if (persisted.contains("audit_retention") && persisted["audit_retention"].is_object()) {
             retention = persisted["audit_retention"];
         } else {
             retention = json{
-                {"mode","never"},{"days",90},{"max_files",50},{"max_total_mb",20480}
+                {"mode", "never"},
+                {"days", 90},
+                {"max_files", 50},
+                {"max_total_mb", 20480}
             };
         }
 
         reply_json(res, 200, json{
             {"ok", true},
-            {"audit_min_level", get_level_safe(persisted, audit.min_level_str())},
+
+            // value from config/admin_settings.json (persisted)
+            {"audit_min_level", persisted_lvl},
+
+            // actual runtime value used by AuditLog
             {"audit_min_level_runtime", audit.min_level_str()},
-            {"audit_retention", retention},
-            {"build_marker", BUILD_MARKER},
+
+            {"allowed", json::array({"SECURITY","ADMIN","INFO","DEBUG"})},
+
+            // persisted retention policy (defaults applied if missing)
+            {"audit_retention", retention}
         }.dump());
-        return;
+    });
 
-    } catch (const std::exception& e) {
-        std::cerr << "[admin.settings] EXCEPTION step=" << step
-                  << " what=" << e.what()
-                  << " body=" << pqnas::shorten(req.body, 200)
-                  << " build_marker=" << BUILD_MARKER
-                  << std::endl;
+    srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
 
-        reply_json(res, 500, json{
-            {"ok", false},
-            {"error", "server_error"},
-            {"message", "exception while saving settings"},
-            {"detail", e.what()},
-            {"step", step},
-            {"body_snip", pqnas::shorten(req.body, 200)},
-            {"build_marker", BUILD_MARKER},
-        }.dump());
-        return;
-    }
-});
+        auto load_settings_json = [&]() -> json {
+            try {
+                std::ifstream f(admin_settings_path);
+                if (!f.good()) return json::object();
+                json j;
+                f >> j;
+                if (!j.is_object()) return json::object();
+                return j;
+            } catch (...) {
+                return json::object();
+            }
+        };
 
+        // Merge patch into existing file, write atomically (tmp + rename)
+        auto save_settings_patch = [&](const json& patch) -> bool {
+            try {
+                if (!patch.is_object()) return false;
 
+                json merged = json::object();
+                {
+                    std::ifstream in(admin_settings_path);
+                    if (in.good()) {
+                        in >> merged;
+                        if (!merged.is_object()) merged = json::object();
+                    }
+                }
+
+                for (auto& it : patch.items()) {
+                    merged[it.key()] = it.value();
+                }
+
+                const std::string tmp = admin_settings_path + ".tmp";
+                {
+                    std::ofstream f(tmp, std::ios::trunc);
+                    if (!f.good()) return false;
+                    f << merged.dump(2) << "\n";
+                    f.flush();
+                    if (!f.good()) return false;
+                }
+
+                std::error_code ec;
+                std::filesystem::rename(tmp, admin_settings_path, ec);
+                if (ec) {
+                    std::filesystem::remove(tmp);
+                    return false;
+                }
+
+                return true;
+            } catch (...) {
+                return false;
+            }
+        };
+
+        auto is_allowed_level = [&](const std::string& lvl) -> bool {
+            return (lvl == "SECURITY" || lvl == "ADMIN" || lvl == "INFO" || lvl == "DEBUG");
+        };
+
+        // SAFE accessor for audit_min_level (never throws)
+        auto get_level_safe = [&](const json& j, const std::string& fallback) -> std::string {
+            auto it2 = j.find("audit_min_level");
+            if (it2 != j.end() && it2->is_string()) return it2->get<std::string>();
+            return fallback;
+        };
+
+        // Normalize retention safely (never throws; returns null json on error + sets err)
+        auto normalize_retention = [&](const json& in_ret, std::string& err) -> json {
+            err.clear();
+
+            if (!in_ret.is_object()) {
+                err = "audit_retention must be an object";
+                return json();
+            }
+
+            // mode
+            std::string mode = "never";
+            {
+                auto it2 = in_ret.find("mode");
+                if (it2 != in_ret.end() && !it2->is_null()) {
+                    if (!it2->is_string()) {
+                        err = "audit_retention.mode must be string";
+                        return json();
+                    }
+                    mode = it2->get<std::string>();
+                }
+            }
+
+            if (!(mode == "never" || mode == "days" || mode == "files" || mode == "size_mb")) {
+                err = "audit_retention.mode must be one of: never, days, files, size_mb";
+                return json();
+            }
+
+            auto get_int = [&](const char* key, int def, int lo, int hi) -> int {
+                auto it2 = in_ret.find(key);
+                if (it2 == in_ret.end() || it2->is_null()) return def;
+
+                if (!it2->is_number_integer()) {
+                    err = std::string("audit_retention.") + key + " must be integer";
+                    return def;
+                }
+
+                int v = it2->get<int>();
+                if (v < lo) v = lo;
+                if (v > hi) v = hi;
+                return v;
+            };
+
+            int days         = get_int("days",         90,    1,       3650);
+            if (!err.empty()) return json();
+            int max_files    = get_int("max_files",    50,    1,      50000);
+            if (!err.empty()) return json();
+            int max_total_mb = get_int("max_total_mb", 20480, 1,   10000000);
+            if (!err.empty()) return json();
+
+            return json{
+                {"mode", mode},
+                {"days", days},
+                {"max_files", max_files},
+                {"max_total_mb", max_total_mb},
+            };
+        };
+
+        try {
+            if (req.body.empty()) {
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "empty request body (expected JSON object)"}
+                }.dump());
+                return;
+            }
+
+            json in = json::parse(req.body, nullptr, false);
+            if (in.is_discarded()) {
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "invalid json"}
+                }.dump());
+                return;
+            }
+
+            if (!in.is_object()) {
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "json must be object"}
+                }.dump());
+                return;
+            }
+
+            json persisted = load_settings_json();
+            if (!persisted.is_object()) persisted = json::object();
+
+            const std::string before_runtime   = audit.min_level_str();
+            const std::string before_persisted = get_level_safe(persisted, before_runtime);
+
+            json before_ret = json::object();
+            if (persisted.contains("audit_retention") && persisted["audit_retention"].is_object()) {
+                before_ret = persisted["audit_retention"];
+            }
+
+            bool changed_level = false;
+            bool changed_ret   = false;
+
+            json patch = json::object();
+
+            // ---- audit_min_level (optional) ----
+            if (in.contains("audit_min_level")) {
+                if (!in["audit_min_level"].is_string()) {
+                    reply_json(res, 400, json{
+                        {"ok", false},
+                        {"error", "bad_request"},
+                        {"message", "audit_min_level must be string"}
+                    }.dump());
+                    return;
+                }
+
+                const std::string lvl = in["audit_min_level"].get<std::string>();
+                if (!is_allowed_level(lvl) || !audit.set_min_level_str(lvl)) {
+                    reply_json(res, 400, json{
+                        {"ok", false},
+                        {"error", "bad_request"},
+                        {"message", "invalid audit_min_level"}
+                    }.dump());
+                    return;
+                }
+
+                patch["audit_min_level"] = lvl;
+                persisted["audit_min_level"] = lvl; // for response shaping
+                changed_level = true;
+
+                // Audit (best-effort)
+                try {
+                    pqnas::AuditEvent ev;
+                    ev.event = "admin.settings_changed";
+                    ev.outcome = "ok";
+                    ev.f["audit_min_level_before"] = before_persisted;
+                    ev.f["audit_min_level_after"] = lvl;
+                    ev.f["audit_min_level_runtime_after"] = audit.min_level_str();
+                    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                    auto it_ua = req.headers.find("User-Agent");
+                    ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
+                    audit.append(ev);
+                } catch (...) {}
+            }
+
+            // ---- audit_retention (optional) ----
+            if (in.contains("audit_retention")) {
+                std::string err;
+                json norm = normalize_retention(in["audit_retention"], err);
+                if (!err.empty()) {
+                    reply_json(res, 400, json{
+                        {"ok", false},
+                        {"error", "bad_request"},
+                        {"message", err}
+                    }.dump());
+                    return;
+                }
+
+                patch["audit_retention"] = norm;
+                persisted["audit_retention"] = norm; // for response shaping
+                changed_ret = true;
+
+                // Audit (best-effort)
+                try {
+                    pqnas::AuditEvent ev;
+                    ev.event = "admin.settings_changed";
+                    ev.outcome = "ok";
+                    ev.f["audit_retention_before"] = before_ret.is_null() ? json::object() : before_ret;
+                    ev.f["audit_retention_after"]  = norm;
+                    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                    auto it_ua = req.headers.find("User-Agent");
+                    ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
+                    audit.append(ev);
+                } catch (...) {}
+            }
+
+            if (!changed_level && !changed_ret) {
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "nothing to update (provide audit_min_level and/or audit_retention)"}
+                }.dump());
+                return;
+            }
+
+            if (!save_settings_patch(patch)) {
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "failed to save settings"}
+                }.dump());
+                return;
+            }
+
+            // Reply with current state (defaults if missing)
+            json retention = json::object();
+            if (persisted.contains("audit_retention") && persisted["audit_retention"].is_object()) {
+                retention = persisted["audit_retention"];
+            } else {
+                retention = json{
+                    {"mode","never"},{"days",90},{"max_files",50},{"max_total_mb",20480}
+                };
+            }
+
+            reply_json(res, 200, json{
+                {"ok", true},
+                {"audit_min_level", get_level_safe(persisted, audit.min_level_str())},
+                {"audit_min_level_runtime", audit.min_level_str()},
+                {"audit_retention", retention}
+            }.dump());
+            return;
+
+        } catch (const std::exception& e) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "exception while saving settings"},
+                {"detail", e.what()}
+            }.dump());
+            return;
+        }
+    });
 
     // GET /api/v4/me  (returns role + decoded fingerprint)
     srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
@@ -2228,7 +2110,7 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
 
         // Policy check (fail-closed)
         const bool is_admin = users.is_admin_enabled(fp_hex);
-		const bool is_user  = users.is_enabled_user(fp_hex) || is_admin;
+        const bool is_user  = users.is_enabled_user(fp_hex) || is_admin;
 
         if (!is_user) {
             audit_fail("policy_denied");
@@ -2248,61 +2130,52 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
         }).dump());
     });
 
+    auto session_handler = [&](const httplib::Request& req, httplib::Response& res) {
+        long issued_at  = pqnas::now_epoch();
+        long expires_at = issued_at + REQ_TTL;
 
-auto session_handler = [&](const httplib::Request& req, httplib::Response& res) {
-    std::cerr << "[/api/v4/session] hit from "
-              << (req.remote_addr.empty() ? "?" : req.remote_addr)
-              << std::endl;
+        std::string sid   = random_b64url(18);
+        std::string chal  = random_b64url(32);
+        std::string nonce = random_b64url(16);
 
-    long issued_at  = pqnas::now_epoch();
-    long expires_at = issued_at + REQ_TTL;
+        std::string payload  = build_req_payload_canonical(sid, chal, nonce, issued_at, expires_at);
+        std::string st_token = sign_req_token(payload);
 
-    std::string sid   = random_b64url(18);
-    std::string chal  = random_b64url(32);
-    std::string nonce = random_b64url(16);
+        std::string qr_uri =
+            "dna://auth?v=4&st=" + url_encode(st_token) +
+            "&origin=" + url_encode(ORIGIN) +
+            "&app=" + url_encode(APP_NAME);
 
-    std::string payload  = build_req_payload_canonical(sid, chal, nonce, issued_at, expires_at);
-    std::string st_token = sign_req_token(payload);
+        json out = {
+            {"v", 4},
+            {"sid", sid},
+            {"expires_at", expires_at},
+            {"st", st_token},
+            {"req", st_token},
+            {"qr_uri", qr_uri}
+        };
 
-    std::string qr_uri =
-        "dna://auth?v=4&st=" + url_encode(st_token) +
-        "&origin=" + url_encode(ORIGIN) +
-        "&app=" + url_encode(APP_NAME);
+        {
+            pqnas::AuditEvent ev;
+            ev.event = "v4.session_issued";
+            ev.outcome = "ok";
+            ev.f["sid"] = sid;
+            ev.f["issued_at"] = std::to_string(issued_at);
+            ev.f["expires_at"] = std::to_string(expires_at);
+            ev.f["origin"] = ORIGIN;
+            ev.f["app"] = APP_NAME;
+            ev.f["client_ip"] = client_ip(req);
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            auto it = req.headers.find("User-Agent");
+            ev.f["ua"] = pqnas::shorten(it == req.headers.end() ? "" : it->second);
+            audit.append(ev);
+        }
 
-    json out = {
-        {"v", 4},
-        {"sid", sid},
-        {"expires_at", expires_at},
-        {"st", st_token},
-        {"req", st_token},
-        {"qr_uri", qr_uri}
+        reply_json(res, 200, out.dump());
     };
 
-    {
-        pqnas::AuditEvent ev;
-        ev.event = "v4.session_issued";
-        ev.outcome = "ok";
-        ev.f["sid"] = sid;
-        ev.f["issued_at"] = std::to_string(issued_at);
-        ev.f["expires_at"] = std::to_string(expires_at);
-        ev.f["origin"] = ORIGIN;
-        ev.f["app"] = APP_NAME;
-        ev.f["client_ip"] = client_ip(req);
-        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        auto it = req.headers.find("User-Agent");
-        ev.f["ua"] = pqnas::shorten(it == req.headers.end() ? "" : it->second);
-        audit.append(ev);
-    }
-
-    reply_json(res, 200, out.dump());
-};
-
-srv.Get("/api/v4/session", session_handler);
-srv.Post("/api/v4/session", session_handler);
-
-
-
-
+    srv.Get("/api/v4/session", session_handler);
+    srv.Post("/api/v4/session", session_handler);
 
     // GET /api/v4/qr.svg?st=...
     srv.Get("/api/v4/qr.svg", [&](const httplib::Request& req, httplib::Response& res) {
@@ -2334,265 +2207,280 @@ srv.Post("/api/v4/session", session_handler);
         }
     });
 
-// POST /api/v4/verify
-srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& res) {
-    std::cerr << "[/api/v4/verify] ENTER len=" << req.body.size()
-              << " from " << (req.remote_addr.empty() ? "?" : req.remote_addr)
-              << std::endl;
-
-    auto fail = [&](int code, const std::string& msg, const std::string& detail = "") {
-        std::cerr << "[/api/v4/verify] FAIL " << code << " " << msg;
-        if (!detail.empty()) std::cerr << " detail=" << detail;
-        std::cerr << std::endl;
-
-        json out = {
-            {"ok", false},
-            {"error", (code == 400 ? "bad_request" : "not_authorized")},
-            {"message", msg}
+    // POST /api/v4/verify
+    srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& res) {
+        auto fail = [&](int code, const std::string& msg, const std::string& detail = "") {
+            json out = {
+                {"ok", false},
+                {"error", (code == 400 ? "bad_request" : "not_authorized")},
+                {"message", msg}
+            };
+            if (!detail.empty()) out["detail"] = detail;
+            reply_json(res, code, out.dump());
         };
-        if (!detail.empty()) out["detail"] = detail;
-        reply_json(res, code, out.dump());
-    };
 
-    // --- audit context (filled after verify_v4_json) ---
-    std::string audit_sid;
-    std::string audit_st_hash_b64;
-    std::string audit_origin;
-    std::string audit_rp_id_hash;
-    std::string audit_fp;
+        // --- audit context (filled after verify_v4_json) ---
+        std::string audit_sid;
+        std::string audit_st_hash_b64;
+        std::string audit_origin;
+        std::string audit_rp_id_hash;
+        std::string audit_fp;
 
-    auto audit_ua = [&]() -> std::string {
-        auto it = req.headers.find("User-Agent");
-        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
-    };
-
-    auto audit_fail = [&](const std::string& reason, const std::string& detail = "") {
-        pqnas::AuditEvent ev;
-        ev.event = "v4.verify_fail";
-        ev.outcome = "fail";
-        if (!audit_sid.empty()) ev.f["sid"] = audit_sid;
-        if (!audit_st_hash_b64.empty()) ev.f["st_hash_b64"] = audit_st_hash_b64;
-        if (!audit_origin.empty()) ev.f["origin"] = audit_origin;
-        if (!audit_rp_id_hash.empty()) ev.f["rp_id_hash"] = audit_rp_id_hash;
-        if (!audit_fp.empty()) ev.f["fingerprint"] = audit_fp;
-        ev.f["reason"] = reason;
-        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
-
-        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-
-        auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
-
-        auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
-
-        ev.f["ua"] = audit_ua();
-        audit.append(ev);
-    };
-
-    auto audit_info = [&](const std::string& event, const std::string& outcome,
-                          const std::string& reason = "", const std::string& detail = "") {
-        pqnas::AuditEvent ev;
-        ev.event = event;
-        ev.outcome = outcome;
-        if (!audit_sid.empty()) ev.f["sid"] = audit_sid;
-        if (!audit_st_hash_b64.empty()) ev.f["st_hash_b64"] = audit_st_hash_b64;
-        if (!audit_origin.empty()) ev.f["origin"] = audit_origin;
-        if (!audit_rp_id_hash.empty()) ev.f["rp_id_hash"] = audit_rp_id_hash;
-        if (!audit_fp.empty()) ev.f["fingerprint"] = audit_fp;
-
-        if (!reason.empty()) ev.f["reason"] = reason;
-        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
-
-        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-
-        auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
-
-        auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
-
-        ev.f["ua"] = audit_ua();
-        audit.append(ev);
-    };
-
-    // ISO UTC helper (avoid relying on a missing pqnas::now_iso_utc())
-    auto now_iso_utc = [&]() -> std::string {
-        using namespace std::chrono;
-        auto now = system_clock::now();
-        auto ms  = duration_cast<milliseconds>(now.time_since_epoch()) % 1000;
-
-        std::time_t t = system_clock::to_time_t(now);
-        std::tm tm{};
-        gmtime_r(&t, &tm);
-
-        char buf[64];
-        std::snprintf(buf, sizeof(buf),
-                      "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
-                      tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                      tm.tm_hour, tm.tm_min, tm.tm_sec,
-                      (int)ms.count());
-        return std::string(buf);
-    };
-
-    try {
-        // ---- v4 shared verification (crypto + bindings) ----
-        pqnas::VerifyV4Config cfg;
-        cfg.now_unix_sec = 0;
-        cfg.expected_origin = ORIGIN;
-        cfg.expected_rp_id  = RP_ID;
-
-        // IMPORTANT (Model A):
-        // Let crypto/bindings verify first; enforce users registry *after* we know who it is.
-        cfg.enforce_allowlist = false;
-
-        std::array<unsigned char, 32> server_pk{};
-        std::memcpy(server_pk.data(), SERVER_PK, 32);
-
-        auto vr = pqnas::verify_v4_json(req.body, server_pk, cfg);
-
-        audit_sid         = vr.sid;
-        audit_origin      = vr.origin;
-        audit_rp_id_hash  = vr.rp_id_hash;
-        audit_st_hash_b64 = vr.st_hash_b64;
-        audit_fp          = vr.fingerprint_hex;
-
-        if (!vr.ok) {
-            int http = 400;
-            switch (vr.rc) {
-                case pqnas::VerifyV4Rc::ST_EXPIRED:
-                    http = 410;
-                    break;
-                case pqnas::VerifyV4Rc::RP_ID_HASH_MISMATCH:
-                case pqnas::VerifyV4Rc::FINGERPRINT_MISMATCH:
-                case pqnas::VerifyV4Rc::PQ_SIG_INVALID:
-                    http = 403;
-                    break;
-                // POLICY_DENY should not happen when enforce_allowlist=false, but keep mapping safe:
-                case pqnas::VerifyV4Rc::POLICY_DENY:
-                    http = 403;
-                    break;
-                default:
-                    http = 400;
-                    break;
-            }
-
-            audit_fail(std::string("v4_shared_rc_") + std::to_string((int)vr.rc), vr.detail);
-
-            if (http == 410) return fail(410, "st expired");
-            return fail(http, "verify failed", vr.detail);
-        }
-
-        const bool vectors_mode = (std::getenv("PQNAS_V4_VECTORS") != nullptr);
-        const long at_ttl = vectors_mode ? (10L * 365 * 24 * 3600) : 60L;
-        long now = pqnas::now_epoch();
-
-        const std::string& st_hash     = vr.st_hash_b64;
-        const std::string& computed_fp = vr.fingerprint_hex;
-
-        // ---- Users registry policy (fail-closed) ----
-        const std::string now_iso = now_iso_utc();
-
-        // Unknown user: create disabled record, persist, mark as pending, deny.
-        if (!users.exists(computed_fp)) {
-            const bool created = users.ensure_present_disabled_user(computed_fp, now_iso);
-            const bool saved   = created ? users.save(users_path) : false;
-
-            audit_info("v4.user_auto_created_disabled", "ok",
-                       created ? "created" : "already_exists_race",
-                       saved ? "" : "users_save_failed");
-
-            // NEW: mark this sid as "pending admin approval" so /api/v4/status can surface it
-            // (Browser JS will redirect to /wait-approval when it sees pending_admin=true.)
-            {
-                PendingEntry p;
-                p.expires_at = now + 120; // keep in sync with approvals TTL window
-                pending_put(vr.sid, p);
-            }
-
-            return fail(403, "user disabled");
-        }
-
-        // Known user must be enabled (role user/admin is fine; status must be enabled)
-        if (!users.is_enabled_user(computed_fp)) {
-            audit_info("v4.user_disabled", "fail", "not_enabled");
-
-            // NEW: mark this sid as "pending admin approval" so browser can show wait-approval UX
-            {
-                PendingEntry p;
-                p.expires_at = now + 120; // keep in sync with approvals TTL window
-                pending_put(vr.sid, p);
-            }
-
-            return fail(403, "user disabled");
-        }
-
-        // Update last_seen on successful verify (best-effort persist)
-        const bool touched = users.touch_last_seen(computed_fp, now_iso);
-        const bool saved   = touched ? users.save(users_path) : false;
-
-        if (touched && saved) {
-            audit_info("v4.user_last_seen_updated", "ok");
-        } else if (touched && !saved) {
-            audit_info("v4.user_last_seen_updated", "fail", "users_save_failed");
-        } else {
-            audit_info("v4.user_last_seen_updated", "fail", "touch_failed");
-        }
-
-        // ---- vectors logging ----
-        if (vectors_mode) {
-            std::cerr << "[v4_vectors] FP_HEX " << computed_fp
-                      << " SID " << vr.sid
-                      << " ST_HASH " << st_hash
-                      << "\n";
-            std::cerr << "[v4_vectors] CANON_SHA256_B64 " << vr.canonical_sha256_b64 << "\n";
-        }
-
-        // ---- mint AT (short-lived) ----
-        json at_payload = {
-            {"v",4},
-            {"typ","at"},
-            {"sid", vr.sid},
-            {"st_hash", st_hash},
-            {"rp_id_hash", vr.rp_id_hash},
-            {"fingerprint", computed_fp},
-            {"issued_at", now},
-            {"expires_at", now + at_ttl}
+        auto audit_ua = [&]() -> std::string {
+            auto it = req.headers.find("User-Agent");
+            return pqnas::shorten(it == req.headers.end() ? "" : it->second);
         };
-        std::string at = sign_token_v4_ed25519(at_payload, SERVER_SK);
 
-        if (vectors_mode) {
-            std::cerr << "[v4_vectors] AT_ISSUED " << at << "\n";
-        }
+        auto audit_fail = [&](const std::string& reason, const std::string& detail = "") {
+            pqnas::AuditEvent ev;
+            ev.event = "v4.verify_fail";
+            ev.outcome = "fail";
+            if (!audit_sid.empty()) ev.f["sid"] = audit_sid;
+            if (!audit_st_hash_b64.empty()) ev.f["st_hash_b64"] = audit_st_hash_b64;
+            if (!audit_origin.empty()) ev.f["origin"] = audit_origin;
+            if (!audit_rp_id_hash.empty()) ev.f["rp_id_hash"] = audit_rp_id_hash;
+            if (!audit_fp.empty()) ev.f["fingerprint"] = audit_fp;
+            ev.f["reason"] = reason;
+            if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
 
-        // ---- mint browser session cookie (stored for /consume) ----
-        std::string cookieVal;
-        long sess_iat = now;
-        long sess_exp = now + SESS_TTL;
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
-        // Cookie embeds fingerprint as *standard* base64 of UTF-8 fingerprint hex string
-        std::string fp_b64 = pqnas::b64_std(
-            reinterpret_cast<const unsigned char*>(computed_fp.data()),
-            computed_fp.size()
-        );
+            auto it_cf = req.headers.find("CF-Connecting-IP");
+            if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
 
-        if (session_cookie_mint(COOKIE_KEY, fp_b64, sess_iat, sess_exp, cookieVal)) {
-            ApprovalEntry e;
-            e.cookie_val  = cookieVal;
-            e.fingerprint = computed_fp;
-            e.expires_at  = now + 120;
-            approvals_put(vr.sid, e);
+            auto it_xff = req.headers.find("X-Forwarded-For");
+            if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
+            ev.f["ua"] = audit_ua();
+            audit.append(ev);
+        };
+
+        auto audit_info = [&](const std::string& event, const std::string& outcome,
+                              const std::string& reason = "", const std::string& detail = "") {
+            pqnas::AuditEvent ev;
+            ev.event = event;
+            ev.outcome = outcome;
+            if (!audit_sid.empty()) ev.f["sid"] = audit_sid;
+            if (!audit_st_hash_b64.empty()) ev.f["st_hash_b64"] = audit_st_hash_b64;
+            if (!audit_origin.empty()) ev.f["origin"] = audit_origin;
+            if (!audit_rp_id_hash.empty()) ev.f["rp_id_hash"] = audit_rp_id_hash;
+            if (!audit_fp.empty()) ev.f["fingerprint"] = audit_fp;
+
+            if (!reason.empty()) ev.f["reason"] = reason;
+            if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+            auto it_cf = req.headers.find("CF-Connecting-IP");
+            if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+            auto it_xff = req.headers.find("X-Forwarded-For");
+            if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+            ev.f["ua"] = audit_ua();
+            audit.append(ev);
+        };
+
+        // ISO UTC helper (avoid relying on a missing pqnas::now_iso_utc())
+        auto now_iso_utc = [&]() -> std::string {
+            using namespace std::chrono;
+            auto now = system_clock::now();
+            auto ms  = duration_cast<milliseconds>(now.time_since_epoch()) % 1000;
+
+            std::time_t t = system_clock::to_time_t(now);
+            std::tm tm{};
+            gmtime_r(&t, &tm);
+
+            char buf[64];
+            std::snprintf(buf, sizeof(buf),
+                          "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
+                          tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                          tm.tm_hour, tm.tm_min, tm.tm_sec,
+                          (int)ms.count());
+            return std::string(buf);
+        };
+
+        try {
+            // ---- v4 shared verification (crypto + bindings) ----
+            pqnas::VerifyV4Config cfg;
+            cfg.now_unix_sec = 0;
+            cfg.expected_origin = ORIGIN;
+            cfg.expected_rp_id  = RP_ID;
+
+            // Let crypto/bindings verify first; enforce users registry after we know who it is.
+            cfg.enforce_allowlist = false;
+
+            std::array<unsigned char, 32> server_pk{};
+            std::memcpy(server_pk.data(), SERVER_PK, 32);
+
+            auto vr = pqnas::verify_v4_json(req.body, server_pk, cfg);
+
+            audit_sid         = vr.sid;
+            audit_origin      = vr.origin;
+            audit_rp_id_hash  = vr.rp_id_hash;
+            audit_st_hash_b64 = vr.st_hash_b64;
+            audit_fp          = vr.fingerprint_hex;
+
+            if (!vr.ok) {
+                int http = 400;
+                switch (vr.rc) {
+                    case pqnas::VerifyV4Rc::ST_EXPIRED:
+                        http = 410;
+                        break;
+                    case pqnas::VerifyV4Rc::RP_ID_HASH_MISMATCH:
+                    case pqnas::VerifyV4Rc::FINGERPRINT_MISMATCH:
+                    case pqnas::VerifyV4Rc::PQ_SIG_INVALID:
+                        http = 403;
+                        break;
+                    case pqnas::VerifyV4Rc::POLICY_DENY:
+                        http = 403;
+                        break;
+                    default:
+                        http = 400;
+                        break;
+                }
+
+                audit_fail(std::string("v4_shared_rc_") + std::to_string((int)vr.rc), vr.detail);
+
+                if (http == 410) return fail(410, "st expired");
+                return fail(http, "verify failed", vr.detail);
+            }
+
+            const bool vectors_mode = (std::getenv("PQNAS_V4_VECTORS") != nullptr);
+            const long at_ttl = vectors_mode ? (10L * 365 * 24 * 3600) : 60L;
+            long now = pqnas::now_epoch();
+
+            const std::string& st_hash     = vr.st_hash_b64;
+            const std::string& computed_fp = vr.fingerprint_hex;
+
+            // ---- Users registry policy (fail-closed) ----
+            const std::string now_iso = now_iso_utc();
+
+            // Unknown user: create disabled record, persist, mark as pending, deny.
+            if (!users.exists(computed_fp)) {
+                const bool created = users.ensure_present_disabled_user(computed_fp, now_iso);
+                const bool saved   = created ? users.save(users_path) : false;
+
+                audit_info("v4.user_auto_created_disabled", "ok",
+                           created ? "created" : "already_exists_race",
+                           saved ? "" : "users_save_failed");
+
+                // Mark this sid as pending admin approval so /api/v4/status can surface it
+                {
+                    PendingEntry p;
+                    p.expires_at = now + 120; // keep in sync with approvals TTL window
+                    pending_put(vr.sid, p);
+                }
+
+                return fail(403, "user disabled");
+            }
+
+            // Known user must be enabled (role user/admin is fine; status must be enabled)
+            if (!users.is_enabled_user(computed_fp)) {
+                audit_info("v4.user_disabled", "fail", "not_enabled");
+
+                // Mark this sid as pending admin approval so browser can show wait-approval UX
+                {
+                    PendingEntry p;
+                    p.expires_at = now + 120; // keep in sync with approvals TTL window
+                    pending_put(vr.sid, p);
+                }
+
+                return fail(403, "user disabled");
+            }
+
+            // Update last_seen on successful verify (best-effort persist)
+            const bool touched = users.touch_last_seen(computed_fp, now_iso);
+            const bool saved   = touched ? users.save(users_path) : false;
+
+            if (touched && saved) {
+                audit_info("v4.user_last_seen_updated", "ok");
+            } else if (touched && !saved) {
+                audit_info("v4.user_last_seen_updated", "fail", "users_save_failed");
+            } else {
+                audit_info("v4.user_last_seen_updated", "fail", "touch_failed");
+            }
+
+            // ---- vectors logging ----
+            if (vectors_mode) {
+                std::cerr << "[v4_vectors] FP_HEX " << computed_fp
+                          << " SID " << vr.sid
+                          << " ST_HASH " << st_hash
+                          << "\n";
+                std::cerr << "[v4_vectors] CANON_SHA256_B64 " << vr.canonical_sha256_b64 << "\n";
+            }
+
+            // ---- mint AT (short-lived) ----
+            json at_payload = {
+                {"v",4},
+                {"typ","at"},
+                {"sid", vr.sid},
+                {"st_hash", st_hash},
+                {"rp_id_hash", vr.rp_id_hash},
+                {"fingerprint", computed_fp},
+                {"issued_at", now},
+                {"expires_at", now + at_ttl}
+            };
+            std::string at = sign_token_v4_ed25519(at_payload, SERVER_SK);
+
+            if (vectors_mode) {
+                std::cerr << "[v4_vectors] AT_ISSUED " << at << "\n";
+            }
+
+            // ---- mint browser session cookie (stored for /consume) ----
+            std::string cookieVal;
+            long sess_iat = now;
+            long sess_exp = now + SESS_TTL;
+
+            // Cookie embeds fingerprint as standard base64 of UTF-8 fingerprint hex string
+            std::string fp_b64 = pqnas::b64_std(
+                reinterpret_cast<const unsigned char*>(computed_fp.data()),
+                computed_fp.size()
+            );
+
+            if (session_cookie_mint(COOKIE_KEY, fp_b64, sess_iat, sess_exp, cookieVal)) {
+                ApprovalEntry e;
+                e.cookie_val  = cookieVal;
+                e.fingerprint = computed_fp;
+                e.expires_at  = now + 120;
+                approvals_put(vr.sid, e);
+
+                {
+                    pqnas::AuditEvent ev;
+                    ev.event = "v4.cookie_minted";
+                    ev.outcome = "ok";
+                    ev.f["sid"] = vr.sid;
+                    ev.f["st_hash_b64"] = st_hash;
+                    ev.f["rp_id_hash"] = vr.rp_id_hash;
+                    ev.f["fingerprint"] = computed_fp;
+                    ev.f["sess_iat"] = std::to_string(sess_iat);
+                    ev.f["sess_exp"] = std::to_string(sess_exp);
+
+                    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+                    auto it_cf = req.headers.find("CF-Connecting-IP");
+                    if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+                    auto it_xff = req.headers.find("X-Forwarded-For");
+                    if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+                    ev.f["ua"] = audit_ua();
+                    audit.append(ev);
+                }
+            } else {
+                audit_fail("cookie_mint_failed");
+            }
+
+            // ---- verify ok audit ----
             {
                 pqnas::AuditEvent ev;
-                ev.event = "v4.cookie_minted";
+                ev.event = "v4.verify_ok";
                 ev.outcome = "ok";
                 ev.f["sid"] = vr.sid;
                 ev.f["st_hash_b64"] = st_hash;
+                ev.f["origin"] = vr.origin;
                 ev.f["rp_id_hash"] = vr.rp_id_hash;
                 ev.f["fingerprint"] = computed_fp;
-                ev.f["sess_iat"] = std::to_string(sess_iat);
-                ev.f["sess_exp"] = std::to_string(sess_exp);
 
                 ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
@@ -2606,45 +2494,14 @@ srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& r
                 audit.append(ev);
             }
 
-            std::cerr << "[/api/v4/verify] approval stored sid=" << vr.sid
-                      << " cookie_exp=" << sess_exp << std::endl;
-        } else {
-            audit_fail("cookie_mint_failed");
-            std::cerr << "[/api/v4/verify] WARNING: session_cookie_mint failed" << std::endl;
+            json out = {{"ok",true},{"v",4},{"at",at}};
+            reply_json(res, 200, out.dump());
         }
-
-        // ---- verify ok audit ----
-        {
-            pqnas::AuditEvent ev;
-            ev.event = "v4.verify_ok";
-            ev.outcome = "ok";
-            ev.f["sid"] = vr.sid;
-            ev.f["st_hash_b64"] = st_hash;
-            ev.f["origin"] = vr.origin;
-            ev.f["rp_id_hash"] = vr.rp_id_hash;
-            ev.f["fingerprint"] = computed_fp;
-
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-
-            auto it_cf = req.headers.find("CF-Connecting-IP");
-            if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
-
-            auto it_xff = req.headers.find("X-Forwarded-For");
-            if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
-
-            ev.f["ua"] = audit_ua();
-            audit.append(ev);
+        catch (const std::exception& e) {
+            audit_fail("exception", e.what());
+            return fail(400, "exception", e.what());
         }
-
-        json out = {{"ok",true},{"v",4},{"at",at}};
-        std::cerr << "[/api/v4/verify] SUCCESS issuing at=" << at << std::endl;
-        reply_json(res, 200, out.dump());
-    }
-    catch (const std::exception& e) {
-        audit_fail("exception", e.what());
-        return fail(400, "exception", e.what());
-    }
-});
+    });
 
     // GET /wait-approval (static UI)
     srv.Get("/wait-approval", [&](const httplib::Request&, httplib::Response& res) {
@@ -2662,51 +2519,48 @@ srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& r
         res.set_content(body, "application/javascript; charset=utf-8");
     });
 
-
-
-	srv.Get("/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
-	    std::string actor_fp;
+    srv.Get("/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
+        std::string actor_fp;
         if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
-	    const std::string body = slurp_file(STATIC_USERS_HTML);
-	    if (body.empty()) { res.status = 404; res.set_content("missing admin_users.html","text/plain"); return; }
-	    res.set_header("Cache-Control", "no-store");
-	    res.set_content(body, "text/html; charset=utf-8");
-	});
+        const std::string body = slurp_file(STATIC_USERS_HTML);
+        if (body.empty()) { res.status = 404; res.set_content("missing admin_users.html","text/plain"); return; }
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(body, "text/html; charset=utf-8");
+    });
 
-	srv.Get("/static/admin_users.js", [&](const httplib::Request&, httplib::Response& res) {
-    	const std::string body = slurp_file(STATIC_USERS_JS);
-    	if (body.empty()) { res.status = 404; res.set_content("missing admin_users.js","text/plain"); return; }
-    	res.set_header("Cache-Control", "no-store");
-    	res.set_content(body, "application/javascript; charset=utf-8");
-	});
+    srv.Get("/static/admin_users.js", [&](const httplib::Request&, httplib::Response& res) {
+        const std::string body = slurp_file(STATIC_USERS_JS);
+        if (body.empty()) { res.status = 404; res.set_content("missing admin_users.js","text/plain"); return; }
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(body, "application/javascript; charset=utf-8");
+    });
 
-	srv.Get("/api/v4/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
-	    std::string actor_fp;
+    srv.Get("/api/v4/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
+        std::string actor_fp;
         if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
+        res.set_header("Cache-Control", "no-store");
 
-    	res.set_header("Cache-Control", "no-store"); // recommended
+        json out;
+        out["ok"] = true;
+        out["users"] = json::array();
 
-    	json out;
-    	out["ok"] = true;
-    	out["users"] = json::array();
+        for (auto& kv : users.snapshot()) {
+            auto& u = kv.second;
+            out["users"].push_back({
+                {"fingerprint", u.fingerprint},
+                {"name", u.name},
+                {"role", u.role},
+                {"status", u.status},
+                {"added_at", u.added_at},
+                {"last_seen", u.last_seen},
+                {"notes", u.notes}
+            });
+        }
 
-    	for (auto& kv : users.snapshot()) {
-        	auto& u = kv.second;
-        	out["users"].push_back({
-            	{"fingerprint", u.fingerprint},
-            	{"name", u.name},
-            	{"role", u.role},
-            	{"status", u.status},
-            	{"added_at", u.added_at},
-            	{"last_seen", u.last_seen},
-            	{"notes", u.notes}
-        	});
-    	}
-
-    	reply_json(res, 200, out.dump());
-	});
+        reply_json(res, 200, out.dump());
+    });
 
     auto now_iso_utc = []() -> std::string {
         using namespace std::chrono;
@@ -2731,7 +2585,6 @@ srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& r
     srv.Post("/api/v4/admin/users/status", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
         if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
-
 
         json j;
         try { j = json::parse(req.body); }
@@ -2758,7 +2611,7 @@ srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& r
             return;
         }
 
-        const bool ok_set = users.set_status(fp, status);
+        const bool ok_set  = users.set_status(fp, status);
         const bool ok_save = ok_set ? users.save(users_path) : false;
 
         {
@@ -2785,217 +2638,209 @@ srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& r
         reply_json(res, 200, json({{"ok",true}}).dump());
     });
 
-	// GET /system (static UI) - visible to user + admin (cookie required)
-	srv.Get("/system", [&](const httplib::Request& req, httplib::Response& res) {
-    	std::string actor_fp, role;
-    	if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &role)) return;
+    // GET /system (static UI) - visible to user + admin (cookie required)
+    srv.Get("/system", [&](const httplib::Request& req, httplib::Response& res) {
+        std::string actor_fp, role;
+        if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &role)) return;
 
-    	std::string body;
-    	if (!read_file_to_string(STATIC_SYSTEM_HTML, body) || body.empty()) {
-        	res.status = 500;
-        	res.set_header("Content-Type", "text/plain");
-        	res.body = "Missing static file: " + STATIC_SYSTEM_HTML;
-        	return;
-    	}
+        std::string body;
+        if (!read_file_to_string(STATIC_SYSTEM_HTML, body) || body.empty()) {
+            res.status = 500;
+            res.set_header("Content-Type", "text/plain");
+            res.body = "Missing static file: " + STATIC_SYSTEM_HTML;
+            return;
+        }
 
-    	res.status = 200;
-    	res.set_header("Content-Type", "text/html; charset=utf-8");
-    	res.set_header("Cache-Control", "no-store");
-    	res.body = body;
-	});
+        res.status = 200;
+        res.set_header("Content-Type", "text/html; charset=utf-8");
+        res.set_header("Cache-Control", "no-store");
+        res.body = body;
+    });
 
+    // POST /api/v4/admin/users/upsert
+    // Body: {"fingerprint":"...","name":"...","role":"user|admin","notes":"..."}
+    srv.Post("/api/v4/admin/users/upsert", [&](const httplib::Request& req, httplib::Response& res) {
+        std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
-// POST /api/v4/admin/users/upsert
-// Body: {"fingerprint":"...","name":"...","role":"user|admin","notes":"..."}
-srv.Post("/api/v4/admin/users/upsert", [&](const httplib::Request& req, httplib::Response& res) {
-    std::string actor_fp;
-    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        json j;
+        try { j = json::parse(req.body); }
+        catch (...) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+            return;
+        }
 
+        const std::string fp    = j.value("fingerprint", "");
+        const std::string name  = j.value("name", "");
+        const std::string role  = j.value("role", "user");
+        const std::string notes = j.value("notes", "");
 
-    json j;
-    try { j = json::parse(req.body); }
-    catch (...) {
-        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
-        return;
-    }
+        if (fp.empty()) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+            return;
+        }
 
-    const std::string fp    = j.value("fingerprint", "");
-    const std::string name  = j.value("name", "");
-    const std::string role  = j.value("role", "user");
-    const std::string notes = j.value("notes", "");
+        const std::string now_iso = now_iso_utc();
 
-    if (fp.empty()) {
-        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
-        return;
-    }
+        // Preserve added_at/last_seen/status if user exists; otherwise create disabled by default.
+        pqnas::UserRec u{};
+        bool existed = false;
 
-    const std::string now_iso = now_iso_utc();
+        if (auto cur = users.get(fp); cur.has_value()) {
+            existed = true;
+            u = *cur;
+        } else {
+            u.fingerprint = fp;
+            u.added_at = now_iso;
+            u.last_seen = "";
+            u.status = "disabled"; // default fail-closed for manual add, admin can Enable
+            u.role = "user";
+            u.name = "";
+            u.notes = "";
+        }
 
-    // Preserve added_at/last_seen/status if user exists; otherwise create disabled by default.
-    pqnas::UserRec u{};
-    bool existed = false;
+        // Apply fields from request
+        u.name  = name;
+        u.notes = notes;
+        u.role  = role;  // normalized inside upsert()
 
-    if (auto cur = users.get(fp); cur.has_value()) {
-        existed = true;
-        u = *cur;
-    } else {
-        u.fingerprint = fp;
-        u.added_at = now_iso;
-        u.last_seen = "";
-        u.status = "disabled"; // default fail-closed for manual add, admin can Enable
-        u.role = "user";
-        u.name = "";
-        u.notes = "";
-    }
+        const bool ok_upsert = users.upsert(u);
+        const bool ok_save   = ok_upsert ? users.save(users_path) : false;
 
-    // Apply fields from request
-    u.name  = name;
-    u.notes = notes;
-    u.role  = role;  // normalized inside upsert()
+        {
+            pqnas::AuditEvent ev;
+            ev.event = "admin.user_upsert";
+            ev.outcome = (ok_upsert && ok_save) ? "ok" : "fail";
+            ev.f["fingerprint"] = fp;
+            ev.f["existed"] = existed ? "true" : "false";
+            ev.f["role"] = role;
+            if (!name.empty()) ev.f["name"] = pqnas::shorten(name, 80);
+            if (!notes.empty()) ev.f["notes"] = pqnas::shorten(notes, 120);
+            ev.f["ts"] = now_iso;
+            ev.f["actor_fp"] = actor_fp;
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            audit.append(ev);
+        }
 
-    const bool ok_upsert = users.upsert(u);
-    const bool ok_save   = ok_upsert ? users.save(users_path) : false;
+        if (!ok_upsert) {
+            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","upsert failed"}}).dump());
+            return;
+        }
+        if (!ok_save) {
+            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
+            return;
+        }
 
-    {
-        pqnas::AuditEvent ev;
-        ev.event = "admin.user_upsert";
-        ev.outcome = (ok_upsert && ok_save) ? "ok" : "fail";
-        ev.f["fingerprint"] = fp;
-        ev.f["existed"] = existed ? "true" : "false";
-        ev.f["role"] = role;
-        if (!name.empty()) ev.f["name"] = pqnas::shorten(name, 80);
-        if (!notes.empty()) ev.f["notes"] = pqnas::shorten(notes, 120);
-        ev.f["ts"] = now_iso;
-        ev.f["actor_fp"] = actor_fp;
-        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        audit.append(ev);
-    }
+        reply_json(res, 200, json({{"ok",true}}).dump());
+    });
 
-    if (!ok_upsert) {
-        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","upsert failed"}}).dump());
-        return;
-    }
-    if (!ok_save) {
-        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
-        return;
-    }
+    // POST /api/v4/admin/users/enable   {"fingerprint":"...","role":"user|admin"?,"name":"..."?,"notes":"..."?}
+    srv.Post("/api/v4/admin/users/enable", [&](const httplib::Request& req, httplib::Response& res) {
+        std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
-    reply_json(res, 200, json({{"ok",true}}).dump());
-});
+        json j;
+        try { j = json::parse(req.body); }
+        catch (...) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+            return;
+        }
 
-// POST /api/v4/admin/users/enable   {"fingerprint":"...","role":"user|admin"?,"name":"..."?,"notes":"..."?}
-srv.Post("/api/v4/admin/users/enable", [&](const httplib::Request& req, httplib::Response& res) {
-    std::string actor_fp;
-    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        const std::string fp    = j.value("fingerprint", "");
+        const std::string role  = j.value("role", "user");
+        const std::string name  = j.value("name", "");
+        const std::string notes = j.value("notes", "");
 
+        if (fp.empty()) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+            return;
+        }
+        if (!users.exists(fp)) {
+            reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
+            return;
+        }
 
-    json j;
-    try { j = json::parse(req.body); }
-    catch (...) {
-        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
-        return;
-    }
+        if (!users.set_status(fp, "enabled")) {
+            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","set_status failed"}}).dump());
+            return;
+        }
 
-    const std::string fp    = j.value("fingerprint", "");
-    const std::string role  = j.value("role", "user");
-    const std::string name  = j.value("name", "");
-    const std::string notes = j.value("notes", "");
+        // optional updates
+        users.set_role(fp, role);
+        if (!name.empty() || !notes.empty()) users.set_name_notes(fp, name, notes);
 
-    if (fp.empty()) {
-        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
-        return;
-    }
-    if (!users.exists(fp)) {
-        reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
-        return;
-    }
+        const bool saved = users.save(users_path);
 
-    // enable
-    if (!users.set_status(fp, "enabled")) {
-        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","set_status failed"}}).dump());
-        return;
-    }
+        {
+            pqnas::AuditEvent ev;
+            ev.event = "admin.user_enabled";
+            ev.outcome = saved ? "ok" : "fail";
+            ev.f["fingerprint"] = fp;
+            ev.f["role"] = role;
+            ev.f["ts"] = now_iso_utc();
+            ev.f["actor_fp"] = actor_fp;
 
-    // optional updates
-    users.set_role(fp, role);
-    if (!name.empty() || !notes.empty()) users.set_name_notes(fp, name, notes);
+            if (!name.empty()) ev.f["name"] = pqnas::shorten(name, 80);
+            if (!notes.empty()) ev.f["notes"] = pqnas::shorten(notes, 120);
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            audit.append(ev);
+        }
 
-    const bool saved = users.save(users_path);
+        if (!saved) {
+            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
+            return;
+        }
 
-    // audit
-    {
-        pqnas::AuditEvent ev;
-        ev.event = "admin.user_enabled";
-        ev.outcome = saved ? "ok" : "fail";
-        ev.f["fingerprint"] = fp;
-        ev.f["role"] = role;
-        ev.f["ts"] = now_iso_utc();
-        ev.f["actor_fp"] = actor_fp;
+        reply_json(res, 200, json({{"ok",true}}).dump());
+    });
 
-        if (!name.empty()) ev.f["name"] = pqnas::shorten(name, 80);
-        if (!notes.empty()) ev.f["notes"] = pqnas::shorten(notes, 120);
-        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        audit.append(ev);
-    }
+    // POST /api/v4/admin/users/disable  {"fingerprint":"..."}
+    srv.Post("/api/v4/admin/users/disable", [&](const httplib::Request& req, httplib::Response& res) {
+        std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
-    if (!saved) {
-        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
-        return;
-    }
+        json j;
+        try { j = json::parse(req.body); }
+        catch (...) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+            return;
+        }
 
-    reply_json(res, 200, json({{"ok",true}}).dump());
-});
+        const std::string fp = j.value("fingerprint", "");
+        if (fp.empty()) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+            return;
+        }
+        if (!users.exists(fp)) {
+            reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
+            return;
+        }
 
+        if (!users.set_status(fp, "disabled")) {
+            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","set_status failed"}}).dump());
+            return;
+        }
 
-// POST /api/v4/admin/users/disable  {"fingerprint":"..."}
-srv.Post("/api/v4/admin/users/disable", [&](const httplib::Request& req, httplib::Response& res) {
-    std::string actor_fp;
-    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        const bool saved = users.save(users_path);
 
+        {
+            pqnas::AuditEvent ev;
+            ev.event = "admin.user_disabled";
+            ev.outcome = saved ? "ok" : "fail";
+            ev.f["fingerprint"] = fp;
+            ev.f["ts"] = now_iso_utc();
+            ev.f["actor_fp"] = actor_fp;
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            audit.append(ev);
+        }
 
-    json j;
-    try { j = json::parse(req.body); }
-    catch (...) {
-        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
-        return;
-    }
+        if (!saved) {
+            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
+            return;
+        }
 
-    const std::string fp = j.value("fingerprint", "");
-    if (fp.empty()) {
-        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
-        return;
-    }
-    if (!users.exists(fp)) {
-        reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
-        return;
-    }
-
-    if (!users.set_status(fp, "disabled")) {
-        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","set_status failed"}}).dump());
-        return;
-    }
-
-    const bool saved = users.save(users_path);
-
-    // audit
-    {
-        pqnas::AuditEvent ev;
-        ev.event = "admin.user_disabled";
-        ev.outcome = saved ? "ok" : "fail";
-        ev.f["fingerprint"] = fp;
-        ev.f["ts"] = now_iso_utc();
-        ev.f["actor_fp"] = actor_fp;
-        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        audit.append(ev);
-    }
-
-    if (!saved) {
-        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
-        return;
-    }
-
-    reply_json(res, 200, json({{"ok",true}}).dump());
-});
+        reply_json(res, 200, json({{"ok",true}}).dump());
+    });
 
     srv.Get("/api/v4/debug/approvals", [&](const httplib::Request&, httplib::Response& res) {
         json out;
@@ -3030,7 +2875,6 @@ srv.Post("/api/v4/admin/users/disable", [&](const httplib::Request& req, httplib
     srv.Post("/api/v4/admin/users/delete", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
         if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
-
 
         json j;
         try { j = json::parse(req.body); }
@@ -3082,8 +2926,7 @@ srv.Post("/api/v4/admin/users/disable", [&](const httplib::Request& req, httplib
         reply_json(res, 200, json({{"ok",true}}).dump());
     });
 
-
-	std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
-	srv.listen("0.0.0.0", LISTEN_PORT);
-	return 0;
-	}
+    std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
+    srv.listen("0.0.0.0", LISTEN_PORT);
+    return 0;
+}
