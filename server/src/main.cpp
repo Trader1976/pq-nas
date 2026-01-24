@@ -266,6 +266,243 @@ static bool read_proc_net_dev(std::unordered_map<std::string, NetCounters>& out)
 
     return true;
 }
+// for audit log checking
+static long long file_size_bytes_safe(const std::string& path) {
+    std::error_code ec;
+    auto sz = std::filesystem::file_size(path, ec);
+    if (ec) return -1;
+    return (long long)sz;
+}
+
+namespace {
+
+// If you already have file_size_bytes_safe somewhere else in this file,
+// DO NOT duplicate it. Keep only one copy.
+static long long file_size_bytes_safe_local(const std::string& path) {
+    try {
+        std::error_code ec;
+        auto sz = std::filesystem::file_size(path, ec);
+        if (ec) return -1;
+        return (long long)sz;
+    } catch (...) {
+        return -1;
+    }
+}
+
+static std::string iso_utc_from_filetime(const std::filesystem::file_time_type& ft) {
+    try {
+        using namespace std::chrono;
+
+        auto sctp = time_point_cast<system_clock::duration>(
+            ft - std::filesystem::file_time_type::clock::now()
+            + system_clock::now()
+        );
+
+        std::time_t tt = system_clock::to_time_t(sctp);
+
+        std::tm tm{};
+#if defined(_WIN32)
+        gmtime_s(&tm, &tt);
+#else
+        gmtime_r(&tt, &tm);
+#endif
+
+        char buf[64];
+        const int n = std::snprintf(
+            buf,
+            sizeof(buf),
+            "%04d-%02d-%02dT%02d:%02d:%02dZ",
+            tm.tm_year + 1900,
+            tm.tm_mon + 1,
+            tm.tm_mday,
+            tm.tm_hour,
+            tm.tm_min,
+            tm.tm_sec
+        );
+
+        if (n <= 0) {
+            return "—";
+        }
+        if (n >= (int)sizeof(buf)) {
+            return std::string(buf, buf + (sizeof(buf) - 1));
+        }
+
+        return std::string(buf, buf + n);
+    } catch (...) {
+        return "—";
+    }
+}
+
+
+struct ArchivePair {
+    std::string jsonl_path;
+    std::string state_path; // optional
+    std::string name;       // filename
+    long long size_bytes = 0; // jsonl + state (if present)
+    std::filesystem::file_time_type mtime{};
+};
+
+static std::vector<ArchivePair> list_rotated_archives_local(const std::string& audit_jsonl_path) {
+    std::vector<ArchivePair> out;
+
+    const std::filesystem::path active(audit_jsonl_path);
+    const std::filesystem::path dir = active.parent_path();
+
+    const std::string active_name = active.filename().string(); // pqnas_audit.jsonl
+    const std::string prefix = "pqnas_audit.";
+    const std::string jsonl_ext = ".jsonl";
+    const std::string state_ext = ".state";
+
+    std::error_code ec;
+    for (auto& de : std::filesystem::directory_iterator(dir, ec)) {
+        if (ec) break;
+        if (!de.is_regular_file()) continue;
+
+        const auto p = de.path();
+        const std::string fn = p.filename().string();
+        if (fn == active_name) continue;
+
+        if (fn.rfind(prefix, 0) != 0) continue;
+        if (fn.size() <= prefix.size() + jsonl_ext.size()) continue;
+        if (fn.substr(fn.size() - jsonl_ext.size()) != jsonl_ext) continue;
+
+        const std::string id = fn.substr(prefix.size(), fn.size() - prefix.size() - jsonl_ext.size());
+        if (id.empty()) continue;
+
+        ArchivePair ap;
+        ap.jsonl_path = p.string();
+        ap.name = fn;
+
+        ap.size_bytes = file_size_bytes_safe_local(ap.jsonl_path);
+        if (ap.size_bytes < 0) ap.size_bytes = 0;
+
+        const std::filesystem::path st = dir / (prefix + id + state_ext);
+        if (std::filesystem::exists(st)) {
+            ap.state_path = st.string();
+            long long s2 = file_size_bytes_safe_local(ap.state_path);
+            if (s2 > 0) ap.size_bytes += s2;
+        }
+
+        std::error_code ec2;
+        ap.mtime = std::filesystem::last_write_time(p, ec2);
+        if (ec2) ap.mtime = std::filesystem::file_time_type::clock::now();
+
+        out.push_back(std::move(ap));
+    }
+
+    std::sort(out.begin(), out.end(), [](const ArchivePair& a, const ArchivePair& b) {
+        return a.mtime > b.mtime; // newest first
+    });
+
+    return out;
+}
+
+static nlohmann::json normalize_retention_or_default_local(const nlohmann::json& in_ret) {
+    nlohmann::json ret = nlohmann::json::object();
+    if (in_ret.is_object()) ret = in_ret;
+
+    auto get_mode = [&]() -> std::string {
+        if (ret.contains("mode") && ret["mode"].is_string()) return ret["mode"].get<std::string>();
+        return "never";
+    };
+    auto clamp_int = [&](const char* k, int def, int lo, int hi) -> int {
+        if (!ret.contains(k) || ret[k].is_null()) return def;
+        if (!ret[k].is_number_integer()) return def;
+        int v = ret[k].get<int>();
+        if (v < lo) v = lo;
+        if (v > hi) v = hi;
+        return v;
+    };
+
+    std::string mode = get_mode();
+    if (!(mode == "never" || mode == "days" || mode == "files" || mode == "size_mb")) mode = "never";
+
+    const int days = clamp_int("days", 90, 1, 3650);
+    const int max_files = clamp_int("max_files", 50, 1, 50000);
+    const int max_total_mb = clamp_int("max_total_mb", 20480, 1, 10000000);
+
+    return nlohmann::json{
+        {"mode", mode},
+        {"days", days},
+        {"max_files", max_files},
+        {"max_total_mb", max_total_mb},
+    };
+}
+
+static nlohmann::json build_preview_local(const std::vector<ArchivePair>& archives, const nlohmann::json& policy) {
+    const std::string mode = policy.value("mode", "never");
+    const int days = policy.value("days", 90);
+    const int max_files = policy.value("max_files", 50);
+    const long long max_bytes = (long long)policy.value("max_total_mb", 20480) * 1024LL * 1024LL;
+
+    long long total_bytes = 0;
+    for (const auto& a : archives) total_bytes += std::max(0LL, a.size_bytes);
+
+    std::vector<nlohmann::json> candidates;
+    long long cand_bytes = 0;
+
+    if (mode == "never") {
+        // nothing
+    } else if (mode == "files") {
+        for (size_t i = 0; i < archives.size(); i++) {
+            if ((int)i < max_files) continue;
+            const auto& a = archives[i];
+            candidates.push_back({
+                {"name", a.name},
+                {"size_bytes", a.size_bytes},
+                {"mtime_iso", iso_utc_from_filetime(a.mtime)},
+                {"reason", "exceeds max_files"}
+            });
+            cand_bytes += std::max(0LL, a.size_bytes);
+        }
+    } else if (mode == "days") {
+        using namespace std::chrono;
+        const auto now = std::filesystem::file_time_type::clock::now();
+        const auto cutoff = now - hours(24 * days);
+
+        for (const auto& a : archives) {
+            if (a.mtime >= cutoff) continue;
+            candidates.push_back({
+                {"name", a.name},
+                {"size_bytes", a.size_bytes},
+                {"mtime_iso", iso_utc_from_filetime(a.mtime)},
+                {"reason", "older than days"}
+            });
+            cand_bytes += std::max(0LL, a.size_bytes);
+        }
+    } else if (mode == "size_mb") {
+        long long kept = 0;
+        for (const auto& a : archives) {
+            const long long sz = std::max(0LL, a.size_bytes);
+            if (kept + sz <= max_bytes) {
+                kept += sz;
+                continue;
+            }
+            candidates.push_back({
+                {"name", a.name},
+                {"size_bytes", a.size_bytes},
+                {"mtime_iso", iso_utc_from_filetime(a.mtime)},
+                {"reason", "exceeds max_total_mb"}
+            });
+            cand_bytes += sz;
+        }
+    }
+
+    nlohmann::json summary = {
+        {"candidate_files", (int)candidates.size()},
+        {"candidate_bytes", cand_bytes},
+        {"total_archives", (int)archives.size()},
+        {"total_bytes", total_bytes},
+    };
+
+    return nlohmann::json{
+        {"ok", true},
+        {"candidates", candidates},
+        {"summary", summary}
+    };
+}
+
+} // namespace
 
 // Call with g_net_mu held.
 // Samples at most once per ~1000ms, keeps last ~120 samples (≈2 minutes at 1Hz).
@@ -1647,18 +1884,126 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
 
         const bool ok = audit.rotate(opt, &rr);
 
-        nlohmann::json j;
-        j["ok"] = ok;
-        if (ok) {
-            j["rotated_jsonl_path"] = rr.rotated_jsonl_path;
-            j["rotated_state_path"] = rr.rotated_state_path;
-            j["chain_start_prev_hash"] = rr.chain_start_prev_hash_hex;
-        } else {
-            j["error"] = "rotate_failed";
+		nlohmann::json j;
+
+		if (!ok) {
+    		j["ok"] = false;
+    		j["error"] = "rotate_failed";
+    		res.status = 500;
+    		res.set_content(j.dump(2), "application/json; charset=utf-8");
+    		return;
+		}
+
+		j["ok"] = true;
+		j["rotated_jsonl_path"] = rr.rotated_jsonl_path;
+		j["rotated_state_path"] = rr.rotated_state_path;
+		j["chain_start_prev_hash"] = rr.chain_start_prev_hash_hex;
+
+		res.set_content(j.dump(2), "application/json; charset=utf-8");
+
+    });
+
+// ---- Admin: audit retention preview (dry-run) ----
+srv.Post("/api/v4/admin/audit/preview-prune", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
+    nlohmann::json in = nlohmann::json::object();
+    if (!req.body.empty()) {
+        in = nlohmann::json::parse(req.body, nullptr, false);
+        if (in.is_discarded() || !in.is_object()) in = nlohmann::json::object();
+    }
+
+    // UI sends: { "audit_retention": { ... } }
+    nlohmann::json pol = nlohmann::json::object();
+    if (in.contains("audit_retention")) pol = in["audit_retention"];
+    pol = normalize_retention_or_default_local(pol);
+
+    const auto archives = list_rotated_archives_local(audit_jsonl_path);
+    const auto out = build_preview_local(archives, pol);
+
+    reply_json(res, 200, out.dump());
+});
+
+// ---- Admin: audit retention prune (delete candidates based on SAVED policy) ----
+srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
+    // Load saved retention policy from admin_settings_path
+    nlohmann::json persisted = nlohmann::json::object();
+    try {
+        std::ifstream f(admin_settings_path);
+        if (f.good()) f >> persisted;
+        if (!persisted.is_object()) persisted = nlohmann::json::object();
+    } catch (...) {
+        persisted = nlohmann::json::object();
+    }
+
+    nlohmann::json pol = nlohmann::json::object();
+    if (persisted.contains("audit_retention")) pol = persisted["audit_retention"];
+    pol = normalize_retention_or_default_local(pol);
+
+    const auto archives = list_rotated_archives_local(audit_jsonl_path);
+    const auto preview = build_preview_local(archives, pol);
+
+    long long deleted_bytes = 0;
+    int deleted_files = 0;
+
+    try {
+        const auto cands = preview.value("candidates", nlohmann::json::array());
+
+        // For each candidate archive name, delete both jsonl + state (if present)
+        for (const auto& cj : cands) {
+            const std::string name = cj.value("name", "");
+            if (name.empty()) continue;
+
+            auto it = std::find_if(archives.begin(), archives.end(),
+                                   [&](const ArchivePair& a) { return a.name == name; });
+            if (it == archives.end()) continue;
+
+            std::error_code ec;
+
+            if (!it->jsonl_path.empty()) {
+                if (std::filesystem::remove(it->jsonl_path, ec)) deleted_files++;
+                ec.clear();
+            }
+            if (!it->state_path.empty()) {
+                if (std::filesystem::remove(it->state_path, ec)) deleted_files++;
+                ec.clear();
+            }
+
+            deleted_bytes += std::max(0LL, it->size_bytes);
         }
 
-        res.set_content(j.dump(2), "application/json; charset=utf-8");
-    });
+        // Audit (best-effort)
+        try {
+            pqnas::AuditEvent ev;
+            ev.event = "admin.audit_pruned";
+            ev.outcome = "ok";
+            ev.f["deleted_files"] = deleted_files;
+            ev.f["deleted_bytes"] = deleted_bytes;
+            ev.f["policy"] = pol;
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            auto it_ua = req.headers.find("User-Agent");
+            ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
+            audit.append(ev);
+        } catch (...) {}
+
+        reply_json(res, 200, nlohmann::json{
+            {"ok", true},
+            {"deleted_files", deleted_files},
+            {"deleted_bytes", deleted_bytes},
+        }.dump());
+
+    } catch (...) {
+        reply_json(res, 500, nlohmann::json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "prune failed"},
+        }.dump());
+    }
+});
+
+
 
     srv.Get("/static/admin_settings.js", [&](const httplib::Request&, httplib::Response& res) {
         // You can leave JS ungated (like other static files), page is gated anyway.
@@ -1715,20 +2060,22 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
             };
         }
 
-        reply_json(res, 200, json{
-            {"ok", true},
+		const long long active_bytes = file_size_bytes_safe(audit_jsonl_path);
 
-            // value from config/admin_settings.json (persisted)
-            {"audit_min_level", persisted_lvl},
+		reply_json(res, 200, json{
+    		{"ok", true},
 
-            // actual runtime value used by AuditLog
-            {"audit_min_level_runtime", audit.min_level_str()},
+    		{"audit_min_level", persisted_lvl},
+    		{"audit_min_level_runtime", audit.min_level_str()},
+    		{"allowed", json::array({"SECURITY","ADMIN","INFO","DEBUG"})},
 
-            {"allowed", json::array({"SECURITY","ADMIN","INFO","DEBUG"})},
+		    {"audit_retention", retention},
 
-            // persisted retention policy (defaults applied if missing)
-            {"audit_retention", retention}
-        }.dump());
+    		// NEW: active audit file info for UI
+    		{"audit_active_path", audit_jsonl_path},
+    		{"audit_active_bytes", active_bytes}
+		}.dump());
+
     });
 
     srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Response& res) {
@@ -1999,12 +2346,19 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
                 };
             }
 
-            reply_json(res, 200, json{
-                {"ok", true},
-                {"audit_min_level", get_level_safe(persisted, audit.min_level_str())},
-                {"audit_min_level_runtime", audit.min_level_str()},
-                {"audit_retention", retention}
-            }.dump());
+		const long long active_bytes = file_size_bytes_safe(audit_jsonl_path);
+
+		reply_json(res, 200, json{
+    		{"ok", true},
+    		{"audit_min_level", get_level_safe(persisted, audit.min_level_str())},
+    		{"audit_min_level_runtime", audit.min_level_str()},
+    		{"audit_retention", retention},
+
+    		// NEW: active audit file info for UI
+    		{"audit_active_path", audit_jsonl_path},
+    		{"audit_active_bytes", active_bytes}
+		}.dump());
+
             return;
 
         } catch (const std::exception& e) {

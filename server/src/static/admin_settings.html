@@ -507,13 +507,38 @@
                     </div>
                 </div>
             </div>
+            <!-- Audit rotation -->
+            <div class="card">
+                <div class="hd">
+                    <div class="h">Audit rotation</div>
+                    <div class="pill info" id="activeSizePill">
+                        <span class="k">Active log:</span> <span class="v">—</span>
+                    </div>
+                </div>
+
+                <div class="bd">
+                    <div class="row">
+                        <button id="btnRotateNow" class="btn" type="button">Rotate now</button>
+
+                    </div>
+
+                    <div class="note">
+                        Rotation renames the active <span class="mono">pqnas_audit.jsonl</span> into a timestamped archive
+                        and starts a fresh active log. Retention rules apply only to rotated archives.
+                    </div>
+                </div>
+            </div>
 
             <!-- Audit retention -->
             <div class="card">
                 <div class="hd">
                     <div class="h">Audit retention</div>
-                    <div class="pill info" id="retentionPill"><span class="k">Policy:</span> <span class="v">—</span></div>
-                </div>
+                        <div class="pill info" id="retentionPill">
+                            <span class="k">Policy:</span> <span class="v">—</span>
+                        </div>
+                    </div>
+
+
 
                 <div class="bd">
                     <div class="row">
@@ -539,7 +564,6 @@
                         <button id="btnRetentionSave" class="btn primary" type="button">Save policy</button>
                         <button id="btnRetentionPreview" class="btn" type="button">Preview prune</button>
                         <button id="btnRetentionPrune" class="btn" type="button">Run prune now</button>
-
                         <span class="pill warn" id="retPreviewPill"><span class="k">Preview:</span> <span class="v">—</span></span>
                     </div>
 

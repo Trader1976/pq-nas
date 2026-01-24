@@ -28,6 +28,9 @@
     const toastTitle = $("toastTitle");
     const toastMsg = $("toastMsg");
 
+    const activeSizePill = $("activeSizePill");
+    const btnRotateNow = $("btnRotateNow");
+
     function escapeHtml(s) {
         return String(s ?? "")
             .replaceAll("&", "&amp;")
@@ -59,13 +62,16 @@
     }
 
     function fmtBytes(n) {
-        const x = Number(n || 0);
+        if (n === null || n === undefined) return "—";
+        const x = Number(n);
         if (!Number.isFinite(x)) return "—";
-        if (x < 1024) return `${x} B`;
-        if (x < 1024*1024) return `${(x/1024).toFixed(1)} KB`;
-        if (x < 1024*1024*1024) return `${(x/1024/1024).toFixed(1)} MB`;
-        return `${(x/1024/1024/1024).toFixed(2)} GB`;
+        if (x < 0) return "unknown";
+        if (x < 1024) return `${Math.trunc(x)} B`;
+        if (x < 1024 * 1024) return `${(x / 1024).toFixed(1)} KB`;
+        if (x < 1024 * 1024 * 1024) return `${(x / 1024 / 1024).toFixed(1)} MB`;
+        return `${(x / 1024 / 1024 / 1024).toFixed(2)} GB`;
     }
+
 
     function setOptions(allowed, selected) {
         if (!levelSelect) return;
@@ -157,6 +163,14 @@
             body: JSON.stringify({ audit_retention: policy }), // correct key
         });
     }
+    async function apiRotateAudit() {
+        return await fetchJsonOrThrow("/api/v4/admin/rotate-audit", {
+            method: "POST",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+        });
+    }
 
     async function apiRunPrune() {
         return await fetchJsonOrThrow("/api/v4/admin/audit/prune", {
@@ -209,6 +223,16 @@
         if (mode === "size_mb") retMaxMB.classList.remove("hidden");
 
         updateRetentionPill();
+    }
+    function updateActiveSizePill(j) {
+        const bytes = (j && typeof j.audit_active_bytes === "number") ? j.audit_active_bytes : null;
+        const path  = (j && j.audit_active_path) ? String(j.audit_active_path) : "";
+
+        const label = (bytes == null || bytes < 0)
+            ? "—"
+            : `${fmtBytes(bytes)}${path ? " • " + path : ""}`;
+
+        setSimplePill(activeSizePill, "info", "Active log", label);
     }
 
     function updateRetentionPill() {
@@ -278,12 +302,16 @@
             // retention
             const pol = j.audit_retention || { mode: "never", days: 90, max_files: 50, max_total_mb: 20480 };
             applyPolicyToUi(pol);
+            updateActiveSizePill(j);
+
             clearPreview();
 
             setStatusPill("ok", "ready");
         } catch (e) {
             console.error(e);
             setStatusPill("error", "error");
+            setSimplePill(activeSizePill, "warn", "Active log", "—");
+
             showToast("fail", "Failed to load settings", String(e.message || e));
         }
     }
@@ -366,6 +394,29 @@
             showToast("fail", "Preview failed", String(e.message || e));
         } finally {
             btnRetentionPreview.disabled = false;
+        }
+    });
+
+    btnRotateNow?.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+
+        if (!confirm("Rotate audit log now?\n\nThis renames the active pqnas_audit.jsonl into a timestamped archive and starts a fresh active log.\nHash chain continuity is preserved via the rotate header.")) {
+            return;
+        }
+
+        btnRotateNow.disabled = true;
+        setStatusPill("warn", "rotating…");
+
+        try {
+            const j = await apiRotateAudit();
+            showToast("ok", "Rotated", "New active audit log started");
+            await refreshAll();      // updates size + retention preview clears
+        } catch (e) {
+            console.error(e);
+            showToast("fail", "Rotate failed", String(e.message || e));
+            setStatusPill("error", "error");
+        } finally {
+            btnRotateNow.disabled = false;
         }
     });
 
