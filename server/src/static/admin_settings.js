@@ -30,6 +30,11 @@
 
     const activeSizePill = $("activeSizePill");
     const btnRotateNow = $("btnRotateNow");
+// --- rotation policy controls ---
+    const rotatePolicyPill = $("rotatePolicyPill");
+    const rotMode = $("rotMode");
+    const rotMaxMB = $("rotMaxMB");
+    const btnRotatePolicySave = $("btnRotatePolicySave");
 
     function escapeHtml(s) {
         return String(s ?? "")
@@ -224,6 +229,54 @@
 
         updateRetentionPill();
     }
+    function currentRotatePolicyFromUi() {
+        const mode = (rotMode?.value || "off");
+        let max_active_mb = 512;
+
+        if (rotMaxMB && rotMaxMB.value) {
+            max_active_mb = parseInt(rotMaxMB.value, 10) || max_active_mb;
+        }
+
+        return { mode, max_active_mb };
+    }
+
+    function syncRotateModeUi() {
+        const mode = rotMode?.value || "off";
+        if (!rotMaxMB) return;
+
+        // show max MB only for size-based modes
+        rotMaxMB.classList.add("hidden");
+        if (mode === "size_mb" || mode === "size_or_daily") {
+            rotMaxMB.classList.remove("hidden");
+        }
+
+        updateRotatePolicyPill();
+    }
+
+    function applyRotatePolicyToUi(pol) {
+        const mode = (pol && pol.mode) ? String(pol.mode) : "off";
+        if (rotMode) rotMode.value = mode;
+
+        if (rotMaxMB && pol && pol.max_active_mb != null) {
+            rotMaxMB.value = String(pol.max_active_mb);
+        }
+
+        syncRotateModeUi();
+        updateRotatePolicyPill();
+    }
+
+    function updateRotatePolicyPill() {
+        if (!rotatePolicyPill) return;
+
+        const p = currentRotatePolicyFromUi();
+        let label = "Off";
+        if (p.mode === "daily") label = "Daily (UTC)";
+        if (p.mode === "size_mb") label = `When > ${p.max_active_mb} MB`;
+        if (p.mode === "size_or_daily") label = `> ${p.max_active_mb} MB OR daily`;
+
+        setSimplePill(rotatePolicyPill, "info", "Policy", label);
+    }
+
     function updateActiveSizePill(j) {
         const bytes = (j && typeof j.audit_active_bytes === "number") ? j.audit_active_bytes : null;
         const path  = (j && j.audit_active_path) ? String(j.audit_active_path) : "";
@@ -303,6 +356,9 @@
             const pol = j.audit_retention || { mode: "never", days: 90, max_files: 50, max_total_mb: 20480 };
             applyPolicyToUi(pol);
             updateActiveSizePill(j);
+// rotation policy (automatic)
+            const rp = j.audit_rotation || { mode: "off", max_active_mb: 512 };
+            applyRotatePolicyToUi(rp);
 
             clearPreview();
 
@@ -376,6 +432,33 @@
             btnRetentionSave.disabled = false;
         }
     });
+    rotMode?.addEventListener("change", () => {
+        syncRotateModeUi();
+    });
+
+    rotMaxMB?.addEventListener("input", () => {
+        updateRotatePolicyPill();
+    });
+
+    btnRotatePolicySave?.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+
+        const pol = currentRotatePolicyFromUi();
+        btnRotatePolicySave.disabled = true;
+        setStatusPill("warn", "saving…");
+
+        try {
+            await apiSettingsPost({ audit_rotation: pol });
+            showToast("ok", "Saved", "Rotation policy updated");
+            await refreshAll();
+        } catch (e) {
+            console.error(e);
+            showToast("fail", "Save failed", String(e.message || e));
+            setStatusPill("error", "error");
+        } finally {
+            btnRotatePolicySave.disabled = false;
+        }
+    });
 
     btnRetentionPreview?.addEventListener("click", async (ev) => {
         ev.preventDefault();
@@ -447,6 +530,7 @@
     });
 
     // init
+    syncRotateModeUi();
     syncRetentionModeUi();
     refreshAll();
 })();

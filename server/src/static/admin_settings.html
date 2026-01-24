@@ -528,6 +528,41 @@
                     </div>
                 </div>
             </div>
+            <!-- Audit rotation policy (automatic) -->
+            <div class="card">
+                <div class="hd">
+                    <div class="h">Audit rotation policy</div>
+                    <div class="pill info" id="rotatePolicyPill">
+                        <span class="k">Policy:</span> <span class="v">—</span>
+                    </div>
+                </div>
+
+                <div class="bd">
+                    <div class="row">
+                        <select id="rotMode" aria-label="Rotation mode">
+                            <option value="off">Off</option>
+                            <option value="daily">Daily (UTC)</option>
+                            <option value="size_mb">When active log exceeds N MB</option>
+                            <option value="size_or_daily">Size OR daily (whichever first)</option>
+                        </select>
+
+                        <input id="rotMaxMB"
+                               class="input mono hidden"
+                               style="min-width:180px"
+                               type="number"
+                               min="1"
+                               max="1000000"
+                               placeholder="rotate MB (e.g. 512)" />
+
+                        <button id="btnRotatePolicySave" class="btn primary" type="button">Save policy</button>
+                    </div>
+
+                    <div class="note">
+                        Automatic rotation is enforced server-side (best-effort) before appending audit lines.
+                        Retention rules still apply only to rotated archives, never the active log.
+                    </div>
+                </div>
+            </div>
 
             <!-- Audit retention -->
             <div class="card">

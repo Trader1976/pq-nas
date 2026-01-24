@@ -59,7 +59,7 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include <deque>
 #include <algorithm>
 #include <array>
-
+#include <iomanip>
 #include "verify_v4_crypto.h"
 
 #include "audit_log.h"
@@ -333,6 +333,70 @@ static std::string iso_utc_from_filetime(const std::filesystem::file_time_type& 
     }
 }
 
+static std::string utc_day_yyyymmdd() {
+    try {
+        std::time_t tt = std::time(nullptr);
+        std::tm tm{};
+#if defined(_WIN32)
+        gmtime_s(&tm, &tt);
+#else
+        gmtime_r(&tt, &tm);
+#endif
+        std::ostringstream oss;
+        oss << std::setfill('0')
+            << std::setw(4) << (tm.tm_year + 1900) << "-"
+            << std::setw(2) << (tm.tm_mon + 1) << "-"
+            << std::setw(2) << tm.tm_mday;
+        return oss.str();
+    } catch (...) {
+        return "0000-00-00";
+    }
+}
+static nlohmann::json load_admin_settings_safe(const std::string& path) {
+    try {
+        std::ifstream f(path);
+        if (!f.good()) return nlohmann::json::object();
+        nlohmann::json j;
+        f >> j;
+        if (!j.is_object()) return nlohmann::json::object();
+        return j;
+    } catch (...) {
+        return nlohmann::json::object();
+    }
+}
+
+struct AuditRotateCfg {
+    long long max_active_bytes = 256LL * 1024LL * 1024LL; // default 256 MB
+    bool daily_utc = true;
+    int check_interval_sec = 10;
+};
+
+static AuditRotateCfg get_rotate_cfg_from_settings(const nlohmann::json& settings) {
+    AuditRotateCfg c;
+
+    if (settings.contains("audit_rotate") && settings["audit_rotate"].is_object()) {
+        const auto& ar = settings["audit_rotate"];
+
+        if (ar.contains("max_active_mb") && ar["max_active_mb"].is_number_integer()) {
+            long long mb = ar["max_active_mb"].get<long long>();
+            if (mb < 0) mb = 0;
+            c.max_active_bytes = mb * 1024LL * 1024LL;
+        }
+
+        if (ar.contains("daily_utc") && ar["daily_utc"].is_boolean()) {
+            c.daily_utc = ar["daily_utc"].get<bool>();
+        }
+
+        if (ar.contains("check_interval_sec") && ar["check_interval_sec"].is_number_integer()) {
+            int s = ar["check_interval_sec"].get<int>();
+            if (s < 1) s = 1;
+            if (s > 3600) s = 3600;
+            c.check_interval_sec = s;
+        }
+    }
+
+    return c;
+}
 
 struct ArchivePair {
     std::string jsonl_path;
@@ -1270,7 +1334,64 @@ if (it != j.end() && it->is_string()) {
                   << ": " << e.what() << std::endl;
     }
 
+std::atomic<bool> audit_rotator_stop{false};
+std::thread audit_rotator([&]() {
+    std::string last_day = utc_day_yyyymmdd();
 
+    while (!audit_rotator_stop.load()) {
+        // Load settings each tick so admin changes apply without restart
+        const nlohmann::json settings = load_admin_settings_safe(admin_settings_path);
+        const AuditRotateCfg cfg = get_rotate_cfg_from_settings(settings);
+
+        bool should_rotate = false;
+        std::string reason;
+
+        // 1) size trigger
+        if (cfg.max_active_bytes > 0) {
+            const long long sz = file_size_bytes_safe(audit_jsonl_path);
+            if (sz >= 0 && sz >= cfg.max_active_bytes) {
+                should_rotate = true;
+                reason = "size";
+            }
+        }
+
+        // 2) daily trigger (UTC day changed)
+        if (!should_rotate && cfg.daily_utc) {
+            const std::string today = utc_day_yyyymmdd();
+            if (today != last_day) {
+                should_rotate = true;
+                reason = "daily";
+            }
+        }
+
+        if (should_rotate) {
+            pqnas::AuditLog::RotateOptions opt;
+            pqnas::AuditLog::RotateResult rr;
+            const bool ok = audit.rotate(opt, &rr);
+
+            // best-effort audit event (don’t crash thread)
+            try {
+                pqnas::AuditEvent ev;
+                ev.event = "audit.auto_rotated";
+                ev.outcome = ok ? "ok" : "fail";
+                ev.f["reason"] = reason;
+                ev.f["rotated_jsonl_path"] = ok ? rr.rotated_jsonl_path : "";
+                audit.append(ev);
+            } catch (...) {}
+
+            // Update last_day ONLY when day-based rotate fired (or after any successful rotate)
+            // so we don't rotate repeatedly in the same day.
+            if (cfg.daily_utc) {
+                last_day = utc_day_yyyymmdd();
+            }
+        }
+
+        for (int i = 0; i < cfg.check_interval_sec * 10; i++) {
+            if (audit_rotator_stop.load()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+});
 
 // Generic static handler: /static/<anything>
 // Must come AFTER specific /static/*.js handlers so those remain unchanged.

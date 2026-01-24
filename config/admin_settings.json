@@ -5,5 +5,10 @@
     "max_files": 46,
     "max_total_mb": 20480,
     "mode": "files"
+  },
+  "audit_rotate": {
+    "max_active_mb": 256,
+    "daily_utc": true,
+    "check_interval_sec": 10
   }
 }
