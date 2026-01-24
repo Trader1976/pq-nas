@@ -413,7 +413,7 @@ static std::vector<ArchivePair> list_rotated_archives_local(const std::string& a
     const std::filesystem::path dir = active.parent_path();
 
     const std::string active_name = active.filename().string(); // pqnas_audit.jsonl
-    const std::string prefix = "pqnas_audit.";
+    const std::string prefix = "pqnas_audit-";
     const std::string jsonl_ext = ".jsonl";
     const std::string state_ext = ".state";
 
