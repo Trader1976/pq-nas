@@ -147,10 +147,10 @@
 
     function renderNet(j) {
         const net = j.net || {};
-        const counters = net.counters || null;
-        const nowMs = Date.now();
-
-        if (!counters) {
+        const c = net.counters || {};              
+        console.log("net counters", c.rx_bytes, c.tx_bytes);
+        const series = Array.isArray(net.series) ? net.series : [];
+        if (!series.length) {
             el("netIf") && (el("netIf").textContent = "—");
             el("netRx") && (el("netRx").textContent = "—");
             el("netTx") && (el("netTx").textContent = "—");
@@ -158,44 +158,25 @@
             return;
         }
 
-        if (!netState.iface || !counters[netState.iface]) {
-            netState.iface = pickIface(counters);
-            netState.lastT = 0; // reset deltas on iface switch
-            netState.histRx = [];
-            netState.histTx = [];
+        // Use server-sampled series directly
+        const rxArr = [];
+        const txArr = [];
+        for (const p of series) {
+            rxArr.push(Number(p.rx_bps));
+            txArr.push(Number(p.tx_bps));
         }
 
-        const c = counters[netState.iface] || { rx_bytes: 0, tx_bytes: 0 };
+        // Update “current” numbers from last point
+        const last = series[series.length - 1] || {};
+        el("netRx") && (el("netRx").textContent = fmtBps(Number(last.rx_bps)));
+        el("netTx") && (el("netTx").textContent = fmtBps(Number(last.tx_bps)));
 
-        // First sample: prime
-        if (!netState.lastT) {
-            netState.lastT = nowMs;
-            netState.lastRx = c.rx_bytes;
-            netState.lastTx = c.tx_bytes;
-            pushHist(netState.histRx, 0, netState.maxPoints);
-            pushHist(netState.histTx, 0, netState.maxPoints);
-        } else {
-            const dt = Math.max(0.2, (nowMs - netState.lastT) / 1000.0);
-            const drx = Math.max(0, c.rx_bytes - netState.lastRx);
-            const dtx = Math.max(0, c.tx_bytes - netState.lastTx);
-            const rxBps = drx / dt;
-            const txBps = dtx / dt;
+        // Interface label: backend is total-across-ifaces now
+        el("netIf") && (el("netIf").textContent = "total");
 
-            netState.lastT = nowMs;
-            netState.lastRx = c.rx_bytes;
-            netState.lastTx = c.tx_bytes;
-
-            pushHist(netState.histRx, rxBps, netState.maxPoints);
-            pushHist(netState.histTx, txBps, netState.maxPoints);
-
-            el("netRx") && (el("netRx").textContent = fmtBps(rxBps));
-            el("netTx") && (el("netTx").textContent = fmtBps(txBps));
-        }
-
-        el("netIf") && (el("netIf").textContent = netState.iface || "—");
-
-        drawNet(el("netCanvas"), netState.histRx, netState.histTx);
+        drawNet(el("netCanvas"), rxArr, txArr);
     }
+
 
     // ---------------- Existing render ----------------
     function render(j) {

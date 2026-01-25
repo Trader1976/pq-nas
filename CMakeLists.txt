@@ -26,6 +26,7 @@ endif()
 # -----------------------------------------------------------------------------
 find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
+find_package(Threads REQUIRED)
 
 pkg_check_modules(SODIUM REQUIRED libsodium)
 pkg_check_modules(QRENCODE REQUIRED libqrencode)
@@ -128,6 +129,7 @@ add_executable(pqnas_server
         server/src/audit_log.cc
         server/src/allowlist.cc
         server/src/users_registry.cpp
+        server/src/system_metrics.cc          # <-- FIX: compile/link the moved code
 )
 
 target_include_directories(pqnas_server PRIVATE
@@ -147,6 +149,7 @@ target_link_libraries(pqnas_server PRIVATE
         pqnas_verify_v4
         ${QRENCODE_LIBRARIES}
         OpenSSL::Crypto
+        Threads::Threads                   # <-- robust std::thread support (-pthread)
         dl
 )
 
@@ -251,6 +254,7 @@ target_include_directories(test_admin_cookie PRIVATE
 target_link_libraries(test_admin_cookie PRIVATE
         OpenSSL::Crypto
         ${SODIUM_LIBRARIES}
+        Threads::Threads                  # (harmless; keeps things consistent)
 )
 
 set_target_properties(test_admin_cookie PROPERTIES
