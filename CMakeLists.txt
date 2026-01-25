@@ -31,7 +31,7 @@ pkg_check_modules(SODIUM REQUIRED libsodium)
 pkg_check_modules(QRENCODE REQUIRED libqrencode)
 
 # -----------------------------------------------------------------------------
-# Core library
+# Core library (default: used by tools/vectors; permissive / frozen-vector friendly)
 # -----------------------------------------------------------------------------
 add_library(pqnas_core STATIC
         core/qrauth_v4.c
@@ -50,6 +50,36 @@ target_compile_options(pqnas_core PRIVATE
 )
 
 target_link_libraries(pqnas_core PRIVATE
+        ${SODIUM_LIBRARIES}
+        OpenSSL::Crypto
+)
+
+# -----------------------------------------------------------------------------
+# Core library (server strict mode: enables time enforcement in qrauth_v4.c)
+# -----------------------------------------------------------------------------
+add_library(pqnas_core_server STATIC
+        core/qrauth_v4.c
+)
+
+target_include_directories(pqnas_core_server PUBLIC
+        ${CMAKE_SOURCE_DIR}/core
+)
+
+target_include_directories(pqnas_core_server PRIVATE
+        ${SODIUM_INCLUDE_DIRS}
+)
+
+target_compile_options(pqnas_core_server PRIVATE
+        ${SODIUM_CFLAGS_OTHER}
+)
+
+# Enforce req.exp and proof ts freshness in server builds only.
+target_compile_definitions(pqnas_core_server PRIVATE
+        QR_V4_ENFORCE_TIME=1
+        QR_V4_MAX_SKEW_SEC=300
+)
+
+target_link_libraries(pqnas_core_server PRIVATE
         ${SODIUM_LIBRARIES}
         OpenSSL::Crypto
 )
@@ -77,13 +107,16 @@ target_compile_options(pqnas_verify_v4 PRIVATE
         ${SODIUM_CFLAGS_OTHER}
 )
 
+# IMPORTANT:
+# - Server must get strict time enforcement in core/qrauth_v4.c
+# - Tools/vectors should remain permissive to avoid breaking frozen vectors.
+# Therefore pqnas_verify_v4 links against pqnas_core_server.
 target_link_libraries(pqnas_verify_v4 PUBLIC
-        pqnas_core
+        pqnas_core_server
         ${SODIUM_LIBRARIES}
         OpenSSL::Crypto
         dl
 )
-
 
 # -----------------------------------------------------------------------------
 # Server (C++ / httplib)
@@ -129,8 +162,6 @@ add_custom_command(TARGET pqnas_server POST_BUILD
         "$<TARGET_FILE_DIR:pqnas_server>/libdna_lib.so"
 )
 
-
-
 # -----------------------------------------------------------------------------
 # Tool: verify_vectors
 # -----------------------------------------------------------------------------
@@ -147,6 +178,7 @@ target_compile_options(verify_vectors PRIVATE
         ${SODIUM_CFLAGS_OTHER}
 )
 
+# IMPORTANT: verify_vectors stays linked to permissive core to keep frozen vectors working.
 target_link_libraries(verify_vectors PRIVATE
         pqnas_core
         ${SODIUM_LIBRARIES}
@@ -169,9 +201,11 @@ add_custom_target(run_verify_vectors
 add_executable(verify_v4_vectors
         tools/verify_v4_vectors.cpp
 )
+
 target_link_libraries(verify_v4_vectors PRIVATE
         pqnas_verify_v4
 )
+
 # Keep output next to other tools
 set_target_properties(verify_v4_vectors PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
@@ -222,6 +256,7 @@ target_link_libraries(test_admin_cookie PRIVATE
 set_target_properties(test_admin_cookie PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+
 # -----------------------------------------------------------------------------
 # Tool: pqnas_keygen
 # -----------------------------------------------------------------------------

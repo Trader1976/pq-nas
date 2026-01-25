@@ -199,7 +199,16 @@
 
     // ---------------- Existing render ----------------
     function render(j) {
-        // CPU
+
+            // OS (top card)
+            el("osHost").textContent   = j.host || "—";
+            el("osPretty").textContent = (j.os && j.os.pretty) ? j.os.pretty : "—";
+            el("osKernel").textContent = j.kernel || "—";
+            el("cpuModel").textContent = (j.cpu && j.cpu.model) ? j.cpu.model : "—";
+            setPill(el("osPill"), "ok", j.kernel || "—");
+
+
+            // CPU
         const load = j.cpu && j.cpu.load ? j.cpu.load : null;
         const loadText = load ? `${load.one.toFixed(2)}  ${load.five.toFixed(2)}  ${load.fifteen.toFixed(2)}` : "—";
         el("cpuCores").textContent = (j.cpu && j.cpu.cores) ? String(j.cpu.cores) : "—";

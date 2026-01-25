@@ -27,11 +27,24 @@ extern "C" {
     (allowlist roles) should be applied only after QR_OK is returned.
     */
 
+	// Time enforcement (server should enable; tools/vectors can disable).
+	// If enabled, qr_verify_req_token() enforces req.exp and qr_verify_proof_token()
+	// enforces proof ts freshness.
+	#ifndef QR_V4_ENFORCE_TIME
+	#define QR_V4_ENFORCE_TIME 0
+	#endif
+
+	// Allowed clock skew (seconds) between phone and server.
+	#ifndef QR_V4_MAX_SKEW_SEC
+	#define QR_V4_MAX_SKEW_SEC 300
+	#endif
+
     // Error codes (0 = success).
     //
     // Convention:
     // - QR_ERR_FORMAT/B64/JSON are input/parse failures (HTTP 400).
     // - Signature/binding errors are authorization failures (HTTP 403).
+
     typedef enum {
         QR_OK = 0,
         QR_ERR_FORMAT = 10,     // Token envelope/segments malformed
@@ -40,12 +53,14 @@ extern "C" {
 
         QR_ERR_SERVER_PK = 20,  // server_pk_raw missing/invalid length/etc
         QR_ERR_REQ_SIG = 21,    // req_token signature invalid (not minted by server)
+ 		QR_ERR_REQ_EXPIRED = 22, // req_token exp < now (when QR_V4_ENFORCE_TIME=1)
 
         QR_ERR_REQ_MISMATCH = 30, // proof does not bind to the exact req_token_expected
         QR_ERR_PK_DECODE = 31,    // public key decode/parse failure (format depends on protocol)
         QR_ERR_FP_BINDING = 32,   // fingerprint <-> public key binding failed
 
         QR_ERR_PHONE_SIG = 40,  // phone signature invalid (identity proof failed)
+        QR_ERR_TS_SKEW = 41,     // proof ts too far from server time (when QR_V4_ENFORCE_TIME=1)
     } qr_err_t;
 
     // Proof claims (extracted from proof_token payload).

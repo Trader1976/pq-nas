@@ -314,15 +314,17 @@ static void route_v4_verify(const drogon::HttpRequestPtr& req,
         // Security note:
         // Avoid leaking exact verification failure causes to clients.
         // Put exact rc / reason into audit logs instead.
-        switch (rc) {
-            case QR_ERR_REQ_SIG:
-            case QR_ERR_REQ_MISMATCH:
-            case QR_ERR_FP_BINDING:
-            case QR_ERR_PHONE_SIG:
-                return jerr(resp, 403, "not_authorized", "verification failed"), cb(resp);
-            default:
-                return jerr(resp, 400, "bad_request", "invalid token format"), cb(resp);
-        }
+	switch (rc) {
+    	case QR_ERR_REQ_SIG:
+    	case QR_ERR_REQ_EXPIRED:
+    	case QR_ERR_REQ_MISMATCH:
+    	case QR_ERR_FP_BINDING:
+    	case QR_ERR_PHONE_SIG:
+    	case QR_ERR_TS_SKEW:
+       		return jerr(resp, 403, "not_authorized", "verification failed"), cb(resp);
+    	default:
+	        return jerr(resp, 400, "bad_request", "invalid token format"), cb(resp);
+		}
     }
 
     // Extract claims after successful cryptographic verification.

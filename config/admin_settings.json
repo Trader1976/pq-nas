@@ -1,5 +1,5 @@
 {
-  "audit_min_level": "SECURITY",
+  "audit_min_level": "ADMIN",
   "audit_retention": {
     "days": 365,
     "max_files": 1,

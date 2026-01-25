@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+
 
 void qr_strip_ws_inplace(char *s) {
     if (!s) return;
@@ -53,6 +55,26 @@ static int verify_ed25519_detached(const unsigned char pk[32],
     return crypto_sign_verify_detached(sig, msg, (unsigned long long)msg_len, pk);
 }
 
+
+static int json_get_long(const char *json, const char *field, long *out) {
+    if (!json || !field || !out) return 0;
+    char pat[128];
+    snprintf(pat, sizeof(pat), "\"%s\":", field);
+
+    const char *p = strstr(json, pat);
+    if (!p) return 0;
+    p += strlen(pat);
+
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+
+    char *end = NULL;
+    long v = strtol(p, &end, 10);
+    if (end == p) return 0;
+
+    *out = v;
+    return 1;
+}
+
 static char *json_get_string_dup(const char *json, const char *field) {
     // Minimal extractor: finds "field":"...".
     // For v0 test vectors only. Production should use a real JSON parser or JCS bytes.
@@ -96,11 +118,13 @@ qr_err_t qr_verify_req_token(const char *req_token, const unsigned char server_p
 
     unsigned char payload_bytes[4096];
     size_t payload_len = 0;
-    if (b64url_decode(payload_b64, payload_bytes, sizeof(payload_bytes), &payload_len) != 0) {
+    if (b64url_decode(payload_b64, payload_bytes, sizeof(payload_bytes) - 1, &payload_len) != 0) {
         free(payload_b64);
         return QR_ERR_B64;
     }
-    free(payload_b64);
+
+    // NUL-terminate for crude JSON parsing when time enforcement is enabled
+    payload_bytes[payload_len] = 0;
 
     unsigned char sig[128];
     size_t sig_len = 0;
