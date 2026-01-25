@@ -147,7 +147,7 @@
 
     function renderNet(j) {
         const net = j.net || {};
-        const c = net.counters || {};              
+        const c = net.counters || {};
         console.log("net counters", c.rx_bytes, c.tx_bytes);
         const series = Array.isArray(net.series) ? net.series : [];
         if (!series.length) {
