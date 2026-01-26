@@ -283,51 +283,7 @@ static std::string utc_day_yyyymmdd() {
         return "0000-00-00";
     }
 }
-static nlohmann::json load_admin_settings_safe(const std::string& path) {
-    try {
-        std::ifstream f(path);
-        if (!f.good()) return nlohmann::json::object();
-        nlohmann::json j;
-        f >> j;
-        if (!j.is_object()) return nlohmann::json::object();
-        return j;
-    } catch (...) {
-        return nlohmann::json::object();
-    }
-}
 
-struct AuditRotateCfg {
-    long long max_active_bytes = 256LL * 1024LL * 1024LL; // default 256 MB
-    bool daily_utc = true;
-    int check_interval_sec = 10;
-};
-
-static AuditRotateCfg get_rotate_cfg_from_settings(const nlohmann::json& settings) {
-    AuditRotateCfg c;
-
-    if (settings.contains("audit_rotate") && settings["audit_rotate"].is_object()) {
-        const auto& ar = settings["audit_rotate"];
-
-        if (ar.contains("max_active_mb") && ar["max_active_mb"].is_number_integer()) {
-            long long mb = ar["max_active_mb"].get<long long>();
-            if (mb < 0) mb = 0;
-            c.max_active_bytes = mb * 1024LL * 1024LL;
-        }
-
-        if (ar.contains("daily_utc") && ar["daily_utc"].is_boolean()) {
-            c.daily_utc = ar["daily_utc"].get<bool>();
-        }
-
-        if (ar.contains("check_interval_sec") && ar["check_interval_sec"].is_number_integer()) {
-            int s = ar["check_interval_sec"].get<int>();
-            if (s < 1) s = 1;
-            if (s > 3600) s = 3600;
-            c.check_interval_sec = s;
-        }
-    }
-
-    return c;
-}
 
 struct ArchivePair {
     std::string jsonl_path;
@@ -1067,7 +1023,7 @@ int main()
                 ev.f["reason"] = reason_tag;
                 ev.f["rotated_jsonl_path"] = rr.rotated_jsonl_path;
                 ev.f["ip"] = "local";
-                audit_append(ev);
+                audit.append(ev);
             } catch (...) {}
 
             return true;
@@ -1077,43 +1033,46 @@ int main()
     };
 
 
-    // the actual policy check: call this before audit.append(ev)
-    auto maybe_auto_rotate_before_append = [&]() {
-        json settings = load_admin_settings_cached(admin_settings_path);
+// the actual policy check: call this before audit.append(ev)
+// Uses admin_settings.json schema from /api/v4/admin/settings:
+//   audit_rotation: { mode: manual|daily|size_mb|daily_or_size_mb, max_active_mb: int, rotate_utc_day: string }
+auto maybe_auto_rotate_before_append = [&]() {
+    json settings = load_admin_settings_cached(admin_settings_path);
 
-        // Expect: settings["audit_rotation"] = { "mode": "...", "max_active_mb": N }
-        json rot = json::object();
-        if (settings.contains("audit_rotation") && settings["audit_rotation"].is_object()) {
-            rot = settings["audit_rotation"];
-        }
+    json rot = json::object();
+    if (settings.contains("audit_rotation") && settings["audit_rotation"].is_object()) {
+        rot = settings["audit_rotation"];
+    }
 
-        const std::string mode = rot.value("mode", "off");
-        const int max_mb = rot.value("max_active_mb", 512);
+    const std::string mode = rot.value("mode", "manual");
+    const int max_mb = rot.value("max_active_mb", 256);
 
-        if (mode == "off") return;
+    // manual => never auto-rotate
+    if (mode == "manual") return;
 
-        static std::string last_rotated_day = utc_day_yyyymmdd_local();
+    static std::string last_rotated_day = utc_day_yyyymmdd_local();
 
-        // daily trigger (UTC)
-        if (mode == "daily" || mode == "size_or_daily") {
-            const std::string today = utc_day_yyyymmdd_local();
-            if (today != last_rotated_day) {
-                if (rotate_audit_now_internal("daily")) {
-                    last_rotated_day = today;
-                    return; // done
-                }
+    // daily trigger (UTC day change)
+    if (mode == "daily" || mode == "daily_or_size_mb") {
+        const std::string today = utc_day_yyyymmdd_local();
+        if (today != last_rotated_day) {
+            if (rotate_audit_now_internal("daily")) {
+                last_rotated_day = today;
+                return;
             }
         }
+    }
 
-        // size trigger
-        if (mode == "size_mb" || mode == "size_or_daily") {
-            const long long bytes = file_size_bytes_safe(audit_jsonl_path);
-            const long long limit = (long long)max_mb * 1024LL * 1024LL;
-            if (bytes >= 0 && bytes >= limit) {
-                (void)rotate_audit_now_internal("size_mb");
-            }
+    // size trigger
+    if (mode == "size_mb" || mode == "daily_or_size_mb") {
+        const long long bytes = file_size_bytes_safe(audit_jsonl_path);
+        const long long limit = (long long)max_mb * 1024LL * 1024LL;
+        if (bytes >= 0 && bytes >= limit) {
+            (void)rotate_audit_now_internal("size_mb");
         }
-    };
+    }
+};
+
 
     // OPTIONAL: use this wrapper everywhere instead of calling audit.append(ev) directly
     audit_append = [&](const pqnas::AuditEvent& ev) {
@@ -1151,65 +1110,6 @@ int main()
                   << ": " << e.what() << std::endl;
     }
 
-std::atomic<bool> audit_rotator_stop{false};
-std::thread audit_rotator([&]() {
-    std::string last_day = utc_day_yyyymmdd();
-
-    while (!audit_rotator_stop.load()) {
-        // Load settings each tick so admin changes apply without restart
-        const nlohmann::json settings = load_admin_settings_safe(admin_settings_path);
-        const AuditRotateCfg cfg = get_rotate_cfg_from_settings(settings);
-
-        bool should_rotate = false;
-        std::string reason;
-
-        // 1) size trigger
-        if (cfg.max_active_bytes > 0) {
-            const long long sz = file_size_bytes_safe(audit_jsonl_path);
-            if (sz >= 0 && sz >= cfg.max_active_bytes) {
-                should_rotate = true;
-                reason = "size";
-            }
-        }
-
-        // 2) daily trigger (UTC day changed)
-        if (!should_rotate && cfg.daily_utc) {
-            const std::string today = utc_day_yyyymmdd();
-            if (today != last_day) {
-                should_rotate = true;
-                reason = "daily";
-            }
-        }
-
-        if (should_rotate) {
-            pqnas::AuditLog::RotateOptions opt;
-            pqnas::AuditLog::RotateResult rr;
-            const bool ok = audit.rotate(opt, &rr);
-
-            // best-effort audit event (don’t crash thread)
-            try {
-                pqnas::AuditEvent ev;
-                ev.event = "audit.auto_rotated";
-                ev.outcome = ok ? "ok" : "fail";
-                ev.f["reason"] = reason;
-                ev.f["rotated_jsonl_path"] = ok ? rr.rotated_jsonl_path : "";
-                maybe_auto_rotate_before_append();
-                audit_append(ev);
-            } catch (...) {}
-
-            // Update last_day ONLY when day-based rotate fired (or after any successful rotate)
-            // so we don't rotate repeatedly in the same day.
-            if (cfg.daily_utc) {
-                last_day = utc_day_yyyymmdd();
-            }
-        }
-
-        for (int i = 0; i < cfg.check_interval_sec * 10; i++) {
-            if (audit_rotator_stop.load()) break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-    }
-});
 
 // Generic static handler: /static/<anything>
 // Must come AFTER specific /static/*.js handlers so those remain unchanged.
@@ -1231,7 +1131,7 @@ srv.Get(R"(/static/(.+))", [&](const httplib::Request& req, httplib::Response& r
         return;
     }
 
-    const std::filesystem::path base = std::filesystem::path("server/src/static");
+    const std::filesystem::path base = std::filesystem::path(REPO_ROOT) / "server/src/static";
     const std::filesystem::path full = base / rel;
 
     // Fail-closed: only serve known safe extensions

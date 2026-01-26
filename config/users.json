@@ -6,16 +6,16 @@
       "email": "",
       "fingerprint": "a8885f40f4c12c85837807021a48d31c1ba657f5aebe809107eccb72ce60024076fd976c34109c78c68614c5d37702225397a3daba099fb16ed4738167bede39",
       "group": "",
-      "last_seen": "2026-01-26T05:02:29.697Z",
+      "last_seen": "2026-01-26T07:06:38.970Z",
       "name": "Admin",
       "notes": "",
-      "quota_bytes": 0,
+      "quota_bytes": 8589934592,
       "role": "admin",
-      "root_rel": "",
+      "root_rel": "users/a8885f40f4c12c85837807021a48d31c1ba657f5aebe809107eccb72ce60024076fd976c34109c78c68614c5d37702225397a3daba099fb16ed4738167bede39",
       "status": "enabled",
-      "storage_set_at": "",
-      "storage_set_by": "",
-      "storage_state": "unallocated"
+      "storage_set_at": "2026-01-26T07:09:27.237Z",
+      "storage_set_by": "a8885f40f4c12c85837807021a48d31c1ba657f5aebe809107eccb72ce60024076fd976c34109c78c68614c5d37702225397a3daba099fb16ed4738167bede39",
+      "storage_state": "allocated"
     }
   ]
 }

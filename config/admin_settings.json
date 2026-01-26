@@ -1,5 +1,5 @@
 {
-  "audit_min_level": "ADMIN",
+  "audit_min_level": "DEBUG",
   "audit_retention": {
     "days": 365,
     "max_files": 1,
@@ -19,7 +19,7 @@
   "user_defaults": {
     "auto_allocate_on_enable": false,
     "default_quota_gb": 10,
-    "workspace_root_dir": "data/workspaces",
-    "workspace_layout": "per_fingerprint"
+    "workspace_layout": "per_fingerprint",
+    "workspace_root_dir": "data/workspaces"
   }
 }
