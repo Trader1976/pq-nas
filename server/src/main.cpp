@@ -3281,6 +3281,210 @@ srv.Get("/api/v4/system/storage", [&](const httplib::Request& req, httplib::Resp
     reply_json(res, 200, out.dump());
 });
 
+    
+// DELETE /api/v4/files/delete?path=relative/path
+// Deletes a file or directory (recursive). Refuses empty path (won't delete user root).
+srv.Delete("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_delete_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& rel_path, const std::string& type,
+                        std::uint64_t freed_bytes) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_delete_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_path, 200);
+        ev.f["type"] = type;
+        ev.f["freed_bytes"] = std::to_string((unsigned long long)freed_bytes);
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // Storage allocated check (fail-closed)
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value()) {
+            audit_fail("user_missing", 403);
+            reply_json(res, 403, json{{"ok", false}, {"error", "forbidden"}, {"message", "policy denied"}}.dump());
+            return;
+        }
+        const auto& u = *uopt;
+        if (u.storage_state != "allocated") {
+            audit_fail("storage_unallocated", 403);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"},
+                {"fingerprint_hex", fp_hex},
+                {"quota_bytes", u.quota_bytes}
+            }.dump());
+            return;
+        }
+    }
+
+    // path param (required)
+    std::string rel_path;
+    if (req.has_param("path")) rel_path = req.get_param_value("path");
+    if (rel_path.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    std::filesystem::path abs_path;
+    std::string perr;
+    if (!pqnas::resolve_user_path_strict(user_dir, rel_path, &abs_path, &perr)) {
+        audit_fail("invalid_path", 400, perr);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    // Extra safety: refuse deleting the user root directly
+    // (only possible if rel_path somehow resolves to user_dir, but keep it explicit)
+    if (abs_path == user_dir) {
+        audit_fail("refuse_root_delete", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "refusing to delete root"}
+        }.dump());
+        return;
+    }
+
+    // Must exist
+    std::error_code ec;
+    auto st = std::filesystem::status(abs_path, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "path not found"}
+        }.dump());
+        return;
+    }
+
+    // Compute freed bytes (best-effort)
+    auto compute_freed_bytes = [&](const std::filesystem::path& p) -> std::uint64_t {
+        std::uint64_t total = 0;
+        std::error_code ecx;
+
+        auto st2 = std::filesystem::status(p, ecx);
+        if (ecx) return 0;
+
+        if (std::filesystem::is_regular_file(st2)) {
+            auto sz = std::filesystem::file_size(p, ecx);
+            if (!ecx) total += (std::uint64_t)sz;
+            return total;
+        }
+
+        if (std::filesystem::is_directory(st2)) {
+            for (std::filesystem::recursive_directory_iterator it(p, ecx), end;
+                 it != end && !ecx;
+                 it.increment(ecx)) {
+                std::error_code ec2;
+                if (it->is_regular_file(ec2) && !ec2) {
+                    std::error_code ec3;
+                    auto sz = it->file_size(ec3);
+                    if (!ec3) total += (std::uint64_t)sz;
+                }
+            }
+        }
+
+        return total;
+    };
+
+    const bool is_dir = std::filesystem::is_directory(st);
+    const std::string type = is_dir ? "dir" : (std::filesystem::is_regular_file(st) ? "file" : "other");
+
+    std::uint64_t freed_bytes = compute_freed_bytes(abs_path);
+
+    // Delete
+    if (is_dir) {
+        std::uintmax_t removed = std::filesystem::remove_all(abs_path, ec);
+        if (ec || removed == 0) {
+            audit_fail("remove_all_failed", 500, ec.message());
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "delete failed"},
+                {"detail", pqnas::shorten(ec.message(), 180)}
+            }.dump());
+            return;
+        }
+    } else {
+        bool removed = std::filesystem::remove(abs_path, ec);
+        if (ec || !removed) {
+            audit_fail("remove_failed", 500, ec.message());
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "delete failed"},
+                {"detail", pqnas::shorten(ec.message(), 180)}
+            }.dump());
+            return;
+        }
+    }
+
+    audit_ok(rel_path, type, freed_bytes);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"fingerprint_hex", fp_hex},
+        {"path", rel_path},
+        {"type", type},
+        {"freed_bytes", freed_bytes}
+    }.dump());
+});
+
 // GET /api/v4/files/list?path=relative/dir   (path optional; empty => user root)
 // Response: JSON listing of immediate children (no recursion)
 srv.Get("/api/v4/files/list", [&](const httplib::Request& req, httplib::Response& res) {
