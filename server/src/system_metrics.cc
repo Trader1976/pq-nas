@@ -35,6 +35,8 @@
 #include <limits>
 #include <cstdio>
 #include <cstdlib>
+#include <iomanip>
+
 
 // -----------------------------------------------------------------------------
 // Linux / POSIX
@@ -383,3 +385,329 @@ nlohmann::json collect_system_snapshot(const std::string& repo_root) {
 }
 
 } // namespace pqnas
+
+
+// -----------------------------------------------------------------------------
+// Helper implementations 
+// -----------------------------------------------------------------------------
+
+static std::string trim_ws(const std::string& s) {
+    size_t a = 0, b = s.size();
+    while (a < b && (s[a] == ' ' || s[a] == '\t' || s[a] == '\r' || s[a] == '\n')) a++;
+    while (b > a && (s[b - 1] == ' ' || s[b - 1] == '\t' || s[b - 1] == '\r' || s[b - 1] == '\n')) b--;
+    return s.substr(a, b - a);
+}
+
+static std::string unquote(const std::string& s) {
+    if (s.size() >= 2) {
+        if ((s.front() == '"' && s.back() == '"') || (s.front() == '\'' && s.back() == '\'')) {
+            return s.substr(1, s.size() - 2);
+        }
+    }
+    return s;
+}
+
+static bool parse_proc_loadavg(double& one, double& five, double& fifteen) {
+    std::ifstream f("/proc/loadavg");
+    if (!f.good()) return false;
+    f >> one >> five >> fifteen;
+    return f.good();
+}
+
+static bool parse_proc_uptime(double& uptime_s) {
+    std::ifstream f("/proc/uptime");
+    if (!f.good()) return false;
+    f >> uptime_s;
+    return f.good();
+}
+
+static std::string cpu_model_string() {
+    std::ifstream f("/proc/cpuinfo");
+    if (!f.good()) return "";
+
+    std::string line;
+    while (std::getline(f, line)) {
+        auto pos = line.find(':');
+        if (pos == std::string::npos) continue;
+
+        std::string key = trim_ws(line.substr(0, pos));
+        if (key == "model name" || key == "Hardware" || key == "Processor") {
+            return trim_ws(line.substr(pos + 1));
+        }
+    }
+    return "";
+}
+
+static bool os_release_pretty(std::string& pretty, std::string& id, std::string& ver) {
+    std::ifstream f("/etc/os-release");
+    if (!f.good()) return false;
+
+    std::string pretty_v, id_v, ver_v;
+
+    std::string line;
+    while (std::getline(f, line)) {
+        line = trim_ws(line);
+        if (line.empty() || line[0] == '#') continue;
+
+        auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+
+        std::string k = trim_ws(line.substr(0, eq));
+        std::string v = unquote(trim_ws(line.substr(eq + 1)));
+
+        if (k == "PRETTY_NAME") pretty_v = v;
+        else if (k == "ID") id_v = v;
+        else if (k == "VERSION_ID") ver_v = v;
+    }
+
+    pretty = pretty_v;
+    id = id_v;
+    ver = ver_v;
+    return !(pretty.empty() && id.empty() && ver.empty());
+}
+
+static bool parse_proc_meminfo_bytes(long long& total_bytes, long long& avail_bytes) {
+    std::ifstream f("/proc/meminfo");
+    if (!f.good()) return false;
+
+    long long total_kb = -1;
+    long long avail_kb = -1;
+
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.rfind("MemTotal:", 0) == 0) {
+            std::istringstream iss(line);
+            std::string k;
+            iss >> k >> total_kb;
+        } else if (line.rfind("MemAvailable:", 0) == 0) {
+            std::istringstream iss(line);
+            std::string k;
+            iss >> k >> avail_kb;
+        }
+        if (total_kb >= 0 && avail_kb >= 0) break;
+    }
+
+    if (total_kb < 0 || avail_kb < 0) return false;
+    total_bytes = total_kb * 1024LL;
+    avail_bytes = avail_kb * 1024LL;
+    return true;
+}
+
+static bool statvfs_bytes(const std::string& path, long long& total, long long& free, long long& used) {
+    struct statvfs v {};
+    if (::statvfs(path.c_str(), &v) != 0) return false;
+
+    const unsigned long long bs = (v.f_frsize ? v.f_frsize : v.f_bsize);
+    const unsigned long long tot = bs * (unsigned long long)v.f_blocks;
+    const unsigned long long fre = bs * (unsigned long long)v.f_bavail; // available to non-root
+    const unsigned long long usd = (tot >= fre) ? (tot - fre) : 0ULL;
+
+    total = (long long)tot;
+    free  = (long long)fre;
+    used  = (long long)usd;
+    return true;
+}
+
+static std::string uname_string() {
+    struct utsname u {};
+    if (::uname(&u) != 0) return "";
+    std::ostringstream ss;
+    ss << u.sysname << " " << u.release << " " << u.version << " " << u.machine;
+    return ss.str();
+}
+
+static std::string proc_self_exe() {
+    char buf[PATH_MAX + 1];
+    ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n <= 0) return "";
+    buf[n] = '\0';
+    return std::string(buf);
+}
+
+static bool proc_self_rss_bytes(long long& rss_bytes) {
+    std::ifstream f("/proc/self/status");
+    if (!f.good()) return false;
+
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.rfind("VmRSS:", 0) == 0) {
+            // VmRSS:   12345 kB
+            std::istringstream iss(line);
+            std::string k;
+            long long kb = 0;
+            std::string unit;
+            iss >> k >> kb >> unit;
+            if (kb <= 0) return false;
+            rss_bytes = kb * 1024LL;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool proc_self_start_iso(std::string& started_iso) {
+    // Derive process start time using:
+    //   boot time (btime) from /proc/stat + starttime ticks from /proc/self/stat
+    std::ifstream f("/proc/self/stat");
+    if (!f.good()) return false;
+
+    std::string stat;
+    std::getline(f, stat);
+    if (stat.empty()) return false;
+
+    // comm is "(...)" and may contain spaces, so find the last ')'
+    auto rp = stat.rfind(')');
+    if (rp == std::string::npos) return false;
+
+    // After ") " we start at field 3 (state)
+    std::istringstream iss(stat.substr(rp + 2));
+    std::vector<std::string> fields;
+    std::string tok;
+    while (iss >> tok) fields.push_back(tok);
+
+    // Need up to overall field 22 (starttime). In this shifted list:
+    // index = 22 - 3 = 19
+    const int start_idx = 22 - 3;
+    if ((int)fields.size() <= start_idx) return false;
+
+    long long start_ticks = 0;
+    try { start_ticks = std::stoll(fields[start_idx]); }
+    catch (...) { return false; }
+
+    long long hz = ::sysconf(_SC_CLK_TCK);
+    if (hz <= 0) hz = 100;
+    double start_s_since_boot = (double)start_ticks / (double)hz;
+
+    // Read btime (boot time epoch seconds)
+    std::ifstream fs("/proc/stat");
+    if (!fs.good()) return false;
+
+    long long btime = 0;
+    std::string line;
+    while (std::getline(fs, line)) {
+        if (line.rfind("btime ", 0) == 0) {
+            std::istringstream ls(line);
+            std::string k;
+            ls >> k >> btime;
+            break;
+        }
+    }
+    if (btime <= 0) return false;
+
+    long long start_epoch = btime + (long long)start_s_since_boot;
+
+    std::time_t tt = (std::time_t)start_epoch;
+    std::tm tm {};
+    gmtime_r(&tt, &tm);
+
+    std::ostringstream out;
+    out << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+    started_iso = out.str();
+    return true;
+}
+
+static long long now_ms_utcish() {
+    using namespace std::chrono;
+    auto now = time_point_cast<milliseconds>(system_clock::now());
+    return (long long)now.time_since_epoch().count();
+}
+
+// --- network internals ---
+
+static bool read_proc_net_dev(std::unordered_map<std::string, NetCounters>& out) {
+    std::ifstream f("/proc/net/dev");
+    if (!f.good()) return false;
+
+    std::string line;
+    // skip headers (2 lines)
+    std::getline(f, line);
+    std::getline(f, line);
+
+    while (std::getline(f, line)) {
+        auto colon = line.find(':');
+        if (colon == std::string::npos) continue;
+
+        std::string iface = trim_ws(line.substr(0, colon));
+        std::string rest  = line.substr(colon + 1);
+
+        if (iface.empty()) continue;
+        if (iface == "lo") continue;
+
+        // Format: rx_bytes rx_packets rx_errs rx_drop rx_fifo rx_frame rx_compressed rx_multicast
+        //         tx_bytes tx_packets tx_errs tx_drop tx_fifo tx_colls tx_carrier tx_compressed
+        std::istringstream iss(rest);
+
+        unsigned long long rx_bytes = 0;
+        if (!(iss >> rx_bytes)) continue;
+
+        // skip 7 rx fields to reach tx_bytes
+        for (int i = 0; i < 7; i++) {
+            unsigned long long dummy = 0;
+            if (!(iss >> dummy)) { rx_bytes = 0; break; }
+        }
+
+        unsigned long long tx_bytes = 0;
+        if (!(iss >> tx_bytes)) continue;
+
+        NetCounters c;
+        c.rx_bytes = rx_bytes;
+        c.tx_bytes = tx_bytes;
+        out[iface] = c;
+    }
+    return true;
+}
+
+static void net_maybe_sample_locked(long long now_ms) {
+    // Called with g_net_mu held.
+    if (g_net_last_ms != 0 && (now_ms - g_net_last_ms) < NET_SAMPLE_MS) return;
+
+    std::unordered_map<std::string, NetCounters> cur;
+    if (!read_proc_net_dev(cur)) return;
+
+    // First-ever sample: just store counters; no rate yet.
+    if (g_net_last_ms == 0 || g_net_last.empty()) {
+        g_net_last = std::move(cur);
+        g_net_last_ms = now_ms;
+        return;
+    }
+
+    const long long dt_ms = now_ms - g_net_last_ms;
+    if (dt_ms <= 0) {
+        g_net_last = std::move(cur);
+        g_net_last_ms = now_ms;
+        return;
+    }
+
+    // Aggregate delta across interfaces present in current snapshot.
+    unsigned long long d_rx = 0;
+    unsigned long long d_tx = 0;
+
+    for (const auto& kv : cur) {
+        const auto& iface = kv.first;
+        const auto& c = kv.second;
+
+        auto it = g_net_last.find(iface);
+        if (it == g_net_last.end()) continue;
+
+        const auto& p = it->second;
+
+        if (c.rx_bytes >= p.rx_bytes) d_rx += (c.rx_bytes - p.rx_bytes);
+        if (c.tx_bytes >= p.tx_bytes) d_tx += (c.tx_bytes - p.tx_bytes);
+    }
+
+    const double dt_s = (double)dt_ms / 1000.0;
+
+    NetSample s;
+    s.t_ms = now_ms;
+    s.rx_bps = dt_s > 0 ? ((double)d_rx / dt_s) : 0.0;
+    s.tx_bps = dt_s > 0 ? ((double)d_tx / dt_s) : 0.0;
+
+    g_net_series.push_back(s);
+    if ((int)g_net_series.size() > NET_HISTORY_POINTS) {
+        g_net_series.erase(g_net_series.begin(),
+                           g_net_series.begin() + (g_net_series.size() - NET_HISTORY_POINTS));
+    }
+
+    g_net_last = std::move(cur);
+    g_net_last_ms = now_ms;
+}
