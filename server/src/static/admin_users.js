@@ -49,6 +49,61 @@ function storagePill(state) {
     return `<span class="pill ${cls}">${esc(s)}</span>`;
 }
 
+function fmtBytes(n) {
+    n = Number(n || 0);
+    const units = ["B","KiB","MiB","GiB","TiB"];
+    let u = 0;
+    while (n >= 1024 && u < units.length - 1) { n /= 1024; u++; }
+    return `${n.toFixed(u === 0 ? 0 : 2)} ${units[u]}`;
+}
+
+function showToast(msg, ms = 10000) {
+    let t = document.getElementById("toast");
+    if (!t) {
+        t = document.createElement("div");
+        t.id = "toast";
+        t.style.position = "fixed";
+        t.style.right = "18px";
+        t.style.bottom = "18px";
+        t.style.zIndex = "99999";
+
+        /* sizing */
+        t.style.maxWidth = "520px";
+        t.style.width = "min(520px, calc(100vw - 36px))";
+
+        t.style.padding = "12px 14px";
+        t.style.borderRadius = "12px";
+        t.style.border = "1px solid rgba(0,240,248,0.22)";
+        t.style.background = "rgba(0,0,0,0.70)";
+        t.style.color = "rgba(0,240,248,0.95)";
+        t.style.boxShadow = "0 18px 70px rgba(0,0,0,0.55)";
+        t.style.font = "14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
+
+        /* wrapping + scroll */
+        t.style.whiteSpace = "pre-wrap";
+        t.style.wordBreak = "break-all";
+        t.style.overflowWrap = "anywhere";
+        t.style.maxHeight = "60vh";
+        t.style.overflow = "auto";
+
+        /* allow selection */
+        t.style.userSelect = "text";
+        t.style.cursor = "text";
+
+        t.style.display = "none";
+        document.body.appendChild(t);
+    }
+
+    t.textContent = msg;
+    t.onclick = () => {
+        navigator.clipboard.writeText(msg).catch(() => {});
+    };
+
+    t.style.display = "block";
+    clearTimeout(t._hideTimer);
+    t._hideTimer = setTimeout(() => { t.style.display = "none"; }, ms);
+}
+
 let allUsers = [];
 let actorFp = "";
 
@@ -78,6 +133,7 @@ function render() {
             ? `<span class="pill enabled" title="This is you" style="margin-left:8px;">you</span>`
             : "";
 
+        // Disallow self-modification (Allocate is allowed for self)
         const disAttr = isSelf ? ` disabled title="Refusing to modify your own admin entry"` : "";
         const disClass = isSelf ? ` style="opacity:0.45; cursor:not-allowed;"` : "";
 
@@ -101,18 +157,13 @@ function render() {
 
         <td class="row-actions">
             <button class="btn secondary" data-act="enable" data-fp="${esc(u.fingerprint)}" type="button"${disAttr}${disClass}>Enable</button>
-
-
             <button class="btn secondary" data-act="disable" data-fp="${esc(u.fingerprint)}" type="button"${disAttr}${disClass}>Disable</button>
             <button class="btn secondary" data-act="revoke" data-fp="${esc(u.fingerprint)}" type="button"${disAttr}${disClass}>Revoke</button>
-
             <button class="btn secondary" data-act="allocate" data-fp="${esc(u.fingerprint)}" type="button">Allocate</button>
-
             <button class="btn danger" data-act="delete" data-fp="${esc(u.fingerprint)}" type="button"${disAttr}${disClass}>Delete</button>
         </td>
     </tr>`;
     }).join("");
-
 
     tb.querySelectorAll("button").forEach(b => {
         b.addEventListener("click", async () => {
@@ -139,6 +190,7 @@ function render() {
                     await apiPost("/api/v4/admin/users/delete", { fingerprint: fp });
                     await refresh();
                     setMsg("Delete OK");
+                    showToast("User deleted");
                 } catch (e) {
                     alert("Failed: " + e.message);
                     setMsg("Error: " + e.message);
@@ -152,6 +204,7 @@ function render() {
                     await apiPost("/api/v4/admin/users/enable", { fingerprint: fp });
                     await refresh();
                     setMsg("Enabled");
+                    showToast("User enabled");
                 } catch (e) {
                     alert("Failed: " + e.message);
                     setMsg("Error: " + e.message);
@@ -168,7 +221,7 @@ function render() {
                 }
 
                 const suggested = fmtGBFromBytes(cur.quota_bytes) || "10";
-                const input = prompt("Allocate storage (metadata only for now).\n\nQuota in GB:", suggested);
+                const input = prompt("Allocate storage.\n\nQuota in GB:", suggested);
                 if (input === null) return;
 
                 const quota_gb = Number(String(input).trim());
@@ -178,10 +231,23 @@ function render() {
                 }
 
                 try {
-                    setMsg("Allocating…");
-                    await apiPost("/api/v4/admin/users/storage", { fingerprint: fp, quota_gb, force: isAllocated });
+                    setMsg(isAllocated ? "Updating storage…" : "Allocating…");
+                    const j = await apiPost("/api/v4/admin/users/storage", { fingerprint: fp, quota_gb, force: isAllocated });
                     await refresh();
-                    setMsg("Allocated");
+
+                    const path = j.root_rel || "(missing)";
+                    const qb = Number(j.quota_bytes || 0);
+                    const quotaText = qb ? fmtBytes(qb) : `${quota_gb} GB`;
+                    const at = j.storage_set_at || "";
+
+                    showToast(
+                        (isAllocated ? "Storage updated (click to copy)\n" : "Storage allocated\n") +
+                        `Path: ${path}\n` +
+                        `Quota: ${quotaText}\n` +
+                        (at ? `Set at: ${at}` : "")
+                    );
+
+                    setMsg(isAllocated ? "Storage updated" : "Allocated");
                 } catch (e) {
                     alert("Failed: " + e.message);
                     setMsg("Error: " + e.message);
@@ -204,6 +270,7 @@ function render() {
                 await apiPost("/api/v4/admin/users/status", { fingerprint: fp, status });
                 await refresh();
                 setMsg("Saved");
+                showToast(`User status: ${status}`);
             } catch (e) {
                 alert("Failed: " + e.message);
                 setMsg("Error: " + e.message);
@@ -211,7 +278,6 @@ function render() {
         });
     });
 }
-
 
 async function refresh() {
     setMsg("Loading users…");
@@ -232,6 +298,7 @@ async function upsertFromForm() {
     await apiPost("/api/v4/admin/users/upsert", { fingerprint: fp, name, role, notes });
     await refresh();
     setMsg("Upsert OK");
+    showToast("User upserted");
 }
 
 window.addEventListener("load", async () => {

@@ -125,6 +125,29 @@ function statusClass(st) {
     return "info";
 }
 
+function eventClasses(e) {
+    const ev = String(toEventText(e) || "").toLowerCase();
+
+    const cls = [];
+
+    // Family buckets
+    if (ev.startsWith("admin.")) cls.push("ev-admin");
+    if (ev.includes("storage") || ev.includes("quota") || ev.includes("dir_") || ev.includes("directory")) cls.push("ev-storage");
+    if (ev.startsWith("v4.") || ev.includes("cookie") || ev.includes("session") || ev.includes("login") || ev.includes("verify")) cls.push("ev-auth");
+
+    // Status-derived tint (works even if event name doesn’t say much)
+    const st = inferStatus(e);
+    if (st === "warn") cls.push("ev-warnline");
+    if (st === "fail") cls.push("ev-errorline");
+
+    // Exact “make these pop” lines (your examples)
+    if (ev === "admin.user_storage_allocated" || ev.endsWith(".user_storage_allocated")) cls.push("ev-storage-alloc");
+    if (ev === "admin.user_storage_dir_created" || ev.endsWith(".user_storage_dir_created")) cls.push("ev-storage-dir");
+    if (ev === "admin.user_enabled" || ev.endsWith(".user_enabled")) cls.push("ev-admin-enabled");
+
+    return cls.join(" ");
+}
+
 function matchesAny(hay, needle) {
     if (!needle) return true;
     return String(hay || "").toLowerCase().includes(String(needle).toLowerCase());
@@ -178,8 +201,24 @@ function renderTable() {
         const st = inferStatus(e);
 
         const tr = document.createElement("tr");
-        tr.className = "clickable";
+        tr.className = "clickable " + eventClasses(e);
         tr.dataset.key = k;
+
+        const evLower = String(ev || "").toLowerCase();
+
+        // families
+        if (evLower.startsWith("admin.")) tr.classList.add("ev-admin");
+        if (evLower.startsWith("v4.")) tr.classList.add("ev-auth");
+        if (evLower.includes("storage")) tr.classList.add("ev-storage");
+
+        if (st === "warn") tr.classList.add("ev-warnline");
+        if (st === "fail") tr.classList.add("ev-errorline");
+
+        // exact ones you named
+        if (evLower === "admin.user_storage_allocated") tr.classList.add("ev-storage-alloc");
+        if (evLower === "admin.user_storage_dir_created") tr.classList.add("ev-storage-dir");
+        if (evLower === "admin.user_enabled" || evLower === "admin.user_status_set") tr.classList.add("ev-admin-enabled");
+
 
         const idxText = String(i + 1);
 
@@ -297,6 +336,28 @@ async function loadTail() {
         const j = await r.json();
         const lines = Array.isArray(j.lines) ? j.lines : [];
         _all = lines.map(safeJsonParseMaybe);
+
+// NEW: newest-first (ISO timestamps sort correctly as strings)
+        _all.sort((a, b) => {
+            const ta = String(toTsText(a) || "");
+            const tb = String(toTsText(b) || "");
+
+            // push missing/unknown timestamps to bottom
+            const aBad = (ta === "—" || !ta.trim());
+            const bBad = (tb === "—" || !tb.trim());
+            if (aBad && bBad) return 0;
+            if (aBad) return 1;
+            if (bBad) return -1;
+
+            if (ta < tb) return 1;
+            if (ta > tb) return -1;
+
+            // tie-breaker for deterministic order
+            const ea = String(toEventText(a) || "");
+            const eb = String(toEventText(b) || "");
+            return ea.localeCompare(eb);
+        });
+
 
         _expandedKey = null;
         setPill($("lastFetchPill"), "ok", nowIsoCompact());

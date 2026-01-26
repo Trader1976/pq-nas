@@ -1,19 +1,36 @@
 {
   "users": [
     {
+      "added_at": "2026-01-26T08:19:22.371Z",
+      "address": "",
+      "email": "",
+      "fingerprint": "6f35876588f4a045e852b7570821430b8aa38c34d755f0b2a1c5444b27d70cb47fbe0bd0d65e5457917b9581f4c995f9819f193cae03af515b98b7d01d84035a",
+      "group": "",
+      "last_seen": "",
+      "name": "",
+      "notes": "",
+      "quota_bytes": 10737418240,
+      "role": "user",
+      "root_rel": "users/6f35876588f4a045e852b7570821430b8aa38c34d755f0b2a1c5444b27d70cb47fbe0bd0d65e5457917b9581f4c995f9819f193cae03af515b98b7d01d84035a",
+      "status": "enabled",
+      "storage_set_at": "2026-01-26T08:20:09.436Z",
+      "storage_set_by": "a8885f40f4c12c85837807021a48d31c1ba657f5aebe809107eccb72ce60024076fd976c34109c78c68614c5d37702225397a3daba099fb16ed4738167bede39",
+      "storage_state": "allocated"
+    },
+    {
       "added_at": "2026-01-21T00:00:00.000Z",
       "address": "",
       "email": "",
       "fingerprint": "a8885f40f4c12c85837807021a48d31c1ba657f5aebe809107eccb72ce60024076fd976c34109c78c68614c5d37702225397a3daba099fb16ed4738167bede39",
       "group": "",
-      "last_seen": "2026-01-26T07:06:38.970Z",
+      "last_seen": "2026-01-26T08:19:38.255Z",
       "name": "Admin",
       "notes": "",
-      "quota_bytes": 8589934592,
+      "quota_bytes": 9663676416,
       "role": "admin",
       "root_rel": "users/a8885f40f4c12c85837807021a48d31c1ba657f5aebe809107eccb72ce60024076fd976c34109c78c68614c5d37702225397a3daba099fb16ed4738167bede39",
       "status": "enabled",
-      "storage_set_at": "2026-01-26T07:09:27.237Z",
+      "storage_set_at": "2026-01-26T08:32:14.013Z",
       "storage_set_by": "a8885f40f4c12c85837807021a48d31c1ba657f5aebe809107eccb72ce60024076fd976c34109c78c68614c5d37702225397a3daba099fb16ed4738167bede39",
       "storage_state": "allocated"
     }
