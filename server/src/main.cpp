@@ -64,7 +64,8 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include <functional>
 #include "audit_log.h"
 #include "audit_fields.h"
-
+#include <limits>
+#include <cstdint>
 extern "C" {
 #include "qrauth_v4.h"
 }
@@ -2825,15 +2826,28 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 
         for (auto& kv : users.snapshot()) {
             auto& u = kv.second;
-            out["users"].push_back({
-                {"fingerprint", u.fingerprint},
-                {"name", u.name},
-                {"role", u.role},
-                {"status", u.status},
-                {"added_at", u.added_at},
-                {"last_seen", u.last_seen},
-                {"notes", u.notes}
-            });
+			out["users"].push_back({
+    			{"fingerprint", u.fingerprint},
+    			{"name", u.name},
+    			{"role", u.role},
+    			{"status", u.status},
+    			{"added_at", u.added_at},
+    			{"last_seen", u.last_seen},
+			    {"notes", u.notes},
+
+    			// New: profile
+    			{"group", u.group},
+    			{"email", u.email},
+    			{"address", u.address},
+
+    			// New: storage metadata
+    			{"storage_state", u.storage_state},
+			    {"quota_bytes", u.quota_bytes},
+    			{"root_rel", u.root_rel},
+    			{"storage_set_at", u.storage_set_at},
+			    {"storage_set_by", u.storage_set_by}
+			});
+
         }
 
         reply_json(res, 200, out.dump());
@@ -2915,6 +2929,139 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 
         reply_json(res, 200, json({{"ok",true}}).dump());
     });
+
+	// POST /api/v4/admin/users/storage
+	// Body: {"fingerprint":"...","quota_gb":10}
+	// Action (metadata-only for now):
+	//   - storage_state="allocated"
+	//   - quota_bytes = quota_gb * 1024^3
+	//   - root_rel = "users/<full fingerprint>"
+	//   - storage_set_at = now ISO
+	//   - storage_set_by = actor_fp
+	srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib::Response& res) {
+    	std::string actor_fp;
+    	if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    	json j;
+    	try { j = json::parse(req.body); }
+    	catch (...) {
+        	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+        	return;
+    	}
+
+    	const std::string fp = j.value("fingerprint", "");
+    	if (fp.empty()) {
+	        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+    	    return;
+    	}
+
+    	if (!users.exists(fp)) {
+        	reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
+        	return;
+    	}
+
+    	// quota_gb: accept integer or float; require >= 0
+	    double quota_gb_d = 0.0;
+    	try {
+        	if (j.contains("quota_gb")) {
+            	const auto& v = j["quota_gb"];
+	            if (v.is_number_integer()) quota_gb_d = (double)v.get<long long>();
+    	        else if (v.is_number_unsigned()) quota_gb_d = (double)v.get<unsigned long long>();
+        	    else if (v.is_number_float()) quota_gb_d = v.get<double>();
+            	else {
+                	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","quota_gb must be a number"}}).dump());
+	                return;
+    	        }
+        	} else {
+            	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing quota_gb"}}).dump());
+            	return;
+        	}
+    	} catch (...) {
+        	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid quota_gb"}}).dump());
+        	return;
+    	}
+
+    	if (quota_gb_d < 0.0) {
+        	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","quota_gb must be >= 0"}}).dump());
+        	return;
+    	}
+
+    	// Convert GB -> bytes using GiB (1024^3). Round to nearest byte.
+    	// Also guard overflow into uint64_t.
+	    const long double bytes_ld = (long double)quota_gb_d * (long double)1024.0L * (long double)1024.0L * (long double)1024.0L;
+    	if (bytes_ld > (long double)std::numeric_limits<std::uint64_t>::max()) {
+        	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","quota_gb too large"}}).dump());
+        	return;
+    	}
+	    const std::uint64_t quota_bytes = (std::uint64_t)(bytes_ld + 0.5L);
+
+	    const std::string now_iso = now_iso_utc();
+
+    	// Load, modify, upsert (registry has no dedicated setters for these fields yet)
+    	auto cur = users.get(fp);
+    	if (!cur.has_value()) {
+        	// Should not happen because exists(fp) checked, but fail closed.
+        	reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","user lookup failed"}}).dump());
+        	return;
+    	}
+
+    	pqnas::UserRec u = *cur;
+
+	    const std::string prev_state = u.storage_state;
+    	const std::uint64_t prev_quota = u.quota_bytes;
+    	const std::string prev_root = u.root_rel;
+
+    	u.storage_state = "allocated";
+    	u.quota_bytes = quota_bytes;
+    	u.root_rel = std::string("users/") + fp; // Option A: full fingerprint
+    	u.storage_set_at = now_iso;
+    	u.storage_set_by = actor_fp;
+
+    	const bool ok_upsert = users.upsert(u);
+    	const bool ok_save   = ok_upsert ? users.save(users_path) : false;
+
+    	{
+	        pqnas::AuditEvent ev;
+    	    ev.event = "admin.user_storage_allocated";
+        	ev.outcome = (ok_upsert && ok_save) ? "ok" : "fail";
+	        ev.f["fingerprint"] = fp;
+    	    ev.f["ts"] = now_iso;
+        	ev.f["actor_fp"] = actor_fp;
+	        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+    	    // Details (all metadata)
+        	ev.f["quota_gb"] = pqnas::shorten(std::to_string(quota_gb_d), 32);
+        	ev.f["quota_bytes"] = pqnas::shorten(std::to_string((unsigned long long)quota_bytes), 32);
+        	ev.f["root_rel"] = pqnas::shorten(u.root_rel, 160);
+
+        	// previous values (useful for audits)
+	        if (!prev_state.empty()) ev.f["prev_storage_state"] = pqnas::shorten(prev_state, 40);
+    	    if (prev_quota != 0) ev.f["prev_quota_bytes"] = pqnas::shorten(std::to_string((unsigned long long)prev_quota), 32);
+        	if (!prev_root.empty()) ev.f["prev_root_rel"] = pqnas::shorten(prev_root, 160);
+
+        	maybe_auto_rotate_before_append();
+	        audit_append(ev);
+    	}
+
+	    if (!ok_upsert) {
+    	    reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","upsert failed"}}).dump());
+        	return;
+    	}
+    	if (!ok_save) {
+        	reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
+        	return;
+    	}
+
+    	reply_json(res, 200, json({
+        	{"ok", true},
+        	{"fingerprint", fp},
+        	{"storage_state", u.storage_state},
+	        {"quota_bytes", u.quota_bytes},
+    	    {"root_rel", u.root_rel},
+        	{"storage_set_at", u.storage_set_at},
+	        {"storage_set_by", u.storage_set_by}
+    	}).dump());
+	});
 
     // GET /system (static UI) - visible to user + admin (cookie required)
     srv.Get("/system", [&](const httplib::Request& req, httplib::Response& res) {

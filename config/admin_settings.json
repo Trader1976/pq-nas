@@ -15,5 +15,11 @@
     "max_active_mb": 20,
     "mode": "size_mb",
     "rotate_utc_day": ""
+  },
+  "user_defaults": {
+    "auto_allocate_on_enable": false,
+    "default_quota_gb": 10,
+    "workspace_root_dir": "data/workspaces",
+    "workspace_layout": "per_fingerprint"
   }
 }

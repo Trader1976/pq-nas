@@ -28,6 +28,27 @@ function esc(s) {
     return (s || "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+function fmtGBFromBytes(b) {
+    const n = Number(b || 0);
+    if (!isFinite(n) || n <= 0) return "";
+    const gb = n / (1024 * 1024 * 1024);
+    // keep it simple: show up to 2 decimals, trim trailing zeros
+    return (Math.round(gb * 100) / 100).toString();
+}
+
+function fmtQuotaCell(u) {
+    const st = (u.storage_state || "unallocated");
+    if (st !== "allocated") return `<span class="muted">—</span>`;
+    const gb = fmtGBFromBytes(u.quota_bytes);
+    return gb ? `${esc(gb)} GB` : `<span class="muted">0</span>`;
+}
+
+function storagePill(state) {
+    const s = (state || "unallocated");
+    const cls = (s === "allocated") ? "enabled" : "disabled"; // reuse pill CSS classes
+    return `<span class="pill ${cls}">${esc(s)}</span>`;
+}
+
 let allUsers = [];
 
 function setMsg(text) {
@@ -39,7 +60,9 @@ function render() {
     const f = ($("filter")?.value || "").toLowerCase().trim();
     const rows = allUsers.filter(u => {
         const hay = [
-            u.fingerprint, u.name, u.notes, u.role, u.status
+            u.fingerprint, u.name, u.notes, u.role, u.status,
+            u.group, u.email, u.storage_state,
+            String(u.quota_bytes || "")
         ].join(" ").toLowerCase();
         return !f || hay.includes(f);
     });
@@ -49,22 +72,31 @@ function render() {
 
     tb.innerHTML = rows.map(u => {
         return `<tr>
-      <td class="mono">${esc(u.fingerprint)}</td>
-      <td>
-        <div><b>${esc(u.name || "")}</b></div>
-        <div class="muted" style="white-space:pre-wrap;">${esc(u.notes || "")}</div>
-      </td>
-      <td>${esc(u.role || "")}</td>
-      <td>${pill(u.status)}</td>
-      <td class="mono">${esc(u.added_at || "")}</td>
-      <td class="mono">${esc(u.last_seen || "")}</td>
-      <td class="row-actions">
-        <button class="btn secondary" data-act="enable" data-fp="${esc(u.fingerprint)}" type="button">Enable</button>
-        <button class="btn secondary" data-act="disable" data-fp="${esc(u.fingerprint)}" type="button">Disable</button>
-        <button class="btn secondary" data-act="revoke" data-fp="${esc(u.fingerprint)}" type="button">Revoke</button>
-        <button class="btn danger" data-act="delete" data-fp="${esc(u.fingerprint)}" type="button">Delete</button>
-      </td>
-    </tr>`;
+            <td class="mono">${esc(u.fingerprint)}</td>
+
+            <td>
+                <div><b>${esc(u.name || "")}</b></div>
+                <div class="muted" style="white-space:pre-wrap;">${esc(u.notes || "")}</div>
+            </td>
+
+            <td>${esc(u.role || "")}</td>
+            <td>${pill(u.status)}</td>
+
+            <td>${esc(u.group || "")}</td>
+            <td>${storagePill(u.storage_state)}</td>
+            <td class="mono">${fmtQuotaCell(u)}</td>
+
+            <td class="mono">${esc(u.added_at || "")}</td>
+            <td class="mono">${esc(u.last_seen || "")}</td>
+
+            <td class="row-actions">
+                <button class="btn secondary" data-act="enable" data-fp="${esc(u.fingerprint)}" type="button">Enable</button>
+                <button class="btn secondary" data-act="disable" data-fp="${esc(u.fingerprint)}" type="button">Disable</button>
+                <button class="btn secondary" data-act="revoke" data-fp="${esc(u.fingerprint)}" type="button">Revoke</button>
+                <button class="btn secondary" data-act="allocate" data-fp="${esc(u.fingerprint)}" type="button">Allocate</button>
+                <button class="btn danger" data-act="delete" data-fp="${esc(u.fingerprint)}" type="button">Delete</button>
+            </td>
+        </tr>`;
     }).join("");
 
     tb.querySelectorAll("button").forEach(b => {
@@ -93,10 +125,48 @@ function render() {
                 return;
             }
 
+            if (act === "enable") {
+                try {
+                    setMsg("Enabling…");
+                    await apiPost("/api/v4/admin/users/enable", { fingerprint: fp });
+                    await refresh();
+                    setMsg("Enabled");
+                } catch (e) {
+                    alert("Failed: " + e.message);
+                    setMsg("Error: " + e.message);
+                }
+                return;
+            }
+
+            if (act === "allocate") {
+                const cur = allUsers.find(x => x.fingerprint === fp) || {};
+                const suggested = fmtGBFromBytes(cur.quota_bytes) || "10";
+                const input = prompt("Allocate storage (metadata only for now).\n\nQuota in GB:", suggested);
+                if (input === null) return;
+
+                const quota_gb = Number(String(input).trim());
+                if (!isFinite(quota_gb) || quota_gb < 0) {
+                    alert("Invalid quota. Enter a number >= 0.");
+                    return;
+                }
+
+                try {
+                    setMsg("Allocating…");
+                    await apiPost("/api/v4/admin/users/storage", { fingerprint: fp, quota_gb });
+                    await refresh();
+                    setMsg("Allocated");
+                } catch (e) {
+                    alert("Failed: " + e.message);
+                    setMsg("Error: " + e.message);
+                }
+                return;
+            }
+
             const status =
-                (act === "enable") ? "enabled" :
-                    (act === "disable") ? "disabled" :
-                        "revoked";
+                (act === "disable") ? "disabled" :
+                    (act === "revoke") ? "revoked" : "";
+
+            if (!status) return;
 
             if (act === "revoke") {
                 if (!confirm("Revoke this user? This hard-blocks login for that fingerprint.")) return;
@@ -114,6 +184,7 @@ function render() {
         });
     });
 }
+
 
 async function refresh() {
     setMsg("Loading users…");

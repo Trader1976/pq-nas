@@ -470,7 +470,7 @@
                 <h2>Upsert user</h2>
 
                 <div class="row" style="margin-bottom:10px;">
-                    <input id="filter" placeholder="Filter (fingerprint/name/notes/role/status)" style="min-width: 320px; flex:1;" />
+                    <input id="filter" placeholder="Filter (fingerprint/name/notes/role/status/group/storage/quota)" style="min-width: 320px; flex:1;" />
                 </div>
 
                 <div class="row" style="margin-bottom:10px;">
@@ -500,13 +500,18 @@
                     <table>
                         <thead>
                         <tr>
-                            <th style="width:34%;">Fingerprint</th>
-                            <th style="width:22%;">Name / Notes</th>
-                            <th style="width:8%;">Role</th>
-                            <th style="width:10%;">Status</th>
-                            <th style="width:13%;">Added</th>
-                            <th style="width:13%;">Last seen</th>
-                            <th style="width:14%;">Actions</th>
+                            <th style="width:28%;">Fingerprint</th>
+                            <th style="width:18%;">Name / Notes</th>
+                            <th style="width:6%;">Role</th>
+                            <th style="width:7%;">Status</th>
+
+                            <th style="width:8%;">Group</th>
+                            <th style="width:7%;">Storage</th>
+                            <th style="width:6%;">Quota</th>
+
+                            <th style="width:10%;">Added</th>
+                            <th style="width:10%;">Last seen</th>
+                            <th style="width:20%;">Actions</th>
                         </tr>
                         </thead>
                         <tbody id="tbody">

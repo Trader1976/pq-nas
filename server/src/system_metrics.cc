@@ -388,7 +388,7 @@ nlohmann::json collect_system_snapshot(const std::string& repo_root) {
 
 
 // -----------------------------------------------------------------------------
-// Helper implementations 
+// Helper implementations
 // -----------------------------------------------------------------------------
 
 static std::string trim_ws(const std::string& s) {
