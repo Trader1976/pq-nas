@@ -3281,6 +3281,181 @@ srv.Get("/api/v4/system/storage", [&](const httplib::Request& req, httplib::Resp
     reply_json(res, 200, out.dump());
 });
 
+// GET /api/v4/files/list?path=relative/dir   (path optional; empty => user root)
+// Response: JSON listing of immediate children (no recursion)
+srv.Get("/api/v4/files/list", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_list_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& rel_dir, std::size_t count) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_list_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_dir, 200);
+        ev.f["count"] = std::to_string((unsigned long long)count);
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // Storage allocated check (fail-closed)
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value()) {
+            audit_fail("user_missing", 403);
+            reply_json(res, 403, json{{"ok", false}, {"error", "forbidden"}, {"message", "policy denied"}}.dump());
+            return;
+        }
+        const auto& u = *uopt;
+        if (u.storage_state != "allocated") {
+            audit_fail("storage_unallocated", 403);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"},
+                {"fingerprint_hex", fp_hex},
+                {"quota_bytes", u.quota_bytes}
+            }.dump());
+            return;
+        }
+    }
+
+    // path param (optional). Empty => root listing.
+    std::string rel_dir;
+    if (req.has_param("path")) rel_dir = req.get_param_value("path");
+    // allow empty here
+    // but still reject NUL and backslashes / drive letters etc if provided
+    // We'll validate via resolve_user_path_strict only when non-empty.
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    std::filesystem::path abs_dir = user_dir;
+
+    if (!rel_dir.empty()) {
+        std::string perr;
+        if (!pqnas::resolve_user_path_strict(user_dir, rel_dir, &abs_dir, &perr)) {
+            audit_fail("invalid_path", 400, perr);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            }.dump());
+            return;
+        }
+    }
+
+    // Must exist and be directory
+    std::error_code ec;
+    auto st = std::filesystem::status(abs_dir, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "directory not found"}
+        }.dump());
+        return;
+    }
+    if (!std::filesystem::is_directory(st)) {
+        audit_fail("not_a_directory", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "not a directory"}
+        }.dump());
+        return;
+    }
+
+    json out;
+    out["ok"] = true;
+    out["fingerprint_hex"] = fp_hex;
+    out["path"] = rel_dir;
+    out["items"] = json::array();
+
+    // List immediate children
+    std::size_t count = 0;
+    for (std::filesystem::directory_iterator it(abs_dir, ec), end; it != end && !ec; it.increment(ec)) {
+        std::error_code ec2;
+
+        const auto name = it->path().filename().string();
+        if (name == "." || name == ".." || name.empty()) continue;
+
+        std::string type = "other";
+        if (it->is_directory(ec2) && !ec2) type = "dir";
+        ec2.clear();
+        if (it->is_regular_file(ec2) && !ec2) type = "file";
+
+        std::uint64_t size_bytes = 0;
+        if (type == "file") {
+            ec2.clear();
+            auto sz = it->file_size(ec2);
+            if (!ec2) size_bytes = (std::uint64_t)sz;
+        }
+
+        long long mtime_unix = 0;
+        // best-effort mtime (portable-ish)
+        ec2.clear();
+        auto ft = it->last_write_time(ec2);
+        if (!ec2) {
+            using namespace std::chrono;
+            auto sctp = time_point_cast<system_clock::duration>(
+                ft - decltype(ft)::clock::now() + system_clock::now()
+            );
+            mtime_unix = (long long)duration_cast<seconds>(sctp.time_since_epoch()).count();
+        }
+
+        out["items"].push_back(json{
+            {"name", name},
+            {"type", type},
+            {"size_bytes", size_bytes},
+            {"mtime_unix", mtime_unix}
+        });
+        count++;
+        if (count >= 5000) break; // v1 safety cap
+    }
+
+    audit_ok(rel_dir, count);
+    reply_json(res, 200, out.dump());
+});
+
+
+
 // GET /api/v4/files/get?path=relative/path.bin
 // Response: raw bytes (streams file)
 srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response& res) {
