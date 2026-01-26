@@ -129,7 +129,8 @@ add_executable(pqnas_server
         server/src/audit_log.cc
         server/src/allowlist.cc
         server/src/users_registry.cpp
-        server/src/system_metrics.cc          # <-- FIX: compile/link the moved code
+        server/src/system_metrics.cc
+        server/src/storage_info.cc
 )
 
 target_include_directories(pqnas_server PRIVATE

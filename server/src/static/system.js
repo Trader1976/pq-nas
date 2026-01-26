@@ -52,6 +52,37 @@
         if (!j) throw new Error("bad JSON");
         return j;
     }
+    async function fetchStorage() {
+        const r = await fetch("/api/v4/system/storage", { cache: "no-store", credentials: "include" });
+        const txt = await r.text();
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        let j = null;
+        try { j = JSON.parse(txt); } catch {}
+        if (!j || !j.ok) throw new Error((j && (j.message || j.error)) || "bad JSON");
+        return j;
+    }
+
+    function renderStorage(s) {
+        const set = (id, v) => { const x = el(id); if (x) x.textContent = (v == null || v === "") ? "—" : String(v); };
+
+        set("fsType", s.fstype);
+        set("fsRoot", s.root);
+        set("fsMount", s.mountpoint);
+        set("fsSource", s.source);
+        set("fsOptions", s.options);
+
+        const on = !!s.prjquota_enabled;
+        set("fsQuota", on ? "ON" : "OFF");
+
+        const qp = el("fsQuotaPill");
+        if (qp) {
+            qp.classList.remove("ok", "warn", "fail");
+            qp.classList.add(on ? "ok" : "warn");
+        }
+
+        const warn = el("fsWarn");
+        if (warn) warn.textContent = s.warning ? ("Note: " + s.warning) : "";
+    }
 
     // ---------------- Network graph (local deltas) ----------------
     const netState = {
@@ -268,6 +299,30 @@
 
     el("btnRefresh").addEventListener("click", refreshOnce);
 
+
+
+    let _storageTimer = null;
+
+    async function refreshStorageOnce() {
+        try {
+            const s = await fetchStorage();
+            renderStorage(s);
+        } catch (e) {
+            const warn = el("fsWarn");
+            if (warn) warn.textContent = "Failed to probe storage: " + (e && e.message ? e.message : e);
+            const qp = el("fsQuotaPill");
+            if (qp) {
+                qp.classList.remove("ok");
+                qp.classList.add("fail");
+            }
+            el("fsQuota") && (el("fsQuota").textContent = "ERROR");
+        }
+    }
     refreshOnce();
     setInterval(refreshOnce, 3000);
+
+// Storage probe: slower cadence is enough
+    refreshStorageOnce();
+    _storageTimer = setInterval(refreshStorageOnce, 30000);
+
 })();

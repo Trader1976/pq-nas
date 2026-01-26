@@ -539,6 +539,29 @@
                         <div class="bar" title="Disk used"><div id="diskRepoBar"></div></div>
                     </div>
                 </section>
+                <section class="card span-6">
+                    <div class="hd">
+                        <div class="h">Storage</div>
+                        <span class="pill" id="fsQuotaPill"><span class="k">prjquota:</span> <span class="v" id="fsQuota">—</span></span>
+                    </div>
+                    <div class="bd">
+                        <div class="kv"><div class="k">FS type</div><div class="v mono" id="fsType">—</div></div>
+                        <div class="kv"><div class="k">Data root</div><div class="v mono" id="fsRoot">—</div></div>
+                        <div class="kv"><div class="k">Mountpoint</div><div class="v mono" id="fsMount">—</div></div>
+                        <div class="kv"><div class="k">Source</div><div class="v mono" id="fsSource">—</div></div>
+
+                        <div class="note mono" style="overflow-wrap:anywhere;">
+                            <div style="margin-top:10px;"><b>Options</b></div>
+                            <div id="fsOptions" style="opacity:.9;">—</div>
+                            <div id="fsWarn" style="margin-top:8px; color: rgba(255,190,0,0.95);"></div>
+                        </div>
+
+                        <div class="note">
+                            This helps admins decide whether project quotas (prjquota/pquota) can be used for enforcing per-user storage limits.
+                        </div>
+                    </div>
+                </section>
+
                 <section class="card span-12">
                     <div class="hd">
                         <div class="h">Network</div>

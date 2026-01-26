@@ -80,6 +80,7 @@ extern "C" {
 #include "allowlist.h"
 #include "v4_verify_shared.h"
 #include "users_registry.h"
+#include "storage_info.h"
 
 #include "system_metrics.h"
 // JSON (header-only)
@@ -3246,6 +3247,39 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
         res.set_header("Cache-Control", "no-store");
         res.body = body;
     });
+
+// GET /api/v4/system/storage  (used by /system page)
+srv.Get("/api/v4/system/storage", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &role)) return;
+
+    const std::string data_root = data_root_dir();
+
+    pqnas::StorageInfo si;
+    std::string err;
+    pqnas::get_storage_info(data_root, &si, &err);
+
+    json out;
+    out["ok"] = true;
+
+    out["data_root"] = si.root;
+    out["fstype"] = si.fstype;
+    out["mountpoint"] = si.mountpoint;
+    out["source"] = si.source;
+    out["options"] = si.options;
+    out["prjquota_enabled"] = si.prjquota_enabled;
+
+    out["note"] = si.prjquota_enabled
+        ? "Project quotas appear enabled (prjquota/pquota)."
+        : "Project quotas not detected in mount options.";
+
+    if (!err.empty())
+        out["warning"] = err;
+
+    reply_json(res, 200, out.dump());
+});
+
+
 
     // POST /api/v4/admin/users/upsert
     // Body: {"fingerprint":"...","name":"...","role":"user|admin","notes":"..."}
