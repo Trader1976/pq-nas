@@ -3293,13 +3293,16 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         return pqnas::shorten(it == req.headers.end() ? "" : it->second);
     };
 
-    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "") {
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
+                          const std::string& from_rel = "", const std::string& to_rel = "") {
         pqnas::AuditEvent ev;
         ev.event = "v4.files_move_fail";
         ev.outcome = "fail";
         ev.f["fingerprint"] = fp_hex;
         ev.f["reason"] = reason;
         ev.f["http"] = std::to_string(http);
+        if (!from_rel.empty()) ev.f["from"] = pqnas::shorten(from_rel, 200);
+        if (!to_rel.empty())   ev.f["to"]   = pqnas::shorten(to_rel, 200);
         if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
 
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
@@ -3315,7 +3318,11 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         audit_append(ev);
     };
 
-    auto audit_ok = [&](const std::string& from_rel, const std::string& to_rel, const std::string& type) {
+
+    auto audit_ok = [&](const std::string& from_rel,
+                        const std::string& to_rel,
+                        const std::string& type,
+                        std::uint64_t bytes) {
         pqnas::AuditEvent ev;
         ev.event = "v4.files_move_ok";
         ev.outcome = "ok";
@@ -3323,6 +3330,7 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         ev.f["from"] = pqnas::shorten(from_rel, 200);
         ev.f["to"]   = pqnas::shorten(to_rel, 200);
         ev.f["type"] = type;
+        if (type == "file") ev.f["bytes"] = std::to_string((unsigned long long)bytes);
 
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
@@ -3368,19 +3376,19 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
     std::filesystem::path from_abs, to_abs;
     std::string err1, err2;
     if (!pqnas::resolve_user_path_strict(user_dir, from_rel, &from_abs, &err1)) {
-        audit_fail("invalid_from_path", 400, err1);
+        audit_fail("invalid_from_path", 400, err1, from_rel, to_rel);
         reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid from path"}}.dump());
         return;
     }
     if (!pqnas::resolve_user_path_strict(user_dir, to_rel, &to_abs, &err2)) {
-        audit_fail("invalid_to_path", 400, err2);
+        audit_fail("invalid_to_path", 400, err2, from_rel, to_rel);
         reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid to path"}}.dump());
         return;
     }
 
     // refuse no-op (helps avoid weird audits)
     if (from_abs == to_abs) {
-        audit_fail("same_path", 400);
+        audit_fail("same_path", 400, "", from_rel, to_rel);
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "bad_request"},
@@ -3393,7 +3401,7 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
     std::error_code ec;
     auto st = std::filesystem::status(from_abs, ec);
     if (ec || !std::filesystem::exists(st)) {
-        audit_fail("not_found", 404);
+        audit_fail("not_found", 404, "", from_rel, to_rel);
         reply_json(res, 404, json{
             {"ok", false},
             {"error", "not_found"},
@@ -3418,6 +3426,9 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         }.dump());
         return;
     }
+    const std::string type = is_dir ? "dir" : (is_file ? "file" : "other");
+    std::uint64_t bytes = 0;
+    if (is_file) bytes = pqnas::file_size_u64_safe(from_abs);
 
     // rename/move
     ec.clear();
@@ -3433,13 +3444,16 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         return;
     }
 
-    audit_ok(from_rel, to_rel, is_dir ? "dir" : (is_file ? "file" : "other"));
+    audit_ok(from_rel, to_rel, type, bytes);
 
     reply_json(res, 200, json{
         {"ok", true},
         {"from", from_rel},
-        {"to", to_rel}
+        {"to", to_rel},
+        {"type", type},
+        {"bytes", bytes}
     }.dump());
+
 });
 
 // ---- Files API (user storage) ----
