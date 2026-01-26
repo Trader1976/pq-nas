@@ -140,6 +140,12 @@ function render() {
 
             if (act === "allocate") {
                 const cur = allUsers.find(x => x.fingerprint === fp) || {};
+
+                const isAllocated = String(cur.storage_state || "").toLowerCase() === "allocated";
+                if (isAllocated) {
+                    if (!confirm("Storage is already allocated for this user.\n\nChange quota anyway?")) return;
+                }
+
                 const suggested = fmtGBFromBytes(cur.quota_bytes) || "10";
                 const input = prompt("Allocate storage (metadata only for now).\n\nQuota in GB:", suggested);
                 if (input === null) return;
@@ -152,7 +158,7 @@ function render() {
 
                 try {
                     setMsg("Allocating…");
-                    await apiPost("/api/v4/admin/users/storage", { fingerprint: fp, quota_gb });
+                    await apiPost("/api/v4/admin/users/storage", { fingerprint: fp, quota_gb, force: isAllocated });
                     await refresh();
                     setMsg("Allocated");
                 } catch (e) {

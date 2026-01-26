@@ -139,7 +139,9 @@
                     return;
                 }
 
-                setBadge("ok", `signed in · ${role}`);
+                const st = String(j.storage_state || "unallocated");
+                setBadge("ok", `signed in · ${role} · storage: ${st}`);
+
                 return;
             }
 

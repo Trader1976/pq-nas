@@ -2289,119 +2289,137 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
         }
     });
 
-    // GET /api/v4/me  (returns role + decoded fingerprint)
-    srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
-        auto audit_ua = [&]() -> std::string {
-            auto it = req.headers.find("User-Agent");
-            return pqnas::shorten(it == req.headers.end() ? "" : it->second);
-        };
+	// GET /api/v4/me  (returns role + decoded fingerprint)
+	srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
+    	auto audit_ua = [&]() -> std::string {
+	        auto it = req.headers.find("User-Agent");
+        	return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    	};
 
-        auto audit_fail = [&](const std::string& reason) {
-            pqnas::AuditEvent ev;
-            ev.event = "v4.me_fail";
-            ev.outcome = "fail";
-            ev.f["reason"] = reason;
+    	auto audit_fail = [&](const std::string& reason) {
+	        pqnas::AuditEvent ev;
+        	ev.event = "v4.me_fail";
+    	    ev.outcome = "fail";
+	        ev.f["reason"] = reason;
 
-            auto it_cf = req.headers.find("CF-Connecting-IP");
-            if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+    	    auto it_cf = req.headers.find("CF-Connecting-IP");
+	        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
 
-            auto it_xff = req.headers.find("X-Forwarded-For");
-            if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+    	    auto it_xff = req.headers.find("X-Forwarded-For");
+	        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            ev.f["ua"] = audit_ua();
-            maybe_auto_rotate_before_append();
-            audit_append(ev);
-        };
+    	    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+	        ev.f["ua"] = audit_ua();
+        	maybe_auto_rotate_before_append();
+    	    audit_append(ev);
+	    };
 
-        auto audit_ok = [&](const std::string& fp_b64, long exp, const std::string& role) {
-            pqnas::AuditEvent ev;
-            ev.event = "v4.me_ok";
-            ev.outcome = "ok";
-            ev.f["fingerprint_b64"] = pqnas::shorten(fp_b64, 120);
-            ev.f["exp"] = std::to_string(exp);
-            ev.f["role"] = role;
+	    auto audit_ok = [&](const std::string& fp_b64, long exp, const std::string& role) {
+        	pqnas::AuditEvent ev;
+    	    ev.event = "v4.me_ok";
+	        ev.outcome = "ok";
+        	ev.f["fingerprint_b64"] = pqnas::shorten(fp_b64, 120);
+    	    ev.f["exp"] = std::to_string(exp);
+	        ev.f["role"] = role;
 
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        	ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
-            auto it_cf = req.headers.find("CF-Connecting-IP");
-            if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+    	    auto it_cf = req.headers.find("CF-Connecting-IP");
+	        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
 
-            auto it_xff = req.headers.find("X-Forwarded-For");
-            if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        	auto it_xff = req.headers.find("X-Forwarded-For");
+    	    if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
-            ev.f["ua"] = audit_ua();
-            maybe_auto_rotate_before_append();
-            audit_append(ev);
-        };
+	        ev.f["ua"] = audit_ua();
+        	maybe_auto_rotate_before_append();
+    	    audit_append(ev);
+	    };
 
-        auto it = req.headers.find("Cookie");
-        if (it == req.headers.end()) {
-            audit_fail("missing_cookie_header");
-            reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing cookie"}}).dump());
-            return;
-        }
+    	auto it = req.headers.find("Cookie");
+    	if (it == req.headers.end()) {
+	        audit_fail("missing_cookie_header");
+        	reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing cookie"}}).dump());
+    	    return;
+	    }
 
-        const std::string& hdr = it->second;
-        const std::string k = "pqnas_session=";
-        auto pos = hdr.find(k);
-        if (pos == std::string::npos) {
-            audit_fail("missing_pqnas_session");
-            reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing pqnas_session"}}).dump());
-            return;
-        }
-        pos += k.size();
-        auto end = hdr.find(';', pos);
-        std::string cookieVal = hdr.substr(pos, (end == std::string::npos) ? std::string::npos : (end - pos));
+    	const std::string& hdr = it->second;
+    	const std::string k = "pqnas_session=";
+    	auto pos = hdr.find(k);
+    	if (pos == std::string::npos) {
+		    audit_fail("missing_pqnas_session");
+        	reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing pqnas_session"}}).dump());
+    	    return;
+	    }
+    	pos += k.size();
+    	auto end = hdr.find(';', pos);
+	    std::string cookieVal = hdr.substr(pos, (end == std::string::npos) ? std::string::npos : (end - pos));
 
-        std::string fp_b64;
-        long exp = 0;
-        if (!session_cookie_verify(COOKIE_KEY, cookieVal, fp_b64, exp)) {
-            audit_fail("cookie_verify_failed");
-            reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","invalid session"}}).dump());
-            return;
-        }
+    	std::string fp_b64;
+    	long exp = 0;
+    	if (!session_cookie_verify(COOKIE_KEY, cookieVal, fp_b64, exp)) {
+    	    audit_fail("cookie_verify_failed");
+	        reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","invalid session"}}).dump());
+        	return;
+    	}
 
-        long now = pqnas::now_epoch();
-        if (now > exp) {
-            audit_fail("session_expired");
-            reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","session expired"}}).dump());
-            return;
-        }
+    	long now = pqnas::now_epoch();
+    	if (now > exp) {
+    	    audit_fail("session_expired");
+	        reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","session expired"}}).dump());
+        	return;
+    	}
 
-        // Decode cookie identity: cookie stores standard base64 of UTF-8 fingerprint hex string
-        std::string fp_hex;
-        {
-            std::string raw;
-            if (!b64std_decode_to_bytes(fp_b64, raw)) {
-                audit_fail("fingerprint_b64_decode_failed");
-                reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","invalid session"}}).dump());
-                return;
-            }
-            fp_hex.assign(raw.begin(), raw.end());
-        }
+    	// Decode cookie identity: cookie stores standard base64 of UTF-8 fingerprint hex string
+	    std::string fp_hex;
+    	{
+    	    std::string raw;
+	        if (!b64std_decode_to_bytes(fp_b64, raw)) {
+            	audit_fail("fingerprint_b64_decode_failed");
+        	    reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","invalid session"}}).dump());
+    	        return;
+	        }
+        	fp_hex.assign(raw.begin(), raw.end());
+    	}
 
-        // Policy check (fail-closed)
-        const bool is_admin = users.is_admin_enabled(fp_hex);
-        const bool is_user  = users.is_enabled_user(fp_hex) || is_admin;
+    	// Policy check (fail-closed)
+	    const bool is_admin = users.is_admin_enabled(fp_hex);
+	   	const bool is_user  = users.is_enabled_user(fp_hex) || is_admin;
 
-        if (!is_user) {
-            audit_fail("policy_denied");
-            reply_json(res, 403, json({{"ok",false},{"error","forbidden"},{"message","policy denied"}}).dump());
-            return;
-        }
+    	if (!is_user) {
+    	    audit_fail("policy_denied");
+	        reply_json(res, 403, json({{"ok",false},{"error","forbidden"},{"message","policy denied"}}).dump());
+        	return;
+    	}
 
-        const std::string role = is_admin ? "admin" : "user";
-        audit_ok(fp_b64, exp, role);
+    	const std::string role = is_admin ? "admin" : "user";
+    	audit_ok(fp_b64, exp, role);
 
-        reply_json(res, 200, json({
-            {"ok",true},
-            {"exp",exp},
-            {"fingerprint_b64",fp_b64},
-            {"fingerprint_hex",fp_hex},
-            {"role", role}
-        }).dump());
-    });
+    	// Include storage status + profile metadata (if present)
+    	std::string storage_state = "unallocated";
+	    std::uint64_t quota_bytes = 0;
+    	std::string root_rel;
+	    std::string group;
+    	if (auto u = users.get(fp_hex); u.has_value()) {
+    	    if (!u->storage_state.empty()) storage_state = u->storage_state;
+	        quota_bytes = u->quota_bytes;
+        	root_rel = u->root_rel;
+    	    group = u->group;
+	    }
+
+    	reply_json(res, 200, json({
+    	    {"ok",true},
+	        {"exp",exp},
+        	{"fingerprint_b64",fp_b64},
+    	    {"fingerprint_hex",fp_hex},
+	        {"role", role},
+
+        	{"storage_state", storage_state},
+    	    {"quota_bytes", quota_bytes},
+	        {"root_rel", root_rel},
+        	{"group", group}
+    	}).dump());
+	});
+
 
     auto session_handler = [&](const httplib::Request& req, httplib::Response& res) {
         long issued_at  = pqnas::now_epoch();
@@ -2938,13 +2956,13 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 	//   - root_rel = "users/<full fingerprint>"
 	//   - storage_set_at = now ISO
 	//   - storage_set_by = actor_fp
-	srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib::Response& res) {
+srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib::Response& res) {
     	std::string actor_fp;
     	if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
     	json j;
     	try { j = json::parse(req.body); }
-    	catch (...) {
+	    catch (...) {
         	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
         	return;
     	}
@@ -2952,7 +2970,7 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
     	const std::string fp = j.value("fingerprint", "");
     	if (fp.empty()) {
 	        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
-    	    return;
+        	return;
     	}
 
     	if (!users.exists(fp)) {
@@ -2960,108 +2978,142 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
         	return;
     	}
 
+    	const bool force = j.value("force", false);
+
     	// quota_gb: accept integer or float; require >= 0
-	    double quota_gb_d = 0.0;
+    	double quota_gb_d = 0.0;
     	try {
-        	if (j.contains("quota_gb")) {
-            	const auto& v = j["quota_gb"];
-	            if (v.is_number_integer()) quota_gb_d = (double)v.get<long long>();
-    	        else if (v.is_number_unsigned()) quota_gb_d = (double)v.get<unsigned long long>();
-        	    else if (v.is_number_float()) quota_gb_d = v.get<double>();
-            	else {
-                	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","quota_gb must be a number"}}).dump());
-	                return;
+    	    if (j.contains("quota_gb")) {
+	            const auto& v = j["quota_gb"];
+            	if (v.is_number_integer()) quota_gb_d = (double)v.get<long long>();
+        	    else if (v.is_number_unsigned()) quota_gb_d = (double)v.get<unsigned long long>();
+    	        else if (v.is_number_float()) quota_gb_d = v.get<double>();
+	            else {
+            	    reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","quota_gb must be a number"}}).dump());
+        	        return;
     	        }
-        	} else {
+	        } else {
             	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing quota_gb"}}).dump());
             	return;
         	}
     	} catch (...) {
-        	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid quota_gb"}}).dump());
+	        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid quota_gb"}}).dump());
         	return;
     	}
 
     	if (quota_gb_d < 0.0) {
         	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","quota_gb must be >= 0"}}).dump());
-        	return;
-    	}
+    	    return;
+	    }
 
     	// Convert GB -> bytes using GiB (1024^3). Round to nearest byte.
     	// Also guard overflow into uint64_t.
-	    const long double bytes_ld = (long double)quota_gb_d * (long double)1024.0L * (long double)1024.0L * (long double)1024.0L;
+    	const long double bytes_ld =
+    	    (long double)quota_gb_d *
+	        (long double)1024.0L * (long double)1024.0L * (long double)1024.0L;
+
     	if (bytes_ld > (long double)std::numeric_limits<std::uint64_t>::max()) {
-        	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","quota_gb too large"}}).dump());
+	        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","quota_gb too large"}}).dump());
         	return;
     	}
-	    const std::uint64_t quota_bytes = (std::uint64_t)(bytes_ld + 0.5L);
+    	const std::uint64_t quota_bytes = (std::uint64_t)(bytes_ld + 0.5L);
 
-	    const std::string now_iso = now_iso_utc();
+    	const std::string now_iso = now_iso_utc();
 
     	// Load, modify, upsert (registry has no dedicated setters for these fields yet)
     	auto cur = users.get(fp);
-    	if (!cur.has_value()) {
+	    if (!cur.has_value()) {
         	// Should not happen because exists(fp) checked, but fail closed.
         	reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","user lookup failed"}}).dump());
+    	    return;
+	    }
+
+	    pqnas::UserRec u = *cur;
+
+    	const std::string prev_state = u.storage_state;
+    	const std::uint64_t prev_quota = u.quota_bytes;
+	    const std::string prev_root = u.root_rel;
+
+    	const bool already_allocated = (u.storage_state == "allocated");
+
+    	if (already_allocated && !force) {
+    	    {
+	            pqnas::AuditEvent ev;
+        	    ev.event = "admin.user_storage_allocate_refused";
+    	        ev.outcome = "fail";
+	            ev.f["fingerprint"] = fp;
+        	    ev.f["reason"] = "already_allocated";
+    	        ev.f["ts"] = now_iso;
+	            ev.f["actor_fp"] = actor_fp;
+            	ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        	    maybe_auto_rotate_before_append();
+    	        audit_append(ev);
+	        }
+
+        	reply_json(res, 409, json({
+        	    {"ok", false},
+    	        {"error", "already_allocated"},
+	            {"message", "storage is already allocated; use force=true to change quota"},
+            	{"storage_state", u.storage_state},
+        	    {"quota_bytes", u.quota_bytes},
+    	        {"root_rel", u.root_rel}
+	        }).dump());
         	return;
     	}
-
-    	pqnas::UserRec u = *cur;
-
-	    const std::string prev_state = u.storage_state;
-    	const std::uint64_t prev_quota = u.quota_bytes;
-    	const std::string prev_root = u.root_rel;
 
     	u.storage_state = "allocated";
     	u.quota_bytes = quota_bytes;
-    	u.root_rel = std::string("users/") + fp; // Option A: full fingerprint
+	    u.root_rel = std::string("users/") + fp; // Option A: full fingerprint
     	u.storage_set_at = now_iso;
-    	u.storage_set_by = actor_fp;
+	    u.storage_set_by = actor_fp;
 
     	const bool ok_upsert = users.upsert(u);
-    	const bool ok_save   = ok_upsert ? users.save(users_path) : false;
+	    const bool ok_save   = ok_upsert ? users.save(users_path) : false;
 
     	{
 	        pqnas::AuditEvent ev;
-    	    ev.event = "admin.user_storage_allocated";
-        	ev.outcome = (ok_upsert && ok_save) ? "ok" : "fail";
+        	ev.event = already_allocated ? "admin.user_storage_updated" : "admin.user_storage_allocated";
+    	    ev.outcome = (ok_upsert && ok_save) ? "ok" : "fail";
 	        ev.f["fingerprint"] = fp;
-    	    ev.f["ts"] = now_iso;
-        	ev.f["actor_fp"] = actor_fp;
+        	ev.f["ts"] = now_iso;
+    	    ev.f["actor_fp"] = actor_fp;
 	        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
-    	    // Details (all metadata)
-        	ev.f["quota_gb"] = pqnas::shorten(std::to_string(quota_gb_d), 32);
-        	ev.f["quota_bytes"] = pqnas::shorten(std::to_string((unsigned long long)quota_bytes), 32);
+        	// Details (all metadata)
+    	    ev.f["quota_gb"] = pqnas::shorten(std::to_string(quota_gb_d), 32);
+	        ev.f["quota_bytes"] = pqnas::shorten(std::to_string((unsigned long long)quota_bytes), 32);
         	ev.f["root_rel"] = pqnas::shorten(u.root_rel, 160);
+    	    if (force) ev.f["force"] = "true";
 
-        	// previous values (useful for audits)
-	        if (!prev_state.empty()) ev.f["prev_storage_state"] = pqnas::shorten(prev_state, 40);
+	        // previous values (useful for audits)
+        	if (!prev_state.empty()) ev.f["prev_storage_state"] = pqnas::shorten(prev_state, 40);
     	    if (prev_quota != 0) ev.f["prev_quota_bytes"] = pqnas::shorten(std::to_string((unsigned long long)prev_quota), 32);
-        	if (!prev_root.empty()) ev.f["prev_root_rel"] = pqnas::shorten(prev_root, 160);
+	        if (!prev_root.empty()) ev.f["prev_root_rel"] = pqnas::shorten(prev_root, 160);
 
         	maybe_auto_rotate_before_append();
-	        audit_append(ev);
-    	}
+    	    audit_append(ev);
+	    }
 
-	    if (!ok_upsert) {
-    	    reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","upsert failed"}}).dump());
+    	if (!ok_upsert) {
+        	reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","upsert failed"}}).dump());
         	return;
     	}
-    	if (!ok_save) {
+	    if (!ok_save) {
         	reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
-        	return;
-    	}
+    	    return;
+	    }
 
-    	reply_json(res, 200, json({
+	    reply_json(res, 200, json({
         	{"ok", true},
-        	{"fingerprint", fp},
-        	{"storage_state", u.storage_state},
-	        {"quota_bytes", u.quota_bytes},
+    	    {"fingerprint", fp},
+	        {"storage_state", u.storage_state},
+        	{"quota_bytes", u.quota_bytes},
     	    {"root_rel", u.root_rel},
-        	{"storage_set_at", u.storage_set_at},
-	        {"storage_set_by", u.storage_set_by}
+	        {"storage_set_at", u.storage_set_at},
+        	{"storage_set_by", u.storage_set_by}
     	}).dump());
 	});
+
 
     // GET /system (static UI) - visible to user + admin (cookie required)
     srv.Get("/system", [&](const httplib::Request& req, httplib::Response& res) {
