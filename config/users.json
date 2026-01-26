@@ -1,29 +1,12 @@
 {
   "users": [
     {
-      "added_at": "2026-01-25T02:34:51.578Z",
-      "address": "",
-      "email": "",
-      "fingerprint": "6f35876588f4a045e852b7570821430b8aa38c34d755f0b2a1c5444b27d70cb47fbe0bd0d65e5457917b9581f4c995f9819f193cae03af515b98b7d01d84035a",
-      "group": "",
-      "last_seen": "2026-01-26T03:24:50.373Z",
-      "name": "",
-      "notes": "",
-      "quota_bytes": 8589934592,
-      "role": "user",
-      "root_rel": "users/6f35876588f4a045e852b7570821430b8aa38c34d755f0b2a1c5444b27d70cb47fbe0bd0d65e5457917b9581f4c995f9819f193cae03af515b98b7d01d84035a",
-      "status": "enabled",
-      "storage_set_at": "2026-01-26T03:24:13.673Z",
-      "storage_set_by": "a8885f40f4c12c85837807021a48d31c1ba657f5aebe809107eccb72ce60024076fd976c34109c78c68614c5d37702225397a3daba099fb16ed4738167bede39",
-      "storage_state": "allocated"
-    },
-    {
       "added_at": "2026-01-21T00:00:00.000Z",
       "address": "",
       "email": "",
       "fingerprint": "a8885f40f4c12c85837807021a48d31c1ba657f5aebe809107eccb72ce60024076fd976c34109c78c68614c5d37702225397a3daba099fb16ed4738167bede39",
       "group": "",
-      "last_seen": "2026-01-26T03:26:27.286Z",
+      "last_seen": "2026-01-26T05:02:29.697Z",
       "name": "Admin",
       "notes": "",
       "quota_bytes": 0,

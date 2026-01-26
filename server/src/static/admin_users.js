@@ -50,6 +50,7 @@ function storagePill(state) {
 }
 
 let allUsers = [];
+let actorFp = "";
 
 function setMsg(text) {
     const el = $("msg");
@@ -71,33 +72,47 @@ function render() {
     if (!tb) return;
 
     tb.innerHTML = rows.map(u => {
+        const isSelf = actorFp && String(u.fingerprint || "") === actorFp;
+
+        const selfTag = isSelf
+            ? `<span class="pill enabled" title="This is you" style="margin-left:8px;">you</span>`
+            : "";
+
+        const disAttr = isSelf ? ` disabled title="Refusing to modify your own admin entry"` : "";
+        const disClass = isSelf ? ` style="opacity:0.45; cursor:not-allowed;"` : "";
+
         return `<tr>
-            <td class="mono">${esc(u.fingerprint)}</td>
+        <td class="mono">${esc(u.fingerprint)}</td>
 
-            <td>
-                <div><b>${esc(u.name || "")}</b></div>
-                <div class="muted" style="white-space:pre-wrap;">${esc(u.notes || "")}</div>
-            </td>
+        <td>
+            <div><b>${esc(u.name || "")}</b>${selfTag}</div>
+            <div class="muted" style="white-space:pre-wrap;">${esc(u.notes || "")}</div>
+        </td>
 
-            <td>${esc(u.role || "")}</td>
-            <td>${pill(u.status)}</td>
+        <td>${esc(u.role || "")}</td>
+        <td>${pill(u.status)}</td>
 
-            <td>${esc(u.group || "")}</td>
-            <td>${storagePill(u.storage_state)}</td>
-            <td class="mono">${fmtQuotaCell(u)}</td>
+        <td>${esc(u.group || "")}</td>
+        <td>${storagePill(u.storage_state)}</td>
+        <td class="mono">${fmtQuotaCell(u)}</td>
 
-            <td class="mono">${esc(u.added_at || "")}</td>
-            <td class="mono">${esc(u.last_seen || "")}</td>
+        <td class="mono">${esc(u.added_at || "")}</td>
+        <td class="mono">${esc(u.last_seen || "")}</td>
 
-            <td class="row-actions">
-                <button class="btn secondary" data-act="enable" data-fp="${esc(u.fingerprint)}" type="button">Enable</button>
-                <button class="btn secondary" data-act="disable" data-fp="${esc(u.fingerprint)}" type="button">Disable</button>
-                <button class="btn secondary" data-act="revoke" data-fp="${esc(u.fingerprint)}" type="button">Revoke</button>
-                <button class="btn secondary" data-act="allocate" data-fp="${esc(u.fingerprint)}" type="button">Allocate</button>
-                <button class="btn danger" data-act="delete" data-fp="${esc(u.fingerprint)}" type="button">Delete</button>
-            </td>
-        </tr>`;
+        <td class="row-actions">
+            <button class="btn secondary" data-act="enable" data-fp="${esc(u.fingerprint)}" type="button"${disAttr}${disClass}>Enable</button>
+
+
+            <button class="btn secondary" data-act="disable" data-fp="${esc(u.fingerprint)}" type="button"${disAttr}${disClass}>Disable</button>
+            <button class="btn secondary" data-act="revoke" data-fp="${esc(u.fingerprint)}" type="button"${disAttr}${disClass}>Revoke</button>
+
+            <button class="btn secondary" data-act="allocate" data-fp="${esc(u.fingerprint)}" type="button">Allocate</button>
+
+            <button class="btn danger" data-act="delete" data-fp="${esc(u.fingerprint)}" type="button"${disAttr}${disClass}>Delete</button>
+        </td>
+    </tr>`;
     }).join("");
+
 
     tb.querySelectorAll("button").forEach(b => {
         b.addEventListener("click", async () => {
@@ -105,6 +120,12 @@ function render() {
             const act = b.getAttribute("data-act");
 
             if (!fp || !act) return;
+
+            const isSelf = actorFp && fp === actorFp;
+            if (isSelf && (act === "enable" || act === "disable" || act === "revoke" || act === "delete")) {
+                alert("Refusing to modify your own admin entry (prevents lockout or role change).");
+                return;
+            }
 
             if (act === "delete") {
                 const msg =
@@ -195,6 +216,7 @@ function render() {
 async function refresh() {
     setMsg("Loading users…");
     const j = await apiGet("/api/v4/admin/users");
+    actorFp = String(j.actor_fp || "");
     allUsers = (j.users || []).sort((a,b) => (a.fingerprint||"").localeCompare(b.fingerprint||""));
     render();
     setMsg(`Loaded ${allUsers.length} users`);

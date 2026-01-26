@@ -137,6 +137,11 @@ const std::string STATIC_ADMIN_SETTINGS_HTML =
 
 const std::string STATIC_ADMIN_SETTINGS_JS =
     (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_settings.js").string();
+static const char* STATIC_APPROVALS_HTML = "server/src/static/admin_approvals.html";
+static const char* STATIC_APPROVALS_JS   = "server/src/static/admin_approvals.js";
+static const char* STATIC_BADGES_JS = "server/src/static/admin_badges.js";
+
+
 
 
 
@@ -2832,6 +2837,13 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
         res.set_content(body, "application/javascript; charset=utf-8");
     });
 
+	srv.Get("/static/admin_badges.js", [&](const httplib::Request&, httplib::Response& res) {
+    	const std::string body = slurp_file(STATIC_BADGES_JS);
+    	if (body.empty()) { res.status = 404; res.set_content("missing admin_badges.js","text/plain"); return; }
+    	res.set_header("Cache-Control", "no-store");
+	    res.set_content(body, "application/javascript; charset=utf-8");
+	});
+
     srv.Get("/api/v4/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
         if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
@@ -2840,6 +2852,7 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 
         json out;
         out["ok"] = true;
+	    out["actor_fp"] = actor_fp;
         out["users"] = json::array();
 
         for (auto& kv : users.snapshot()) {
@@ -2871,6 +2884,23 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
         reply_json(res, 200, out.dump());
     });
 
+	srv.Get("/admin/approvals", [&](const httplib::Request& req, httplib::Response& res) {
+   		std::string actor_fp;
+    	if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    	const std::string body = slurp_file(STATIC_APPROVALS_HTML);
+    	if (body.empty()) { res.status = 404; res.set_content("missing admin_approvals.html","text/plain"); return; }
+    	res.set_header("Cache-Control", "no-store");
+    	res.set_content(body, "text/html; charset=utf-8");
+	});
+
+	srv.Get("/static/admin_approvals.js", [&](const httplib::Request&, httplib::Response& res) {
+    	const std::string body = slurp_file(STATIC_APPROVALS_JS);
+	    if (body.empty()) { res.status = 404; res.set_content("missing admin_approvals.js","text/plain"); return; }
+    	res.set_header("Cache-Control", "no-store");
+	    res.set_content(body, "application/javascript; charset=utf-8");
+	});
+
     auto now_iso_utc = []() -> std::string {
         using namespace std::chrono;
         auto now = system_clock::now();
@@ -2891,62 +2921,87 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 
     // POST /api/v4/admin/users/status
     // Body: {"fingerprint":"...","status":"enabled|disabled|revoked"}
-    srv.Post("/api/v4/admin/users/status", [&](const httplib::Request& req, httplib::Response& res) {
-        std::string actor_fp;
-        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+	srv.Post("/api/v4/admin/users/status", [&](const httplib::Request& req, httplib::Response& res) {
+    	std::string actor_fp;
+	    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
-        json j;
-        try { j = json::parse(req.body); }
-        catch (...) {
-            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
-            return;
-        }
+    	json j;
+    	try { j = json::parse(req.body); }
+	    catch (...) {
+        	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+        	return;
+    	}
 
-        const std::string fp     = j.value("fingerprint", "");
-        const std::string status = j.value("status", "");
+    	const std::string fp     = j.value("fingerprint", "");
+	    const std::string status = j.value("status", "");
 
-        if (fp.empty()) {
-            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
-            return;
-        }
+	    if (fp.empty()) {
+        	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+    	    return;
+	    }
 
-        if (status != "enabled" && status != "disabled" && status != "revoked") {
-            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid status"}}).dump());
-            return;
-        }
+    	if (status != "enabled" && status != "disabled" && status != "revoked") {
+	        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid status"}}).dump());
+        	return;
+    	}
 
-        if (!users.exists(fp)) {
-            reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
-            return;
-        }
+    	// Prevent admin self-lockout: do not allow disabling/revoking your own fingerprint.
+    	if (fp == actor_fp && status != "enabled") {
+	        {
+    	        pqnas::AuditEvent ev;
+	            ev.event = "admin.self_lockout_blocked";
+        	    ev.outcome = "fail";
+    	        ev.f["action"] = "status";
+	            ev.f["fingerprint"] = fp;
+        	    ev.f["requested_status"] = status;
+    	        ev.f["ts"] = now_iso_utc();
+	            ev.f["actor_fp"] = actor_fp;
+            	ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        	    maybe_auto_rotate_before_append();
+    	        audit_append(ev);
+	        }
 
-        const bool ok_set  = users.set_status(fp, status);
-        const bool ok_save = ok_set ? users.save(users_path) : false;
+        	reply_json(res, 400, json({
+        	    {"ok",false},
+    	        {"error","bad_request"},
+	            {"message","refusing to change your own status (prevents admin lockout)"}
+        	}).dump());
+    	    return;
+	    }
 
-        {
-            pqnas::AuditEvent ev;
-            ev.event = "admin.user_status_set";
-            ev.outcome = (ok_set && ok_save) ? "ok" : "fail";
-            ev.f["fingerprint"] = fp;
-            ev.f["status"] = status;
-            ev.f["ts"] = now_iso_utc();
-            ev.f["actor_fp"] = actor_fp;
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            maybe_auto_rotate_before_append();
-            audit_append(ev);
-        }
+    	if (!users.exists(fp)) {
+        	reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
+	        return;
+    	}
 
-        if (!ok_set) {
-            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","set_status failed"}}).dump());
-            return;
-        }
-        if (!ok_save) {
-            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
-            return;
-        }
+    	const bool ok_set  = users.set_status(fp, status);
+    	const bool ok_save = ok_set ? users.save(users_path) : false;
 
-        reply_json(res, 200, json({{"ok",true}}).dump());
-    });
+    	{
+	        pqnas::AuditEvent ev;
+        	ev.event = "admin.user_status_set";
+    	    ev.outcome = (ok_set && ok_save) ? "ok" : "fail";
+	        ev.f["fingerprint"] = fp;
+        	ev.f["status"] = status;
+    	    ev.f["ts"] = now_iso_utc();
+	        ev.f["actor_fp"] = actor_fp;
+        	ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+    	    maybe_auto_rotate_before_append();
+	        audit_append(ev);
+    	}
+
+	    if (!ok_set) {
+        	reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","set_status failed"}}).dump());
+    	    return;
+	    }
+    	if (!ok_save) {
+	        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
+        	return;
+    	}
+
+    	reply_json(res, 200, json({{"ok",true}}).dump());
+	});
+
 
 	// POST /api/v4/admin/users/storage
 	// Body: {"fingerprint":"...","quota_gb":10}
@@ -3352,60 +3407,83 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
 
     // POST /api/v4/admin/users/delete
     // Body: {"fingerprint":"..."}
-    srv.Post("/api/v4/admin/users/delete", [&](const httplib::Request& req, httplib::Response& res) {
-        std::string actor_fp;
-        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+	srv.Post("/api/v4/admin/users/delete", [&](const httplib::Request& req, httplib::Response& res) {
+    	std::string actor_fp;
+	    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
-        json j;
-        try { j = json::parse(req.body); }
-        catch (...) {
-            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
-            return;
-        }
+    	json j;
+    	try { j = json::parse(req.body); }
+    	catch (...) {
+	        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+        	return;
+    	}
 
-        const std::string fp = j.value("fingerprint", "");
-        if (fp.empty()) {
-            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
-            return;
-        }
+    	const std::string fp = j.value("fingerprint", "");
+	    if (fp.empty()) {
+        	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+    	    return;
+	    }
 
-        if (!users.exists(fp)) {
-            reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
-            return;
-        }
+    	// Prevent admin self-lockout: do not allow deleting your own identity entry.
+    	if (fp == actor_fp) {
+	        {
+        	    pqnas::AuditEvent ev;
+    	        ev.event = "admin.self_lockout_blocked";
+	            ev.outcome = "fail";
+            	ev.f["action"] = "delete";
+        	    ev.f["fingerprint"] = fp;
+    	        ev.f["ts"] = now_iso_utc();
+	            ev.f["actor_fp"] = actor_fp;
+            	ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        	    maybe_auto_rotate_before_append();
+    	        audit_append(ev);
+	        }
 
-        // Safety: refuse deleting an enabled admin identity (keeps system recoverable)
-        if (users.is_admin_enabled(fp)) {
-            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","refusing to delete an enabled admin"}}).dump());
-            return;
-        }
+        	reply_json(res, 400, json({
+    	        {"ok",false},
+	            {"error","bad_request"},
+            	{"message","refusing to delete your own admin entry (prevents lockout)"}
+        	}).dump());
+    	    return;
+	    }
 
-        const bool ok_del  = users.erase(fp);
-        const bool ok_save = ok_del ? users.save(users_path) : false;
+	    if (!users.exists(fp)) {
+        	reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
+    	    return;
+	    }
 
-        {
-            pqnas::AuditEvent ev;
-            ev.event = "admin.user_deleted";
-            ev.outcome = (ok_del && ok_save) ? "ok" : "fail";
-            ev.f["fingerprint"] = fp;
-            ev.f["ts"] = now_iso_utc();
-            ev.f["actor_fp"] = actor_fp;
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            maybe_auto_rotate_before_append();
-            audit_append(ev);
-        }
+    	// Safety: refuse deleting an enabled admin identity (keeps system recoverable)
+	    if (users.is_admin_enabled(fp)) {
+        	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","refusing to delete an enabled admin"}}).dump());
+    	    return;
+	    }
 
-        if (!ok_del) {
-            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","delete failed"}}).dump());
-            return;
-        }
-        if (!ok_save) {
-            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
-            return;
-        }
+    	const bool ok_del  = users.erase(fp);
+    	const bool ok_save = ok_del ? users.save(users_path) : false;
 
-        reply_json(res, 200, json({{"ok",true}}).dump());
-    });
+    	{
+	        pqnas::AuditEvent ev;
+        	ev.event = "admin.user_deleted";
+    	    ev.outcome = (ok_del && ok_save) ? "ok" : "fail";
+	        ev.f["fingerprint"] = fp;
+        	ev.f["ts"] = now_iso_utc();
+    	    ev.f["actor_fp"] = actor_fp;
+	        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        	maybe_auto_rotate_before_append();
+    	    audit_append(ev);
+	    }
+
+    	if (!ok_del) {
+	        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","delete failed"}}).dump());
+        	return;
+    	}
+	    if (!ok_save) {
+        	reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
+    	    return;
+	    }
+
+    	reply_json(res, 200, json({{"ok",true}}).dump());
+	});
 
     std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
     srv.listen("0.0.0.0", LISTEN_PORT);
