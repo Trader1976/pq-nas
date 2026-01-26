@@ -3281,7 +3281,285 @@ srv.Get("/api/v4/system/storage", [&](const httplib::Request& req, httplib::Resp
     reply_json(res, 200, out.dump());
 });
 
-    
+    // ---- Files API (user storage) ----
+// POST /api/v4/files/move?from=old/path&to=new/path
+srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_move_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& from_rel, const std::string& to_rel, const std::string& type) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_move_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["from"] = pqnas::shorten(from_rel, 200);
+        ev.f["to"]   = pqnas::shorten(to_rel, 200);
+        ev.f["type"] = type;
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    std::string from_rel, to_rel;
+    if (req.has_param("from")) from_rel = req.get_param_value("from");
+    if (req.has_param("to"))   to_rel   = req.get_param_value("to");
+
+    if (from_rel.empty() || to_rel.empty()) {
+        audit_fail("missing_from_or_to", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing from or to"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    std::filesystem::path from_abs, to_abs;
+    std::string err1, err2;
+    if (!pqnas::resolve_user_path_strict(user_dir, from_rel, &from_abs, &err1)) {
+        audit_fail("invalid_from_path", 400, err1);
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid from path"}}.dump());
+        return;
+    }
+    if (!pqnas::resolve_user_path_strict(user_dir, to_rel, &to_abs, &err2)) {
+        audit_fail("invalid_to_path", 400, err2);
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid to path"}}.dump());
+        return;
+    }
+
+    // refuse no-op (helps avoid weird audits)
+    if (from_abs == to_abs) {
+        audit_fail("same_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "from and to are the same"}
+        }.dump());
+        return;
+    }
+
+    // source must exist
+    std::error_code ec;
+    auto st = std::filesystem::status(from_abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "source not found"}
+        }.dump());
+        return;
+    }
+
+    const bool is_dir  = std::filesystem::is_directory(st);
+    const bool is_file = std::filesystem::is_regular_file(st);
+
+    // ensure destination parent exists
+    ec.clear();
+    std::filesystem::create_directories(to_abs.parent_path(), ec);
+    if (ec) {
+        audit_fail("mkdir_failed", 500, ec.message());
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to create destination directories"},
+            {"detail", pqnas::shorten(ec.message(), 180)}
+        }.dump());
+        return;
+    }
+
+    // rename/move
+    ec.clear();
+    std::filesystem::rename(from_abs, to_abs, ec);
+    if (ec) {
+        audit_fail("rename_failed", 500, ec.message());
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "move failed"},
+            {"detail", pqnas::shorten(ec.message(), 180)}
+        }.dump());
+        return;
+    }
+
+    audit_ok(from_rel, to_rel, is_dir ? "dir" : (is_file ? "file" : "other"));
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"from", from_rel},
+        {"to", to_rel}
+    }.dump());
+});
+
+// ---- Files API (user storage) ----
+// POST /api/v4/files/mkdir?path=relative/dir
+srv.Post("/api/v4/files/mkdir", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_mkdir_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& rel_path) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_mkdir_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_path, 200);
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // ---- path param ----
+    std::string rel_path;
+    if (req.has_param("path"))
+        rel_path = req.get_param_value("path");
+
+    if (rel_path.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    // reuse strict resolver
+    std::filesystem::path abs;
+    std::string path_err;
+    if (!pqnas::resolve_user_path_strict(user_dir, rel_path, &abs, &path_err)) {
+        audit_fail("invalid_path", 400, path_err);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(abs, ec);
+    if (ec) {
+        audit_fail("mkdir_failed", 500, ec.message());
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to create directory"},
+            {"detail", pqnas::shorten(ec.message(), 180)}
+        }.dump());
+        return;
+    }
+
+    audit_ok(rel_path);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", rel_path}
+    }.dump());
+});
+
+
 // DELETE /api/v4/files/delete?path=relative/path
 // Deletes a file or directory (recursive). Refuses empty path (won't delete user root).
 srv.Delete("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Response& res) {
