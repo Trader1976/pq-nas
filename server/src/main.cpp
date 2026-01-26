@@ -3281,6 +3281,175 @@ srv.Get("/api/v4/system/storage", [&](const httplib::Request& req, httplib::Resp
     reply_json(res, 200, out.dump());
 });
 
+// GET /api/v4/files/get?path=relative/path.bin
+// Response: raw bytes (streams file)
+srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_get_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& rel_path, std::uint64_t bytes) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_get_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_path, 200);
+        ev.f["bytes"] = std::to_string((unsigned long long)bytes);
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // path param
+    std::string rel_path;
+    if (req.has_param("path")) rel_path = req.get_param_value("path");
+    if (rel_path.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    // Must be allocated (fail-closed)
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value()) {
+            audit_fail("user_missing", 403);
+            reply_json(res, 403, json{{"ok", false}, {"error", "forbidden"}, {"message", "policy denied"}}.dump());
+            return;
+        }
+        const auto& u = *uopt;
+        if (u.storage_state != "allocated") {
+            audit_fail("storage_unallocated", 403);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"},
+                {"fingerprint_hex", fp_hex},
+                {"quota_bytes", u.quota_bytes}
+            }.dump());
+            return;
+        }
+    }
+
+    // Resolve file path strictly under user dir
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    std::filesystem::path abs;
+    std::string perr;
+    if (!pqnas::resolve_user_path_strict(user_dir, rel_path, &abs, &perr)) {
+        audit_fail("invalid_path", 400, perr);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    // Validate exists + regular + size
+    std::error_code ec;
+    auto st = std::filesystem::status(abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "file not found"}
+        }.dump());
+        return;
+    }
+    if (!std::filesystem::is_regular_file(st)) {
+        audit_fail("not_regular_file", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "not a regular file"}
+        }.dump());
+        return;
+    }
+
+    const std::uint64_t sz = pqnas::file_size_u64_safe(abs);
+
+    // Stream it
+    auto fp = std::make_shared<std::ifstream>(abs, std::ios::binary);
+    if (!fp->good()) {
+        audit_fail("open_failed", 500);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to open file"}
+        }.dump());
+        return;
+    }
+
+    res.set_header("Cache-Control", "no-store");
+    res.set_header("Content-Type", "application/octet-stream");
+    res.set_header("Content-Length", std::to_string((unsigned long long)sz));
+
+    // Optional: browser-friendly filename (safe-ish: just basename)
+    res.set_header("Content-Disposition",
+                   std::string("attachment; filename=\"") + abs.filename().string() + "\"");
+
+    // httplib content provider: called repeatedly until it returns false
+    res.set_content_provider(
+        (size_t)sz,
+        "application/octet-stream",
+        [fp](size_t /*offset*/, size_t length, httplib::DataSink& sink) mutable {
+            std::string buf;
+            buf.resize(length);
+
+            fp->read(buf.data(), (std::streamsize)length);
+            std::streamsize n = fp->gcount();
+            if (n > 0) sink.write(buf.data(), (size_t)n);
+
+            return n > 0; // false ends the stream
+        },
+        [fp](bool /*success*/) mutable {
+            if (fp && fp->is_open()) fp->close();
+        }
+    );
+
+
+    audit_ok(rel_path, sz);
+});
 
 // ---- Files API (user storage) ----
 // PUT /api/v4/files/put?path=relative/path.bin
