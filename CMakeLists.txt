@@ -94,6 +94,7 @@ add_library(pqnas_verify_v4 STATIC
         server/src/pqnas_util.cc
         server/src/authz.cc
         server/src/users_registry.cpp
+        server/src/user_quota.cc
 )
 
 target_include_directories(pqnas_verify_v4 PUBLIC
