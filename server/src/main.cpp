@@ -3954,6 +3954,253 @@ srv.Post("/api/v4/files/rmdir", [&](const httplib::Request& req, httplib::Respon
 });
 
 
+    // POST /api/v4/files/tree?path=rel/path&max=500
+srv.Post("/api/v4/files/tree", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
+                          const std::string& path_rel = "", int max_entries = -1) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_tree_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!path_rel.empty()) ev.f["path"] = pqnas::shorten(path_rel, 200);
+        if (max_entries >= 0)  ev.f["max"]  = std::to_string(max_entries);
+        if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& path_rel, int max_entries,
+                        std::uint64_t entries, std::uint64_t files, std::uint64_t dirs, bool truncated) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_tree_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(path_rel, 200);
+        ev.f["max"] = std::to_string(max_entries);
+        ev.f["entries"] = std::to_string((unsigned long long)entries);
+        ev.f["files"] = std::to_string((unsigned long long)files);
+        ev.f["dirs"]  = std::to_string((unsigned long long)dirs);
+        ev.f["truncated"] = truncated ? "1" : "0";
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    std::string path_rel;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+    if (path_rel.empty()) path_rel = "."; // convenience: root of user storage
+
+    int max_entries = 500;
+    if (req.has_param("max")) {
+        try { max_entries = std::stoi(req.get_param_value("max")); } catch (...) {}
+    }
+    max_entries = std::max(1, std::min(5000, max_entries));
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    std::filesystem::path path_abs;
+    std::string err;
+    if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &path_abs, &err)) {
+        audit_fail("invalid_path", 400, err, path_rel, max_entries);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    std::error_code ec;
+    auto st = std::filesystem::status(path_abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404, "", path_rel, max_entries);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "path not found"}
+        }.dump());
+        return;
+    }
+
+    // Helpers for building relative paths under user_dir (for UI)
+    auto to_rel_from_user_dir = [&](const std::filesystem::path& abs) -> std::string {
+        std::error_code ec3;
+        auto rel = std::filesystem::relative(abs, user_dir, ec3);
+        if (ec3) return path_rel; // fallback
+        return rel.generic_string();
+    };
+
+    std::uint64_t entries = 0, files = 0, dirs = 0;
+    bool truncated = false;
+
+    // Return shape:
+    // node = { name, path, type, bytes?, children? }
+    std::function<json(const std::filesystem::path&, const std::filesystem::path&)> build_node;
+
+    build_node = [&](const std::filesystem::path& abs, const std::filesystem::path& name_for_display) -> json {
+        json node;
+        node["name"] = name_for_display.empty() ? std::string("") : name_for_display.generic_string();
+        node["path"] = to_rel_from_user_dir(abs);
+
+        std::error_code ec2;
+        auto st2 = std::filesystem::symlink_status(abs, ec2);
+        if (ec2) {
+            node["type"] = "other";
+            return node;
+        }
+
+        // Do not follow symlinks: report and stop.
+        if (std::filesystem::is_symlink(st2)) {
+            node["type"] = "symlink";
+            return node;
+        }
+
+        if (std::filesystem::is_regular_file(st2)) {
+            node["type"] = "file";
+            node["bytes"] = pqnas::file_size_u64_safe(abs);
+            return node;
+        }
+
+        if (std::filesystem::is_directory(st2)) {
+            node["type"] = "dir";
+            node["children"] = json::array();
+
+            // Stop adding children if we hit max
+            if ((int)entries >= max_entries) {
+                truncated = true;
+                return node;
+            }
+
+            // Stable order: name sort
+            std::vector<std::filesystem::directory_entry> kids;
+            for (auto it = std::filesystem::directory_iterator(abs, std::filesystem::directory_options::skip_permission_denied, ec2);
+                 it != std::filesystem::directory_iterator();
+                 it.increment(ec2)) {
+                if (ec2) break;
+                kids.push_back(*it);
+            }
+            std::sort(kids.begin(), kids.end(), [](const auto& a, const auto& b) {
+                return a.path().filename().string() < b.path().filename().string();
+            });
+
+            for (auto& de : kids) {
+                if ((int)entries >= max_entries) { truncated = true; break; }
+
+                // Count entry (dir or file) when we *include* it
+                std::error_code ec4;
+                auto stc = de.symlink_status(ec4);
+                if (ec4) continue;
+
+                // Skip symlinks entirely (or keep as leaf). Here: keep as leaf.
+                // That still doesn't follow them.
+                entries++;
+
+                if (std::filesystem::is_symlink(stc)) {
+                    node["children"].push_back(json{
+                        {"name", de.path().filename().string()},
+                        {"path", to_rel_from_user_dir(de.path())},
+                        {"type", "symlink"}
+                    });
+                    continue;
+                }
+
+                if (std::filesystem::is_directory(stc)) {
+                    dirs++;
+                    node["children"].push_back(build_node(de.path(), de.path().filename()));
+                    continue;
+                }
+
+                if (std::filesystem::is_regular_file(stc)) {
+                    files++;
+                    node["children"].push_back(json{
+                        {"name", de.path().filename().string()},
+                        {"path", to_rel_from_user_dir(de.path())},
+                        {"type", "file"},
+                        {"bytes", pqnas::file_size_u64_safe(de.path())}
+                    });
+                    continue;
+                }
+
+                node["children"].push_back(json{
+                    {"name", de.path().filename().string()},
+                    {"path", to_rel_from_user_dir(de.path())},
+                    {"type", "other"}
+                });
+            }
+
+            return node;
+        }
+
+        node["type"] = "other";
+        return node;
+    };
+
+    json root;
+
+    // Root node counts
+    entries = 1; // root itself
+    if (std::filesystem::is_directory(st)) dirs = 1;
+    else if (std::filesystem::is_regular_file(st)) files = 1;
+
+    // For root node name: show last component unless "." (use "")
+    std::filesystem::path root_name = path_abs.filename();
+    if (path_rel == "." || path_rel == "/" || path_rel.empty()) root_name = "";
+
+    root = build_node(path_abs, root_name);
+
+    audit_ok(path_rel, max_entries, entries, files, dirs, truncated);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", path_rel},
+        {"max", max_entries},
+        {"truncated", truncated},
+        {"entries", entries},
+        {"files", files},
+        {"dirs", dirs},
+        {"tree", root}
+    }.dump());
+});
+
+
     // POST /api/v4/files/du?path=rel/path
 srv.Post("/api/v4/files/du", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
