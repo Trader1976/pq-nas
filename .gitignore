@@ -20,3 +20,7 @@ apps/installed/
 
 # Per-user app installs/data are runtime state
 apps/users/
+
+# Installed apps + user app data are runtime state
+apps/installed/
+apps/users/
