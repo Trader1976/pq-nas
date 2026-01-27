@@ -3950,6 +3950,442 @@ srv.Get("/api/v4/files/list", [&](const httplib::Request& req, httplib::Response
     reply_json(res, 200, out.dump());
 });
 
+    // POST /api/v4/files/exists?path=rel/path
+srv.Post("/api/v4/files/exists", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
+                          const std::string& path_rel = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_exists_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!path_rel.empty()) ev.f["path"] = pqnas::shorten(path_rel, 200);
+        if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& path_rel,
+                        const std::string& type,
+                        bool exists,
+                        std::uint64_t bytes) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_exists_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(path_rel, 200);
+        ev.f["exists"] = exists ? "1" : "0";
+        ev.f["type"] = type;
+        if (exists && type == "file") ev.f["bytes"] = std::to_string((unsigned long long)bytes);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    std::string path_rel;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+
+    if (path_rel.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    std::filesystem::path path_abs;
+    std::string err;
+    if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &path_abs, &err)) {
+        audit_fail("invalid_path", 400, err, path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    std::error_code ec;
+    auto st = std::filesystem::status(path_abs, ec);
+
+    bool exists = (!ec && std::filesystem::exists(st));
+    std::string type = "missing";
+    std::uint64_t bytes = 0;
+
+    if (exists) {
+        if (std::filesystem::is_regular_file(st)) {
+            type = "file";
+            bytes = pqnas::file_size_u64_safe(path_abs);
+        } else if (std::filesystem::is_directory(st)) {
+            type = "dir";
+        } else if (std::filesystem::is_symlink(st)) {
+            // resolve_user_path_strict should already prevent escaping,
+            // but we still report accurately.
+            type = "symlink";
+        } else {
+            type = "other";
+        }
+    }
+
+    audit_ok(path_rel, type, exists, bytes);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", path_rel},
+        {"exists", exists},
+        {"type", type},
+        {"bytes", bytes}
+    }.dump());
+});
+
+
+    // POST /api/v4/files/copy?from=old/path&to=new/path
+srv.Post("/api/v4/files/copy", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
+                          const std::string& from_rel = "", const std::string& to_rel = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_copy_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!from_rel.empty()) ev.f["from"] = pqnas::shorten(from_rel, 200);
+        if (!to_rel.empty())   ev.f["to"]   = pqnas::shorten(to_rel, 200);
+        if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_quota = [&](int http,
+                           const std::string& detail,
+                           const std::string& from_rel,
+                           const std::string& to_rel,
+                           std::uint64_t src_bytes,
+                           std::uint64_t dst_old_bytes,
+                           std::uint64_t delta_bytes) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_copy_quota_exceeded";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = "quota_exceeded";
+        ev.f["http"] = std::to_string(http);
+        ev.f["from"] = pqnas::shorten(from_rel, 200);
+        ev.f["to"]   = pqnas::shorten(to_rel, 200);
+        ev.f["src_bytes"] = std::to_string((unsigned long long)src_bytes);
+        ev.f["dst_old_bytes"] = std::to_string((unsigned long long)dst_old_bytes);
+        ev.f["delta_bytes"] = std::to_string((unsigned long long)delta_bytes);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& from_rel,
+                        const std::string& to_rel,
+                        std::uint64_t src_bytes,
+                        std::uint64_t dst_old_bytes,
+                        std::uint64_t delta_bytes,
+                        bool overwrote) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_copy_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["from"] = pqnas::shorten(from_rel, 200);
+        ev.f["to"]   = pqnas::shorten(to_rel, 200);
+        ev.f["type"] = "file";
+        ev.f["src_bytes"] = std::to_string((unsigned long long)src_bytes);
+        ev.f["dst_old_bytes"] = std::to_string((unsigned long long)dst_old_bytes);
+        ev.f["delta_bytes"] = std::to_string((unsigned long long)delta_bytes);
+        ev.f["overwrote"] = overwrote ? "1" : "0";
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    std::string from_rel, to_rel;
+    if (req.has_param("from")) from_rel = req.get_param_value("from");
+    if (req.has_param("to"))   to_rel   = req.get_param_value("to");
+
+    if (from_rel.empty() || to_rel.empty()) {
+        audit_fail("missing_from_or_to", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing from or to"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    std::filesystem::path from_abs, to_abs;
+    std::string err1, err2;
+    if (!pqnas::resolve_user_path_strict(user_dir, from_rel, &from_abs, &err1)) {
+        audit_fail("invalid_from_path", 400, err1, from_rel, to_rel);
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid from path"}}.dump());
+        return;
+    }
+    if (!pqnas::resolve_user_path_strict(user_dir, to_rel, &to_abs, &err2)) {
+        audit_fail("invalid_to_path", 400, err2, from_rel, to_rel);
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid to path"}}.dump());
+        return;
+    }
+
+    // refuse no-op
+    if (from_abs == to_abs) {
+        audit_fail("same_path", 400, "", from_rel, to_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "from and to are the same"}
+        }.dump());
+        return;
+    }
+
+    // source must exist + must be regular file (v1: file-only)
+    std::error_code ec;
+    auto st_src = std::filesystem::status(from_abs, ec);
+    if (ec || !std::filesystem::exists(st_src)) {
+        audit_fail("not_found", 404, "", from_rel, to_rel);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "source not found"}
+        }.dump());
+        return;
+    }
+    if (!std::filesystem::is_regular_file(st_src)) {
+        audit_fail("src_not_file", 400, "", from_rel, to_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "source must be a file (directories not supported yet)"}
+        }.dump());
+        return;
+    }
+
+    const std::uint64_t src_bytes = pqnas::file_size_u64_safe(from_abs);
+
+    // destination: if exists, must be regular file (overwrite) or missing
+    bool dst_exists = false;
+    bool dst_is_file = false;
+    std::uint64_t dst_old_bytes = 0;
+
+    ec.clear();
+    auto st_dst = std::filesystem::status(to_abs, ec);
+    if (!ec && std::filesystem::exists(st_dst)) {
+        dst_exists = true;
+        dst_is_file = std::filesystem::is_regular_file(st_dst);
+        if (!dst_is_file) {
+            audit_fail("dst_not_file", 400, "", from_rel, to_rel);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "destination exists and is not a file"}
+            }.dump());
+            return;
+        }
+        dst_old_bytes = pqnas::file_size_u64_safe(to_abs);
+    }
+
+    // ensure destination parent exists
+    ec.clear();
+    std::filesystem::create_directories(to_abs.parent_path(), ec);
+    if (ec) {
+        audit_fail("mkdir_failed", 500, ec.message(), from_rel, to_rel);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to create destination directories"},
+            {"detail", pqnas::shorten(ec.message(), 180)}
+        }.dump());
+        return;
+    }
+
+    // quota-aware: delta = src_bytes - dst_old_bytes (only if positive)
+    std::uint64_t delta_bytes = 0;
+    if (src_bytes > dst_old_bytes) delta_bytes = (src_bytes - dst_old_bytes);
+
+    if (delta_bytes > 0) {
+        // IMPORTANT: use destination rel path for quota attribution
+        pqnas::QuotaCheckResult qc = pqnas::quota_check_for_upload_v1(
+            users, fp_hex, user_dir, to_rel, delta_bytes
+        );
+
+        // ---- Adjust these field names if your QuotaCheckResult differs ----
+        // Expected: qc.ok (bool). If you have qc.allowed, rename accordingly.
+        if (!qc.ok) {
+            // Choose http + detail if your struct carries them, otherwise fall back.
+            int http = 403;
+            std::string detail;
+
+            // If your struct has these, uncomment/adjust:
+            // if (qc.http > 0) http = qc.http;
+            // detail = qc.detail.empty() ? qc.message : qc.detail;
+
+            audit_quota(http, detail, from_rel, to_rel, src_bytes, dst_old_bytes, delta_bytes);
+
+            reply_json(res, http, json{
+                {"ok", false},
+                {"error", "quota_exceeded"},
+                {"message", "Quota exceeded"},
+                {"detail", pqnas::shorten(detail, 180)}
+            }.dump());
+            return;
+        }
+    }
+
+    // copy using temp file + rename (atomic within same directory)
+    const std::filesystem::path tmp =
+    to_abs.parent_path() /
+    (to_abs.filename().string() + ".tmp.copy." + random_b64url(12));
+
+    // Best effort: remove stale tmp
+    ec.clear();
+    std::filesystem::remove(tmp, ec);
+
+    ec.clear();
+    std::filesystem::copy_file(from_abs, tmp, std::filesystem::copy_options::overwrite_existing, ec);
+    if (ec) {
+        audit_fail("copy_failed", 500, ec.message(), from_rel, to_rel);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "copy failed"},
+            {"detail", pqnas::shorten(ec.message(), 180)}
+        }.dump());
+        return;
+    }
+
+    // If overwriting, remove destination right before rename
+    if (dst_exists) {
+        ec.clear();
+        std::filesystem::remove(to_abs, ec);
+        if (ec) {
+            // cleanup tmp
+            std::error_code ec2;
+            std::filesystem::remove(tmp, ec2);
+
+            audit_fail("overwrite_remove_failed", 500, ec.message(), from_rel, to_rel);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to overwrite destination"},
+                {"detail", pqnas::shorten(ec.message(), 180)}
+            }.dump());
+            return;
+        }
+    }
+
+    ec.clear();
+    std::filesystem::rename(tmp, to_abs, ec);
+    if (ec) {
+        // cleanup tmp
+        std::error_code ec2;
+        std::filesystem::remove(tmp, ec2);
+
+        audit_fail("rename_failed", 500, ec.message(), from_rel, to_rel);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "copy failed"},
+            {"detail", pqnas::shorten(ec.message(), 180)}
+        }.dump());
+        return;
+    }
+
+    audit_ok(from_rel, to_rel, src_bytes, dst_old_bytes, delta_bytes, dst_exists);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"from", from_rel},
+        {"to", to_rel},
+        {"type", "file"},
+        {"src_bytes", src_bytes},
+        {"dst_old_bytes", dst_old_bytes},
+        {"delta_bytes", delta_bytes},
+        {"overwrote", dst_exists}
+    }.dump());
+});
+
 
 
 // GET /api/v4/files/get?path=relative/path.bin
