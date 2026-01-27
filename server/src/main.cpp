@@ -84,6 +84,9 @@ extern "C" {
 #include "storage_info.h"
 #include "user_quota.h"
 
+//apps
+#include "static_serve.h"
+
 #include "system_metrics.h"
 // JSON (header-only)
 #include <nlohmann/json.hpp>
@@ -144,6 +147,18 @@ const std::string STATIC_ADMIN_SETTINGS_JS =
 static const char* STATIC_APPROVALS_HTML = "server/src/static/admin_approvals.html";
 static const char* STATIC_APPROVALS_JS   = "server/src/static/admin_approvals.js";
 static const char* STATIC_BADGES_JS = "server/src/static/admin_badges.js";
+
+const std::string APPS_DIR =
+    (std::filesystem::path(REPO_ROOT) / "apps").string();
+
+const std::string APPS_BUNDLED_DIR =
+    (std::filesystem::path(REPO_ROOT) / "apps/bundled").string();
+
+const std::string APPS_INSTALLED_DIR =
+    (std::filesystem::path(REPO_ROOT) / "apps/installed").string();
+
+const std::string APPS_USERS_DIR =
+    (std::filesystem::path(REPO_ROOT) / "apps/users").string();
 
 
 
@@ -905,6 +920,59 @@ static std::string build_req_payload_canonical(
         + "}";
 }
 
+static bool serve_file_under_root(const std::string& root_dir,
+                                  const std::string& rel,
+                                  const std::string& content_type,
+                                  httplib::Response& res,
+                                  bool no_store = true) {
+    namespace fs = std::filesystem;
+
+    // Build full path then canonicalize.
+    std::error_code ec;
+    fs::path root = fs::weakly_canonical(fs::path(root_dir), ec);
+    if (ec) {
+        res.status = 500;
+        res.set_content("static root unavailable", "text/plain; charset=utf-8");
+        return false;
+    }
+
+    fs::path full = fs::weakly_canonical(root / rel, ec);
+    if (ec) {
+        res.status = 404;
+        res.set_content("not found", "text/plain; charset=utf-8");
+        return false;
+    }
+
+    // Enforce: full must be under root
+    auto root_s = root.string();
+    auto full_s = full.string();
+    if (full_s.size() < root_s.size() ||
+        full_s.compare(0, root_s.size(), root_s) != 0 ||
+        (full_s.size() > root_s.size() && full_s[root_s.size()] != '/')) {
+        res.status = 403;
+        res.set_content("forbidden", "text/plain; charset=utf-8");
+        return false;
+        }
+
+    // Only serve regular files
+    if (!fs::is_regular_file(full, ec) || ec) {
+        res.status = 404;
+        res.set_content("not found", "text/plain; charset=utf-8");
+        return false;
+    }
+
+    const std::string body = slurp_file(full_s);
+    if (body.empty()) {
+        res.status = 404;
+        res.set_content("not found", "text/plain; charset=utf-8");
+        return false;
+    }
+
+    res.set_header("X-Content-Type-Options", "nosniff");
+    if (no_store) res.set_header("Cache-Control", "no-store");
+    res.set_content(body, content_type);
+    return true;
+}
 
 static std::string slurp_file(const std::string& path) {
     std::ifstream f(path, std::ios::binary);
@@ -1343,6 +1411,33 @@ srv.Get("/api/v4/system", [&](const httplib::Request& req, httplib::Response& re
     reply_json(res, 200, out.dump());
 });
 
+    // Serve installed apps (system scope) at: /apps/<appId>/<version>/...
+    // Example: /apps/filemgr/1.0.0/www/index.html
+    srv.Get(R"(/apps/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/(.*))",
+            [&](const httplib::Request& req, httplib::Response& res) {
+        const std::string appId = req.matches[1];
+        const std::string ver   = req.matches[2];
+        const std::string tail  = req.matches[3];
+
+        // Root dir for this app version
+        const std::string root =
+            (std::filesystem::path(APPS_INSTALLED_DIR) / appId / ver).string();
+
+        // Basic content-type mapping (extend later)
+        auto guess_ct = [&](const std::string& p) -> std::string {
+            if (p.size() >= 5 && p.substr(p.size()-5) == ".html") return "text/html; charset=utf-8";
+            if (p.size() >= 3 && p.substr(p.size()-3) == ".js")   return "application/javascript; charset=utf-8";
+            if (p.size() >= 4 && p.substr(p.size()-4) == ".css")  return "text/css; charset=utf-8";
+            if (p.size() >= 4 && p.substr(p.size()-4) == ".png")  return "image/png";
+            if (p.size() >= 4 && p.substr(p.size()-4) == ".svg")  return "image/svg+xml";
+            if (p.size() >= 4 && p.substr(p.size()-4) == ".jpg")  return "image/jpeg";
+            if (p.size() >= 5 && p.substr(p.size()-5) == ".jpeg") return "image/jpeg";
+            if (p.size() >= 4 && p.substr(p.size()-4) == ".webp") return "image/webp";
+            return "application/octet-stream";
+        };
+
+        serve_file_under_root(root, tail, guess_ct(tail), res, /*no_store=*/true);
+    });
 
 srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res) {
     std::string body;
@@ -1426,7 +1521,7 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
         res.status = 302;
         res.set_header("Location", "/app");
     });
-
+/*
     srv.Get("/app", [&](const httplib::Request&, httplib::Response& res) {
         const std::string body = slurp_file(STATIC_APP_HTML);
         if (body.empty()) {
@@ -1436,7 +1531,14 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
         }
         res.set_content(body, "text/html; charset=utf-8");
     });
-
+*/
+    srv.Get("/app", [&](const httplib::Request&, httplib::Response& res) {
+        const std::string body = slurp_file(STATIC_APP_HTML);
+        if (body.empty()) { res.status = 404; res.set_content("missing app.html","text/plain"); return; }
+        res.set_header("Cache-Control", "no-store");
+        res.set_header("X-Content-Type-Options", "nosniff");
+        res.set_content(body, "text/html; charset=utf-8");
+    });
 
 
 
