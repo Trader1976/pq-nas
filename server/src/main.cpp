@@ -69,7 +69,9 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 extern "C" {
 #include "qrauth_v4.h"
 }
-#include <filesystem>
+
+#include <cstdio>
+#include <sys/wait.h>
 
 #include "pqnas_util.h"
 #include "authz.h"
@@ -920,6 +922,48 @@ static std::string build_req_payload_canonical(
         + "}";
 }
 
+
+static std::string slurp_file(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f.good()) return "";
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+
+static std::string sign_req_token(const std::string& payload_json) {
+    unsigned char sig[crypto_sign_BYTES];
+    unsigned long long siglen = 0;
+
+    crypto_sign_detached(
+        sig, &siglen,
+        reinterpret_cast<const unsigned char*>(payload_json.data()),
+        (unsigned long long)payload_json.size(),
+        SERVER_SK
+    );
+
+    std::string payload_b64 = b64url_enc(reinterpret_cast<const unsigned char*>(payload_json.data()), payload_json.size());
+    std::string sig_b64     = b64url_enc(sig, crypto_sign_BYTES);
+    return "v4." + payload_b64 + "." + sig_b64;
+}
+
+static std::string rel_to_repo(const std::string& abs) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path p = fs::weakly_canonical(fs::path(abs), ec);
+    fs::path r = fs::weakly_canonical(fs::path(REPO_ROOT), ec);
+    if (ec) return abs;
+
+    auto ps = p.string();
+    auto rs = r.string();
+    if (ps.size() >= rs.size() && ps.compare(0, rs.size(), rs) == 0) {
+        if (ps.size() == rs.size()) return ".";
+        if (ps[rs.size()] == '/') return ps.substr(rs.size() + 1);
+    }
+    return abs; // fallback
+}
+
+
 static bool serve_file_under_root(const std::string& root_dir,
                                   const std::string& rel,
                                   const std::string& content_type,
@@ -974,29 +1018,7 @@ static bool serve_file_under_root(const std::string& root_dir,
     return true;
 }
 
-static std::string slurp_file(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f.good()) return "";
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-}
 
-static std::string sign_req_token(const std::string& payload_json) {
-    unsigned char sig[crypto_sign_BYTES];
-    unsigned long long siglen = 0;
-
-    crypto_sign_detached(
-        sig, &siglen,
-        reinterpret_cast<const unsigned char*>(payload_json.data()),
-        (unsigned long long)payload_json.size(),
-        SERVER_SK
-    );
-
-    std::string payload_b64 = b64url_enc(reinterpret_cast<const unsigned char*>(payload_json.data()), payload_json.size());
-    std::string sig_b64     = b64url_enc(sig, crypto_sign_BYTES);
-    return "v4." + payload_b64 + "." + sig_b64;
-}
 
 [[maybe_unused]]
 static bool decode_st_payload_json(const std::string& st, std::string& payload_json_out) {
@@ -1093,7 +1115,39 @@ static bool sha256_file(const std::filesystem::path& p, std::string* out_hex, st
     return true;
 }
 
+static bool run_cmd_capture(const std::string& cmd, std::string* out, int* exit_code) {
+    FILE* fp = popen(cmd.c_str(), "r");
+    if (!fp) return false;
+    std::string s;
+    char buf[4096];
+    while (true) {
+        size_t n = fread(buf, 1, sizeof(buf), fp);
+        if (n == 0) break;
+        s.append(buf, n);
+    }
+    int rc = pclose(fp);
+    if (out) *out = s;
+    if (exit_code) *exit_code = WEXITSTATUS(rc);
+    return true;
+}
 
+static std::string rand_hex_16() {
+    static const char* k = "0123456789abcdef";
+    std::array<unsigned char, 8> b{};
+    randombytes_buf(b.data(), b.size());
+    std::string s;
+    s.reserve(16);
+    for (unsigned char c : b) { s.push_back(k[c >> 4]); s.push_back(k[c & 0x0f]); }
+    return s;
+}
+
+static bool safe_app_id(const std::string& s) {
+    if (s.empty() || s.size() > 64) return false;
+    for (char c : s) {
+        if (!(std::isalnum((unsigned char)c) || c=='_' || c=='-' || c=='.')) return false;
+    }
+    return true;
+}
 
 
 // -----------------------------------------------------------------------------
@@ -1368,7 +1422,6 @@ srv.Get(R"(/static/(.+))", [&](const httplib::Request& req, httplib::Response& r
 });
 
 
-
     // Option A: fixed policy location in repo, with optional env override
     std::string allowlist_path =
         (std::filesystem::path(REPO_ROOT) / "config" / "policy.json").string();
@@ -1489,6 +1542,77 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
         res.set_content(body, "application/javascript; charset=utf-8");
     });
 
+srv.Get("/api/v4/apps", [&](const httplib::Request&, httplib::Response& res) {
+    namespace fs = std::filesystem;
+    json out;
+    out["ok"] = true;
+    out["bundled"] = json::array();
+    out["installed"] = json::array();
+
+    // Bundled: apps/bundled/<id>/*.zip
+    {
+        std::error_code ec;
+        fs::path bundled(APPS_BUNDLED_DIR);
+        if (fs::exists(bundled, ec) && fs::is_directory(bundled, ec)) {
+            for (auto& de : fs::directory_iterator(bundled, ec)) {
+                if (ec) break;
+                if (!de.is_directory(ec) || ec) continue;
+
+                const std::string appId = de.path().filename().string();
+                for (auto& f : fs::directory_iterator(de.path(), ec)) {
+                    if (ec) break;
+                    if (!f.is_regular_file(ec) || ec) continue;
+                    if (f.path().extension() != ".zip") continue;
+
+                    json item;
+                    item["id"] = appId;
+                    item["zip"] = rel_to_repo(f.path().string());
+                    out["bundled"].push_back(item);
+                }
+            }
+        }
+    }
+
+    // Installed: apps/installed/<id>/<ver>/manifest.json (or at least www/index.html)
+    {
+        std::error_code ec;
+        fs::path installed(APPS_INSTALLED_DIR);
+        if (fs::exists(installed, ec) && fs::is_directory(installed, ec)) {
+            for (auto& deApp : fs::directory_iterator(installed, ec)) {
+                if (ec) break;
+                if (!deApp.is_directory(ec) || ec) continue;
+
+                const std::string appId = deApp.path().filename().string();
+
+                for (auto& deVer : fs::directory_iterator(deApp.path(), ec)) {
+                    if (ec) break;
+                    if (!deVer.is_directory(ec) || ec) continue;
+
+                    const std::string ver = deVer.path().filename().string();
+                    fs::path root = deVer.path();
+
+                    // detect entry (prefer manifest, else default)
+                    fs::path manifest = root / "manifest.json";
+                    fs::path defaultEntry = root / "www" / "index.html";
+
+                    if (!fs::exists(manifest, ec) && !fs::exists(defaultEntry, ec)) {
+                        continue; // not a valid install dir
+                    }
+
+                    json item;
+                    item["id"] = appId;
+                    item["version"] = ver;
+                    item["root"] = rel_to_repo(root.string());
+                    item["has_manifest"] = fs::exists(manifest, ec);
+                    out["installed"].push_back(item);
+                }
+            }
+        }
+    }
+
+    res.set_header("Cache-Control", "no-store");
+    res.set_content(out.dump(2), "application/json; charset=utf-8");
+});
 
 
 
@@ -7614,6 +7738,164 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
 
         reply_json(res, 200, json({{"ok",true}}).dump());
     });
+
+srv.Post("/api/v4/apps/install_bundled", [&](const httplib::Request& req, httplib::Response& res) {
+    auto reply = [&](int status, const json& j) {
+        res.status = status;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(j.dump(2), "application/json; charset=utf-8");
+    };
+
+    json in;
+    try { in = json::parse(req.body); }
+    catch (...) {
+        reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "invalid json"}});
+        return;
+    }
+
+    const std::string id  = in.value("id", "");
+    const std::string zip = in.value("zip", "");
+
+    if (!safe_app_id(id) || zip.empty() ||
+        zip.find('/') != std::string::npos || zip.find('\\') != std::string::npos) {
+        reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "bad id or zip"}});
+        return;
+    }
+
+    std::error_code ec;
+    const std::filesystem::path zip_path = std::filesystem::path(APPS_BUNDLED_DIR) / id / zip;
+
+    if (!std::filesystem::exists(zip_path, ec) || ec) {
+        reply(404, {{"ok", false}, {"error", "not_found"}, {"message", "bundled zip not found"}});
+        return;
+    }
+
+    // Read manifest.json from zip
+    std::string manifest_txt;
+    int code = -1;
+    {
+        const std::string cmd = "unzip -p \"" + zip_path.string() + "\" manifest.json 2>/dev/null";
+        if (!run_cmd_capture(cmd, &manifest_txt, &code) || code != 0 || manifest_txt.empty()) {
+            reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "manifest.json missing or unreadable in zip"}});
+            return;
+        }
+    }
+
+    json mani;
+    try { mani = json::parse(manifest_txt); }
+    catch (...) {
+        reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "manifest.json is not valid json"}});
+        return;
+    }
+
+    const std::string mid = mani.value("id", "");
+    const std::string ver = mani.value("version", "");
+
+    if (mid != id || !safe_app_id(mid) || ver.empty() || ver.size() > 64) {
+        reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "manifest id/version invalid or mismatch"}});
+        return;
+    }
+
+    const std::filesystem::path dst = std::filesystem::path(APPS_INSTALLED_DIR) / id / ver;
+    if (std::filesystem::exists(dst, ec) && !ec) {
+        reply(409, {{"ok", false}, {"error", "conflict"}, {"message", "version already installed (remove first)"}});
+        return;
+    }
+
+    // Extract to temp dir under apps/installed
+    const std::filesystem::path tmp =
+        std::filesystem::path(APPS_INSTALLED_DIR) / (".tmp_install_" + id + "_" + rand_hex_16());
+
+    std::filesystem::create_directories(tmp, ec);
+    if (ec) {
+        reply(500, {{"ok", false}, {"error", "server_error"}, {"message", "failed to create temp dir"}});
+        return;
+    }
+
+    // unzip into temp
+    {
+        const std::string cmd = "unzip -q \"" + zip_path.string() + "\" -d \"" + tmp.string() + "\" 2>/dev/null";
+        std::string out;
+        int rc = -1;
+        if (!run_cmd_capture(cmd, &out, &rc) || rc != 0) {
+            std::filesystem::remove_all(tmp, ec);
+            reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "failed to extract zip"}});
+            return;
+        }
+    }
+
+    // Required structure
+    if (!std::filesystem::exists(tmp / "manifest.json", ec) || ec ||
+        !std::filesystem::exists(tmp / "www" / "index.html", ec) || ec) {
+        std::filesystem::remove_all(tmp, ec);
+        reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "zip missing required files (manifest.json, www/index.html)"}});
+        return;
+    }
+
+    std::filesystem::create_directories(dst.parent_path(), ec);
+    if (ec) {
+        std::filesystem::remove_all(tmp, ec);
+        reply(500, {{"ok", false}, {"error", "server_error"}, {"message", "failed to create destination dir"}});
+        return;
+    }
+
+    std::filesystem::rename(tmp, dst, ec);
+    if (ec) {
+        std::filesystem::remove_all(tmp, ec);
+        reply(500, {{"ok", false}, {"error", "server_error"}, {"message", "failed to finalize install"}});
+        return;
+    }
+
+    reply(200, {{"ok", true}, {"id", id}, {"version", ver}, {"root", rel_to_repo(dst.string())}});
+});
+
+
+	srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Response& res) {
+    auto reply = [&](int status, const json& j) {
+        res.status = status;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(j.dump(2), "application/json; charset=utf-8");
+    };
+
+    json in;
+    try { in = json::parse(req.body); }
+    catch (...) {
+        reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "invalid json"}});
+        return;
+    }
+
+    const std::string id  = in.value("id", "");
+    const std::string ver = in.value("version", "");
+
+    if (!safe_app_id(id) || ver.empty() || ver.size() > 64) {
+        reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "bad id or version"}});
+        return;
+    }
+
+    std::error_code ec;
+    const std::filesystem::path dst = std::filesystem::path(APPS_INSTALLED_DIR) / id / ver;
+
+    if (!std::filesystem::exists(dst, ec) || ec) {
+        reply(404, {{"ok", false}, {"error", "not_found"}, {"message", "not installed"}});
+        return;
+    }
+
+    std::filesystem::remove_all(dst, ec);
+    if (ec) {
+        reply(500, {{"ok", false}, {"error", "server_error"}, {"message", "failed to remove app"}});
+        return;
+    }
+
+    // Optional: remove empty appId dir
+    const std::filesystem::path appDir = std::filesystem::path(APPS_INSTALLED_DIR) / id;
+    if (std::filesystem::exists(appDir, ec) && std::filesystem::is_directory(appDir, ec)) {
+        bool empty = (std::filesystem::directory_iterator(appDir, ec) == std::filesystem::directory_iterator());
+        if (!ec && empty) std::filesystem::remove(appDir, ec);
+    }
+
+    reply(200, {{"ok", true}, {"id", id}, {"version", ver}});
+});
+
 
     // POST /api/v4/admin/users/disable  {"fingerprint":"..."}
     srv.Post("/api/v4/admin/users/disable", [&](const httplib::Request& req, httplib::Response& res) {
