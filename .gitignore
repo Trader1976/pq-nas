@@ -13,3 +13,10 @@ __pycache__/
 .DS_Store
 
 .env.pqnas
+
+
+# Installed apps are runtime state
+apps/installed/
+
+# Per-user app installs/data are runtime state
+apps/users/
