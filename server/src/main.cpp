@@ -5622,6 +5622,321 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
     }.dump());
 });
 
+    // POST /api/v4/files/stat?path=rel/path or "." (dir -> children + recursive bytes by default)
+srv.Post("/api/v4/files/stat", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    // Caps for recursive directory aggregation (UI-safe)
+    const std::uint64_t RECURSIVE_HARD_CAP = 100000; // max entries scanned
+    const int RECURSIVE_TIME_CAP_MS = 300;           // soft wall clock cap
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http,
+                          const std::string& detail = "",
+                          const std::string& path_rel = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_stat_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!path_rel.empty()) ev.f["path"] = pqnas::shorten(path_rel, 200);
+        if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    std::string path_rel;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+
+    // allow "." as user root for convenience
+    if (path_rel == "." || path_rel == "./" || path_rel == "/") path_rel.clear();
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    std::filesystem::path path_abs;
+    std::string err;
+
+    // IMPORTANT: do NOT call strict resolver for empty/"." path; treat as user root.
+    if (path_rel.empty()) {
+        path_abs = user_dir;
+    } else {
+        if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &path_abs, &err)) {
+            audit_fail("invalid_path", 400, err, path_rel);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            }.dump());
+            return;
+        }
+    }
+
+    // Detect symlink without following (matches /search base behavior)
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(path_abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404, "", path_rel);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "path not found"}
+        }.dump());
+        return;
+    }
+    if (std::filesystem::is_symlink(st)) {
+        audit_fail("symlink_not_supported", 400, "", path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "symlinks not supported"}
+        }.dump());
+        return;
+    }
+
+    // Helper: absolute-like normalized path for UI (/foo/bar). Root => "/"
+    auto make_path_norm = [&](const std::filesystem::path& p) -> std::string {
+        std::error_code ec2;
+        auto rel = std::filesystem::relative(p, user_dir, ec2);
+        if (ec2) return "/";
+        std::string s = rel.generic_string();
+        if (s.empty() || s == ".") return "/";
+        if (!s.empty() && s[0] != '/') s = "/" + s;
+        return s;
+    };
+
+    auto mode_octal_from_perms = [&](std::filesystem::perms pr) -> std::string {
+        auto has = [&](std::filesystem::perms bit) { return (pr & bit) != std::filesystem::perms::none; };
+
+        int m = 0;
+        if (has(std::filesystem::perms::owner_read))  m |= 0400;
+        if (has(std::filesystem::perms::owner_write)) m |= 0200;
+        if (has(std::filesystem::perms::owner_exec))  m |= 0100;
+
+        if (has(std::filesystem::perms::group_read))  m |= 0040;
+        if (has(std::filesystem::perms::group_write)) m |= 0020;
+        if (has(std::filesystem::perms::group_exec))  m |= 0010;
+
+        if (has(std::filesystem::perms::others_read))  m |= 0004;
+        if (has(std::filesystem::perms::others_write)) m |= 0002;
+        if (has(std::filesystem::perms::others_exec))  m |= 0001;
+
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "%04o", m);
+        return std::string(buf);
+    };
+
+    auto guess_mime = [&](const std::string& name) -> std::string {
+        auto lower = [](std::string s) {
+            for (char& c : s) c = (char)std::tolower((unsigned char)c);
+            return s;
+        };
+        std::string n = lower(name);
+        auto dot = n.rfind('.');
+        std::string ext = (dot == std::string::npos) ? "" : n.substr(dot + 1);
+
+        if (ext == "txt" || ext == "log" || ext == "md") return "text/plain";
+        if (ext == "json") return "application/json";
+        if (ext == "html" || ext == "htm") return "text/html";
+        if (ext == "css") return "text/css";
+        if (ext == "js") return "application/javascript";
+        if (ext == "xml") return "application/xml";
+        if (ext == "csv") return "text/csv";
+
+        if (ext == "png") return "image/png";
+        if (ext == "jpg" || ext == "jpeg") return "image/jpeg";
+        if (ext == "gif") return "image/gif";
+        if (ext == "webp") return "image/webp";
+        if (ext == "svg") return "image/svg+xml";
+
+        if (ext == "pdf") return "application/pdf";
+        if (ext == "zip") return "application/zip";
+
+        return "application/octet-stream";
+    };
+
+    auto looks_like_text = [&](const std::filesystem::path& p) -> bool {
+        // lightweight "binary reject": treat NUL as binary
+        std::ifstream f(p, std::ios::binary);
+        if (!f.good()) return false;
+
+        char buf[4096];
+        f.read(buf, sizeof(buf));
+        std::streamsize n = f.gcount();
+        for (std::streamsize i = 0; i < n; i++) {
+            if (buf[i] == '\0') return false;
+        }
+        return true;
+    };
+
+    const bool is_dir = std::filesystem::is_directory(st);
+    const bool is_file = std::filesystem::is_regular_file(st);
+
+    std::string type = "other";
+    if (is_dir) type = "dir";
+    else if (is_file) type = "file";
+
+    const std::string path_norm = make_path_norm(path_abs);
+    const std::string name = (path_abs == user_dir) ? "" : path_abs.filename().string();
+
+    // mtime (portable via last_write_time)
+    std::uint64_t mtime_epoch = 0;
+    {
+        std::error_code ec3;
+        auto ftime = std::filesystem::last_write_time(path_abs, ec3);
+        if (!ec3) {
+            using namespace std::chrono;
+            auto sctp = time_point_cast<system_clock::duration>(
+                ftime - std::filesystem::file_time_type::clock::now() + system_clock::now()
+            );
+            auto sec = duration_cast<seconds>(sctp.time_since_epoch()).count();
+            if (sec > 0) mtime_epoch = (std::uint64_t)sec;
+        }
+    }
+
+    // mode (best-effort)
+    std::string mode_octal = "0000";
+    {
+        std::error_code ec4;
+        auto stp = std::filesystem::status(path_abs, ec4);
+        if (!ec4) mode_octal = mode_octal_from_perms(stp.permissions());
+    }
+
+    json out;
+    out["ok"] = true;
+    out["path"] = path_rel.empty() ? "." : path_rel;
+    out["path_norm"] = path_norm;
+    out["name"] = pqnas::shorten(name, 200);
+    out["type"] = type;
+    out["exists"] = true;
+    if (mtime_epoch > 0) out["mtime_epoch"] = mtime_epoch;
+    out["mode_octal"] = mode_octal;
+
+    if (type == "file") {
+        out["bytes"] = pqnas::file_size_u64_safe(path_abs);
+        out["mime"] = guess_mime(name);
+        out["is_text"] = looks_like_text(path_abs);
+        reply_json(res, 200, out.dump());
+        return;
+    }
+
+    if (type == "dir") {
+        // immediate children counts
+        std::uint64_t c_files = 0, c_dirs = 0, c_other = 0;
+
+        std::error_code ec5;
+        for (auto it = std::filesystem::directory_iterator(path_abs, std::filesystem::directory_options::skip_permission_denied, ec5);
+             !ec5 && it != std::filesystem::directory_iterator();
+             it.increment(ec5)) {
+
+            std::error_code ec6;
+            auto stc = it->symlink_status(ec6);
+            if (ec6) { c_other++; continue; }
+
+            if (std::filesystem::is_symlink(stc)) { c_other++; continue; }
+            if (std::filesystem::is_directory(stc)) c_dirs++;
+            else if (std::filesystem::is_regular_file(stc)) c_files++;
+            else c_other++;
+        }
+
+        out["children"] = json{
+            {"files", c_files},
+            {"dirs", c_dirs},
+            {"other", c_other}
+        };
+
+        // recursive bytes: sum regular files only, skip symlinks (matches /du)
+        std::uint64_t bytes_recursive = 0;
+        std::uint64_t scanned = 0;
+        bool complete = true;
+
+        auto t0 = std::chrono::steady_clock::now();
+        std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
+
+        ec5.clear();
+        for (auto it = std::filesystem::recursive_directory_iterator(path_abs, opts, ec5);
+             it != std::filesystem::recursive_directory_iterator();
+             it.increment(ec5)) {
+
+            if (ec5) {
+                audit_fail("walk_failed", 500, ec5.message(), path_rel);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "directory walk failed"},
+                    {"detail", pqnas::shorten(ec5.message(), 180)}
+                }.dump());
+                return;
+            }
+
+            scanned++;
+
+            if (scanned >= RECURSIVE_HARD_CAP) { complete = false; break; }
+
+            auto now = std::chrono::steady_clock::now();
+            auto ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
+            if (ms >= RECURSIVE_TIME_CAP_MS) { complete = false; break; }
+
+            std::error_code ec6;
+            auto st2 = it->symlink_status(ec6);
+            if (ec6) continue;
+
+            // Do not follow symlinks; do not descend into symlink dirs
+            if (std::filesystem::is_symlink(st2)) {
+                if (it->is_directory(ec6)) it.disable_recursion_pending();
+                continue;
+            }
+
+            if (std::filesystem::is_regular_file(st2)) {
+                bytes_recursive += pqnas::file_size_u64_safe(it->path());
+            }
+        }
+
+        out["bytes_recursive"] = bytes_recursive;
+        out["recursive_scanned_entries"] = scanned;
+        out["recursive_complete"] = complete;
+        out["scan_cap"] = RECURSIVE_HARD_CAP;
+        out["time_cap_ms"] = RECURSIVE_TIME_CAP_MS;
+
+        reply_json(res, 200, out.dump());
+        return;
+    }
+
+    // other types: just return metadata
+    reply_json(res, 200, out.dump());
+});
 
 
 
