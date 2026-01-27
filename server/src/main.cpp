@@ -4341,6 +4341,178 @@ srv.Post("/api/v4/files/touch", [&](const httplib::Request& req, httplib::Respon
     }.dump());
 });
 
+    // POST /api/v4/files/cat?path=rel/file&max_bytes=65536
+srv.Post("/api/v4/files/cat", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
+                          const std::string& path_rel = "", int max_bytes = -1) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_cat_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!path_rel.empty()) ev.f["path"] = pqnas::shorten(path_rel, 200);
+        if (max_bytes >= 0)    ev.f["max_bytes"] = std::to_string(max_bytes);
+        if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& path_rel,
+                        int max_bytes,
+                        std::uint64_t bytes_total,
+                        std::uint64_t bytes_returned,
+                        bool truncated) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_cat_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(path_rel, 200);
+        ev.f["max_bytes"] = std::to_string(max_bytes);
+        ev.f["bytes_total"] = std::to_string((unsigned long long)bytes_total);
+        ev.f["bytes_returned"] = std::to_string((unsigned long long)bytes_returned);
+        ev.f["truncated"] = truncated ? "1" : "0";
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    std::string path_rel;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+    if (path_rel.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    int max_bytes = 64 * 1024;
+    if (req.has_param("max_bytes")) {
+        try { max_bytes = std::stoi(req.get_param_value("max_bytes")); } catch (...) {}
+    }
+    max_bytes = std::max(1, std::min(1024 * 1024, max_bytes)); // 1..1MiB
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    std::filesystem::path path_abs;
+    std::string err;
+    if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &path_abs, &err)) {
+        audit_fail("invalid_path", 400, err, path_rel, max_bytes);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    // must exist + must be file
+    std::error_code ec;
+    auto st = std::filesystem::status(path_abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404, "", path_rel, max_bytes);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "file not found"}
+        }.dump());
+        return;
+    }
+    if (!std::filesystem::is_regular_file(st)) {
+        audit_fail("not_file", 400, "", path_rel, max_bytes);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "path is not a file"}
+        }.dump());
+        return;
+    }
+
+    const std::uint64_t bytes_total = pqnas::file_size_u64_safe(path_abs);
+
+    std::ifstream f(path_abs, std::ios::binary);
+    if (!f.good()) {
+        audit_fail("open_failed", 500, "cannot open file", path_rel, max_bytes);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to open file"}
+        }.dump());
+        return;
+    }
+
+    std::string buf;
+    buf.resize((size_t)max_bytes);
+    f.read(&buf[0], (std::streamsize)buf.size());
+    std::streamsize n = f.gcount();
+    if (n < 0) n = 0;
+    buf.resize((size_t)n);
+
+    bool truncated = (bytes_total > (std::uint64_t)buf.size());
+
+    // Detect binary-ish content: reject if NUL found in returned bytes
+    if (std::find(buf.begin(), buf.end(), '\0') != buf.end()) {
+        audit_fail("binary_detected", 415, "", path_rel, max_bytes);
+        reply_json(res, 415, json{
+            {"ok", false},
+            {"error", "unsupported_media_type"},
+            {"message", "binary file cannot be previewed as text"}
+        }.dump());
+        return;
+    }
+
+    audit_ok(path_rel, max_bytes, bytes_total, (std::uint64_t)buf.size(), truncated);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", path_rel},
+        {"bytes_total", bytes_total},
+        {"bytes_returned", (std::uint64_t)buf.size()},
+        {"truncated", truncated},
+        {"text", buf}
+    }.dump());
+});
+
+
     // POST /api/v4/files/du?path=rel/path
 srv.Post("/api/v4/files/du", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
