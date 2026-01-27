@@ -5377,6 +5377,8 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
     if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
         return;
 
+    const std::uint64_t SCAN_HARD_CAP = 200000; // hard cap for file search
+
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
         return pqnas::shorten(it == req.headers.end() ? "" : it->second);
@@ -5414,18 +5416,24 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
 
     auto audit_ok = [&](const std::string& path_rel, const std::string& q, int max,
                         std::uint64_t scanned, std::uint64_t matched,
-                        std::uint64_t returned, bool truncated) {
+                        std::uint64_t returned, bool truncated,
+                        bool scan_capped) {
         pqnas::AuditEvent ev;
         ev.event = "v4.files_search_ok";
         ev.outcome = "ok";
         ev.f["fingerprint"] = fp_hex;
-        ev.f["path"] = pqnas::shorten(path_rel, 200);
+        ev.f["path"] = pqnas::shorten(path_rel.empty() ? "." : path_rel, 200);
         ev.f["q"] = pqnas::shorten(q, 120);
         ev.f["max"] = std::to_string(max);
         ev.f["scanned"] = std::to_string((unsigned long long)scanned);
         ev.f["matched"] = std::to_string((unsigned long long)matched);
         ev.f["returned"] = std::to_string((unsigned long long)returned);
         ev.f["truncated"] = truncated ? "1" : "0";
+
+        if (scan_capped) {
+            ev.f["scan_capped"] = "1";
+            ev.f["scan_cap"] = std::to_string((unsigned long long)SCAN_HARD_CAP);
+        }
 
         add_ip_headers(ev);
         maybe_auto_rotate_before_append();
@@ -5448,12 +5456,15 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
     if (req.has_param("path")) path_rel = req.get_param_value("path");
     if (req.has_param("q"))    q = req.get_param_value("q");
 
-    if (path_rel.empty() || q.empty()) {
-        audit_fail("missing_path_or_q", 400, "", path_rel, q);
+    // allow "." as user root for convenience
+    if (path_rel == "." || path_rel == "./") path_rel.clear();
+
+    if (q.empty()) {
+        audit_fail("missing_q", 400, "", path_rel, q);
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "bad_request"},
-            {"message", "missing path or q"}
+            {"message", "missing q"}
         }.dump());
         return;
     }
@@ -5479,10 +5490,16 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
 
     std::filesystem::path base_abs;
     std::string err;
-    if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &base_abs, &err)) {
-        audit_fail("invalid_path", 400, err, path_rel, q, max);
-        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid path"}}.dump());
-        return;
+
+    // IMPORTANT: do NOT call strict resolver for empty/"." path; treat as user root.
+    if (path_rel.empty()) {
+        base_abs = user_dir;
+    } else {
+        if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &base_abs, &err)) {
+            audit_fail("invalid_path", 400, err, path_rel, q, max);
+            reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid path"}}.dump());
+            return;
+        }
     }
 
     std::error_code ec;
@@ -5513,6 +5530,7 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
     std::uint64_t scanned = 0;
     std::uint64_t matched = 0;
     bool truncated = false;
+    bool scan_capped = false;
 
     json results = json::array();
 
@@ -5535,6 +5553,12 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
         }
 
         scanned++;
+
+        if (scanned >= SCAN_HARD_CAP) {
+            scan_capped = true;
+            truncated = true;
+            break;
+        }
 
         // Do not follow symlinks; also do not recurse into symlink dirs
         std::error_code ec2;
@@ -5582,16 +5606,18 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
         }
     }
 
-    audit_ok(path_rel, q, max, scanned, matched, (std::uint64_t)results.size(), truncated);
+    audit_ok(path_rel, q, max, scanned, matched,
+         (std::uint64_t)results.size(), truncated, scan_capped);
 
     reply_json(res, 200, json{
         {"ok", true},
-        {"path", path_rel},
+        {"path", path_rel.empty() ? "." : path_rel},
         {"q", q},
         {"max", max},
         {"scanned", scanned},
         {"matched", matched},
         {"truncated", truncated},
+        {"scan_capped", scan_capped},
         {"results", results}
     }.dump());
 });
