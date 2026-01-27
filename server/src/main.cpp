@@ -5371,6 +5371,232 @@ srv.Post("/api/v4/files/rmrf", [&](const httplib::Request& req, httplib::Respons
     }.dump());
 });
 
+    // POST /api/v4/files/search?path=rel/dir&q=needle&max=200
+srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
+                          const std::string& path_rel = "", const std::string& q = "", int max = 0) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_search_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!path_rel.empty()) ev.f["path"] = pqnas::shorten(path_rel, 200);
+        if (!q.empty())        ev.f["q"] = pqnas::shorten(q, 120);
+        if (max > 0)           ev.f["max"] = std::to_string(max);
+        if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& path_rel, const std::string& q, int max,
+                        std::uint64_t scanned, std::uint64_t matched,
+                        std::uint64_t returned, bool truncated) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_search_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(path_rel, 200);
+        ev.f["q"] = pqnas::shorten(q, 120);
+        ev.f["max"] = std::to_string(max);
+        ev.f["scanned"] = std::to_string((unsigned long long)scanned);
+        ev.f["matched"] = std::to_string((unsigned long long)matched);
+        ev.f["returned"] = std::to_string((unsigned long long)returned);
+        ev.f["truncated"] = truncated ? "1" : "0";
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    std::string path_rel, q;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+    if (req.has_param("q"))    q = req.get_param_value("q");
+
+    if (path_rel.empty() || q.empty()) {
+        audit_fail("missing_path_or_q", 400, "", path_rel, q);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path or q"}
+        }.dump());
+        return;
+    }
+
+    // v1: avoid pathological queries
+    if (q.size() > 128) {
+        audit_fail("q_too_long", 400, "", path_rel, q);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "q too long"}
+        }.dump());
+        return;
+    }
+
+    int max = 200;
+    if (req.has_param("max")) {
+        try { max = std::stoi(req.get_param_value("max")); } catch (...) {}
+    }
+    max = std::max(1, std::min(2000, max));
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    std::filesystem::path base_abs;
+    std::string err;
+    if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &base_abs, &err)) {
+        audit_fail("invalid_path", 400, err, path_rel, q, max);
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid path"}}.dump());
+        return;
+    }
+
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(base_abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404, "", path_rel, q, max);
+        reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","path not found"}}.dump());
+        return;
+    }
+    if (std::filesystem::is_symlink(st)) {
+        audit_fail("symlink_not_supported", 400, "", path_rel, q, max);
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","symlinks not supported for search base"}}.dump());
+        return;
+    }
+    if (!std::filesystem::is_directory(st)) {
+        audit_fail("not_a_directory", 400, "", path_rel, q, max);
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","path must be a directory"}}.dump());
+        return;
+    }
+
+    auto lower_ascii = [](std::string s) {
+        for (char& c : s) c = (char)std::tolower((unsigned char)c);
+        return s;
+    };
+
+    const std::string ql = lower_ascii(q);
+
+    std::uint64_t scanned = 0;
+    std::uint64_t matched = 0;
+    bool truncated = false;
+
+    json results = json::array();
+
+    std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
+
+    ec.clear();
+    for (auto it = std::filesystem::recursive_directory_iterator(base_abs, opts, ec);
+         it != std::filesystem::recursive_directory_iterator();
+         it.increment(ec)) {
+
+        if (ec) {
+            audit_fail("walk_failed", 500, ec.message(), path_rel, q, max);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "directory walk failed"},
+                {"detail", pqnas::shorten(ec.message(), 180)}
+            }.dump());
+            return;
+        }
+
+        scanned++;
+
+        // Do not follow symlinks; also do not recurse into symlink dirs
+        std::error_code ec2;
+        auto st2 = it->symlink_status(ec2);
+        if (!ec2 && std::filesystem::is_symlink(st2)) {
+            if (it->is_directory(ec2)) it.disable_recursion_pending();
+            continue;
+        }
+
+        const std::filesystem::path p = it->path();
+        const std::string name = p.filename().string();
+        const std::string namel = lower_ascii(name);
+
+        if (namel.find(ql) == std::string::npos) {
+            continue;
+        }
+
+        matched++;
+
+        std::string type = "other";
+        std::uint64_t bytes = 0;
+
+        if (!ec2 && std::filesystem::is_directory(st2)) {
+            type = "dir";
+        } else if (!ec2 && std::filesystem::is_regular_file(st2)) {
+            type = "file";
+            bytes = pqnas::file_size_u64_safe(p);
+        }
+
+        // Convert to user-relative path
+        std::filesystem::path rel = std::filesystem::relative(p, user_dir, ec2);
+        std::string rel_s = ec2 ? "" : rel.generic_string();
+
+        json item;
+        item["path"] = rel_s.empty() ? pqnas::shorten(p.string(), 220) : rel_s;
+        item["name"] = pqnas::shorten(name, 200);
+        item["type"] = type;
+        if (type == "file") item["bytes"] = bytes;
+
+        results.push_back(item);
+
+        if ((int)results.size() >= max) {
+            truncated = true;
+            break;
+        }
+    }
+
+    audit_ok(path_rel, q, max, scanned, matched, (std::uint64_t)results.size(), truncated);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", path_rel},
+        {"q", q},
+        {"max", max},
+        {"scanned", scanned},
+        {"matched", matched},
+        {"truncated", truncated},
+        {"results", results}
+    }.dump());
+});
+
+
 
 
 
