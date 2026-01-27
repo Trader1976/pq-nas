@@ -4200,6 +4200,146 @@ srv.Post("/api/v4/files/tree", [&](const httplib::Request& req, httplib::Respons
     }.dump());
 });
 
+// POST /api/v4/files/touch?path=rel/file
+srv.Post("/api/v4/files/touch", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
+                          const std::string& path_rel = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_touch_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!path_rel.empty()) ev.f["path"] = pqnas::shorten(path_rel, 200);
+        if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& path_rel) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_touch_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(path_rel, 200);
+        ev.f["action"] = "created";
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    std::string path_rel;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+
+    if (path_rel.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    std::filesystem::path path_abs;
+    std::string err;
+    if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &path_abs, &err)) {
+        audit_fail("invalid_path", 400, err, path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    // Ensure parent exists
+    std::error_code ec;
+    std::filesystem::create_directories(path_abs.parent_path(), ec);
+    if (ec) {
+        audit_fail("mkdir_failed", 500, ec.message(), path_rel);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to create parent directories"},
+            {"detail", pqnas::shorten(ec.message(), 180)}
+        }.dump());
+        return;
+    }
+
+    // Create-only: if exists -> 409
+    ec.clear();
+    auto st = std::filesystem::status(path_abs, ec);
+    if (!ec && std::filesystem::exists(st)) {
+        audit_fail("already_exists", 409, "", path_rel);
+        reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "already_exists"},
+            {"message", "file already exists"}
+        }.dump());
+        return;
+    }
+
+    // Create empty file
+    {
+        std::ofstream f(path_abs, std::ios::binary | std::ios::out | std::ios::trunc);
+        if (!f.good()) {
+            audit_fail("create_failed", 500, "cannot create file", path_rel);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to create file"}
+            }.dump());
+            return;
+        }
+    }
+
+    audit_ok(path_rel);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", path_rel},
+        {"action", "created"}
+    }.dump());
+});
 
     // POST /api/v4/files/du?path=rel/path
 srv.Post("/api/v4/files/du", [&](const httplib::Request& req, httplib::Response& res) {
