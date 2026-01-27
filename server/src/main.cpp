@@ -90,6 +90,7 @@ extern "C" {
 
 #include <sys/statvfs.h>
 #include <sys/utsname.h>
+#include <sys/wait.h>
 #include <chrono>
 
 using json = nlohmann::json;
@@ -4788,6 +4789,341 @@ srv.Post("/api/v4/files/save_text", [&](const httplib::Request& req, httplib::Re
         {"overwrote", overwrote}
     }.dump());
 });
+
+    // POST /api/v4/files/zip?path=rel/path&max_bytes=52428800
+srv.Post("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
+                          const std::string& path_rel = "", std::uint64_t max_bytes = 0) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_zip_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!path_rel.empty()) ev.f["path"] = pqnas::shorten(path_rel, 200);
+        if (max_bytes) ev.f["max_bytes"] = std::to_string((unsigned long long)max_bytes);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& path_rel,
+                        const std::string& type,
+                        std::uint64_t max_bytes,
+                        std::uint64_t input_bytes,
+                        std::uint64_t zip_bytes,
+                        std::uint64_t files,
+                        std::uint64_t dirs) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_zip_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(path_rel, 200);
+        ev.f["type"] = type;
+        ev.f["max_bytes"] = std::to_string((unsigned long long)max_bytes);
+        ev.f["input_bytes"] = std::to_string((unsigned long long)input_bytes);
+        ev.f["zip_bytes"] = std::to_string((unsigned long long)zip_bytes);
+        ev.f["files"] = std::to_string((unsigned long long)files);
+        ev.f["dirs"]  = std::to_string((unsigned long long)dirs);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    std::string path_rel;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+    if (path_rel.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    // Safety: reject a leading '-' so it can't be treated as a zip option
+    if (!path_rel.empty() && path_rel[0] == '-') {
+        audit_fail("invalid_path", 400, "leading '-' refused", path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    // max_bytes cap (controls RAM usage too)
+    std::uint64_t max_bytes = 50ull * 1024 * 1024; // 50 MiB default
+    if (req.has_param("max_bytes")) {
+        try {
+            long long v = std::stoll(req.get_param_value("max_bytes"));
+            if (v > 0) max_bytes = (std::uint64_t)v;
+        } catch (...) {}
+    }
+    const std::uint64_t MINB = 1ull * 1024 * 1024;       // 1 MiB
+    const std::uint64_t MAXB = 250ull * 1024 * 1024;     // 250 MiB hard clamp
+    if (max_bytes < MINB) max_bytes = MINB;
+    if (max_bytes > MAXB) max_bytes = MAXB;
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    std::filesystem::path path_abs;
+    std::string err;
+    if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &path_abs, &err)) {
+        audit_fail("invalid_path", 400, err, path_rel, max_bytes);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    // must exist
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(path_abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404, "", path_rel, max_bytes);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "path not found"}
+        }.dump());
+        return;
+    }
+
+    // No symlinks in v1 (avoid surprises with zip behavior)
+    if (std::filesystem::is_symlink(st)) {
+        audit_fail("symlink_not_supported", 400, "", path_rel, max_bytes);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "symlinks not supported for zip download"}
+        }.dump());
+        return;
+    }
+
+    const bool is_file = std::filesystem::is_regular_file(st);
+    const bool is_dir  = std::filesystem::is_directory(st);
+    const std::string type = is_dir ? "dir" : (is_file ? "file" : "other");
+
+    // Pre-walk to compute total bytes and ensure no symlinks inside
+    std::uint64_t files = 0, dirs = 0, input_bytes = 0;
+
+    if (is_file) {
+        files = 1;
+        input_bytes = pqnas::file_size_u64_safe(path_abs);
+    } else if (is_dir) {
+        dirs = 1; // include root dir
+
+        std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
+        ec.clear();
+        for (auto it = std::filesystem::recursive_directory_iterator(path_abs, opts, ec);
+             it != std::filesystem::recursive_directory_iterator();
+             it.increment(ec)) {
+
+            if (ec) {
+                audit_fail("walk_failed", 500, ec.message(), path_rel, max_bytes);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "directory walk failed"},
+                    {"detail", pqnas::shorten(ec.message(), 180)}
+                }.dump());
+                return;
+            }
+
+            std::error_code ec2;
+            auto st2 = it->symlink_status(ec2);
+            if (ec2) continue;
+
+            if (std::filesystem::is_symlink(st2)) {
+                audit_fail("symlink_not_supported", 400, "symlink inside tree", path_rel, max_bytes);
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "symlinks inside directory are not supported for zip download"}
+                }.dump());
+                return;
+            }
+
+            if (std::filesystem::is_directory(st2)) {
+                dirs += 1;
+                continue;
+            }
+
+            if (std::filesystem::is_regular_file(st2)) {
+                files += 1;
+                input_bytes += pqnas::file_size_u64_safe(it->path());
+                if (input_bytes > max_bytes) break;
+                continue;
+            }
+
+            // other file types count as “file-like” but 0 bytes
+            files += 1;
+        }
+    } else {
+        audit_fail("unsupported_type", 400, "", path_rel, max_bytes);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "unsupported path type for zip download"}
+        }.dump());
+        return;
+    }
+
+    if (input_bytes > max_bytes) {
+        audit_fail("too_large", 413, "input exceeds max_bytes", path_rel, max_bytes);
+        reply_json(res, 413, json{
+            {"ok", false},
+            {"error", "too_large"},
+            {"message", "selected content exceeds max_bytes"}
+        }.dump());
+        return;
+    }
+
+    // Build zip using /usr/bin/zip and capture to memory (bounded).
+    // We run: zip -r -q - <relpath>  (stdout is the zip)
+    // in cwd=user_dir, so relpath stays inside user storage.
+    int pipefd[2];
+    if (::pipe(pipefd) != 0) {
+        audit_fail("pipe_failed", 500, "pipe()", path_rel, max_bytes);
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","zip failed"}}.dump());
+        return;
+    }
+
+    pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(pipefd[0]); ::close(pipefd[1]);
+        audit_fail("fork_failed", 500, "fork()", path_rel, max_bytes);
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","zip failed"}}.dump());
+        return;
+    }
+
+    if (pid == 0) {
+        // child
+        ::dup2(pipefd[1], STDOUT_FILENO);
+        // keep STDERR separate
+
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
+
+        if (::chdir(user_dir.c_str()) != 0) _exit(127);
+
+
+
+        // args: zip -r -q - <path_rel>
+        // Using "--" is supported by many zip builds, but to be safe we already reject leading '-'.
+        const char* argv[] = {
+            "zip",
+            "-r",
+            "-q",
+            "-",
+            path_rel.c_str(),
+            nullptr
+        };
+        ::execvp("zip", (char* const*)argv);
+        _exit(127);
+    }
+
+    // parent
+    ::close(pipefd[1]);
+
+    std::string zip_data;
+    zip_data.reserve((size_t)std::min<std::uint64_t>(max_bytes, 4ull * 1024 * 1024));
+
+    const std::uint64_t zip_limit = max_bytes + 8ull * 1024 * 1024; // allow some zip overhead
+    std::array<char, 64 * 1024> buf{};
+    while (true) {
+        ssize_t n = ::read(pipefd[0], buf.data(), (ssize_t)buf.size());
+        if (n == 0) break;
+        if (n < 0) {
+            ::close(pipefd[0]);
+            ::kill(pid, SIGKILL);
+            audit_fail("read_failed", 500, "read()", path_rel, max_bytes);
+            reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","zip failed"}}.dump());
+            return;
+        }
+
+        if (zip_data.size() + (size_t)n > (size_t)zip_limit) {
+            ::close(pipefd[0]);
+            ::kill(pid, SIGKILL);
+            audit_fail("zip_too_large", 413, "zip output exceeds limit", path_rel, max_bytes);
+            reply_json(res, 413, json{
+                {"ok", false},
+                {"error", "too_large"},
+                {"message", "zip output too large"}
+            }.dump());
+            return;
+        }
+
+        zip_data.append(buf.data(), (size_t)n);
+    }
+    ::close(pipefd[0]);
+
+    int status = 0;
+    ::waitpid(pid, &status, 0);
+    if (!(WIFEXITED(status) && WEXITSTATUS(status) == 0)) {
+        audit_fail("zip_failed", 500, "zip exit nonzero", path_rel, max_bytes);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "zip failed"}
+        }.dump());
+        return;
+    }
+
+    // filename suggestion
+    std::string base = std::filesystem::path(path_rel).filename().string();
+    if (base.empty()) base = "download";
+    std::string fname = base + ".zip";
+
+    audit_ok(path_rel, type, max_bytes, input_bytes, (std::uint64_t)zip_data.size(), files, dirs);
+
+    res.status = 200;
+    res.set_header("Cache-Control", "no-store");
+    res.set_header("Content-Type", "application/zip");
+    res.set_header("Content-Disposition", ("attachment; filename=\"" + fname + "\"").c_str());
+    res.body = std::move(zip_data);
+});
+
 
     // POST /api/v4/files/rmrf?path=rel/path
 srv.Post("/api/v4/files/rmrf", [&](const httplib::Request& req, httplib::Response& res) {
