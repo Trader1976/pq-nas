@@ -959,6 +959,74 @@ static std::string sign_token_v4_ed25519(const json& payload_obj, const unsigned
     return std::string("v4.") + p64 + "." + s64;
 }
 
+
+// Small helper: bytes -> hex
+static std::string hex_encode_lower(const unsigned char* data, size_t len) {
+    static const char* kHex = "0123456789abcdef";
+    std::string out;
+    out.resize(len * 2);
+    for (size_t i = 0; i < len; i++) {
+        out[i * 2 + 0] = kHex[(data[i] >> 4) & 0xF];
+        out[i * 2 + 1] = kHex[(data[i] >> 0) & 0xF];
+    }
+    return out;
+}
+
+// Stream SHA-256 for a file. Returns false + err on failure.
+static bool sha256_file(const std::filesystem::path& p, std::string* out_hex, std::string* err) {
+    std::ifstream f(p, std::ios::binary);
+    if (!f.good()) {
+        if (err) *err = "cannot open file";
+        return false;
+    }
+
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) {
+        if (err) *err = "EVP_MD_CTX_new failed";
+        return false;
+    }
+
+    // ensure free on all exits
+    struct CtxGuard {
+        EVP_MD_CTX* c;
+        ~CtxGuard() { if (c) EVP_MD_CTX_free(c); }
+    } guard{ctx};
+
+    if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1) {
+        if (err) *err = "EVP_DigestInit_ex failed";
+        return false;
+    }
+
+    std::array<char, 64 * 1024> buf{};
+    while (f.good()) {
+        f.read(buf.data(), (std::streamsize)buf.size());
+        std::streamsize n = f.gcount();
+        if (n > 0) {
+            if (EVP_DigestUpdate(ctx, buf.data(), (size_t)n) != 1) {
+                if (err) *err = "EVP_DigestUpdate failed";
+                return false;
+            }
+        }
+    }
+    if (!f.eof()) {
+        if (err) *err = "read failed";
+        return false;
+    }
+
+    unsigned char md[EVP_MAX_MD_SIZE];
+    unsigned int md_len = 0;
+    if (EVP_DigestFinal_ex(ctx, md, &md_len) != 1) {
+        if (err) *err = "EVP_DigestFinal_ex failed";
+        return false;
+    }
+
+    if (out_hex) *out_hex = hex_encode_lower(md, (size_t)md_len);
+    return true;
+}
+
+
+
+
 // -----------------------------------------------------------------------------
 // main
 // -----------------------------------------------------------------------------
@@ -3573,6 +3641,163 @@ srv.Post("/api/v4/files/mkdir", [&](const httplib::Request& req, httplib::Respon
     }.dump());
 });
 
+    // POST /api/v4/files/hash?path=rel/path&algo=sha256
+srv.Post("/api/v4/files/hash", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
+                          const std::string& path_rel = "", const std::string& algo = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_hash_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!path_rel.empty()) ev.f["path"] = pqnas::shorten(path_rel, 200);
+        if (!algo.empty())     ev.f["algo"] = pqnas::shorten(algo, 40);
+        if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& path_rel,
+                        const std::string& algo,
+                        std::uint64_t bytes,
+                        const std::string& digest_hex) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_hash_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(path_rel, 200);
+        ev.f["algo"] = pqnas::shorten(algo, 40);
+        ev.f["bytes"] = std::to_string((unsigned long long)bytes);
+        // Don’t store full digest if you want shorter logs; but full is often fine.
+        ev.f["digest"] = pqnas::shorten(digest_hex, 80);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    std::string path_rel;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+    if (path_rel.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    std::string algo = "sha256";
+    if (req.has_param("algo")) algo = req.get_param_value("algo");
+
+    // v1: only sha256 supported
+    if (algo != "sha256") {
+        audit_fail("unsupported_algo", 400, "", path_rel, algo);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "unsupported algo (use sha256)"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    std::filesystem::path path_abs;
+    std::string err;
+    if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &path_abs, &err)) {
+        audit_fail("invalid_path", 400, err, path_rel, algo);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    // must exist + must be file
+    std::error_code ec;
+    auto st = std::filesystem::status(path_abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404, "", path_rel, algo);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "file not found"}
+        }.dump());
+        return;
+    }
+    if (!std::filesystem::is_regular_file(st)) {
+        audit_fail("not_file", 400, "", path_rel, algo);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "path is not a file"}
+        }.dump());
+        return;
+    }
+
+    const std::uint64_t bytes = pqnas::file_size_u64_safe(path_abs);
+
+    std::string digest_hex, herr;
+    if (!sha256_file(path_abs, &digest_hex, &herr)) {
+        audit_fail("hash_failed", 500, herr, path_rel, algo);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "hash failed"},
+            {"detail", pqnas::shorten(herr, 180)}
+        }.dump());
+        return;
+    }
+
+    audit_ok(path_rel, algo, bytes, digest_hex);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", path_rel},
+        {"algo", algo},
+        {"bytes", bytes},
+        {"digest_hex", digest_hex}
+    }.dump());
+});
 
 // DELETE /api/v4/files/delete?path=relative/path
 // Deletes a file or directory (recursive). Refuses empty path (won't delete user root).
