@@ -49,7 +49,8 @@
     }
 
     function setWorkspace(view) {
-        // This is UI-only for now. We don't invent backend calls.
+        console.log("setWorkspace:", view);
+
         if (view === "home") {
             setActiveNav("nav_home");
             if (wsTitle) wsTitle.textContent = "Home";
@@ -58,7 +59,7 @@
             if (homeBlurb) {
                 homeBlurb.innerHTML =
                     `This is the PQ-NAS desktop shell. The large pane will later host the file manager, apps, and tools.
-           Use the left menu to switch views. Admin links appear only when your role is <b>admin</b>.`;
+Use the left menu to switch views. Admin links appear only when your role is <b>admin</b>.`;
                 show(homeBlurb, true);
             }
             return;
@@ -67,11 +68,32 @@
         if (view === "files") {
             setActiveNav("nav_files");
             if (wsTitle) wsTitle.textContent = "Files";
-            if (wsSubtitle) wsSubtitle.textContent = "File manager (placeholder UI)";
+            if (wsSubtitle) wsSubtitle.textContent = "File manager (embedded app)";
             if (mainPaneTitle) mainPaneTitle.textContent = "File Manager";
+
             if (homeBlurb) {
-                homeBlurb.innerHTML =
-                    `File manager UI will be rendered here later (server-backed).`;
+                // Clear
+                homeBlurb.innerHTML = "";
+
+                const info = document.createElement("div");
+                info.className = "mono";
+                info.style.padding = "10px";
+                info.style.border = "1px solid rgba(0,240,248,0.25)";
+                info.style.borderRadius = "14px";
+                info.style.marginBottom = "10px";
+                info.innerHTML = `<b>FILES TAB ACTIVE ✅</b> — loading <span class="mono">filemgr 0.1.0</span>`;
+
+                const frame = document.createElement("iframe");
+                frame.src = "/apps/filemgr/0.1.0/www/index.html";
+                frame.style.width = "100%";
+                frame.style.height = "800px";
+                frame.style.border = "1px solid rgba(0,240,248,0.18)";
+                frame.style.borderRadius = "16px";
+                frame.style.background = "rgba(0,0,0,0.22)";
+
+                homeBlurb.appendChild(info);
+                homeBlurb.appendChild(frame);
+
                 show(homeBlurb, true);
             }
             return;
@@ -83,12 +105,13 @@
             if (wsSubtitle) wsSubtitle.textContent = "Viewer (placeholder UI)";
             if (mainPaneTitle) mainPaneTitle.textContent = "Logs";
             if (homeBlurb) {
-                homeBlurb.innerHTML =
-                    `Log viewer UI will be rendered here later (audit and system logs).`;
+                homeBlurb.innerHTML = `Log viewer UI will be rendered here later (audit and system logs).`;
                 show(homeBlurb, true);
             }
+            return;
         }
     }
+
 
     async function loadMe() {
         show(stateDisabled, false);

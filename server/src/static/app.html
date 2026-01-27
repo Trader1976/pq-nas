@@ -352,6 +352,13 @@
 
         a{ color: var(--fg); }
         a:hover{ text-shadow: 0 0 10px rgba(0,240,248,0.25); }
+        /* Make sure sidebar stays clickable above any content overlays */
+        .sidebar { position: relative; z-index: 10; }
+        .workspace { position: relative; z-index: 1; }
+        /* Defensive: prevent main content from stealing clicks from sidebar */
+        .workspace { pointer-events: auto; }
+        .sidebar, .sidebar * { pointer-events: auto; }
+
     </style>
 </head>
 
@@ -440,8 +447,8 @@
                     </div>
                 </div>
 
-                <div class="mono" id="homeBlurb" style="color: var(--fg-dim); line-height: 1.5;">
-                    This is the PQ-NAS desktop shell. The large pane will later host the file manager, apps, and tools.
+                <div class="mono" id="homeBlurb" style="color: var(--fg-dim); line-height: 1.5; margin-top: 10px;">
+                This is the PQ-NAS desktop shell. The large pane will later host the file manager, apps, and tools.
                     Use the left menu to switch views. Admin tools are available from the admin page.
                 </div>
             </section>
