@@ -564,6 +564,24 @@
         tbody tr.ev-warnline td.col-event { color: rgba(255,215,120,0.98); font-weight: 900; }
         tbody tr.ev-errorline td.col-event { color: rgba(255,190,190,0.98); font-weight: 900; }
 
+        /* Files API family (v4.files_*) — ONLY for OK/INFO rows.
+           If row is warn/fail, let ev-warnline / ev-errorline win. */
+        tbody tr.ev-files:not(.ev-warnline):not(.ev-errorline) td.col-idx{
+            border-left-color: rgba(0,240,248,1.0);
+            box-shadow: inset 12px 0 22px rgba(0,240,248,0.14);
+        }
+        tbody tr.ev-files:not(.ev-warnline):not(.ev-errorline){
+            background: rgba(0,240,248,0.050);
+        }
+        tbody tr.ev-files:not(.ev-warnline):not(.ev-errorline) td.col-event{
+            color: rgba(0,240,248,0.98);
+            font-weight: 900;
+        }
+        tbody tr.ev-files:not(.ev-warnline):not(.ev-errorline):hover{
+            background: rgba(0,240,248,0.11);
+        }
+
+
         .statusPill{
             display:inline-flex;
             align-items:center;

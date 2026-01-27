@@ -4789,6 +4789,253 @@ srv.Post("/api/v4/files/save_text", [&](const httplib::Request& req, httplib::Re
     }.dump());
 });
 
+    // POST /api/v4/files/rmrf?path=rel/path
+srv.Post("/api/v4/files/rmrf", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
+                          const std::string& path_rel = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_rmrf_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!path_rel.empty()) ev.f["path"] = pqnas::shorten(path_rel, 200);
+        if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& path_rel,
+                        const std::string& type,
+                        std::uint64_t removed_files,
+                        std::uint64_t removed_dirs,
+                        std::uint64_t removed_bytes) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_rmrf_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(path_rel, 200);
+        ev.f["type"] = type;
+        ev.f["removed_files"] = std::to_string((unsigned long long)removed_files);
+        ev.f["removed_dirs"]  = std::to_string((unsigned long long)removed_dirs);
+        ev.f["removed_bytes"] = std::to_string((unsigned long long)removed_bytes);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    std::string path_rel;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+
+    if (path_rel.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    // extra safety: refuse root-ish deletes
+    auto norm = path_rel;
+    while (!norm.empty() && (norm.back() == ' ' || norm.back() == '\t' || norm.back() == '\n' || norm.back() == '\r'))
+        norm.pop_back();
+    while (!norm.empty() && (norm.front() == ' ' || norm.front() == '\t' || norm.front() == '\n' || norm.front() == '\r'))
+        norm.erase(norm.begin());
+
+    if (norm.empty() || norm == "." || norm == "/" || norm == "./") {
+        audit_fail("refuse_root", 400, "", path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "refusing to delete root"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    std::filesystem::path path_abs;
+    std::string err;
+    if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &path_abs, &err)) {
+        audit_fail("invalid_path", 400, err, path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    // refuse deleting the user_dir itself
+    std::error_code ec;
+    auto abs_weak = std::filesystem::weakly_canonical(path_abs, ec);
+    auto user_weak = std::filesystem::weakly_canonical(user_dir, ec);
+    if (!ec && abs_weak == user_weak) {
+        audit_fail("refuse_user_root", 400, "", path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "refusing to delete user storage root"}
+        }.dump());
+        return;
+    }
+
+    // must exist
+    ec.clear();
+    auto st = std::filesystem::symlink_status(path_abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404, "", path_rel);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "path not found"}
+        }.dump());
+        return;
+    }
+
+    // v1 safety: refuse deleting a symlink target directly (prevents confusion)
+    if (std::filesystem::is_symlink(st)) {
+        audit_fail("target_is_symlink", 400, "", path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "refusing to rmrf a symlink path"}
+        }.dump());
+        return;
+    }
+
+    const bool is_file = std::filesystem::is_regular_file(st);
+    const bool is_dir  = std::filesystem::is_directory(st);
+
+    std::string type = is_dir ? "dir" : (is_file ? "file" : "other");
+
+    // Pre-count bytes/files/dirs without following symlinks
+    std::uint64_t removed_files = 0;
+    std::uint64_t removed_dirs  = 0;
+    std::uint64_t removed_bytes = 0;
+
+    if (is_file) {
+        removed_files = 1;
+        removed_bytes = pqnas::file_size_u64_safe(path_abs);
+    } else if (is_dir) {
+        removed_dirs = 1; // root dir
+        std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
+
+        ec.clear();
+        for (auto it = std::filesystem::recursive_directory_iterator(path_abs, opts, ec);
+             it != std::filesystem::recursive_directory_iterator();
+             it.increment(ec)) {
+
+            if (ec) {
+                audit_fail("walk_failed", 500, ec.message(), path_rel);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "directory walk failed"},
+                    {"detail", pqnas::shorten(ec.message(), 180)}
+                }.dump());
+                return;
+            }
+
+            std::error_code ec2;
+            auto st2 = it->symlink_status(ec2);
+            if (ec2) continue;
+
+            if (std::filesystem::is_symlink(st2)) {
+                // do not follow; count as "file-like" removed entry of 0 bytes
+                removed_files += 1;
+                if (it->is_directory(ec2)) it.disable_recursion_pending();
+                continue;
+            }
+
+            if (std::filesystem::is_directory(st2)) {
+                removed_dirs += 1;
+                continue;
+            }
+
+            if (std::filesystem::is_regular_file(st2)) {
+                removed_files += 1;
+                removed_bytes += pqnas::file_size_u64_safe(it->path());
+                continue;
+            }
+
+            // other types counted as file-like entries with 0 bytes
+            removed_files += 1;
+        }
+    } else {
+        // other types: treat like single entry delete attempt
+        removed_files = 1;
+        removed_bytes = 0;
+    }
+
+    // Remove (remove_all handles file or dir)
+    ec.clear();
+    std::uintmax_t removed = std::filesystem::remove_all(path_abs, ec);
+    if (ec) {
+        audit_fail("remove_all_failed", 500, ec.message(), path_rel);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "recursive delete failed"},
+            {"detail", pqnas::shorten(ec.message(), 180)}
+        }.dump());
+        return;
+    }
+
+    // removed is best-effort count from FS; we report our own counts (more meaningful)
+    (void)removed;
+
+    audit_ok(path_rel, type, removed_files, removed_dirs, removed_bytes);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", path_rel},
+        {"type", type},
+        {"removed_files", removed_files},
+        {"removed_dirs", removed_dirs},
+        {"removed_bytes", removed_bytes}
+    }.dump());
+});
+
+
 
 
 

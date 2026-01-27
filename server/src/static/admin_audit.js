@@ -208,8 +208,12 @@ function renderTable() {
 
         // families
         if (evLower.startsWith("admin.")) tr.classList.add("ev-admin");
-        if (evLower.startsWith("v4.")) tr.classList.add("ev-auth");
+
+        if (evLower.startsWith("v4.files_")) tr.classList.add("ev-files");
+        else if (evLower.startsWith("v4."))  tr.classList.add("ev-auth");
+
         if (evLower.includes("storage")) tr.classList.add("ev-storage");
+
 
         if (st === "warn") tr.classList.add("ev-warnline");
         if (st === "fail") tr.classList.add("ev-errorline");
