@@ -1542,36 +1542,39 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
         res.set_content(body, "application/javascript; charset=utf-8");
     });
 
-srv.Get("/api/v4/apps", [&](const httplib::Request&, httplib::Response& res) {
+    srv.Get("/api/v4/apps", [&](const httplib::Request& req, httplib::Response& res) {
     namespace fs = std::filesystem;
     json out;
     out["ok"] = true;
     out["bundled"] = json::array();
     out["installed"] = json::array();
+    const bool isAdmin = is_admin_cookie(req, COOKIE_KEY, &allowlist);
 
     // Bundled: apps/bundled/<id>/*.zip
-    {
-        std::error_code ec;
-        fs::path bundled(APPS_BUNDLED_DIR);
-        if (fs::exists(bundled, ec) && fs::is_directory(bundled, ec)) {
-            for (auto& de : fs::directory_iterator(bundled, ec)) {
-                if (ec) break;
-                if (!de.is_directory(ec) || ec) continue;
-
-                const std::string appId = de.path().filename().string();
-                for (auto& f : fs::directory_iterator(de.path(), ec)) {
+        // Bundled: apps/bundled/<id>/*.zip (admin-only visibility)
+        if (isAdmin) {
+            std::error_code ec;
+            fs::path bundled(APPS_BUNDLED_DIR);
+            if (fs::exists(bundled, ec) && fs::is_directory(bundled, ec)) {
+                for (auto& de : fs::directory_iterator(bundled, ec)) {
                     if (ec) break;
-                    if (!f.is_regular_file(ec) || ec) continue;
-                    if (f.path().extension() != ".zip") continue;
+                    if (!de.is_directory(ec) || ec) continue;
 
-                    json item;
-                    item["id"] = appId;
-                    item["zip"] = rel_to_repo(f.path().string());
-                    out["bundled"].push_back(item);
+                    const std::string appId = de.path().filename().string();
+                    for (auto& f : fs::directory_iterator(de.path(), ec)) {
+                        if (ec) break;
+                        if (!f.is_regular_file(ec) || ec) continue;
+                        if (f.path().extension() != ".zip") continue;
+
+                        json item;
+                        item["id"] = appId;
+                        item["zip"] = rel_to_repo(f.path().string());
+                        out["bundled"].push_back(item);
+                    }
                 }
             }
         }
-    }
+
 
     // Installed: apps/installed/<id>/<ver>/manifest.json (or at least www/index.html)
     {
@@ -7745,6 +7748,9 @@ srv.Post("/api/v4/apps/install_bundled", [&](const httplib::Request& req, httpli
         res.set_header("Cache-Control", "no-store");
         res.set_content(j.dump(2), "application/json; charset=utf-8");
     };
+    //only admins can install apps
+    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
 
     json in;
     try { in = json::parse(req.body); }
@@ -7856,6 +7862,9 @@ srv.Post("/api/v4/apps/install_bundled", [&](const httplib::Request& req, httpli
         res.set_header("Cache-Control", "no-store");
         res.set_content(j.dump(2), "application/json; charset=utf-8");
     };
+    //only admins can uninstall apps
+    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
 
     json in;
     try { in = json::parse(req.body); }

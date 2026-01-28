@@ -125,6 +125,8 @@
             border: 1px solid var(--border2);
             background: rgba(0,0,0,0.22);
             color: var(--fg);
+            line-height: 1;
+            min-height: 42px;
             cursor: pointer;
             user-select:none;
             text-decoration:none;
@@ -150,6 +152,9 @@
             border-radius: 10px;
             padding: 2px 8px;
             background: rgba(0,0,0,0.22);
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
         }
 
         .bottom{
@@ -306,9 +311,12 @@
             height: 100%;
         }
 
-        /* When an app is embedded, we want the pane to feel like a host window */
+        /* When an app is embedded, make the host pane frameless (the main pane already provides the frame) */
         .pane.appHost{
-            padding: 10px;
+            padding: 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
         }
 
         /* The area where renderApp() injects content */
@@ -316,21 +324,16 @@
             gap: 10px;
         }
 
-        /* Small host header strip (APP ACTIVE...) */
-        .appHostInfo{
-            padding: 8px 10px;
-            border: 1px solid rgba(0,240,248,0.18);
-            border-radius: 14px;
-            background: rgba(0,0,0,0.18);
+        #toggleInspectorBtn{
+            padding: 8px 12px;
+            opacity: 0.92;
         }
-
         /* Make iframe wrapper flush and reduce extra borders */
         .appFrameWrap{
-            border-radius: 18px;
-            overflow: hidden;
-            border: 1px solid rgba(0,240,248,0.14);
-            background: rgba(0,0,0,0.18);
-            overflow: auto;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            overflow: hidden; /* keep clipping */
         }
 
         /* Remove iframe border now that wrapper has it */
@@ -346,6 +349,12 @@
             to   { opacity: 1; transform: scale(1); }
         }
 
+        #appsList{
+            display:flex;
+            flex-direction:column;
+            gap:8px;
+        }
+
         .appFrame {
             animation: appIn 180ms ease-out;
         }
@@ -358,6 +367,7 @@
             letter-spacing: 0.6px;
             text-transform: uppercase;
         }
+        .pane.appHost h2{ display:none; }
 
         .bigState{
             display:none;
@@ -424,6 +434,10 @@
             flex: 1 1 auto;
             min-height: 0;
             display:flex;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            overflow: hidden; /* keep clipping */
         }
 
         .appFrame{
@@ -431,10 +445,12 @@
             min-height: 0;
             width: 100%;
             height: 100%;
-            border: 1px solid rgba(0,240,248,0.18);
-            border-radius: 16px;
-            background: rgba(0,0,0,0.22);
+            display:block;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
         }
+
 
 
 
@@ -460,7 +476,8 @@
             </button>
 
             <div class="sectionLabel">Apps</div>
-            <div id="appsList" style="display:flex; flex-direction:column; gap:8px; padding: 0 6px 10px;"></div>
+            <div id="appsList"></div>
+
 
 
             <div class="sectionLabel">Admin</div>
@@ -480,6 +497,10 @@
 
         <div class="bottom">
             <div class="statusCard">
+                <button class="navbtn" id="toggleInspectorBtn" type="button" style="justify-content:center;">
+                    Show inspector
+                    <span class="k">I</span>
+                </button>
                 <div id="stateBadge" class="badge warn">checking…</div>
                 <div class="mini" id="statusLine">Loading…</div>
             </div>
@@ -495,7 +516,6 @@
             </div>
 
             <div class="actions">
-                <button class="btn secondary" id="toggleInspectorBtn" type="button">Toggle inspector</button>
                 <button class="btn" id="refreshBtn" type="button">Refresh</button>
             </div>
         </div>

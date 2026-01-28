@@ -36,3 +36,8 @@ bool require_admin_cookie_users_actor(const httplib::Request& req,
                                       const std::string& users_path,
                                       const pqnas::UsersRegistry* users,
                                       std::string* out_admin_fp_hex);
+
+bool is_admin_cookie(const httplib::Request& req,
+                     const unsigned char cookie_key[32],
+                     const pqnas::Allowlist* allowlist,
+                     std::string* out_fp_hex = nullptr);

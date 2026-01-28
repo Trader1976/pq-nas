@@ -166,3 +166,34 @@ bool require_admin_cookie_users_actor(const httplib::Request& req,
     return true;
 }
 
+bool is_admin_cookie(const httplib::Request& req,
+                     const unsigned char cookie_key[32],
+                     const pqnas::Allowlist* allowlist,
+                     std::string* out_fp_hex)
+{
+    if (out_fp_hex) out_fp_hex->clear();
+
+    // Require cookie header + pqnas_session
+    const std::string cookieVal = extract_cookie_value(req, "pqnas_session");
+    if (cookieVal.empty()) return false;
+
+    // Verify cookie MAC and extract identity (fp_b64) + expiry
+    std::string fp_b64;
+    long exp = 0;
+    if (!session_cookie_verify(cookie_key, cookieVal, fp_b64, exp)) return false;
+
+    // Expiry check
+    const long now = std::time(nullptr);
+    if (now > exp) return false;
+
+    // Cookie stores fp_b64 = standard base64 of UTF-8 fingerprint HEX string
+    std::string raw;
+    if (!b64std_decode_to_bytes(fp_b64, raw)) return false;
+
+    const std::string fp_hex(raw.begin(), raw.end());
+    if (out_fp_hex) *out_fp_hex = fp_hex;
+
+    // Admin policy check (fail-closed)
+    if (!allowlist) return false;
+    return allowlist->is_admin(fp_hex);
+}

@@ -148,7 +148,7 @@
         frame.className = "appFrame";
         frame.src = `/apps/${encodeURIComponent(app.id)}/${encodeURIComponent(app.version)}/www/index.html`;
 
-        homeBlurb.appendChild(info);
+       // homeBlurb.appendChild(info);
 
         const frameWrap = document.createElement("div");
         frameWrap.className = "appFrameWrap";
@@ -222,7 +222,7 @@
             const ct = (r.headers.get("content-type") || "").toLowerCase();
             const txt = await r.text();
 
-            if (statusLine) statusLine.textContent = `GET /api/v4/me → HTTP ${r.status}`;
+            if (statusLine) statusLine.textContent = "PQ-NAS v1.0";
 
             let j = null;
             try { j = JSON.parse(txt); } catch {}
