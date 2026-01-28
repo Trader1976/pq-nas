@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>PQ-NAS • Admin • Apps</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+
+    <style>
+        :root{
+            --bg:#050712;
+            --fg:#00f0f8;
+            --fg-dim: rgba(0,240,248,0.74);
+            --panel: rgba(255,255,255,0.03);
+            --panel2: rgba(0,0,0,0.28);
+            --border: rgba(0,240,248,0.22);
+            --border2: rgba(0,240,248,0.12);
+            --shadow: 0 18px 70px rgba(0,0,0,0.55);
+            --radius: 18px;
+            --radius2: 22px;
+            --warn: rgba(255,190,0,0.95);
+            --err: rgba(255,90,90,0.95);
+            --ok: rgba(0,240,248,0.95);
+        }
+        *{ box-sizing:border-box; }
+        html,body{ height:100%; }
+        body{
+            margin:0;
+            color:var(--fg);
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial;
+            background:
+                    radial-gradient(1200px 700px at 18% 8%, rgba(0,240,248,0.11), transparent 55%),
+                    radial-gradient(1000px 700px at 82% 12%, rgba(0,240,248,0.07), transparent 60%),
+                    linear-gradient(180deg, #04050f, var(--bg));
+            overflow:hidden;
+        }
+        a{ color:var(--fg); text-decoration:none; }
+        a:hover{ text-shadow: 0 0 10px rgba(0,240,248,0.25); }
+
+        .wrap{
+            height:100%;
+            padding:14px;
+            display:flex;
+            flex-direction:column;
+            gap:14px;
+        }
+        .topbar{
+            border:1px solid var(--border);
+            border-radius: var(--radius2);
+            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
+            box-shadow: var(--shadow);
+            padding: 12px 14px;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap: 12px;
+        }
+        .crumbs{ min-width:0; display:flex; flex-direction:column; }
+        .title{
+            font-weight: 950;
+            letter-spacing: 0.2px;
+            font-size: 14px;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }
+        .sub{
+            margin-top: 2px;
+            font-size: 12px;
+            color: var(--fg-dim);
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }
+
+        .btn{
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            gap:10px;
+            padding:10px 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(0,240,248,0.28);
+            background: rgba(0,0,0,0.26);
+            color: var(--fg);
+            font-weight: 900;
+            cursor:pointer;
+            user-select:none;
+            transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+        }
+        .btn:hover{ transform: translateY(-1px); border-color: rgba(0,240,248,0.42); background: rgba(0,240,248,0.07); }
+        .btn.secondary{ border-color: rgba(255,255,255,0.12); color: rgba(0,240,248,0.82); }
+        .btn.secondary:hover{ border-color: rgba(255,255,255,0.22); background: rgba(255,255,255,0.05); }
+        .btn.danger{ border-color: rgba(255,90,90,0.30); color: rgba(255,200,200,0.95); }
+        .btn.danger:hover{ border-color: rgba(255,90,90,0.55); background: rgba(255,90,90,0.10); }
+
+        .panel{
+            flex: 1 1 auto;
+            min-height: 0;
+            border:1px solid var(--border);
+            border-radius: var(--radius2);
+            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
+            box-shadow: var(--shadow);
+            overflow:hidden;
+            display:flex;
+            flex-direction:column;
+        }
+        .panelBar{
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border2);
+            background: rgba(0,0,0,0.18);
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+        }
+        .grid{
+            flex: 1 1 auto;
+            min-height:0;
+            overflow:auto;
+            padding: 14px;
+            display:grid;
+            grid-template-columns: 420px 1fr;
+            gap: 14px;
+        }
+        @media (max-width: 1100px){
+            body{ overflow:auto; }
+            .grid{ grid-template-columns: 1fr; }
+        }
+
+        .card{
+            border: 1px solid var(--border2);
+            border-radius: var(--radius);
+            background: rgba(0,0,0,0.22);
+            padding: 14px;
+            overflow:hidden;
+        }
+        .card h3{ margin:0 0 10px 0; font-size: 14px; letter-spacing:0.2px; }
+        .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+        .muted{ color: var(--fg-dim); }
+
+        .row{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+        input[type="file"]{
+            width:100%;
+            border: 1px solid rgba(0,240,248,0.22);
+            border-radius: 14px;
+            padding: 10px 12px;
+            background: rgba(0,0,0,0.26);
+            color: var(--fg);
+        }
+
+        .list{
+            display:flex;
+            flex-direction:column;
+            gap:10px;
+        }
+        .item{
+            border: 1px solid var(--border2);
+            border-radius: 16px;
+            background: rgba(0,0,0,0.20);
+            padding: 12px;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap: 12px;
+        }
+        .item .left{ min-width:0; display:flex; flex-direction:column; gap: 4px; }
+        .item .name{ font-weight: 950; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .item .meta{ font-size: 12px; color: var(--fg-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+        .badge{
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 900;
+            border: 1px solid var(--border2);
+            background: rgba(0,0,0,0.28);
+            color: var(--fg);
+            white-space: nowrap;
+        }
+        .badge.ok{ border-color: rgba(0,240,248,0.30); background: rgba(0,240,248,0.08); }
+        .badge.warn{ border-color: rgba(255,190,0,0.25); background: rgba(255,190,0,0.10); color: rgba(255,225,170,0.95); }
+        .badge.err{ border-color: rgba(255,90,90,0.25); background: rgba(255,90,90,0.10); color: rgba(255,190,190,0.95); }
+
+        .footer{
+            padding: 10px 14px;
+            border-top: 1px solid var(--border2);
+            color: rgba(0,240,248,0.55);
+            font-size: 12px;
+            user-select:none;
+            background: rgba(0,0,0,0.12);
+            display:flex;
+            justify-content:space-between;
+            gap: 12px;
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="topbar">
+        <div class="crumbs">
+            <div class="title">Admin • App Manager</div>
+            <div class="sub">Upload app zip → validate → install. Manage installed apps.</div>
+        </div>
+        <div class="row">
+            <a class="btn secondary" href="/admin">Back to Admin</a>
+            <button class="btn" id="refreshBtn" type="button">Refresh</button>
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="panelBar">
+            <div class="row">
+                <span class="badge warn" id="stateBadge">loading…</span>
+                <span class="mono muted" id="statusLine">Starting…</span>
+            </div>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <h3>Install app from zip</h3>
+                <div class="muted" style="margin-bottom:10px">
+                    Zip must contain <span class="mono">manifest.json</span> and <span class="mono">www/index.html</span>.
+                </div>
+
+                <input id="zipFile" type="file" accept=".zip,application/zip" />
+                <div class="row" style="margin-top:10px">
+                    <button class="btn" id="installBtn" type="button">Install</button>
+                </div>
+
+                <div class="mono" id="installOut" style="margin-top:10px; white-space:pre-wrap;"></div>
+            </div>
+
+            <div class="card">
+                <h3>Installed apps</h3>
+                <div class="list" id="installedList"></div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <div>Admin-only</div>
+            <div class="mono">PQ-NAS v1.0</div>
+        </div>
+    </div>
+</div>
+
+<script src="/static/admin_apps.js"></script>
+</body>
+</html>

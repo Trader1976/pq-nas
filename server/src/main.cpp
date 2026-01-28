@@ -123,6 +123,11 @@ const std::string STATIC_ADMIN_HTML =
     (std::filesystem::path(REPO_ROOT) / "server/src/static/admin.html").string();
 const std::string STATIC_ADMIN_JS =
     (std::filesystem::path(REPO_ROOT) / "server/src/static/admin.js").string();
+const std::string STATIC_ADMIN_APPS_HTML =
+    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_apps.html").string();
+
+const std::string STATIC_ADMIN_APPS_JS =
+    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_apps.js").string();
 const std::string STATIC_APP_HTML =
     (std::filesystem::path(REPO_ROOT) / "server/src/static/app.html").string();
 const std::string STATIC_APP_JS =
@@ -3087,6 +3092,33 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
         res.set_header("Cache-Control", "no-store");
         res.set_content(body, "application/javascript; charset=utf-8");
     });
+
+    srv.Get("/admin/apps", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
+    std::string body;
+    if (!read_file_to_string(STATIC_ADMIN_APPS_HTML, body)) {
+        res.status = 404;
+        res.body = "Missing static file: " + STATIC_ADMIN_APPS_HTML;
+        return;
+    }
+
+    res.set_header("Cache-Control", "no-store");
+    res.set_content(body, "text/html; charset=utf-8");
+    });
+
+    srv.Get("/static/admin_apps.js", [&](const httplib::Request&, httplib::Response& res) {
+        std::string body;
+        if (!read_file_to_string(STATIC_ADMIN_APPS_JS, body)) {
+            res.status = 404;
+            res.body = "Missing static file: " + STATIC_ADMIN_APPS_JS;
+            return;
+        }
+
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(body, "application/javascript; charset=utf-8");
+    });
+
 
     srv.Get("/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
@@ -7741,6 +7773,206 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
 
         reply_json(res, 200, json({{"ok",true}}).dump());
     });
+
+    srv.Post("/api/v4/apps/upload_install", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
+    auto reply = [&](int status, const json& j) {
+        res.status = status;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(j.dump(2), "application/json; charset=utf-8");
+    };
+
+    const std::string ct = req.get_header_value("Content-Type");
+    if (ct.find("application/zip") == std::string::npos &&
+        ct.find("application/octet-stream") == std::string::npos) {
+        reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "expected Content-Type: application/zip"}});
+        return;
+    }
+
+    // basic size guard (tune later)
+    const size_t maxZipBytes = 100u * 1024u * 1024u; // 100 MiB
+    if (req.body.empty()) {
+        reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "empty body"}});
+        return;
+    }
+    if (req.body.size() > maxZipBytes) {
+        reply(413, {{"ok", false}, {"error", "too_large"}, {"message", "zip too large"}});
+        return;
+    }
+
+    const std::string origName = req.get_header_value("X-PQNAS-Filename");
+
+    std::error_code ec;
+
+    // Write uploaded zip to temp file
+    const std::filesystem::path tmpZip =
+        std::filesystem::path(APPS_INSTALLED_DIR) / (".tmp_upload_" + rand_hex_16() + ".zip");
+
+    {
+        std::filesystem::create_directories(tmpZip.parent_path(), ec);
+        if (ec) {
+            reply(500, {{"ok", false}, {"error", "server_error"}, {"message", "failed to create temp dir"}});
+            return;
+        }
+
+        std::ofstream f(tmpZip, std::ios::binary);
+        if (!f.good()) {
+            reply(500, {{"ok", false}, {"error", "server_error"}, {"message", "failed to open temp zip for write"}});
+            return;
+        }
+        f.write(req.body.data(), (std::streamsize)req.body.size());
+        f.close();
+        if (!f.good()) {
+            std::filesystem::remove(tmpZip, ec);
+            reply(500, {{"ok", false}, {"error", "server_error"}, {"message", "failed to write temp zip"}});
+            return;
+        }
+    }
+
+    auto cleanupZip = [&]() {
+        std::filesystem::remove(tmpZip, ec);
+    };
+
+    // Zip-slip defense: list entries and validate names
+    {
+        std::string listing;
+        int rc = -1;
+        const std::string cmd = "unzip -Z1 \"" + tmpZip.string() + "\" 2>/dev/null";
+        if (!run_cmd_capture(cmd, &listing, &rc) || rc != 0 || listing.empty()) {
+            cleanupZip();
+            reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "zip unreadable or empty"}});
+            return;
+        }
+
+        std::istringstream iss(listing);
+        std::string line;
+        int count = 0;
+        while (std::getline(iss, line)) {
+            if (line.empty()) continue;
+            count++;
+            if (count > 2000) { // sanity limit
+                cleanupZip();
+                reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "zip has too many entries"}});
+                return;
+            }
+
+            // Reject absolute paths or Windows-style
+            if (!line.empty() && (line[0] == '/' || line[0] == '\\')) {
+                cleanupZip();
+                reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "zip contains unsafe paths"}});
+                return;
+            }
+            if (line.find('\\') != std::string::npos) {
+                cleanupZip();
+                reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "zip contains unsafe paths"}});
+                return;
+            }
+
+            // Reject .. segments
+            // (handles "../x", "a/../b", etc.)
+            if (line == ".." || line.rfind("../", 0) == 0 || line.find("/../") != std::string::npos ||
+                (line.size() >= 3 && line.compare(line.size()-3, 3, "/..") == 0)) {
+                cleanupZip();
+                reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "zip contains path traversal"}});
+                return;
+            }
+        }
+    }
+
+    // Read manifest.json from zip
+    std::string manifest_txt;
+    {
+        std::string out;
+        int rc = -1;
+        const std::string cmd = "unzip -p \"" + tmpZip.string() + "\" manifest.json 2>/dev/null";
+        if (!run_cmd_capture(cmd, &out, &rc) || rc != 0 || out.empty()) {
+            cleanupZip();
+            reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "manifest.json missing or unreadable in zip"}});
+            return;
+        }
+        manifest_txt = out;
+    }
+
+    json mani;
+    try { mani = json::parse(manifest_txt); }
+    catch (...) {
+        cleanupZip();
+        reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "manifest.json is not valid json"}});
+        return;
+    }
+
+    const std::string id  = mani.value("id", "");
+    const std::string ver = mani.value("version", "");
+    if (!safe_app_id(id) || ver.empty() || ver.size() > 64) {
+        cleanupZip();
+        reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "manifest id/version invalid"}});
+        return;
+    }
+
+    const std::filesystem::path dst = std::filesystem::path(APPS_INSTALLED_DIR) / id / ver;
+    if (std::filesystem::exists(dst, ec) && !ec) {
+        cleanupZip();
+        reply(409, {{"ok", false}, {"error", "conflict"}, {"message", "version already installed (remove first)"}});
+        return;
+    }
+
+    // Extract to temp dir under apps/installed
+    const std::filesystem::path tmp =
+        std::filesystem::path(APPS_INSTALLED_DIR) / (".tmp_install_" + id + "_" + rand_hex_16());
+
+    std::filesystem::create_directories(tmp, ec);
+    if (ec) {
+        cleanupZip();
+        reply(500, {{"ok", false}, {"error", "server_error"}, {"message", "failed to create temp dir"}});
+        return;
+    }
+
+    // unzip into temp
+    {
+        std::string out;
+        int rc = -1;
+        const std::string cmd = "unzip -q \"" + tmpZip.string() + "\" -d \"" + tmp.string() + "\" 2>/dev/null";
+        if (!run_cmd_capture(cmd, &out, &rc) || rc != 0) {
+            std::filesystem::remove_all(tmp, ec);
+            cleanupZip();
+            reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "failed to extract zip"}});
+            return;
+        }
+    }
+
+    // Required structure
+    if (!std::filesystem::exists(tmp / "manifest.json", ec) || ec ||
+        !std::filesystem::exists(tmp / "www" / "index.html", ec) || ec) {
+        std::filesystem::remove_all(tmp, ec);
+        cleanupZip();
+        reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "zip missing required files (manifest.json, www/index.html)"}});
+        return;
+    }
+
+    std::filesystem::create_directories(dst.parent_path(), ec);
+    if (ec) {
+        std::filesystem::remove_all(tmp, ec);
+        cleanupZip();
+        reply(500, {{"ok", false}, {"error", "server_error"}, {"message", "failed to create destination dir"}});
+        return;
+    }
+
+    std::filesystem::rename(tmp, dst, ec);
+    if (ec) {
+        std::filesystem::remove_all(tmp, ec);
+        cleanupZip();
+        reply(500, {{"ok", false}, {"error", "server_error"}, {"message", "failed to finalize install"}});
+        return;
+    }
+
+    cleanupZip();
+
+    // Optional: audit (if you want)
+    // pqnas::AuditEvent ev; ev.event="admin.apps_upload_install"; ...
+
+    reply(200, {{"ok", true}, {"id", id}, {"version", ver}, {"root", rel_to_repo(dst.string())}, {"src", origName}});
+});
 
 srv.Post("/api/v4/apps/install_bundled", [&](const httplib::Request& req, httplib::Response& res) {
     auto reply = [&](int status, const json& j) {
