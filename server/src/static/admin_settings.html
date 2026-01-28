@@ -458,6 +458,9 @@
 
         .hidden { display:none !important; }
     </style>
+    <link rel="stylesheet" href="/static/theme.css">
+    <script src="/static/theme.js"></script>
+
 </head>
 
 <body>
@@ -674,6 +677,33 @@
 
                     <div class="note">
                         Preview is a dry-run: it lists what would be deleted. “Run prune now” deletes only those candidates, and logs an admin audit event.
+                    </div>
+                </div>
+            </div>
+            <!-- Theme -->
+            <div class="card">
+                <div class="hd">
+                    <div class="h">UI Theme</div>
+                    <div class="row">
+                        <span class="pill info" id="themePill"><span class="k">Theme:</span> <span class="v">—</span></span>
+                    </div>
+                </div>
+
+                <div class="bd">
+                    <div class="row">
+                        <select id="themeSelect" aria-label="UI theme">
+                            <option value="dark">Dark (default)</option>
+                            <option value="bright">Bright</option>
+                            <option value="cpunk_orange">CPUNK Orange</option>
+                        </select>
+
+                        <button id="btnThemeSave" class="btn primary" type="button">Save theme</button>
+                        <button id="btnThemeApply" class="btn" type="button">Apply now</button>
+                    </div>
+
+                    <div class="note">
+                        Theme is saved in <span class="mono">admin_settings.json</span> (server) and also cached in your browser
+                        (<span class="mono">localStorage</span>) so all pages can apply it instantly.
                     </div>
                 </div>
             </div>

@@ -6,10 +6,12 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
 
     <style>
+        body { outline: 10px solid rgba(255,90,90,0.95) !important; }
+
         :root{
             --bg:#050712;
             --fg:#00f0f8;
-            --fg-dim: rgba(0,240,248,0.74);
+            --fg-dim: rgba(0,240,248,0.88);
 
             --panel: rgba(255,255,255,0.03);
             --panel2: rgba(0,0,0,0.28);
@@ -64,10 +66,10 @@
         }
 
         .sidebar{
-            border: 1px solid var(--border);
+            border: 1px solid rgba(0,240,248,0.34);
             border-radius: var(--radius2);
-            background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.24));
-            box-shadow: var(--shadow);
+            background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(0,0,0,0.14));
+            box-shadow: var(--shadow), inset 0 0 70px rgba(0,240,248,0.05);
             padding: 14px;
             display: flex;
             flex-direction: column;
@@ -127,24 +129,26 @@
             gap: 10px;
             padding: 10px 12px;
             border-radius: 14px;
-            border: 1px solid var(--border2);
-            background: rgba(0,0,0,0.22);
+            border: 1px solid rgba(0,240,248,0.22);
+            background: rgba(255,255,255,0.06);
             color: var(--fg);
             cursor: pointer;
             user-select:none;
             text-decoration:none;
             transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
         }
+
         .navbtn:hover{
             transform: translateY(-1px);
-            background: rgba(0,240,248,0.06);
-            border-color: rgba(0,240,248,0.30);
+            background: rgba(255,255,255,0.10);
+            border-color: rgba(0,240,248,0.40);
         }
         .navbtn.active{
-            background: rgba(0,240,248,0.10);
-            border-color: rgba(0,240,248,0.38);
-            box-shadow: 0 0 18px rgba(0,240,248,0.12);
+            background: rgba(255,255,255,0.14);
+            border-color: rgba(0,240,248,0.55);
+            box-shadow: 0 0 18px rgba(0,240,248,0.14);
         }
+
         .navbtn .k{
             font-size: 12px;
             color: rgba(0,240,248,0.55);
@@ -164,11 +168,12 @@
         }
 
         .statusCard{
-            border: 1px solid var(--border2);
+            border: 1px solid rgba(0,240,248,0.18);
             border-radius: 16px;
-            background: rgba(0,0,0,0.22);
+            background: rgba(255,255,255,0.06);
             padding: 10px 12px;
         }
+
 
         /* IMPORTANT: keep id="roleBadge" */
         .badge{
@@ -196,10 +201,16 @@
         }
 
         .workspace{
-            border: 1px solid var(--border);
+            border: 1px solid rgba(0,240,248,0.34);
             border-radius: var(--radius2);
-            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
-            box-shadow: var(--shadow);
+            background: linear-gradient(
+                    180deg,
+                    rgba(255,255,255,0.09),
+                    rgba(0,0,0,0.14)
+            );
+            box-shadow:
+                    var(--shadow),
+                    inset 0 0 60px rgba(0,240,248,0.05);
             display:flex;
             flex-direction: column;
             min-width: 0;
@@ -207,14 +218,21 @@
             overflow: hidden;
         }
 
+
         .topbar{
             display:flex;
             align-items:center;
             justify-content: space-between;
             gap: 12px;
             padding: 12px 14px;
-            border-bottom: 1px solid var(--border2);
-            background: rgba(0,0,0,0.18);
+            border-bottom: 1px solid rgba(0,240,248,0.28);
+            background: linear-gradient(
+                    180deg,
+                    rgba(255,255,255,0.10),
+                    rgba(0,0,0,0.12)
+            );
+            box-shadow:
+                    inset 0 0 40px rgba(0,240,248,0.05);
         }
 
         .crumbs{
@@ -254,8 +272,8 @@
             gap: 10px;
             padding:10px 12px;
             border-radius: 14px;
-            border: 1px solid rgba(0,240,248,0.28);
-            background: rgba(0,0,0,0.26);
+            border: 1px solid rgba(0,240,248,0.38);
+            background: rgba(255,255,255,0.06);
             color: var(--fg);
             font-weight: 900;
             cursor:pointer;
@@ -268,8 +286,9 @@
             background: rgba(0,240,248,0.07);
         }
         .btn.secondary{
-            border-color: rgba(255,255,255,0.12);
-            color: rgba(0,240,248,0.82);
+            border-color: rgba(0,240,248,0.24);
+            color: rgba(0,240,248,0.95);
+            background: rgba(255,255,255,0.04);
         }
         .btn.secondary:hover{
             border-color: rgba(255,255,255,0.22);
@@ -296,9 +315,9 @@
         }
 
         .pane{
-            border: 1px solid var(--border2);
+            border: 1px solid rgba(0,240,248,0.20);
             border-radius: var(--radius);
-            background: rgba(0,0,0,0.22);
+            background: rgba(255,255,255,0.07);
             padding: 14px;
             min-width: 0;
             min-height: 0;
@@ -340,12 +359,13 @@
         }
 
         .card{
-            border: 1px solid var(--border2);
+            border: 1px solid rgba(0,240,248,0.18);
             border-radius: var(--radius);
-            background: rgba(0,0,0,0.22);
+            background: rgba(255,255,255,0.06);
             padding: 14px;
             overflow:hidden;
         }
+
         .card h3{ margin:0 0 10px 0; font-size: 14px; letter-spacing:0.2px; }
 
         .list{
@@ -354,15 +374,16 @@
             gap:10px;
         }
         .item{
-            border: 1px solid var(--border2);
+            border: 1px solid rgba(0,240,248,0.16);
             border-radius: 16px;
-            background: rgba(0,0,0,0.20);
+            background: rgba(255,255,255,0.055);
             padding: 12px;
             display:flex;
             align-items:center;
             justify-content:space-between;
             gap: 12px;
         }
+
         .item .left{ min-width:0; display:flex; flex-direction:column; gap: 4px; }
         .item .name{ font-weight: 950; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .item .meta{ font-size: 12px; color: var(--fg-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -382,6 +403,9 @@
             background: rgba(0,0,0,0.12);
         }
     </style>
+    <link rel="stylesheet" href="/static/theme.css">
+    <script src="/static/theme.js"></script>
+
 </head>
 
 <body>
@@ -482,7 +506,7 @@
             </section>
         </div>
 
-        <div class="footerline">© CPUNK 2026</div>
+        <div class="footerline">© CPUNK 2026 v2</div>
     </main>
 </div>
 

@@ -1,3 +1,15 @@
+/* server/src/static/admin_settings.js
+ *
+ * PQ-NAS Admin Settings UI
+ * - Loads/saves: audit_min_level, audit_retention, audit_rotation, ui_theme
+ * - Uses /api/v4/admin/settings (+ audit retention/rotation endpoints)
+ *
+ * IMPORTANT:
+ * - This file intentionally has ONE theme system:
+ *   applyTheme() prefers window.pqnasSetTheme() from /static/theme.js.
+ * - No duplicate const declarations (previous breakage).
+ */
+
 (function () {
     const $ = (id) => document.getElementById(id);
 
@@ -38,6 +50,15 @@
     const rotMode = $("rotMode");
     const rotMaxMB = $("rotMaxMB");
     const btnRotatePolicySave = $("btnRotatePolicySave");
+
+    // --- theme ---
+    const themePill = $("themePill");
+    const themeSelect = $("themeSelect");
+    const btnThemeSave = $("btnThemeSave");
+    const btnThemeApply = $("btnThemeApply");
+
+    const ALLOWED_THEMES = new Set(["dark", "bright", "cpunk_orange"]);
+    const ALLOWED_ROT_MODES = new Set(["manual", "daily", "size_mb", "daily_or_size_mb"]);
 
     function escapeHtml(s) {
         return String(s ?? "")
@@ -99,6 +120,34 @@
     }
 
     // ---------------------------
+    // Theme (single clean implementation)
+    // ---------------------------
+    function normalizeTheme(t) {
+        t = String(t || "").trim();
+        return ALLOWED_THEMES.has(t) ? t : "dark";
+    }
+
+    function applyTheme(theme) {
+        const t = normalizeTheme(theme);
+
+        // Preferred: centralized theme.js (shared across pages)
+        try {
+            if (typeof window.pqnasSetTheme === "function") {
+                window.pqnasSetTheme(t);
+            } else {
+                document.documentElement.dataset.theme = t;
+                try {
+                    localStorage.setItem("pqnas_theme", t);
+                } catch (_) {}
+            }
+        } catch (_) {}
+
+        if (themeSelect) themeSelect.value = t;
+        if (themePill) setSimplePill(themePill, "info", "Theme", t);
+        return t;
+    }
+
+    // ---------------------------
     // HTTP helper (robust JSON parsing)
     // ---------------------------
     async function fetchJsonOrThrow(url, opts) {
@@ -114,7 +163,11 @@
         if (!r.ok) {
             const msg =
                 j && (j.message || j.error)
-                    ? [j.message || j.error, j.detail ? `detail: ${j.detail}` : "", j.body_snip ? `body: ${j.body_snip}` : ""]
+                    ? [
+                        j.message || j.error,
+                        j.detail ? `detail: ${j.detail}` : "",
+                        j.body_snip ? `body: ${j.body_snip}` : "",
+                    ]
                         .filter(Boolean)
                         .join(" • ")
                     : text && text.trim()
@@ -127,7 +180,11 @@
         if (!j || j.ok !== true) {
             const msg =
                 j && (j.message || j.error)
-                    ? [j.message || j.error, j.detail ? `detail: ${j.detail}` : "", j.body_snip ? `body: ${j.body_snip}` : ""]
+                    ? [
+                        j.message || j.error,
+                        j.detail ? `detail: ${j.detail}` : "",
+                        j.body_snip ? `body: ${j.body_snip}` : "",
+                    ]
                         .filter(Boolean)
                         .join(" • ")
                     : text && text.trim()
@@ -302,9 +359,15 @@
 
     // ---------------------------
     // Rotation UI helpers (AUTOMATIC policy)
+    // Server modes: manual | daily | size_mb | daily_or_size_mb
     // ---------------------------
+    function normalizeRotateMode(m) {
+        m = String(m || "").trim();
+        return ALLOWED_ROT_MODES.has(m) ? m : "manual";
+    }
+
     function currentRotatePolicyFromUi() {
-        const mode = rotMode?.value || "off";
+        const mode = normalizeRotateMode(rotMode?.value || "manual");
         let max_active_mb = 256; // UI default
         if (rotMaxMB && rotMaxMB.value) {
             max_active_mb = parseInt(rotMaxMB.value, 10) || max_active_mb;
@@ -313,12 +376,12 @@
     }
 
     function syncRotateModeUi() {
-        const mode = rotMode?.value || "off";
+        const mode = normalizeRotateMode(rotMode?.value || "manual");
         if (!rotMaxMB) return;
 
         // show max MB only for size-based modes
         rotMaxMB.classList.add("hidden");
-        if (mode === "size_mb" || mode === "size_or_daily") {
+        if (mode === "size_mb" || mode === "daily_or_size_mb") {
             rotMaxMB.classList.remove("hidden");
         }
 
@@ -326,7 +389,7 @@
     }
 
     function applyRotatePolicyToUi(pol) {
-        const mode = pol && pol.mode ? String(pol.mode) : "off";
+        const mode = normalizeRotateMode(pol && pol.mode ? String(pol.mode) : "manual");
         if (rotMode) rotMode.value = mode;
 
         if (rotMaxMB && pol && pol.max_active_mb != null) {
@@ -341,10 +404,10 @@
         if (!rotatePolicyPill) return;
 
         const p = currentRotatePolicyFromUi();
-        let label = "Off";
+        let label = "Manual only";
         if (p.mode === "daily") label = "Daily (UTC)";
         if (p.mode === "size_mb") label = `When > ${p.max_active_mb} MB`;
-        if (p.mode === "size_or_daily") label = `> ${p.max_active_mb} MB OR daily`;
+        if (p.mode === "daily_or_size_mb") label = `> ${p.max_active_mb} MB OR daily (UTC)`;
 
         setSimplePill(rotatePolicyPill, "info", "Policy", label);
     }
@@ -383,8 +446,12 @@
             applyRetentionToUi(ret);
 
             // rotation policy (automatic)
-            const rp = j.audit_rotation || { mode: "off", max_active_mb: 256 };
+            const rp = j.audit_rotation || { mode: "manual", max_active_mb: 256, rotate_utc_day: "" };
             applyRotatePolicyToUi(rp);
+
+            // theme (server -> apply)
+            const serverTheme = j && j.ui_theme ? String(j.ui_theme) : "dark";
+            applyTheme(serverTheme);
 
             // active audit file info
             updateActiveSizePill(j);
@@ -505,7 +572,11 @@
 
         try {
             const j = await apiRunPrune();
-            showToast("ok", "Prune complete", `Deleted ${(j.deleted_files || 0)} file(s) • freed ${fmtBytes(j.deleted_bytes || 0)}`);
+            showToast(
+                "ok",
+                "Prune complete",
+                `Deleted ${(j.deleted_files || 0)} file(s) • freed ${fmtBytes(j.deleted_bytes || 0)}`
+            );
             const pol = currentRetentionPolicyFromUi();
             const pv = await apiPreviewPrune(pol);
             renderPreview(pv);
@@ -545,6 +616,33 @@
             setStatusPill("error", "error");
         } finally {
             btnRotateNow.disabled = false;
+        }
+    });
+
+    // ---------------------------
+    // Wire theme
+    // ---------------------------
+    themeSelect?.addEventListener("change", () => {
+        // Update pill and preview instantly
+        applyTheme(themeSelect.value);
+    });
+
+    btnThemeApply?.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const t = normalizeTheme(themeSelect?.value || "dark");
+        applyTheme(t);
+        showToast("ok", "Theme applied", `Theme: ${t}`);
+    });
+
+    btnThemeSave?.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        const t = normalizeTheme(themeSelect?.value || "dark");
+        try {
+            const j = await apiSettingsPost({ ui_theme: t });
+            applyTheme(j && j.ui_theme ? j.ui_theme : t);
+            showToast("ok", "Theme saved", `Theme: ${t}`);
+        } catch (e) {
+            showToast("fail", "Save failed", String(e && e.message ? e.message : e));
         }
     });
 

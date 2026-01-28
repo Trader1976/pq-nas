@@ -167,6 +167,10 @@ const std::string APPS_INSTALLED_DIR =
 const std::string APPS_USERS_DIR =
     (std::filesystem::path(REPO_ROOT) / "apps/users").string();
 
+const std::string STATIC_THEME_CSS =
+    (std::filesystem::path(REPO_ROOT) / "server/src/static/theme.css").string();
+const std::string STATIC_THEME_JS =
+    (std::filesystem::path(REPO_ROOT) / "server/src/static/theme.js").string();
 
 
 
@@ -2097,6 +2101,13 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
     srv.Get("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Response& res) {
         if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
 
+		// SAFE accessor for audit_min_level (never throws)
+		auto get_level_safe = [&](const json& j, const std::string& fallback) -> std::string {
+    		auto it2 = j.find("audit_min_level");
+    		if (it2 != j.end() && it2->is_string()) return it2->get<std::string>();
+    		return fallback;
+		};
+
         auto load_settings_json = [&]() -> json {
             try {
                 std::ifstream f(admin_settings_path);
@@ -2119,6 +2130,15 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
         if (it != persisted.end() && it->is_string()) {
             persisted_lvl = it->get<std::string>();
         }
+
+		// default theme
+		std::string ui_theme = "dark";
+		if (persisted.contains("ui_theme") && persisted["ui_theme"].is_string()) {
+    		ui_theme = persisted["ui_theme"].get<std::string>();
+		}
+		if (!(ui_theme == "dark" || ui_theme == "bright" || ui_theme == "cpunk_orange")) ui_theme = "dark";
+
+
 
         // Retention defaults (if absent)
         json retention = json::object();
@@ -2149,385 +2169,443 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 		reply_json(res, 200, json{
     		{"ok", true},
 
-    		{"audit_min_level", persisted_lvl},
+    		{"audit_min_level", get_level_safe(persisted, audit.min_level_str())},
     		{"audit_min_level_runtime", audit.min_level_str()},
     		{"allowed", json::array({"SECURITY","ADMIN","INFO","DEBUG"})},
 
-		    {"audit_retention", retention},
-            {"audit_rotation", rotation},
-    		// NEW: active audit file info for UI
+    		{"audit_retention", retention},
+    		{"audit_rotation", rotation},
+
     		{"audit_active_path", audit_jsonl_path},
-    		{"audit_active_bytes", active_bytes}
+    		{"audit_active_bytes", active_bytes},
+
+    		{"ui_theme", ui_theme}
 		}.dump());
+
 
     });
 
-    srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Response& res) {
-        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+ // Admin settings API
+srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
 
-        auto load_settings_json = [&]() -> json {
-            try {
-                std::ifstream f(admin_settings_path);
-                if (!f.good()) return json::object();
-                json j;
-                f >> j;
-                if (!j.is_object()) return json::object();
-                return j;
-            } catch (...) {
-                return json::object();
+    auto load_settings_json = [&]() -> json {
+        try {
+            std::ifstream f(admin_settings_path);
+            if (!f.good()) return json::object();
+            json j;
+            f >> j;
+            if (!j.is_object()) return json::object();
+            return j;
+        } catch (...) {
+            return json::object();
+        }
+    };
+
+    // Merge patch into existing file, write atomically (tmp + rename)
+    auto save_settings_patch = [&](const json& patch) -> bool {
+        try {
+            if (!patch.is_object()) return false;
+
+            json merged = json::object();
+            {
+                std::ifstream in(admin_settings_path);
+                if (in.good()) {
+                    in >> merged;
+                    if (!merged.is_object()) merged = json::object();
+                }
             }
-        };
 
-        // Merge patch into existing file, write atomically (tmp + rename)
-        auto save_settings_patch = [&](const json& patch) -> bool {
-            try {
-                if (!patch.is_object()) return false;
+            for (auto& it : patch.items()) {
+                merged[it.key()] = it.value();
+            }
 
-                json merged = json::object();
-                {
-                    std::ifstream in(admin_settings_path);
-                    if (in.good()) {
-                        in >> merged;
-                        if (!merged.is_object()) merged = json::object();
-                    }
-                }
+            const std::string tmp = admin_settings_path + ".tmp";
+            {
+                std::ofstream f(tmp, std::ios::trunc);
+                if (!f.good()) return false;
+                f << merged.dump(2) << "\n";
+                f.flush();
+                if (!f.good()) return false;
+            }
 
-                for (auto& it : patch.items()) {
-                    merged[it.key()] = it.value();
-                }
-
-                const std::string tmp = admin_settings_path + ".tmp";
-                {
-                    std::ofstream f(tmp, std::ios::trunc);
-                    if (!f.good()) return false;
-                    f << merged.dump(2) << "\n";
-                    f.flush();
-                    if (!f.good()) return false;
-                }
-
-                std::error_code ec;
-                std::filesystem::rename(tmp, admin_settings_path, ec);
-                if (ec) {
-                    std::filesystem::remove(tmp);
-                    return false;
-                }
-
-                return true;
-            } catch (...) {
+            std::error_code ec;
+            std::filesystem::rename(tmp, admin_settings_path, ec);
+            if (ec) {
+                std::filesystem::remove(tmp);
                 return false;
             }
-        };
 
-        auto is_allowed_level = [&](const std::string& lvl) -> bool {
-            return (lvl == "SECURITY" || lvl == "ADMIN" || lvl == "INFO" || lvl == "DEBUG");
-        };
+            return true;
+        } catch (...) {
+            return false;
+        }
+    };
 
-        // SAFE accessor for audit_min_level (never throws)
-        auto get_level_safe = [&](const json& j, const std::string& fallback) -> std::string {
-            auto it2 = j.find("audit_min_level");
-            if (it2 != j.end() && it2->is_string()) return it2->get<std::string>();
-            return fallback;
-        };
-        auto is_allowed_rotation_mode = [&](const std::string& m) -> bool {
-            return (m == "manual" || m == "daily" || m == "size_mb" || m == "daily_or_size_mb");
-        };
+    auto is_allowed_level = [&](const std::string& lvl) -> bool {
+        return (lvl == "SECURITY" || lvl == "ADMIN" || lvl == "INFO" || lvl == "DEBUG");
+    };
 
-        // Normalize rotation safely (never throws; returns null json on error + sets err)
-        auto normalize_rotation = [&](const json& in_rot, std::string& err) -> json {
-            err.clear();
+    auto is_allowed_rotation_mode = [&](const std::string& m) -> bool {
+        return (m == "manual" || m == "daily" || m == "size_mb" || m == "daily_or_size_mb");
+    };
 
-            if (!in_rot.is_object()) {
-                err = "audit_rotation must be an object";
-                return json();
-            }
+	auto is_allowed_theme = [&](const std::string& t) -> bool {
+    	return (t == "dark" || t == "bright" || t == "cpunk_orange");
+	};
 
-            std::string mode = "manual";
-            {
-                auto it2 = in_rot.find("mode");
-                if (it2 != in_rot.end() && !it2->is_null()) {
-                    if (!it2->is_string()) {
-                        err = "audit_rotation.mode must be string";
-                        return json();
-                    }
-                    mode = it2->get<std::string>();
+    // SAFE accessor for audit_min_level (never throws)
+    auto get_level_safe = [&](const json& j, const std::string& fallback) -> std::string {
+        auto it2 = j.find("audit_min_level");
+        if (it2 != j.end() && it2->is_string()) return it2->get<std::string>();
+        return fallback;
+    };
+
+    // Normalize rotation safely (never throws; returns null json on error + sets err)
+    auto normalize_rotation = [&](const json& in_rot, std::string& err) -> json {
+        err.clear();
+
+        if (!in_rot.is_object()) {
+            err = "audit_rotation must be an object";
+            return json();
+        }
+
+        std::string mode = "manual";
+        {
+            auto it2 = in_rot.find("mode");
+            if (it2 != in_rot.end() && !it2->is_null()) {
+                if (!it2->is_string()) {
+                    err = "audit_rotation.mode must be string";
+                    return json();
                 }
+                mode = it2->get<std::string>();
             }
-            if (!is_allowed_rotation_mode(mode)) {
-                err = "audit_rotation.mode must be one of: manual, daily, size_mb, daily_or_size_mb";
-                return json();
+        }
+        if (!is_allowed_rotation_mode(mode)) {
+            err = "audit_rotation.mode must be one of: manual, daily, size_mb, daily_or_size_mb";
+            return json();
+        }
+
+        auto get_int = [&](const char* key, int def, int lo, int hi) -> int {
+            auto it2 = in_rot.find(key);
+            if (it2 == in_rot.end() || it2->is_null()) return def;
+
+            if (!it2->is_number_integer()) {
+                err = std::string("audit_rotation.") + key + " must be integer";
+                return def;
             }
-
-            auto get_int = [&](const char* key, int def, int lo, int hi) -> int {
-                auto it2 = in_rot.find(key);
-                if (it2 == in_rot.end() || it2->is_null()) return def;
-
-                if (!it2->is_number_integer()) {
-                    err = std::string("audit_rotation.") + key + " must be integer";
-                    return def;
-                }
-                int v = it2->get<int>();
-                if (v < lo) v = lo;
-                if (v > hi) v = hi;
-                return v;
-            };
-
-            // only used for size-based modes
-            int max_active_mb = get_int("max_active_mb", 256, 1, 10000000);
-            if (!err.empty()) return json();
-
-            // optional tracker field
-            std::string rotate_utc_day = "";
-            {
-                auto it2 = in_rot.find("rotate_utc_day");
-                if (it2 != in_rot.end() && it2->is_string()) rotate_utc_day = it2->get<std::string>();
-            }
-
-            return json{
-                {"mode", mode},
-                {"max_active_mb", max_active_mb},
-                {"rotate_utc_day", rotate_utc_day},
-            };
-        };
-        // Normalize retention safely (never throws; returns null json on error + sets err)
-        auto normalize_retention = [&](const json& in_ret, std::string& err) -> json {
-            err.clear();
-
-            if (!in_ret.is_object()) {
-                err = "audit_retention must be an object";
-                return json();
-            }
-
-            // mode
-            std::string mode = "never";
-            {
-                auto it2 = in_ret.find("mode");
-                if (it2 != in_ret.end() && !it2->is_null()) {
-                    if (!it2->is_string()) {
-                        err = "audit_retention.mode must be string";
-                        return json();
-                    }
-                    mode = it2->get<std::string>();
-                }
-            }
-
-            if (!(mode == "never" || mode == "days" || mode == "files" || mode == "size_mb")) {
-                err = "audit_retention.mode must be one of: never, days, files, size_mb";
-                return json();
-            }
-
-            auto get_int = [&](const char* key, int def, int lo, int hi) -> int {
-                auto it2 = in_ret.find(key);
-                if (it2 == in_ret.end() || it2->is_null()) return def;
-
-                if (!it2->is_number_integer()) {
-                    err = std::string("audit_retention.") + key + " must be integer";
-                    return def;
-                }
-
-                int v = it2->get<int>();
-                if (v < lo) v = lo;
-                if (v > hi) v = hi;
-                return v;
-            };
-
-            int days         = get_int("days",         90,    1,       3650);
-            if (!err.empty()) return json();
-            int max_files    = get_int("max_files",    50,    1,      50000);
-            if (!err.empty()) return json();
-            int max_total_mb = get_int("max_total_mb", 20480, 1,   10000000);
-            if (!err.empty()) return json();
-
-            return json{
-                {"mode", mode},
-                {"days", days},
-                {"max_files", max_files},
-                {"max_total_mb", max_total_mb},
-            };
+            int v = it2->get<int>();
+            if (v < lo) v = lo;
+            if (v > hi) v = hi;
+            return v;
         };
 
-        try {
-            if (req.body.empty()) {
+        // only used for size-based modes
+        int max_active_mb = get_int("max_active_mb", 256, 1, 10000000);
+        if (!err.empty()) return json();
+
+        // optional tracker field
+        std::string rotate_utc_day = "";
+        {
+            auto it2 = in_rot.find("rotate_utc_day");
+            if (it2 != in_rot.end() && it2->is_string()) rotate_utc_day = it2->get<std::string>();
+        }
+
+        return json{
+            {"mode", mode},
+            {"max_active_mb", max_active_mb},
+            {"rotate_utc_day", rotate_utc_day},
+        };
+    };
+
+    // Normalize retention safely (never throws; returns null json on error + sets err)
+    auto normalize_retention = [&](const json& in_ret, std::string& err) -> json {
+        err.clear();
+
+        if (!in_ret.is_object()) {
+            err = "audit_retention must be an object";
+            return json();
+        }
+
+        // mode
+        std::string mode = "never";
+        {
+            auto it2 = in_ret.find("mode");
+            if (it2 != in_ret.end() && !it2->is_null()) {
+                if (!it2->is_string()) {
+                    err = "audit_retention.mode must be string";
+                    return json();
+                }
+                mode = it2->get<std::string>();
+            }
+        }
+
+        if (!(mode == "never" || mode == "days" || mode == "files" || mode == "size_mb")) {
+            err = "audit_retention.mode must be one of: never, days, files, size_mb";
+            return json();
+        }
+
+        auto get_int = [&](const char* key, int def, int lo, int hi) -> int {
+            auto it2 = in_ret.find(key);
+            if (it2 == in_ret.end() || it2->is_null()) return def;
+
+            if (!it2->is_number_integer()) {
+                err = std::string("audit_retention.") + key + " must be integer";
+                return def;
+            }
+
+            int v = it2->get<int>();
+            if (v < lo) v = lo;
+            if (v > hi) v = hi;
+            return v;
+        };
+
+        int days         = get_int("days",         90,    1,       3650);
+        if (!err.empty()) return json();
+        int max_files    = get_int("max_files",    50,    1,      50000);
+        if (!err.empty()) return json();
+        int max_total_mb = get_int("max_total_mb", 20480, 1,   10000000);
+        if (!err.empty()) return json();
+
+        return json{
+            {"mode", mode},
+            {"days", days},
+            {"max_files", max_files},
+            {"max_total_mb", max_total_mb},
+        };
+    };
+
+    try {
+        if (req.body.empty()) {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "empty request body (expected JSON object)"}
+            }.dump());
+            return;
+        }
+
+        json in = json::parse(req.body, nullptr, false);
+        if (in.is_discarded()) {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid json"}
+            }.dump());
+            return;
+        }
+
+        if (!in.is_object()) {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "json must be object"}
+            }.dump());
+            return;
+        }
+
+        json persisted = load_settings_json();
+        if (!persisted.is_object()) persisted = json::object();
+
+        const std::string before_runtime   = audit.min_level_str();
+        const std::string before_persisted = get_level_safe(persisted, before_runtime);
+
+        json before_rotation = json::object();
+        if (persisted.contains("audit_rotation") && persisted["audit_rotation"].is_object()) {
+            before_rotation = persisted["audit_rotation"];
+        }
+
+        json before_ret = json::object();
+        if (persisted.contains("audit_retention") && persisted["audit_retention"].is_object()) {
+            before_ret = persisted["audit_retention"];
+        }
+
+        std::string before_theme = "dark";
+        if (persisted.contains("ui_theme") && persisted["ui_theme"].is_string()) {
+            before_theme = persisted["ui_theme"].get<std::string>();
+        }
+        if (!is_allowed_theme(before_theme)) before_theme = "dark";
+
+        bool changed_level    = false;
+        bool changed_ret      = false;
+        bool changed_rotation = false;
+        bool changed_theme    = false;
+
+        json patch = json::object();
+
+        // ---- audit_min_level (optional) ----
+        if (in.contains("audit_min_level")) {
+            if (!in["audit_min_level"].is_string()) {
                 reply_json(res, 400, json{
                     {"ok", false},
                     {"error", "bad_request"},
-                    {"message", "empty request body (expected JSON object)"}
+                    {"message", "audit_min_level must be string"}
                 }.dump());
                 return;
             }
 
-            json in = json::parse(req.body, nullptr, false);
-            if (in.is_discarded()) {
+            const std::string lvl = in["audit_min_level"].get<std::string>();
+            if (!is_allowed_level(lvl) || !audit.set_min_level_str(lvl)) {
                 reply_json(res, 400, json{
                     {"ok", false},
                     {"error", "bad_request"},
-                    {"message", "invalid json"}
+                    {"message", "invalid audit_min_level"}
                 }.dump());
                 return;
             }
 
-            if (!in.is_object()) {
+            patch["audit_min_level"] = lvl;
+            persisted["audit_min_level"] = lvl; // for response shaping
+            changed_level = true;
+
+            // Audit (best-effort)
+            try {
+                pqnas::AuditEvent ev;
+                ev.event = "admin.settings_changed";
+                ev.outcome = "ok";
+                ev.f["audit_min_level_before"] = before_persisted;
+                ev.f["audit_min_level_after"] = lvl;
+                ev.f["audit_min_level_runtime_after"] = audit.min_level_str();
+                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                auto it_ua = req.headers.find("User-Agent");
+                ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
+                maybe_auto_rotate_before_append();
+                audit_append(ev);
+            } catch (...) {}
+        }
+
+        // ---- audit_retention (optional) ----
+        if (in.contains("audit_retention")) {
+            std::string err;
+            json norm = normalize_retention(in["audit_retention"], err);
+            if (!err.empty()) {
                 reply_json(res, 400, json{
                     {"ok", false},
                     {"error", "bad_request"},
-                    {"message", "json must be object"}
+                    {"message", err}
                 }.dump());
                 return;
             }
 
-            json persisted = load_settings_json();
-            if (!persisted.is_object()) persisted = json::object();
+            patch["audit_retention"] = norm;
+            persisted["audit_retention"] = norm; // for response shaping
+            changed_ret = true;
 
-            const std::string before_runtime   = audit.min_level_str();
-            const std::string before_persisted = get_level_safe(persisted, before_runtime);
-            json before_rotation = json::object();
-            if (persisted.contains("audit_rotation") && persisted["audit_rotation"].is_object()) {
-                before_rotation = persisted["audit_rotation"];
-            }
+            // Audit (best-effort)
+            try {
+                pqnas::AuditEvent ev;
+                ev.event = "admin.settings_changed";
+                ev.outcome = "ok";
+                ev.f["audit_retention_before"] = before_ret.is_null() ? json::object() : before_ret;
+                ev.f["audit_retention_after"]  = norm;
+                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                auto it_ua = req.headers.find("User-Agent");
+                ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
+                maybe_auto_rotate_before_append();
+                audit_append(ev);
+            } catch (...) {}
+        }
 
-            json before_ret = json::object();
-            if (persisted.contains("audit_retention") && persisted["audit_retention"].is_object()) {
-                before_ret = persisted["audit_retention"];
-            }
-
-            bool changed_level = false;
-            bool changed_ret   = false;
-            bool changed_rotation = false;
-            json patch = json::object();
-
-            // ---- audit_min_level (optional) ----
-            if (in.contains("audit_min_level")) {
-                if (!in["audit_min_level"].is_string()) {
-                    reply_json(res, 400, json{
-                        {"ok", false},
-                        {"error", "bad_request"},
-                        {"message", "audit_min_level must be string"}
-                    }.dump());
-                    return;
-                }
-
-                const std::string lvl = in["audit_min_level"].get<std::string>();
-                if (!is_allowed_level(lvl) || !audit.set_min_level_str(lvl)) {
-                    reply_json(res, 400, json{
-                        {"ok", false},
-                        {"error", "bad_request"},
-                        {"message", "invalid audit_min_level"}
-                    }.dump());
-                    return;
-                }
-
-                patch["audit_min_level"] = lvl;
-                persisted["audit_min_level"] = lvl; // for response shaping
-                changed_level = true;
-
-                // Audit (best-effort)
-                try {
-                    pqnas::AuditEvent ev;
-                    ev.event = "admin.settings_changed";
-                    ev.outcome = "ok";
-                    ev.f["audit_min_level_before"] = before_persisted;
-                    ev.f["audit_min_level_after"] = lvl;
-                    ev.f["audit_min_level_runtime_after"] = audit.min_level_str();
-                    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-                    auto it_ua = req.headers.find("User-Agent");
-                    ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-                    maybe_auto_rotate_before_append();
-                    audit_append(ev);
-                } catch (...) {}
-            }
-
-            // ---- audit_retention (optional) ----
-            if (in.contains("audit_retention")) {
-                std::string err;
-                json norm = normalize_retention(in["audit_retention"], err);
-                if (!err.empty()) {
-                    reply_json(res, 400, json{
-                        {"ok", false},
-                        {"error", "bad_request"},
-                        {"message", err}
-                    }.dump());
-                    return;
-                }
-
-                patch["audit_retention"] = norm;
-                persisted["audit_retention"] = norm; // for response shaping
-                changed_ret = true;
-
-                // Audit (best-effort)
-                try {
-                    pqnas::AuditEvent ev;
-                    ev.event = "admin.settings_changed";
-                    ev.outcome = "ok";
-                    ev.f["audit_retention_before"] = before_ret.is_null() ? json::object() : before_ret;
-                    ev.f["audit_retention_after"]  = norm;
-                    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-                    auto it_ua = req.headers.find("User-Agent");
-                    ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-                    maybe_auto_rotate_before_append();
-                    audit_append(ev);
-                } catch (...) {}
-            }
-            // ---- audit_rotation (optional) ----
-            if (in.contains("audit_rotation")) {
-                std::string err;
-                json norm = normalize_rotation(in["audit_rotation"], err);
-                if (!err.empty()) {
-                    reply_json(res, 400, json{
-                        {"ok", false},
-                        {"error", "bad_request"},
-                        {"message", err}
-                    }.dump());
-                    return;
-                }
-
-                patch["audit_rotation"] = norm;
-                persisted["audit_rotation"] = norm; // for response shaping
-                changed_rotation = true;
-
-                // Audit (best-effort)
-                try {
-                    pqnas::AuditEvent ev;
-                    ev.event = "admin.settings_changed";
-                    ev.outcome = "ok";
-                    ev.f["audit_rotation_before"] = before_rotation.is_null() ? json::object() : before_rotation;
-                    ev.f["audit_rotation_after"]  = norm;
-                    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-                    auto it_ua = req.headers.find("User-Agent");
-                    ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-                    maybe_auto_rotate_before_append();
-                    audit_append(ev);
-                } catch (...) {}
-            }
-
-            if (!changed_level && !changed_ret && !changed_rotation) {
-
+        // ---- ui_theme (optional) ----
+        if (in.contains("ui_theme")) {
+            if (!in["ui_theme"].is_string()) {
                 reply_json(res, 400, json{
                     {"ok", false},
                     {"error", "bad_request"},
-                    {"message", "nothing to update (provide audit_min_level and/or audit_retention and/or audit_rotation)"}
+                    {"message", "ui_theme must be string"}
                 }.dump());
                 return;
             }
 
-            if (!save_settings_patch(patch)) {
-                reply_json(res, 500, json{
+            std::string t = in["ui_theme"].get<std::string>();
+            if (!is_allowed_theme(t)) {
+                reply_json(res, 400, json{
                     {"ok", false},
-                    {"error", "server_error"},
-                    {"message", "failed to save settings"}
+                    {"error", "bad_request"},
+                    {"message", "invalid ui_theme (allowed: dark, bright, cpunk_orange)"}
                 }.dump());
                 return;
             }
 
-            // Reply with current state (defaults if missing)
-            json retention = json::object();
-            if (persisted.contains("audit_retention") && persisted["audit_retention"].is_object()) {
-                retention = persisted["audit_retention"];
-            } else {
-                retention = json{
-                    {"mode","never"},{"days",90},{"max_files",50},{"max_total_mb",20480}
-                };
+            patch["ui_theme"] = t;
+            persisted["ui_theme"] = t; // for response shaping
+            changed_theme = true;
+
+            // Audit (best-effort)
+            try {
+                pqnas::AuditEvent ev;
+                ev.event = "admin.settings_changed";
+                ev.outcome = "ok";
+                ev.f["ui_theme_before"] = before_theme;
+                ev.f["ui_theme_after"]  = t;
+                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                auto it_ua = req.headers.find("User-Agent");
+                ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
+                maybe_auto_rotate_before_append();
+                audit_append(ev);
+            } catch (...) {}
+        }
+
+        // ---- audit_rotation (optional) ----
+        if (in.contains("audit_rotation")) {
+            std::string err;
+            json norm = normalize_rotation(in["audit_rotation"], err);
+            if (!err.empty()) {
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", err}
+                }.dump());
+                return;
             }
 
-		const long long active_bytes = file_size_bytes_safe(audit_jsonl_path);
+            patch["audit_rotation"] = norm;
+            persisted["audit_rotation"] = norm; // for response shaping
+            changed_rotation = true;
+
+            // Audit (best-effort)
+            try {
+                pqnas::AuditEvent ev;
+                ev.event = "admin.settings_changed";
+                ev.outcome = "ok";
+                ev.f["audit_rotation_before"] = before_rotation.is_null() ? json::object() : before_rotation;
+                ev.f["audit_rotation_after"]  = norm;
+                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                auto it_ua = req.headers.find("User-Agent");
+                ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
+                maybe_auto_rotate_before_append();
+                audit_append(ev);
+            } catch (...) {}
+        }
+
+        if (!changed_level && !changed_ret && !changed_rotation && !changed_theme) {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "nothing to update (provide audit_min_level and/or audit_retention and/or audit_rotation and/or ui_theme)"}
+            }.dump());
+            return;
+        }
+
+        if (!save_settings_patch(patch)) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to save settings"}
+            }.dump());
+            return;
+        }
+
+        // Reply with current state (defaults if missing)
+        json retention = json::object();
+        if (persisted.contains("audit_retention") && persisted["audit_retention"].is_object()) {
+            retention = persisted["audit_retention"];
+        } else {
+            retention = json{
+                {"mode","never"},{"days",90},{"max_files",50},{"max_total_mb",20480}
+            };
+        }
+
         // ---- audit_rotation in response ----
         json rotation = json::object();
         if (persisted.contains("audit_rotation") && persisted["audit_rotation"].is_object()) {
@@ -2540,6 +2618,15 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             };
         }
 
+        // ---- ui_theme in response ----
+        std::string ui_theme_value = "dark";
+        if (persisted.contains("ui_theme") && persisted["ui_theme"].is_string()) {
+            ui_theme_value = persisted["ui_theme"].get<std::string>();
+        }
+        if (!is_allowed_theme(ui_theme_value)) ui_theme_value = "dark";
+
+        const long long active_bytes = file_size_bytes_safe(audit_jsonl_path);
+
         reply_json(res, 200, json{
             {"ok", true},
 
@@ -2548,24 +2635,27 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             {"allowed", json::array({"SECURITY","ADMIN","INFO","DEBUG"})},
 
             {"audit_retention", retention},
-            {"audit_rotation", rotation},   // <-- ADD THIS
+            {"audit_rotation", rotation},
 
             {"audit_active_path", audit_jsonl_path},
-            {"audit_active_bytes", active_bytes}
+            {"audit_active_bytes", active_bytes},
+
+            {"ui_theme", ui_theme_value}
         }.dump());
 
-            return;
+        return;
 
-        } catch (const std::exception& e) {
-            reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "server_error"},
-                {"message", "exception while saving settings"},
-                {"detail", e.what()}
-            }.dump());
-            return;
-        }
-    });
+    } catch (const std::exception& e) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "exception while saving settings"},
+            {"detail", e.what()}
+        }.dump());
+        return;
+    }
+});
+
 
 	// GET /api/v4/me  (returns role + decoded fingerprint)
 	srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
@@ -3136,6 +3226,28 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
         res.set_header("Cache-Control", "no-store");
         res.set_content(body, "application/javascript; charset=utf-8");
     });
+
+	srv.Get("/static/theme.css", [&](const httplib::Request&, httplib::Response& res) {
+    std::string body;
+    if (!read_file_to_string(STATIC_THEME_CSS, body)) {
+        res.status = 404;
+        res.body = "Missing static file: " + STATIC_THEME_CSS;
+        return;
+    }
+    res.set_header("Cache-Control", "no-store");
+    res.set_content(body, "text/css; charset=utf-8");
+	});
+
+	srv.Get("/static/theme.js", [&](const httplib::Request&, httplib::Response& res) {
+    std::string body;
+    if (!read_file_to_string(STATIC_THEME_JS, body)) {
+        res.status = 404;
+        res.body = "Missing static file: " + STATIC_THEME_JS;
+        return;
+    }
+    res.set_header("Cache-Control", "no-store");
+    res.set_content(body, "application/javascript; charset=utf-8");
+	});
 
 	srv.Get("/static/admin_badges.js", [&](const httplib::Request&, httplib::Response& res) {
     	const std::string body = slurp_file(STATIC_BADGES_JS);
