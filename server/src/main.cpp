@@ -7989,15 +7989,12 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
             ev.f["id"] = id;
             ev.f["version"] = ver;
             if (!origName.empty()) ev.f["src"] = pqnas::shorten(origName, 160);
-            ev.f["bytes"] = (int64_t)req.body.size();
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            ev.f["bytes"] = std::to_string(req.body.size());
+            ev.f["ip"] = client_ip(req);
             ev.f["ts"] = now_iso_utc();
             maybe_auto_rotate_before_append();
             audit_append(ev);
         }
-
-    // Optional: audit (if you want)
-    // pqnas::AuditEvent ev; ev.event="admin.apps_upload_install"; ...
 
     reply(200, {{"ok", true}, {"id", id}, {"version", ver}, {"root", rel_to_repo(dst.string())}, {"src", origName}});
 });
@@ -8016,7 +8013,7 @@ srv.Post("/api/v4/apps/install_bundled", [&](const httplib::Request& req, httpli
         ev.event = "admin.apps_install_bundled";
         ev.outcome = "fail";
         ev.f["why"] = pqnas::shorten(why, 180);
-        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        ev.f["ip"] = client_ip(req);
         ev.f["ts"] = now_iso_utc();
         maybe_auto_rotate_before_append();
         audit_append(ev);
@@ -8131,19 +8128,30 @@ srv.Post("/api/v4/apps/install_bundled", [&](const httplib::Request& req, httpli
 });
 
 
-	srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Response& res) {
+srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Response& res) {
     auto reply = [&](int status, const json& j) {
         res.status = status;
         res.set_header("Cache-Control", "no-store");
         res.set_content(j.dump(2), "application/json; charset=utf-8");
     };
-    //only admins can uninstall apps
-    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
 
+    // only admins can uninstall apps
+    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
 
     json in;
     try { in = json::parse(req.body); }
     catch (...) {
+        // audit (fail)
+        {
+            pqnas::AuditEvent ev;
+            ev.event = "admin.apps_uninstall";
+            ev.outcome = "fail";
+            ev.f["why"] = "invalid json";
+            ev.f["ip"] = client_ip(req);
+            ev.f["ts"] = now_iso_utc();
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
+        }
         reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "invalid json"}});
         return;
     }
@@ -8151,7 +8159,33 @@ srv.Post("/api/v4/apps/install_bundled", [&](const httplib::Request& req, httpli
     const std::string id  = in.value("id", "");
     const std::string ver = in.value("version", "");
 
+    auto audit_fail = [&](const std::string& why) {
+        pqnas::AuditEvent ev;
+        ev.event = "admin.apps_uninstall";
+        ev.outcome = "fail";
+        if (!id.empty())  ev.f["id"] = id;
+        if (!ver.empty()) ev.f["version"] = ver;
+        ev.f["why"] = pqnas::shorten(why, 180);
+        ev.f["ip"] = client_ip(req);
+        ev.f["ts"] = now_iso_utc();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&]() {
+        pqnas::AuditEvent ev;
+        ev.event = "admin.apps_uninstall";
+        ev.outcome = "ok";
+        ev.f["id"] = id;
+        ev.f["version"] = ver;
+        ev.f["ip"] = client_ip(req);
+        ev.f["ts"] = now_iso_utc();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
     if (!safe_app_id(id) || ver.empty() || ver.size() > 64) {
+        audit_fail("bad id or version");
         reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "bad id or version"}});
         return;
     }
@@ -8160,12 +8194,14 @@ srv.Post("/api/v4/apps/install_bundled", [&](const httplib::Request& req, httpli
     const std::filesystem::path dst = std::filesystem::path(APPS_INSTALLED_DIR) / id / ver;
 
     if (!std::filesystem::exists(dst, ec) || ec) {
+        audit_fail("not installed");
         reply(404, {{"ok", false}, {"error", "not_found"}, {"message", "not installed"}});
         return;
     }
 
     std::filesystem::remove_all(dst, ec);
     if (ec) {
+        audit_fail(std::string("failed to remove app: ") + ec.message());
         reply(500, {{"ok", false}, {"error", "server_error"}, {"message", "failed to remove app"}});
         return;
     }
@@ -8177,6 +8213,7 @@ srv.Post("/api/v4/apps/install_bundled", [&](const httplib::Request& req, httpli
         if (!ec && empty) std::filesystem::remove(appDir, ec);
     }
 
+    audit_ok();
     reply(200, {{"ok", true}, {"id", id}, {"version", ver}});
 });
 
