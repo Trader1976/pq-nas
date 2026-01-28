@@ -51,6 +51,14 @@
             const actions = document.createElement("div");
             actions.className = "row";
 
+            const openBtn = document.createElement("a");
+            openBtn.className = "btn secondary";
+            openBtn.textContent = "Open";
+            openBtn.href = `/apps/${encodeURIComponent(it.id)}/${encodeURIComponent(it.version)}/www/index.html`;
+            openBtn.target = "_blank";
+            openBtn.rel = "noopener";
+            actions.appendChild(openBtn);
+
             const btn = document.createElement("button");
             btn.className = "btn danger";
             btn.type = "button";
