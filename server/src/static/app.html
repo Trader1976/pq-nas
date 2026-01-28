@@ -277,12 +277,15 @@
 
         .content{
             display:grid;
+            grid-template-rows: 1fr;
             grid-template-columns: 1fr 420px;
             gap: 14px;
             padding: 14px;
             min-height: 0;
             min-width: 0;
             overflow: hidden;
+            flex: 1 1 auto;
+            height: 0;
         }
 
         @media (max-width: 1200px){
@@ -297,6 +300,54 @@
             min-width: 0;
             min-height: 0;
             overflow: hidden;
+            display:flex;
+            flex-direction:column;
+            min-height:0;
+            height: 100%;
+        }
+
+        /* When an app is embedded, we want the pane to feel like a host window */
+        .pane.appHost{
+            padding: 10px;
+        }
+
+        /* The area where renderApp() injects content */
+        #homeBlurb.appHostBlurb{
+            gap: 10px;
+        }
+
+        /* Small host header strip (APP ACTIVE...) */
+        .appHostInfo{
+            padding: 8px 10px;
+            border: 1px solid rgba(0,240,248,0.18);
+            border-radius: 14px;
+            background: rgba(0,0,0,0.18);
+        }
+
+        /* Make iframe wrapper flush and reduce extra borders */
+        .appFrameWrap{
+            border-radius: 18px;
+            overflow: hidden;
+            border: 1px solid rgba(0,240,248,0.14);
+            background: rgba(0,0,0,0.18);
+            overflow: auto;
+        }
+
+        /* Remove iframe border now that wrapper has it */
+        .appFrame{
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+        }
+
+        /* App open animation */
+        @keyframes appIn {
+            from { opacity: 0; transform: scale(0.985); }
+            to   { opacity: 1; transform: scale(1); }
+        }
+
+        .appFrame {
+            animation: appIn 180ms ease-out;
         }
 
         .pane h2{
@@ -358,6 +409,34 @@
         /* Defensive: prevent main content from stealing clicks from sidebar */
         .workspace { pointer-events: auto; }
         .sidebar, .sidebar * { pointer-events: auto; }
+        .content.noInspector{
+            grid-template-columns: 1fr;
+        }
+        #homeBlurb {
+            flex: 1 1 auto;
+            min-height: 0;
+            display:flex;
+            flex-direction:column;
+            gap: 12px;
+        }
+
+        .appFrameWrap{
+            flex: 1 1 auto;
+            min-height: 0;
+            display:flex;
+        }
+
+        .appFrame{
+            flex: 1 1 auto;
+            min-height: 0;
+            width: 100%;
+            height: 100%;
+            border: 1px solid rgba(0,240,248,0.18);
+            border-radius: 16px;
+            background: rgba(0,0,0,0.22);
+        }
+
+
 
     </style>
 </head>
@@ -379,12 +458,10 @@
             <button class="navbtn active" id="nav_home" type="button">
                 <span>Home</span><span class="k">H</span>
             </button>
-            <button class="navbtn" id="nav_files" type="button">
-                <span>Files</span><span class="k">F</span>
-            </button>
-            <button class="navbtn" id="nav_logs" type="button">
-                <span>Logs</span><span class="k">L</span>
-            </button>
+
+            <div class="sectionLabel">Apps</div>
+            <div id="appsList" style="display:flex; flex-direction:column; gap:8px; padding: 0 6px 10px;"></div>
+
 
             <div class="sectionLabel">Admin</div>
             <a class="navbtn" id="nav_admin" href="/admin" style="display:none">
@@ -423,7 +500,7 @@
             </div>
         </div>
 
-        <div class="content">
+        <div class="content" id="contentGrid">
             <!-- Large primary pane (future file manager / apps) -->
             <section class="pane" aria-label="Main pane">
                 <h2 id="mainPaneTitle">Workspace</h2>
@@ -454,8 +531,8 @@
             </section>
 
             <!-- Right inspector pane (JSON state / logs preview etc) -->
-            <aside class="pane" aria-label="Inspector pane" id="inspectorPane">
-                <h2>Inspector</h2>
+            <aside class="pane" aria-label="Inspector pane" id="inspectorPane" style="display:none">
+            <h2>Inspector</h2>
                 <pre id="out">Loading…</pre>
                 <div style="margin-top:10px; color: rgba(0,240,248,0.60); font-size: 12px;">
                     Tip: <code>/api/v4/me</code> should return JSON.

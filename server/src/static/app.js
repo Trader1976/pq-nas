@@ -9,8 +9,6 @@
     const stateUnauth = document.getElementById("state_unauth");
 
     const navHome = document.getElementById("nav_home");
-    const navFiles = document.getElementById("nav_files");
-    const navLogs = document.getElementById("nav_logs");
 
     const navAdmin = document.getElementById("nav_admin");
     const navUsers = document.getElementById("nav_users");
@@ -27,6 +25,15 @@
 
     const inspectorPane = document.getElementById("inspectorPane");
     const toggleInspectorBtn = document.getElementById("toggleInspectorBtn");
+    const contentGrid = document.getElementById("contentGrid");
+
+    const appsList = document.getElementById("appsList");
+
+    // app state
+    let installedApps = [];     // [{id, version, has_manifest, root}, ...]
+    let currentView = "home";   // "home" or "app:<id>@<ver>"
+    let currentApp = null;      // {id, version} or null
+    let lastAppsKey = "";
 
     function show(el, on) {
         if (!el) return;
@@ -40,7 +47,7 @@
     }
 
     function setActiveNav(activeId) {
-        const ids = ["nav_home", "nav_files", "nav_logs"];
+        const ids = ["nav_home"];
         for (const id of ids) {
             const b = document.getElementById(id);
             if (!b) continue;
@@ -48,70 +55,163 @@
         }
     }
 
-    function setWorkspace(view) {
-        console.log("setWorkspace:", view);
+    function clearAppsList(){
+        if (!appsList) return;
+        appsList.innerHTML = "";
+    }
 
-        if (view === "home") {
-            setActiveNav("nav_home");
-            if (wsTitle) wsTitle.textContent = "Home";
-            if (wsSubtitle) wsSubtitle.textContent = "Session, role, and access status";
-            if (mainPaneTitle) mainPaneTitle.textContent = "Workspace";
-            if (homeBlurb) {
-                homeBlurb.innerHTML =
-                    `This is the PQ-NAS desktop shell. The large pane will later host the file manager, apps, and tools.
-Use the left menu to switch views. Admin links appear only when your role is <b>admin</b>.`;
-                show(homeBlurb, true);
-            }
-            return;
-        }
+    function addAppNavButton(appId, label, href){
+        if (!appsList) return;
 
-        if (view === "files") {
-            setActiveNav("nav_files");
-            if (wsTitle) wsTitle.textContent = "Files";
-            if (wsSubtitle) wsSubtitle.textContent = "File manager (embedded app)";
-            if (mainPaneTitle) mainPaneTitle.textContent = "File Manager";
+        const a = document.createElement("a");
+        a.className = "navbtn";
+        a.href = href; // we will preventDefault and render iframe
+        a.dataset.appid = appId;
 
-            if (homeBlurb) {
-                // Clear
-                homeBlurb.innerHTML = "";
+        const left = document.createElement("span");
+        left.textContent = label;
 
-                const info = document.createElement("div");
-                info.className = "mono";
-                info.style.padding = "10px";
-                info.style.border = "1px solid rgba(0,240,248,0.25)";
-                info.style.borderRadius = "14px";
-                info.style.marginBottom = "10px";
-                info.innerHTML = `<b>FILES TAB ACTIVE ✅</b> — loading <span class="mono">filemgr 0.1.0</span>`;
+        const k = document.createElement("span");
+        k.className = "k";
+        k.textContent = "▶";
 
-                const frame = document.createElement("iframe");
-                frame.src = "/apps/filemgr/0.1.0/www/index.html";
-                frame.style.width = "100%";
-                frame.style.height = "800px";
-                frame.style.border = "1px solid rgba(0,240,248,0.18)";
-                frame.style.borderRadius = "16px";
-                frame.style.background = "rgba(0,0,0,0.22)";
+        a.appendChild(left);
+        a.appendChild(k);
 
-                homeBlurb.appendChild(info);
-                homeBlurb.appendChild(frame);
+        a.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            openAppById(appId);
+        });
 
-                show(homeBlurb, true);
-            }
-            return;
-        }
+        appsList.appendChild(a);
+    }
 
-        if (view === "logs") {
-            setActiveNav("nav_logs");
-            if (wsTitle) wsTitle.textContent = "Logs";
-            if (wsSubtitle) wsSubtitle.textContent = "Viewer (placeholder UI)";
-            if (mainPaneTitle) mainPaneTitle.textContent = "Logs";
-            if (homeBlurb) {
-                homeBlurb.innerHTML = `Log viewer UI will be rendered here later (audit and system logs).`;
-                show(homeBlurb, true);
-            }
-            return;
+    function setActiveApp(appId){
+        if (!appsList) return;
+        for (const el of appsList.querySelectorAll(".navbtn")){
+            el.classList.toggle("active", el.dataset.appid === appId);
         }
     }
 
+    function renderHome(){
+        currentView = "home";
+        currentApp = null;
+
+        setActiveNav("nav_home");
+        setActiveApp(""); // clears app highlight
+
+        if (wsTitle) wsTitle.textContent = "Home";
+        if (wsSubtitle) wsSubtitle.textContent = "Session, role, and access status";
+        if (mainPaneTitle) mainPaneTitle.textContent = "Workspace";
+
+        // ✅ remove "embedded app" styling when leaving an app
+        if (homeBlurb) {
+            const mainPane = homeBlurb.closest(".pane");
+            if (mainPane) mainPane.classList.remove("appHost");
+            homeBlurb.classList.remove("appHostBlurb");
+        }
+
+        if (homeBlurb) {
+            homeBlurb.innerHTML =
+                `This is the PQ-NAS desktop shell. The large pane hosts apps and tools.
+             Installed apps appear in the left menu. Admin links appear only when your role is <b>admin</b>.`;
+            show(homeBlurb, true);
+        }
+    }
+
+    function renderApp(app){
+        // app = {id, version}
+        currentView = `app:${app.id}@${app.version}`;
+        currentApp = { id: app.id, version: app.version };
+
+        setActiveNav(""); // Home not active
+        setActiveApp(app.id);
+
+        if (wsTitle) wsTitle.textContent = app.id;
+        if (wsSubtitle) wsSubtitle.textContent = "App (embedded)";
+        if (mainPaneTitle) mainPaneTitle.textContent = app.id;
+
+        if (!homeBlurb) return;
+
+        // mark main pane + blurb as app host mode (for tighter padding)
+        const mainPane = homeBlurb.closest(".pane");
+        if (mainPane) mainPane.classList.add("appHost");
+        homeBlurb.classList.add("appHostBlurb");
+
+        homeBlurb.innerHTML = "";
+
+        const info = document.createElement("div");
+        info.className = "appHostInfo mono";
+        info.innerHTML = `<b>APP ACTIVE ✅</b> — loading <span class="mono">${app.id} ${app.version}</span>`;
+
+        const frame = document.createElement("iframe");
+        frame.className = "appFrame";
+        frame.src = `/apps/${encodeURIComponent(app.id)}/${encodeURIComponent(app.version)}/www/index.html`;
+
+        homeBlurb.appendChild(info);
+
+        const frameWrap = document.createElement("div");
+        frameWrap.className = "appFrameWrap";
+        frameWrap.appendChild(frame);
+
+
+        homeBlurb.appendChild(frameWrap);
+        show(homeBlurb, true);
+    }
+
+    function openAppById(appId){
+        const a = installedApps.find(x => x.id === appId);
+        if (!a) {
+            // fallback to home
+            renderHome();
+            return;
+        }
+        renderApp({ id: a.id, version: a.version });
+    }
+
+    async function loadApps(){
+        if (!appsList) return;
+
+        try {
+            const r = await fetch("/api/v4/apps", { credentials: "include", cache: "no-store" });
+            const j = await r.json().catch(() => null);
+            if (!r.ok || !j || !j.ok) return;
+
+            const installed = Array.isArray(j.installed) ? j.installed : [];
+            const usable = installed.filter(x => x && x.id && x.version && x.has_manifest);
+
+            // stable order: id then version
+            usable.sort((a,b) => {
+                const ai = String(a.id||"");
+                const bi = String(b.id||"");
+                if (ai !== bi) return ai.localeCompare(bi);
+                return String(a.version||"").localeCompare(String(b.version||""));
+            });
+
+            const key = JSON.stringify(usable.map(x => [x.id, x.version]));
+            if (key === lastAppsKey) return;
+            lastAppsKey = key;
+
+            installedApps = usable;
+
+            clearAppsList();
+            for (const a of usable) {
+                // label = id for now (we can later fetch manifest.json to show "name")
+                const label = a.id;
+                const href = `/apps/${encodeURIComponent(a.id)}/${encodeURIComponent(a.version)}/www/index.html`;
+                addAppNavButton(a.id, label, href);
+            }
+
+            // keep current view alive if app still exists; otherwise go home
+            if (currentApp) {
+                const still = installedApps.find(x => x.id === currentApp.id);
+                if (!still) renderHome();
+                else setActiveApp(currentApp.id);
+            }
+        } catch {
+            // ignore (no UI spam)
+        }
+    }
 
     async function loadMe() {
         show(stateDisabled, false);
@@ -143,7 +243,6 @@ Use the left menu to switch views. Admin links appear only when your role is <b>
 
                 // signed-in vs not-signed-in nav
                 show(navLogin, !ok);
-                // Logout stays visible but is just a link to "/" for now
 
                 if (!r.ok || !ok) {
                     const err = String(j.error || "").toLowerCase();
@@ -164,6 +263,9 @@ Use the left menu to switch views. Admin links appear only when your role is <b>
 
                 const st = String(j.storage_state || "unallocated");
                 setBadge("ok", `signed in · ${role} · storage: ${st}`);
+
+                // update installed apps list (only when signed in ok)
+                loadApps();
 
                 return;
             }
@@ -194,24 +296,45 @@ Use the left menu to switch views. Admin links appear only when your role is <b>
         }
     }
 
-    if (refreshBtn) refreshBtn.addEventListener("click", loadMe);
+    if (refreshBtn) refreshBtn.addEventListener("click", () => {
+        loadMe();
+        loadApps();
+    });
+
+    function setInspectorHidden(hidden) {
+        if (!inspectorPane || !toggleInspectorBtn) return;
+        inspectorPane.style.display = hidden ? "none" : "";
+        if (contentGrid) contentGrid.classList.toggle("noInspector", hidden);
+        toggleInspectorBtn.textContent = hidden ? "Show inspector" : "Hide inspector";
+        try { localStorage.setItem("pqnas_hide_inspector", hidden ? "1" : "0"); } catch {}
+    }
+
+    // default: hidden (or last saved choice)
+    (() => {
+        let hide = true;
+        try {
+            const v = localStorage.getItem("pqnas_hide_inspector");
+            if (v === "0") hide = false;
+        } catch {}
+        setInspectorHidden(hide);
+    })();
 
     if (toggleInspectorBtn && inspectorPane) {
         toggleInspectorBtn.addEventListener("click", () => {
             const hidden = inspectorPane.style.display === "none";
-            inspectorPane.style.display = hidden ? "" : "none";
-            toggleInspectorBtn.textContent = hidden ? "Hide inspector" : "Show inspector";
+            setInspectorHidden(!hidden);
         });
     }
 
-    if (navHome) navHome.addEventListener("click", () => setWorkspace("home"));
-    if (navFiles) navFiles.addEventListener("click", () => setWorkspace("files"));
-    if (navLogs) navLogs.addEventListener("click", () => setWorkspace("logs"));
+    if (navHome) navHome.addEventListener("click", () => renderHome());
 
     // Default view
-    setWorkspace("home");
+    renderHome();
 
-    // Load status immediately, then refresh periodically (keeps "waiting for admin" alive)
+    // Load status immediately, then refresh periodically
     loadMe();
     setInterval(loadMe, 2000);
+
+    // Also refresh app list occasionally (in case installs/uninstalls happen)
+    setInterval(loadApps, 4000);
 })();
