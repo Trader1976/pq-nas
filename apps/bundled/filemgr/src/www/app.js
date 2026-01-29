@@ -55,6 +55,13 @@
   const uploadProgPct = document.getElementById("uploadProgPct");
   const uploadProgFill = document.getElementById("uploadProgFill");
 
+  const propsModal = document.getElementById("propsModal");
+  const propsClose = document.getElementById("propsClose");
+  const propsTitle = document.getElementById("propsTitle");
+  const propsPath = document.getElementById("propsPath");
+  const propsBody = document.getElementById("propsBody");
+
+
 
   let curPath = "";
   // Multi-select: keys are stable within the *current folder listing*:
@@ -75,6 +82,23 @@
     badge.className = `badge ${kind}`;
     badge.textContent = text;
   }
+  function openPropsModal() {
+    if (!propsModal) return;
+    propsModal.classList.add("show");
+    propsModal.setAttribute("aria-hidden", "false");
+  }
+
+  function closePropsModal() {
+    if (!propsModal) return;
+    propsModal.classList.remove("show");
+    propsModal.setAttribute("aria-hidden", "true");
+  }
+
+  propsClose?.addEventListener("click", closePropsModal);
+  propsModal?.addEventListener("click", (e) => {
+    // click outside card closes
+    if (e.target === propsModal) closePropsModal();
+  });
 
   // ---- Theme + icons --------------------------------------------------------
   function getActiveThemeName() {
@@ -968,6 +992,11 @@
   function openMenuAt(x, y, item) {
     if (!ctxEl) return;
 
+    // If properties modal is open, close it before showing a menu
+    if (propsModal && propsModal.classList.contains("show")) {
+      closePropsModal();
+    }
+
     const key = `${item.type}:${item.name}`;
     if (ctxEl.classList.contains("show") && ctxOpenForKey === key) {
       closeMenu();
@@ -1008,12 +1037,21 @@
         doMkdirAt(relDir);
       }));
 
+      // NEW: Properties
+      ctxEl.appendChild(menuSep());
+      ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
+
       ctxEl.appendChild(menuSep());
       ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
       ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
+
     } else {
       ctxEl.appendChild(menuItem("Download", "⤓", () => doDownload(item)));
-      // if selected -> add download selection + menuSep()
+
+      // NEW: Properties
+      ctxEl.appendChild(menuSep());
+      ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
+
       ctxEl.appendChild(menuSep());
       ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
       ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
@@ -1025,6 +1063,11 @@
 
   function openBackgroundMenuAt(x, y) {
     if (!ctxEl) return;
+
+    // If properties modal is open, close it before showing a menu
+    if (propsModal && propsModal.classList.contains("show")) {
+      closePropsModal();
+    }
 
     const key = "__bg__";
     if (ctxEl.classList.contains("show") && ctxOpenForKey === key) {
@@ -1038,15 +1081,28 @@
     ctxEl.appendChild(menuItem("Upload files…", "", () => pickFiles()));
     ctxEl.appendChild(menuItem("Upload folder…", "", () => pickFolder()));
 
-    //if we have selected many files/folders
+    // If we have a selection
     if (selectedKeys && selectedKeys.size > 0) {
+      ctxEl.appendChild(menuSep());
+
+      if (selectedKeys.size === 1) {
+        // Properties for exactly one selected item
+        const onlyKey = Array.from(selectedKeys)[0];
+        const p = keyToItemRelPath(onlyKey); // already exists in your code
+        if (p) {
+          const name = p.split("/").pop() || p;
+          const type = String(onlyKey).startsWith("dir:") ? "dir" : "file";
+          const item = { type, name };
+          ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
+        }
+      }
+
       ctxEl.appendChild(
           menuItem(`Download selection (zip) (${selectedKeys.size})`, "", () => downloadSelectionZip())
       );
       ctxEl.appendChild(
           menuItem(`Delete selection (${selectedKeys.size})…`, "", () => deleteSelection(), { danger: true })
       );
-      ctxEl.appendChild(menuSep());
     }
 
     ctxEl.appendChild(menuSep());
@@ -1060,6 +1116,7 @@
     placeMenu(x, y);
   }
 
+
   document.addEventListener("click", (e) => {
     if (!ctxEl || !ctxEl.classList.contains("show")) return;
     if (e.target === ctxEl || ctxEl.contains(e.target)) return;
@@ -1071,14 +1128,24 @@
   // - Ctrl/Cmd + A selects all tiles in the current view
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+
+      // Close properties modal first if open
+      if (propsModal && propsModal.classList.contains("show")) {
+        closePropsModal();
+        return;
+      }
+
+      // Otherwise close context menu
       closeMenu();
       return;
     }
+
     if (e.key === "Delete" && selectedKeys && selectedKeys.size > 0) {
       e.preventDefault();
       deleteSelection();
       return;
     }
+
     if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === "a") {
       e.preventDefault();
       selectedKeys = new Set(
@@ -1088,6 +1155,7 @@
       status.textContent = `Selected: ${selectedKeys.size}`;
     }
   });
+
 
   window.addEventListener("scroll", closeMenu, true);
   window.addEventListener("resize", closeMenu);
@@ -1118,12 +1186,12 @@
       if (Math.abs(e.movementX) + Math.abs(e.movementY) > 8) cancel();
     });
   }
-/*
-  downloadFolderBtn?.addEventListener("click", () => {
-    // Download the *current* directory as zip
-    downloadFolderZip(curPath);
-  });
-*/
+  /*
+    downloadFolderBtn?.addEventListener("click", () => {
+      // Download the *current* directory as zip
+      downloadFolderZip(curPath);
+    });
+  */
   gridEl?.addEventListener("contextmenu", (e) => {
     if (e.target && e.target.closest && e.target.closest(".tile")) return;
     e.preventDefault();
@@ -1189,6 +1257,105 @@
     });
 
     return t;
+  }
+  function kvRow(k, v) {
+    const kEl = document.createElement("div");
+    kEl.className = "k";
+    kEl.textContent = k;
+
+    const vEl = document.createElement("div");
+    vEl.className = "v mono";
+    vEl.textContent = v == null ? "" : String(v);
+
+    return [kEl, vEl];
+  }
+
+  async function showProperties(item) {
+    if (!item) return;
+
+    const rel = joinPath(curPath, item.name || "");
+    const isDir = item.type === "dir";
+
+    if (propsTitle) propsTitle.textContent = isDir ? "Folder properties" : "File properties";
+    if (propsPath) propsPath.textContent = "/" + (rel || "");
+
+    if (propsBody) {
+      propsBody.innerHTML = "";
+
+      const rows = [];
+      rows.push(["Name", item.name || ""]);
+      rows.push(["Type", isDir ? "Folder" : "File"]);
+      rows.push(["Path", "/" + (rel || "")]);
+
+      if (!isDir) rows.push(["Size", fmtSize(item.size_bytes || 0)]);
+      if (item.mtime_unix) rows.push(["Modified", fmtTime(item.mtime_unix)]);
+
+      // placeholder for enrichment
+      rows.push(["Details", "loading…"]);
+
+      for (const [k, v] of rows) {
+        const [kEl, vEl] = kvRow(k, v);
+        propsBody.appendChild(kEl);
+        propsBody.appendChild(vEl);
+      }
+    }
+
+    openPropsModal();
+
+    // Enrich via server stat (if available)
+    try {
+      const r = await fetch(`/api/v4/files/stat?path=${encodeURIComponent(rel)}`, {
+        credentials: "include",
+        cache: "no-store"
+      });
+      const j = await r.json().catch(() => null);
+
+      if (!r.ok || !j || j.ok === false) {
+        // replace "Details: loading…" with best-effort message
+        if (propsBody) {
+          const nodes = propsBody.querySelectorAll(".k");
+          for (const n of nodes) {
+            if (n.textContent === "Details") {
+              const vEl = n.nextElementSibling;
+              if (vEl) vEl.textContent = "unavailable";
+              break;
+            }
+          }
+        }
+        return;
+      }
+
+      // Dump whatever the stat endpoint returns (without guessing schema):
+      // show a compact JSON string in Details.
+      const details = JSON.stringify(j, null, 2);
+
+      if (propsBody) {
+        // Replace Details row value with JSON
+        const nodes = propsBody.querySelectorAll(".k");
+        for (const n of nodes) {
+          if (n.textContent === "Details") {
+            const vEl = n.nextElementSibling;
+            if (vEl) {
+              vEl.textContent = details;
+              vEl.style.whiteSpace = "pre-wrap";
+              vEl.style.fontFamily = "var(--mono)";
+            }
+            break;
+          }
+        }
+      }
+    } catch (_) {
+      if (propsBody) {
+        const nodes = propsBody.querySelectorAll(".k");
+        for (const n of nodes) {
+          if (n.textContent === "Details") {
+            const vEl = n.nextElementSibling;
+            if (vEl) vEl.textContent = "network error";
+            break;
+          }
+        }
+      }
+    }
   }
 
   async function load() {
