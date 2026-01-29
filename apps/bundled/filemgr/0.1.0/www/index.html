@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PQ-NAS • File Manager</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+
+  <!-- Use PQ-NAS global themes -->
+  <link rel="stylesheet" href="/static/theme.css">
+  <script src="/static/theme.js"></script>
+
+  <style>
+    :root{
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial;
+    }
+
+    html:not([data-theme]){
+      --bg: #050712;
+      --fg: #00f0f8;
+      --fg-rgb: 0,240,248;
+      --fg-dim: rgba(var(--fg-rgb),0.74);
+      --border: rgba(var(--fg-rgb),0.22);
+      --border2: rgba(var(--fg-rgb),0.12);
+      --shadow: 0 18px 70px rgba(0,0,0,0.55);
+      --radius: 18px;
+      --radius2: 22px;
+
+      --ok-rgb: var(--fg-rgb);
+      --warn-rgb: 255,190,0;
+      --fail-rgb: 255,90,90;
+    }
+
+    *{ box-sizing:border-box; }
+    html,body{ height:100%; }
+
+    body{
+      margin:0;
+      color:var(--fg);
+      font-family: var(--sans);
+      background:
+              radial-gradient(1200px 700px at 18% 8%, rgba(var(--fg-rgb),0.11), transparent 55%),
+              radial-gradient(1000px 700px at 82% 12%, rgba(var(--fg-rgb),0.07), transparent 60%),
+              linear-gradient(180deg, #04050f, var(--bg));
+      overflow:hidden;
+    }
+
+    .wrap{
+      height:100%;
+      display:flex;
+      flex-direction:column;
+      padding:14px;
+      gap:14px;
+    }
+
+    .panel{
+      flex: 1 1 auto;
+      min-height:0;
+      border:1px solid var(--border);
+      border-radius: var(--radius2);
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
+      box-shadow: var(--shadow);
+      overflow:hidden;
+      display:flex;
+      flex-direction:column;
+    }
+
+    .bar{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      padding:12px 14px;
+      border-bottom: 1px solid var(--border2);
+      background: rgba(0,0,0,0.18);
+    }
+
+    .crumbs{
+      min-width:0;
+      display:flex;
+      flex-direction:column;
+      gap:2px;
+    }
+
+    .title{
+      font-weight: 900;
+      letter-spacing: 0.2px;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow:hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sub{
+      font-size: 12px;
+      color: var(--fg-dim);
+      white-space: nowrap;
+      overflow:hidden;
+      text-overflow: ellipsis;
+    }
+
+    .actions{ display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
+
+    .btn{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:10px;
+      padding:10px 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(var(--fg-rgb),0.28);
+      background: rgba(0,0,0,0.26);
+      color: var(--fg);
+      font-weight: 850;
+      cursor:pointer;
+      text-decoration:none;
+      user-select:none;
+      transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+    }
+    .btn:hover{
+      transform: translateY(-1px);
+      border-color: rgba(var(--fg-rgb),0.42);
+      background: rgba(var(--fg-rgb),0.07);
+    }
+    .btn.secondary{
+      border-color: rgba(255,255,255,0.12);
+      color: rgba(var(--fg-rgb),0.82);
+    }
+    .btn.secondary:hover{
+      border-color: rgba(255,255,255,0.22);
+      background: rgba(255,255,255,0.05);
+    }
+
+    .btnIco{ width:16px; height:16px; opacity:0.9; }
+    .btnTxt{ display:inline; }
+    @media (max-width: 520px){ .btnTxt{ display:none; } }
+
+    .badge{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      border: 1px solid var(--border2);
+      background: rgba(0,0,0,0.28);
+      color: var(--fg);
+      white-space: nowrap;
+    }
+    .badge.ok   { border-color: rgba(var(--ok-rgb),0.30);   background: rgba(var(--ok-rgb),0.08); }
+    .badge.warn { border-color: rgba(var(--warn-rgb),0.25); background: rgba(var(--warn-rgb),0.10); color: rgba(255,225,170,0.95); }
+    .badge.err  { border-color: rgba(var(--fail-rgb),0.25); background: rgba(var(--fail-rgb),0.10); color: rgba(255,190,190,0.95); }
+
+    .gridWrap{
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      padding: 14px;
+      position: relative;
+    }
+
+    .grid{
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 12px;
+      align-content: start;
+    }
+
+    .tile{
+      border: 1px solid var(--border2);
+      border-radius: 18px;
+      background: rgba(0,0,0,0.22);
+      padding: 12px;
+      cursor: pointer;
+      user-select: none;
+      transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+      min-height: 110px;
+    }
+
+    .tile:hover{
+      transform: translateY(-1px);
+      background: rgba(var(--fg-rgb),0.06);
+      border-color: rgba(var(--fg-rgb),0.30);
+    }
+
+    .tile.sel{
+      background: rgba(var(--fg-rgb),0.10);
+      border-color: rgba(var(--fg-rgb),0.38);
+      box-shadow: 0 0 18px rgba(var(--fg-rgb),0.12);
+    }
+
+    .ico{
+      width: 40px;
+      height: 40px;
+      opacity: 0.95;
+      filter: drop-shadow(0 0 16px rgba(var(--fg-rgb),0.10));
+    }
+
+    .name{
+      font-weight: 900;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .meta{
+      margin-top: auto;
+      font-size: 12px;
+      color: var(--fg-dim);
+      display:flex;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .mono{ font-family: var(--mono); }
+
+    .footer{
+      padding:10px 12px;
+      border-top:1px solid var(--border2);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      color: rgba(var(--fg-rgb),0.55);
+      font-size: 12px;
+    }
+
+    body.embedded .wrap{ padding:0; }
+    body.embedded .panel{
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+      background: transparent;
+    }
+    body.embedded .bar{
+      border-bottom: 1px solid var(--border2);
+      background: rgba(0,0,0,0.12);
+      border-left: 0;
+      border-right: 0;
+      border-top: 0;
+      border-radius: 0;
+    }
+
+    .ctxMenu{
+      position: fixed;
+      z-index: 9999;
+      min-width: 180px;
+      max-width: min(360px, calc(100vw - 24px));
+      border: 1px solid var(--border2);
+      border-radius: 14px;
+      background: rgba(0,0,0,0.72);
+      box-shadow: var(--shadow);
+      padding: 6px;
+      display: none;
+      backdrop-filter: blur(8px);
+    }
+
+    .ctxMenu.show{ display:block; }
+
+    .ctxItem{
+      width: 100%;
+      display:flex;
+      align-items:center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 10px;
+      border-radius: 10px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--fg);
+      cursor: pointer;
+      font-weight: 800;
+      text-align: left;
+    }
+
+    .ctxItem:hover{
+      background: rgba(var(--fg-rgb),0.07);
+      border-color: rgba(var(--fg-rgb),0.18);
+    }
+
+    .ctxItem.danger{
+      color: rgba(255,190,190,0.98);
+    }
+    .ctxItem.danger:hover{
+      background: rgba(var(--fail-rgb),0.14);
+      border-color: rgba(var(--fail-rgb),0.25);
+    }
+
+    .ctxSep{
+      height: 1px;
+      background: rgba(var(--fg-rgb),0.10);
+      margin: 6px 4px;
+    }
+
+    body.embedded .gridWrap{ padding: 12px; }
+    body.embedded .footer{ border-top: 1px solid var(--border2); border-radius: 0; }
+
+    .dropOverlay{
+      position:absolute;
+      inset: 10px;
+      border-radius: 18px;
+      border: 2px dashed rgba(var(--fg-rgb),0.35);
+      background: rgba(0,0,0,0.45);
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.25) inset, var(--shadow);
+      display:none;
+      align-items:center;
+      justify-content:center;
+      text-align:center;
+      padding: 18px;
+      z-index: 50;
+      backdrop-filter: blur(6px);
+    }
+    .dropOverlay.show{ display:flex; }
+    .dropOverlay .big{
+      font-weight: 950;
+      font-size: 16px;
+      letter-spacing: 0.2px;
+    }
+    .dropOverlay .small{
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--fg-dim);
+    }
+  </style>
+</head>
+
+<body>
+<div class="wrap">
+  <div class="panel">
+    <div class="bar">
+      <div class="crumbs">
+        <div class="title" id="titleLine">File Manager</div>
+        <div class="sub mono" id="pathLine">path: (loading)</div>
+      </div>
+      <div class="actions">
+        <span class="badge warn" id="badge">loading…</span>
+
+        <button class="btn secondary" id="upBtn" type="button" title="Up">
+          <img class="btnIco" id="upIcon" src="./icons/updir_small.png" alt="">
+          <span class="btnTxt">Up</span>
+        </button>
+
+        <button class="btn secondary" id="uploadBtn" type="button" title="Upload file(s)">
+          <span class="btnTxt">Upload</span>
+        </button>
+
+        <button class="btn secondary" id="uploadFolderBtn" type="button" title="Upload a folder (keeps structure)">
+          <span class="btnTxt">Upload folder</span>
+        </button>
+        <button class="btn secondary" id="downloadFolderBtn" type="button" title="Download current folder as ZIP">
+          <span class="btnTxt">Download folder</span>
+        </button>
+        <button class="btn" id="refreshBtn" type="button" title="Refresh">
+          <span class="btnTxt">Refresh</span>
+        </button>
+
+        <!-- hidden pickers -->
+        <input id="filePick" type="file" multiple style="display:none" />
+        <input id="folderPick" type="file" webkitdirectory multiple style="display:none" />
+      </div>
+    </div>
+
+    <div class="gridWrap" id="gridWrap">
+      <div class="dropOverlay" id="dropOverlay" aria-hidden="true">
+        <div>
+          <div class="big">Drop files or folders to upload</div>
+          <div class="small">Uploads into the current folder</div>
+        </div>
+      </div>
+
+      <div class="grid" id="grid"></div>
+    </div>
+
+    <div class="footer">
+      <div id="status" class="mono">Ready.</div>
+      <div class="mono">PQ-NAS bundled app • filemgr 0.1.0</div>
+    </div>
+  </div>
+</div>
+
+<div id="ctxMenu" class="ctxMenu" role="menu" aria-hidden="true"></div>
+<script src="./app.js"></script>
+</body>
+</html>

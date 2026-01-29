@@ -69,7 +69,7 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 extern "C" {
 #include "qrauth_v4.h"
 }
-
+#include <chrono>
 #include <cstdio>
 #include <sys/wait.h>
 
@@ -96,7 +96,7 @@ extern "C" {
 #include <sys/statvfs.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
-#include <chrono>
+
 
 using json = nlohmann::json;
 
@@ -1052,6 +1052,356 @@ static std::string hex_encode_lower(const unsigned char* data, size_t len) {
     }
     return out;
 }
+
+#include <cstdint>
+#include <vector>
+#include <string>
+#include <fstream>
+#include <filesystem>
+#include <chrono>
+#include <algorithm>
+
+// ----------------------------- ZIP streaming (store, no compression) ----------
+// We create a ZIP with local headers + data descriptors + central directory.
+// No external libs required. CRC32 is computed per-file while streaming.
+//
+// Limitations:
+// - Uses ZIP32 fields (no Zip64). Good for typical sizes; if you need >4GiB single file
+//   or very large archives, we can extend to Zip64 later.
+// ------------------------------------------------------------------------------
+
+namespace {
+
+static inline void zip_u16(std::string& out, std::uint16_t v) {
+    out.push_back((char)(v & 0xff));
+    out.push_back((char)((v >> 8) & 0xff));
+}
+static inline void zip_u32(std::string& out, std::uint32_t v) {
+    out.push_back((char)(v & 0xff));
+    out.push_back((char)((v >> 8) & 0xff));
+    out.push_back((char)((v >> 16) & 0xff));
+    out.push_back((char)((v >> 24) & 0xff));
+}
+
+static std::uint32_t crc32_update(std::uint32_t crc, const unsigned char* data, size_t len) {
+    static std::uint32_t table[256];
+    static bool inited = false;
+    if (!inited) {
+        for (std::uint32_t i = 0; i < 256; i++) {
+            std::uint32_t c = i;
+            for (int k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+            table[i] = c;
+        }
+        inited = true;
+    }
+    crc = crc ^ 0xFFFFFFFFu;
+    for (size_t i = 0; i < len; i++) crc = table[(crc ^ data[i]) & 0xFFu] ^ (crc >> 8);
+    return crc ^ 0xFFFFFFFFu;
+}
+
+static inline std::string zip_sanitize_relpath(std::string p) {
+    // ZIP paths use forward slashes and must not be absolute.
+    for (auto& ch : p) if (ch == '\\') ch = '/';
+    while (!p.empty() && p.front() == '/') p.erase(p.begin());
+    // Remove any empty segments.
+    while (p.find("//") != std::string::npos) p = std::string(p).replace(p.find("//"), 2, "/");
+    return p;
+}
+
+static inline std::string zip_basename(const std::filesystem::path& p) {
+    auto s = p.filename().string();
+    if (s.empty()) s = "folder";
+    return s;
+}
+
+static inline void zip_dos_time_date(std::filesystem::file_time_type ft, std::uint16_t& dos_time, std::uint16_t& dos_date) {
+    // Best-effort conversion.
+    // DOS date starts at 1980-01-01.
+    using namespace std::chrono;
+    auto sctp = time_point_cast<system_clock::duration>(ft - std::filesystem::file_time_type::clock::now()
+                                                       + system_clock::now());
+    std::time_t tt = system_clock::to_time_t(sctp);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &tt);
+#else
+    localtime_r(&tt, &tm);
+#endif
+    int year = tm.tm_year + 1900;
+    if (year < 1980) year = 1980;
+    int mon = tm.tm_mon + 1;
+    int day = tm.tm_mday;
+    int hour = tm.tm_hour;
+    int min = tm.tm_min;
+    int sec = tm.tm_sec;
+
+    dos_time = (std::uint16_t)(((hour & 31) << 11) | ((min & 63) << 5) | ((sec / 2) & 31));
+    dos_date = (std::uint16_t)((((year - 1980) & 127) << 9) | ((mon & 15) << 5) | (day & 31));
+}
+
+struct ZipFileItem {
+    std::filesystem::path abs_path; // full path on disk
+    std::string zip_name;           // relative name inside zip (forward slashes)
+    std::uint64_t size_u64 = 0;     // file size
+    std::uint16_t dos_time = 0;
+    std::uint16_t dos_date = 0;
+
+    // Filled during streaming:
+    std::uint32_t crc32 = 0;
+    std::uint32_t size32 = 0;
+    std::uint32_t local_header_off = 0;
+};
+
+struct ZipTotals {
+    std::uint64_t total_bytes = 0;
+    std::uint64_t central_dir_bytes = 0;
+    std::uint64_t central_dir_off = 0;
+};
+
+// Compute exact archive size for "store + data descriptor".
+static ZipTotals zip_compute_totals(const std::vector<ZipFileItem>& items) {
+    ZipTotals t{};
+    std::uint64_t off = 0;
+
+    // Local file header layout:
+    // 30 bytes fixed + filename + extra
+    // file data
+    // data descriptor 16 bytes (signature + crc + csize + usize)
+    for (const auto& it : items) {
+        off += 30;
+        off += it.zip_name.size();
+        off += 0; // extra
+        off += it.size_u64;
+        off += 16; // data descriptor (we include signature)
+    }
+
+    t.central_dir_off = off;
+
+    // Central dir file header:
+    // 46 bytes fixed + filename + extra + comment
+    std::uint64_t cd = 0;
+    for (const auto& it : items) {
+        cd += 46;
+        cd += it.zip_name.size();
+        cd += 0; // extra
+        cd += 0; // comment
+    }
+
+    // End of central dir: 22 bytes + comment(0)
+    cd += 22;
+
+    t.central_dir_bytes = cd;
+    t.total_bytes = off + cd;
+    return t;
+}
+
+// Streaming state machine that emits the full ZIP in-order.
+class ZipStreamer {
+public:
+    ZipStreamer(std::vector<ZipFileItem> items, ZipTotals totals)
+        : items_(std::move(items)), totals_(totals) {}
+
+    std::uint64_t total_size() const { return totals_.total_bytes; }
+
+    // Called by httplib content provider; must emit sequential bytes.
+    bool emit(size_t offset, size_t max_len, httplib::DataSink& sink) {
+        if (finished_) return false;
+        if (offset != (size_t)cur_off_) {
+            // httplib usually calls sequentially. If not, fail safe.
+            return false;
+        }
+
+        size_t remaining = max_len;
+        while (remaining > 0 && !finished_) {
+            // Drain pending buffer first
+            if (buf_pos_ < buf_.size()) {
+                size_t n = std::min(remaining, buf_.size() - buf_pos_);
+                sink.write(buf_.data() + buf_pos_, n);
+                buf_pos_ += n;
+                cur_off_ += n;
+                remaining -= n;
+                continue;
+            }
+
+            // Buffer empty; produce next chunk based on stage
+            buf_.clear();
+            buf_pos_ = 0;
+
+            if (stage_ == Stage::LocalHeader) {
+                if (idx_ >= items_.size()) {
+                    stage_ = Stage::CentralDir;
+                    continue;
+                }
+                auto& it = items_[idx_];
+                it.local_header_off = (std::uint32_t)cur_off_; // zip32 offset
+                make_local_header(it);
+                stage_ = Stage::FileData;
+                open_file(it);
+                continue;
+            }
+
+            if (stage_ == Stage::FileData) {
+                auto& it = items_[idx_];
+                if (!fp_.is_open()) {
+                    // nothing to read -> write descriptor
+                    make_data_descriptor(it);
+                    stage_ = Stage::NextFile;
+                    continue;
+                }
+
+                // Read a chunk from file directly into sink (avoids extra copies)
+                const size_t chunk = std::min<size_t>(remaining, 64 * 1024);
+                tmp_.resize(chunk);
+
+                fp_.read(tmp_.data(), (std::streamsize)chunk);
+                std::streamsize got = fp_.gcount();
+                if (got > 0) {
+                    // update CRC
+                    it.crc32 = crc32_update(it.crc32, (const unsigned char*)tmp_.data(), (size_t)got);
+                    sink.write(tmp_.data(), (size_t)got);
+                    cur_off_ += (size_t)got;
+                    remaining -= (size_t)got;
+                    continue;
+                }
+
+                // EOF
+                fp_.close();
+                // finalize sizes for central dir
+                it.size32 = (std::uint32_t)std::min<std::uint64_t>(it.size_u64, 0xFFFFFFFFu);
+                make_data_descriptor(it);
+                stage_ = Stage::NextFile;
+                continue;
+            }
+
+            if (stage_ == Stage::NextFile) {
+                idx_++;
+                stage_ = Stage::LocalHeader;
+                continue;
+            }
+
+            if (stage_ == Stage::CentralDir) {
+                if (!central_built_) {
+                    build_central_directory();
+                    central_built_ = true;
+                }
+                if (central_pos_ < central_.size()) {
+                    // serve central dir bytes in chunks via buf_
+                    const size_t n = std::min(remaining, central_.size() - central_pos_);
+                    sink.write(central_.data() + central_pos_, n);
+                    central_pos_ += n;
+                    cur_off_ += n;
+                    remaining -= n;
+                    continue;
+                }
+                finished_ = true;
+                break;
+            }
+        }
+
+        return !finished_;
+    }
+
+    const std::vector<ZipFileItem>& items() const { return items_; }
+
+private:
+    enum class Stage { LocalHeader, FileData, NextFile, CentralDir };
+
+    void make_local_header(const ZipFileItem& it) {
+        // Local file header signature 0x04034b50
+        zip_u32(buf_, 0x04034b50u);
+        zip_u16(buf_, 20);             // version needed
+        zip_u16(buf_, 0x0008u);        // general purpose bit flag: bit3 => data descriptor
+        zip_u16(buf_, 0);              // compression method 0=store
+        zip_u16(buf_, it.dos_time);
+        zip_u16(buf_, it.dos_date);
+        zip_u32(buf_, 0);              // crc32 (0 for now, in descriptor)
+        zip_u32(buf_, 0);              // compressed size (0 for now)
+        zip_u32(buf_, 0);              // uncompressed size (0 for now)
+        zip_u16(buf_, (std::uint16_t)it.zip_name.size());
+        zip_u16(buf_, 0);              // extra length
+        buf_ += it.zip_name;           // filename bytes
+    }
+
+    void make_data_descriptor(const ZipFileItem& it) {
+        // Data descriptor signature 0x08074b50 + crc + csize + usize
+        zip_u32(buf_, 0x08074b50u);
+        zip_u32(buf_, it.crc32);
+        // store => compressed size == uncompressed size
+        std::uint32_t sz = (std::uint32_t)std::min<std::uint64_t>(it.size_u64, 0xFFFFFFFFu);
+        zip_u32(buf_, sz);
+        zip_u32(buf_, sz);
+    }
+
+    void build_central_directory() {
+        central_.clear();
+        central_.reserve((size_t)totals_.central_dir_bytes);
+
+        const std::uint32_t cd_start = (std::uint32_t)totals_.central_dir_off;
+        std::uint32_t cd_size = 0;
+
+        for (const auto& it : items_) {
+            // Central directory header signature 0x02014b50
+            zip_u32(central_, 0x02014b50u);
+            zip_u16(central_, 0x031Eu);   // version made by (arbitrary)
+            zip_u16(central_, 20);        // version needed
+            zip_u16(central_, 0x0008u);   // flags: data descriptor used
+            zip_u16(central_, 0);         // method: store
+            zip_u16(central_, it.dos_time);
+            zip_u16(central_, it.dos_date);
+            zip_u32(central_, it.crc32);
+            std::uint32_t sz = (std::uint32_t)std::min<std::uint64_t>(it.size_u64, 0xFFFFFFFFu);
+            zip_u32(central_, sz);        // compressed
+            zip_u32(central_, sz);        // uncompressed
+            zip_u16(central_, (std::uint16_t)it.zip_name.size());
+            zip_u16(central_, 0);         // extra len
+            zip_u16(central_, 0);         // comment len
+            zip_u16(central_, 0);         // disk number
+            zip_u16(central_, 0);         // internal attrs
+            zip_u32(central_, 0);         // external attrs
+            zip_u32(central_, it.local_header_off);
+            central_ += it.zip_name;
+
+            cd_size += (std::uint32_t)(46 + it.zip_name.size());
+        }
+
+        // End of central directory record signature 0x06054b50
+        zip_u32(central_, 0x06054b50u);
+        zip_u16(central_, 0); // disk
+        zip_u16(central_, 0); // disk start
+        zip_u16(central_, (std::uint16_t)items_.size());
+        zip_u16(central_, (std::uint16_t)items_.size());
+        zip_u32(central_, cd_size);
+        zip_u32(central_, cd_start);
+        zip_u16(central_, 0); // comment len
+    }
+
+    void open_file(const ZipFileItem& it) {
+        fp_.open(it.abs_path, std::ios::binary);
+        // If open fails, we still proceed; read will yield 0 and descriptor will be written.
+    }
+
+private:
+    std::vector<ZipFileItem> items_;
+    ZipTotals totals_;
+
+    Stage stage_ = Stage::LocalHeader;
+    size_t idx_ = 0;
+
+    std::ifstream fp_;
+    std::string buf_;
+    size_t buf_pos_ = 0;
+
+    std::string central_;
+    size_t central_pos_ = 0;
+    bool central_built_ = false;
+
+    std::vector<char> tmp_;
+
+    std::uint64_t cur_off_ = 0;
+    bool finished_ = false;
+};
+
+} // namespace
 
 // Stream SHA-256 for a file. Returns false + err on failure.
 static bool sha256_file(const std::filesystem::path& p, std::string* out_hex, std::string* err) {
@@ -5481,6 +5831,580 @@ srv.Post("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response
     res.body = std::move(zip_data);
 });
 
+// POST /api/v4/files/zip_sel
+// Body JSON: { "paths": ["rel/a.txt", "rel/dir", ...], "max_bytes": 52428800, "base": "rel/dir" }
+// Response: application/zip (in-memory, bounded)
+//
+// Semantics:
+// - paths[] are user-root-relative (same as other v4 file endpoints).
+// - If "base" is provided, we chdir() into user_dir/base and feed zip with paths
+//   stripped to be relative to base. This avoids the annoying "selection/<cwd>/..."
+//   nesting when user selects files from inside a folder.
+srv.Post("/api/v4/files/zip_sel", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
+                          std::uint64_t max_bytes = 0, std::uint64_t paths_n = 0) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_zip_sel_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (max_bytes) ev.f["max_bytes"] = std::to_string((unsigned long long)max_bytes);
+        if (paths_n)  ev.f["paths_n"]  = std::to_string((unsigned long long)paths_n);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](std::uint64_t max_bytes,
+                        std::uint64_t input_bytes,
+                        std::uint64_t zip_bytes,
+                        std::uint64_t files,
+                        std::uint64_t dirs,
+                        std::uint64_t paths_n,
+                        const std::string& base_rel) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_zip_sel_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["max_bytes"] = std::to_string((unsigned long long)max_bytes);
+        ev.f["input_bytes"] = std::to_string((unsigned long long)input_bytes);
+        ev.f["zip_bytes"] = std::to_string((unsigned long long)zip_bytes);
+        ev.f["files"] = std::to_string((unsigned long long)files);
+        ev.f["dirs"]  = std::to_string((unsigned long long)dirs);
+        ev.f["paths_n"] = std::to_string((unsigned long long)paths_n);
+        if (!base_rel.empty()) ev.f["base"] = pqnas::shorten(base_rel, 200);
+
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    // Parse JSON body
+    json body;
+    try {
+        body = json::parse(req.body.empty() ? "{}" : req.body);
+    } catch (const std::exception& e) {
+        audit_fail("json_parse", 400, e.what());
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    if (!body.is_object()) {
+        audit_fail("json_schema", 400, "body must be object");
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid json schema"}}.dump());
+        return;
+    }
+
+    if (!body.contains("paths") || !body["paths"].is_array()) {
+        audit_fail("missing_paths", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing paths[]"}
+        }.dump());
+        return;
+    }
+
+    // Optional base folder: when provided, zip entries are stored relative to base.
+    // Example: base="test" and paths=["test/note.txt"] -> zip entry "note.txt".
+    std::string base_rel;
+    if (body.contains("base") && body["base"].is_string()) {
+        base_rel = body["base"].get<std::string>();
+
+        // normalize slashes + trim leading slashes
+        for (char& c : base_rel) if (c == '\\') c = '/';
+        while (!base_rel.empty() && base_rel[0] == '/') base_rel.erase(base_rel.begin());
+
+        // strip duplicate slashes
+        {
+            std::string tmp;
+            tmp.reserve(base_rel.size());
+            bool prev_slash = false;
+            for (char c : base_rel) {
+                if (c == '/') {
+                    if (prev_slash) continue;
+                    prev_slash = true;
+                    tmp.push_back(c);
+                } else {
+                    prev_slash = false;
+                    tmp.push_back(c);
+                }
+            }
+            base_rel.swap(tmp);
+        }
+
+        // remove trailing slash
+        while (!base_rel.empty() && base_rel.back() == '/') base_rel.pop_back();
+
+        // reject unsafe base
+        bool bad = false;
+        if (!base_rel.empty() && base_rel[0] == '-') bad = true;
+        if (base_rel.find('\n') != std::string::npos || base_rel.find('\r') != std::string::npos) bad = true;
+
+        // reject traversal segments
+        if (!bad && !base_rel.empty()) {
+            size_t start = 0;
+            while (start < base_rel.size()) {
+                size_t end = base_rel.find('/', start);
+                if (end == std::string::npos) end = base_rel.size();
+                std::string seg = base_rel.substr(start, end - start);
+                if (seg == "." || seg == ".." || seg.empty()) { bad = true; break; }
+                start = end + 1;
+            }
+        }
+
+        if (bad) base_rel.clear();
+    }
+
+    // max_bytes cap (controls RAM usage too)
+    std::uint64_t max_bytes = 50ull * 1024 * 1024; // 50 MiB default
+    if (body.contains("max_bytes")) {
+        try {
+            long long v = 0;
+            if (body["max_bytes"].is_number_integer()) v = body["max_bytes"].get<long long>();
+            else if (body["max_bytes"].is_string()) v = std::stoll(body["max_bytes"].get<std::string>());
+            if (v > 0) max_bytes = (std::uint64_t)v;
+        } catch (...) {}
+    }
+    const std::uint64_t MINB = 1ull * 1024 * 1024;       // 1 MiB
+    const std::uint64_t MAXB = 250ull * 1024 * 1024;     // 250 MiB hard clamp
+    if (max_bytes < MINB) max_bytes = MINB;
+    if (max_bytes > MAXB) max_bytes = MAXB;
+
+    // Collect + basic sanitize
+    std::vector<std::string> paths_in;
+    paths_in.reserve(body["paths"].size());
+
+    for (const auto& it : body["paths"]) {
+        if (!it.is_string()) continue;
+        std::string p = it.get<std::string>();
+
+        // normalize slashes + trim leading slashes
+        for (char& c : p) if (c == '\\') c = '/';
+        while (!p.empty() && p[0] == '/') p.erase(p.begin());
+
+        // strip duplicate slashes
+        {
+            std::string tmp;
+            tmp.reserve(p.size());
+            bool prev_slash = false;
+            for (char c : p) {
+                if (c == '/') {
+                    if (prev_slash) continue;
+                    prev_slash = true;
+                    tmp.push_back(c);
+                } else {
+                    prev_slash = false;
+                    tmp.push_back(c);
+                }
+            }
+            p.swap(tmp);
+        }
+
+        // remove trailing slash (we still treat dir fine)
+        while (p.size() > 1 && p.back() == '/') p.pop_back();
+
+        if (p.empty()) continue;
+
+        // Safety: reject leading '-' so it can't be treated as an option by zip
+        if (!p.empty() && p[0] == '-') continue;
+
+        // Safety: reject traversal segments
+        bool bad = false;
+        {
+            size_t start = 0;
+            while (start < p.size()) {
+                size_t end = p.find('/', start);
+                if (end == std::string::npos) end = p.size();
+                std::string seg = p.substr(start, end - start);
+                if (seg == "." || seg == ".." || seg.empty()) { bad = true; break; }
+                start = end + 1;
+            }
+        }
+        if (bad) continue;
+
+        // prevent CR/LF injection into -@ stdin list
+        if (p.find('\n') != std::string::npos || p.find('\r') != std::string::npos) continue;
+
+        paths_in.push_back(std::move(p));
+    }
+
+    // Hard cap selection count to avoid abuse
+    const std::size_t MAX_PATHS = 500;
+    if (paths_in.empty()) {
+        audit_fail("no_valid_paths", 400, "", max_bytes, 0);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "no valid paths"}
+        }.dump());
+        return;
+    }
+    if (paths_in.size() > MAX_PATHS) {
+        audit_fail("too_many_paths", 413, "paths[] too large", max_bytes, (std::uint64_t)paths_in.size());
+        reply_json(res, 413, json{
+            {"ok", false},
+            {"error", "too_large"},
+            {"message", "too many selected paths"}
+        }.dump());
+        return;
+    }
+
+    // Dedupe + drop children if parent dir is selected
+    std::sort(paths_in.begin(), paths_in.end());
+    paths_in.erase(std::unique(paths_in.begin(), paths_in.end()), paths_in.end());
+
+    std::vector<std::string> paths_rel;
+    paths_rel.reserve(paths_in.size());
+
+    auto is_child_of = [&](const std::string& child, const std::string& parent) -> bool {
+        if (child.size() <= parent.size()) return false;
+        if (child.compare(0, parent.size(), parent) != 0) return false;
+        return child[parent.size()] == '/';
+    };
+
+    for (const auto& p : paths_in) {
+        if (paths_rel.empty()) {
+            paths_rel.push_back(p);
+            continue;
+        }
+        bool covered = false;
+        for (const auto& sel : paths_rel) {
+            if (is_child_of(p, sel)) { covered = true; break; }
+        }
+        if (!covered) paths_rel.push_back(p);
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    // If base is provided, ensure it's a real directory under user_dir (fail-closed).
+    std::filesystem::path base_abs;
+    if (!base_rel.empty()) {
+        std::string berr;
+        if (!pqnas::resolve_user_path_strict(user_dir, base_rel, &base_abs, &berr)) {
+            audit_fail("invalid_base", 400, berr, max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid base"}}.dump());
+            return;
+        }
+        std::error_code bec;
+        auto bst = std::filesystem::symlink_status(base_abs, bec);
+        if (bec || !std::filesystem::exists(bst) || !std::filesystem::is_directory(bst) || std::filesystem::is_symlink(bst)) {
+            audit_fail("invalid_base", 400, "base must be an existing directory", max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid base"}}.dump());
+            return;
+        }
+    }
+
+    // If base is set, require all selected paths to be within base.
+    // This prevents weird results when we chdir into base but zip tries to access paths outside it.
+    if (!base_rel.empty()) {
+        for (const auto& p : paths_rel) {
+            if (p == base_rel) continue;
+            if (!is_child_of(p, base_rel)) {
+                audit_fail("path_outside_base", 400, pqnas::shorten(p, 180), max_bytes, (std::uint64_t)paths_rel.size());
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "selected path outside base"}
+                }.dump());
+                return;
+            }
+        }
+    }
+
+    // Resolve + pre-walk all selections (size + symlink checks)
+    std::uint64_t files = 0, dirs = 0, input_bytes = 0;
+
+    for (const auto& path_rel : paths_rel) {
+        std::filesystem::path path_abs;
+        std::string err;
+        if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &path_abs, &err)) {
+            audit_fail("invalid_path", 400, err, max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid path"}}.dump());
+            return;
+        }
+
+        std::error_code ec;
+        auto st = std::filesystem::symlink_status(path_abs, ec);
+        if (ec || !std::filesystem::exists(st)) {
+            audit_fail("not_found", 404, path_rel, max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","path not found"}}.dump());
+            return;
+        }
+
+        if (std::filesystem::is_symlink(st)) {
+            audit_fail("symlink_not_supported", 400, "symlink selected", max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","symlinks not supported for zip download"}}.dump());
+            return;
+        }
+
+        const bool is_file = std::filesystem::is_regular_file(st);
+        const bool is_dir  = std::filesystem::is_directory(st);
+
+        if (is_file) {
+            files += 1;
+            input_bytes += pqnas::file_size_u64_safe(path_abs);
+            if (input_bytes > max_bytes) break;
+            continue;
+        }
+
+        if (is_dir) {
+            dirs += 1; // include selected root dir
+
+            std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
+            ec.clear();
+            for (auto it = std::filesystem::recursive_directory_iterator(path_abs, opts, ec);
+                 it != std::filesystem::recursive_directory_iterator();
+                 it.increment(ec)) {
+
+                if (ec) {
+                    audit_fail("walk_failed", 500, ec.message(), max_bytes, (std::uint64_t)paths_rel.size());
+                    reply_json(res, 500, json{
+                        {"ok", false},
+                        {"error", "server_error"},
+                        {"message", "directory walk failed"},
+                        {"detail", pqnas::shorten(ec.message(), 180)}
+                    }.dump());
+                    return;
+                }
+
+                std::error_code ec2;
+                auto st2 = it->symlink_status(ec2);
+                if (ec2) continue;
+
+                if (std::filesystem::is_symlink(st2)) {
+                    audit_fail("symlink_not_supported", 400, "symlink inside tree", max_bytes, (std::uint64_t)paths_rel.size());
+                    reply_json(res, 400, json{
+                        {"ok", false},
+                        {"error", "bad_request"},
+                        {"message", "symlinks inside directory are not supported for zip download"}
+                    }.dump());
+                    return;
+                }
+
+                if (std::filesystem::is_directory(st2)) {
+                    dirs += 1;
+                    continue;
+                }
+
+                if (std::filesystem::is_regular_file(st2)) {
+                    files += 1;
+                    input_bytes += pqnas::file_size_u64_safe(it->path());
+                    if (input_bytes > max_bytes) break;
+                    continue;
+                }
+
+                files += 1; // other types, 0 bytes
+            }
+            if (input_bytes > max_bytes) break;
+            continue;
+        }
+
+        audit_fail("unsupported_type", 400, path_rel, max_bytes, (std::uint64_t)paths_rel.size());
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","unsupported path type for zip download"}}.dump());
+        return;
+    }
+
+    if (input_bytes > max_bytes) {
+        audit_fail("too_large", 413, "input exceeds max_bytes", max_bytes, (std::uint64_t)paths_rel.size());
+        reply_json(res, 413, json{{"ok",false},{"error","too_large"},{"message","selected content exceeds max_bytes"}}.dump());
+        return;
+    }
+
+    // Run: zip -r -q - -@ (read file list from stdin, write zip to stdout)
+    int out_pipe[2] = {-1, -1};
+    int in_pipe[2]  = {-1, -1};
+    if (::pipe(out_pipe) != 0 || ::pipe(in_pipe) != 0) {
+        if (out_pipe[0] >= 0) { ::close(out_pipe[0]); ::close(out_pipe[1]); }
+        if (in_pipe[0]  >= 0) { ::close(in_pipe[0]);  ::close(in_pipe[1]);  }
+        audit_fail("pipe_failed", 500, "pipe()", max_bytes, (std::uint64_t)paths_rel.size());
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","zip failed"}}.dump());
+        return;
+    }
+
+    pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(out_pipe[0]); ::close(out_pipe[1]);
+        ::close(in_pipe[0]);  ::close(in_pipe[1]);
+        audit_fail("fork_failed", 500, "fork()", max_bytes, (std::uint64_t)paths_rel.size());
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","zip failed"}}.dump());
+        return;
+    }
+
+    if (pid == 0) {
+        // child
+        ::dup2(in_pipe[0], STDIN_FILENO);
+        ::dup2(out_pipe[1], STDOUT_FILENO);
+
+        ::close(out_pipe[0]);
+        ::close(out_pipe[1]);
+        ::close(in_pipe[0]);
+        ::close(in_pipe[1]);
+
+        if (!base_rel.empty()) {
+            std::filesystem::path cd = user_dir / base_rel;
+            if (::chdir(cd.c_str()) != 0) _exit(127);
+        } else {
+            if (::chdir(user_dir.c_str()) != 0) _exit(127);
+        }
+
+        const char* argv[] = {
+            "zip",
+            "-r",
+            "-q",
+            "-",
+            "-@",
+            nullptr
+        };
+        ::execvp("zip", (char* const*)argv);
+        _exit(127);
+    }
+
+    // parent
+    ::close(out_pipe[1]); // read zip from out_pipe[0]
+    ::close(in_pipe[0]);  // write list to in_pipe[1]
+
+    // feed paths list
+    {
+        auto starts_with_dir = [](const std::string& p, const std::string& base) -> bool {
+            if (base.empty()) return false;
+            if (p.size() <= base.size()) return false;
+            if (p.compare(0, base.size(), base) != 0) return false;
+            return p[base.size()] == '/';
+        };
+
+        bool write_ok = true;
+        for (const auto& p0 : paths_rel) {
+            std::string p = p0;
+
+            // When chdir() into base, feed zip paths relative to base.
+            if (!base_rel.empty()) {
+                if (p0 == base_rel) {
+                    p = "."; // zip the current directory (the base itself)
+                } else if (starts_with_dir(p0, base_rel)) {
+                    p = p0.substr(base_rel.size() + 1);
+                } else {
+                    // should be impossible due to earlier validation
+                    write_ok = false;
+                }
+            }
+
+            if (!write_ok) break;
+
+            if (p.empty()) p = "."; // never send empty line
+
+            std::string line = p;
+            line.push_back('\n');
+
+            const char* data = line.data();
+            size_t left = line.size();
+            while (left > 0) {
+                ssize_t n = ::write(in_pipe[1], data, (ssize_t)left);
+                if (n <= 0) { write_ok = false; break; }
+                data += n;
+                left -= (size_t)n;
+            }
+            if (!write_ok) break;
+        }
+
+        ::close(in_pipe[1]);
+
+        if (!write_ok) {
+            ::close(out_pipe[0]);
+            ::kill(pid, SIGKILL);
+            audit_fail("write_failed", 500, "write(stdin)", max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","zip failed"}}.dump());
+            return;
+        }
+    }
+
+    std::string zip_data;
+    zip_data.reserve((size_t)std::min<std::uint64_t>(max_bytes, 4ull * 1024 * 1024));
+
+    const std::uint64_t zip_limit = max_bytes + 8ull * 1024 * 1024; // allow some zip overhead
+    std::array<char, 64 * 1024> buf{};
+    while (true) {
+        ssize_t n = ::read(out_pipe[0], buf.data(), (ssize_t)buf.size());
+        if (n == 0) break;
+        if (n < 0) {
+            ::close(out_pipe[0]);
+            ::kill(pid, SIGKILL);
+            audit_fail("read_failed", 500, "read(zip)", max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","zip failed"}}.dump());
+            return;
+        }
+
+        if (zip_data.size() + (size_t)n > (size_t)zip_limit) {
+            ::close(out_pipe[0]);
+            ::kill(pid, SIGKILL);
+            audit_fail("zip_too_large", 413, "zip output exceeds limit", max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 413, json{{"ok",false},{"error","too_large"},{"message","zip output too large"}}.dump());
+            return;
+        }
+
+        zip_data.append(buf.data(), (size_t)n);
+    }
+    ::close(out_pipe[0]);
+
+    int st = 0;
+    ::waitpid(pid, &st, 0);
+    if (!(WIFEXITED(st) && WEXITSTATUS(st) == 0)) {
+        audit_fail("zip_failed", 500, "zip exit nonzero", max_bytes, (std::uint64_t)paths_rel.size());
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","zip failed"}}.dump());
+        return;
+    }
+
+    // filename suggestion
+    const std::string fname = "selection.zip";
+
+    audit_ok(max_bytes, input_bytes, (std::uint64_t)zip_data.size(), files, dirs, (std::uint64_t)paths_rel.size(), base_rel);
+
+    res.status = 200;
+    res.set_header("Cache-Control", "no-store");
+    res.set_header("Content-Type", "application/zip");
+    res.set_header("Content-Disposition", ("attachment; filename=\"" + fname + "\"").c_str());
+    res.body = std::move(zip_data);
+});
 
     // POST /api/v4/files/rmrf?path=rel/path
 srv.Post("/api/v4/files/rmrf", [&](const httplib::Request& req, httplib::Response& res) {
@@ -7308,6 +8232,236 @@ srv.Post("/api/v4/files/copy", [&](const httplib::Request& req, httplib::Respons
     }.dump());
 });
 
+// GET /api/v4/files/zip?path=relative/dir
+// Response: application/zip (streams a zip of the directory)
+srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_zip_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& rel_path, std::uint64_t bytes) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_zip_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_path, 200);
+        ev.f["bytes"] = std::to_string((unsigned long long)bytes);
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // path param (directory)
+    std::string rel_path;
+    if (req.has_param("path")) rel_path = req.get_param_value("path");
+    if (rel_path.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    // Must be allocated (fail-closed)
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value()) {
+            audit_fail("user_missing", 403);
+            reply_json(res, 403, json{{"ok", false}, {"error", "forbidden"}, {"message", "policy denied"}}.dump());
+            return;
+        }
+        const auto& u = *uopt;
+        if (u.storage_state != "allocated") {
+            audit_fail("storage_unallocated", 403);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"},
+                {"fingerprint_hex", fp_hex},
+                {"quota_bytes", u.quota_bytes}
+            }.dump());
+            return;
+        }
+    }
+
+    // Resolve directory path strictly under user dir
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    std::filesystem::path abs_dir;
+    std::string perr;
+    if (!pqnas::resolve_user_path_strict(user_dir, rel_path, &abs_dir, &perr)) {
+        audit_fail("invalid_path", 400, perr);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    // Validate exists + directory
+    std::error_code ec;
+    auto st = std::filesystem::status(abs_dir, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "directory not found"}
+        }.dump());
+        return;
+    }
+    if (!std::filesystem::is_directory(st)) {
+        audit_fail("not_directory", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "not a directory"}
+        }.dump());
+        return;
+    }
+
+    // Collect files (pass 1)
+    std::vector<ZipFileItem> items;
+    std::uint64_t total_payload = 0;
+
+    // ZIP will contain entries relative to rel_path root.
+    // Example: rel_path="photos" => inside zip, paths like "photos/a.jpg" etc.
+    // This makes it intuitive when extracted.
+    const std::string zip_root = zip_sanitize_relpath(rel_path);
+    const std::filesystem::path base = abs_dir;
+
+    for (auto it = std::filesystem::recursive_directory_iterator(base, ec);
+         !ec && it != std::filesystem::recursive_directory_iterator();
+         it.increment(ec)) {
+
+        if (ec) break;
+        const auto& de = *it;
+        if (!de.is_regular_file(ec)) continue;
+        if (ec) { ec.clear(); continue; }
+
+        const std::filesystem::path abs = de.path();
+        std::uint64_t sz = pqnas::file_size_u64_safe(abs);
+
+        // build relative name within the selected directory
+        std::filesystem::path rel_inside = std::filesystem::relative(abs, base, ec);
+        if (ec) { ec.clear(); continue; }
+
+        std::string name = zip_root.empty()
+            ? rel_inside.string()
+            : (zip_root + "/" + rel_inside.string());
+
+        name = zip_sanitize_relpath(name);
+        if (name.empty()) continue;
+
+        ZipFileItem z;
+        z.abs_path = abs;
+        z.zip_name = name;
+        z.size_u64 = sz;
+
+        std::uint16_t dt=0, dd=0;
+        zip_dos_time_date(de.last_write_time(ec), dt, dd);
+        if (ec) ec.clear();
+        z.dos_time = dt;
+        z.dos_date = dd;
+
+        items.push_back(std::move(z));
+        total_payload += sz;
+    }
+
+    if (ec) {
+        audit_fail("iter_failed", 500, ec.message());
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to enumerate directory"}
+        }.dump());
+        return;
+    }
+
+    if (items.empty()) {
+        // Allow empty zips (valid), but still produce something useful.
+        // We'll return a small zip with no entries.
+    }
+
+    // Sort stable by name for deterministic output
+    std::sort(items.begin(), items.end(), [](const ZipFileItem& a, const ZipFileItem& b){
+        return a.zip_name < b.zip_name;
+    });
+
+    // Compute total zip size (exact, ZIP32)
+    ZipTotals totals = zip_compute_totals(items);
+    const std::uint64_t zip_bytes = totals.total_bytes;
+
+    if (zip_bytes > 0xFFFFFFFFull) {
+        audit_fail("zip_too_large_zip32", 413);
+        reply_json(res, 413, json{
+            {"ok", false},
+            {"error", "too_large"},
+            {"message", "directory too large for zip (zip32 limit)"}
+        }.dump());
+        return;
+    }
+
+    // Build filename
+    std::string out_name = zip_basename(abs_dir) + ".zip";
+
+    res.set_header("Cache-Control", "no-store");
+    res.set_header("Content-Type", "application/zip");
+    res.set_header("Content-Length", std::to_string((unsigned long long)zip_bytes));
+    res.set_header("Content-Disposition", std::string("attachment; filename=\"") + out_name + "\"");
+
+    auto streamer = std::make_shared<ZipStreamer>(std::move(items), totals);
+
+    res.set_content_provider(
+        (size_t)zip_bytes,
+        "application/zip",
+        [streamer](size_t offset, size_t length, httplib::DataSink& sink) mutable {
+            return streamer->emit(offset, length, sink);
+        },
+        [streamer](bool /*success*/) mutable {
+            // nothing to close; files are opened/closed per entry inside streamer
+        }
+    );
+
+    audit_ok(rel_path, zip_bytes);
+});
 
 
 // GET /api/v4/files/get?path=relative/path.bin
