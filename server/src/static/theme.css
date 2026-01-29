@@ -51,6 +51,12 @@ html[data-theme="bright"]{
     --err: rgba(255,90,90,0.95);
     --fail: rgba(255,90,90,0.95);
     --info: rgba(100,181,255,0.95);
+    --fg-rgb: 223,252,255;
+    --warn-rgb: 255,190,0;
+    --fail-rgb: 255,90,90;
+    --err-rgb: 255,90,90;
+    --info-rgb: 100,181,255;
+
 }
 
 /* -----------------------
@@ -77,4 +83,75 @@ html[data-theme="cpunk_orange"]{
     --err: rgba(255,90,90,0.95);
     --fail: rgba(255,90,90,0.95);
     --info: rgba(255,155,80,0.95);
+    --fg-rgb: 255,122,24;
+    --warn-rgb: 255,190,0;
+    --fail-rgb: 255,90,90;
+    --err-rgb: 255,90,90;
+    --info-rgb: 255,155,80;
+
+}
+
+/* -----------------------
+   WINDOWS CLASSIC
+   Goal: neutral gray UI + blue accents, like old Windows dialogs
+   ----------------------- */
+html[data-theme="win_classic"]{
+    --bg:#c0c0c0;
+    --fg:#000000;
+    --fg-dim:#404040;
+
+    --panel:#d4d0c8;
+    --panel2:#e4e0d8;
+
+    --border:#808080;
+    --border2:#ffffff;
+
+    --shadow:none;
+
+    --ok:#006600;
+    --warn:#9a6b00;
+    --err:#800000;
+    --fail:#800000;
+    --info:#003399;
+}
+
+html[data-theme="win_classic"] *{
+    text-shadow:none !important;
+    box-shadow:none !important;
+    backdrop-filter:none !important;
+}
+
+html[data-theme="win_classic"] .navbtn:hover,
+html[data-theme="win_classic"] .btn:hover,
+html[data-theme="win_classic"] tbody tr:hover{
+    background:#dcdcdc !important;
+}
+
+
+:root{
+    --fg-rgb: 0,240,248;
+    --warn-rgb: 255,190,0;
+    --fail-rgb: 255,90,90;
+    --info-rgb: 100,181,255;
+    /* RGB helpers so pages can use rgba(var(--fg-rgb),0.22) */
+    --fg-rgb: 0,240,248;
+    --warn-rgb: 255,190,0;
+    --fail-rgb: 255,90,90;
+    --err-rgb: 255,90,90;
+    --info-rgb: 100,181,255;
+
+}
+
+html[data-theme="bright"]{
+    --fg-rgb: 223,252,255;
+    --warn-rgb: 255,190,0;
+    --fail-rgb: 255,90,90;
+    --info-rgb: 100,181,255;
+}
+
+html[data-theme="cpunk_orange"]{
+    --fg-rgb: 255,122,24;
+    --warn-rgb: 255,190,0;
+    --fail-rgb: 255,90,90;
+    --info-rgb: 255,155,80;
 }

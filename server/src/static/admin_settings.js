@@ -57,7 +57,7 @@
     const btnThemeSave = $("btnThemeSave");
     const btnThemeApply = $("btnThemeApply");
 
-    const ALLOWED_THEMES = new Set(["dark", "bright", "cpunk_orange"]);
+    const ALLOWED_THEMES = new Set(["dark", "bright", "cpunk_orange", "win_classic"]);
     const ALLOWED_ROT_MODES = new Set(["manual", "daily", "size_mb", "daily_or_size_mb"]);
 
     function escapeHtml(s) {

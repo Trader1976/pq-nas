@@ -361,25 +361,6 @@ static std::string iso_utc_from_filetime(const std::filesystem::file_time_type& 
     }
 }
 
-static std::string utc_day_yyyymmdd() {
-    try {
-        std::time_t tt = std::time(nullptr);
-        std::tm tm{};
-#if defined(_WIN32)
-        gmtime_s(&tm, &tt);
-#else
-        gmtime_r(&tt, &tm);
-#endif
-        std::ostringstream oss;
-        oss << std::setfill('0')
-            << std::setw(4) << (tm.tm_year + 1900) << "-"
-            << std::setw(2) << (tm.tm_mon + 1) << "-"
-            << std::setw(2) << tm.tm_mday;
-        return oss.str();
-    } catch (...) {
-        return "0000-00-00";
-    }
-}
 
 
 struct ArchivePair {
@@ -2136,7 +2117,9 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 		if (persisted.contains("ui_theme") && persisted["ui_theme"].is_string()) {
     		ui_theme = persisted["ui_theme"].get<std::string>();
 		}
-		if (!(ui_theme == "dark" || ui_theme == "bright" || ui_theme == "cpunk_orange")) ui_theme = "dark";
+		if (!(ui_theme == "dark" || ui_theme == "bright" || ui_theme == "cpunk_orange" || ui_theme == "win_classic"))
+		    ui_theme = "dark";
+
 
 
 
@@ -2251,7 +2234,7 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
     };
 
 	auto is_allowed_theme = [&](const std::string& t) -> bool {
-    	return (t == "dark" || t == "bright" || t == "cpunk_orange");
+    return (t == "dark" || t == "bright" || t == "cpunk_orange" || t == "win_classic");
 	};
 
     // SAFE accessor for audit_min_level (never throws)
@@ -2506,45 +2489,46 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             } catch (...) {}
         }
 
-        // ---- ui_theme (optional) ----
-        if (in.contains("ui_theme")) {
-            if (!in["ui_theme"].is_string()) {
-                reply_json(res, 400, json{
-                    {"ok", false},
-                    {"error", "bad_request"},
-                    {"message", "ui_theme must be string"}
-                }.dump());
-                return;
-            }
+		// ---- ui_theme (optional) ----
+		if (in.contains("ui_theme")) {
+    		if (!in["ui_theme"].is_string()) {
+        		reply_json(res, 400, json{
+            		{"ok", false},
+            		{"error", "bad_request"},
+            		{"message", "ui_theme must be string"}
+        		}.dump());
+        		return;
+    		}
 
-            std::string t = in["ui_theme"].get<std::string>();
-            if (!is_allowed_theme(t)) {
-                reply_json(res, 400, json{
-                    {"ok", false},
-                    {"error", "bad_request"},
-                    {"message", "invalid ui_theme (allowed: dark, bright, cpunk_orange)"}
-                }.dump());
-                return;
-            }
+    		std::string t = in["ui_theme"].get<std::string>();
 
-            patch["ui_theme"] = t;
-            persisted["ui_theme"] = t; // for response shaping
-            changed_theme = true;
+    		if (!is_allowed_theme(t)) {
+        		reply_json(res, 400, json{
+            		{"ok", false},
+            		{"error", "bad_request"},
+            		{"message", "invalid ui_theme (allowed: dark, bright, cpunk_orange, win_classic)"}
+        		}.dump());
+        		return;
+    		}
 
-            // Audit (best-effort)
-            try {
-                pqnas::AuditEvent ev;
-                ev.event = "admin.settings_changed";
-                ev.outcome = "ok";
-                ev.f["ui_theme_before"] = before_theme;
-                ev.f["ui_theme_after"]  = t;
-                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-                auto it_ua = req.headers.find("User-Agent");
-                ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-                maybe_auto_rotate_before_append();
-                audit_append(ev);
-            } catch (...) {}
-        }
+    		patch["ui_theme"] = t;
+    		persisted["ui_theme"] = t;
+    		changed_theme = true;
+
+    		// Audit (best-effort)
+    		try {
+        		pqnas::AuditEvent ev;
+        		ev.event = "admin.settings_changed";
+        		ev.outcome = "ok";
+        		ev.f["ui_theme_after"] = t;
+        		ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        		auto it_ua = req.headers.find("User-Agent");
+        		ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
+        		maybe_auto_rotate_before_append();
+        		audit_append(ev);
+    		} catch (...) {}
+		}
+
 
         // ---- audit_rotation (optional) ----
         if (in.contains("audit_rotation")) {

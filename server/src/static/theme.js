@@ -1,5 +1,5 @@
 (() => {
-    const THEMES = new Set(["dark", "bright", "cpunk_orange"]);
+    const THEMES = new Set(["dark", "bright", "cpunk_orange", "win_classic"]);
     const KEY = "pqnas_theme";
 
     function normalizeTheme(t) {
