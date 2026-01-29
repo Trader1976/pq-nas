@@ -1,0 +1,8 @@
+{
+  "id": "filemgr",
+  "name": "File Manager",
+  "version": "0.1.0",
+  "entry": "www/index.html",
+  "api_base": "/api/v4/files",
+  "permissions": []
+}
