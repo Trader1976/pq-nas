@@ -3,7 +3,11 @@
 
    Tokens used across pages today:
    --bg, --fg, --fg-dim, --panel, --panel2, --border, --border2, --shadow,
-   --radius, --radius2, --ok, --warn, --err or --fail
+   --radius, --radius2, --ok, --warn, --err or --fail, --info
+
+   RGB helpers:
+   --fg-rgb, --warn-rgb, --fail-rgb, --err-rgb, --info-rgb
+   (so pages can do rgba(var(--fg-rgb),0.22))
 */
 
 :root{
@@ -28,14 +32,26 @@
     --err: rgba(255,90,90,0.95);
     --fail: rgba(255,90,90,0.95);
     --info: rgba(100,181,255,0.95);
+
+    /* RGB helpers */
+    --fg-rgb: 0,240,248;
+    --warn-rgb: 255,190,0;
+    --fail-rgb: 255,90,90;
+    --err-rgb: 255,90,90;
+    --info-rgb: 100,181,255;
+
+    /* charts */
+    --chart_rx: var(--ok);
+    --chart_tx: var(--warn);
+    --chart_grid: var(--border2);
 }
 
 /* -----------------------
    BRIGHT (noticeably brighter)
    ----------------------- */
 html[data-theme="bright"]{
-    --bg:#101a33;                 /* much lighter than #050712 */
-    --fg:#dffcff;                 /* brighter text */
+    --bg:#101a33;
+    --fg:#dffcff;
     --fg-dim: rgba(223,252,255,0.78);
 
     --panel: rgba(255,255,255,0.10);
@@ -51,23 +67,20 @@ html[data-theme="bright"]{
     --err: rgba(255,90,90,0.95);
     --fail: rgba(255,90,90,0.95);
     --info: rgba(100,181,255,0.95);
+
     --fg-rgb: 223,252,255;
     --warn-rgb: 255,190,0;
     --fail-rgb: 255,90,90;
     --err-rgb: 255,90,90;
     --info-rgb: 100,181,255;
-
 }
 
 /* -----------------------
    CPUNK ORANGE
-   NOTE: Today many pages use --fg as both text + accent.
-   This theme intentionally makes text/accents orange.
-   If later you want white text + orange accents, we can split tokens.
    ----------------------- */
 html[data-theme="cpunk_orange"]{
-    --bg:#120b06;                 /* warm dark */
-    --fg:#ff7a18;                 /* CPUNK orange */
+    --bg:#120b06;
+    --fg:#ff7a18;
     --fg-dim: rgba(255,122,24,0.72);
 
     --panel: rgba(255,255,255,0.05);
@@ -83,75 +96,180 @@ html[data-theme="cpunk_orange"]{
     --err: rgba(255,90,90,0.95);
     --fail: rgba(255,90,90,0.95);
     --info: rgba(255,155,80,0.95);
+
     --fg-rgb: 255,122,24;
     --warn-rgb: 255,190,0;
     --fail-rgb: 255,90,90;
     --err-rgb: 255,90,90;
     --info-rgb: 255,155,80;
 
+    --chart_rx: rgba(255,122,24,0.95);
+    --chart_tx: rgba(255,190,0,0.95);
+    --chart_grid: rgba(255,122,24,0.18);
 }
 
 /* -----------------------
-   WINDOWS CLASSIC
-   Goal: neutral gray UI + blue accents, like old Windows dialogs
+   WINDOWS CLASSIC (improved)
+   Goal:
+   - neutral gray window chrome
+   - subtle bevel borders
+   - restrained “system blue” accents
+   - kill neon fog + cyan hardcoded text where possible
    ----------------------- */
 html[data-theme="win_classic"]{
-    --bg:#c0c0c0;
-    --fg:#000000;
-    --fg-dim:#404040;
+    /* base */
+    --bg:#cfcfcf;               /* page background */
+    --fg:#000000;               /* text */
+    --fg-dim: rgba(0,0,0,0.70);
 
-    --panel:#d4d0c8;
-    --panel2:#e4e0d8;
+    /* surfaces */
+    --panel:#e6e6e6;            /* main surface */
+    --panel2:#f2f2f2;           /* raised surface */
 
-    --border:#808080;
-    --border2:#ffffff;
+    /* bevel-ish borders */
+    --border: rgba(0,0,0,0.40); /* dark edge */
+    --border2: rgba(255,255,255,0.85); /* highlight edge */
 
-    --shadow:none;
+    --shadow: 0 8px 22px rgba(0,0,0,0.12);
 
-    --ok:#006600;
+    /* keep your rounded corners, but slightly tighter looks more “classic” */
+    --radius: 14px;
+    --radius2: 18px;
+
+    /* status colors (muted) */
+    --ok:#0a6b2b;
+    --ok: rgba(10,107,43,0.95);
+
     --warn:#9a6b00;
-    --err:#800000;
-    --fail:#800000;
-    --info:#003399;
+    --err:#8a1d1d;
+    --fail:#8a1d1d;
+    --info:#0b4ea2; /* system-ish blue */
+
+    /* RGB helpers */
+    --fg-rgb: 0,0,0;
+    --warn-rgb: 154,107,0;
+    --fail-rgb: 138,29,29;
+    --err-rgb: 138,29,29;
+    --info-rgb: 11,78,162;
+
+    /* charts */
+    --chart_rx: #0b4ea2;
+    --chart_tx: #9a6b00;
+    --chart_grid: rgba(0,0,0,0.18);
 }
 
+/* Win classic: kill modern effects */
 html[data-theme="win_classic"] *{
     text-shadow:none !important;
-    box-shadow:none !important;
     backdrop-filter:none !important;
 }
 
+/* Replace the “neon fog” page body backgrounds */
+html[data-theme="win_classic"] body{
+    background: linear-gradient(180deg, #eeeeee, var(--bg)) !important;
+    color: var(--fg) !important;
+}
+
+/* Common surfaces: make them look like windows panels */
+html[data-theme="win_classic"] .sidebar,
+html[data-theme="win_classic"] .workspace,
+html[data-theme="win_classic"] .card,
+html[data-theme="win_classic"] .statusCard,
+html[data-theme="win_classic"] .tableWrap{
+    background: linear-gradient(180deg, var(--panel2), var(--panel)) !important;
+    box-shadow: var(--shadow) !important;
+    border: 1px solid var(--border) !important;
+}
+
+/* Top bars / headers */
+html[data-theme="win_classic"] .topbar,
+html[data-theme="win_classic"] .card .hd{
+    background: linear-gradient(180deg, #f6f6f6, #dedede) !important;
+    border-bottom: 1px solid var(--border) !important;
+}
+
+/* Bevel hint: add inner highlight line */
+html[data-theme="win_classic"] .sidebar,
+html[data-theme="win_classic"] .workspace,
+html[data-theme="win_classic"] .card,
+html[data-theme="win_classic"] .statusCard,
+html[data-theme="win_classic"] .tableWrap{
+    outline: 1px solid var(--border2) !important;
+    outline-offset: -2px !important;
+}
+
+/* Fix the “cyan labels” coming from page-local rgba(0,240,248,...) */
+html[data-theme="win_classic"] .sectionLabel,
+html[data-theme="win_classic"] .small,
+html[data-theme="win_classic"] .card .hd .h,
+html[data-theme="win_classic"] .crumbs .sub,
+html[data-theme="win_classic"] .brand .sub,
+html[data-theme="win_classic"] .note,
+html[data-theme="win_classic"] .kbd{
+    color: rgba(0,0,0,0.72) !important;
+    border-color: rgba(0,0,0,0.22) !important;
+}
+
+/* Links */
+html[data-theme="win_classic"] a{
+    color: var(--info) !important;
+}
+html[data-theme="win_classic"] a:hover{
+    text-shadow:none !important;
+    text-decoration: underline !important;
+}
+
+/* Buttons / inputs */
+html[data-theme="win_classic"] .btn,
+html[data-theme="win_classic"] .navbtn,
+html[data-theme="win_classic"] .input,
+html[data-theme="win_classic"] select,
+html[data-theme="win_classic"] .pill,
+html[data-theme="win_classic"] .toggle{
+    color: var(--fg) !important;
+    background: linear-gradient(180deg, #f2f2f2, #d2d2d2) !important;
+    border: 1px solid var(--border) !important;
+    box-shadow: none !important;
+}
+
+/* Slight pressed effect on active */
+html[data-theme="win_classic"] .btn:active,
+html[data-theme="win_classic"] .navbtn:active{
+    background: linear-gradient(180deg, #cfcfcf, #e8e8e8) !important;
+}
+
+/* Active nav should be “system highlight” but not neon */
+html[data-theme="win_classic"] .navbtn.active{
+    border-color: rgba(11,78,162,0.55) !important;
+    background: linear-gradient(180deg, #e9f2ff, #d8e8ff) !important;
+}
+
+/* Hover: simple, not glowy */
 html[data-theme="win_classic"] .navbtn:hover,
 html[data-theme="win_classic"] .btn:hover,
 html[data-theme="win_classic"] tbody tr:hover{
-    background:#dcdcdc !important;
+    background: #e7e7e7 !important;
 }
 
-
-:root{
-    --fg-rgb: 0,240,248;
-    --warn-rgb: 255,190,0;
-    --fail-rgb: 255,90,90;
-    --info-rgb: 100,181,255;
-    /* RGB helpers so pages can use rgba(var(--fg-rgb),0.22) */
-    --fg-rgb: 0,240,248;
-    --warn-rgb: 255,190,0;
-    --fail-rgb: 255,90,90;
-    --err-rgb: 255,90,90;
-    --info-rgb: 100,181,255;
-
+/* Pills should stop looking “teal neon” */
+html[data-theme="win_classic"] .pill{
+    background: #e6e6e6 !important;
 }
-
-html[data-theme="bright"]{
-    --fg-rgb: 223,252,255;
-    --warn-rgb: 255,190,0;
-    --fail-rgb: 255,90,90;
-    --info-rgb: 100,181,255;
+html[data-theme="win_classic"] .pill .k,
+html[data-theme="win_classic"] .pill .v{
+    color: rgba(0,0,0,0.80) !important;
 }
+html[data-theme="win_classic"] .pill.ok{ border-color: rgba(10,107,43,0.55) !important; background: #e9f6ee !important; }
+html[data-theme="win_classic"] .pill.warn{ border-color: rgba(154,107,0,0.55) !important; background: #f8f1e4 !important; }
+html[data-theme="win_classic"] .pill.fail{ border-color: rgba(138,29,29,0.55) !important; background: #f7e8e8 !important; }
+html[data-theme="win_classic"] .pill.info{ border-color: rgba(11,78,162,0.55) !important; background: #e9f2ff !important; }
 
-html[data-theme="cpunk_orange"]{
-    --fg-rgb: 255,122,24;
-    --warn-rgb: 255,190,0;
-    --fail-rgb: 255,90,90;
-    --info-rgb: 255,155,80;
+/* Tables */
+html[data-theme="win_classic"] thead th{
+    color: rgba(0,0,0,0.75) !important;
+    background: #e4e4e4 !important;
+    border-bottom: 1px solid rgba(0,0,0,0.22) !important;
+}
+html[data-theme="win_classic"] tbody td{
+    border-bottom: 1px solid rgba(0,0,0,0.10) !important;
 }

@@ -73,9 +73,9 @@ function showToast(msg, ms = 10000) {
 
         t.style.padding = "12px 14px";
         t.style.borderRadius = "12px";
-        t.style.border = "1px solid rgba(0,240,248,0.22)";
+        t.style.border = "1px solid var(--border)";
         t.style.background = "rgba(0,0,0,0.70)";
-        t.style.color = "rgba(0,240,248,0.95)";
+        t.style.color  = "var(--fg)";
         t.style.boxShadow = "0 18px 70px rgba(0,0,0,0.55)";
         t.style.font = "14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
 

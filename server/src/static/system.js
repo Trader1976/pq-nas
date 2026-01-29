@@ -1,6 +1,15 @@
 (() => {
     const el = (id) => document.getElementById(id);
 
+    function cssVar(name, fallback) {
+        try {
+            const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+            return v || fallback;
+        } catch (_) {
+            return fallback;
+        }
+    }
+
     function setPill(pill, kind, text) {
         if (!pill) return;
         pill.className = "pill " + (kind || "");
@@ -84,6 +93,15 @@
         if (warn) warn.textContent = s.warning ? ("Note: " + s.warning) : "";
     }
 
+    function cssVar(name, fallback) {
+        try {
+            const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+            return v || fallback;
+        } catch (_) {
+            return fallback;
+        }
+    }
+
     // ---------------- Network graph (local deltas) ----------------
     const netState = {
         iface: null,
@@ -147,7 +165,7 @@
             ctx.moveTo(0, y);
             ctx.lineTo(cssW, y);
         }
-        ctx.strokeStyle = "rgba(0,240,248,0.25)";
+        ctx.strokeStyle = cssVar("--border2", "rgba(0,240,248,0.12)");
         ctx.stroke();
         ctx.globalAlpha = 1;
 
@@ -167,12 +185,13 @@
         }
 
         // RX = cyan-ish, TX = amber-ish (works with your theme)
-        drawLine(rxArr, "rgba(0,240,248,0.85)");
-        drawLine(txArr, "rgba(255,190,0,0.85)");
+        drawLine(rxArr, cssVar("--chart_rx", "rgba(0,240,248,0.95)"));
+        drawLine(txArr, cssVar("--chart_tx", "rgba(255,190,0,0.95)"));
+
 
         // Labels
         ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
-        ctx.fillStyle = "rgba(0,240,248,0.75)";
+        ctx.fillStyle = cssVar("--fg-dim", "rgba(0,240,248,0.74)");
         ctx.fillText(`max ${fmtBps(max)}`, 10, 18);
     }
 
