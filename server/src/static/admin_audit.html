@@ -491,11 +491,11 @@
 
 
         tbody tr.ev-warnline td.col-idx{
-            border-left-color: rgba(255,200,0,1.0);
-            box-shadow: inset 12px 0 22px rgba(255,200,0,0.14);
+            border-left-color: rgba(var(--warn-rgb),1.0);
+            box-shadow: inset 12px 0 22px rgba(var(--warn-rgb),0.14);
         }
         tbody tr.ev-warnline{
-            background: rgba(255,200,0,0.07);
+            background: rgba(var(--warn-rgb),0.07)
         }
 
         tbody tr.ev-errorline td.col-idx{
@@ -516,11 +516,11 @@
         }
 
         tbody tr.ev-storage-dir td.col-idx{
-            border-left-color: rgba(0,210,255,1.0);
-            box-shadow: inset 14px 0 28px rgba(0,210,255,0.18);
+            border-left-color: rgba(var(--info-rgb),1.0);
+            box-shadow: inset 14px 0 28px rgba(var(--info-rgb),0.18);
         }
         tbody tr.ev-storage-dir{
-            background: rgba(0,210,255,0.075);
+            background: rgba(var(--info-rgb),0.075);
         }
 
         tbody tr.ev-admin-enabled td.col-idx{
@@ -539,7 +539,7 @@
         tbody tr.ev-admin:hover{ background: rgba(var(--info-rgb),0.10); }
         tbody tr.ev-storage:hover{ background: rgba(var(--fg-rgb),0.11); }
 
-        tbody tr.ev-warnline:hover{ background: rgba(255,200,0,0.12); }
+        tbody tr.ev-warnline:hover{ background: rgba(var(--warn-rgb),0.12);}
         tbody tr.ev-errorline:hover{ background: rgba(var(--fail-rgb),0.12); }
 
 
@@ -551,8 +551,8 @@
         /* Files API family (v4.files_*) — ONLY for OK/INFO rows.
            If row is warn/fail, let ev-warnline / ev-errorline win. */
         tbody tr.ev-files:not(.ev-warnline):not(.ev-errorline) td.col-idx{
-            border-left-color: rgba(var(--ok-rgb),1.0);
-            box-shadow: inset 12px 0 22px rgba(var(--ok-rgb),0.14);
+            border-left-color: rgba(var(--info-rgb),1.0);
+            box-shadow: inset 14px 0 28px rgba(var(--info-rgb),0.18);
         }
         tbody tr.ev-files:not(.ev-warnline):not(.ev-errorline){
             background: rgba(var(--ok-rgb),0.050);

@@ -269,12 +269,12 @@
             background: rgba(255,255,255,0.05);
         }
         .btn.danger{
-            border-color: rgba(255,90,90,0.30);
+            border-color: rgba(var(--fail-rgb),0.30);
             color: rgba(255,200,200,0.95);
         }
         .btn.danger:hover{
-            border-color: rgba(255,90,90,0.55);
-            background: rgba(255,90,90,0.10);
+            border-color: rgba(var(--fail-rgb),0.55);
+            background: rgba(var(--fail-rgb),0.10);
         }
 
         /* ===== Apps page content ===== */
@@ -368,8 +368,8 @@
             background: rgba(var(--ok-rgb),0.08);
             color: rgba(var(--ok-rgb),0.92);
         }
-        .badge.warn{ border-color: rgba(255,190,0,0.25); background: rgba(255,190,0,0.10); color: rgba(255,225,170,0.95); }
-        .badge.err{ border-color: rgba(255,90,90,0.25); background: rgba(255,90,90,0.10); color: rgba(255,190,190,0.95); }
+        .badge.warn { border-color: rgba(var(--warn-rgb),0.25); background: rgba(var(--warn-rgb),0.10); color: rgba(var(--warn-rgb),0.92); }
+        .badge.err  { border-color: rgba(var(--fail-rgb),0.25); background: rgba(var(--fail-rgb),0.10); color: rgba(var(--fail-rgb),0.92); }
 
         .footerline{
             padding: 10px 14px;

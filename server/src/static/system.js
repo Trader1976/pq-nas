@@ -186,7 +186,8 @@
 
         // RX = cyan-ish, TX = amber-ish (works with your theme)
         drawLine(rxArr, cssVar("--chart_rx", "rgba(0,240,248,0.95)"));
-        drawLine(txArr, cssVar("--chart_tx", "rgba(255,190,0,0.95)"));
+        drawLine(txArr, cssVar("--chart_tx", "rgba(var(--warn-rgb),0.95)"));
+
 
 
         // Labels
