@@ -289,6 +289,25 @@
         .pill.ok{ border-color: rgba(var(--fg-rgb),0.38); background: rgba(var(--fg-rgb),0.08); }
         .pill.warn{ border-color: rgba(var(--warn-rgb),0.38); background: rgba(var(--warn-rgb),0.10); color: rgba(var(--warn-rgb),0.92); }
         .pill.fail{ border-color: rgba(var(--fail-rgb),0.42); background: rgba(var(--fail-rgb),0.10); color: rgba(var(--fail-rgb),0.92); }
+        /* --- Fix: long pills must be allowed to shrink inside flex headers --- */
+        .card .hd{ min-width: 0; }
+        .card .hd > *{ min-width: 0; }
+
+        /* Make pill shrinkable and clip long content */
+        .pill{
+            flex: 0 1 auto;
+            max-width: 100%;
+            overflow: hidden;
+        }
+
+        /* Ellipsis the value part (Kernel string, etc.) */
+        .pill .v{
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
 
         .content{
             padding: 14px;
@@ -508,25 +527,10 @@
                     </div>
                 </section>
 
-                <section class="card span-6">
-                    <div class="hd"><div class="h">Disk • /</div><span class="pill ok" id="diskRootPill"><span class="k">Used:</span> <span class="v">—</span></span></div>
-                    <div class="bd">
-                        <div class="kv"><div class="k">Total</div><div class="v" id="diskRootTotal">—</div></div>
-                        <div class="kv"><div class="k">Free</div><div class="v" id="diskRootFree">—</div></div>
-                        <div class="kv"><div class="k">Used</div><div class="v" id="diskRootUsed">—</div></div>
-                        <div class="bar" title="Disk used"><div id="diskRootBar"></div></div>
-                    </div>
-                </section>
+
 
                 <section class="card span-6">
-                    <div class="hd"><div class="h">Disk • Repo</div><span class="pill ok" id="diskRepoPill"><span class="k">Path:</span> <span class="v mono">REPO_ROOT</span></span></div>
-                    <div class="bd">
-                        <div class="kv"><div class="k">Path</div><div class="v mono" id="repoPath">—</div></div>
-                        <div class="kv"><div class="k">Total</div><div class="v" id="diskRepoTotal">—</div></div>
-                        <div class="kv"><div class="k">Free</div><div class="v" id="diskRepoFree">—</div></div>
-                        <div class="kv"><div class="k">Used</div><div class="v" id="diskRepoUsed">—</div></div>
-                        <div class="bar" title="Disk used"><div id="diskRepoBar"></div></div>
-                    </div>
+                    <div id="diskMulti" class="span-12"></div>
                 </section>
                 <section class="card span-6">
                     <div class="hd">

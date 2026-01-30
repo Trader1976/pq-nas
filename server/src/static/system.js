@@ -228,6 +228,172 @@
         drawNet(el("netCanvas"), rxArr, txArr);
     }
 
+    function isNoisyMount(mp) {
+        if (!mp) return true;
+        if (mp === "/") return false;
+
+        // defense-in-depth (backend should already filter most of these)
+        if (mp.startsWith("/proc")) return true;
+        if (mp.startsWith("/sys")) return true;
+        if (mp.startsWith("/dev")) return true;
+        if (mp.startsWith("/run")) return true;
+        if (mp.startsWith("/snap")) return true;
+        if (mp.startsWith("/var/snap")) return true;
+        if (mp.startsWith("/var/lib/snapd")) return true;
+        if (mp.startsWith("/var/lib/flatpak")) return true;
+
+        // boot partitions are usually not useful in NAS UI
+        if (mp === "/boot" || mp === "/boot/efi") return true;
+
+        return false;
+    }
+
+    function findBestMountForPath(mountpoints, path) {
+        if (!path || !Array.isArray(mountpoints) || !mountpoints.length) return null;
+
+        // best match = longest mountpoint prefix of path
+        let best = null;
+        for (const mp of mountpoints) {
+            if (!mp) continue;
+            if (mp === "/") {
+                if (path.startsWith("/")) best = best || mp;
+                continue;
+            }
+            // ensure prefix boundary: "/mnt/data" matches "/mnt/data/..." too
+            if (path === mp || path.startsWith(mp.endsWith("/") ? mp : (mp + "/"))) {
+                if (!best || mp.length > best.length) best = mp;
+            }
+        }
+        return best;
+    }
+
+    function diskKindFromPct(p) {
+        if (!Number.isFinite(p)) return "warn";
+        if (p >= 92) return "fail";
+        if (p >= 80) return "warn";
+        return "ok";
+    }
+
+    function escapeHtml(s) {
+        return String(s ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+    }
+
+    function shortSource(src) {
+        if (!src) return "—";
+        src = String(src);
+        if (src.length <= 42) return src;
+        return src.slice(0, 18) + "…" + src.slice(-18);
+    }
+
+    function renderDiskFilesystems(j) {
+        const host = el("diskMulti");
+        if (!host) return;
+
+        const fsArr0 = j && j.disk && Array.isArray(j.disk.filesystems) ? j.disk.filesystems : [];
+        if (!fsArr0.length) { host.innerHTML = ""; return; }
+
+        // filter noisy mounts
+        const fsArr = fsArr0.filter(fs => !isNoisyMount(fs.mountpoint));
+
+        const repoRoot = j && j.disk && j.disk.repo_root ? j.disk.repo_root : null;
+        // If you didn’t add disk.repo_root to JSON, we can still try:
+        // prefer dp.path if you keep it; otherwise use global REPO_ROOT exposed elsewhere.
+        const repoPath = repoRoot || (j.disk && j.disk.repo && j.disk.repo.path) || null;
+
+        const mountpoints = fsArr.map(x => x.mountpoint);
+        const repoMp = findBestMountForPath(mountpoints, repoPath);
+
+        // tag + sort
+        const tagged = fsArr.map(fs => {
+            const mp = fs.mountpoint || "";
+            const isSystem = (mp === "/");
+            const isData = (!!repoMp && mp === repoMp && mp !== "/");
+            return { fs, mp, isSystem, isData };
+        }).sort((a, b) => {
+            // system first, then data, then alphabetical
+            if (a.isSystem !== b.isSystem) return a.isSystem ? -1 : 1;
+            if (a.isData !== b.isData) return a.isData ? -1 : 1;
+            return (a.mp || "").localeCompare(b.mp || "");
+        });
+
+        const cards = [];
+        const single = (tagged.length === 1);
+        for (const t of tagged) {
+            const fs = t.fs;
+            const mp = fs.mountpoint || "—";
+            const fstype = fs.fstype || "—";
+            const src = fs.source || "";
+
+            const total = Number(fs.total_bytes);
+            const used  = Number(fs.used_bytes);
+            const free  = Number(fs.free_bytes);
+
+            const p = pct(used, total);
+            const pillKind = diskKindFromPct(p);
+
+            const label = t.isSystem ? "System volume" : (t.isData ? "Data volume" : "Volume");
+
+            const key = "mp_" + mp.replace(/[^a-zA-Z0-9]+/g, "_");
+
+            cards.push(`
+<section class="card ${single ? "span-12" : "span-6"}">
+  <div class="hd">
+    <div class="h">
+      ${escapeHtml(label)} •
+      <span class="mono"
+            title="${escapeHtml(mp)}">${escapeHtml(mp)}</span>
+    </div>
+    <span class="pill ${pillKind}">
+      <span class="k">Used:</span>
+      <span class="v">${p.toFixed(1)}%</span>
+    </span>
+  </div>
+
+  <div class="bd">
+    <div class="kv">
+      <div class="k">FS type</div>
+      <div class="v mono">${escapeHtml(fstype)}</div>
+    </div>
+
+    <div class="kv">
+      <div class="k">Source</div>
+      <div class="v mono"
+           title="${escapeHtml(src)}">${escapeHtml(shortSource(src))}</div>
+    </div>
+
+    <div class="kv">
+      <div class="k">Total</div>
+      <div class="v">${fmtBytes(total)}</div>
+    </div>
+
+    <div class="kv">
+      <div class="k">Free</div>
+      <div class="v">${fmtBytes(free)}</div>
+    </div>
+
+    <div class="kv">
+      <div class="k">Used</div>
+      <div class="v">${fmtBytes(used)}</div>
+    </div>
+
+    <div class="bar" title="Disk used">
+      <div id="bar_${key}"
+           style="width:${p.toFixed(1)}%"></div>
+    </div>
+  </div>
+</section>
+
+        `.trim());
+        }
+
+        host.innerHTML = `<div class="grid">${cards.join("\n")}</div>`;
+    }
+
 
     // ---------------- Existing render ----------------
     function render(j) {
@@ -258,26 +424,7 @@
         setBar(el("memBar"), mu, mt);
         setPill(el("memPill"), "ok", `${pct(mu, mt).toFixed(1)}%`);
 
-        // Disk /
-        const dr = j.disk && j.disk.root ? j.disk.root : null;
-        if (dr) {
-            el("diskRootTotal").textContent = fmtBytes(dr.total_bytes);
-            el("diskRootFree").textContent = fmtBytes(dr.free_bytes);
-            el("diskRootUsed").textContent = fmtBytes(dr.used_bytes);
-            setBar(el("diskRootBar"), dr.used_bytes, dr.total_bytes);
-            setPill(el("diskRootPill"), "ok", `${pct(dr.used_bytes, dr.total_bytes).toFixed(1)}%`);
-        }
-
-        // Disk repo
-        const dp = j.disk && j.disk.repo ? j.disk.repo : null;
-        if (dp) {
-            el("repoPath").textContent = dp.path || "—";
-            el("diskRepoTotal").textContent = fmtBytes(dp.total_bytes);
-            el("diskRepoFree").textContent = fmtBytes(dp.free_bytes);
-            el("diskRepoUsed").textContent = fmtBytes(dp.used_bytes);
-            setBar(el("diskRepoBar"), dp.used_bytes, dp.total_bytes);
-        }
-
+        renderDiskFilesystems(j);
         // Process
         const p = j.process || null;
         if (p) {
@@ -309,7 +456,16 @@
 
         try {
             const j = await fetchSystem();
-            render(j);
+            try {
+                render(j);
+            } catch (e2) {
+                // Frontend render error (NOT API)
+                setPill(el("livePill"), "fail", "UI ERROR");
+                el("liveText").textContent = String(e2 && e2.message ? e2.message : e2);
+                // keep lastPill as-is or mark warn
+                return;
+            }
+
         } catch (e) {
             setPill(el("livePill"), "fail", "ERROR");
             el("liveText").textContent = String(e && e.message ? e.message : e);

@@ -314,7 +314,7 @@
             vertical-align: bottom;
         }
         .pill.ok{ border-color: rgba(var(--ok-rgb),0.38); color: rgba(var(--ok-rgb),0.95); background: rgba(var(--ok-rgb),0.08); }
-        .pill.fail{ border-color: rgba(var(--fail-rgb),0.42); color: rgba(255,200,200,0.95); background: rgba(var(--fail-rgb),0.10); }
+        .pill.fail{ border-color: rgba(var(--fail-rgb),0.42); color: var(--fail); background: rgba(var(--fail-rgb),0.10); }
         .pill.warn{ border-color: rgba(var(--warn-rgb),0.38); color: rgba(255,225,170,0.95); background: rgba(var(--warn-rgb),0.10); }
         .pill.info{ border-color: rgba(var(--info-rgb),0.38); color: rgba(195,225,255,0.95); background: rgba(var(--info-rgb),0.08); }
         .pill.on{ border-color: rgba(var(--fg-rgb),0.55); box-shadow: 0 0 0 1px rgba(var(--fg-rgb),0.10) inset, 0 0 16px rgba(var(--fg-rgb),0.10); }
@@ -546,7 +546,8 @@
         tbody tr.ev-storage td.col-event { color: rgba(var(--fg-rgb),0.98); font-weight: 900; }
         tbody tr.ev-admin td.col-event { color: rgba(var(--info-rgb),0.92); font-weight: 900; }
         tbody tr.ev-warnline td.col-event { color: rgba(255,215,120,0.98); font-weight: 900; }
-        tbody tr.ev-errorline td.col-event { color: rgba(255,190,190,0.98); font-weight: 900; }
+        tbody tr.ev-errorline td.col-event { color: var(--fail); font-weight: 900; }
+
 
         /* Files API family (v4.files_*) — ONLY for OK/INFO rows.
            If row is warn/fail, let ev-warnline / ev-errorline win. */
@@ -582,7 +583,7 @@
             color: rgba(var(--fg-rgb),0.85);
         }
         .statusPill.ok{ border-color: rgba(var(--ok-rgb),0.38); background: rgba(var(--ok-rgb),0.08); color: rgba(var(--ok-rgb),0.95); }
-        .statusPill.fail{ border-color: rgba(var(--fail-rgb),0.42); background: rgba(var(--fail-rgb),0.10); color: rgba(255,200,200,0.95); }
+        .statusPill.fail{ border-color: rgba(var(--fail-rgb),0.42); background: rgba(var(--fail-rgb),0.10); color: var(--fail); }
         .statusPill.warn{ border-color: rgba(var(--warn-rgb),0.40); background: rgba(var(--warn-rgb),0.10); color: rgba(255,225,170,0.95); }
         .statusPill.info{ border-color: rgba(var(--info-rgb),0.40); background: rgba(var(--info-rgb),0.08); color: rgba(195,225,255,0.95); }
 
@@ -801,14 +802,6 @@
                             <input id="intervalSec" class="input mono" style="width:90px" value="3" />
                         </div>
 
-
-
-
-
-                        <div class="note">
-                            Integrity calls <span class="kbd">/api/v4/audit/verify</span>.
-                            Tail uses <span class="kbd">/api/v4/audit/tail?n=…</span> with <span class="kbd">Cache-Control: no-store</span>.
-                        </div>
                     </div>
                 </div>
             </div>

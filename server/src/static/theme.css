@@ -141,15 +141,16 @@ html[data-theme="win_classic"]{
     --ok: rgba(10,107,43,0.95);
 
     --warn:#9a6b00;
-    --err:#8a1d1d;
-    --fail:#8a1d1d;
+    --err: #5f1515;
+    --fail: #5f1515;
     --info:#0b4ea2; /* system-ish blue */
 
     /* RGB helpers */
     --fg-rgb: 0,0,0;
     --warn-rgb: 154,107,0;
-    --fail-rgb: 138,29,29;
-    --err-rgb: 138,29,29;
+    /* RGB used for translucent backgrounds */
+    --fail-rgb: 80,18,18;
+    --err-rgb: 80,18,18;
     --info-rgb: 11,78,162;
 
     /* charts */
@@ -163,6 +164,29 @@ html[data-theme="win_classic"] *{
     text-shadow:none !important;
     backdrop-filter:none !important;
 }
+/* --------------------------------------------------------------------------
+   Admin Audit: expanded JSON row is too dark in win_classic
+   admin_audit.html uses inline dark rgba(0,0,0,...) surfaces; override them.
+   -------------------------------------------------------------------------- */
+
+html[data-theme="win_classic"] .detailRow td{
+    /* the whole expanded row background */
+    background: linear-gradient(180deg, var(--panel2), var(--panel)) !important;
+    border-bottom: 1px solid rgba(0,0,0,0.14) !important;
+}
+
+html[data-theme="win_classic"] .detail pre{
+    /* the JSON box */
+    background: rgba(255,255,255,0.65) !important;
+    color: rgba(0,0,0,0.88) !important;
+    border: 1px solid rgba(0,0,0,0.18) !important;
+}
+
+/* Optional: make the right-side action area match (buttons already handled globally) */
+html[data-theme="win_classic"] .detailActions .small{
+    color: rgba(0,0,0,0.70) !important;
+}
+
 
 /* Replace the “neon fog” page body backgrounds */
 html[data-theme="win_classic"] body{

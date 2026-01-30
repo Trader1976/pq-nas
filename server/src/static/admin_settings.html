@@ -434,6 +434,43 @@
             user-select: none;
             background: rgba(0,0,0,0.12);
         }
+        /* -------------------------
+          Accordion cards (Settings)
+          - multi-open allowed
+          - works with current .card/.hd/.bd structure
+          ------------------------- */
+
+        .card.accordion .hd{
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .card.accordion .hd:focus{
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(var(--fg-rgb),0.10);
+            border-radius: 12px;
+        }
+
+        /* body visibility */
+        .card.accordion .bd{ display: none; }
+        .card.accordion.open .bd{ display: block; }
+
+        /* header border when collapsed */
+        .card.accordion:not(.open) .hd{ border-bottom: none; }
+
+        /* chevron */
+        .card.accordion .chev{
+            margin-left: 10px;
+            opacity: 0.75;
+            font-weight: 950;
+            transform: rotate(0deg);
+            transition: transform 120ms ease, opacity 120ms ease;
+            flex: 0 0 auto;
+        }
+        .card.accordion.open .chev{
+            transform: rotate(90deg);
+            opacity: 0.95;
+        }
 
         .hidden { display:none !important; }
     </style>
@@ -511,11 +548,12 @@
 
         <div class="content">
 
-            <!-- Audit verbosity -->
-            <div class="card">
-                <div class="hd">
+            <!-- Audit verbosity (OPEN by default) -->
+            <div class="card accordion open" data-acc="settings">
+                <div class="hd" role="button" tabindex="0" aria-expanded="true">
                     <div class="h">Audit verbosity</div>
                     <div class="pill warn" id="statusPill"><span class="k">Status:</span> <span class="v">loading…</span></div>
+                    <span class="chev" aria-hidden="true">▸</span>
                 </div>
 
                 <div class="bd">
@@ -537,19 +575,20 @@
                     </div>
                 </div>
             </div>
+
             <!-- Audit rotation -->
-            <div class="card">
-                <div class="hd">
+            <div class="card accordion" data-acc="settings">
+                <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">Audit rotation</div>
                     <div class="pill info" id="activeSizePill">
                         <span class="k">Active log:</span> <span class="v">—</span>
                     </div>
+                    <span class="chev" aria-hidden="true">▸</span>
                 </div>
 
                 <div class="bd">
                     <div class="row">
                         <button id="btnRotateNow" class="btn" type="button">Rotate now</button>
-
                     </div>
 
                     <div class="note">
@@ -558,13 +597,15 @@
                     </div>
                 </div>
             </div>
+
             <!-- Audit rotation policy (automatic) -->
-            <div class="card">
-                <div class="hd">
+            <div class="card accordion" data-acc="settings">
+                <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">Audit rotation policy</div>
                     <div class="pill info" id="rotatePolicyPill">
                         <span class="k">Policy:</span> <span class="v">—</span>
                     </div>
+                    <span class="chev" aria-hidden="true">▸</span>
                 </div>
 
                 <div class="bd">
@@ -595,15 +636,14 @@
             </div>
 
             <!-- Audit retention -->
-            <div class="card">
-                <div class="hd">
+            <div class="card accordion" data-acc="settings">
+                <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">Audit retention</div>
-                        <div class="pill info" id="retentionPill">
-                            <span class="k">Policy:</span> <span class="v">—</span>
-                        </div>
+                    <div class="pill info" id="retentionPill">
+                        <span class="k">Policy:</span> <span class="v">—</span>
                     </div>
-
-
+                    <span class="chev" aria-hidden="true">▸</span>
+                </div>
 
                 <div class="bd">
                     <div class="row">
@@ -659,13 +699,15 @@
                     </div>
                 </div>
             </div>
+
             <!-- Theme -->
-            <div class="card">
-                <div class="hd">
+            <div class="card accordion" data-acc="settings">
+                <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">UI Theme</div>
                     <div class="row">
                         <span class="pill info" id="themePill"><span class="k">Theme:</span> <span class="v">—</span></span>
                     </div>
+                    <span class="chev" aria-hidden="true">▸</span>
                 </div>
 
                 <div class="bd">
@@ -694,9 +736,42 @@
             </div>
         </div>
 
-        <div class="footerline">© CPUNK 2026</div>
-    </main>
-</div>
+        <script>
+            (function () {
+                function isInteractive(el) {
+                    if (!el) return false;
+                    // NOTE: do NOT include [role="button"] or you'll match the header itself.
+                    return !!el.closest('a,button,input,select,textarea,label,summary');
+                }
+
+                const cards = Array.from(document.querySelectorAll('.card.accordion'));
+                for (const card of cards) {
+                    const hd = card.querySelector('.hd');
+                    if (!hd) continue;
+
+                    hd.setAttribute('role', 'button');
+                    hd.setAttribute('tabindex', '0');
+                    hd.setAttribute('aria-expanded', card.classList.contains('open') ? 'true' : 'false');
+
+                    const toggle = () => {
+                        const open = card.classList.toggle('open');
+                        hd.setAttribute('aria-expanded', open ? 'true' : 'false');
+                    };
+
+                    hd.addEventListener('click', (ev) => {
+                        if (isInteractive(ev.target)) return;
+                        toggle();
+                    });
+
+                    hd.addEventListener('keydown', (ev) => {
+                        if (ev.key === 'Enter' || ev.key === ' ') {
+                            ev.preventDefault();
+                            toggle();
+                        }
+                    });
+                }
+            })();
+        </script>
 
 <script src="/static/admin_badges.js"></script>
 <script src="/static/admin_settings.js?v=3"></script>

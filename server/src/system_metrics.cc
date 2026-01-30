@@ -64,6 +64,11 @@ static std::string cpu_model_string();
 static bool os_release_pretty(std::string& pretty, std::string& id, std::string& ver);
 static bool parse_proc_meminfo_bytes(long long& total_bytes, long long& avail_bytes);
 static bool statvfs_bytes(const std::string& path, long long& total, long long& free, long long& used);
+static bool list_filesystems(std::vector<std::string>& mountpoints,
+                             std::unordered_map<std::string, std::string>& mp_source,
+                             std::unordered_map<std::string, std::string>& mp_fstype);
+static bool is_pseudo_fstype(const std::string& fs);
+static bool is_hidden_mount(const std::string& mp);
 static std::string uname_string();
 static std::string proc_self_exe();
 static bool proc_self_rss_bytes(long long& rss_bytes);
@@ -275,46 +280,82 @@ nlohmann::json collect_system_snapshot(const std::string& repo_root) {
         }
     }
 
-    // ---------------------------------------------------------------------
-    // Disk usage: root filesystem + repo path
-    // ---------------------------------------------------------------------
-    {
-        out["disk"] = nlohmann::json::object();
+// ---------------------------------------------------------------------
+// Disk usage: root filesystem + repo path + mounted filesystems list
+// ---------------------------------------------------------------------
+{
+    out["disk"] = nlohmann::json::object();
+    out["disk"]["repo_root"] = repo_root;
 
-        long long t=0,f=0,u=0;
-        if (statvfs_bytes("/", t, f, u)) {
-            out["disk"]["root"] = {
-                {"path","/"},
-                {"total_bytes",t},
-                {"free_bytes",f},
-                {"used_bytes",u}
-            };
-        } else {
-            out["disk"]["root"] = {
-                {"path","/"},
-                {"total_bytes",nullptr},
-                {"free_bytes",nullptr},
-                {"used_bytes",nullptr}
-            };
-        }
+    // Back-compat: root filesystem
+    long long t=0,f=0,u=0;
+    if (statvfs_bytes("/", t, f, u)) {
+        out["disk"]["root"] = {
+            {"path","/"},
+            {"total_bytes",t},
+            {"free_bytes",f},
+            {"used_bytes",u}
+        };
+    } else {
+        out["disk"]["root"] = {
+            {"path","/"},
+            {"total_bytes",nullptr},
+            {"free_bytes",nullptr},
+            {"used_bytes",nullptr}
+        };
+    }
 
-        long long t2=0,f2=0,u2=0;
-        if (statvfs_bytes(repo_root, t2, f2, u2)) {
-            out["disk"]["repo"] = {
-                {"path",repo_root},
-                {"total_bytes",t2},
-                {"free_bytes",f2},
-                {"used_bytes",u2}
-            };
-        } else {
-            out["disk"]["repo"] = {
-                {"path",repo_root},
-                {"total_bytes",nullptr},
-                {"free_bytes",nullptr},
-                {"used_bytes",nullptr}
-            };
+    // Back-compat: repo path
+    long long t2=0,f2=0,u2=0;
+    if (statvfs_bytes(repo_root, t2, f2, u2)) {
+        out["disk"]["repo"] = {
+            {"path",repo_root},
+            {"total_bytes",t2},
+            {"free_bytes",f2},
+            {"used_bytes",u2}
+        };
+    } else {
+        out["disk"]["repo"] = {
+            {"path",repo_root},
+            {"total_bytes",nullptr},
+            {"free_bytes",nullptr},
+            {"used_bytes",nullptr}
+        };
+    }
+
+    // New: mounted filesystems list (mountpoints)
+    std::vector<std::string> mps;
+    std::unordered_map<std::string, std::string> mp_src;
+    std::unordered_map<std::string, std::string> mp_fs;
+
+    nlohmann::json arr = nlohmann::json::array();
+
+    if (list_filesystems(mps, mp_src, mp_fs)) {
+        for (const auto& mp : mps) {
+            if (is_hidden_mount(mp)) continue;
+
+            long long tt=0, ff=0, uu=0;
+            if (!statvfs_bytes(mp, tt, ff, uu)) continue;
+
+            const std::string src = mp_src.count(mp) ? mp_src[mp] : "";
+            const std::string fs  = mp_fs.count(mp)  ? mp_fs[mp]  : "";
+
+            // Skip pseudo filesystems (proc, sysfs, tmpfs, overlay, …)
+            if (is_pseudo_fstype(fs)) continue;
+
+            arr.push_back({
+                {"mountpoint", mp},
+                {"source", src},
+                {"fstype", fs},
+                {"total_bytes", tt},
+                {"free_bytes", ff},
+                {"used_bytes", uu}
+            });
         }
     }
+
+    out["disk"]["filesystems"] = std::move(arr);
+}
 
     // ---------------------------------------------------------------------
     // Process info for pqnas_server itself
@@ -656,6 +697,109 @@ static bool read_proc_net_dev(std::unordered_map<std::string, NetCounters>& out)
     }
     return true;
 }
+
+static bool is_pseudo_fstype(const std::string& fs) {
+    // Expand as you like; these are “not real disks”
+    static const char* k[] = {
+        "proc","sysfs","devtmpfs","devpts","tmpfs","cgroup","cgroup2","pstore",
+        "securityfs","tracefs","debugfs","hugetlbfs","mqueue","fusectl",
+        "overlay","squashfs","ramfs","autofs","binfmt_misc"
+    };
+    for (auto s : k) if (fs == s) return true;
+    return false;
+}
+
+static bool is_hidden_mount(const std::string& mp) {
+    // Hide noisy internals; keep / and “real” mounts
+    if (mp.empty()) return true;
+    if (mp == "/") return false;
+
+    if (mp == "/boot" || mp == "/boot/efi") return true;
+
+    // Common internal mount roots
+    if (mp.rfind("/proc", 0) == 0) return true;
+    if (mp.rfind("/sys", 0) == 0) return true;
+    if (mp.rfind("/dev", 0) == 0) return true;
+    if (mp.rfind("/run", 0) == 0) return true;
+
+    // Remove unwanted noise
+    if (mp.rfind("/snap", 0) == 0) return true;
+    if (mp.rfind("/var/snap", 0) == 0) return true;
+    if (mp.rfind("/var/lib/snapd", 0) == 0) return true;
+    if (mp.rfind("/var/lib/flatpak", 0) == 0) return true;
+
+    // Snap/flatpak noise (optional)
+    if (mp.rfind("/snap", 0) == 0) return true;
+    if (mp.rfind("/var/lib/snapd", 0) == 0) return true;
+
+    return false;
+}
+
+static bool list_filesystems(std::vector<std::string>& mountpoints,
+                             std::unordered_map<std::string, std::string>& mp_source,
+                             std::unordered_map<std::string, std::string>& mp_fstype) {
+    mountpoints.clear();
+    mp_source.clear();
+    mp_fstype.clear();
+
+    std::ifstream f("/proc/self/mountinfo");
+    if (!f.good()) return false;
+
+    // mountinfo format:
+    // id parent major:minor root mount_point options ... - fstype source superoptions
+    std::string line;
+    std::unordered_map<std::string, bool> seen;
+
+    while (std::getline(f, line)) {
+        if (line.empty()) continue;
+
+        // split around " - "
+        const std::string sep = " - ";
+        auto pos = line.find(sep);
+        if (pos == std::string::npos) continue;
+
+        const std::string left = line.substr(0, pos);
+        const std::string right = line.substr(pos + sep.size());
+
+        // Left side tokens: we need token #5 = mount_point (1-based)
+        // left: id(1) parent(2) major:minor(3) root(4) mount_point(5) ...
+        std::istringstream lss(left);
+        std::string tok;
+        std::string mount_point;
+        int idx = 0;
+        while (lss >> tok) {
+            idx++;
+            if (idx == 5) { mount_point = tok; break; }
+        }
+        if (mount_point.empty()) continue;
+
+        // Right side: fstype + source + superoptions...
+        std::istringstream rss(right);
+        std::string fstype, source;
+        rss >> fstype >> source;
+        if (fstype.empty()) fstype = "";
+        if (source.empty()) source = "";
+
+        if (!seen[mount_point]) {
+            seen[mount_point] = true;
+            mountpoints.push_back(mount_point);
+        }
+
+        mp_fstype[mount_point] = fstype;
+        mp_source[mount_point] = source;
+    }
+
+    // Sort: show / first, then lexicographic
+    std::sort(mountpoints.begin(), mountpoints.end(), [](const std::string& a, const std::string& b){
+        if (a == "/") return true;
+        if (b == "/") return false;
+        return a < b;
+    });
+
+    return true;
+}
+
+
 
 static void net_maybe_sample_locked(long long now_ms) {
     // Called with g_net_mu held.

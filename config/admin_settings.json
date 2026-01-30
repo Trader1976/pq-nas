@@ -16,7 +16,7 @@
     "mode": "size_mb",
     "rotate_utc_day": ""
   },
-  "ui_theme": "dark",
+  "ui_theme": "win_classic",
   "user_defaults": {
     "auto_allocate_on_enable": false,
     "default_quota_gb": 10,
