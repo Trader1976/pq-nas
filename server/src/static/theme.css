@@ -273,3 +273,64 @@ html[data-theme="win_classic"] thead th{
 html[data-theme="win_classic"] tbody td{
     border-bottom: 1px solid rgba(0,0,0,0.10) !important;
 }
+/* --------------------------------------------------------------------------
+   File Manager (filemgr) app: fix modal + context menu surfaces in win_classic
+   These elements are app-local (IDs), so global .card rules don't catch them.
+   -------------------------------------------------------------------------- */
+
+html[data-theme="win_classic"] #propsModal .card{
+    background: linear-gradient(180deg, var(--panel2), var(--panel)) !important;
+    color: var(--fg) !important;
+    border: 1px solid var(--border) !important;
+    box-shadow: var(--shadow) !important;
+    outline: 1px solid var(--border2) !important;
+    outline-offset: -2px !important;
+}
+
+html[data-theme="win_classic"] #propsModal .hdr{
+    background: linear-gradient(180deg, #f6f6f6, #dedede) !important;
+    border-bottom: 1px solid var(--border) !important;
+}
+html[data-theme="win_classic"]{
+    --fm_modal_overlay: rgba(0,0,0,0.18);
+}
+html[data-theme="win_classic"] #propsBody .k{
+    color: rgba(0,0,0,0.72) !important;
+}
+html[data-theme="win_classic"] #propsBody .v{
+    color: rgba(0,0,0,0.92) !important;
+}
+
+/* Raw JSON details block */
+html[data-theme="win_classic"] #propsBody details > summary{
+    color: rgba(0,0,0,0.92) !important;
+    cursor: pointer;
+    user-select: none;
+}
+html[data-theme="win_classic"] #propsBody pre.pre{
+    background: rgba(0,0,0,0.04) !important;
+    border: 1px solid rgba(0,0,0,0.12) !important;
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+/* Right-click context menu */
+html[data-theme="win_classic"] #ctxMenu{
+    background: linear-gradient(180deg, var(--panel2), var(--panel)) !important;
+    color: var(--fg) !important;
+    border: 1px solid var(--border) !important;
+    box-shadow: 0 14px 50px rgba(0,0,0,0.18) !important;
+    outline: 1px solid var(--border2) !important;
+    outline-offset: -2px !important;
+}
+
+html[data-theme="win_classic"] #ctxMenu .ctxItem{
+    color: rgba(0,0,0,0.92) !important;
+}
+html[data-theme="win_classic"] #ctxMenu .ctxItem:hover{
+    background: rgba(0,0,0,0.06) !important;
+}
+html[data-theme="win_classic"] #ctxMenu .ctxSep{
+    background: rgba(0,0,0,0.14) !important;
+}
+

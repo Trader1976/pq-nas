@@ -13,6 +13,10 @@
     :root{
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial;
+      /* App surfaces default to global theme tokens */
+      --fm_surface: var(--panel);
+      --fm_surface2: var(--panel2);
+      --fm_modal_overlay: rgba(0,0,0,0.55);
     }
 
     html:not([data-theme]){
@@ -399,7 +403,7 @@
       justify-content: center;
       padding: 18px;
       z-index: 10000;
-      background: rgba(0,0,0,0.55);
+      background: var(--fm_modal_overlay);
       backdrop-filter: blur(6px);
     }
 
@@ -409,7 +413,7 @@
       width: min(720px, calc(100vw - 24px));
       border: 1px solid var(--border2);
       border-radius: 18px;
-      background: rgba(0,0,0,0.72);
+      background: linear-gradient(180deg, var(--fm_surface2), var(--fm_surface));
       box-shadow: var(--shadow);
       overflow: hidden;
     }
@@ -421,8 +425,9 @@
       gap: 12px;
       padding: 12px 14px;
       border-bottom: 1px solid var(--border2);
-      background: rgba(0,0,0,0.30);
+      background: rgba(0,0,0,0.18); /* neutral header tint; works on dark + light */
     }
+
 
     .modalTitle{
       font-weight: 950;
@@ -460,6 +465,15 @@
       overflow-wrap: anywhere;
     }
 
+    #propsBody details > summary {
+      cursor: pointer;
+      user-select: none;
+    }
+    #propsBody pre.pre {
+      margin: 10px 0 0 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
   </style>
 </head>
 

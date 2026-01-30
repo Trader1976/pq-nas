@@ -86,7 +86,7 @@ Example:
 {
   "id": "filemgr",
   "name": "File Manager",
-  "version": "0.1.0",
+  "version": "0.9.0",
   "entry": "www/index.html",
   "api_base": "/api/v4/files",
   "permissions": []
@@ -191,7 +191,7 @@ Example:
 ```bash
 curl -s -X POST http://127.0.0.1:8081/api/v4/apps/uninstall \
   -H 'Content-Type: application/json' \
-  -d '{"id":"filemgr","version":"0.1.0"}' | jq .
+  -d '{"id":"filemgr","version":"0.9.0"}' | jq .
 ```
 
 ---
@@ -231,6 +231,8 @@ Recommended workflow:
 ## 10) API endpoints apps can use (current)
 
 Apps run in the user’s browser and can call PQ-NAS endpoints with:
+Some read-only endpoints may be callable with GET or POST for convenience and backward compatibility. 
+Mutating endpoints always use POST/PUT/DELETE.
 
 ```js
 fetch("/api/v4/...", { credentials: "include", cache: "no-store" })
@@ -271,7 +273,47 @@ POST /api/v4/files/hash
 POST /api/v4/files/cat  
 POST /api/v4/files/touch  
 POST /api/v4/files/save_text
+GET  /api/v4/files/stat  
+POST /api/v4/files/stat
+POST /api/v4/files/stat_sel
 
+/api/v4/files/stat
+Returns metadata about a file or directory.
+Query parameter:
+path — relative path inside the user root, or "." for root.
+Notes:
+Symlinks are rejected.
+Paths are validated via strict resolver.
+Requires allocated storage.
+Returns recursive size + children counts for directories (subject to caps).
+Example:
+curl -s -X POST "http://127.0.0.1:8081/api/v4/files/stat?path=." \
+--cookie "pqnas_session=..." | jq .
+
+Success response fields (current):
+
+Common:
+ok
+path
+path_norm
+name
+type (file|dir|other)
+exists
+mode_octal
+mtime_epoch (if available)
+File only:
+bytes
+mime
+is_text
+Directory only:
+children.files
+children.dirs
+children.other
+bytes_recursive
+recursive_scanned_entries
+recursive_complete
+scan_cap
+time_cap_ms
 Mutations:
 
 POST   /api/v4/files/mkdir  

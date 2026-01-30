@@ -6903,8 +6903,9 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
     }.dump());
 });
 
-    // POST /api/v4/files/stat?path=rel/path or "." (dir -> children + recursive bytes by default)
-srv.Post("/api/v4/files/stat", [&](const httplib::Request& req, httplib::Response& res) {
+// /api/v4/files/stat?path=rel/path or "." (dir -> children + recursive bytes by default)
+// GET/POST /api/v4/files/stat?path=rel/path or "." ...
+auto files_stat_handler = [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
         return;
@@ -7217,9 +7218,260 @@ srv.Post("/api/v4/files/stat", [&](const httplib::Request& req, httplib::Respons
 
     // other types: just return metadata
     reply_json(res, 200, out.dump());
+};
+
+srv.Post("/api/v4/files/stat", files_stat_handler);
+srv.Get ("/api/v4/files/stat", files_stat_handler);
+
+// POST /api/v4/files/stat_sel
+// Body: { "paths": ["rel/path", ".", ...] }
+// Returns aggregated selection stats (total bytes etc) + per-item minimal stats.
+srv.Post("/api/v4/files/stat_sel", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    // caps (match /stat)
+    const std::uint64_t RECURSIVE_HARD_CAP = 100000;
+    const int RECURSIVE_TIME_CAP_MS = 300;
+
+    // selection cap (protect server)
+    const int MAX_ITEMS = 200;
+
+    json body;
+    try {
+        body = json::parse(req.body);
+    } catch (...) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    if (!body.is_object() || !body.contains("paths") || !body["paths"].is_array()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "body must be { paths: [...] }"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    // Helpers (copied from /stat for consistency)
+    auto mode_octal_from_perms = [&](std::filesystem::perms pr) -> std::string {
+        auto has = [&](std::filesystem::perms bit) { return (pr & bit) != std::filesystem::perms::none; };
+        int m = 0;
+        if (has(std::filesystem::perms::owner_read))  m |= 0400;
+        if (has(std::filesystem::perms::owner_write)) m |= 0200;
+        if (has(std::filesystem::perms::owner_exec))  m |= 0100;
+        if (has(std::filesystem::perms::group_read))  m |= 0040;
+        if (has(std::filesystem::perms::group_write)) m |= 0020;
+        if (has(std::filesystem::perms::group_exec))  m |= 0010;
+        if (has(std::filesystem::perms::others_read))  m |= 0004;
+        if (has(std::filesystem::perms::others_write)) m |= 0002;
+        if (has(std::filesystem::perms::others_exec))  m |= 0001;
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "%04o", m);
+        return std::string(buf);
+    };
+
+    auto make_path_norm = [&](const std::filesystem::path& p) -> std::string {
+        std::error_code ec2;
+        auto rel = std::filesystem::relative(p, user_dir, ec2);
+        if (ec2) return "/";
+        std::string s = rel.generic_string();
+        if (s.empty() || s == ".") return "/";
+        if (!s.empty() && s[0] != '/') s = "/" + s;
+        return s;
+    };
+
+    auto dir_bytes_recursive = [&](const std::filesystem::path& base_abs,
+                                   std::uint64_t* out_scanned,
+                                   bool* out_complete) -> std::uint64_t {
+        std::uint64_t bytes_recursive = 0;
+        std::uint64_t scanned = 0;
+        bool complete = true;
+
+        auto t0 = std::chrono::steady_clock::now();
+        std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
+
+        std::error_code ec;
+        for (auto it = std::filesystem::recursive_directory_iterator(base_abs, opts, ec);
+             it != std::filesystem::recursive_directory_iterator();
+             it.increment(ec)) {
+
+            if (ec) {
+                // Treat walk failure as incomplete; caller will record error.
+                complete = false;
+                break;
+            }
+
+            scanned++;
+            if (scanned >= RECURSIVE_HARD_CAP) { complete = false; break; }
+
+            auto now = std::chrono::steady_clock::now();
+            auto ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
+            if (ms >= RECURSIVE_TIME_CAP_MS) { complete = false; break; }
+
+            std::error_code ec6;
+            auto st2 = it->symlink_status(ec6);
+            if (ec6) continue;
+
+            if (std::filesystem::is_symlink(st2)) {
+                if (it->is_directory(ec6)) it.disable_recursion_pending();
+                continue;
+            }
+
+            if (std::filesystem::is_regular_file(st2)) {
+                bytes_recursive += pqnas::file_size_u64_safe(it->path());
+            }
+        }
+
+        if (out_scanned) *out_scanned = scanned;
+        if (out_complete) *out_complete = complete;
+        return bytes_recursive;
+    };
+
+    // Aggregate
+    std::uint64_t total_bytes = 0;
+    int n_files = 0, n_dirs = 0, n_other = 0;
+    bool partial = false;
+
+    json items = json::array();
+    json errors = json::array();
+
+    int idx = 0;
+    for (const auto& v : body["paths"]) {
+        if (idx >= MAX_ITEMS) { partial = true; break; }
+        idx++;
+
+        if (!v.is_string()) {
+            partial = true;
+            errors.push_back(json{{"path",""}, {"error","bad_request"}, {"message","path must be string"}});
+            continue;
+        }
+
+        std::string path_rel = v.get<std::string>();
+
+        // allow "." as user root
+        if (path_rel == "." || path_rel == "./" || path_rel == "/") path_rel.clear();
+
+        std::filesystem::path path_abs;
+        std::string err;
+
+        if (path_rel.empty()) {
+            path_abs = user_dir;
+        } else {
+            if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &path_abs, &err)) {
+                partial = true;
+                errors.push_back(json{{"path", path_rel}, {"error","invalid_path"}, {"message", pqnas::shorten(err, 180)}});
+                continue;
+            }
+        }
+
+        // Detect symlink without following
+        std::error_code ec;
+        auto st = std::filesystem::symlink_status(path_abs, ec);
+        if (ec || !std::filesystem::exists(st)) {
+            partial = true;
+            errors.push_back(json{{"path", path_rel.empty() ? "." : path_rel}, {"error","not_found"}});
+            continue;
+        }
+        if (std::filesystem::is_symlink(st)) {
+            partial = true;
+            errors.push_back(json{{"path", path_rel.empty() ? "." : path_rel}, {"error","symlink_not_supported"}});
+            continue;
+        }
+
+        const bool is_dir = std::filesystem::is_directory(st);
+        const bool is_file = std::filesystem::is_regular_file(st);
+
+        std::string type = "other";
+        if (is_dir) type = "dir";
+        else if (is_file) type = "file";
+
+        json itj;
+        itj["path"] = path_rel.empty() ? "." : path_rel;
+        itj["path_norm"] = make_path_norm(path_abs);
+        itj["type"] = type;
+
+        // mode (best-effort, same as /stat)
+        {
+            std::error_code ec4;
+            auto stp = std::filesystem::status(path_abs, ec4);
+            if (!ec4) itj["mode_octal"] = mode_octal_from_perms(stp.permissions());
+        }
+
+        if (type == "file") {
+            std::uint64_t b = pqnas::file_size_u64_safe(path_abs);
+            itj["bytes"] = b;
+            total_bytes += b;
+            n_files++;
+            items.push_back(itj);
+            continue;
+        }
+
+        if (type == "dir") {
+            std::uint64_t scanned = 0;
+            bool complete = true;
+
+            // recursive bytes: sum regular files only, skip symlinks (same as /stat)
+            std::uint64_t b = dir_bytes_recursive(path_abs, &scanned, &complete);
+
+            itj["bytes_recursive"] = b;
+            itj["recursive_scanned_entries"] = scanned;
+            itj["recursive_complete"] = complete;
+
+            total_bytes += b;
+            n_dirs++;
+
+            if (!complete) partial = true;
+
+            items.push_back(itj);
+            continue;
+        }
+
+        // other
+        n_other++;
+        items.push_back(itj);
+        partial = true; // “other” is uncommon; treat aggregate as partial/unknown
+    }
+
+    json out;
+    out["ok"] = true;
+    out["count"] = (int)items.size();
+    out["files"] = n_files;
+    out["dirs"] = n_dirs;
+    out["other"] = n_other;
+    out["bytes_total"] = total_bytes;
+    out["partial"] = partial;
+
+    out["limits"] = json{
+        {"max_items", MAX_ITEMS},
+        {"scan_cap", RECURSIVE_HARD_CAP},
+        {"time_cap_ms", RECURSIVE_TIME_CAP_MS}
+    };
+
+    out["items"] = items;
+    out["errors"] = errors;
+
+    reply_json(res, 200, out.dump());
 });
-
-
 
 
 

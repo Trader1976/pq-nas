@@ -805,6 +805,17 @@
     return d;
   }
 
+  function buildSelectionMenuOnly() {
+    if (!ctxEl) return;
+
+    ctxEl.innerHTML = "";
+
+    ctxEl.appendChild(menuItem(`Properties (selection)…`, "", () => showSelectionProperties()));
+    ctxEl.appendChild(menuSep());
+    ctxEl.appendChild(menuItem(`Download selection (zip) (${selectedKeys.size})`, "", () => downloadSelectionZip()));
+    ctxEl.appendChild(menuItem(`Delete selection (${selectedKeys.size})…`, "", () => deleteSelection(), { danger: true }));
+  }
+
   function currentRelPathFor(item) {
     return joinPath(curPath, item.name);
   }
@@ -830,6 +841,121 @@
     const name = s.slice(i + 1);
     if (!name) return null;
     return curPath ? `${curPath}/${name}` : name;
+  }
+  async function showSelectionProperties() {
+    const paths = selectedRelPaths();
+    if (!paths.length) return;
+
+    if (propsTitle) propsTitle.textContent = `Selection properties`;
+    if (propsPath) propsPath.textContent = `${paths.length} item(s)`;
+    if (propsBody) propsBody.innerHTML = "";
+
+    // initial rows
+    const rows = [];
+    rows.push(["Items", String(paths.length)]);
+    rows.push(["Details", "Loading…"]);
+
+    if (propsBody) {
+      for (const [k, v] of rows) {
+        const [kEl, vEl] = kvRow(k, v);
+        propsBody.appendChild(kEl);
+        propsBody.appendChild(vEl);
+      }
+    }
+
+    // fetch aggregated stats
+    let st = null;
+    try {
+      const r = await fetch("/api/v4/files/stat_sel", {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({ paths })
+      });
+      st = await r.json().catch(() => null);
+      if (!r.ok && st && !st.ok) {
+        // keep whatever server said
+      }
+    } catch (e) {
+      st = { ok: false, error: "client_error", message: String(e && e.message ? e.message : e) };
+    }
+
+    if (!propsBody) { openPropsModal(); return; }
+    propsBody.innerHTML = "";
+
+    if (!st || !st.ok) {
+      const msg = (st && (st.message || st.error))
+          ? `${st.error || "error"}: ${st.message || ""}`.trim()
+          : "Failed to load selection properties";
+
+      for (const [k, v] of [["Items", String(paths.length)], ["Error", msg]]) {
+        const [kEl, vEl] = kvRow(k, v);
+        propsBody.appendChild(kEl);
+        propsBody.appendChild(vEl);
+      }
+      openPropsModal();
+      return;
+    }
+
+    const pushRow = (arr, k, v) => {
+      if (v === undefined || v === null || v === "") return;
+      arr.push([k, v]);
+    };
+
+    const rows2 = [];
+    pushRow(rows2, "Items", String(st.count != null ? st.count : paths.length));
+    pushRow(rows2, "Files", st.files != null ? String(st.files) : "");
+    pushRow(rows2, "Folders", st.dirs != null ? String(st.dirs) : "");
+    if (st.other != null && st.other !== 0) pushRow(rows2, "Other", String(st.other));
+
+    if (st.bytes_total != null) pushRow(rows2, "Total size", fmtSize(st.bytes_total));
+
+    if (typeof st.partial === "boolean") {
+      pushRow(rows2, "Complete", st.partial ? "No (partial)" : "Yes");
+    }
+
+    if (st.limits) {
+      if (st.limits.max_items != null) pushRow(rows2, "Max items", String(st.limits.max_items));
+      if (st.limits.time_cap_ms != null) pushRow(rows2, "Dir scan time cap", `${st.limits.time_cap_ms} ms`);
+      if (st.limits.scan_cap != null) pushRow(rows2, "Dir scan entry cap", String(st.limits.scan_cap));
+    }
+
+    // Errors summary
+    const errCount = Array.isArray(st.errors) ? st.errors.length : 0;
+    if (errCount) pushRow(rows2, "Errors", String(errCount));
+
+    // Collapsible Raw JSON
+    const rawDetails = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = "Raw JSON";
+    rawDetails.appendChild(summary);
+
+    const pre = document.createElement("pre");
+    pre.className = "pre mono";
+    pre.textContent = JSON.stringify(st, null, 2);
+    rawDetails.appendChild(pre);
+
+    // Render rows
+    for (const [k, v] of rows2) {
+      const [kEl, vEl] = kvRow(k, v);
+      propsBody.appendChild(kEl);
+      propsBody.appendChild(vEl);
+    }
+
+    // add details block spanning full width: append empty key cell + value cell
+    {
+      const kEl = document.createElement("div");
+      kEl.className = "k";
+      kEl.textContent = "";
+      const vEl = document.createElement("div");
+      vEl.className = "v mono";
+      vEl.appendChild(rawDetails);
+      propsBody.appendChild(kEl);
+      propsBody.appendChild(vEl);
+    }
+
+    openPropsModal();
   }
 
   function selectedRelPaths() {
@@ -1006,9 +1132,21 @@
     ctxEl.innerHTML = "";
     ctxOpenForKey = key;
 
+    const selectionMode = (selectedKeys && selectedKeys.size > 1 && selectedKeys.has(key));
+    if (selectionMode) {
+      buildSelectionMenuOnly();
+      ctxEl.setAttribute("aria-hidden", "false");
+      placeMenu(x, y);
+      return;
+    }
     // If multiple items are selected and the right-clicked item is part of that selection,
     // show selection-level actions here too (not only in background menu).
     if (selectedKeys && selectedKeys.size > 1 && selectedKeys.has(key)) {
+      ctxEl.appendChild(
+          menuItem(`Properties (selection)…`, "", () => showSelectionProperties())
+      );
+      ctxEl.appendChild(menuSep());
+
       ctxEl.appendChild(
           menuItem(`Download selection (zip) (${selectedKeys.size})`, "", () => downloadSelectionZip())
       );
@@ -1037,10 +1175,11 @@
         doMkdirAt(relDir);
       }));
 
-      // NEW: Properties
-      ctxEl.appendChild(menuSep());
-      ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
-
+// Properties (single only)
+      if (!(selectedKeys && selectedKeys.size > 1)) {
+        ctxEl.appendChild(menuSep());
+        ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
+      }
       ctxEl.appendChild(menuSep());
       ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
       ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
@@ -1048,9 +1187,11 @@
     } else {
       ctxEl.appendChild(menuItem("Download", "⤓", () => doDownload(item)));
 
-      // NEW: Properties
-      ctxEl.appendChild(menuSep());
-      ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
+      // Properties (single only)
+      if (!(selectedKeys && selectedKeys.size > 1)) {
+        ctxEl.appendChild(menuSep());
+        ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
+      }
 
       ctxEl.appendChild(menuSep());
       ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
@@ -1078,36 +1219,37 @@
     ctxEl.innerHTML = "";
     ctxOpenForKey = key;
 
-    ctxEl.appendChild(menuItem("Upload files…", "", () => pickFiles()));
-    ctxEl.appendChild(menuItem("Upload folder…", "", () => pickFolder()));
-
-    // If we have a selection
+    // If there is ANY selection, background right-click should behave like selection menu,
+    // not show upload/create folder actions.
     if (selectedKeys && selectedKeys.size > 0) {
-      ctxEl.appendChild(menuSep());
-
-      if (selectedKeys.size === 1) {
-        // Properties for exactly one selected item
+      if (selectedKeys.size > 1) {
+        // Multi-select: selection-only actions
+        buildSelectionMenuOnly();
+      } else {
+        // Single-select: show the same menu as right-clicking that item
         const onlyKey = Array.from(selectedKeys)[0];
-        const p = keyToItemRelPath(onlyKey); // already exists in your code
+        const p = keyToItemRelPath(onlyKey);
         if (p) {
           const name = p.split("/").pop() || p;
           const type = String(onlyKey).startsWith("dir:") ? "dir" : "file";
-          const item = { type, name };
-          ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
+          openMenuAt(x, y, { type, name });
+          return; // openMenuAt already places + shows
+        } else {
+          // fallback: at least show selection menu
+          buildSelectionMenuOnly();
         }
       }
 
-      ctxEl.appendChild(
-          menuItem(`Download selection (zip) (${selectedKeys.size})`, "", () => downloadSelectionZip())
-      );
-      ctxEl.appendChild(
-          menuItem(`Delete selection (${selectedKeys.size})…`, "", () => deleteSelection(), { danger: true })
-      );
+      ctxEl.setAttribute("aria-hidden", "false");
+      placeMenu(x, y);
+      return;
     }
 
+    // No selection: background actions (upload / folder / refresh)
+    ctxEl.appendChild(menuItem("Upload files…", "", () => pickFiles()));
+    ctxEl.appendChild(menuItem("Upload folder…", "", () => pickFolder()));
     ctxEl.appendChild(menuSep());
     ctxEl.appendChild(menuItem("Download current folder (zip)", "", () => downloadFolderZip(curPath)));
-    ctxEl.appendChild(menuSep());
     ctxEl.appendChild(menuItem("New folder…", "", () => doMkdirAt(curPath)));
     ctxEl.appendChild(menuSep());
     ctxEl.appendChild(menuItem("Refresh", "", () => load()));
@@ -1115,6 +1257,7 @@
     ctxEl.setAttribute("aria-hidden", "false");
     placeMenu(x, y);
   }
+
 
 
   document.addEventListener("click", (e) => {
@@ -1274,25 +1417,61 @@
     if (!item) return;
 
     const rel = joinPath(curPath, item.name || "");
-    const isDir = item.type === "dir";
+    const isDirHint = item.type === "dir";
 
-    if (propsTitle) propsTitle.textContent = isDir ? "Folder properties" : "File properties";
+    if (propsTitle) propsTitle.textContent = isDirHint ? "Folder properties" : "File properties";
     if (propsPath) propsPath.textContent = "/" + (rel || "");
 
+    if (propsBody) propsBody.innerHTML = "";
+
+    // --- helpers local to this function (no global guesses) ---
+    const pad2 = (n) => String(n).padStart(2, "0");
+
+    const fmtUnix = (sec) => {
+      if (!sec) return "";
+      // Your server returns epoch seconds (UTC). Show local time by default.
+      const d = new Date(Number(sec) * 1000);
+      if (isNaN(d.getTime())) return String(sec);
+      return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+    };
+
+    const permsFromOctal = (modeStr) => {
+      // mode_octal is like "0664" or "0775"
+      if (!modeStr || typeof modeStr !== "string") return "";
+      const s = modeStr.trim();
+      if (!/^[0-7]{3,4}$/.test(s)) return "";
+      const oct = s.length === 4 ? s.slice(1) : s; // ignore leading special digit if present
+      const bits = oct.split("").map((c) => parseInt(c, 8));
+      if (bits.length !== 3 || bits.some((x) => Number.isNaN(x))) return "";
+
+      const rwx = (b) => {
+        const r = (b & 4) ? "r" : "-";
+        const w = (b & 2) ? "w" : "-";
+        const x = (b & 1) ? "x" : "-";
+        return r + w + x;
+      };
+      return rwx(bits[0]) + rwx(bits[1]) + rwx(bits[2]);
+    };
+
+    const pushRow = (rows, k, v) => {
+      if (v === undefined || v === null || v === "") return;
+      rows.push([k, v]);
+    };
+
+    // --- render initial rows from list-item (fast) ---
+    const rows = [];
+    pushRow(rows, "Name", item.name || "");
+    pushRow(rows, "Type", isDirHint ? "Folder" : "File");
+    pushRow(rows, "Path", "/" + (rel || ""));
+
+    // Show list-derived size/mtime only as fallback (server stat will override)
+    if (!isDirHint && item.size_bytes != null) pushRow(rows, "Size", fmtSize(item.size_bytes || 0));
+    if (item.mtime_unix) pushRow(rows, "Modified", fmtTime(item.mtime_unix));
+
+    // Temporary row while loading
+    rows.push(["Details", "Loading…"]);
+
     if (propsBody) {
-      propsBody.innerHTML = "";
-
-      const rows = [];
-      rows.push(["Name", item.name || ""]);
-      rows.push(["Type", isDir ? "Folder" : "File"]);
-      rows.push(["Path", "/" + (rel || "")]);
-
-      if (!isDir) rows.push(["Size", fmtSize(item.size_bytes || 0)]);
-      if (item.mtime_unix) rows.push(["Modified", fmtTime(item.mtime_unix)]);
-
-      // placeholder for enrichment
-      rows.push(["Details", "loading…"]);
-
       for (const [k, v] of rows) {
         const [kEl, vEl] = kvRow(k, v);
         propsBody.appendChild(kEl);
@@ -1300,63 +1479,121 @@
       }
     }
 
-    openPropsModal();
-
-    // Enrich via server stat (if available)
+    // --- fetch stat from server ---
+    let st = null;
     try {
-      const r = await fetch(`/api/v4/files/stat?path=${encodeURIComponent(rel)}`, {
+      const qs = new URLSearchParams();
+      // Use "." for root; otherwise use rel (already relative, no leading slash)
+      qs.set("path", rel ? rel : ".");
+      const r = await fetch(`/api/v4/files/stat?${qs.toString()}`, {
+        method: "POST",
         credentials: "include",
-        cache: "no-store"
+        headers: { "Accept": "application/json" }
       });
-      const j = await r.json().catch(() => null);
-
-      if (!r.ok || !j || j.ok === false) {
-        // replace "Details: loading…" with best-effort message
-        if (propsBody) {
-          const nodes = propsBody.querySelectorAll(".k");
-          for (const n of nodes) {
-            if (n.textContent === "Details") {
-              const vEl = n.nextElementSibling;
-              if (vEl) vEl.textContent = "unavailable";
-              break;
-            }
-          }
-        }
-        return;
-      }
-
-      // Dump whatever the stat endpoint returns (without guessing schema):
-      // show a compact JSON string in Details.
-      const details = JSON.stringify(j, null, 2);
-
-      if (propsBody) {
-        // Replace Details row value with JSON
-        const nodes = propsBody.querySelectorAll(".k");
-        for (const n of nodes) {
-          if (n.textContent === "Details") {
-            const vEl = n.nextElementSibling;
-            if (vEl) {
-              vEl.textContent = details;
-              vEl.style.whiteSpace = "pre-wrap";
-              vEl.style.fontFamily = "var(--mono)";
-            }
-            break;
-          }
-        }
-      }
-    } catch (_) {
-      if (propsBody) {
-        const nodes = propsBody.querySelectorAll(".k");
-        for (const n of nodes) {
-          if (n.textContent === "Details") {
-            const vEl = n.nextElementSibling;
-            if (vEl) vEl.textContent = "network error";
-            break;
-          }
-        }
-      }
+      st = await r.json();
+    } catch (e) {
+      st = { ok: false, error: "client_error", message: String(e) };
     }
+
+    // --- re-render based on stat ground truth ---
+    if (!propsBody) {
+      openPropsModal?.();
+      return;
+    }
+
+    propsBody.innerHTML = "";
+
+    if (!st || !st.ok) {
+      const msg = (st && (st.message || st.error)) ? `${st.error || "error"}: ${st.message || ""}` : "Failed to load properties";
+      for (const [k, v] of [["Name", item.name || ""], ["Path", "/" + (rel || "")], ["Error", msg]]) {
+        const [kEl, vEl] = kvRow(k, v);
+        propsBody.appendChild(kEl);
+        propsBody.appendChild(vEl);
+      }
+      openPropsModal?.();
+      return;
+    }
+
+    const isDir = st.type === "dir";
+    if (propsTitle) propsTitle.textContent = isDir ? "Folder properties" : (st.type === "file" ? "File properties" : "Item properties");
+    if (propsPath) propsPath.textContent = st.path_norm || ("/" + (rel || ""));
+
+    const rows2 = [];
+    pushRow(rows2, "Name", st.name || "");
+    pushRow(rows2, "Type", st.type === "dir" ? "Folder" : (st.type === "file" ? "File" : "Other"));
+    pushRow(rows2, "Path", st.path_norm || ("/" + (rel || "")));
+
+    // Permissions
+    if (st.mode_octal) {
+      const rwx = permsFromOctal(st.mode_octal);
+      pushRow(rows2, "Permissions", rwx ? `${st.mode_octal} (${rwx})` : st.mode_octal);
+    }
+
+    // Time
+    if (st.mtime_epoch) pushRow(rows2, "Modified", fmtUnix(st.mtime_epoch));
+
+    if (st.type === "file") {
+      if (st.bytes != null) pushRow(rows2, "Size", fmtSize(st.bytes));
+      if (st.mime) pushRow(rows2, "MIME", st.mime);
+      if (typeof st.is_text === "boolean") pushRow(rows2, "Looks like text", st.is_text ? "Yes" : "No");
+    }
+
+    if (st.type === "dir") {
+      if (st.children) {
+        const c = st.children;
+        const parts = [];
+        if (c.files != null) parts.push(`${c.files} files`);
+        if (c.dirs != null) parts.push(`${c.dirs} folders`);
+        if (c.other != null && c.other !== 0) parts.push(`${c.other} other`);
+        pushRow(rows2, "Children", parts.join(", "));
+      }
+      if (st.bytes_recursive != null) pushRow(rows2, "Size (recursive)", fmtSize(st.bytes_recursive));
+      if (st.recursive_scanned_entries != null) pushRow(rows2, "Scanned entries", String(st.recursive_scanned_entries));
+      if (typeof st.recursive_complete === "boolean") pushRow(rows2, "Scan complete", st.recursive_complete ? "Yes" : "No");
+    }
+
+// Render normal rows first (no raw JSON yet)
+    for (const [k, v] of rows2) {
+      const [kEl, vEl] = kvRow(k, v);
+      propsBody.appendChild(kEl);
+      propsBody.appendChild(vEl);
+    }
+
+// Collapsible Raw JSON (developer-friendly, not noisy)
+    {
+      const [kEl, vEl] = kvRow("Details", "");
+      vEl.classList.remove("mono"); // we'll control formatting inside
+      vEl.innerHTML = ""; // safe: we only add DOM nodes (no untrusted HTML)
+
+      const details = document.createElement("details");
+      details.style.width = "100%";
+
+      const summary = document.createElement("summary");
+      summary.textContent = "Raw JSON";
+      summary.style.cursor = "pointer";
+      summary.style.userSelect = "none";
+
+      const pre = document.createElement("pre");
+      pre.className = "mono pre";
+      pre.style.margin = "10px 0 0 0";
+      pre.style.whiteSpace = "pre-wrap";
+      pre.style.wordBreak = "break-word";
+      pre.textContent = JSON.stringify(st, null, 2);
+
+      details.appendChild(summary);
+      details.appendChild(pre);
+
+      vEl.appendChild(details);
+
+      propsBody.appendChild(kEl);
+      propsBody.appendChild(vEl);
+    }
+
+    openPropsModal?.();
+
   }
+
+
 
   async function load() {
     closeMenu();
