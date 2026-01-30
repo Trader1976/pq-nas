@@ -376,6 +376,7 @@
       font-size: 12px;
       color: var(--fg-dim);
     }
+    .dropOverlay { pointer-events: none; }
 
     /* Upload progress */
     #uploadProg { margin-top: 8px; }
@@ -474,6 +475,36 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
+    /* --- Properties modal: keep it usable with large JSON --- */
+    .modalCard{
+      /* existing styles kept */
+      display: flex;              /* NEW */
+      flex-direction: column;     /* NEW */
+      max-height: min(82vh, 900px); /* NEW: cap overall modal height */
+    }
+
+    .modalHead{
+      flex: 0 0 auto;             /* NEW: header stays fixed */
+    }
+
+    .modalBody{
+      flex: 1 1 auto;             /* NEW: body takes remaining space */
+      min-height: 0;              /* NEW: required so overflow works in flex */
+      overflow: auto;             /* NEW: body scrolls */
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    /* If you want the Raw JSON block to scroll inside its own box too: */
+    #propsBody pre.pre{
+      max-height: 42vh;           /* NEW: don't let raw JSON dominate */
+      overflow: auto;             /* NEW */
+      padding: 10px 12px;         /* NEW: readability */
+      border: 1px solid var(--border2);
+      border-radius: 12px;
+      background: rgba(0,0,0,0.22);
+    }
+
   </style>
 </head>
 

@@ -5,6 +5,41 @@ async function apiGet(path) {
     return j;
 }
 
+
+// for showing quota usage bar
+function clamp01(x) {
+    x = Number(x);
+    if (!isFinite(x)) return 0;
+    return Math.max(0, Math.min(1, x));
+}
+
+function fmtBytesShort(n) {
+    if (!Number.isFinite(n) || n < 0) return "—";
+    const units = ["B","KiB","MiB","GiB","TiB"];
+    let x = n, i = 0;
+    while (x >= 1024 && i < units.length - 1) { x /= 1024; i++; }
+    return `${x.toFixed(i === 0 ? 0 : (i === 1 ? 1 : 2))} ${units[i]}`;
+}
+
+function quotaUsageText(usedBytes, quotaBytes) {
+    const used = Number(usedBytes);
+    const quota = Number(quotaBytes);
+    if (!isFinite(quota) || quota <= 0) return "—";
+    return `${fmtBytesShort(isFinite(used) ? used : NaN)} / ${fmtBytesShort(quota)}`;
+}
+
+function quotaUsagePct(usedBytes, quotaBytes) {
+    const used = Number(usedBytes);
+    const quota = Number(quotaBytes);
+    if (!isFinite(used) || !isFinite(quota) || quota <= 0) return 0;
+    return clamp01(used / quota);
+}
+
+
+// allow multiple open rows
+const openUsers = new Set(); // fingerprints
+
+
 async function apiPost(path, body) {
     const r = await fetch(path, {
         method: "POST",
@@ -42,6 +77,11 @@ function fmtQuotaCell(u) {
     const gb = fmtGBFromBytes(u.quota_bytes);
     return gb ? `${esc(gb)} GB` : `<span class="muted">0</span>`;
 }
+function shortFp(fp) {
+    fp = String(fp || "");
+    if (fp.length <= 20) return fp;
+    return fp.slice(0, 12) + "…" + fp.slice(-12);
+}
 
 function storagePill(state) {
     const s = (state || "unallocated");
@@ -74,9 +114,9 @@ function showToast(msg, ms = 10000) {
         t.style.padding = "12px 14px";
         t.style.borderRadius = "12px";
         t.style.border = "1px solid var(--border)";
-        t.style.background = "rgba(0,0,0,0.70)";
-        t.style.color  = "var(--fg)";
-        t.style.boxShadow = "0 18px 70px rgba(0,0,0,0.55)";
+        t.style.background = "linear-gradient(180deg, var(--panel2), var(--panel))";
+        t.style.color = "var(--fg)";
+        t.style.boxShadow = "var(--shadow)";
         t.style.font = "14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
 
         /* wrapping + scroll */
@@ -127,7 +167,9 @@ function render() {
     if (!tb) return;
 
     tb.innerHTML = rows.map(u => {
-        const isSelf = actorFp && String(u.fingerprint || "") === actorFp;
+        const fp = String(u.fingerprint || "");
+        const isOpen = openUsers.has(fp);
+        const isSelf = actorFp && fp === actorFp;
 
         const selfTag = isSelf
             ? `<span class="pill enabled" title="This is you" style="margin-left:8px;">you</span>`
@@ -137,39 +179,162 @@ function render() {
         const disAttr = isSelf ? ` disabled title="Refusing to modify your own admin entry"` : "";
         const disClass = isSelf ? ` style="opacity:0.45; cursor:not-allowed;"` : "";
 
-        return `<tr>
-        <td class="mono">${esc(u.fingerprint)}</td>
+        // detail content
+        const quotaBytes = Number(u.quota_bytes || 0);
+        const quotaText = quotaBytes ? fmtBytes(quotaBytes) : "—";
 
-        <td>
-            <div><b>${esc(u.name || "")}</b>${selfTag}</div>
-            <div class="muted" style="white-space:pre-wrap;">${esc(u.notes || "")}</div>
-        </td>
+        const usedBytes = Number(u.used_bytes ?? u.storage_used_bytes ?? 0);
+        const quotaBytes2 = Number(u.quota_bytes ?? 0);
 
-        <td>${esc(u.role || "")}</td>
-        <td>${pill(u.status)}</td>
+        const pct = quotaBytes2 > 0 ? clamp01(usedBytes / quotaBytes2) : 0;
+        const pct100 = (pct * 100).toFixed(1);
 
-        <td>${esc(u.group || "")}</td>
-        <td>${storagePill(u.storage_state)}</td>
-        <td class="mono">${fmtQuotaCell(u)}</td>
+        const quotaCls =
+            pct >= 0.90 ? "danger" :
+                pct >= 0.70 ? "warn" :
+                    "";
 
-        <td class="mono">${esc(u.added_at || "")}</td>
-        <td class="mono">${esc(u.last_seen || "")}</td>
+        const detailRow = isOpen ? `
+<tr class="detailRow" data-fp="${esc(fp)}">
+  <td colspan="10">
+    <div class="detailGrid">
+      <div class="detailBox">
+        <h3>Profile</h3>
+        
+        <div class="detailActions">
+            <button class="btn secondary" data-edit="${esc(fp)}" type="button" ${disAttr}${disClass}>Edit</button>
+        </div>
 
-        <td class="row-actions">
-            <button class="btn secondary" data-act="enable" data-fp="${esc(u.fingerprint)}" type="button"${disAttr}${disClass}>Enable</button>
-            <button class="btn secondary" data-act="disable" data-fp="${esc(u.fingerprint)}" type="button"${disAttr}${disClass}>Disable</button>
-            <button class="btn secondary" data-act="revoke" data-fp="${esc(u.fingerprint)}" type="button"${disAttr}${disClass}>Revoke</button>
-            <button class="btn secondary" data-act="allocate" data-fp="${esc(u.fingerprint)}" type="button">Allocate</button>
-            <button class="btn danger" data-act="delete" data-fp="${esc(u.fingerprint)}" type="button"${disAttr}${disClass}>Delete</button>
-        </td>
-    </tr>`;
+        <div class="detailKV"><div class="k">Fingerprint</div><div class="v mono">${esc(fp)}</div></div>
+        <div class="detailKV"><div class="k">Name</div><div class="v">${esc(u.name || "—")}</div></div>
+        <div class="detailKV"><div class="k">Role</div><div class="v">${esc(u.role || "—")}</div></div>
+        <div class="detailKV"><div class="k">Status</div><div class="v">${pill(u.status)}</div></div>
+        <div class="detailKV"><div class="k">Group</div><div class="v">${esc(u.group || "—")}</div></div>
+        <div class="detailKV"><div class="k">Storage</div><div class="v">${storagePill(u.storage_state)}</div></div>
+        <div class="detailKV"><div class="k">Quota</div><div class="v mono">${esc(quotaText)}</div></div>
+        <div class="detailKV"><div class="k">Added</div><div class="v mono">${esc(u.added_at || "—")}</div></div>
+        <div class="detailKV"><div class="k">Last seen</div><div class="v mono">${esc(u.last_seen || "—")}</div></div>
+      </div>
+
+      <div class="detailBox">
+        <h3>Notes</h3>
+        <pre class="detailPre">${esc(u.notes || "—")}</pre>
+
+        <div class="quotaBox">
+          <div class="quotaTop">
+            <div class="quotaLabel">Storage usage</div>
+            <div class="quotaNum mono">${esc(quotaUsageText(u.used_bytes ?? u.storage_used_bytes, u.quota_bytes))}</div>
+          </div>
+            <div class="quotaBar" title="${esc(quotaUsageText(usedBytes, quotaBytes2))}">
+                <div class="quotaFill ${quotaCls}" style="width:${pct100}%"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="detailBox">
+        <h3>Actions</h3>
+        <div class="detailActions">
+          <button class="btn secondary" data-act="enable" data-fp="${esc(fp)}" type="button"${disAttr}${disClass}>Enable</button>
+          <button class="btn secondary" data-act="disable" data-fp="${esc(fp)}" type="button"${disAttr}${disClass}>Disable</button>
+          <button class="btn secondary" data-act="revoke" data-fp="${esc(fp)}" type="button"${disAttr}${disClass}>Revoke</button>
+          <button class="btn secondary" data-act="allocate" data-fp="${esc(fp)}" type="button">Allocate</button>
+          <button class="btn danger" data-act="delete" data-fp="${esc(fp)}" type="button"${disAttr}${disClass}>Delete</button>
+        </div>
+        ${isSelf ? `<div class="muted" style="margin-top:10px;">Self-protection: enable/disable/revoke/delete are blocked for your own fingerprint.</div>` : ``}
+      </div>
+    </div>
+  </td>
+</tr>
+
+    `.trim() : "";
+
+        return `
+<tr class="userRow" data-fp="${esc(fp)}" aria-expanded="${isOpen ? "true" : "false"}">
+  <td class="mono">
+    <button class="expBtn" data-exp="${esc(fp)}" type="button" aria-expanded="${isOpen ? "true" : "false"}" title="Expand/collapse">
+      ${isOpen ? "▾" : "▸"}
+    </button>
+    <span style="margin-left:8px;" title="${esc(fp)}">${esc(shortFp(fp))}</span>
+  </td>
+
+  <td>
+    <div><b>${esc(u.name || "")}</b>${selfTag}</div>
+    <div class="muted" style="white-space:pre-wrap;">${esc(u.notes || "")}</div>
+  </td>
+
+  <td>${esc(u.role || "")}</td>
+  <td>${pill(u.status)}</td>
+
+  <td>${esc(u.group || "")}</td>
+  <td>${storagePill(u.storage_state)}</td>
+  <td class="mono">${fmtQuotaCell(u)}</td>
+
+  <td class="mono">${esc(u.added_at || "")}</td>
+  <td class="mono">${esc(u.last_seen || "")}</td>
+
+  <td class="row-actions">
+    <span class="muted">Open ▸ to manage</span>
+  </td>
+</tr>
+${detailRow}
+    `.trim();
     }).join("");
+// -------------------- Edit button: load user into form --------------------
+    tb.querySelectorAll("button[data-edit]").forEach(btn => {
+        btn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
 
-    tb.querySelectorAll("button").forEach(b => {
+            const fp = btn.getAttribute("data-edit");
+            if (!fp) return;
+
+            const u = allUsers.find(x => String(x.fingerprint || "") === fp);
+            if (!u) return;
+
+            // Fill the edit form
+            $("fp").value = fp;
+            $("name").value = u.name || "";
+            $("role").value = (u.role || "user");
+            $("notes").value = u.notes || "";
+
+            // bring it into view + focus
+            $("fp").scrollIntoView({ behavior: "smooth", block: "center" });
+            $("name").focus();
+        });
+    });
+
+
+    // Expand/collapse handlers
+    tb.querySelectorAll("button[data-exp]").forEach(btn => {
+        btn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            const fp = btn.getAttribute("data-exp");
+            if (!fp) return;
+            if (openUsers.has(fp)) openUsers.delete(fp);
+            else openUsers.add(fp);
+            render(); // re-render keeps multiple open
+        });
+    });
+
+    // Optional: clicking the row toggles (but don't toggle when clicking action buttons)
+    tb.querySelectorAll("tr.userRow").forEach(tr => {
+        tr.addEventListener("click", (ev) => {
+            const t = ev.target;
+            if (t && (t.closest("button") || t.closest("a") || t.closest("input") || t.closest("select") || t.closest("textarea"))) {
+                return; // let controls work normally
+            }
+            const fp = tr.getAttribute("data-fp");
+            if (!fp) return;
+            if (openUsers.has(fp)) openUsers.delete(fp);
+            else openUsers.add(fp);
+            render();
+        });
+    });
+
+    // Existing action buttons (enable/disable/revoke/allocate/delete)
+    tb.querySelectorAll("button[data-act]").forEach(b => {
         b.addEventListener("click", async () => {
             const fp = b.getAttribute("data-fp");
             const act = b.getAttribute("data-act");
-
             if (!fp || !act) return;
 
             const isSelf = actorFp && fp === actorFp;

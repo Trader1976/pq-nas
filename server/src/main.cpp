@@ -265,6 +265,57 @@ static bool is_hex_lower_or_upper(char c) {
            (c >= 'A' && c <= 'F');
 }
 
+#include <filesystem>
+
+// Reject absolute paths and ".." traversal. Also reject empty.
+static bool is_safe_rel_path(const std::string& rel) {
+    if (rel.empty()) return false;
+    std::filesystem::path p(rel);
+    if (p.is_absolute()) return false;
+
+    for (const auto& part : p) {
+        const std::string s = part.string();
+        if (s == "..") return false;
+    }
+    return true;
+}
+
+// Best-effort recursive size; skips symlinks; ignores errors.
+static unsigned long long dir_size_bytes_best_effort(const std::filesystem::path& root) {
+    std::error_code ec;
+
+    if (!std::filesystem::exists(root, ec) || ec) return 0;
+    if (!std::filesystem::is_directory(root, ec) || ec) return 0;
+
+    unsigned long long total = 0;
+
+    auto it = std::filesystem::recursive_directory_iterator(
+        root,
+        std::filesystem::directory_options::skip_permission_denied,
+        ec
+    );
+
+    for (auto end = std::filesystem::recursive_directory_iterator(); it != end; it.increment(ec)) {
+        if (ec) { ec.clear(); continue; }
+
+        std::error_code ec2;
+        const auto st = it->symlink_status(ec2);
+        if (ec2) continue;
+
+        // skip symlinks entirely
+        if (std::filesystem::is_symlink(st)) continue;
+
+        if (std::filesystem::is_regular_file(st)) {
+            std::error_code ec3;
+            const auto sz = std::filesystem::file_size(it->path(), ec3);
+            if (!ec3) total += (unsigned long long)sz;
+        }
+    }
+
+    return total;
+}
+
+
 // Conservative validation: fingerprint must be hex, reasonable length.
 static bool is_valid_fingerprint_hex(const std::string& fp) {
     if (fp.size() < 16) return false;
@@ -3601,31 +3652,43 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
 	    out["actor_fp"] = actor_fp;
         out["users"] = json::array();
 
-        for (auto& kv : users.snapshot()) {
-            auto& u = kv.second;
-			out["users"].push_back({
-    			{"fingerprint", u.fingerprint},
-    			{"name", u.name},
-    			{"role", u.role},
-    			{"status", u.status},
-    			{"added_at", u.added_at},
-    			{"last_seen", u.last_seen},
-			    {"notes", u.notes},
+		for (auto& kv : users.snapshot()) {
+   			auto& u = kv.second;
 
-    			// New: profile
-    			{"group", u.group},
-    			{"email", u.email},
-    			{"address", u.address},
+   			// storage usage (best-effort)
+   			unsigned long long used_bytes = 0;
+		    if (u.storage_state == "allocated" && !u.root_rel.empty() && is_safe_rel_path(u.root_rel)) {
+		        std::filesystem::path abs = std::filesystem::path(data_root_dir()) / std::filesystem::path(u.root_rel);
+       			used_bytes = dir_size_bytes_best_effort(abs);
+   			}
 
-    			// New: storage metadata
-    			{"storage_state", u.storage_state},
-			    {"quota_bytes", u.quota_bytes},
-    			{"root_rel", u.root_rel},
-    			{"storage_set_at", u.storage_set_at},
-			    {"storage_set_by", u.storage_set_by}
-			});
+		    out["users"].push_back({
+		        {"fingerprint", u.fingerprint},
+		        {"name", u.name},
+		        {"role", u.role},
+		        {"status", u.status},
+		        {"added_at", u.added_at},
+		        {"last_seen", u.last_seen},
+        		{"notes", u.notes},
 
-        }
+		        // profile
+		        {"group", u.group},
+		        {"email", u.email},
+		        {"address", u.address},
+
+		        // storage metadata
+		        {"storage_state", u.storage_state},
+		        {"quota_bytes", u.quota_bytes},
+		        {"root_rel", u.root_rel},
+		        {"storage_set_at", u.storage_set_at},
+		        {"storage_set_by", u.storage_set_by},
+
+		        // NEW: storage usage
+        		{"storage_used_bytes", used_bytes}
+		    });
+		}
+
+
 
         reply_json(res, 200, out.dump());
     });
@@ -3747,7 +3810,6 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
 
     	reply_json(res, 200, json({{"ok",true}}).dump());
 	});
-
 
 	// POST /api/v4/admin/users/storage
 	// Body: {"fingerprint":"...","quota_gb":10}

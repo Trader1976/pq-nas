@@ -4,34 +4,47 @@
   // ===========================================================================
   // PQ-NAS File Manager (example bundled app)
   //
+  // Purpose
+  // - Demonstrates how a bundled "static web app" can talk to PQ-NAS via the
+  //   Files API using cookie-based sessions (credentials: "include").
+  //
   // Files API used:
-  //     GET    /api/v4/files/list?path=<rel>
-  //     GET    /api/v4/files/get?path=<rel>
-  //     POST   /api/v4/files/mkdir?path=<rel>
-  //     POST   /api/v4/files/move?from=<rel>&to=<rel>
-  //     DELETE /api/v4/files/delete?path=<rel>
-  //     PUT    /api/v4/files/put?path=<rel>             (upload)
+  //     GET    /api/v4/files/list?path=<rel>             (list directory)
+  //     GET    /api/v4/files/get?path=<rel>              (download file)
+  //     POST   /api/v4/files/mkdir?path=<rel>            (create directory)
+  //     POST   /api/v4/files/move?from=<rel>&to=<rel>    (rename/move)
+  //     DELETE /api/v4/files/delete?path=<rel>           (delete file/dir)
+  //     PUT    /api/v4/files/put?path=<rel>              (upload/replace)
   //
   // Folder upload:
   // - Picker: <input webkitdirectory> provides File.webkitRelativePath
   // - Drag&Drop (Chromium): DataTransferItem.webkitGetAsEntry() recursion
   //
-  // Selection:
+  // Selection UX:
   // - Single click selects 1 tile
   // - Ctrl/Cmd click toggles tiles
   // - Drag on empty space draws a rectangle (marquee) selecting tiles inside
   // - Ctrl/Cmd + drag adds to existing selection
+  //
+  // Note
+  // - Client-side path checks are ONLY for UX. Server must enforce security.
   // ===========================================================================
   try {
+    // If this app is loaded inside an <iframe>, switch to "embedded" layout.
+    // (PQ-NAS admin/app host may embed apps in a viewport.)
     if (window.self !== window.top) document.body.classList.add("embedded");
   } catch (_) {
+    // If cross-origin framing blocks access to window.top, assume embedded.
     document.body.classList.add("embedded");
   }
 
+  // ---- DOM handles ----------------------------------------------------------
+  // Core grid
   const gridEl = document.getElementById("grid");
   const gridWrap = document.getElementById("gridWrap");
   const dropOverlay = document.getElementById("dropOverlay");
 
+  // Top bar / status UI
   const pathLine = document.getElementById("pathLine");
   const badge = document.getElementById("badge");
   const status = document.getElementById("status");
@@ -40,36 +53,51 @@
   const titleLine = document.getElementById("titleLine");
   const upIcon = document.getElementById("upIcon");
 
+  // (Optional legacy buttons - some versions hide these and use context menu)
   const uploadBtn = document.getElementById("uploadBtn");
   const uploadFolderBtn = document.getElementById("uploadFolderBtn");
   const downloadFolderBtn = document.getElementById("downloadFolderBtn");
 
+  // Hidden file pickers used by "Upload…" actions
   const filePick = document.getElementById("filePick");
   const folderPick = document.getElementById("folderPick");
 
+  // Context menu root element (built dynamically per click)
   const ctxEl = document.getElementById("ctxMenu");
 
-  // for upload progress bar
+  // Upload progress UI (footer)
   const uploadProg = document.getElementById("uploadProg");
   const uploadProgText = document.getElementById("uploadProgText");
   const uploadProgPct = document.getElementById("uploadProgPct");
   const uploadProgFill = document.getElementById("uploadProgFill");
 
+  // Properties modal UI
   const propsModal = document.getElementById("propsModal");
   const propsClose = document.getElementById("propsClose");
   const propsTitle = document.getElementById("propsTitle");
   const propsPath = document.getElementById("propsPath");
   const propsBody = document.getElementById("propsBody");
 
-
-
+  // ---- State ----------------------------------------------------------------
+  // Current folder path (server-relative, no leading "/"; "" means root).
   let curPath = "";
+
   // Multi-select: keys are stable within the *current folder listing*:
   // "dir:<name>" or "file:<name>" (name is a single path segment).
+  // We intentionally do NOT store full paths here to keep selection stable
+  // after reloads in the same directory.
   let selectedKeys = new Set();
+
+  // Context menu state: used to toggle open/close when right-clicking same item.
   let ctxOpenForKey = "";
+
+  // Mobile/tablet long-press timer for opening context menu without right-click.
   let longPressTimer = null;
 
+  // ---- Version label (nice for demo bundles) --------------------------------
+  // The app can be installed with versioned paths like:
+  //   /apps/<appId>/<version>/www/index.html
+  // We show the version in the UI title if detected.
   function detectVersionFromUrl() {
     const p = String(location.pathname || "");
     const m = p.match(/\/apps\/[^/]+\/([^/]+)\/www\//);
@@ -78,10 +106,44 @@
   const appVer = detectVersionFromUrl();
   if (titleLine && appVer) titleLine.textContent = `File Manager • ${appVer}`;
 
+  // ---- Badge + transient warnings -------------------------------------------
+  // Badge: short status pill. kind is one of: ok / warn / err (CSS classes).
   function setBadge(kind, text) {
     badge.className = `badge ${kind}`;
     badge.textContent = text;
   }
+
+  // showTransientWarning() is used for browser quirks / UX hints that should
+  // disappear automatically (ex: browser didn't provide files in drag&drop).
+  //
+  // Behavior:
+  // - Does NOT override the "upload…" badge if upload progress UI is visible.
+  // - After a timeout, resets back to "ready" (unless uploading is still active).
+  let warnTimer = null;
+
+  function showTransientWarning(text, ms = 6000) {
+    if (warnTimer) { clearTimeout(warnTimer); warnTimer = null; }
+
+    // Don't stomp upload UI if it's currently visible
+    const uploadingNow = uploadProg && uploadProg.style.display !== "none";
+
+    if (!uploadingNow) setBadge("warn", "browser");
+    status.textContent = text;
+
+    warnTimer = setTimeout(() => {
+      warnTimer = null;
+
+      // Only reset if we're still not uploading
+      const stillUploading = uploadProg && uploadProg.style.display !== "none";
+      if (!stillUploading) {
+        setBadge("ok", "ready");
+        status.textContent = "Ready.";
+      }
+    }, ms);
+  }
+
+  // ---- Properties modal helpers ---------------------------------------------
+  // Modal shows either single-item properties, or selection summary.
   function openPropsModal() {
     if (!propsModal) return;
     propsModal.classList.add("show");
@@ -94,6 +156,7 @@
     propsModal.setAttribute("aria-hidden", "true");
   }
 
+  // Close button + click-outside-to-close
   propsClose?.addEventListener("click", closePropsModal);
   propsModal?.addEventListener("click", (e) => {
     // click outside card closes
@@ -101,37 +164,55 @@
   });
 
   // ---- Theme + icons --------------------------------------------------------
+  // PQ-NAS provides global theme tokens; this demo app also swaps icons by theme.
+  // - theme.css/theme.js set documentElement[data-theme]
+  // - we also mirror theme name in localStorage ("pqnas_theme")
   function getActiveThemeName() {
     const dt = document.documentElement.getAttribute("data-theme") || "";
     if (dt) return dt;
     try { return localStorage.getItem("pqnas_theme") || ""; } catch (_) { return ""; }
   }
+
+  // Icons are packaged in ./icons/ and ./icons/orange/ for CPUNK orange theme.
   function iconBase() {
     const t = String(getActiveThemeName() || "").toLowerCase();
     return (t === "cpunk_orange") ? "./icons/orange/" : "./icons/";
   }
+
+  // Apply theme-specific icons that are not part of each tile.
   function applyIconsNow() {
     if (upIcon) upIcon.src = iconBase() + "updir_small.png";
   }
+
   applyIconsNow();
+
+  // When PQ-NAS theme changes in another tab, update icons and reload listing.
   window.addEventListener("storage", (e) => {
     if (!e || e.key !== "pqnas_theme") return;
     applyIconsNow();
     load();
   });
+
+  // When returning to the tab, refresh icons (theme might have changed).
   window.addEventListener("focus", () => applyIconsNow());
 
-  // ---- path utils -----------------------------------------------------------
+  // ---- Path helpers ---------------------------------------------------------
+  // setPathAndLoad() is the single entry point for changing directories:
+  // - updates curPath
+  // - clears selection
+  // - reloads listing
   function setPathAndLoad(p) {
     curPath = p || "";
     clearSelection();
     load();
   }
 
-  // breadcrumb path on the top bar
+  // Render breadcrumb navigation:
+  // - root "/" is always present
+  // - intermediate crumbs are clickable (to jump back up)
+  // - last crumb is "active" and not clickable
   function renderBreadcrumb() {
     if (!pathLine) return;
-
 
     pathLine.className = "crumbbar mono";
     pathLine.replaceChildren();
@@ -181,18 +262,21 @@
     }
   }
 
-
-
+  // Join a directory path and a single segment (no leading "/").
   function joinPath(base, name) {
     if (!base) return name;
     return `${base}/${name}`;
   }
+
+  // Parent directory ("" => root). Used for "Up" button.
   function parentPath(p) {
     if (!p) return "";
     const i = p.lastIndexOf("/");
     if (i < 0) return "";
     return p.slice(0, i);
   }
+
+  // Human-friendly file sizes (KiB/MiB/GiB).
   function fmtSize(n) {
     const u = ["B", "KiB", "MiB", "GiB", "TiB"];
     let v = Number(n || 0);
@@ -201,12 +285,15 @@
     return i === 0 ? `${v | 0} ${u[i]}` : `${v.toFixed(1)} ${u[i]}`;
   }
 
+  // File list times come from server as epoch seconds (UTC). We show ISO-like.
   function fmtTime(unix) {
     if (!unix) return "";
     const d = new Date(unix * 1000);
     return d.toISOString().replace("T", " ").replace("Z", "");
   }
 
+  // Choose an icon based on item type and file extension.
+  // This is intentionally "simple + predictable" for the demo app.
   function iconFor(item) {
     const base = iconBase();
     if (item.type === "dir") return base + "folder.png";
@@ -236,42 +323,51 @@
     return base + "file.png";
   }
 
+  // Clear the tile grid (used before rendering a new listing).
   function clear() { gridEl.innerHTML = ""; }
 
-  // ---- Selection helpers (multi-select + marquee) ----------------------------
+  // ===========================================================================
+  // Selection helpers (multi-select + marquee)
+  // ===========================================================================
+  // Removes selection styling from all tiles.
   function clearSelectionDom() {
     for (const el of gridEl.querySelectorAll(".tile")) el.classList.remove("sel");
   }
 
+  // Applies current selectedKeys to the tile DOM.
   function applySelectionToDom() {
     for (const el of gridEl.querySelectorAll(".tile")) {
       el.classList.toggle("sel", selectedKeys.has(el.dataset.key));
     }
   }
 
+  // Clears selection state + DOM.
   function clearSelection() {
     selectedKeys.clear();
     clearSelectionDom();
   }
 
+  // Makes selection exactly one item.
   function setSingleSelection(key) {
     selectedKeys = new Set([key]);
     applySelectionToDom();
   }
 
+  // Toggle selection of one item (Ctrl/Cmd click behavior).
   function toggleSelection(key) {
     if (selectedKeys.has(key)) selectedKeys.delete(key);
     else selectedKeys.add(key);
     applySelectionToDom();
   }
 
+  // Ensure an item is selected (used before opening item context menu).
   function ensureSelected(key) {
     if (!selectedKeys.has(key)) setSingleSelection(key);
   }
 
-  // Marquee rectangle (viewport-based):
-  // We draw it on <body> so it can overlay the scroll container. Selection uses
-  // getBoundingClientRect() so everything stays in the same coordinate space.
+  // --- Marquee selection -----------------------------------------------------
+  // We draw the marquee on <body> (absolute coords) so it overlays the scroll
+  // container. Intersection checks use getBoundingClientRect() (viewport coords).
   const marquee = document.createElement("div");
   marquee.style.position = "absolute";
   marquee.style.border = "1px solid rgba(var(--fg-rgb),0.45)";
@@ -287,6 +383,7 @@
   let marqueeStartY = 0;
   let marqueeBaseSelection = null; // Set() when ctrl/meta used
 
+  // Snapshot current tile rects (key + bounding box).
   function tileRects() {
     const out = [];
     for (const el of gridEl.querySelectorAll(".tile")) {
@@ -295,10 +392,12 @@
     return out;
   }
 
+  // Basic rectangle intersection test.
   function rectIntersects(a, b) {
     return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
   }
 
+  // End marquee mode (hide overlay + clear base selection).
   function endMarquee() {
     if (!marqueeOn) return;
     marqueeOn = false;
@@ -306,17 +405,18 @@
     marqueeBaseSelection = null;
   }
 
-  // Start marquee only when dragging on empty space inside gridWrap
+  // Start marquee only when dragging on empty space inside gridWrap.
+  // This avoids fighting with tile clicks and context menus.
   gridWrap?.addEventListener("pointerdown", (e) => {
     if (e.button !== 0) return; // left only
     if (e.target && e.target.closest && e.target.closest(".tile")) return; // tiles handle clicks
-    // Don't start marquee if context menu open (rare but safe)
-    if (ctxEl && ctxEl.classList.contains("show")) return;
+    if (ctxEl && ctxEl.classList.contains("show")) return; // don't start under context menu
 
     marqueeOn = true;
     marqueeStartX = e.clientX;
     marqueeStartY = e.clientY;
 
+    // Ctrl/Cmd + drag adds to selection; otherwise start fresh.
     marqueeBaseSelection = (e.ctrlKey || e.metaKey) ? new Set(selectedKeys) : null;
     if (!marqueeBaseSelection) clearSelection();
 
@@ -330,6 +430,7 @@
     e.preventDefault();
   });
 
+  // Update marquee rect and selection set as pointer moves.
   gridWrap?.addEventListener("pointermove", (e) => {
     if (!marqueeOn) return;
 
@@ -362,30 +463,33 @@
   gridWrap?.addEventListener("pointerup", endMarquee);
   gridWrap?.addEventListener("pointercancel", endMarquee);
 
-  // If we lose focus mid-drag, stop marquee
+  // If we lose focus mid-drag (alt-tab etc), stop marquee.
   window.addEventListener("blur", endMarquee);
 
   // ===========================================================================
   // Upload helpers (files + folders)
   // ===========================================================================
+  // Overlay makes it obvious where to drop files/folders.
   function showDropOverlay(show) {
     if (!dropOverlay) return;
     dropOverlay.classList.toggle("show", !!show);
     dropOverlay.setAttribute("aria-hidden", show ? "false" : "true");
   }
 
+  // Normalize relative path for uploads:
+  // - converts "\" to "/"
+  // - strips leading "/"
+  // - collapses empty segments
   function normalizeRelPath(rel) {
-    // Normalize to forward slashes; strip leading slashes.
     rel = String(rel || "").replace(/\\/g, "/");
     rel = rel.replace(/^\/+/, "");
-    // Remove empty segments.
     rel = rel.split("/").filter(Boolean).join("/");
     return rel;
   }
 
-  // Client-side guardrails only (UX). Server still enforces strict path rules.
+  // Client-side guardrails only (UX).
+  // Server still enforces strict path rules (no traversal, no escapes).
   function validateRelPath(rel) {
-    // Reject traversal / weird segments
     const parts = String(rel || "").split("/").filter(Boolean);
     if (!parts.length) return false;
     for (const p of parts) {
@@ -395,6 +499,7 @@
     return true;
   }
 
+  // Show/hide upload progress block in footer.
   function showUploadProgress(show) {
     if (!uploadProg) return;
     uploadProg.style.display = show ? "block" : "none";
@@ -406,8 +511,9 @@
     }
   }
 
-  // --- add near your other helpers, e.g. close to downloadSelectionZip() ---
-
+  // Delete the current selection (multi-delete):
+  // - sequential deletes for predictable UX + simpler server load
+  // - shows summary, logs failures to console
   async function deleteSelection() {
     const paths = selectedRelPaths(); // absolute-rel paths (includes curPath prefix)
     if (!paths.length) {
@@ -425,7 +531,6 @@
     let failed = 0;
     const failures = [];
 
-    // Delete sequentially for predictable behavior
     for (const rel of paths) {
       try {
         const url = `/api/v4/files/delete?path=${encodeURIComponent(rel)}`;
@@ -452,7 +557,6 @@
 
     if (failed > 0) {
       setBadge("err", "partial");
-      // Keep it short in UI; full list in console.
       status.textContent = `Deleted ${paths.length - failed}/${paths.length}. Failed: ${failed}. See console.`;
       console.warn("Multi-delete failures:", failures);
     } else {
@@ -463,7 +567,7 @@
     await load();
   }
 
-
+  // Update upload progress bar (percent + line of text).
   function setUploadProgress(pct, text) {
     pct = Math.max(0, Math.min(100, Number(pct || 0)));
     if (uploadProgFill) uploadProgFill.style.width = `${pct.toFixed(1)}%`;
@@ -471,6 +575,9 @@
     if (uploadProgText && text) uploadProgText.textContent = text;
   }
 
+  // Ensure directory path exists before uploading nested files.
+  // We create progressively: a/b/c -> mkdir a, mkdir a/b, mkdir a/b/c
+  // created is a Set of already attempted dirs (avoid spamming server).
   async function mkdirIfNeeded(relDir, created) {
     if (!relDir) return;
     const norm = normalizeRelPath(relDir);
@@ -487,16 +594,16 @@
       const r = await fetch(url, { method: "POST", credentials: "include", cache: "no-store" });
       const j = await r.json().catch(() => null);
 
-      // mkdir might fail if already exists; tolerate that.
-      if (r.ok && j && j.ok) {
-        created.add(full);
-      } else {
-        // If server returns ok:false but folder exists, next steps may still succeed.
-        created.add(full);
-      }
+      // mkdir may return ok:false if already exists; we still mark as created
+      // so we don't retry for every file.
+      if (r.ok && j && j.ok) created.add(full);
+      else created.add(full);
     }
   }
 
+  // Upload a file with progress reporting.
+  // XMLHttpRequest is used because fetch() upload progress isn't widely supported.
+  // Server returns JSON {ok:true} on success, and may return quota details.
   function xhrPutFileTo(relPath, file, onProgress) {
     return new Promise((resolve, reject) => {
       const full = curPath ? `${curPath}/${relPath}` : relPath;
@@ -516,12 +623,21 @@
       xhr.onabort = () => reject(new Error("upload aborted"));
 
       xhr.onload = () => {
-        // Server returns JSON {ok:true} for /put
         let j = null;
         try { j = JSON.parse(xhr.responseText || ""); } catch (_) {}
 
         if (xhr.status >= 200 && xhr.status < 300 && j && j.ok) {
           resolve(j);
+          return;
+        }
+
+        // Prefer rich quota message if present
+        if (j && j.error === "quota_exceeded") {
+          const used = (j.used_bytes != null) ? fmtSize(j.used_bytes) : "?";
+          const quota = (j.quota_bytes != null) ? fmtSize(j.quota_bytes) : "?";
+          const incoming = (j.incoming_bytes != null) ? fmtSize(j.incoming_bytes) : "?";
+          const existing = (j.existing_bytes != null) ? fmtSize(j.existing_bytes) : "?";
+          reject(new Error(`Quota exceeded: used ${used} / ${quota}. Upload ${incoming} (replacing ${existing}).`));
           return;
         }
 
@@ -536,21 +652,22 @@
     });
   }
 
-
+  // Upload many files (from picker or drag&drop).
+  // - Normalizes & validates each relative path
+  // - mkdir() for parent dirs as needed
+  // - uploads sequentially to keep server load predictable
+  // - progress is computed by total bytes across all files
   async function uploadRelFiles(relFiles) {
     // relFiles: Array<{ rel: string, file: File }>
     if (!relFiles.length) return;
 
     const created = new Set();
 
-    // Filter/normalize first so totals are accurate
+    // Normalize/filter first so totals and progress are correct
     const items = [];
     for (const it of relFiles) {
       const rel = normalizeRelPath(it.rel);
-      if (!validateRelPath(rel)) {
-        // Skip unsafe paths but keep going
-        continue;
-      }
+      if (!validateRelPath(rel)) continue; // skip unsafe paths (UX)
       items.push({ rel, file: it.file });
     }
 
@@ -565,6 +682,9 @@
 
     let doneFiles = 0;
     let uploadedBytesCommitted = 0; // bytes from fully finished files
+    let failedFiles = 0;
+    const failures = [];
+    let lastErrMsg = "";
 
     showUploadProgress(true);
     setBadge("warn", "upload…");
@@ -573,6 +693,7 @@
     for (let idx = 0; idx < items.length; idx++) {
       const { rel, file } = items[idx];
 
+      // Ensure folder exists (for nested uploads)
       const dir = parentPath(rel);
       if (dir) await mkdirIfNeeded(dir, created);
 
@@ -582,7 +703,7 @@
         status.textContent = `Uploading: ${rel} (${fmtSize(file.size)})`;
 
         await xhrPutFileTo(rel, file, (loaded) => {
-          // overall = committed + current loaded delta
+          // overall = committed bytes + current file loaded bytes
           lastLoaded = Math.max(lastLoaded, loaded || 0);
           const overall = uploadedBytesCommitted + lastLoaded;
           const pct = (overall / totalBytes) * 100;
@@ -594,50 +715,61 @@
           );
         });
 
-        // file finished => commit its full size
+        // File finished => commit full size
         uploadedBytesCommitted += (Number(file.size) || lastLoaded || 0);
         doneFiles++;
 
         const pct = (uploadedBytesCommitted / totalBytes) * 100;
-        setUploadProgress(
-            pct,
-            `Uploaded ${doneFiles}/${totalFiles} • ${rel}`
-        );
+        setUploadProgress(pct, `Uploaded ${doneFiles}/${totalFiles} • ${rel}`);
 
       } catch (e) {
+        failedFiles++;
+        lastErrMsg = String(e && e.message ? e.message : e);
+        failures.push({ rel, message: lastErrMsg });
+
         setBadge("err", "error");
-        status.textContent = `Upload failed: ${rel} — ${String(e && e.message ? e.message : e)}`;
-        // continue to next file
-        // NOTE: we do NOT commit bytes on failure
+        status.textContent = `Upload failed: ${rel} — ${lastErrMsg}`;
+
+        // Keep progress based only on committed bytes (failed file doesn't count)
+        const pct = (uploadedBytesCommitted / totalBytes) * 100;
+        setUploadProgress(pct, `Failed ${failedFiles} • Uploaded ${doneFiles}/${totalFiles} • ${rel}`);
       }
     }
 
-    // End state
-    setBadge("ok", "ready");
-    setUploadProgress(100, `Upload finished • ${doneFiles}/${totalFiles} files`);
-    status.textContent = `Upload finished. Files: ${doneFiles}/${totalFiles}`;
-
-    // Hide after a short moment (optional). If you prefer keep it visible, remove this.
-    setTimeout(() => showUploadProgress(false), 900);
+    // End state: keep progress visible on errors; auto-hide on clean success.
+    if (failedFiles > 0) {
+      setBadge("err", "partial");
+      const pct = (uploadedBytesCommitted / totalBytes) * 100;
+      setUploadProgress(pct, `Upload finished • OK ${doneFiles}/${totalFiles} • Failed ${failedFiles}`);
+      status.textContent =
+          `Upload finished with errors. OK ${doneFiles}/${totalFiles}, failed ${failedFiles}. ` +
+          `Last error: ${lastErrMsg}`;
+      console.warn("Upload failures:", failures);
+    } else {
+      setBadge("ok", "ready");
+      setUploadProgress(100, `Upload finished • ${doneFiles}/${totalFiles} files`);
+      status.textContent = `Upload finished. Files: ${doneFiles}/${totalFiles}`;
+      setTimeout(() => showUploadProgress(false), 900);
+    }
 
     await load();
   }
 
+  // Trigger hidden file picker.
   function pickFiles() {
     if (!filePick) return;
-    // reset so selecting same file twice still triggers "change"
-    filePick.value = "";
+    filePick.value = ""; // allow selecting same file twice
     filePick.click();
   }
 
+  // Trigger hidden folder picker (Chromium + some others).
   function pickFolder() {
     if (!folderPick) return;
     folderPick.value = "";
     folderPick.click();
   }
 
-
-
+  // File picker -> upload to current folder
   filePick?.addEventListener("change", async () => {
     const files = Array.from(filePick.files || []);
     const relFiles = files.map(f => ({ rel: f.name, file: f }));
@@ -645,9 +777,9 @@
     filePick.value = "";
   });
 
+  // Folder picker -> upload preserving folder structure via webkitRelativePath
   folderPick?.addEventListener("change", async () => {
     const files = Array.from(folderPick.files || []);
-    // In folder picker, webkitRelativePath includes folder structure.
     const relFiles = files.map(f => ({
       rel: f.webkitRelativePath || f.name,
       file: f
@@ -656,19 +788,31 @@
     folderPick.value = "";
   });
 
-  // ---- Drag & Drop folder recursion (Chromium) ------------------------------
+  // ===========================================================================
+  // Drag & Drop folder recursion (Chromium)
+  // ===========================================================================
+  // Best-effort check if a DataTransfer likely contains files.
+  // (Some browsers are inconsistent during dragenter/dragover.)
   function hasFiles(dt) {
     if (!dt) return false;
-    try { return Array.from(dt.types || []).includes("Files"); } catch (_) {}
-    return !!dt.files && dt.files.length > 0;
+    try { if (dt.files && dt.files.length > 0) return true; } catch (_) {}
+    try { if (dt.items && dt.items.length > 0) return true; } catch (_) {}
+    try {
+      const types = Array.from(dt.types || []);
+      return types.includes("Files") || types.includes("application/x-moz-file");
+    } catch (_) {}
+    return false;
   }
 
+  // Convert FileSystemEntry (webkitGetAsEntry) to File.
   function readEntryAsFile(entry) {
     return new Promise((resolve) => {
       entry.file((file) => resolve(file), () => resolve(null));
     });
   }
 
+  // Recursively walk a dropped directory (Chromium).
+  // prefix tracks current relative directory path within the drop.
   async function walkEntry(entry, prefix, out) {
     if (!entry) return;
 
@@ -683,7 +827,7 @@
       const name = entry.name ? (entry.name + "/") : "";
       const nextPrefix = prefix + name;
 
-      // readEntries is chunked
+      // readEntries() returns chunks; loop until empty.
       while (true) {
         const batch = await new Promise((resolve) => {
           dirReader.readEntries(resolve, () => resolve([]));
@@ -696,12 +840,12 @@
     }
   }
 
-  // Folder drag&drop is Chromium-only via webkitGetAsEntry().
-  // Firefox typically provides files without directory structure (except some cases).
+  // Normalize a browser drop into our {rel,file} format.
+  // - Chromium: use entry API when available (keeps folder structure)
+  // - Fallback: plain dt.files (usually no folder structure)
   async function collectDroppedFiles(dt) {
     const out = [];
 
-    // Prefer entry API if available (folders)
     const items = dt && dt.items ? Array.from(dt.items) : [];
     const hasEntryApi = items.some(it => it && typeof it.webkitGetAsEntry === "function");
     if (hasEntryApi) {
@@ -720,38 +864,80 @@
     return out;
   }
 
+  // dragenter: allow drop + show overlay if possible
   gridWrap?.addEventListener("dragenter", (e) => {
-    if (!hasFiles(e.dataTransfer)) return;
-    e.preventDefault();
-    showDropOverlay(true);
+    e.preventDefault(); // ALWAYS allow drop
+    if (hasFiles(e.dataTransfer)) showDropOverlay(true);
   });
 
+  // dragover: MUST preventDefault or the browser won't populate drop data
   gridWrap?.addEventListener("dragover", (e) => {
-    if (!hasFiles(e.dataTransfer)) return;
-    e.preventDefault();
+    e.preventDefault(); // CRITICAL
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
     showDropOverlay(true);
   });
 
+  // dragleave: hide overlay when leaving the container
   gridWrap?.addEventListener("dragleave", (e) => {
     if (e.target === gridWrap) showDropOverlay(false);
   });
 
+  // Browser hint (currently unused; keep if you later branch behavior)
+  const isFirefox = navigator.userAgent.includes("Firefox");
+
+  // drop:
+  // - Prevent browser navigation to dropped file (VERY IMPORTANT)
+  // - Convert drop content to upload list
+  // - If browser provides no files (quirk/permissions), show a transient warning
   gridWrap?.addEventListener("drop", async (e) => {
-    if (!hasFiles(e.dataTransfer)) return;
     e.preventDefault();
     showDropOverlay(false);
 
     try {
-      const relFiles = await collectDroppedFiles(e.dataTransfer);
+      const dt = e.dataTransfer;
+
+      // Some browser/platform combinations can produce an empty DataTransfer.
+      if (!dt || (!dt.files || dt.files.length === 0)) {
+        showTransientWarning(
+            "Drag & drop did not provide files. Firefox on Linux may block file drops here — use Upload instead."
+        );
+        return;
+      }
+
+      const relFiles = await collectDroppedFiles(dt);
+
+      if (!relFiles || relFiles.length === 0) {
+        setBadge("err", "error");
+        status.textContent = "Drop contained no files.";
+        return;
+      }
+
       await uploadRelFiles(relFiles);
+
     } catch (err) {
       setBadge("err", "error");
-      status.textContent = `Drop upload failed: ${String(err && err.message ? err.message : err)}`;
+      status.textContent =
+          `Drop upload failed: ${String(err && err.message ? err.message : err)}`;
+      console.error("Drop failed:", err);
     }
   });
 
+
   // ===========================================================================
-  // Context menu / UI (same as before, just adds upload items in background menu)
+  // Context menu / UI
+  //
+  // Goals:
+  // - Right-click (or long-press on touch) opens an item menu.
+  // - Right-click on empty background opens a "background" menu:
+  //     * If selection exists -> selection actions
+  //     * If no selection -> upload / mkdir / download current folder / refresh
+  // - Esc closes the properties modal first, then the context menu.
+  // - Delete key deletes current selection (like desktop file managers).
+  // - Ctrl/Cmd+A selects all visible tiles.
+  //
+  // Notes:
+  // - We keep the menu DOM lightweight: rebuild on open, delete on close.
+  // - Menu is positioned/clamped to viewport so it never renders off-screen.
   // ===========================================================================
   function closeMenu() {
     if (!ctxEl) return;
@@ -761,8 +947,10 @@
     ctxOpenForKey = "";
   }
 
+  // Clamp an integer/float to [lo, hi]
   function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
 
+  // Place menu at screen coords (x,y), then clamp so it stays within viewport.
   function placeMenu(x, y) {
     ctxEl.style.left = "0px";
     ctxEl.style.top = "0px";
@@ -777,6 +965,11 @@
     ctxEl.style.top = `${ny}px`;
   }
 
+  // Create a clickable menu button.
+  // - label: left text
+  // - rightHint: e.g. shortcut hint (optional)
+  // - onClick: callback executed after menu closes
+  // - opts.danger: red styling for destructive actions
   function menuItem(label, rightHint, onClick, opts = {}) {
     const b = document.createElement("button");
     b.type = "button";
@@ -799,42 +992,48 @@
     return b;
   }
 
+  // Visual separator line inside menu
   function menuSep() {
     const d = document.createElement("div");
     d.className = "ctxSep";
     return d;
   }
 
+  // Build menu with selection-only actions.
+  // Used when multiple items are selected (or background click with selection).
   function buildSelectionMenuOnly() {
     if (!ctxEl) return;
 
     ctxEl.innerHTML = "";
-
     ctxEl.appendChild(menuItem(`Properties (selection)…`, "", () => showSelectionProperties()));
     ctxEl.appendChild(menuSep());
     ctxEl.appendChild(menuItem(`Download selection (zip) (${selectedKeys.size})`, "", () => downloadSelectionZip()));
     ctxEl.appendChild(menuItem(`Delete selection (${selectedKeys.size})…`, "", () => deleteSelection(), { danger: true }));
   }
 
+  // Convert an item from list view into a rel-path to send to server.
   function currentRelPathFor(item) {
     return joinPath(curPath, item.name);
   }
 
+  // Simple file download via browser navigation to GET endpoint.
   function doDownload(item) {
     const p = currentRelPathFor(item);
     window.location.href = `/api/v4/files/get?path=${encodeURIComponent(p)}`;
   }
 
+  // Download a directory as a server-generated zip (GET endpoint).
   function downloadFolderZip(relDir) {
-    // relDir: "" means current root
+    // relDir: "" means root/current
     const p = relDir || "";
     // Server endpoint:
     //   GET /api/v4/files/zip?path=<relDir>
     window.location.href = `/api/v4/files/zip?path=${encodeURIComponent(p)}`;
   }
 
+  // Convert selection key ("dir:name" or "file:name") into absolute-rel path.
+  // Keys are only valid within the current folder listing.
   function keyToItemRelPath(key) {
-    // key is "dir:<name>" or "file:<name>" in *current* folder
     const s = String(key || "");
     const i = s.indexOf(":");
     if (i < 0) return null;
@@ -842,6 +1041,10 @@
     if (!name) return null;
     return curPath ? `${curPath}/${name}` : name;
   }
+
+  // Show aggregated stats for the current selection using server endpoint:
+  //   POST /api/v4/files/stat_sel  { paths: ["rel/a", "rel/b", ...] }
+  // This is useful for multi-select where client doesn't know recursive sizes.
   async function showSelectionProperties() {
     const paths = selectedRelPaths();
     if (!paths.length) return;
@@ -850,7 +1053,7 @@
     if (propsPath) propsPath.textContent = `${paths.length} item(s)`;
     if (propsBody) propsBody.innerHTML = "";
 
-    // initial rows
+    // Initial placeholder rows so modal doesn't feel "blank" while loading.
     const rows = [];
     rows.push(["Items", String(paths.length)]);
     rows.push(["Details", "Loading…"]);
@@ -863,7 +1066,7 @@
       }
     }
 
-    // fetch aggregated stats
+    // Fetch aggregated stats from server (counts, bytes, partial scan, errors).
     let st = null;
     try {
       const r = await fetch("/api/v4/files/stat_sel", {
@@ -874,9 +1077,6 @@
         body: JSON.stringify({ paths })
       });
       st = await r.json().catch(() => null);
-      if (!r.ok && st && !st.ok) {
-        // keep whatever server said
-      }
     } catch (e) {
       st = { ok: false, error: "client_error", message: String(e && e.message ? e.message : e) };
     }
@@ -898,34 +1098,36 @@
       return;
     }
 
+    // Helper: append rows only if value exists.
     const pushRow = (arr, k, v) => {
       if (v === undefined || v === null || v === "") return;
       arr.push([k, v]);
     };
 
+    // Render readable summary first.
     const rows2 = [];
     pushRow(rows2, "Items", String(st.count != null ? st.count : paths.length));
     pushRow(rows2, "Files", st.files != null ? String(st.files) : "");
     pushRow(rows2, "Folders", st.dirs != null ? String(st.dirs) : "");
     if (st.other != null && st.other !== 0) pushRow(rows2, "Other", String(st.other));
-
     if (st.bytes_total != null) pushRow(rows2, "Total size", fmtSize(st.bytes_total));
 
     if (typeof st.partial === "boolean") {
       pushRow(rows2, "Complete", st.partial ? "No (partial)" : "Yes");
     }
 
+    // Expose server limits if present (helps explain why scan was partial).
     if (st.limits) {
       if (st.limits.max_items != null) pushRow(rows2, "Max items", String(st.limits.max_items));
       if (st.limits.time_cap_ms != null) pushRow(rows2, "Dir scan time cap", `${st.limits.time_cap_ms} ms`);
       if (st.limits.scan_cap != null) pushRow(rows2, "Dir scan entry cap", String(st.limits.scan_cap));
     }
 
-    // Errors summary
+    // Errors summary (full list in Raw JSON below).
     const errCount = Array.isArray(st.errors) ? st.errors.length : 0;
     if (errCount) pushRow(rows2, "Errors", String(errCount));
 
-    // Collapsible Raw JSON
+    // Collapsible Raw JSON for developers (keeps UI clean for normal users).
     const rawDetails = document.createElement("details");
     const summary = document.createElement("summary");
     summary.textContent = "Raw JSON";
@@ -936,14 +1138,14 @@
     pre.textContent = JSON.stringify(st, null, 2);
     rawDetails.appendChild(pre);
 
-    // Render rows
+    // Render summary rows
     for (const [k, v] of rows2) {
       const [kEl, vEl] = kvRow(k, v);
       propsBody.appendChild(kEl);
       propsBody.appendChild(vEl);
     }
 
-    // add details block spanning full width: append empty key cell + value cell
+    // Add details block spanning full width: append empty key cell + value cell.
     {
       const kEl = document.createElement("div");
       kEl.className = "k";
@@ -958,19 +1160,23 @@
     openPropsModal();
   }
 
+  // Convert selectedKeys to server-usable rel paths (includes curPath prefix).
+  // Sorted to keep output stable and user-friendly.
   function selectedRelPaths() {
-    // Convert current selection to absolute-rel paths for server
     const out = [];
     for (const k of selectedKeys) {
       const p = keyToItemRelPath(k);
       if (p) out.push(p);
     }
-    // stable order (nice UX)
     out.sort((a, b) => String(a).localeCompare(String(b)));
     return out;
   }
-  // Download a zip of the current selection (requires server: POST /api/v4/files/zip_sel).
-  // Uses fetch+Blob so we can send JSON body (list of selected paths).
+
+  // Download a zip of the current selection.
+  // Uses fetch+Blob because we need to send a JSON body (list of paths).
+  // Server endpoint:
+  //   POST /api/v4/files/zip_sel
+  //   Body: { paths: [...], base: curPath }
   async function downloadSelectionZip() {
     const paths = selectedRelPaths();
     if (!paths.length) {
@@ -981,9 +1187,6 @@
     setBadge("warn", "zip…");
     status.textContent = `Preparing zip (${paths.length} items)…`;
 
-    // Server endpoint (you need to implement this):
-    // POST /api/v4/files/zip_sel
-    // Body: { paths: ["rel/file", "rel/dir", ...] }
     const r = await fetch("/api/v4/files/zip_sel", {
       method: "POST",
       credentials: "include",
@@ -1001,12 +1204,13 @@
 
     const blob = await r.blob();
 
-    // filename from server is best; fallback if missing
+    // Use server-provided filename if present, otherwise fallback.
     const cd = r.headers.get("Content-Disposition") || "";
     let filename = "pqnas_selection.zip";
     const m = cd.match(/filename="([^"]+)"/i);
     if (m && m[1]) filename = m[1];
 
+    // Trigger download
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -1020,12 +1224,14 @@
     status.textContent = `Downloaded: ${filename}`;
   }
 
+  // Rename (move within same directory) using server move endpoint.
   async function doRename(item) {
     const oldRel = currentRelPathFor(item);
     const oldName = String(item.name || "");
     const newName = prompt("Rename to:", oldName);
     if (!newName) return;
 
+    // UX guardrails: disallow path separators in the *name* prompt.
     if (newName.includes("/") || newName.includes("\\")) {
       alert("Name cannot contain '/' or '\\\\'.");
       return;
@@ -1055,6 +1261,7 @@
     await load();
   }
 
+  // Delete a single file/folder using server delete endpoint.
   async function doDelete(item) {
     const rel = currentRelPathFor(item);
     const isDir = item.type === "dir";
@@ -1082,6 +1289,7 @@
     await load();
   }
 
+  // Create a folder (mkdir) at relDir (or current path).
   async function doMkdirAt(relDir) {
     const baseShown = relDir ? `/${relDir}` : curPath ? `/${curPath}` : "/";
     const name = prompt(`New folder name in ${baseShown}:`, "New Folder");
@@ -1115,10 +1323,13 @@
     await load();
   }
 
+  // Open an item context menu at (x,y).
+  // Handles selection-mode: if multiple items are selected and the clicked item
+  // is within that selection, show selection actions as well.
   function openMenuAt(x, y, item) {
     if (!ctxEl) return;
 
-    // If properties modal is open, close it before showing a menu
+    // If properties modal is open, close it before showing a menu.
     if (propsModal && propsModal.classList.contains("show")) {
       closePropsModal();
     }
@@ -1132,6 +1343,7 @@
     ctxEl.innerHTML = "";
     ctxOpenForKey = key;
 
+    // Selection menu mode (multi-select where clicked item is part of selection).
     const selectionMode = (selectedKeys && selectedKeys.size > 1 && selectedKeys.has(key));
     if (selectionMode) {
       buildSelectionMenuOnly();
@@ -1139,23 +1351,17 @@
       placeMenu(x, y);
       return;
     }
-    // If multiple items are selected and the right-clicked item is part of that selection,
-    // show selection-level actions here too (not only in background menu).
-    if (selectedKeys && selectedKeys.size > 1 && selectedKeys.has(key)) {
-      ctxEl.appendChild(
-          menuItem(`Properties (selection)…`, "", () => showSelectionProperties())
-      );
-      ctxEl.appendChild(menuSep());
 
-      ctxEl.appendChild(
-          menuItem(`Download selection (zip) (${selectedKeys.size})`, "", () => downloadSelectionZip())
-      );
-      ctxEl.appendChild(
-          menuItem(`Delete selection (${selectedKeys.size})…`, "", () => deleteSelection(), { danger: true })
-      );
+    // If multiple are selected and this item is in the selection, offer selection actions.
+    if (selectedKeys && selectedKeys.size > 1 && selectedKeys.has(key)) {
+      ctxEl.appendChild(menuItem(`Properties (selection)…`, "", () => showSelectionProperties()));
+      ctxEl.appendChild(menuSep());
+      ctxEl.appendChild(menuItem(`Download selection (zip) (${selectedKeys.size})`, "", () => downloadSelectionZip()));
+      ctxEl.appendChild(menuItem(`Delete selection (${selectedKeys.size})…`, "", () => deleteSelection(), { danger: true }));
       ctxEl.appendChild(menuSep());
     }
 
+    // Directory menu
     if (item.type === "dir") {
       ctxEl.appendChild(menuItem("Open", "↩", () => {
         curPath = joinPath(curPath, item.name);
@@ -1163,31 +1369,30 @@
         load();
       }));
 
-      ctxEl.appendChild(
-          menuItem("Download folder (zip)", "", () => {
-            const relDir = joinPath(curPath, item.name);
-            downloadFolderZip(relDir);
-          })
-      );
+      ctxEl.appendChild(menuItem("Download folder (zip)", "", () => {
+        const relDir = joinPath(curPath, item.name);
+        downloadFolderZip(relDir);
+      }));
 
       ctxEl.appendChild(menuItem("New folder here…", "", () => {
         const relDir = joinPath(curPath, item.name);
         doMkdirAt(relDir);
       }));
 
-// Properties (single only)
+      // Properties is single-item only (keeps UI clean when multi-select active).
       if (!(selectedKeys && selectedKeys.size > 1)) {
         ctxEl.appendChild(menuSep());
         ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
       }
+
       ctxEl.appendChild(menuSep());
       ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
       ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
 
     } else {
+      // File menu
       ctxEl.appendChild(menuItem("Download", "⤓", () => doDownload(item)));
 
-      // Properties (single only)
       if (!(selectedKeys && selectedKeys.size > 1)) {
         ctxEl.appendChild(menuSep());
         ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
@@ -1202,10 +1407,14 @@
     placeMenu(x, y);
   }
 
+  // Background menu opens when right-clicking empty space.
+  // Behavior:
+  // - If selection exists => show selection actions (like desktop file manager)
+  // - If no selection => show upload/create/refresh actions
   function openBackgroundMenuAt(x, y) {
     if (!ctxEl) return;
 
-    // If properties modal is open, close it before showing a menu
+    // If properties modal is open, close it before showing a menu.
     if (propsModal && propsModal.classList.contains("show")) {
       closePropsModal();
     }
@@ -1219,23 +1428,20 @@
     ctxEl.innerHTML = "";
     ctxOpenForKey = key;
 
-    // If there is ANY selection, background right-click should behave like selection menu,
-    // not show upload/create folder actions.
+    // If there is ANY selection, background menu becomes "selection menu".
     if (selectedKeys && selectedKeys.size > 0) {
       if (selectedKeys.size > 1) {
-        // Multi-select: selection-only actions
         buildSelectionMenuOnly();
       } else {
-        // Single-select: show the same menu as right-clicking that item
+        // Single-select: behave as if user right-clicked that item.
         const onlyKey = Array.from(selectedKeys)[0];
         const p = keyToItemRelPath(onlyKey);
         if (p) {
           const name = p.split("/").pop() || p;
           const type = String(onlyKey).startsWith("dir:") ? "dir" : "file";
           openMenuAt(x, y, { type, name });
-          return; // openMenuAt already places + shows
+          return; // openMenuAt already placed + displayed
         } else {
-          // fallback: at least show selection menu
           buildSelectionMenuOnly();
         }
       }
@@ -1245,7 +1451,7 @@
       return;
     }
 
-    // No selection: background actions (upload / folder / refresh)
+    // No selection: "background" actions.
     ctxEl.appendChild(menuItem("Upload files…", "", () => pickFiles()));
     ctxEl.appendChild(menuItem("Upload folder…", "", () => pickFolder()));
     ctxEl.appendChild(menuSep());
@@ -1258,27 +1464,23 @@
     placeMenu(x, y);
   }
 
-
-
+  // Click outside menu closes it (normal desktop menu behavior).
   document.addEventListener("click", (e) => {
     if (!ctxEl || !ctxEl.classList.contains("show")) return;
     if (e.target === ctxEl || ctxEl.contains(e.target)) return;
     closeMenu();
   });
 
-  // Global keyboard shortcuts:
-  // - Esc closes context menu
-  // - Ctrl/Cmd + A selects all tiles in the current view
+  // Keyboard shortcuts:
+  // - Esc: close modal first, then menu
+  // - Delete: delete selection
+  // - Ctrl/Cmd+A: select all
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-
-      // Close properties modal first if open
       if (propsModal && propsModal.classList.contains("show")) {
         closePropsModal();
         return;
       }
-
-      // Otherwise close context menu
       closeMenu();
       return;
     }
@@ -1299,10 +1501,14 @@
     }
   });
 
-
+  // If the page scrolls or resizes, hide menu (avoids awkward floating menu).
   window.addEventListener("scroll", closeMenu, true);
   window.addEventListener("resize", closeMenu);
 
+  // Long-press support (touch):
+  // - On touch pointerdown, start a timer.
+  // - If still pressed after ~520ms, open the item menu.
+  // - Any movement/cancel ends the timer.
   function installLongPress(el, item) {
     el.addEventListener("pointerdown", (e) => {
       if (e.pointerType === "mouse") return;
@@ -1326,21 +1532,28 @@
     el.addEventListener("pointercancel", cancel);
     el.addEventListener("pointerleave", cancel);
     el.addEventListener("pointermove", (e) => {
+      // Cancel if finger moves significantly (treat as scroll/drag).
       if (Math.abs(e.movementX) + Math.abs(e.movementY) > 8) cancel();
     });
   }
+
   /*
     downloadFolderBtn?.addEventListener("click", () => {
       // Download the *current* directory as zip
       downloadFolderZip(curPath);
     });
   */
+
+  // Right-click on empty grid area opens background menu.
   gridEl?.addEventListener("contextmenu", (e) => {
     if (e.target && e.target.closest && e.target.closest(".tile")) return;
     e.preventDefault();
     openBackgroundMenuAt(e.clientX, e.clientY);
   });
 
+  // ===========================================================================
+  // Tile rendering + per-item interactions
+  // ===========================================================================
   function tile(item) {
     const key = `${item.type}:${item.name}`;
 
@@ -1348,15 +1561,18 @@
     t.className = "tile";
     t.dataset.key = key;
 
+    // Icon
     const img = document.createElement("img");
     img.className = "ico";
     img.alt = "";
     img.src = iconFor(item);
 
+    // Name (one-line ellipsis)
     const nm = document.createElement("div");
     nm.className = "name";
     nm.textContent = item.name || "(unnamed)";
 
+    // Meta line: size/dir + mtime
     const meta = document.createElement("div");
     meta.className = "meta";
 
@@ -1373,22 +1589,28 @@
     t.appendChild(nm);
     t.appendChild(meta);
 
+    // Single click selection:
+    // - Ctrl/Cmd toggles
+    // - plain click selects only this item
     t.addEventListener("click", (e) => {
-      // Ignore click if we were marquee-selecting
-      if (marqueeOn) return;
-
+      if (marqueeOn) return; // ignore accidental click after marquee drag
       if (e.ctrlKey || e.metaKey) toggleSelection(key);
       else setSingleSelection(key);
     });
 
+    // Right click: ensure item is selected, then show menu.
     t.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       ensureSelected(key);
       openMenuAt(e.clientX, e.clientY, item);
     });
 
+    // Touch long-press: open menu.
     installLongPress(t, item);
 
+    // Double click:
+    // - dir: enter folder
+    // - file: download
     t.addEventListener("dblclick", () => {
       if (item.type === "dir") {
         curPath = joinPath(curPath, item.name);
@@ -1401,6 +1623,8 @@
 
     return t;
   }
+
+  // Key/Value row builder for properties modal.
   function kvRow(k, v) {
     const kEl = document.createElement("div");
     kEl.className = "k";
@@ -1413,6 +1637,10 @@
     return [kEl, vEl];
   }
 
+  // Show single-item properties:
+  // - Render fast info from list() immediately
+  // - Then POST /api/v4/files/stat to get authoritative details
+  // - Finally render a clean summary + optional Raw JSON
   async function showProperties(item) {
     if (!item) return;
 
@@ -1424,23 +1652,23 @@
 
     if (propsBody) propsBody.innerHTML = "";
 
-    // --- helpers local to this function (no global guesses) ---
+    // --- helpers local to this function ---
     const pad2 = (n) => String(n).padStart(2, "0");
 
+    // Server returns epoch seconds; show local time for user friendliness.
     const fmtUnix = (sec) => {
       if (!sec) return "";
-      // Your server returns epoch seconds (UTC). Show local time by default.
       const d = new Date(Number(sec) * 1000);
       if (isNaN(d.getTime())) return String(sec);
       return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
     };
 
+    // Convert octal mode (e.g. "0664") to rwx string (e.g. "rw-rw-r--").
     const permsFromOctal = (modeStr) => {
-      // mode_octal is like "0664" or "0775"
       if (!modeStr || typeof modeStr !== "string") return "";
       const s = modeStr.trim();
       if (!/^[0-7]{3,4}$/.test(s)) return "";
-      const oct = s.length === 4 ? s.slice(1) : s; // ignore leading special digit if present
+      const oct = s.length === 4 ? s.slice(1) : s; // ignore special leading digit if present
       const bits = oct.split("").map((c) => parseInt(c, 8));
       if (bits.length !== 3 || bits.some((x) => Number.isNaN(x))) return "";
 
@@ -1458,17 +1686,15 @@
       rows.push([k, v]);
     };
 
-    // --- render initial rows from list-item (fast) ---
+    // --- initial render from list() item (fast) ---
     const rows = [];
     pushRow(rows, "Name", item.name || "");
     pushRow(rows, "Type", isDirHint ? "Folder" : "File");
     pushRow(rows, "Path", "/" + (rel || ""));
 
-    // Show list-derived size/mtime only as fallback (server stat will override)
+    // list() is a hint; stat() is authoritative
     if (!isDirHint && item.size_bytes != null) pushRow(rows, "Size", fmtSize(item.size_bytes || 0));
     if (item.mtime_unix) pushRow(rows, "Modified", fmtTime(item.mtime_unix));
-
-    // Temporary row while loading
     rows.push(["Details", "Loading…"]);
 
     if (propsBody) {
@@ -1479,11 +1705,11 @@
       }
     }
 
-    // --- fetch stat from server ---
+    // --- fetch stat() from server ---
     let st = null;
     try {
       const qs = new URLSearchParams();
-      // Use "." for root; otherwise use rel (already relative, no leading slash)
+      // Use "." for root; otherwise use rel (already relative, no leading slash).
       qs.set("path", rel ? rel : ".");
       const r = await fetch(`/api/v4/files/stat?${qs.toString()}`, {
         method: "POST",
@@ -1495,7 +1721,7 @@
       st = { ok: false, error: "client_error", message: String(e) };
     }
 
-    // --- re-render based on stat ground truth ---
+    // --- render authoritative result ---
     if (!propsBody) {
       openPropsModal?.();
       return;
@@ -1504,7 +1730,10 @@
     propsBody.innerHTML = "";
 
     if (!st || !st.ok) {
-      const msg = (st && (st.message || st.error)) ? `${st.error || "error"}: ${st.message || ""}` : "Failed to load properties";
+      const msg = (st && (st.message || st.error))
+          ? `${st.error || "error"}: ${st.message || ""}`.trim()
+          : "Failed to load properties";
+
       for (const [k, v] of [["Name", item.name || ""], ["Path", "/" + (rel || "")], ["Error", msg]]) {
         const [kEl, vEl] = kvRow(k, v);
         propsBody.appendChild(kEl);
@@ -1523,7 +1752,7 @@
     pushRow(rows2, "Type", st.type === "dir" ? "Folder" : (st.type === "file" ? "File" : "Other"));
     pushRow(rows2, "Path", st.path_norm || ("/" + (rel || "")));
 
-    // Permissions
+    // Permissions/owner/mode
     if (st.mode_octal) {
       const rwx = permsFromOctal(st.mode_octal);
       pushRow(rows2, "Permissions", rwx ? `${st.mode_octal} (${rwx})` : st.mode_octal);
@@ -1532,12 +1761,14 @@
     // Time
     if (st.mtime_epoch) pushRow(rows2, "Modified", fmtUnix(st.mtime_epoch));
 
+    // File-specific fields
     if (st.type === "file") {
       if (st.bytes != null) pushRow(rows2, "Size", fmtSize(st.bytes));
       if (st.mime) pushRow(rows2, "MIME", st.mime);
       if (typeof st.is_text === "boolean") pushRow(rows2, "Looks like text", st.is_text ? "Yes" : "No");
     }
 
+    // Dir-specific fields (recursive scan may be partial/limited)
     if (st.type === "dir") {
       if (st.children) {
         const c = st.children;
@@ -1552,18 +1783,18 @@
       if (typeof st.recursive_complete === "boolean") pushRow(rows2, "Scan complete", st.recursive_complete ? "Yes" : "No");
     }
 
-// Render normal rows first (no raw JSON yet)
+    // Render readable rows
     for (const [k, v] of rows2) {
       const [kEl, vEl] = kvRow(k, v);
       propsBody.appendChild(kEl);
       propsBody.appendChild(vEl);
     }
 
-// Collapsible Raw JSON (developer-friendly, not noisy)
+    // Collapsible Raw JSON (developer-friendly, not noisy)
     {
       const [kEl, vEl] = kvRow("Details", "");
-      vEl.classList.remove("mono"); // we'll control formatting inside
-      vEl.innerHTML = ""; // safe: we only add DOM nodes (no untrusted HTML)
+      vEl.classList.remove("mono");
+      vEl.innerHTML = "";
 
       const details = document.createElement("details");
       details.style.width = "100%";
@@ -1590,11 +1821,11 @@
     }
 
     openPropsModal?.();
-
   }
 
-
-
+  // ===========================================================================
+  // Directory listing / render
+  // ===========================================================================
   async function load() {
     closeMenu();
     setBadge("warn", "loading…");
@@ -1602,6 +1833,7 @@
     clear();
 
     try {
+      // /list at root takes no query param; subfolders use ?path=<rel>
       const url = curPath
           ? `/api/v4/files/list?path=${encodeURIComponent(curPath)}`
           : `/api/v4/files/list`;
@@ -1612,8 +1844,12 @@
       if (!r.ok || !j || !j.ok) {
         setBadge("err", "error");
         status.textContent = `List failed: HTTP ${r.status}`;
-        const msg = j && (j.message || j.error) ? `${j.error || ""} ${j.message || ""}`.trim() : "bad response";
 
+        const msg = j && (j.message || j.error)
+            ? `${j.error || ""} ${j.message || ""}`.trim()
+            : "bad response";
+
+        // Render an error tile (keeps UI consistent and visible)
         const err = document.createElement("div");
         err.className = "tile mono";
         err.style.cursor = "default";
@@ -1622,12 +1858,13 @@
         return;
       }
 
+      // Server echoes canonical path; trust it (stays in sync with server rules)
       curPath = typeof j.path === "string" ? j.path : curPath;
       renderBreadcrumb();
 
-
       setBadge("ok", "ready");
 
+      // Sort folders first, then alphabetical
       const items = Array.isArray(j.items) ? j.items.slice() : [];
       items.sort((a, b) => {
         if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
@@ -1636,6 +1873,7 @@
 
       status.textContent = `Items: ${items.length}`;
 
+      // Friendly empty state
       if (!items.length) {
         const empty = document.createElement("div");
         empty.className = "tile mono";
@@ -1645,13 +1883,17 @@
         return;
       }
 
+      // Render tiles
       for (const it of items) gridEl.appendChild(tile(it));
 
-      // restore selection highlights (keys are stable per folder listing)
+      // Restore selection highlights (keys are stable per folder listing)
       applySelectionToDom();
+
     } catch (e) {
+      // Network/unexpected errors: show a "network" badge and a diagnostic tile
       setBadge("err", "network");
       status.textContent = "Network error";
+
       const err = document.createElement("div");
       err.className = "tile mono";
       err.style.cursor = "default";
@@ -1660,6 +1902,7 @@
     }
   }
 
+  // Toolbar hooks
   refreshBtn?.addEventListener("click", load);
   upBtn?.addEventListener("click", () => {
     curPath = parentPath(curPath);
@@ -1667,5 +1910,6 @@
     load();
   });
 
+  // Initial load on startup
   load();
 })();

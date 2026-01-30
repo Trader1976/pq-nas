@@ -40,10 +40,27 @@
     --err-rgb: 255,90,90;
     --info-rgb: 100,181,255;
 
+    /* form fields (defaults) */
+    --field-bg: rgba(255,255,255,0.10);
+    --field-bg2: rgba(255,255,255,0.14);
+    --field-fg: rgba(var(--fg-rgb),0.95);
+    --field-ph: rgba(var(--fg-rgb),0.55);
+
+    --field-border: rgba(var(--fg-rgb),0.22);
+    --field-border2: rgba(var(--fg-rgb),0.35);
+    --field-focus-ring: rgba(var(--fg-rgb),0.14);
+
     /* charts */
     --chart_rx: var(--ok);
     --chart_tx: var(--warn);
     --chart_grid: var(--border2);
+
+    /* toast / popups */
+    --toast-bg: rgba(0,0,0,0.78);
+    --toast-border: var(--border);
+    --toast-fg: var(--fg);
+    --toast-shadow: var(--shadow);
+
 }
 
 /* -----------------------
@@ -247,13 +264,25 @@ html[data-theme="win_classic"] a:hover{
 html[data-theme="win_classic"] .btn,
 html[data-theme="win_classic"] .navbtn,
 html[data-theme="win_classic"] .input,
-html[data-theme="win_classic"] select,
 html[data-theme="win_classic"] .pill,
 html[data-theme="win_classic"] .toggle{
     color: var(--fg) !important;
     background: linear-gradient(180deg, #f2f2f2, #d2d2d2) !important;
     border: 1px solid var(--border) !important;
     box-shadow: none !important;
+}
+/* Win classic: form fields use field tokens (do NOT look like buttons) */
+html[data-theme="win_classic"] input,
+html[data-theme="win_classic"] textarea,
+html[data-theme="win_classic"] select{
+    background: linear-gradient(180deg, var(--field-bg2), var(--field-bg)) !important;
+    color: var(--field-fg) !important;
+    border: 1px solid var(--field-border) !important;
+    box-shadow: none !important;
+}
+html[data-theme="win_classic"] input::placeholder,
+html[data-theme="win_classic"] textarea::placeholder{
+    color: var(--field-ph) !important;
 }
 
 /* Slight pressed effect on active */
