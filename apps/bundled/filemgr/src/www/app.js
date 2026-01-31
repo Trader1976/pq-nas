@@ -111,6 +111,8 @@
   // Context menu state: used to toggle open/close when right-clicking same item.
   let ctxOpenForKey = "";
 
+  let propsShareTimer = null;
+
   // Mobile/tablet long-press timer for opening context menu without right-click.
   let longPressTimer = null;
 
@@ -254,6 +256,12 @@
       throw new Error(msg || "share revoke failed");
     }
   }
+  function isShareExpired(share) {
+    if (!share || !share.expires_at) return false; // no expiry => not expired
+    const ms = Date.parse(share.expires_at);
+    if (!Number.isFinite(ms)) return false; // fail-open
+    return Date.now() >= ms;
+  }
 
   async function copyTextToClipboard(text) {
     try {
@@ -282,6 +290,11 @@
   }
 
   function closePropsModal() {
+    if (propsShareTimer) {
+      clearInterval(propsShareTimer);
+      propsShareTimer = null;
+    }
+
     if (!propsModal) return;
     propsModal.classList.remove("show");
     propsModal.setAttribute("aria-hidden", "true");
@@ -1308,43 +1321,35 @@
     openPropsModal();
   }
 
-  function shareKey(type, path) {
-    return `${type}:${String(path || "")}`;
+
+
+  function isoUtcToMs(iso) {
+    if (!iso) return 0;
+    const t = Date.parse(iso); // "2026-01-31T12:34:56Z" -> ms
+    return Number.isFinite(t) ? t : 0;
   }
 
-  function existingShareFor(relPath, type) {
-    const k = shareKey(type, relPath);
-    return sharesByKey.get(k) || null;
+  function fmtCountdown(msLeft) {
+    if (msLeft <= 0) return "expired";
+    const sec = Math.floor(msLeft / 1000);
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+
+    if (d > 0) return `${d}d ${h}h ${m}m`;
+    if (h > 0) return `${h}h ${m}m ${s}s`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
   }
 
-  async function refreshSharesCache() {
-    // Keep it light: don’t refetch too often.
-    const now = Date.now();
-    if (now - sharesLoadedAt < 1500 && sharesByKey.size > 0) return;
-
-    const r = await fetch("/api/v4/shares/list", {
-      method: "GET",
-      credentials: "include",
-      cache: "no-store",
-      headers: { "Accept": "application/json" }
-    });
-
-    const j = await r.json().catch(() => null);
-    if (!r.ok || !j || !j.ok || !Array.isArray(j.shares)) {
-      // Fail quietly (badge is “best effort” UI)
-      return;
-    }
-
-    const m = new Map();
-    for (const s of j.shares) {
-      const type = String(s.type || "");
-      const path = String(s.path || "");
-      if (!type || !path) continue;
-      m.set(shareKey(type, path), s);
-    }
-    sharesByKey = m;
-    sharesLoadedAt = now;
+  function fullShareUrl(urlPath) {
+    // server returns "/s/<token>"
+    if (!urlPath) return "";
+    if (urlPath.startsWith("http://") || urlPath.startsWith("https://")) return urlPath;
+    return `${window.location.origin}${urlPath}`;
   }
+
 
   // Convert selectedKeys to server-usable rel paths (includes curPath prefix).
   // Sorted to keep output stable and user-friendly.
@@ -1513,6 +1518,22 @@
     if (v === "24h") return 86400;
     if (v === "7d") return 7 * 86400;
     return 0; // never
+  }
+  async function revokeShareToken(token) {
+    const r = await fetch("/api/v4/shares/revoke", {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ token })
+    });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok) {
+      const msg = j && (j.message || j.error)
+          ? `${j.error || ""} ${j.message || ""}`.trim()
+          : `HTTP ${r.status}`;
+      throw new Error(msg || "share revoke failed");
+    }
   }
 
   async function createShareLinkFor(relPath, expiresSec) {
@@ -1907,11 +1928,15 @@
       const rel = currentRelPathFor(item);
       const type = (item.type === "dir") ? "dir" : "file";
       const share = existingShareFor(rel, type);
+
       if (share) {
+        const expired = isShareExpired(share);
+
         const b = document.createElement("div");
-        b.className = "shareBadge";
-        b.title = `Shared: /s/${share.token || ""}`.trim();
-        b.textContent = "🔗";
+        b.className = "shareBadge" + (expired ? " expired" : "");
+        b.title = expired ? "Share link expired" : "Shared";
+        b.textContent = expired ? "⏰" : "🔗";
+
         t.appendChild(b);
       }
     } catch (_) {}
@@ -1965,12 +1990,20 @@
     return [kEl, vEl];
   }
 
+
+
   // Show single-item properties:
   // - Render fast info from list() immediately
   // - Then POST /api/v4/files/stat to get authoritative details
   // - Finally render a clean summary + optional Raw JSON
   async function showProperties(item) {
     if (!item) return;
+
+    // Stop any previous countdown timer for Properties modal
+    if (propsShareTimer) {
+      clearInterval(propsShareTimer);
+      propsShareTimer = null;
+    }
 
     const rel = joinPath(curPath, item.name || "");
     const isDirHint = item.type === "dir";
@@ -2007,6 +2040,24 @@
         return r + w + x;
       };
       return rwx(bits[0]) + rwx(bits[1]) + rwx(bits[2]);
+    };
+    const isoUtcToMs = (iso) => {
+      if (!iso || typeof iso !== "string") return null;
+      // expected "YYYY-MM-DDTHH:MM:SSZ"
+      const ms = Date.parse(iso);
+      return Number.isFinite(ms) ? ms : null;
+    };
+
+    const fmtCountdown = (msLeft) => {
+      if (msLeft == null) return "";
+      if (msLeft <= 0) return "Expired";
+      const s = Math.floor(msLeft / 1000);
+      const d = Math.floor(s / 86400);
+      const h = Math.floor((s % 86400) / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const se = s % 60;
+      if (d > 0) return `${d}d ${pad2(h)}:${pad2(m)}:${pad2(se)}`;
+      return `${pad2(h)}:${pad2(m)}:${pad2(se)}`;
     };
 
     const pushRow = (rows, k, v) => {
@@ -2116,6 +2167,163 @@
       const [kEl, vEl] = kvRow(k, v);
       propsBody.appendChild(kEl);
       propsBody.appendChild(vEl);
+    }
+// -------------------------------------------------------------------------
+// Share info (from cache), with expiry countdown + copy/revoke actions
+// -------------------------------------------------------------------------
+    {
+      // NOTE: rel has no leading "/" by construction (joinPath)
+      const type = (item.type === "dir") ? "dir" : "file";
+      const share = existingShareFor(rel, type);
+
+      // Title row
+      {
+        const [kEl, vEl] = kvRow("Share", "");
+        vEl.classList.remove("mono");
+        vEl.innerHTML = "";
+        vEl.style.display = "flex";
+        vEl.style.flexDirection = "column";
+        vEl.style.gap = "8px";
+
+        const topLine = document.createElement("div");
+        topLine.textContent = share ? "Shared" : "Not shared";
+        topLine.style.opacity = "0.92";
+
+        vEl.appendChild(topLine);
+
+        if (share) {
+          const fullUrl = `${window.location.origin}${share.url || ("/s/" + (share.token || ""))}`;
+
+          // URL (readonly)
+          const urlRow = document.createElement("div");
+          urlRow.style.display = "flex";
+          urlRow.style.gap = "8px";
+          urlRow.style.alignItems = "center";
+
+          const inp = document.createElement("input");
+          inp.type = "text";
+          inp.value = fullUrl;
+          inp.readOnly = true;
+          inp.style.flex = "1";
+          inp.style.minWidth = "0";
+
+          const btnCopy = document.createElement("button");
+          btnCopy.type = "button";
+          btnCopy.textContent = "Copy";
+          btnCopy.onclick = async () => {
+            const ok = await copyText(fullUrl);
+            btnCopy.textContent = ok ? "Copied" : "Copy failed";
+            setTimeout(() => (btnCopy.textContent = "Copy"), 1200);
+          };
+
+          urlRow.appendChild(inp);
+          urlRow.appendChild(btnCopy);
+
+          // Expiry + countdown
+          const expLine = document.createElement("div");
+          expLine.style.display = "flex";
+          expLine.style.gap = "10px";
+          expLine.style.flexWrap = "wrap";
+          expLine.style.opacity = "0.92";
+
+          const expAt = share.expires_at || "";
+          const expMs = isoUtcToMs(expAt);
+
+          const expLabel = document.createElement("span");
+          expLabel.textContent = expAt ? `Expires: ${expAt}` : "Expires: never";
+
+          const cdLabel = document.createElement("span");
+          cdLabel.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+          cdLabel.style.opacity = "0.95";
+
+          const updateCountdown = () => {
+            if (!expMs) {
+              cdLabel.textContent = ""; // no countdown if never
+              return;
+            }
+            const left = expMs - Date.now();
+            cdLabel.textContent = `Remaining: ${fmtCountdown(left)}`;
+          };
+          updateCountdown();
+
+          // Only start timer if exp exists (otherwise pointless)
+          if (expMs) {
+            propsShareTimer = setInterval(updateCountdown, 1000);
+          }
+
+          expLine.appendChild(expLabel);
+          expLine.appendChild(cdLabel);
+
+          // Downloads (if present)
+          const dl = document.createElement("div");
+          dl.style.opacity = "0.85";
+          if (share.downloads != null) dl.textContent = `Downloads: ${share.downloads}`;
+
+          // Revoke
+          const actions = document.createElement("div");
+          actions.style.display = "flex";
+          actions.style.gap = "8px";
+          actions.style.alignItems = "center";
+
+          const btnRevoke = document.createElement("button");
+          btnRevoke.type = "button";
+          btnRevoke.textContent = "Revoke";
+          btnRevoke.onclick = async () => {
+            const ok = confirm("Revoke this share link?\n\nThis will invalidate the URL immediately.");
+            if (!ok) return;
+
+            btnRevoke.disabled = true;
+            btnRevoke.textContent = "Revoking…";
+
+            try {
+              const r = await fetch("/api/v4/shares/revoke", {
+                method: "POST",
+                credentials: "include",
+                cache: "no-store",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body: JSON.stringify({ token: share.token })
+              });
+              const j = await r.json().catch(() => null);
+              if (!r.ok || !j || !j.ok) {
+                const msg = j && (j.message || j.error)
+                    ? `${j.error || ""} ${j.message || ""}`.trim()
+                    : `HTTP ${r.status}`;
+                throw new Error(msg || "revoke failed");
+              }
+
+              // refresh cache + refresh properties view
+              await refreshSharesCache();
+              await showProperties(item);
+              return;
+
+            } catch (e) {
+              btnRevoke.textContent = "Revoke failed";
+              setTimeout(() => {
+                btnRevoke.textContent = "Revoke";
+                btnRevoke.disabled = false;
+              }, 1400);
+              return;
+            }
+          };
+
+          actions.appendChild(btnRevoke);
+
+          vEl.appendChild(urlRow);
+          vEl.appendChild(expLine);
+          if (share.downloads != null) vEl.appendChild(dl);
+          vEl.appendChild(actions);
+        } else {
+          // Not shared: offer create shortcut
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = "Create share link…";
+          btn.onclick = () => openShareDialogFor(item);
+          vEl.appendChild(btn);
+        }
+
+        propsBody.appendChild(kEl);
+        propsBody.appendChild(vEl);
+      }
     }
 
     // Collapsible Raw JSON (developer-friendly, not noisy)
