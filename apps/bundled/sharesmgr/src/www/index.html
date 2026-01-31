@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>PQ-NAS • Shares Manager</title>
+
+    <!-- PQ-NAS global theme (tokens + theme switcher) -->
+    <link rel="stylesheet" href="/static/theme.css" />
+    <script src="/static/theme.js"></script>
+
+    <!-- app-local -->
+    <link rel="stylesheet" href="./app.css" />
+</head>
+<body>
+<div class="wrap">
+    <header class="top">
+        <div class="brand">
+            <div class="logo">PQ</div>
+            <div class="titles">
+                <div class="h1">Shares Manager</div>
+                <div class="sub">Manage your public share links (/s/&lt;token&gt;).</div>
+            </div>
+        </div>
+
+        <div class="topActions">
+            <button class="btn" id="btnRefresh">Refresh</button>
+            <button class="btn" id="btnRevokeExpired">Revoke expired</button>
+            <button class="btn btnGhost" id="btnClear">Clear</button>
+        </div>
+
+    </header>
+
+    <main class="grid gridOne">
+        <section class="card spanFull">
+            <div class="cardTitle">
+                <span>My shares</span>
+                <span class="pill" id="countPill">0</span>
+            </div>
+
+            <div class="cardBody">
+                <div class="toolbar">
+                    <div class="tool">
+                        <label class="lblSmall">Search</label>
+                        <input class="inp" id="q" placeholder="Filter by path or token…" autocomplete="off" />
+                    </div>
+
+                    <div class="tool">
+                        <label class="lblSmall">State</label>
+                        <select class="sel" id="state">
+                            <option value="all" selected>All</option>
+                            <option value="active">Active</option>
+                            <option value="expired">Expired</option>
+                            <option value="noexpiry">No expiry</option>
+                        </select>
+                    </div>
+
+                    <div class="tool">
+                        <label class="lblSmall">Sort</label>
+                        <select class="sel" id="sort">
+                            <option value="created_desc" selected>Created (newest)</option>
+                            <option value="created_asc">Created (oldest)</option>
+                            <option value="expires_asc">Expires (soonest)</option>
+                            <option value="downloads_desc">Downloads (most)</option>
+                            <option value="path_asc">Path (A→Z)</option>
+                        </select>
+                    </div>
+
+                    <div class="tool toolRight">
+                        <label class="lblSmall">Show token</label>
+                        <label class="switch">
+                            <input type="checkbox" id="showToken" />
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="tableWrap">
+                    <table class="tbl" id="tbl">
+                        <thead>
+                        <tr>
+                            <th class="colPath">Path</th>
+                            <th class="colType">Type</th>
+                            <th class="colExp">Expires</th>
+                            <th class="colDl">Downloads</th>
+                            <th class="colCreated">Created</th>
+                            <th class="colUrl">URL</th>
+                            <th class="colToken hidden" id="thToken">Token</th>
+                            <th class="colAct">Actions</th>
+                        </tr>
+                        </thead>
+                        <tbody id="tbody">
+                        <tr><td colspan="8" class="empty">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="foot">
+                    <div class="muted" id="statusLine">—</div>
+                </div>
+
+                <div class="toastArea" id="toastArea"></div>
+            </div>
+        </section>
+    </main>
+</div>
+
+<script src="./app.js" defer></script>
+</body>
+</html>
