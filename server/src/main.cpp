@@ -9999,11 +9999,15 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         audit_append(ev);
     };
 
-    if (role != "admin") {
-        audit_fail("not_admin", 403);
-        reply(403, json{{"ok", false}, {"error", "not_authorized"}, {"message", "Admin required"}});
-        return;
-    }
+	// user-scoped: any authenticated user can create shares for THEIR storage
+	(void)role;
+	/*
+	if (role != "admin") {
+    	audit_fail("not_admin", 403);
+    	reply(403, json{{"ok", false}, {"error", "not_authorized"}, {"message", "Admin required"}});
+ 	   return;
+	}
+*/
 
     // Parse body: { "path": "<rel>", "expires_sec": 86400 }
     json body;
@@ -10150,12 +10154,14 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         audit_append(ev);
     };
 
+	(void)role;
+	/* if we restric to only admin level
     if (role != "admin") {
         audit_fail("not_admin", 403);
         reply(403, json{{"ok", false}, {"error", "not_authorized"}, {"message", "Admin required"}});
         return;
     }
-
+	*/
     json body;
     try { body = json::parse(req.body.empty() ? "{}" : req.body); }
     catch (const std::exception& e) {
@@ -10174,7 +10180,7 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
     std::string token_short = pqnas::shorten(token, 32);
 
     std::string err;
-    bool removed = shares.revoke(token, &err);
+    bool removed = shares.revoke_owner(fp_hex, token, &err);
     if (!removed) {
         // If err set => save failed; else token not found
         if (!err.empty()) {
@@ -10192,34 +10198,30 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
 });
 
 
-    srv.Get("/api/v4/shares/list", [&](const httplib::Request& req, httplib::Response& res) {
+srv.Get("/api/v4/shares/list", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
         return;
 
-    if (role != "admin") {
-        res.status = 403;
-        res.set_header("Cache-Control", "no-store");
-        res.set_content(json{{"ok",false},{"error","not_authorized"},{"message","Admin required"}}.dump(2),
-                        "application/json; charset=utf-8");
-        return;
-    }
-
+    // List only shares owned by the current user.
     auto v = shares.list();
 
     json out;
     out["ok"] = true;
     out["shares"] = json::array();
+
     for (const auto& s : v) {
+        if (s.owner_fp != fp_hex) continue; // IMPORTANT: no cross-user leaks
+
         json it;
         it["token"] = s.token;
         it["url"] = std::string("/s/") + s.token;
-        it["owner_fp"] = s.owner_fp;
         it["path"] = s.path;
         it["type"] = s.type;
         it["created_at"] = s.created_at;
         if (!s.expires_at.empty()) it["expires_at"] = s.expires_at;
         it["downloads"] = s.downloads;
+
         out["shares"].push_back(std::move(it));
     }
 
@@ -10227,6 +10229,8 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
     res.set_header("Cache-Control", "no-store");
     res.set_content(out.dump(2), "application/json; charset=utf-8");
 });
+
+
     // Public share download: GET /s/<token>
 srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Response& res) {
     const std::string token = req.matches[1].str();

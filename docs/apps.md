@@ -261,6 +261,7 @@ Current endpoints:
 PUT  /api/v4/files/put  
 GET  /api/v4/files/get  
 POST /api/v4/files/zip
+POST /api/v4/files/zip_sel (if present in your tree)
 
 Browse / inspect:
 
@@ -365,3 +366,61 @@ Static serving must ensure:
 - App signing
 - Built-in filemgr bundled
 - App registry UI
+
+14) Shares / public links API (current)
+These are the endpoints used by the file manager “share link” UI and the /s/<token> public downloader.
+Authenticated share management
+POST /api/v4/shares/create
+Body: { "path": "<rel>", "expires_sec": 86400 }
+Returns: { ok:true, token:"...", url:"/s/<token>", expires_at, type, path }
+POST /api/v4/shares/revoke
+Body: { "token": "<token>" }
+Returns: { ok:true }
+GET /api/v4/shares/list
+Returns: { ok:true, shares:[{token,url,owner_fp,path,type,created_at,expires_at,downloads}] }
+Role note: currently this may be admin-gated in your server code. Apps should handle 403 and either:
+hide “already shared” badges/menus, or
+degrade to “create share only” UI without list/badges.
+Public download
+GET /s/<token>
+Downloads a file, or returns a zip if token targets a directory.
+Returns 410 if expired (and should not leak extra details).
+Should set Cache-Control: no-store.
+App-side caching pattern (recommended)
+If you want “shared” badges in a file grid:
+load shares list once (or on interval / after create/revoke)
+build a map keyed by <type>:<path>
+when rendering each tile, check if it exists in the map and overlay a 🔗 badge
+
+15) Security notes
+
+Apps are not sandboxed yet.
+File APIs must enforce:
+cookie auth
+user root confinement
+storage allocation requirement
+symlink rejection (where applicable)
+Static serving must ensure:
+no traversal escapes
+correct content-type
+X-Content-Type-Options: nosniff
+Cache-Control: no-store during dev (and for sensitive pages)
+Shares/public links must ensure:
+no path traversal via stored share paths
+expired tokens return 410
+avoid leaking whether a path exists (prefer 404 in many invalid-path cases)
+
+16) Versioning rules
+Uninstall same version before reinstalling.
+Bump versions aggressively during dev.
+Apps can show their version by parsing URL:
+/apps/<id>/<version>/www/...
+
+17) TODO / future ideas
+App permissions model
+Admin allow/deny apps
+Per-user app installs
+App signing
+Built-in filemgr bundled
+App registry UI
+Dedicated “Share Manager” app (list/revoke/expiry/search/export) as an optional bundled app

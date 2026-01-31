@@ -506,6 +506,21 @@
       background: rgba(0,0,0,0.22);
     }
 
+    .tile{ position: relative; } /* needed for absolute badge */
+
+    .shareBadge{
+      position:absolute;
+      top:10px;
+      right:10px;
+      font-size:12px;
+      line-height:1;
+      padding:6px 8px;
+      border-radius:999px;
+      background: rgba(0,0,0,0.45);
+      border: 1px solid rgba(255,255,255,0.18);
+      backdrop-filter: blur(6px);
+    }
+
   </style>
 </head>
 

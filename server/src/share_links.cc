@@ -307,6 +307,23 @@ bool ShareRegistry::revoke(const std::string& token, std::string* err) {
     return true;
 }
 
+bool ShareRegistry::revoke_owner(const std::string& owner_fp,
+                                 const std::string& token,
+                                 std::string* err) {
+    std::lock_guard<std::mutex> lk(mu_);
+
+    auto it = std::find_if(shares_.begin(), shares_.end(),
+                           [&](const ShareLink& s){ return s.token == token; });
+    if (it == shares_.end()) return false;
+
+    // Owner check (do not leak existence to other users)
+    if (it->owner_fp != owner_fp) return false;
+
+    shares_.erase(it);
+    if (!save_atomic(err)) return false;
+    return true;
+}
+
 std::optional<ShareLink> ShareRegistry::find(const std::string& token) const {
 	std::lock_guard<std::mutex> lk(mu_);
     auto it = std::find_if(shares_.begin(), shares_.end(), [&](const ShareLink& s){ return s.token == token; });

@@ -101,6 +101,13 @@
   // after reloads in the same directory.
   let selectedKeys = new Set();
 
+
+
+  // Share overlay state: path -> count of active shares for that path
+  // Paths are server-relative (same as files API), no leading "/".
+  let shareCountByPath = new Map();
+  let shareTokensByPath = new Map(); // path -> most recent token (best-effort)
+  let sharesLoadedAt = 0;
   // Context menu state: used to toggle open/close when right-clicking same item.
   let ctxOpenForKey = "";
 
@@ -153,6 +160,117 @@
         status.textContent = "Ready.";
       }
     }, ms);
+  }
+  // ===========================================================================
+  // Shares cache (so we can show "already shared" + badges/menu)
+  // Server endpoints:
+  //   GET  /api/v4/shares/list   -> { ok:true, shares:[{token,url,path,type,expires_at,downloads,...}] }
+  //   POST /api/v4/shares/create -> { ok:true, url:"/s/<token>", token:"...", ... }
+  //   POST /api/v4/shares/revoke -> { ok:true }
+  // ===========================================================================
+
+  // Map key = "<type>:<path>" -> share obj
+  // type is "file" or "dir", path is rel path (no leading "/")
+  let sharesByKey = new Map();
+  let sharesLoadedOnce = false;
+
+  // ===========================================================================
+  // Shares cache (so we can show "already shared" + badges/menu)
+  // ===========================================================================
+
+  function shareKey(type, relPath) {
+    const t = (type === "dir") ? "dir" : "file";
+    const p = String(relPath || "").replace(/^\/+/, "").replace(/\\/g, "/");
+    return `${t}:${p}`;
+  }
+
+  function existingShareFor(relPath, type) {
+    return sharesByKey.get(shareKey(type, relPath)) || null;
+  }
+  async function refreshSharesCache() {
+    try {
+      const r = await fetch("/api/v4/shares/list", {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "Accept": "application/json" }
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j || !j.ok || !Array.isArray(j.shares)) {
+        sharesByKey = new Map();
+        sharesLoadedOnce = true;
+        return;
+      }
+
+      const m = new Map();
+      for (const s of j.shares) {
+        if (!s || typeof s !== "object") continue;
+        const k = shareKey(s.type, s.path);
+        m.set(k, s);
+      }
+      sharesByKey = m;
+      sharesLoadedOnce = true;
+      sharesLoadedAt = Date.now();
+    } catch (_) {
+      sharesByKey = new Map();
+      sharesLoadedOnce = true;
+    }
+  }
+
+  function shareUrlForToken(token) {
+    // If you later add PQNAS_ORIGIN on client, you can make absolute.
+    return `${location.origin}/s/${token}`;
+  }
+
+  async function createShareForPath(relPath, expiresSec = 0) {
+    const r = await fetch("/api/v4/shares/create", {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ path: relPath, expires_sec: expiresSec })
+    });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok) {
+      const msg = j && (j.message || j.error) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`;
+      throw new Error(msg || "share create failed");
+    }
+    return j; // {token,url,...}
+  }
+
+  async function revokeShareToken(token) {
+    const r = await fetch("/api/v4/shares/revoke", {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ token })
+    });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok) {
+      const msg = j && (j.message || j.error)
+          ? `${j.error || ""} ${j.message || ""}`.trim()
+          : `HTTP ${r.status}`;
+      throw new Error(msg || "share revoke failed");
+    }
+  }
+
+  async function copyTextToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) {
+      // fallback
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.left = "-9999px";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch (_) {}
+      ta.remove();
+      return true;
+    }
   }
 
   // ---- Properties modal helpers ---------------------------------------------
@@ -1190,6 +1308,44 @@
     openPropsModal();
   }
 
+  function shareKey(type, path) {
+    return `${type}:${String(path || "")}`;
+  }
+
+  function existingShareFor(relPath, type) {
+    const k = shareKey(type, relPath);
+    return sharesByKey.get(k) || null;
+  }
+
+  async function refreshSharesCache() {
+    // Keep it light: don’t refetch too often.
+    const now = Date.now();
+    if (now - sharesLoadedAt < 1500 && sharesByKey.size > 0) return;
+
+    const r = await fetch("/api/v4/shares/list", {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "Accept": "application/json" }
+    });
+
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok || !Array.isArray(j.shares)) {
+      // Fail quietly (badge is “best effort” UI)
+      return;
+    }
+
+    const m = new Map();
+    for (const s of j.shares) {
+      const type = String(s.type || "");
+      const path = String(s.path || "");
+      if (!type || !path) continue;
+      m.set(shareKey(type, path), s);
+    }
+    sharesByKey = m;
+    sharesLoadedAt = now;
+  }
+
   // Convert selectedKeys to server-usable rel paths (includes curPath prefix).
   // Sorted to keep output stable and user-friendly.
   function selectedRelPaths() {
@@ -1359,13 +1515,13 @@
     return 0; // never
   }
 
-  async function createShareLinkFor(relPath, type, expiresSec) {
+  async function createShareLinkFor(relPath, expiresSec) {
     const r = await fetch("/api/v4/shares/create", {
       method: "POST",
       credentials: "include",
       cache: "no-store",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ path: relPath, type, expires_sec: expiresSec })
+      body: JSON.stringify({ path: relPath, expires_sec: expiresSec })
     });
 
     const j = await r.json().catch(() => null);
@@ -1376,11 +1532,11 @@
       throw new Error(msg || "share create failed");
     }
 
-    // Expect server to return something like: { ok:true, url:"/s/<token>", token:"..." }
     const url = j.url || "";
     if (!url) throw new Error("server did not return url");
     return `${window.location.origin}${url}`;
   }
+
 
   async function copyText(s) {
     try {
@@ -1399,7 +1555,9 @@
 
   function openShareDialogFor(item) {
     const rel = currentRelPathFor(item);
-    const type = item.type === "dir" ? "dir" : "file";
+    const type = (item.type === "dir") ? "dir" : "file";
+
+    const existing = existingShareFor(rel, type);
 
     if (shareTitle) shareTitle.textContent = "Share link";
     if (sharePath) sharePath.textContent = "/" + (rel || "");
@@ -1407,20 +1565,43 @@
     if (shareOutWrap) shareOutWrap.classList.add("hidden");
     if (shareOut) shareOut.value = "";
 
-    // default expiry = 24h
+    // Default expiry = 24h for new shares
     if (shareExpiry) shareExpiry.value = "24h";
 
-    // wire buttons (idempotent: remove old handlers by assigning onclick)
+    // If already shared -> show link immediately, change primary button to "Re-create"
+    if (existing) {
+      const full = `${window.location.origin}${existing.url || ("/s/" + (existing.token || ""))}`;
+      if (shareOut) shareOut.value = full;
+      if (shareOutWrap) shareOutWrap.classList.remove("hidden");
+
+      const exp = existing.expires_at ? ` • expires ${existing.expires_at}` : " • no expiry";
+      if (shareStatus) shareStatus.textContent = `Already shared${exp}.`;
+
+      if (shareCreateBtn) shareCreateBtn.textContent = "Create new link (rotate)…";
+    } else {
+      if (shareCreateBtn) shareCreateBtn.textContent = "Create link";
+    }
+
     if (shareCreateBtn) {
       shareCreateBtn.onclick = async () => {
         try {
           if (shareStatus) shareStatus.textContent = "Creating…";
           const expiresSec = expiresSecFromPreset(shareExpiry ? shareExpiry.value : "24h");
-          const link = await createShareLinkFor(rel, type, expiresSec);
+
+          // If already shared, you might want to rotate by revoking old token first.
+          // This is optional; leaving it in gives deterministic UX.
+          if (existing && existing.token) {
+            try { await revokeShareToken(existing.token); } catch (_) {}
+          }
+
+          const link = await createShareLinkFor(rel, expiresSec);
 
           if (shareOut) shareOut.value = link;
           if (shareOutWrap) shareOutWrap.classList.remove("hidden");
-          if (shareStatus) shareStatus.textContent = "Link created.";
+          if (shareStatus) shareStatus.textContent = existing ? "New link created (old revoked)." : "Link created.";
+
+          await refreshSharesCache();
+          await load(); // re-render badges if you add them later
         } catch (e) {
           if (shareStatus) shareStatus.textContent = `Error: ${String(e && e.message ? e.message : e)}`;
         }
@@ -1437,6 +1618,7 @@
 
     openShareModal();
   }
+
 
   // Open an item context menu at (x,y).
   // Handles selection-mode: if multiple items are selected and the clicked item
@@ -1457,6 +1639,10 @@
 
     ctxEl.innerHTML = "";
     ctxOpenForKey = key;
+
+    const rel = currentRelPathFor(item);
+    const share = existingShareFor(rel, item.type === "dir" ? "dir" : "file");
+    const shareLabel = share ? "Shared… (copy/revoke)" : "Share link…";
 
     // Selection menu mode (multi-select where clicked item is part of selection).
     const selectionMode = (selectedKeys && selectedKeys.size > 1 && selectedKeys.has(key));
@@ -1488,7 +1674,9 @@
         const relDir = joinPath(curPath, item.name);
         downloadFolderZip(relDir);
       }));
-      ctxEl.appendChild(menuItem("Share link…", "", () => openShareDialogFor(item)));
+
+      // Share (single place; label changes if already shared)
+      ctxEl.appendChild(menuItem(shareLabel, "", () => openShareDialogFor(item)));
 
       ctxEl.appendChild(menuItem("New folder here…", "", () => {
         const relDir = joinPath(curPath, item.name);
@@ -1498,7 +1686,6 @@
       // Properties is single-item only (keeps UI clean when multi-select active).
       if (!(selectedKeys && selectedKeys.size > 1)) {
         ctxEl.appendChild(menuSep());
-        ctxEl.appendChild(menuItem("Share link…", "", () => openShareDialogFor(item)));
         ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
       }
 
@@ -1510,9 +1697,11 @@
       // File menu
       ctxEl.appendChild(menuItem("Download", "⤓", () => doDownload(item)));
 
+      // Share (single place; label changes if already shared)
+      ctxEl.appendChild(menuItem(shareLabel, "", () => openShareDialogFor(item)));
+
       if (!(selectedKeys && selectedKeys.size > 1)) {
         ctxEl.appendChild(menuSep());
-        ctxEl.appendChild(menuItem("Share link…", "", () => openShareDialogFor(item)));
         ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
       }
 
@@ -1574,7 +1763,7 @@
     ctxEl.appendChild(menuItem("Upload folder…", "", () => pickFolder()));
     ctxEl.appendChild(menuSep());
     ctxEl.appendChild(menuItem("Download current folder (zip)", "", () => downloadFolderZip(curPath)));
-    ctxEl.appendChild(menuItem("Share link…", "", () => openShareDialogFor(item)));
+    // NOTE: No "Share link…" here because there is no single item in background context.
     ctxEl.appendChild(menuItem("New folder…", "", () => doMkdirAt(curPath)));
     ctxEl.appendChild(menuSep());
     ctxEl.appendChild(menuItem("Refresh", "", () => load()));
@@ -1608,7 +1797,6 @@
       return;
     }
 
-
     if (e.key === "Delete" && selectedKeys && selectedKeys.size > 0) {
       e.preventDefault();
       deleteSelection();
@@ -1624,6 +1812,7 @@
       status.textContent = `Selected: ${selectedKeys.size}`;
     }
   });
+
 
   // If the page scrolls or resizes, hide menu (avoids awkward floating menu).
   window.addEventListener("scroll", closeMenu, true);
@@ -1712,6 +1901,21 @@
     t.appendChild(img);
     t.appendChild(nm);
     t.appendChild(meta);
+
+    // ---- Shared badge overlay (top-right) ----
+    try {
+      const rel = currentRelPathFor(item);
+      const type = (item.type === "dir") ? "dir" : "file";
+      const share = existingShareFor(rel, type);
+      if (share) {
+        const b = document.createElement("div");
+        b.className = "shareBadge";
+        b.title = `Shared: /s/${share.token || ""}`.trim();
+        b.textContent = "🔗";
+        t.appendChild(b);
+      }
+    } catch (_) {}
+
 
     // Single click selection:
     // - Ctrl/Cmd toggles
@@ -1955,6 +2159,7 @@
     setBadge("warn", "loading…");
     status.textContent = "Loading…";
     clear();
+    await refreshSharesCache();
 
     try {
       // /list at root takes no query param; subfolders use ?path=<rel>

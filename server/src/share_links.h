@@ -38,6 +38,10 @@ public:
     // Revoke token. Returns true if removed.
     bool revoke(const std::string& token, std::string* err);
 
+    // Revoke token only if it belongs to owner_fp. Returns true if removed.
+    // If token exists but is owned by someone else, returns false (no leak).
+    bool revoke_owner(const std::string& owner_fp, const std::string& token, std::string* err);
+
     // Lookup without modifying downloads.
     std::optional<ShareLink> find(const std::string& token) const;
 
