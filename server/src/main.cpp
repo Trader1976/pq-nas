@@ -86,6 +86,9 @@ extern "C" {
 #include "storage_info.h"
 #include "user_quota.h"
 
+//sharing
+#include "share_links.h"
+
 //apps
 #include "static_serve.h"
 
@@ -1568,7 +1571,6 @@ int main()
     if (const char* v = std::getenv("PQNAS_SESS_TTL")) SESS_TTL = std::atoi(v);
     if (const char* v = std::getenv("PQNAS_LISTEN_PORT")) LISTEN_PORT = std::atoi(v);
 
-    httplib::Server srv;
 
     // ---- Audit log (hash-chained JSONL) ----
     const std::string audit_dir = exe_dir() + "/audit";
@@ -1732,6 +1734,11 @@ auto maybe_auto_rotate_before_append = [&]() {
         audit.append(ev);
     };
 
+	//Load shared files
+    pqnas::ShareRegistry shares((std::filesystem::path(REPO_ROOT) / "config" / "shares.json").string());
+    { std::string err; if (!shares.load(&err)) std::cerr << "[shares] WARNING: " << err << "\n"; }
+
+    httplib::Server srv;
 
     // ---- Load admin settings once at startup (audit min level) ----
     try {
@@ -2110,7 +2117,6 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -9938,6 +9944,549 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
 
     	reply_json(res, 200, json({{"ok",true}}).dump());
 	});
+
+
+
+    srv.Post("/api/v4/shares/create", [&](const httplib::Request& req, httplib::Response& res) {
+    auto reply = [&](int status, const json& j) {
+        res.status = status;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(j.dump(2), "application/json; charset=utf-8");
+    };
+
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        ev.f["ua"] = audit_ua();
+    };
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
+                          const std::string& path_rel = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "share_create";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!path_rel.empty()) ev.f["path"] = pqnas::shorten(path_rel, 200);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+    auto audit_ok = [&](const pqnas::ShareLink& s) {
+        pqnas::AuditEvent ev;
+        ev.event = "share_create";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["token"] = pqnas::shorten(s.token, 32);
+        ev.f["owner_fp"] = s.owner_fp;
+        ev.f["path"] = pqnas::shorten(s.path, 200);
+        ev.f["type"] = s.type;
+        if (!s.expires_at.empty()) ev.f["expires_at"] = s.expires_at;
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    if (role != "admin") {
+        audit_fail("not_admin", 403);
+        reply(403, json{{"ok", false}, {"error", "not_authorized"}, {"message", "Admin required"}});
+        return;
+    }
+
+    // Parse body: { "path": "<rel>", "expires_sec": 86400 }
+    json body;
+    try { body = json::parse(req.body.empty() ? "{}" : req.body); }
+    catch (const std::exception& e) {
+        audit_fail("json_parse", 400, e.what());
+        reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid json"}});
+        return;
+    }
+    if (!body.is_object() || !body.contains("path") || !body["path"].is_string()) {
+        audit_fail("missing_path", 400);
+        reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing path"}});
+        return;
+    }
+
+    std::string path_rel = body["path"].get<std::string>();
+    for (char& c : path_rel) if (c == '\\') c = '/';
+    while (!path_rel.empty() && path_rel[0] == '/') path_rel.erase(path_rel.begin());
+    while (path_rel.size() > 1 && path_rel.back() == '/') path_rel.pop_back();
+
+    // basic safety: reject '-' and CRLF
+    if (path_rel.empty() || path_rel[0] == '-' ||
+        path_rel.find('\n') != std::string::npos || path_rel.find('\r') != std::string::npos) {
+        audit_fail("invalid_path", 400, "bad chars", path_rel);
+        reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid path"}});
+        return;
+    }
+
+    // Optional expires_sec
+    long long expires_sec = 0;
+    if (body.contains("expires_sec")) {
+        try {
+            if (body["expires_sec"].is_number_integer()) expires_sec = body["expires_sec"].get<long long>();
+            else if (body["expires_sec"].is_string()) expires_sec = std::stoll(body["expires_sec"].get<std::string>());
+        } catch (...) {}
+    }
+    if (expires_sec < 0) expires_sec = 0;
+
+    // must have allocated storage (owner is the current user in v1)
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403, "", path_rel);
+        reply(403, json{{"ok", false}, {"error", "storage_unallocated"}, {"message", "Storage not allocated"}});
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    // Resolve path strictly using your existing safe resolver
+    std::filesystem::path abs;
+    std::string rerr;
+    if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &abs, &rerr)) {
+        audit_fail("invalid_path", 400, rerr, path_rel);
+        reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid path"}});
+        return;
+    }
+
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404, "", path_rel);
+        reply(404, json{{"ok", false}, {"error", "not_found"}, {"message", "path not found"}});
+        return;
+    }
+    if (std::filesystem::is_symlink(st)) {
+        audit_fail("symlink_not_supported", 400, "", path_rel);
+        reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "symlinks not supported"}});
+        return;
+    }
+
+    std::string type = std::filesystem::is_directory(st) ? "dir" : (std::filesystem::is_regular_file(st) ? "file" : "");
+    if (type.empty()) {
+        audit_fail("unsupported_type", 400, "", path_rel);
+        reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "unsupported path type"}});
+        return;
+    }
+
+    pqnas::ShareLink out;
+    std::string err;
+    if (!shares.create(fp_hex, path_rel, type, expires_sec, &out, &err)) {
+        audit_fail("create_failed", 500, err, path_rel);
+        reply(500, json{{"ok", false}, {"error", "server_error"}, {"message", "share create failed"}});
+        return;
+    }
+
+    audit_ok(out);
+
+    reply(200, json{
+        {"ok", true},
+        {"token", out.token},
+        {"url", std::string("/s/") + out.token},
+        {"expires_at", out.expires_at.empty() ? json() : json(out.expires_at)},
+        {"type", out.type},
+        {"path", out.path}
+    });
+});
+
+
+    srv.Post("/api/v4/shares/revoke", [&](const httplib::Request& req, httplib::Response& res) {
+    auto reply = [&](int status, const json& j) {
+        res.status = status;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(j.dump(2), "application/json; charset=utf-8");
+    };
+
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        ev.f["ua"] = audit_ua();
+    };
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
+                          const std::string& token_short = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "share_revoke";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!token_short.empty()) ev.f["token"] = token_short;
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+    auto audit_ok = [&](const std::string& token_short) {
+        pqnas::AuditEvent ev;
+        ev.event = "share_revoke";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["token"] = token_short;
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    if (role != "admin") {
+        audit_fail("not_admin", 403);
+        reply(403, json{{"ok", false}, {"error", "not_authorized"}, {"message", "Admin required"}});
+        return;
+    }
+
+    json body;
+    try { body = json::parse(req.body.empty() ? "{}" : req.body); }
+    catch (const std::exception& e) {
+        audit_fail("json_parse", 400, e.what());
+        reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid json"}});
+        return;
+    }
+
+    if (!body.is_object() || !body.contains("token") || !body["token"].is_string()) {
+        audit_fail("missing_token", 400);
+        reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing token"}});
+        return;
+    }
+
+    std::string token = body["token"].get<std::string>();
+    std::string token_short = pqnas::shorten(token, 32);
+
+    std::string err;
+    bool removed = shares.revoke(token, &err);
+    if (!removed) {
+        // If err set => save failed; else token not found
+        if (!err.empty()) {
+            audit_fail("revoke_failed", 500, err, token_short);
+            reply(500, json{{"ok", false}, {"error", "server_error"}, {"message", "share revoke failed"}});
+        } else {
+            audit_fail("not_found", 404, "", token_short);
+            reply(404, json{{"ok", false}, {"error", "not_found"}, {"message", "token not found"}});
+        }
+        return;
+    }
+
+    audit_ok(token_short);
+    reply(200, json{{"ok", true}});
+});
+
+
+    srv.Get("/api/v4/shares/list", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
+        return;
+
+    if (role != "admin") {
+        res.status = 403;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(json{{"ok",false},{"error","not_authorized"},{"message","Admin required"}}.dump(2),
+                        "application/json; charset=utf-8");
+        return;
+    }
+
+    auto v = shares.list();
+
+    json out;
+    out["ok"] = true;
+    out["shares"] = json::array();
+    for (const auto& s : v) {
+        json it;
+        it["token"] = s.token;
+        it["url"] = std::string("/s/") + s.token;
+        it["owner_fp"] = s.owner_fp;
+        it["path"] = s.path;
+        it["type"] = s.type;
+        it["created_at"] = s.created_at;
+        if (!s.expires_at.empty()) it["expires_at"] = s.expires_at;
+        it["downloads"] = s.downloads;
+        out["shares"].push_back(std::move(it));
+    }
+
+    res.status = 200;
+    res.set_header("Cache-Control", "no-store");
+    res.set_content(out.dump(2), "application/json; charset=utf-8");
+});
+    // Public share download: GET /s/<token>
+srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Response& res) {
+    const std::string token = req.matches[1].str();
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_event = [&](const std::string& name,
+                           const std::string& outcome,
+                           const pqnas::ShareLink* s,
+                           const std::string& reason = "",
+                           int http = 0,
+                           const std::string& detail = "") {
+        pqnas::AuditEvent ev;
+        ev.event = name;
+        ev.outcome = outcome;
+        ev.f["token"] = pqnas::shorten(token, 32);
+        if (http) ev.f["http"] = std::to_string(http);
+        if (!reason.empty()) ev.f["reason"] = reason;
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        if (s) {
+            ev.f["owner_fp"] = s->owner_fp;
+            ev.f["path"] = pqnas::shorten(s->path, 200);
+            ev.f["type"] = s->type;
+            if (!s->expires_at.empty()) ev.f["expires_at"] = s->expires_at;
+        }
+        add_ip_headers(ev);
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    pqnas::ShareLink s;
+    std::string err;
+    auto valid = shares.is_valid_now(token, &s, &err);
+
+    if (!valid.has_value()) {
+        audit_event("share_download", "fail", nullptr, "not_found", 404);
+        res.status = 404;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Not found\n", "text/plain; charset=utf-8");
+        return;
+    }
+
+    if (valid.value() == false) {
+        // expired
+        audit_event("share_expired", "ok", &s, "expired", 410);
+        audit_event("share_download", "fail", &s, "expired", 410);
+
+        res.status = 410;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Expired\n", "text/plain; charset=utf-8");
+        return;
+    }
+
+    // Resolve to disk
+    const std::filesystem::path user_dir = user_dir_for_fp(s.owner_fp);
+
+    std::filesystem::path abs;
+    std::string rerr;
+    if (!pqnas::resolve_user_path_strict(user_dir, s.path, &abs, &rerr)) {
+        audit_event("share_download", "fail", &s, "invalid_path", 400, rerr);
+        res.status = 404; // safer: do not leak
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Not found\n", "text/plain; charset=utf-8");
+        return;
+    }
+
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(abs, ec);
+    if (ec || !std::filesystem::exists(st) || std::filesystem::is_symlink(st)) {
+        audit_event("share_download", "fail", &s, "not_found", 404);
+        res.status = 404;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Not found\n", "text/plain; charset=utf-8");
+        return;
+    }
+
+    // Optional: enforce stored type matches on-disk type
+    if (s.type == "file" && !std::filesystem::is_regular_file(st)) {
+        audit_event("share_download", "fail", &s, "type_mismatch", 404);
+        res.status = 404;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Not found\n", "text/plain; charset=utf-8");
+        return;
+    }
+    if (s.type == "dir" && !std::filesystem::is_directory(st)) {
+        audit_event("share_download", "fail", &s, "type_mismatch", 404);
+        res.status = 404;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Not found\n", "text/plain; charset=utf-8");
+        return;
+    }
+
+    // Serve
+    if (s.type == "file") {
+        // Stream file (simple v1: read to memory; if you already have a streaming helper, use it)
+        std::ifstream f(abs, std::ios::binary);
+        if (!f.good()) {
+            audit_event("share_download", "fail", &s, "open_failed", 500);
+            res.status = 500;
+            res.set_header("Cache-Control", "no-store");
+            res.set_content("Server error\n", "text/plain; charset=utf-8");
+            return;
+        }
+        std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+
+        audit_event("share_download", "ok", &s, "", 200);
+        (void)shares.increment_downloads(token, &err); // best effort
+
+        std::string fname = std::filesystem::path(s.path).filename().string();
+        if (fname.empty()) fname = "download";
+
+        res.status = 200;
+        res.set_header("Cache-Control", "no-store");
+        res.set_header("Content-Disposition", ("attachment; filename=\"" + fname + "\"").c_str());
+        res.set_content(std::move(data), "application/octet-stream");
+        return;
+    }
+
+    // s.type == "dir" -> zip directory (reuse your existing in-memory zip style)
+    // For v1, we zip the directory root as "<dirname>/..." like your /api/v4/files/zip does.
+    // We also reject symlinks inside, same rule as your zip endpoints.
+
+    // Pre-walk: check symlinks + count bytes (reuse your helper pqnas::file_size_u64_safe)
+    std::uint64_t input_bytes = 0;
+    std::uint64_t files = 0, dirs = 0;
+
+    dirs = 1;
+    {
+        std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
+        ec.clear();
+        for (auto it = std::filesystem::recursive_directory_iterator(abs, opts, ec);
+             it != std::filesystem::recursive_directory_iterator();
+             it.increment(ec)) {
+
+            if (ec) {
+                audit_event("share_download", "fail", &s, "walk_failed", 500, ec.message());
+                res.status = 500;
+                res.set_header("Cache-Control", "no-store");
+                res.set_content("Server error\n", "text/plain; charset=utf-8");
+                return;
+            }
+
+            std::error_code ec2;
+            auto st2 = it->symlink_status(ec2);
+            if (ec2) continue;
+
+            if (std::filesystem::is_symlink(st2)) {
+                audit_event("share_download", "fail", &s, "symlink_not_supported", 400, "symlink inside tree");
+                res.status = 400;
+                res.set_header("Cache-Control", "no-store");
+                res.set_content("Bad request\n", "text/plain; charset=utf-8");
+                return;
+            }
+
+            if (std::filesystem::is_directory(st2)) { dirs += 1; continue; }
+            if (std::filesystem::is_regular_file(st2)) {
+                files += 1;
+                input_bytes += pqnas::file_size_u64_safe(it->path());
+                continue;
+            }
+
+            files += 1;
+        }
+    }
+
+    // Run: zip -r -q - <dirname> in cwd=user_dir, referencing relpath (s.path)
+    int pipefd[2];
+    if (::pipe(pipefd) != 0) {
+        audit_event("share_download", "fail", &s, "pipe_failed", 500, "pipe()");
+        res.status = 500;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Server error\n", "text/plain; charset=utf-8");
+        return;
+    }
+
+    pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(pipefd[0]); ::close(pipefd[1]);
+        audit_event("share_download", "fail", &s, "fork_failed", 500, "fork()");
+        res.status = 500;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Server error\n", "text/plain; charset=utf-8");
+        return;
+    }
+
+    if (pid == 0) {
+        ::dup2(pipefd[1], STDOUT_FILENO);
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
+
+        if (::chdir(user_dir.c_str()) != 0) _exit(127);
+
+        const char* argv[] = {
+            "zip",
+            "-r",
+            "-q",
+            "-",
+            s.path.c_str(),
+            nullptr
+        };
+        ::execvp("zip", (char* const*)argv);
+        _exit(127);
+    }
+
+    ::close(pipefd[1]);
+
+    std::string zip_data;
+    zip_data.reserve(4ull * 1024 * 1024);
+
+    std::array<char, 64 * 1024> buf{};
+    while (true) {
+        ssize_t n = ::read(pipefd[0], buf.data(), (ssize_t)buf.size());
+        if (n == 0) break;
+        if (n < 0) {
+            ::close(pipefd[0]);
+            ::kill(pid, SIGKILL);
+            audit_event("share_download", "fail", &s, "read_failed", 500, "read(zip)");
+            res.status = 500;
+            res.set_header("Cache-Control", "no-store");
+            res.set_content("Server error\n", "text/plain; charset=utf-8");
+            return;
+        }
+        zip_data.append(buf.data(), (size_t)n);
+    }
+    ::close(pipefd[0]);
+
+    int status = 0;
+    ::waitpid(pid, &status, 0);
+    if (!(WIFEXITED(status) && WEXITSTATUS(status) == 0)) {
+        audit_event("share_download", "fail", &s, "zip_failed", 500, "zip exit nonzero");
+        res.status = 500;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Server error\n", "text/plain; charset=utf-8");
+        return;
+    }
+
+    audit_event("share_download", "ok", &s, "", 200);
+    (void)shares.increment_downloads(token, &err); // best effort
+
+    std::string base = std::filesystem::path(s.path).filename().string();
+    if (base.empty()) base = "download";
+    std::string fname = base + ".zip";
+
+    res.status = 200;
+    res.set_header("Cache-Control", "no-store");
+    res.set_header("Content-Type", "application/zip");
+    res.set_header("Content-Disposition", ("attachment; filename=\"" + fname + "\"").c_str());
+    res.body = std::move(zip_data);
+});
 
     std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
     srv.listen("0.0.0.0", LISTEN_PORT);

@@ -8,6 +8,9 @@ let _autoTimer = null;
 let _verifyTimer = null;
 let _expandedKey = null;  // currently expanded row key (optional)
 
+const intervalInput = document.getElementById("intervalSec");
+const autoToggle = document.getElementById("autoToggle");
+
 function $(id) { return document.getElementById(id); }
 
 function clampInt(v, lo, hi, fallback) {
@@ -427,6 +430,18 @@ function syncAutoUi() {
         $("btnRefresh").classList.remove("glow");
     }
 }
+function syncIntervalEnabled() {
+    intervalInput.disabled = !autoToggle.checked;
+    intervalInput.style.opacity = autoToggle.checked ? "1" : "0.55";
+}
+
+autoToggle.addEventListener("change", syncIntervalEnabled);
+syncIntervalEnabled();
+
+intervalInput.addEventListener("input", () => {
+    const v = Math.max(1, Number(intervalInput.value) || 1);
+    intervalText.textContent = v + "s";
+});
 
 function syncAuto() {
     const on = $("autoToggle").checked;

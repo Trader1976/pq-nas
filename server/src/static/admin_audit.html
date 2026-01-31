@@ -326,7 +326,7 @@
             padding:10px 12px;
             border-radius:12px;
             outline:none;
-            min-width: 210px;
+            min-width: 70px;
         }
         .input::placeholder{ color:rgba(var(--fg-rgb),0.45); }
         .input:focus{ border-color:rgba(var(--fg-rgb),0.38); box-shadow:0 0 0 3px rgba(var(--fg-rgb),0.08); }
@@ -799,7 +799,18 @@
                             <span class="pill" title="Auto refresh interval seconds">
             <span class="k">Every:</span> <span class="v" id="intervalText">3s</span>
         </span>
-                            <input id="intervalSec" class="input mono" style="width:90px" value="3" />
+                            <input
+                                    id="intervalSec"
+                                    type="number"
+                                    min="1"
+                                    max="60"
+                                    step="1"
+                                    class="input mono"
+                                    style="width:52px"
+                                    value="3"
+                                    title="Auto-refresh interval in seconds (used when Auto is enabled)"
+                                    aria-label="Auto refresh interval seconds"
+                            />
                         </div>
 
                     </div>

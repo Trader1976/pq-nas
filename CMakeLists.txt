@@ -132,6 +132,7 @@ add_executable(pqnas_server
         server/src/users_registry.cpp
         server/src/system_metrics.cc
         server/src/storage_info.cc
+        server/src/share_links.cc
 )
 
 target_include_directories(pqnas_server PRIVATE

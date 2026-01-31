@@ -78,6 +78,19 @@
   const propsPath = document.getElementById("propsPath");
   const propsBody = document.getElementById("propsBody");
 
+  // Share modal UI
+  const shareModal = document.getElementById("shareModal");
+  const shareClose = document.getElementById("shareClose");
+  const shareTitle = document.getElementById("shareTitle");
+  const sharePath = document.getElementById("sharePath");
+  const shareExpiry = document.getElementById("shareExpiry");
+  const shareCreateBtn = document.getElementById("shareCreateBtn");
+  const shareOutWrap = document.getElementById("shareOutWrap");
+  const shareOut = document.getElementById("shareOut");
+  const shareCopyBtn = document.getElementById("shareCopyBtn");
+  const shareStatus = document.getElementById("shareStatus");
+
+
   // ---- State ----------------------------------------------------------------
   // Current folder path (server-relative, no leading "/"; "" means root).
   let curPath = "";
@@ -155,6 +168,23 @@
     propsModal.classList.remove("show");
     propsModal.setAttribute("aria-hidden", "true");
   }
+
+  function openShareModal() {
+    if (!shareModal) return;
+    shareModal.classList.add("show");
+    shareModal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeShareModal() {
+    if (!shareModal) return;
+    shareModal.classList.remove("show");
+    shareModal.setAttribute("aria-hidden", "true");
+  }
+
+  shareClose?.addEventListener("click", closeShareModal);
+  shareModal?.addEventListener("click", (e) => {
+    if (e.target === shareModal) closeShareModal();
+  });
 
   // Close button + click-outside-to-close
   propsClose?.addEventListener("click", closePropsModal);
@@ -1322,6 +1352,91 @@
     clearSelection();
     await load();
   }
+  function expiresSecFromPreset(v) {
+    if (v === "1h") return 3600;
+    if (v === "24h") return 86400;
+    if (v === "7d") return 7 * 86400;
+    return 0; // never
+  }
+
+  async function createShareLinkFor(relPath, type, expiresSec) {
+    const r = await fetch("/api/v4/shares/create", {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ path: relPath, type, expires_sec: expiresSec })
+    });
+
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok) {
+      const msg = j && (j.message || j.error)
+          ? `${j.error || ""} ${j.message || ""}`.trim()
+          : `HTTP ${r.status}`;
+      throw new Error(msg || "share create failed");
+    }
+
+    // Expect server to return something like: { ok:true, url:"/s/<token>", token:"..." }
+    const url = j.url || "";
+    if (!url) throw new Error("server did not return url");
+    return `${window.location.origin}${url}`;
+  }
+
+  async function copyText(s) {
+    try {
+      await navigator.clipboard.writeText(s);
+      return true;
+    } catch (_) {
+      const ta = document.createElement("textarea");
+      ta.value = s;
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    }
+  }
+
+  function openShareDialogFor(item) {
+    const rel = currentRelPathFor(item);
+    const type = item.type === "dir" ? "dir" : "file";
+
+    if (shareTitle) shareTitle.textContent = "Share link";
+    if (sharePath) sharePath.textContent = "/" + (rel || "");
+    if (shareStatus) shareStatus.textContent = "";
+    if (shareOutWrap) shareOutWrap.classList.add("hidden");
+    if (shareOut) shareOut.value = "";
+
+    // default expiry = 24h
+    if (shareExpiry) shareExpiry.value = "24h";
+
+    // wire buttons (idempotent: remove old handlers by assigning onclick)
+    if (shareCreateBtn) {
+      shareCreateBtn.onclick = async () => {
+        try {
+          if (shareStatus) shareStatus.textContent = "Creating…";
+          const expiresSec = expiresSecFromPreset(shareExpiry ? shareExpiry.value : "24h");
+          const link = await createShareLinkFor(rel, type, expiresSec);
+
+          if (shareOut) shareOut.value = link;
+          if (shareOutWrap) shareOutWrap.classList.remove("hidden");
+          if (shareStatus) shareStatus.textContent = "Link created.";
+        } catch (e) {
+          if (shareStatus) shareStatus.textContent = `Error: ${String(e && e.message ? e.message : e)}`;
+        }
+      };
+    }
+
+    if (shareCopyBtn) {
+      shareCopyBtn.onclick = async () => {
+        const link = shareOut ? shareOut.value : "";
+        const ok = link ? await copyText(link) : false;
+        if (shareStatus) shareStatus.textContent = ok ? "Copied." : "Copy failed.";
+      };
+    }
+
+    openShareModal();
+  }
 
   // Open an item context menu at (x,y).
   // Handles selection-mode: if multiple items are selected and the clicked item
@@ -1373,6 +1488,7 @@
         const relDir = joinPath(curPath, item.name);
         downloadFolderZip(relDir);
       }));
+      ctxEl.appendChild(menuItem("Share link…", "", () => openShareDialogFor(item)));
 
       ctxEl.appendChild(menuItem("New folder here…", "", () => {
         const relDir = joinPath(curPath, item.name);
@@ -1382,6 +1498,7 @@
       // Properties is single-item only (keeps UI clean when multi-select active).
       if (!(selectedKeys && selectedKeys.size > 1)) {
         ctxEl.appendChild(menuSep());
+        ctxEl.appendChild(menuItem("Share link…", "", () => openShareDialogFor(item)));
         ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
       }
 
@@ -1395,6 +1512,7 @@
 
       if (!(selectedKeys && selectedKeys.size > 1)) {
         ctxEl.appendChild(menuSep());
+        ctxEl.appendChild(menuItem("Share link…", "", () => openShareDialogFor(item)));
         ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
       }
 
@@ -1456,6 +1574,7 @@
     ctxEl.appendChild(menuItem("Upload folder…", "", () => pickFolder()));
     ctxEl.appendChild(menuSep());
     ctxEl.appendChild(menuItem("Download current folder (zip)", "", () => downloadFolderZip(curPath)));
+    ctxEl.appendChild(menuItem("Share link…", "", () => openShareDialogFor(item)));
     ctxEl.appendChild(menuItem("New folder…", "", () => doMkdirAt(curPath)));
     ctxEl.appendChild(menuSep());
     ctxEl.appendChild(menuItem("Refresh", "", () => load()));
@@ -1477,6 +1596,10 @@
   // - Ctrl/Cmd+A: select all
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+      if (shareModal && shareModal.classList.contains("show")) {
+        closeShareModal();
+        return;
+      }
       if (propsModal && propsModal.classList.contains("show")) {
         closePropsModal();
         return;
@@ -1484,6 +1607,7 @@
       closeMenu();
       return;
     }
+
 
     if (e.key === "Delete" && selectedKeys && selectedKeys.size > 0) {
       e.preventDefault();
