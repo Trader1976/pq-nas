@@ -19,6 +19,9 @@
       --fm_modal_overlay: rgba(0,0,0,0.55);
     }
 
+    /* Semantic hook for breadcrumb container (styled mainly via #pathLine) */
+    .crumbbar {}
+
     html:not([data-theme]){
       --bg: #050712;
       --fg: #00f0f8;
@@ -417,6 +420,11 @@
       background: linear-gradient(180deg, var(--fm_surface2), var(--fm_surface));
       box-shadow: var(--shadow);
       overflow: hidden;
+
+      /* Make modal usable with large content (Raw JSON, long lists) */
+      display: flex;
+      flex-direction: column;
+      max-height: min(82vh, 900px);
     }
 
     .modalHead{
@@ -426,8 +434,26 @@
       gap: 12px;
       padding: 12px 14px;
       border-bottom: 1px solid var(--border2);
-      background: rgba(0,0,0,0.18); /* neutral header tint; works on dark + light */
+      background: rgba(0,0,0,0.18);
+
+      /* Keep header visible while body scrolls */
+      flex: 0 0 auto;
     }
+
+    .modalBody{
+      padding: 14px;
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      gap: 10px 14px;
+
+      /* Let body scroll within capped modal height */
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+
 
     .hidden{ display:none !important; }
 
@@ -446,12 +472,6 @@
       max-width: 58ch;
     }
 
-    .modalBody{
-      padding: 14px;
-      display: grid;
-      grid-template-columns: 160px 1fr;
-      gap: 10px 14px;
-    }
 
     @media (max-width: 520px){
       .modalBody{ grid-template-columns: 1fr; }
@@ -476,25 +496,9 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
-    /* --- Properties modal: keep it usable with large JSON --- */
-    .modalCard{
-      /* existing styles kept */
-      display: flex;              /* NEW */
-      flex-direction: column;     /* NEW */
-      max-height: min(82vh, 900px); /* NEW: cap overall modal height */
-    }
 
-    .modalHead{
-      flex: 0 0 auto;             /* NEW: header stays fixed */
-    }
 
-    .modalBody{
-      flex: 1 1 auto;             /* NEW: body takes remaining space */
-      min-height: 0;              /* NEW: required so overflow works in flex */
-      overflow: auto;             /* NEW: body scrolls */
-      overscroll-behavior: contain;
-      -webkit-overflow-scrolling: touch;
-    }
+
 
     /* If you want the Raw JSON block to scroll inside its own box too: */
     #propsBody pre.pre{
@@ -508,32 +512,30 @@
 
     .tile{ position: relative; } /* needed for absolute badge */
 
+
+    /* Share badge overlay (added by JS after shares cache loads) */
+    .tile{ position: relative; } /* needed for absolute badge */
+
     .shareBadge{
       position:absolute;
       top:10px;
       right:10px;
-      font-size:12px;
-      line-height:1;
-      padding:6px 8px;
-      border-radius:999px;
-      background: rgba(0,0,0,0.45);
-      border: 1px solid rgba(255,255,255,0.18);
-      backdrop-filter: blur(6px);
-    }
-    .shareBadge{
-      position:absolute;
-      top:10px;
-      right:10px;
+
       width:28px;
       height:28px;
       border-radius:999px;
+
       display:flex;
       align-items:center;
       justify-content:center;
+
       font-size:16px;
+      line-height:1;
+
       background: rgba(0, 255, 180, 0.18);
       border: 1px solid rgba(0, 255, 180, 0.45);
       box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+      backdrop-filter: blur(6px);
     }
 
     .shareBadge.expired{
@@ -541,6 +543,8 @@
       border-color: rgba(255,70,70,0.55);
       color: rgba(255,70,70,0.95);
     }
+
+
 
 
   </style>

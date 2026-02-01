@@ -1,6 +1,5 @@
 (() => {
   "use strict";
-
   // ===========================================================================
   // PQ-NAS File Manager (example bundled app)
   //
@@ -375,7 +374,9 @@
   function renderBreadcrumb() {
     if (!pathLine) return;
 
-    pathLine.className = "crumbbar mono";
+    // Breadcrumb is styled primarily via #pathLine in CSS.
+    // We only add the mono font class here (safe and explicit).
+    pathLine.classList.add("mono");
     pathLine.replaceChildren();
 
     // Root "/"
@@ -1884,21 +1885,171 @@
     e.preventDefault();
     openBackgroundMenuAt(e.clientX, e.clientY);
   });
+  // -------------------------------------------------------------------------
+  // Tile lookup by our stable per-listing key.
+  //
+  // We assign each tile a data-key="type:name" attribute. This key is stable
+  // inside the *current* directory listing and is used for:
+  // - selection bookkeeping
+  // - async decoration (share badges)
+  //
+  // NOTE: CSS.escape() is widely available in modern browsers, but not universal
+  // in older WebViews. We keep a safe fallback.
+  // -------------------------------------------------------------------------
+  function tileElByKey(key) {
+    if (!gridEl) return null;
 
-  // ===========================================================================
-  // Tile rendering + per-item interactions
-  // ===========================================================================
+    const k = String(key || "");
+    const esc = (window.CSS && typeof CSS.escape === "function")
+        ? CSS.escape(k)
+        : k.replace(/["\\]/g, "\\$&"); // minimal escape for attribute selector
+
+    return gridEl.querySelector(`.tile[data-key="${esc}"]`);
+  }
+
+  // -------------------------------------------------------------------------
+  // Remove share badge element from a tile, if present.
+  // This is used when:
+  // - shares cache loads and item is not shared
+  // - shares cache refresh fails and we want to clear stale badges
+  // -------------------------------------------------------------------------
+  function removeShareBadge(tileEl) {
+    if (!tileEl) return;
+    const b = tileEl.querySelector(".shareBadge");
+    if (b) b.remove();
+  }
+
+  // -------------------------------------------------------------------------
+  // Ensure a share badge exists on the tile and reflects current state.
+  //
+  // The badge is a tiny overlay element (top-right via CSS) that indicates:
+  // - 🔗 shared (valid)
+  // - ⏰ shared but expired (link exists in list but already expired)
+  //
+  // Performance note:
+  // We avoid DOM rewrites if the badge already matches the desired state.
+  // -------------------------------------------------------------------------
+  function ensureShareBadge(tileEl, expired) {
+    if (!tileEl) return;
+
+    const wantExpired = !!expired;
+    let b = tileEl.querySelector(".shareBadge");
+
+    if (!b) {
+      b = document.createElement("div");
+      b.className = "shareBadge";
+      tileEl.appendChild(b);
+    }
+
+    // Skip updates if nothing changed (saves work in large folders)
+    const hasExpired = b.classList.contains("expired");
+    if (hasExpired === wantExpired && b.textContent) {
+      // Still ensure title is correct (cheap, but keep it consistent)
+      b.title = wantExpired ? "Share link expired" : "Shared";
+      return;
+    }
+
+    b.className = "shareBadge" + (wantExpired ? " expired" : "");
+    b.title = wantExpired ? "Share link expired" : "Shared";
+    b.textContent = wantExpired ? "⏰" : "🔗";
+  }
+
+  // -------------------------------------------------------------------------
+  // Share badge decoration (async)
+  //
+  // Why this exists:
+  // - We render directory listings immediately using /files/list.
+  // - /shares/list can be slower and is not required to show the file grid.
+  // - So we load shares in the background and then "decorate" the already
+  //   rendered tiles with a small badge (🔗 / ⏰).
+  //
+  // How it works:
+  // - Each tile has data-key="type:name" (stable inside the current listing).
+  // - We map each item -> its full rel path (curPath + name) and look up an
+  //   existing share in sharesByKey (refreshed by refreshSharesCache()).
+  // - If a share exists, ensureShareBadge() adds/updates a .shareBadge element.
+  // - If no share exists, removeShareBadge() removes any existing badge.
+  //
+  // Performance:
+  // - Avoid DOM writes when the badge state hasn't changed.
+  // - This matters for large directories (hundreds/thousands of tiles).
+  // -------------------------------------------------------------------------
+  function decorateTilesWithShareBadges(items) {
+    if (!Array.isArray(items) || !gridEl) return;
+
+    for (const item of items) {
+      const key = `${item.type}:${item.name}`;
+      const el = tileElByKey(key);
+      if (!el) continue;
+
+      // Compute canonical rel path for this item in the current folder.
+      const rel = currentRelPathFor(item);
+      const type = (item.type === "dir") ? "dir" : "file";
+
+      // Look up share from the in-memory cache (populated by refreshSharesCache()).
+      const share = existingShareFor(rel, type);
+
+      // Determine desired badge state for this tile.
+      const wantBadge = !!share;
+      const wantExpired = wantBadge ? isShareExpired(share) : false;
+
+      // Determine current badge state in DOM (if any).
+      const b = el.querySelector(".shareBadge");
+      const hasBadge = !!b;
+      const hasExpired = hasBadge && b.classList.contains("expired");
+
+      // No change needed -> skip DOM work.
+      if (!wantBadge && !hasBadge) continue;
+      if (wantBadge && hasBadge && (hasExpired === wantExpired)) continue;
+
+      // Apply desired state.
+      if (wantBadge) ensureShareBadge(el, wantExpired);
+      else removeShareBadge(el);
+    }
+  }
+
+// ===========================================================================
+// Tile rendering + per-item interactions
+//
+// Design notes:
+// - A tile is intentionally "data-light": it renders quickly using list() output.
+// - We avoid any extra network calls here.
+// - Share badges are NOT decided here (because /shares/list may still be loading).
+//   Instead, load() renders tiles immediately and later "decorates" tiles with
+//   share badges once refreshSharesCache() finishes.
+// ===========================================================================
   function tile(item) {
+    // Key must be stable within the current folder listing.
+    // We intentionally use "type:name" (not full path) to keep selection stable.
     const key = `${item.type}:${item.name}`;
 
     const t = document.createElement("div");
     t.className = "tile";
     t.dataset.key = key;
 
+    // -------------------------------------------------------------------------
     // Icon
+    //
+    // Performance:
+    // - Icons are tiny but there can be many tiles.
+    // - Hint the browser to decode off-main-thread (decoding="async")
+    // - Hint that icons are low priority (fetchPriority="low") so user actions,
+    //   HTML/CSS/JS, and API responses are not delayed.
+    // - Lazy-load icons for offscreen tiles (loading="lazy") to reduce work.
+    //
+    // Note:
+    // - For most folders we only have a handful of unique icon URLs; we can also
+    //   "warm" those URLs in load() before creating tiles (see warmIconsForItems()).
+    // -------------------------------------------------------------------------
     const img = document.createElement("img");
     img.className = "ico";
     img.alt = "";
+
+    // Browser hints (safe to ignore if unsupported).
+    img.loading = "lazy";
+    try { img.decoding = "async"; } catch (_) {}
+    try { img.fetchPriority = "low"; } catch (_) {}
+
     img.src = iconFor(item);
 
     // Name (one-line ellipsis)
@@ -1923,24 +2074,18 @@
     t.appendChild(nm);
     t.appendChild(meta);
 
-    // ---- Shared badge overlay (top-right) ----
-    try {
-      const rel = currentRelPathFor(item);
-      const type = (item.type === "dir") ? "dir" : "file";
-      const share = existingShareFor(rel, type);
-
-      if (share) {
-        const expired = isShareExpired(share);
-
-        const b = document.createElement("div");
-        b.className = "shareBadge" + (expired ? " expired" : "");
-        b.title = expired ? "Share link expired" : "Shared";
-        b.textContent = expired ? "⏰" : "🔗";
-
-        t.appendChild(b);
-      }
-    } catch (_) {}
-
+    // -------------------------------------------------------------------------
+    // Share badge (async decoration)
+    //
+    // IMPORTANT:
+    // We do NOT add the share badge here.
+    // Rationale:
+    // - /shares/list is global-ish and can be slower than /files/list
+    // - We want directory navigation to render instantly
+    // - Once shares cache finishes loading, load() will call:
+    //     decorateTilesWithShareBadges(items)
+    //   which will add/remove the `.shareBadge` element on already-rendered tiles.
+    // -------------------------------------------------------------------------
 
     // Single click selection:
     // - Ctrl/Cmd toggles
@@ -1976,6 +2121,7 @@
 
     return t;
   }
+
 
   // Key/Value row builder for properties modal.
   function kvRow(k, v) {
@@ -2358,19 +2504,22 @@
 
     openPropsModal?.();
   }
-
-  // ===========================================================================
-  // Directory listing / render
-  // ===========================================================================
+// ===========================================================================
+// Directory listing / render
+// ===========================================================================
   async function load() {
     closeMenu();
     setBadge("warn", "loading…");
     status.textContent = "Loading…";
     clear();
-    await refreshSharesCache();
+
+    // Snapshot path for this load (prevents stale decorate after navigation)
+    const loadPath = curPath;
+
+    // Start shares refresh but DO NOT await yet.
+    const sharesPromise = refreshSharesCache();
 
     try {
-      // /list at root takes no query param; subfolders use ?path=<rel>
       const url = curPath
           ? `/api/v4/files/list?path=${encodeURIComponent(curPath)}`
           : `/api/v4/files/list`;
@@ -2381,12 +2530,10 @@
       if (!r.ok || !j || !j.ok) {
         setBadge("err", "error");
         status.textContent = `List failed: HTTP ${r.status}`;
-
         const msg = j && (j.message || j.error)
             ? `${j.error || ""} ${j.message || ""}`.trim()
             : "bad response";
 
-        // Render an error tile (keeps UI consistent and visible)
         const err = document.createElement("div");
         err.className = "tile mono";
         err.style.cursor = "default";
@@ -2395,13 +2542,11 @@
         return;
       }
 
-      // Server echoes canonical path; trust it (stays in sync with server rules)
       curPath = typeof j.path === "string" ? j.path : curPath;
       renderBreadcrumb();
 
       setBadge("ok", "ready");
 
-      // Sort folders first, then alphabetical
       const items = Array.isArray(j.items) ? j.items.slice() : [];
       items.sort((a, b) => {
         if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
@@ -2410,7 +2555,6 @@
 
       status.textContent = `Items: ${items.length}`;
 
-      // Friendly empty state
       if (!items.length) {
         const empty = document.createElement("div");
         empty.className = "tile mono";
@@ -2420,14 +2564,20 @@
         return;
       }
 
-      // Render tiles
+      // Render tiles immediately (no shares needed)
       for (const it of items) gridEl.appendChild(tile(it));
-
-      // Restore selection highlights (keys are stable per folder listing)
       applySelectionToDom();
 
+      // When shares arrive, decorate (only if still same folder)
+      sharesPromise
+          .then(() => {
+            console.log("[filemgr] shares loaded");
+            if (curPath !== loadPath) return; // user navigated; ignore stale results
+            decorateTilesWithShareBadges(items);
+          })
+          .catch(() => { /* ignore */ });
+
     } catch (e) {
-      // Network/unexpected errors: show a "network" badge and a diagnostic tile
       setBadge("err", "network");
       status.textContent = "Network error";
 
@@ -2438,7 +2588,6 @@
       gridEl.appendChild(err);
     }
   }
-
   // Toolbar hooks
   refreshBtn?.addEventListener("click", load);
   upBtn?.addEventListener("click", () => {
@@ -2449,4 +2598,5 @@
 
   // Initial load on startup
   load();
+
 })();
