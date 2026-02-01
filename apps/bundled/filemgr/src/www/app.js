@@ -162,6 +162,90 @@
       }
     }, ms);
   }
+
+
+  // ===========================================================================
+  // Hash / checksum helpers
+  //
+  // Purpose:
+  // - Show file checksums in Properties without blocking UI.
+  // - Cache by (path + mtime + size) so reopening Properties is instant.
+  //
+  // Server endpoint (expected):
+  //   POST /api/v4/files/hash?path=<rel>   -> { ok:true, ...hash fields... }
+  // ===========================================================================
+  const hashCache = new Map(); // cacheKey -> { sha256, raw, atMs }
+
+  function hashCacheKey(relPath, mtimeEpoch, sizeBytes) {
+    // mtime+size makes it safe across overwrites/reuploads under same name
+    const m = Number(mtimeEpoch || 0) || 0;
+    const s = Number(sizeBytes || 0) || 0;
+    return `${String(relPath || "")}|m=${m}|s=${s}`;
+  }
+
+  function pickSha256FromHashResponse(j) {
+    // Support multiple possible response shapes:
+    // 1) { ok:true, sha256:"..." }
+    // 2) { ok:true, digest_hex:"..." }  <-- PQ-NAS server returns this
+    // 3) { ok:true, hash:"...", algo:"sha256" }
+    // 4) { ok:true, hashes:{ sha256:"..." } }
+    // 5) { ok:true, digests:{ sha256:"..." } }
+    if (!j || typeof j !== "object") return "";
+
+    // PQ-NAS current shape
+    if (typeof j.digest_hex === "string" && j.digest_hex) {
+      const algo = String(j.algo || j.algorithm || "").toLowerCase();
+      // If algo is present and not sha256, don't mislabel it.
+      if (!algo || algo === "sha256" || algo === "sha-256") return j.digest_hex;
+    }
+
+    if (typeof j.sha256 === "string" && j.sha256) return j.sha256;
+
+    if (j.hashes && typeof j.hashes === "object" && typeof j.hashes.sha256 === "string") {
+      return j.hashes.sha256;
+    }
+    if (j.digests && typeof j.digests === "object" && typeof j.digests.sha256 === "string") {
+      return j.digests.sha256;
+    }
+
+    if (typeof j.hash === "string" && j.hash) {
+      const algo = String(j.algo || j.algorithm || "").toLowerCase();
+      if (!algo || algo === "sha256" || algo === "sha-256") return j.hash;
+    }
+
+    return "";
+  }
+
+
+  async function fetchSha256ForRelPath(relPath) {
+    const p = String(relPath || "").replace(/^\/+/, "").trim();
+    if (!p) throw new Error("hash requires a file path");
+
+    const qs = new URLSearchParams();
+    qs.set("path", p);
+    qs.set("algo", "sha256"); // optional, but explicit
+
+    const r = await fetch(`/api/v4/files/hash?${qs.toString()}`, {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "Accept": "application/json" }
+    });
+
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok) {
+      const msg = j && (j.message || j.error)
+          ? `${j.error || ""} ${j.message || ""}`.trim()
+          : `HTTP ${r.status}`;
+      throw new Error(msg || "hash failed");
+    }
+
+    const sha256 = pickSha256FromHashResponse(j);
+    if (!sha256) throw new Error("server did not return sha256");
+    return { sha256, raw: j };
+  }
+
+
   // ===========================================================================
   // Shares cache (so we can show "already shared" + badges/menu)
   // Server endpoints:
@@ -2136,12 +2220,27 @@
     return [kEl, vEl];
   }
 
-
-
-  // Show single-item properties:
-  // - Render fast info from list() immediately
-  // - Then POST /api/v4/files/stat to get authoritative details
-  // - Finally render a clean summary + optional Raw JSON
+  function miniCopyButton(getTextFn) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn secondary";
+    b.style.padding = "8px 10px";
+    b.style.borderRadius = "12px";
+    b.textContent = "Copy";
+    b.onclick = async () => {
+      const text = getTextFn ? String(getTextFn() || "") : "";
+      const ok = text ? await copyText(text) : false;
+      b.textContent = ok ? "Copied" : "Copy failed";
+      setTimeout(() => (b.textContent = "Copy"), 1100);
+    };
+    return b;
+  }
+// Show single-item properties:
+// - Render fast info from list() immediately
+// - Then POST /api/v4/files/stat to get authoritative details
+// - Then fetch SHA-256 (file only) without blocking UI (cached)
+// - Share info (from cache) with expiry countdown + actions
+// - Finally Raw JSON
   async function showProperties(item) {
     if (!item) return;
 
@@ -2156,7 +2255,6 @@
 
     if (propsTitle) propsTitle.textContent = isDirHint ? "Folder properties" : "File properties";
     if (propsPath) propsPath.textContent = "/" + (rel || "");
-
     if (propsBody) propsBody.innerHTML = "";
 
     // --- helpers local to this function ---
@@ -2187,14 +2285,14 @@
       };
       return rwx(bits[0]) + rwx(bits[1]) + rwx(bits[2]);
     };
-    const isoUtcToMs = (iso) => {
+
+    const isoUtcToMsLocal = (iso) => {
       if (!iso || typeof iso !== "string") return null;
-      // expected "YYYY-MM-DDTHH:MM:SSZ"
       const ms = Date.parse(iso);
       return Number.isFinite(ms) ? ms : null;
     };
 
-    const fmtCountdown = (msLeft) => {
+    const fmtCountdownLocal = (msLeft) => {
       if (msLeft == null) return "";
       if (msLeft <= 0) return "Expired";
       const s = Math.floor(msLeft / 1000);
@@ -2217,7 +2315,6 @@
     pushRow(rows, "Type", isDirHint ? "Folder" : "File");
     pushRow(rows, "Path", "/" + (rel || ""));
 
-    // list() is a hint; stat() is authoritative
     if (!isDirHint && item.size_bytes != null) pushRow(rows, "Size", fmtSize(item.size_bytes || 0));
     if (item.mtime_unix) pushRow(rows, "Modified", fmtTime(item.mtime_unix));
     rows.push(["Details", "Loading…"]);
@@ -2277,23 +2374,19 @@
     pushRow(rows2, "Type", st.type === "dir" ? "Folder" : (st.type === "file" ? "File" : "Other"));
     pushRow(rows2, "Path", st.path_norm || ("/" + (rel || "")));
 
-    // Permissions/owner/mode
     if (st.mode_octal) {
       const rwx = permsFromOctal(st.mode_octal);
       pushRow(rows2, "Permissions", rwx ? `${st.mode_octal} (${rwx})` : st.mode_octal);
     }
 
-    // Time
     if (st.mtime_epoch) pushRow(rows2, "Modified", fmtUnix(st.mtime_epoch));
 
-    // File-specific fields
     if (st.type === "file") {
       if (st.bytes != null) pushRow(rows2, "Size", fmtSize(st.bytes));
       if (st.mime) pushRow(rows2, "MIME", st.mime);
       if (typeof st.is_text === "boolean") pushRow(rows2, "Looks like text", st.is_text ? "Yes" : "No");
     }
 
-    // Dir-specific fields (recursive scan may be partial/limited)
     if (st.type === "dir") {
       if (st.children) {
         const c = st.children;
@@ -2314,15 +2407,68 @@
       propsBody.appendChild(kEl);
       propsBody.appendChild(vEl);
     }
-// -------------------------------------------------------------------------
-// Share info (from cache), with expiry countdown + copy/revoke actions
-// -------------------------------------------------------------------------
+
+    // -------------------------------------------------------------------------
+    // Checksums (file only)
+    // -------------------------------------------------------------------------
+    if (st.type === "file") {
+      const [kEl, vEl] = kvRow("SHA-256", "");
+      vEl.classList.remove("mono");
+      vEl.innerHTML = "";
+      vEl.style.display = "flex";
+      vEl.style.gap = "10px";
+      vEl.style.alignItems = "center";
+      vEl.style.flexWrap = "wrap";
+
+      const line = document.createElement("div");
+      line.className = "mono";
+      line.style.wordBreak = "break-all";
+      line.style.opacity = "0.92";
+      line.textContent = "Computing…";
+
+      const btnCopy = miniCopyButton(() => line.textContent);
+      btnCopy.disabled = true;
+
+      vEl.appendChild(line);
+      vEl.appendChild(btnCopy);
+
+      propsBody.appendChild(kEl);
+      propsBody.appendChild(vEl);
+
+      const cacheKey = hashCacheKey(rel, st.mtime_epoch, st.bytes);
+      const cached = hashCache.get(cacheKey);
+
+      if (cached && cached.sha256) {
+        line.textContent = cached.sha256;
+        btnCopy.disabled = false;
+      } else {
+        const expectedPath = propsPath ? propsPath.textContent : (st.path_norm || ("/" + (rel || "")));
+
+        fetchSha256ForRelPath(rel)
+            .then((out) => {
+              hashCache.set(cacheKey, { sha256: out.sha256, raw: out.raw, atMs: Date.now() });
+
+              // Still showing same item?
+              const nowPath = propsPath ? propsPath.textContent : "";
+              if (nowPath && nowPath !== expectedPath) return;
+
+              line.textContent = out.sha256;
+              btnCopy.disabled = false;
+            })
+            .catch((e) => {
+              line.textContent = `Error: ${String(e && e.message ? e.message : e)}`;
+              line.style.opacity = "0.85";
+            });
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Share info (from cache), with expiry countdown + copy/revoke actions
+    // -------------------------------------------------------------------------
     {
-      // NOTE: rel has no leading "/" by construction (joinPath)
       const type = (item.type === "dir") ? "dir" : "file";
       const share = existingShareFor(rel, type);
 
-      // Title row
       {
         const [kEl, vEl] = kvRow("Share", "");
         vEl.classList.remove("mono");
@@ -2334,13 +2480,11 @@
         const topLine = document.createElement("div");
         topLine.textContent = share ? "Shared" : "Not shared";
         topLine.style.opacity = "0.92";
-
         vEl.appendChild(topLine);
 
         if (share) {
           const fullUrl = `${window.location.origin}${share.url || ("/s/" + (share.token || ""))}`;
 
-          // URL (readonly)
           const urlRow = document.createElement("div");
           urlRow.style.display = "flex";
           urlRow.style.gap = "8px";
@@ -2353,19 +2497,18 @@
           inp.style.flex = "1";
           inp.style.minWidth = "0";
 
-          const btnCopy = document.createElement("button");
-          btnCopy.type = "button";
-          btnCopy.textContent = "Copy";
-          btnCopy.onclick = async () => {
+          const btnCopy2 = document.createElement("button");
+          btnCopy2.type = "button";
+          btnCopy2.textContent = "Copy";
+          btnCopy2.onclick = async () => {
             const ok = await copyText(fullUrl);
-            btnCopy.textContent = ok ? "Copied" : "Copy failed";
-            setTimeout(() => (btnCopy.textContent = "Copy"), 1200);
+            btnCopy2.textContent = ok ? "Copied" : "Copy failed";
+            setTimeout(() => (btnCopy2.textContent = "Copy"), 1200);
           };
 
           urlRow.appendChild(inp);
-          urlRow.appendChild(btnCopy);
+          urlRow.appendChild(btnCopy2);
 
-          // Expiry + countdown
           const expLine = document.createElement("div");
           expLine.style.display = "flex";
           expLine.style.gap = "10px";
@@ -2373,7 +2516,7 @@
           expLine.style.opacity = "0.92";
 
           const expAt = share.expires_at || "";
-          const expMs = isoUtcToMs(expAt);
+          const expMs = isoUtcToMsLocal(expAt);
 
           const expLabel = document.createElement("span");
           expLabel.textContent = expAt ? `Expires: ${expAt}` : "Expires: never";
@@ -2383,29 +2526,21 @@
           cdLabel.style.opacity = "0.95";
 
           const updateCountdown = () => {
-            if (!expMs) {
-              cdLabel.textContent = ""; // no countdown if never
-              return;
-            }
+            if (!expMs) { cdLabel.textContent = ""; return; }
             const left = expMs - Date.now();
-            cdLabel.textContent = `Remaining: ${fmtCountdown(left)}`;
+            cdLabel.textContent = `Remaining: ${fmtCountdownLocal(left)}`;
           };
           updateCountdown();
 
-          // Only start timer if exp exists (otherwise pointless)
-          if (expMs) {
-            propsShareTimer = setInterval(updateCountdown, 1000);
-          }
+          if (expMs) propsShareTimer = setInterval(updateCountdown, 1000);
 
           expLine.appendChild(expLabel);
           expLine.appendChild(cdLabel);
 
-          // Downloads (if present)
           const dl = document.createElement("div");
           dl.style.opacity = "0.85";
           if (share.downloads != null) dl.textContent = `Downloads: ${share.downloads}`;
 
-          // Revoke
           const actions = document.createElement("div");
           actions.style.display = "flex";
           actions.style.gap = "8px";
@@ -2437,7 +2572,6 @@
                 throw new Error(msg || "revoke failed");
               }
 
-              // refresh cache + refresh properties view
               await refreshSharesCache();
               await showProperties(item);
               return;
@@ -2458,8 +2592,8 @@
           vEl.appendChild(expLine);
           if (share.downloads != null) vEl.appendChild(dl);
           vEl.appendChild(actions);
+
         } else {
-          // Not shared: offer create shortcut
           const btn = document.createElement("button");
           btn.type = "button";
           btn.textContent = "Create share link…";
@@ -2472,7 +2606,7 @@
       }
     }
 
-    // Collapsible Raw JSON (developer-friendly, not noisy)
+    // Collapsible Raw JSON
     {
       const [kEl, vEl] = kvRow("Details", "");
       vEl.classList.remove("mono");
@@ -2504,6 +2638,7 @@
 
     openPropsModal?.();
   }
+
 // ===========================================================================
 // Directory listing / render
 // ===========================================================================
