@@ -1573,7 +1573,11 @@ int main()
 
 
     // ---- Audit log (hash-chained JSONL) ----
-    const std::string audit_dir = exe_dir() + "/audit";
+    std::string audit_dir = exe_dir() + "/audit";
+	if (const char* p = std::getenv("PQNAS_AUDIT_DIR")) {
+    	audit_dir = p;
+	}
+
     try {
         std::filesystem::create_directories(audit_dir);
     } catch (const std::exception& e) {
@@ -1735,8 +1739,15 @@ auto maybe_auto_rotate_before_append = [&]() {
     };
 
 	//Load shared files
-    pqnas::ShareRegistry shares((std::filesystem::path(REPO_ROOT) / "config" / "shares.json").string());
-    { std::string err; if (!shares.load(&err)) std::cerr << "[shares] WARNING: " << err << "\n"; }
+	std::string shares_path =
+    	(std::filesystem::path(REPO_ROOT) / "config" / "shares.json").string();
+		if (const char* p = std::getenv("PQNAS_SHARES_PATH")) {
+    		shares_path = p;
+		}
+
+		pqnas::ShareRegistry shares(shares_path);
+		{ std::string err; if (!shares.load(&err)) std::cerr << "[shares] WARNING: " << err << "\n"; }
+
 
     httplib::Server srv;
 

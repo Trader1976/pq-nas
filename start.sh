@@ -71,6 +71,14 @@ cat >> "$ENV_FILE" <<EOF
 export PQNAS_ORIGIN="$ORIGIN"
 export PQNAS_RP_ID="$RP_ID"
 EOF
+# --- Load system install env (config + storage paths) if present ---
+if [[ -f /etc/pqnas/pqnas.env ]]; then
+  echo "[*] Loading system env: /etc/pqnas/pqnas.env"
+  set -a
+  # shellcheck disable=SC1091
+  source /etc/pqnas/pqnas.env
+  set +a
+fi
 
 echo "[*] Exporting variables into current shell (source $ENV_FILE)"
 set -a
@@ -84,3 +92,5 @@ echo "    PQNAS_RP_ID=$PQNAS_RP_ID"
 echo "    cloudflared pid=$PQNAS_CLOUDFLARED_PID"
 echo "    cloudflared log=$LOG_FILE"
 echo "./build/bin/pqnas_server"
+echo "    PQNAS_ADMIN_SETTINGS_PATH=${PQNAS_ADMIN_SETTINGS_PATH:-<unset>}"
+
