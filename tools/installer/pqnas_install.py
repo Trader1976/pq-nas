@@ -34,7 +34,24 @@ from textual.screen import Screen
 import shutil
 from pathlib import Path
 
-REPO_ROOT = str(Path(__file__).resolve().parents[2])
+
+
+def find_repo_root() -> str:
+    # 1) explicit override
+    rr = os.environ.get("PQNAS_REPO_ROOT", "").strip()
+    if rr and os.path.isdir(rr):
+        return rr
+
+    # 2) walk up from this script
+    p = Path(__file__).resolve()
+    for parent in [p] + list(p.parents):
+        if (parent / "server" / "src" / "main.cpp").exists() and (parent / "config").is_dir():
+            return str(parent)
+
+    raise RuntimeError("Could not find PQ-NAS repo root. Set PQNAS_REPO_ROOT=/path/to/pq-nas")
+
+
+REPO_ROOT = find_repo_root()
 
 # -----------------------------------------------------------------------------
 # Models + state
@@ -171,9 +188,49 @@ def write_fstab_uuid(mountpoint: str, fstype: str, uuid: str, options: str) -> N
 
 
 def create_pqnas_layout(root: str) -> None:
-    # Keep it simple; you can rename later.
-    for p in ("data", "logs", "apps", "audit", "tmp"):
+    for p in ("data", "logs", "apps/bundled", "apps/installed", "apps/users", "audit", "tmp"):
         ensure_dir(os.path.join(root, p))
+    ensure_dir("/opt/pqnas/static")
+
+def install_static_assets(repo_root: str, dest_root: str = "/opt/pqnas/static") -> None:
+    """
+    Copy server/src/static/* into /opt/pqnas/static.
+    """
+    src = os.path.join(repo_root, "server", "src", "static")
+    if not os.path.isdir(src):
+        raise RuntimeError(f"Missing static dir: {src}")
+
+    os.makedirs(dest_root, exist_ok=True)
+
+    # Copy tree contents (idempotent overwrite is OK for program assets)
+    for name in os.listdir(src):
+        s = os.path.join(src, name)
+        d = os.path.join(dest_root, name)
+        if os.path.isdir(s):
+            if os.path.exists(d):
+                shutil.rmtree(d)
+            shutil.copytree(s, d)
+        else:
+            shutil.copy2(s, d)
+
+def install_bundled_apps(repo_root: str, apps_bundled_dest: str) -> None:
+    src = os.path.join(repo_root, "apps", "bundled")
+    if not os.path.isdir(src):
+        # OK if none exist yet
+        return
+    os.makedirs(apps_bundled_dest, exist_ok=True)
+
+    # Copy everything under apps/bundled (zips and subfolders)
+    for name in os.listdir(src):
+        s = os.path.join(src, name)
+        d = os.path.join(apps_bundled_dest, name)
+        if os.path.isdir(s):
+            if os.path.exists(d):
+                shutil.rmtree(d)
+            shutil.copytree(s, d)
+        else:
+            shutil.copy2(s, d)
+
 
 def ensure_config_files(root: str, repo_root: str) -> None:
     """
@@ -222,17 +279,6 @@ def ensure_config_files(root: str, repo_root: str) -> None:
         pass
 
 def write_env_file(root: str):
-    """
-    Write runtime environment file for PQ-NAS.
-
-    This is sourced by systemd / launch scripts and tells the server
-    where storage and config live.
-
-    Production layout:
-      PQNAS_ROOT=/srv/pqnas
-      PQNAS_CONFIG=/etc/pqnas
-    """
-
     etc_dir = "/etc/pqnas"
     os.makedirs(etc_dir, exist_ok=True)
 
@@ -250,10 +296,57 @@ def write_env_file(root: str):
         f"PQNAS_AUDIT_DIR={root}/audit",
         f"PQNAS_LOG_DIR={root}/logs",
         f"PQNAS_TMP_DIR={root}/tmp",
+        "",
+        f"PQNAS_DATA_ROOT={root}/data",
+        "PQNAS_STATIC_ROOT=/opt/pqnas/static",
+        f"PQNAS_APPS_ROOT={root}/apps",
     ]
 
     with open(env_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
+
+
+def write_keys_env(repo_root: str, path: str = "/etc/pqnas/keys.env") -> None:
+    """
+    Generate Ed25519 + cookie keys and write systemd-friendly EnvironmentFile.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    keygen = "/usr/local/bin/pqnas_keygen"
+    if not os.path.exists(keygen):
+        # fallback: use repo build output if running from repo
+        keygen = os.path.join(repo_root, "build", "bin", "pqnas_keygen")
+    if not os.path.exists(keygen):
+        raise RuntimeError("pqnas_keygen not found (build it or install it first)")
+
+    out = run_cmd([keygen]).strip().splitlines()
+
+    # pqnas_keygen currently prints lines like:
+    # export PQNAS_SERVER_PK_B64URL='...'
+    # We convert to: PQNAS_SERVER_PK_B64URL=...
+    kv = []
+    for line in out:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        # remove optional surrounding quotes
+        if "=" in line:
+            k, v = line.split("=", 1)
+            v = v.strip().strip("'").strip('"')
+            kv.append(f"{k.strip()}={v}")
+
+    needed = {"PQNAS_SERVER_PK_B64URL", "PQNAS_SERVER_SK_B64URL", "PQNAS_COOKIE_KEY_B64URL"}
+    got = {x.split("=",1)[0] for x in kv}
+    if not needed.issubset(got):
+        raise RuntimeError(f"pqnas_keygen output missing keys: {sorted(needed - got)}")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(kv) + "\n")
+
+    os.chmod(path, 0o600)
+
 # -----------------------------------------------------------------------------
 # Install binaries
 # -----------------------------------------------------------------------------
@@ -285,10 +378,9 @@ def install_binaries(repo_root: str, dest_dir: str = "/usr/local/bin") -> Tuple[
     return dst_server, dst_keygen
 
 
-def write_systemd_unit(exec_path: str, env_file: str = "/etc/pqnas/pqnas.env") -> str:
-    """
-    Write /etc/systemd/system/pqnas.service and return its path.
-    """
+def write_systemd_unit(exec_path: str,
+                       env_file: str = "/etc/pqnas/pqnas.env",
+                       keys_file: str = "/etc/pqnas/keys.env") -> str:
     unit_path = "/etc/systemd/system/pqnas.service"
 
     unit = f"""[Unit]
@@ -299,23 +391,19 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile={env_file}
+EnvironmentFile={keys_file}
 ExecStart={exec_path}
 Restart=on-failure
 RestartSec=2
 
-# For now we run as root (simple). Later we can add:
-# User=pqnas
-# Group=pqnas
-# and hardening options.
-
 [Install]
 WantedBy=multi-user.target
 """
-
     with open(unit_path, "w", encoding="utf-8") as f:
         f.write(unit)
 
     return unit_path
+
 
 
 def run_systemctl(args: List[str]) -> str:
@@ -760,9 +848,49 @@ class ExecuteScreen(Screen):
 
                 self.logw.write(f"Creating PQ-NAS directory layout under {mp} …")
                 create_pqnas_layout(mp)
+                install_static_assets(REPO_ROOT, "/opt/pqnas/static")
+                subprocess.run(["chown", "-R", "root:root", "/opt/pqnas/static"], check=False)
+
+                install_bundled_apps(REPO_ROOT, os.path.join(mp, "apps", "bundled"))
+                self.logw.write("Installed static assets to /opt/pqnas/static and bundled apps to storage.")
+
                 ensure_config_files(mp, REPO_ROOT)
+
                 write_env_file(mp)
                 self.logw.write("Config files copied and environment file written.")
+
+
+                self.logw.write("")
+                self.logw.write("== systemd ==")
+
+                server_exec, keygen_exec = install_binaries(REPO_ROOT, "/usr/local/bin")
+                self.logw.write(f"Installed server binary: {server_exec}")
+                if keygen_exec:
+                    self.logw.write(f"Installed keygen binary: {keygen_exec}")
+                self.logw.write("Generating /etc/pqnas/keys.env …")
+                write_keys_env(REPO_ROOT, "/etc/pqnas/keys.env")
+                self.logw.write("keys.env written (mode 600).")
+
+                unit_path = write_systemd_unit(server_exec, "/etc/pqnas/pqnas.env")
+                self.logw.write(f"Wrote unit: {unit_path}")
+
+                self.logw.write("Reloading systemd…")
+                run_systemctl(["daemon-reload"])
+
+                self.logw.write("Enabling + starting pqnas.service …")
+                run_systemctl(["enable", "--now", "pqnas.service"])
+
+                self.logw.write("Service status:")
+                status = subprocess.run(
+                    ["systemctl", "status", "pqnas.service", "--no-pager"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+                self.logw.write(status.stdout.strip())
+
+
+
                 self.logw.write("Layout created: data/ logs/ apps/ audit/ tmp/")
 
                 self.done.update(

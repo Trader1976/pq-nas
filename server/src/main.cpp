@@ -118,63 +118,89 @@ const std::string REPO_ROOT = std::filesystem::weakly_canonical(
     std::filesystem::path(exe_dir()) / ".." / ".."
 ).string();
 
-const std::string STATIC_AUDIT_HTML =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_audit.html").string();
-const std::string STATIC_AUDIT_JS =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_audit.js").string();
-const std::string STATIC_ADMIN_HTML =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin.html").string();
-const std::string STATIC_ADMIN_JS =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin.js").string();
-const std::string STATIC_ADMIN_APPS_HTML =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_apps.html").string();
 
-const std::string STATIC_ADMIN_APPS_JS =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_apps.js").string();
-const std::string STATIC_APP_HTML =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/app.html").string();
-const std::string STATIC_APP_JS =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/app.js").string();
-const std::string STATIC_USERS_HTML =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_users.html").string();
-const std::string STATIC_USERS_JS =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_users.js").string();
-static const std::string STATIC_WAIT_APPROVAL_HTML = "server/src/static/wait_approval.html";
-static const std::string STATIC_WAIT_APPROVAL_JS   = "server/src/static/wait_approval.js";
-static const std::string STATIC_SYSTEM_HTML = "server/src/static/system.html";
-static const std::string STATIC_SYSTEM_JS   = "server/src/static/system.js";
-const std::string STATIC_LOGIN =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/login.html").string();
+// -------------------- Runtime roots (env-first, dev fallback) --------------------
+//
+// In production installs these are set via /etc/pqnas/pqnas.env:
+//   PQNAS_STATIC_ROOT=/opt/pqnas/static
+//   PQNAS_APPS_ROOT=/srv/pqnas/apps
+//
+// In dev (run from repo) they fall back to REPO_ROOT paths.
+//
+static std::string getenv_str(const char* k) {
+    const char* v = std::getenv(k);
+    return (v && *v) ? std::string(v) : std::string();
+}
 
-const std::string STATIC_JS =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/pqnas_v4.js").string();
+static std::string env_or(const char* k, const std::string& fallback) {
+    const std::string v = getenv_str(k);
+    return v.empty() ? fallback : v;
+}
 
-const std::string STATIC_ADMIN_SETTINGS_HTML =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_settings.html").string();
+static bool dir_exists(const std::string& p) {
+    std::error_code ec;
+    return std::filesystem::exists(p, ec) && !ec && std::filesystem::is_directory(p, ec);
+}
 
-const std::string STATIC_ADMIN_SETTINGS_JS =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/admin_settings.js").string();
-static const char* STATIC_APPROVALS_HTML = "server/src/static/admin_approvals.html";
-static const char* STATIC_APPROVALS_JS   = "server/src/static/admin_approvals.js";
-static const char* STATIC_BADGES_JS = "server/src/static/admin_badges.js";
+static std::string static_root_dir() {
+    // 1) explicit override
+    const std::string env = getenv_str("PQNAS_STATIC_ROOT");
+    if (!env.empty()) return env;
 
-const std::string APPS_DIR =
-    (std::filesystem::path(REPO_ROOT) / "apps").string();
+    // 2) service-friendly default
+    const std::string opt = "/opt/pqnas/static";
+    if (dir_exists(opt)) return opt;
 
-const std::string APPS_BUNDLED_DIR =
-    (std::filesystem::path(REPO_ROOT) / "apps/bundled").string();
+    // 3) dev fallback
+    return (std::filesystem::path(REPO_ROOT) / "server/src/static").string();
+}
 
-const std::string APPS_INSTALLED_DIR =
-    (std::filesystem::path(REPO_ROOT) / "apps/installed").string();
+static std::string apps_root_dir() {
+    const std::string env = getenv_str("PQNAS_APPS_ROOT");
+    if (!env.empty()) return env;
 
-const std::string APPS_USERS_DIR =
-    (std::filesystem::path(REPO_ROOT) / "apps/users").string();
+    const std::string srv = "/srv/pqnas/apps";
+    if (dir_exists(srv)) return srv;
 
-const std::string STATIC_THEME_CSS =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/theme.css").string();
-const std::string STATIC_THEME_JS =
-    (std::filesystem::path(REPO_ROOT) / "server/src/static/theme.js").string();
+    return (std::filesystem::path(REPO_ROOT) / "apps").string();
+}
 
+
+
+static std::string static_path(const char* rel) {
+    return (std::filesystem::path(static_root_dir()) / rel).string();
+}
+
+// ---- Static assets (env-first) ----
+const std::string STATIC_AUDIT_HTML          = static_path("admin_audit.html");
+const std::string STATIC_AUDIT_JS            = static_path("admin_audit.js");
+const std::string STATIC_ADMIN_HTML          = static_path("admin.html");
+const std::string STATIC_ADMIN_JS            = static_path("admin.js");
+const std::string STATIC_ADMIN_APPS_HTML     = static_path("admin_apps.html");
+const std::string STATIC_ADMIN_APPS_JS       = static_path("admin_apps.js");
+const std::string STATIC_APP_HTML            = static_path("app.html");
+const std::string STATIC_APP_JS              = static_path("app.js");
+const std::string STATIC_USERS_HTML          = static_path("admin_users.html");
+const std::string STATIC_USERS_JS            = static_path("admin_users.js");
+const std::string STATIC_WAIT_APPROVAL_HTML  = static_path("wait_approval.html");
+const std::string STATIC_WAIT_APPROVAL_JS    = static_path("wait_approval.js");
+const std::string STATIC_SYSTEM_HTML         = static_path("system.html");
+const std::string STATIC_SYSTEM_JS           = static_path("system.js");
+const std::string STATIC_LOGIN               = static_path("login.html");
+const std::string STATIC_JS                  = static_path("pqnas_v4.js");
+const std::string STATIC_ADMIN_SETTINGS_HTML = static_path("admin_settings.html");
+const std::string STATIC_ADMIN_SETTINGS_JS   = static_path("admin_settings.js");
+const std::string STATIC_APPROVALS_HTML      = static_path("admin_approvals.html");
+const std::string STATIC_APPROVALS_JS        = static_path("admin_approvals.js");
+const std::string STATIC_BADGES_JS           = static_path("admin_badges.js");
+const std::string STATIC_THEME_CSS           = static_path("theme.css");
+const std::string STATIC_THEME_JS            = static_path("theme.js");
+
+// ---- Apps dirs (env-first) ----
+const std::string APPS_DIR           = apps_root_dir();
+const std::string APPS_BUNDLED_DIR   = (std::filesystem::path(APPS_DIR) / "bundled").string();
+const std::string APPS_INSTALLED_DIR = (std::filesystem::path(APPS_DIR) / "installed").string();
+const std::string APPS_USERS_DIR     = (std::filesystem::path(APPS_DIR) / "users").string();
 
 
 
@@ -255,12 +281,15 @@ static long long file_size_bytes_safe(const std::string& path) {
 // Root where PQ-NAS stores user data on disk (real filesystem).
 // Default: <exe_dir()>/data  (self-contained next to binary).
 static std::string data_root_dir() {
-    std::string root = exe_dir() + "/data";
-    if (const char* p = std::getenv("PQNAS_DATA_ROOT")) {
-        if (*p) root = p;
-    }
-    return root;
+    const std::string env = getenv_str("PQNAS_DATA_ROOT");
+    if (!env.empty()) return env;
+
+    const std::string srv = "/srv/pqnas/data";
+    if (dir_exists(srv)) return srv;
+
+    return exe_dir() + "/data";
 }
+
 
 static bool is_hex_lower_or_upper(char c) {
     return (c >= '0' && c <= '9') ||
@@ -1543,6 +1572,14 @@ static bool safe_app_id(const std::string& s) {
     return true;
 }
 
+static bool safe_app_ver(const std::string& s) {
+    if (s.empty() || s.size() > 64) return false;
+    for (char c : s) {
+        if (!(std::isalnum((unsigned char)c) || c=='_' || c=='-' || c=='.')) return false;
+    }
+    return true;
+}
+
 
 // -----------------------------------------------------------------------------
 // main
@@ -1594,6 +1631,12 @@ int main()
         (std::filesystem::path(REPO_ROOT) / "config" / "admin_settings.json").string();
     if (const char* p = std::getenv("PQNAS_ADMIN_SETTINGS_PATH")) {
         admin_settings_path = p;
+    }
+
+    // If running installed (static root set), require PQNAS_DATA_ROOT explicitly.
+    if (!getenv_str("PQNAS_STATIC_ROOT").empty() && getenv_str("PQNAS_DATA_ROOT").empty()) {
+        std::cerr << "PQNAS_DATA_ROOT is required when PQNAS_STATIC_ROOT is set (installed mode)." << std::endl;
+        return 2;
     }
 
     // ---------------------------
@@ -1801,7 +1844,7 @@ srv.Get(R"(/static/(.+))", [&](const httplib::Request& req, httplib::Response& r
         return;
     }
 
-    const std::filesystem::path base = std::filesystem::path(REPO_ROOT) / "server/src/static";
+    const std::filesystem::path base = std::filesystem::path(static_root_dir());
     const std::filesystem::path full = base / rel;
 
     // Fail-closed: only serve known safe extensions
@@ -9354,6 +9397,109 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
 
         reply_json(res, 200, json({{"ok",true}}).dump());
     });
+
+    srv.Get("/api/v4/apps/list", [&](const httplib::Request& req, httplib::Response& res) {
+    json out;
+    out["ok"] = true;
+    out["installed"] = json::array();
+    out["bundled"] = json::array();
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    // ---------------- installed: APPS_INSTALLED_DIR/<id>/<ver>/manifest.json
+    fs::path installed_root(APPS_INSTALLED_DIR);
+    if (fs::exists(installed_root, ec) && fs::is_directory(installed_root, ec) && !ec) {
+        for (auto& de_id : fs::directory_iterator(installed_root, ec)) {
+            if (ec) break;
+            if (!de_id.is_directory()) continue;
+
+            const std::string id = de_id.path().filename().string();
+            if (!safe_app_id(id)) continue;
+
+            for (auto& de_ver : fs::directory_iterator(de_id.path(), ec)) {
+                if (ec) break;
+                if (!de_ver.is_directory()) continue;
+
+                const std::string ver = de_ver.path().filename().string();
+                if (!safe_app_ver(ver)) continue;
+
+                const fs::path manifest = de_ver.path() / "manifest.json";
+                if (!fs::exists(manifest, ec) || ec) continue;
+
+                std::string body;
+                if (!read_file_to_string(manifest.string(), body) || body.empty()) continue;
+
+                json mj;
+                try {
+                    mj = json::parse(body);
+                } catch (...) {
+                    continue; // skip invalid manifest
+                }
+
+                json item;
+                item["id"] = id;
+                item["ver"] = ver;
+
+                // optional fields from manifest (don’t assume)
+                if (mj.is_object()) {
+                    if (mj.contains("name")) item["name"] = mj["name"];
+                    if (mj.contains("title")) item["title"] = mj["title"];
+                    if (mj.contains("description")) item["description"] = mj["description"];
+                    if (mj.contains("entry")) item["entry"] = mj["entry"];
+                    if (mj.contains("icon")) item["icon"] = mj["icon"];
+                }
+
+                // convenience: where it is on disk + what URL it should be served from
+                item["path"] = de_ver.path().string();
+                item["base_url"] = std::string("/apps/") + id + "/" + ver + "/";
+
+                out["installed"].push_back(item);
+            }
+        }
+    }
+
+    // ---------------- bundled: APPS_BUNDLED_DIR/<id>/*.zip
+    fs::path bundled_root(APPS_BUNDLED_DIR);
+    if (fs::exists(bundled_root, ec) && fs::is_directory(bundled_root, ec) && !ec) {
+        for (auto& de_id : fs::directory_iterator(bundled_root, ec)) {
+            if (ec) break;
+            if (!de_id.is_directory()) continue;
+
+            const std::string id = de_id.path().filename().string();
+            if (!safe_app_id(id)) continue;
+
+            for (auto& de_zip : fs::directory_iterator(de_id.path(), ec)) {
+                if (ec) break;
+                if (!de_zip.is_regular_file()) continue;
+
+                const fs::path p = de_zip.path();
+                const std::string ext = p.extension().string();
+                if (ext != ".zip") continue;
+
+                json item;
+                item["id"] = id;
+                item["zip"] = p.filename().string();
+                item["path"] = p.string();
+
+                // size + sha256 best-effort (you already have sha256_file + hex helper)
+                long long sz = file_size_bytes_safe(p.string());
+                if (sz >= 0) item["size_bytes"] = sz;
+
+                std::string hex, err;
+                if (sha256_file(p, &hex, &err)) item["sha256"] = hex;
+
+                out["bundled"].push_back(item);
+            }
+        }
+    }
+
+    res.status = 200;
+    res.set_header("Cache-Control", "no-store");
+    res.set_header("Content-Type", "application/json");
+    res.body = out.dump(2);
+});
+
 
     srv.Post("/api/v4/apps/upload_install", [&](const httplib::Request& req, httplib::Response& res) {
         if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;

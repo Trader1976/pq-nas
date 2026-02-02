@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Usage:
-#   source ./setup_env.sh
+#   source ./start.sh
 # Then:
 #   ./build/bin/pqnas_server
 #
@@ -93,4 +93,9 @@ echo "    cloudflared pid=$PQNAS_CLOUDFLARED_PID"
 echo "    cloudflared log=$LOG_FILE"
 echo "./build/bin/pqnas_server"
 echo "    PQNAS_ADMIN_SETTINGS_PATH=${PQNAS_ADMIN_SETTINGS_PATH:-<unset>}"
+echo "    PQNAS_DATA_ROOT=${PQNAS_DATA_ROOT:-<unset>}"
 
+echo "Open local:  http://127.0.0.1:8081/"
+echo "Static test: http://127.0.0.1:8081/static/theme.css"
+echo "Open tunnel: $PQNAS_ORIGIN/"
+echo "Static test: $PQNAS_ORIGIN/static/theme.css"
