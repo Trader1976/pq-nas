@@ -50,8 +50,37 @@ def find_repo_root() -> str:
 
     raise RuntimeError("Could not find PQ-NAS repo root. Set PQNAS_REPO_ROOT=/path/to/pq-nas")
 
+def find_asset_root() -> Tuple[str, str]:
+    """
+    Returns (mode, root_path)
 
-REPO_ROOT = find_repo_root()
+    mode:
+      - "package": extracted release folder (contains pqnas_server + static/ + bundled/ + config/)
+      - "repo": git repo root (contains server/src/main.cpp + config/)
+
+    You can override with:
+      PQNAS_ASSET_ROOT=/path   (forces package-like root)
+      PQNAS_REPO_ROOT=/path    (repo root discovery still works)
+    """
+    # 0) explicit override: asset root (package)
+    ar = os.environ.get("PQNAS_ASSET_ROOT", "").strip()
+    if ar and os.path.isdir(ar):
+        return ("package", ar)
+
+    # 1) detect "package" by walking up from this script
+    p = Path(__file__).resolve()
+    for parent in [p] + list(p.parents):
+        if (parent / "pqnas_server").is_file() and (parent / "static").is_dir() and (parent / "config").is_dir():
+            return ("package", str(parent))
+
+    # 2) fallback to repo root (dev)
+    return ("repo", find_repo_root())
+
+
+MODE, ASSET_ROOT = find_asset_root()
+REPO_ROOT = ASSET_ROOT  # keep variable name to minimize edits; it's "asset root" now
+
+#REPO_ROOT = find_repo_root()
 
 # -----------------------------------------------------------------------------
 # Models + state
@@ -192,17 +221,24 @@ def create_pqnas_layout(root: str) -> None:
         ensure_dir(os.path.join(root, p))
     ensure_dir("/opt/pqnas/static")
 
-def install_static_assets(repo_root: str, dest_root: str = "/opt/pqnas/static") -> None:
+def install_static_assets(asset_root: str, dest_root: str = "/opt/pqnas/static") -> None:
     """
-    Copy server/src/static/* into /opt/pqnas/static.
+    Copy static web assets into /opt/pqnas/static.
+
+    repo mode:    <repo>/server/src/static/*
+    package mode: <pkg>/static/*
     """
-    src = os.path.join(repo_root, "server", "src", "static")
+    # package layout
+    pkg = os.path.join(asset_root, "static")
+    # repo layout
+    repo = os.path.join(asset_root, "server", "src", "static")
+
+    src = pkg if os.path.isdir(pkg) else repo
     if not os.path.isdir(src):
-        raise RuntimeError(f"Missing static dir: {src}")
+        raise RuntimeError(f"Missing static dir (tried): {pkg} and {repo}")
 
     os.makedirs(dest_root, exist_ok=True)
 
-    # Copy tree contents (idempotent overwrite is OK for program assets)
     for name in os.listdir(src):
         s = os.path.join(src, name)
         d = os.path.join(dest_root, name)
@@ -213,14 +249,22 @@ def install_static_assets(repo_root: str, dest_root: str = "/opt/pqnas/static") 
         else:
             shutil.copy2(s, d)
 
-def install_bundled_apps(repo_root: str, apps_bundled_dest: str) -> None:
-    src = os.path.join(repo_root, "apps", "bundled")
+def install_bundled_apps(asset_root: str, apps_bundled_dest: str) -> None:
+    """
+    Copy bundled apps into the storage root.
+
+    repo mode:    <repo>/apps/bundled/*
+    package mode: <pkg>/bundled/*
+    """
+    pkg = os.path.join(asset_root, "bundled")
+    repo = os.path.join(asset_root, "apps", "bundled")
+
+    src = pkg if os.path.isdir(pkg) else repo
     if not os.path.isdir(src):
-        # OK if none exist yet
         return
+
     os.makedirs(apps_bundled_dest, exist_ok=True)
 
-    # Copy everything under apps/bundled (zips and subfolders)
     for name in os.listdir(src):
         s = os.path.join(src, name)
         d = os.path.join(apps_bundled_dest, name)
@@ -243,7 +287,8 @@ def ensure_config_files(root: str, repo_root: str) -> None:
     We copy defaults from repo_root/config into /etc/pqnas on first install.
     We do NOT overwrite existing config (idempotent), unless PQNAS_FORCE_CONFIG=1.
     """
-    src = os.path.join(repo_root, "config")
+    src = os.path.join(asset_root, "config")
+
 
     etc_dir = "/etc/pqnas"
     os.makedirs(etc_dir, exist_ok=True)
@@ -306,24 +351,28 @@ def write_env_file(root: str):
         f.write("\n".join(lines) + "\n")
 
 
-def write_keys_env(repo_root: str, path: str = "/etc/pqnas/keys.env") -> None:
+def write_keys_env(asset_root: str, path: str = "/etc/pqnas/keys.env") -> None:
     """
     Generate Ed25519 + cookie keys and write systemd-friendly EnvironmentFile.
+    Searches for pqnas_keygen in:
+      1) /usr/local/bin/pqnas_keygen
+      2) <asset_root>/pqnas_keygen              (package)
+      3) <asset_root>/build/bin/pqnas_keygen    (repo)
     """
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    keygen = "/usr/local/bin/pqnas_keygen"
-    if not os.path.exists(keygen):
-        # fallback: use repo build output if running from repo
-        keygen = os.path.join(repo_root, "build", "bin", "pqnas_keygen")
-    if not os.path.exists(keygen):
+    candidates = [
+        "/usr/local/bin/pqnas_keygen",
+        os.path.join(asset_root, "pqnas_keygen"),
+        os.path.join(asset_root, "build", "bin", "pqnas_keygen"),
+    ]
+
+    keygen = next((p for p in candidates if os.path.isfile(p)), None)
+    if not keygen:
         raise RuntimeError("pqnas_keygen not found (build it or install it first)")
 
     out = run_cmd([keygen]).strip().splitlines()
 
-    # pqnas_keygen currently prints lines like:
-    # export PQNAS_SERVER_PK_B64URL='...'
-    # We convert to: PQNAS_SERVER_PK_B64URL=...
     kv = []
     for line in out:
         line = line.strip()
@@ -331,17 +380,17 @@ def write_keys_env(repo_root: str, path: str = "/etc/pqnas/keys.env") -> None:
             continue
         if line.startswith("export "):
             line = line[len("export "):].strip()
-        # remove optional surrounding quotes
         if "=" in line:
             k, v = line.split("=", 1)
             v = v.strip().strip("'").strip('"')
             kv.append(f"{k.strip()}={v}")
 
     needed = {"PQNAS_SERVER_PK_B64URL", "PQNAS_SERVER_SK_B64URL", "PQNAS_COOKIE_KEY_B64URL"}
-    got = {x.split("=",1)[0] for x in kv}
+    got = {x.split("=", 1)[0] for x in kv}
     if not needed.issubset(got):
         raise RuntimeError(f"pqnas_keygen output missing keys: {sorted(needed - got)}")
 
+    # Write file (simple version). If you want extra safety, write to temp then rename.
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(kv) + "\n")
 
@@ -350,18 +399,35 @@ def write_keys_env(repo_root: str, path: str = "/etc/pqnas/keys.env") -> None:
 # -----------------------------------------------------------------------------
 # Install binaries
 # -----------------------------------------------------------------------------
-def install_binaries(repo_root: str, dest_dir: str = "/usr/local/bin") -> Tuple[str, Optional[str]]:
+def install_binaries(asset_root: str, dest_dir: str = "/usr/local/bin") -> Tuple[str, Optional[str]]:
     """
-    Copy pqnas_server + pqnas_keygen from repo build/bin into dest_dir.
+    Install pqnas_server + pqnas_keygen into /usr/local/bin.
 
-    Returns: (server_exec_path, keygen_exec_path_or_None)
+    repo mode:    <repo>/build/bin/*
+    package mode: <pkg>/pqnas_server and <pkg>/pqnas_keygen
     """
-    src_dir = os.path.join(repo_root, "build", "bin")
-    src_server = os.path.join(src_dir, "pqnas_server")
-    src_keygen = os.path.join(src_dir, "pqnas_keygen")
+    # package sources
+    pkg_server = os.path.join(asset_root, "pqnas_server")
+    pkg_keygen = os.path.join(asset_root, "pqnas_keygen")
 
-    if not os.path.exists(src_server):
-        raise RuntimeError(f"Missing server binary: {src_server} (build first?)")
+    # repo sources
+    repo_dir = os.path.join(asset_root, "build", "bin")
+    repo_server = os.path.join(repo_dir, "pqnas_server")
+    repo_keygen = os.path.join(repo_dir, "pqnas_keygen")
+
+    package_mode = os.path.isfile(pkg_server)
+
+    if package_mode:
+        src_server = pkg_server
+        src_keygen = pkg_keygen if os.path.isfile(pkg_keygen) else None
+        if src_keygen is None:
+            raise RuntimeError(f"Missing keygen binary in package: {pkg_keygen}")
+    else:
+        src_server = repo_server
+        src_keygen = repo_keygen if os.path.isfile(repo_keygen) else None
+
+    if not os.path.isfile(src_server):
+        raise RuntimeError(f"Missing server binary (tried): {pkg_server} and {repo_server}")
 
     os.makedirs(dest_dir, exist_ok=True)
 
@@ -370,7 +436,7 @@ def install_binaries(repo_root: str, dest_dir: str = "/usr/local/bin") -> Tuple[
     os.chmod(dst_server, 0o755)
 
     dst_keygen = None
-    if os.path.exists(src_keygen):
+    if src_keygen and os.path.isfile(src_keygen):
         dst_keygen = os.path.join(dest_dir, "pqnas_keygen")
         shutil.copy2(src_keygen, dst_keygen)
         os.chmod(dst_keygen, 0o755)
@@ -807,115 +873,122 @@ class ExecuteScreen(Screen):
                 self.logw.write(f"[ERROR] {e}")
                 break
 
-        if ok:
-            # Post-install finalize: persist mount + create layout
-            try:
-                app: InstallerApp = self.app  # type: ignore
-                st = app.state
-                mp = st.mountpoint.rstrip("/") or "/srv/pqnas"
-                backend = st.backend
-                disk = st.disk
-                assert disk is not None
-
-                self.logw.write("")
-                self.logw.write("== Finalize ==")
-
-                subprocess.run(["mkdir", "-p", mp], check=False)
-
-                if backend in ("ext4", "btrfs"):
-                    part = dev_part_path(disk)
-                    uuid = get_uuid_for_device(part)
-                    fstype = "ext4" if backend == "ext4" else "btrfs"
-
-                    if backend == "ext4":
-                        opts = "defaults,noatime,errors=remount-ro"
-                    else:
-                        opts = "defaults,noatime,compress=zstd"
-
-                    self.logw.write(f"Partition: {part}")
-                    self.logw.write(f"UUID: {uuid}")
-                    self.logw.write(f"Writing /etc/fstab entry for {mp}…")
-                    write_fstab_uuid(mp, fstype, uuid, opts)
-
-                    self.logw.write("Testing mount persistence: umount + mount -a …")
-                    subprocess.run(["umount", mp], check=False)
-                    subprocess.run(["mount", "-a"], check=True)
-                    self.logw.write("mount -a OK")
-
-                elif backend == "zfs":
-                    self.logw.write("ZFS backend: mounts managed by ZFS.")
-                    subprocess.run(["zfs", "mount", "-a"], check=False)
-
-                self.logw.write(f"Creating PQ-NAS directory layout under {mp} …")
-                create_pqnas_layout(mp)
-                install_static_assets(REPO_ROOT, "/opt/pqnas/static")
-                subprocess.run(["chown", "-R", "root:root", "/opt/pqnas/static"], check=False)
-
-                install_bundled_apps(REPO_ROOT, os.path.join(mp, "apps", "bundled"))
-                self.logw.write("Installed static assets to /opt/pqnas/static and bundled apps to storage.")
-
-                ensure_config_files(mp, REPO_ROOT)
-
-                write_env_file(mp)
-                self.logw.write("Config files copied and environment file written.")
-
-
-                self.logw.write("")
-                self.logw.write("== systemd ==")
-
-                server_exec, keygen_exec = install_binaries(REPO_ROOT, "/usr/local/bin")
-                self.logw.write(f"Installed server binary: {server_exec}")
-                if keygen_exec:
-                    self.logw.write(f"Installed keygen binary: {keygen_exec}")
-                self.logw.write("Generating /etc/pqnas/keys.env …")
-                write_keys_env(REPO_ROOT, "/etc/pqnas/keys.env")
-                self.logw.write("keys.env written (mode 600).")
-
-                unit_path = write_systemd_unit(server_exec, "/etc/pqnas/pqnas.env")
-                self.logw.write(f"Wrote unit: {unit_path}")
-
-                self.logw.write("Reloading systemd…")
-                run_systemctl(["daemon-reload"])
-
-                self.logw.write("Enabling + starting pqnas.service …")
-                run_systemctl(["enable", "--now", "pqnas.service"])
-
-                self.logw.write("Service status:")
-                status = subprocess.run(
-                    ["systemctl", "status", "pqnas.service", "--no-pager"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                )
-                self.logw.write(status.stdout.strip())
-
-
-
-                self.logw.write("Layout created: data/ logs/ apps/ audit/ tmp/")
-
-                self.done.update(
-                    "\n✅ Done.\n\n"
-                    f"Storage mounted at: {mp}\n"
-                    f"Backend: {backend}\n\n"
-                    "Created folders:\n"
-                    "  data/ logs/ apps/ audit/ tmp/\n"
-                )
-
-            except Exception as e:
-                self.logw.write(f"[FINALIZE ERROR] {e}")
-                self.done.update(
-                    "\n⚠️ Storage created, but finalize failed.\n\n"
-                    "Check log above. You may need to fix /etc/fstab or mounts manually.\n"
-                )
-
-        else:
+        if not ok:
             self.done.update(
                 "\n❌ Failed.\n\n"
                 "Nothing else will be executed. Check the log above.\n"
                 "You can safely rerun after wiping again.\n"
             )
+            return
 
+        # Post-install finalize: persist mount + create layout
+        try:
+            st = app.state
+            mp = st.mountpoint.rstrip("/") or "/srv/pqnas"
+            backend = st.backend
+            disk = st.disk
+            assert disk is not None
 
+            # Treat REPO_ROOT as "asset root": in repo mode it is repo root;
+            # in tarball mode it is the extracted package root (contains pqnas_server, static/, bundled/, etc).
+            asset_root = REPO_ROOT
+
+            self.logw.write("")
+            self.logw.write("== Finalize ==")
+
+            subprocess.run(["mkdir", "-p", mp], check=False)
+
+            if backend in ("ext4", "btrfs"):
+                part = dev_part_path(disk)
+                uuid = get_uuid_for_device(part)
+                fstype = "ext4" if backend == "ext4" else "btrfs"
+
+                if backend == "ext4":
+                    opts = "defaults,noatime,errors=remount-ro"
+                else:
+                    # NOTE: compress=zstd is btrfs-only
+                    opts = "defaults,noatime,compress=zstd"
+
+                self.logw.write(f"Partition: {part}")
+                self.logw.write(f"UUID: {uuid}")
+                self.logw.write(f"Writing /etc/fstab entry for {mp}…")
+                write_fstab_uuid(mp, fstype, uuid, opts)
+
+                self.logw.write("Testing mount persistence: umount + mount -a …")
+                subprocess.run(["umount", mp], check=False)
+                subprocess.run(["mount", "-a"], check=True)
+                self.logw.write("mount -a OK")
+
+            elif backend == "zfs":
+                self.logw.write("ZFS backend: mounts managed by ZFS.")
+                subprocess.run(["zfs", "mount", "-a"], check=False)
+
+            self.logw.write(f"Creating PQ-NAS directory layout under {mp} …")
+            create_pqnas_layout(mp)
+
+            # FIX: support package layout (static/) and repo layout (server/src/static)
+            install_static_assets(asset_root, "/opt/pqnas/static")
+            subprocess.run(["chown", "-R", "root:root", "/opt/pqnas/static"], check=False)
+
+            # FIX: support package layout (bundled/) and repo layout (apps/bundled)
+            install_bundled_apps(asset_root, os.path.join(mp, "apps", "bundled"))
+            self.logw.write("Installed static assets to /opt/pqnas/static and bundled apps to storage.")
+
+            # Config defaults still come from repo_root/config in repo mode;
+            # in tarball we included config/ at package root, so asset_root works too.
+            ensure_config_files(mp, asset_root)
+
+            write_env_file(mp)
+            self.logw.write("Config files copied and environment file written.")
+
+            self.logw.write("")
+            self.logw.write("== systemd ==")
+
+            # FIX: install binaries from package root OR repo build/bin
+            server_exec, keygen_exec = install_binaries(asset_root, "/usr/local/bin")
+            self.logw.write(f"Installed server binary: {server_exec}")
+            if keygen_exec:
+                self.logw.write(f"Installed keygen binary: {keygen_exec}")
+
+            self.logw.write("Generating /etc/pqnas/keys.env …")
+            # FIX: write_keys_env() should accept asset_root, not repo-only paths
+            write_keys_env(asset_root, "/etc/pqnas/keys.env")
+            self.logw.write("keys.env written (mode 600).")
+
+            unit_path = write_systemd_unit(server_exec, "/etc/pqnas/pqnas.env")
+            self.logw.write(f"Wrote unit: {unit_path}")
+
+            self.logw.write("Reloading systemd…")
+            run_systemctl(["daemon-reload"])
+
+            self.logw.write("Enabling + starting pqnas.service …")
+            run_systemctl(["enable", "--now", "pqnas.service"])
+
+            self.logw.write("Service status:")
+            status = subprocess.run(
+                ["systemctl", "status", "pqnas.service", "--no-pager", "-l"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            self.logw.write(status.stdout.strip())
+
+            self.logw.write("Layout created: data/ logs/ apps/ audit/ tmp/")
+
+            self.done.update(
+                "\n✅ Done.\n\n"
+                f"Storage mounted at: {mp}\n"
+                f"Backend: {backend}\n\n"
+                "Created folders:\n"
+                "  data/ logs/ apps/ audit/ tmp/\n"
+            )
+
+        except Exception as e:
+            self.logw.write(f"[FINALIZE ERROR] {e}")
+            self.done.update(
+                "\n⚠️ Storage created, but finalize failed.\n\n"
+                "Check log above. You may need to fix /etc/fstab or mounts manually.\n"
+            )
 
 
 # -----------------------------------------------------------------------------
