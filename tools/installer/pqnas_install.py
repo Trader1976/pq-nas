@@ -34,6 +34,118 @@ from textual.screen import Screen
 import shutil
 from pathlib import Path
 
+def log_line(logw: Log, msg: str) -> None:
+    # Force each message to be a separate line in Textual Log widget
+    logw.write(msg.rstrip("\n") + "\n")
+
+# -----------------------------------------------------------------------------
+# Runtime dependency checks (ldd + apt)
+# -----------------------------------------------------------------------------
+
+def have_cmd(name: str) -> bool:
+    return shutil.which(name) is not None
+
+
+def ldd_missing_libs(bin_path: str) -> List[str]:
+    """
+    Returns missing SONAMEs from `ldd <bin>`,
+    e.g. ["libqrencode.so.4"].
+    """
+    p = subprocess.run(
+        ["ldd", bin_path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    out = p.stdout or ""
+    missing: List[str] = []
+    for line in out.splitlines():
+        line = line.strip()
+        if "=>" in line and "not found" in line:
+            missing.append(line.split("=>", 1)[0].strip())
+    return missing
+
+
+def apt_install(pkgs: List[str], log: Optional[Log] = None) -> None:
+    if not have_cmd("apt-get"):
+        raise RuntimeError("apt-get not found (unsupported distro).")
+
+    def w(msg: str) -> None:
+        if log:
+            log.write(msg)
+        else:
+            print(msg)
+
+    w("[*] apt-get update …")
+    p1 = subprocess.run(
+        ["apt-get", "update", "-y"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if p1.returncode != 0:
+        raise RuntimeError(f"apt-get update failed:\n{p1.stdout.strip()}")
+
+    w(f"[*] apt-get install: {' '.join(pkgs)} …")
+    p2 = subprocess.run(
+        ["apt-get", "install", "-y", *pkgs],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if p2.returncode != 0:
+        raise RuntimeError(f"apt-get install failed:\n{p2.stdout.strip()}")
+
+
+def ensure_runtime_deps_for_server(server_exec: str, log: Optional[Log] = None) -> None:
+    """
+    Ensure pqnas_server has all shared libraries.
+    Debian/Ubuntu only; other distros fail with clear error.
+    """
+    missing = ldd_missing_libs(server_exec)
+    if not missing:
+        if log:
+            log.write("[*] Runtime deps: OK (ldd clean).")
+        return
+
+    # Explicit SONAME -> package mapping (extend only when proven missing)
+    soname_to_pkg = {
+        "libqrencode.so.4": "libqrencode4",
+    }
+
+    pkgs: List[str] = []
+    unknown: List[str] = []
+
+    for lib in missing:
+        pkg = soname_to_pkg.get(lib)
+        if pkg:
+            pkgs.append(pkg)
+        else:
+            unknown.append(lib)
+
+    if unknown:
+        raise RuntimeError(
+            "Missing shared libraries with no package mapping:\n"
+            + "\n".join(f"  - {x}" for x in unknown)
+            + "\nInstall them manually or extend soname_to_pkg."
+        )
+
+    if log:
+        log.write("[*] Missing runtime libs: " + ", ".join(missing))
+        log.write("[*] Installing via apt: " + ", ".join(pkgs))
+
+    apt_install(sorted(set(pkgs)), log=log)
+
+    # Re-check
+    missing2 = ldd_missing_libs(server_exec)
+    if missing2:
+        raise RuntimeError(
+            "Runtime deps still missing after apt install:\n"
+            + "\n".join(f"  - {x}" for x in missing2)
+        )
+
+    if log:
+        log.write("[*] Runtime deps resolved (ldd now OK).")
 
 
 def find_repo_root() -> str:
@@ -100,10 +212,10 @@ class Disk:
 @dataclass
 class InstallState:
     disk: Optional[Disk] = None
-    backend: str = "btrfs"  # default advanced
+    backend: str = "btrfs"
     mountpoint: str = "/srv/pqnas"
-    # generated at plan step:
-    plan: List[List[str]] = None  # argv lists
+    install_mode: str = "disk"   # "disk" (wipe) or "existing" (no partitioning)
+    plan: List[List[str]] = None
     plan_notes: List[str] = None
 
 
@@ -228,9 +340,8 @@ def install_static_assets(asset_root: str, dest_root: str = "/opt/pqnas/static")
     repo mode:    <repo>/server/src/static/*
     package mode: <pkg>/static/*
     """
-    # package layout
+
     pkg = os.path.join(asset_root, "static")
-    # repo layout
     repo = os.path.join(asset_root, "server", "src", "static")
 
     src = pkg if os.path.isdir(pkg) else repo
@@ -239,15 +350,18 @@ def install_static_assets(asset_root: str, dest_root: str = "/opt/pqnas/static")
 
     os.makedirs(dest_root, exist_ok=True)
 
+    # overwrite program assets (idempotent)
     for name in os.listdir(src):
         s = os.path.join(src, name)
         d = os.path.join(dest_root, name)
+
         if os.path.isdir(s):
             if os.path.exists(d):
                 shutil.rmtree(d)
             shutil.copytree(s, d)
         else:
             shutil.copy2(s, d)
+
 
 def install_bundled_apps(asset_root: str, apps_bundled_dest: str) -> None:
     """
@@ -256,18 +370,20 @@ def install_bundled_apps(asset_root: str, apps_bundled_dest: str) -> None:
     repo mode:    <repo>/apps/bundled/*
     package mode: <pkg>/bundled/*
     """
+
     pkg = os.path.join(asset_root, "bundled")
     repo = os.path.join(asset_root, "apps", "bundled")
 
     src = pkg if os.path.isdir(pkg) else repo
     if not os.path.isdir(src):
-        return
+        return  # OK if none exist yet
 
     os.makedirs(apps_bundled_dest, exist_ok=True)
 
     for name in os.listdir(src):
         s = os.path.join(src, name)
         d = os.path.join(apps_bundled_dest, name)
+
         if os.path.isdir(s):
             if os.path.exists(d):
                 shutil.rmtree(d)
@@ -275,8 +391,7 @@ def install_bundled_apps(asset_root: str, apps_bundled_dest: str) -> None:
         else:
             shutil.copy2(s, d)
 
-
-def ensure_config_files(root: str, repo_root: str) -> None:
+def ensure_config_files(root: str, asset_root: str) -> None:
     """
     Ensure PQ-NAS config files exist.
 
@@ -284,16 +399,18 @@ def ensure_config_files(root: str, repo_root: str) -> None:
       - /etc/pqnas/*.json   (config)
       - /srv/pqnas/*        (storage root)
 
-    We copy defaults from repo_root/config into /etc/pqnas on first install.
-    We do NOT overwrite existing config (idempotent), unless PQNAS_FORCE_CONFIG=1.
+    Source of defaults:
+      - package mode: <asset_root>/config
+      - repo mode:    <asset_root>/config  (repo root also has config/)
     """
     src = os.path.join(asset_root, "config")
-
+    if not os.path.isdir(src):
+        raise RuntimeError(f"Missing config dir: {src}")
 
     etc_dir = "/etc/pqnas"
     os.makedirs(etc_dir, exist_ok=True)
 
-    force = os.environ.get("PQNAS_FORCE_CONFIG", "").strip() in ("1", "true", "yes", "y", "on")
+    force = os.environ.get("PQNAS_FORCE_CONFIG", "").strip().lower() in ("1", "true", "yes", "y", "on")
 
     for name in ("admin_settings.json", "policy.json", "users.json", "shares.json"):
         s = os.path.join(src, name)
@@ -307,8 +424,7 @@ def ensure_config_files(root: str, repo_root: str) -> None:
 
         shutil.copy2(s, d)
 
-    # Optional: keep a pointer under the storage root (nice for humans)
-    # This is NOT used by the server, just a breadcrumb.
+    # Optional breadcrumb under storage root
     try:
         marker_dir = os.path.join(root, "config")
         os.makedirs(marker_dir, exist_ok=True)
@@ -320,7 +436,6 @@ def ensure_config_files(root: str, repo_root: str) -> None:
                     "This directory is intentionally not used for runtime config.\n"
                 )
     except Exception:
-        # Do not fail install on a non-critical breadcrumb write.
         pass
 
 def write_env_file(root: str):
@@ -432,14 +547,19 @@ def install_binaries(asset_root: str, dest_dir: str = "/usr/local/bin") -> Tuple
     os.makedirs(dest_dir, exist_ok=True)
 
     dst_server = os.path.join(dest_dir, "pqnas_server")
-    shutil.copy2(src_server, dst_server)
-    os.chmod(dst_server, 0o755)
+    tmp_server = dst_server + ".new"
+    shutil.copy2(src_server, tmp_server)
+    os.chmod(tmp_server, 0o755)
+    os.replace(tmp_server, dst_server)  # atomic replace on same filesystem
+
 
     dst_keygen = None
     if src_keygen and os.path.isfile(src_keygen):
         dst_keygen = os.path.join(dest_dir, "pqnas_keygen")
-        shutil.copy2(src_keygen, dst_keygen)
-        os.chmod(dst_keygen, 0o755)
+        tmp_keygen = dst_keygen + ".new"
+        shutil.copy2(src_keygen, tmp_keygen)
+        os.chmod(tmp_keygen, 0o755)
+        os.replace(tmp_keygen, dst_keygen)
 
     return dst_server, dst_keygen
 
@@ -493,6 +613,12 @@ def plan_for(state: InstallState) -> Tuple[List[List[str]], List[str]]:
 
     notes: List[str] = []
     plan: List[List[str]] = []
+
+    if state.install_mode == "existing":
+        notes.append("Mode: existing filesystem (NO wipe, NO partitioning).")
+        notes.append(f"PQ-NAS will be installed under: {mp}")
+        notes.append("WARNING: This uses your current root filesystem capacity.")
+        return plan, notes
 
     # Safety: refuse system disk (even at plan time)
     if d.is_system:
@@ -577,11 +703,24 @@ class DiskSelectScreen(Screen):
         yield Header()
         with Horizontal():
             with Vertical(id="left"):
-                yield Static("[b]Step 1/5[/b] Select target disk\n\n"
-                             "[r]R[/r] refresh  •  [r]N[/r] next  •  [r]Q[/r] quit\n",
-                             classes="muted")
+                yield Static(
+                    "[b]Step 1/5[/b] Select target disk\n\n"
+                    "[r]R[/r] refresh  •  [r]N[/r] next  •  [r]Q[/r] quit\n",
+                    classes="muted",
+                )
                 self.lv = ListView()
                 yield self.lv
+
+                yield Static("\n[b]Install mode[/b]", classes="muted")
+                self.mode = RadioSet(
+                    RadioButton("Use a dedicated disk (WIPE + format)", id="disk"),
+                    RadioButton("Use existing filesystem (NO wipe) — demo/small install", id="existing"),
+                )
+                yield self.mode
+
+                self.mode_hint = Static("", classes="warn")
+                yield self.mode_hint
+
             with Vertical(id="right"):
                 yield Static("[b]Disk details[/b]\n", classes="muted")
                 self.details = Static("", classes="muted")
@@ -591,6 +730,11 @@ class DiskSelectScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        # default mode: disk wipe
+        for btn in self.mode.query(RadioButton):
+            if btn.id == "disk":
+                btn.value = True
+        self.mode_hint.update("")
         self.action_refresh()
 
     def action_refresh(self) -> None:
@@ -604,7 +748,10 @@ class DiskSelectScreen(Screen):
             self.lv.index = 0
             app.state.disk = app.disks[0]
             self.render_details(app.state.disk)
-
+        else:
+            app.state.disk = None
+            self.details.update("No disks found.")
+            self.warn.update("")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if isinstance(event.item, DiskListItem):
@@ -624,18 +771,66 @@ class DiskSelectScreen(Screen):
             f"[b]Mounts:[/b] {d.mountpoints}\n"
         )
         if d.is_system:
-            self.warn.update("This disk contains '/' and will be blocked from wiping.")
+            self.warn.update("This disk contains '/' (system disk). Wipe mode will be blocked.")
         else:
             self.warn.update("")
+        self.mode_hint.update("")
 
     def action_next(self) -> None:
         app: InstallerApp = self.app  # type: ignore
         if not app.state.disk:
+            self.warn.update("No disk selected.")
             return
-        if app.state.disk.is_system:
-            self.warn.update("Refusing: selected disk is a SYSTEM disk.")
+
+        # Read selected mode
+        chosen_mode = "disk"
+        for btn in self.mode.query(RadioButton):
+            if btn.value:
+                chosen_mode = btn.id
+                break
+
+        app.state.install_mode = chosen_mode
+
+        # In wipe-mode, block system disk
+        if chosen_mode == "disk" and app.state.disk.is_system:
+            self.warn.update("Refusing: selected disk is a SYSTEM disk (contains '/').")
             return
+
+        # In existing-mode, allow system disk but warn
+        if chosen_mode == "existing":
+            self.mode_hint.update(
+                "WARNING: Existing filesystem mode uses your current root disk capacity. "
+                "Use /srv/pqnas and monitor free space."
+            )
+
         app.push_screen(BackendSelectScreen())
+
+
+def action_next(self) -> None:
+    app: InstallerApp = self.app  # type: ignore
+    if not app.state.disk:
+        return
+
+    chosen_mode = "disk"
+    for btn in self.mode.query(RadioButton):
+        if btn.value:
+            chosen_mode = btn.id
+            break
+
+    app.state.install_mode = chosen_mode
+
+    # If wipe-mode, block system disk
+    if chosen_mode == "disk" and app.state.disk.is_system:
+        self.warn.update("Refusing: selected disk is a SYSTEM disk.")
+        return
+
+    # If existing-mode, warn loudly but allow
+    if chosen_mode == "existing" and app.state.disk.is_system:
+        self.warn.update("Using existing filesystem on '/'. No partitioning will be done.")
+        self.mode_hint.update("WARNING: This can fill your root filesystem. Use /srv/pqnas and monitor free space.")
+
+    app.push_screen(BackendSelectScreen())
+
 
 
 class BackendSelectScreen(Screen):
@@ -720,6 +915,10 @@ class PlanScreen(Screen):
 
     def on_mount(self) -> None:
         app: InstallerApp = self.app  # type: ignore
+        if not app.state.disk:
+            self.plan_box.update("[b]Error[/b]\nNo disk selected.")
+            return
+
         try:
             plan, notes = plan_for(app.state)
             app.state.plan = plan
@@ -731,16 +930,22 @@ class PlanScreen(Screen):
         d = app.state.disk
         text = []
         text.append(f"[b]Disk:[/b] {d.name} ({d.size})  {d.model}  serial={d.serial}")
+        text.append(f"[b]Mode:[/b] {app.state.install_mode}")
         text.append(f"[b]Backend:[/b] {app.state.backend}")
         text.append(f"[b]Mountpoint:[/b] {app.state.mountpoint}\n")
         text.append("[b]Notes:[/b]")
         for n in (app.state.plan_notes or []):
             text.append(f"  • {n}")
+
         text.append("\n[b]Commands:[/b]")
-        for i, argv in enumerate(app.state.plan or [], start=1):
-            text.append(f"{i:02d}. {fmt_cmd(argv)}")
+        if app.state.plan:
+            for i, argv in enumerate(app.state.plan, start=1):
+                text.append(f"{i:02d}. {fmt_cmd(argv)}")
+        else:
+            text.append("  (no destructive commands; existing filesystem mode)")
 
         self.plan_box.update("\n".join(text))
+
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back":
@@ -790,15 +995,25 @@ class ConfirmScreen(Screen):
     def on_mount(self) -> None:
         app: InstallerApp = self.app  # type: ignore
         d = app.state.disk
-        self.required = f"WIPE {d.name}"
-        self.msg.update(
-            f"This will DESTROY ALL DATA on [b]{d.path}[/b].\n\n"
-            f"To proceed, type exactly:\n\n"
-            f"[b]{self.required}[/b]\n"
-        )
-        self.confirm_in.value = ""
-        self.err.update("")
-        self._sync_ui()
+        mode = app.state.install_mode
+
+        if mode == "existing":
+            self.required = f"INSTALL {app.state.mountpoint.rstrip('/') or '/srv/pqnas'}"
+            self.msg.update(
+                f"This will install PQ-NAS into the existing filesystem.\n\n"
+                f"No partitioning or formatting will be done.\n\n"
+                f"Target path:\n\n"
+                f"[b]{app.state.mountpoint}[/b]\n\n"
+                f"To proceed, type exactly:\n\n"
+                f"[b]{self.required}[/b]\n"
+            )
+        else:
+            self.required = f"WIPE {d.name}"
+            self.msg.update(
+                f"This will DESTROY ALL DATA on [b]{d.path}[/b].\n\n"
+                f"To proceed, type exactly:\n\n"
+                f"[b]{self.required}[/b]\n"
+            )
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input is self.confirm_in:
@@ -848,110 +1063,139 @@ class ExecuteScreen(Screen):
 
     def on_mount(self) -> None:
         app: InstallerApp = self.app  # type: ignore
-        plan = app.state.plan or []
-        if not plan:
-            self.done.update("No plan to execute.")
+        st = app.state
+
+        if not st.disk:
+            self.done.update("No disk selected.")
             return
 
-        # Execute sequentially. This is intentionally simple for v1.
-        # IMPORTANT: run the installer as root so commands don't prompt for password mid-flight.
-        ok = True
-        for i, argv in enumerate(plan, start=1):
-            self.logw.write(f"$ {fmt_cmd(argv)}")
-            try:
-                p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                assert p.stdout is not None
-                for line in p.stdout:
-                    self.logw.write(line.rstrip("\n"))
-                rc = p.wait()
-                if rc != 0:
+        mode = st.install_mode
+        plan = st.plan or []
+
+        self.logw.write(f"Mode: {mode}")
+        self.logw.write(f"Mountpoint: {st.mountpoint}")
+        self.logw.write("")
+
+        # -----------------------------------------------------------------
+        # 1) Execute destructive plan only in disk mode
+        # -----------------------------------------------------------------
+        if mode == "disk":
+            if not plan:
+                self.done.update("No plan to execute.")
+                return
+
+            ok = True
+            for i, argv in enumerate(plan, start=1):
+                self.logw.write(f"$ {fmt_cmd(argv)}")
+                try:
+                    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    assert p.stdout is not None
+                    for line in p.stdout:
+                        log_line(self.logw, line.rstrip("\n"))
+                    rc = p.wait()
+                    if rc != 0:
+                        ok = False
+                        self.logw.write(f"[ERROR] exit code {rc}")
+                        break
+                except Exception as e:
                     ok = False
-                    self.logw.write(f"[ERROR] exit code {rc}")
+                    self.logw.write(f"[ERROR] {e}")
                     break
-            except Exception as e:
-                ok = False
-                self.logw.write(f"[ERROR] {e}")
-                break
 
-        if not ok:
-            self.done.update(
-                "\n❌ Failed.\n\n"
-                "Nothing else will be executed. Check the log above.\n"
-                "You can safely rerun after wiping again.\n"
-            )
-            return
+            if not ok:
+                self.done.update(
+                    "\n❌ Failed.\n\n"
+                    "Nothing else will be executed. Check the log above.\n"
+                    "You can safely rerun after wiping again.\n"
+                )
+                return
+        else:
+            self.logw.write("Existing filesystem mode: skipping wipe/partition/format steps.")
+            self.logw.write("")
 
-        # Post-install finalize: persist mount + create layout
+        # -----------------------------------------------------------------
+        # 2) Finalize (common for both modes)
+        # -----------------------------------------------------------------
         try:
-            st = app.state
             mp = st.mountpoint.rstrip("/") or "/srv/pqnas"
             backend = st.backend
             disk = st.disk
             assert disk is not None
 
-            # Treat REPO_ROOT as "asset root": in repo mode it is repo root;
-            # in tarball mode it is the extracted package root (contains pqnas_server, static/, bundled/, etc).
-            asset_root = REPO_ROOT
+            asset_root = REPO_ROOT  # in your file REPO_ROOT == ASSET_ROOT
 
-            self.logw.write("")
-            self.logw.write("== Finalize ==")
-
+            log_line(self.logw, "== Finalize ==")
             subprocess.run(["mkdir", "-p", mp], check=False)
 
-            if backend in ("ext4", "btrfs"):
-                part = dev_part_path(disk)
-                uuid = get_uuid_for_device(part)
-                fstype = "ext4" if backend == "ext4" else "btrfs"
+            if mode == "disk":
+                # Persist mounts only if we actually created filesystems
+                if backend in ("ext4", "btrfs"):
+                    part = dev_part_path(disk)
+                    uuid = get_uuid_for_device(part)
+                    fstype = "ext4" if backend == "ext4" else "btrfs"
 
-                if backend == "ext4":
-                    opts = "defaults,noatime,errors=remount-ro"
-                else:
-                    # NOTE: compress=zstd is btrfs-only
-                    opts = "defaults,noatime,compress=zstd"
+                    if backend == "ext4":
+                        opts = "defaults,noatime,errors=remount-ro"
+                    else:
+                        opts = "defaults,noatime,compress=zstd"
 
-                self.logw.write(f"Partition: {part}")
-                self.logw.write(f"UUID: {uuid}")
-                self.logw.write(f"Writing /etc/fstab entry for {mp}…")
-                write_fstab_uuid(mp, fstype, uuid, opts)
+                    self.logw.write(f"Partition: {part}")
+                    self.logw.write(f"UUID: {uuid}")
+                    self.logw.write(f"Writing /etc/fstab entry for {mp}…")
+                    write_fstab_uuid(mp, fstype, uuid, opts)
 
-                self.logw.write("Testing mount persistence: umount + mount -a …")
-                subprocess.run(["umount", mp], check=False)
-                subprocess.run(["mount", "-a"], check=True)
-                self.logw.write("mount -a OK")
+                    self.logw.write("Testing mount persistence: umount + mount -a …")
+                    subprocess.run(["umount", mp], check=False)
+                    subprocess.run(["mount", "-a"], check=True)
+                    self.logw.write("mount -a OK")
 
-            elif backend == "zfs":
-                self.logw.write("ZFS backend: mounts managed by ZFS.")
-                subprocess.run(["zfs", "mount", "-a"], check=False)
+                elif backend == "zfs":
+                    self.logw.write("ZFS backend: mounts managed by ZFS.")
+                    subprocess.run(["zfs", "mount", "-a"], check=False)
+            else:
+                self.logw.write("Existing filesystem mode: NOT writing /etc/fstab and NOT changing mounts.")
 
             self.logw.write(f"Creating PQ-NAS directory layout under {mp} …")
             create_pqnas_layout(mp)
 
-            # FIX: support package layout (static/) and repo layout (server/src/static)
+            self.logw.write("Installing static assets to /opt/pqnas/static …")
             install_static_assets(asset_root, "/opt/pqnas/static")
             subprocess.run(["chown", "-R", "root:root", "/opt/pqnas/static"], check=False)
 
-            # FIX: support package layout (bundled/) and repo layout (apps/bundled)
+            self.logw.write(f"Installing bundled apps to {mp}/apps/bundled …")
             install_bundled_apps(asset_root, os.path.join(mp, "apps", "bundled"))
-            self.logw.write("Installed static assets to /opt/pqnas/static and bundled apps to storage.")
 
-            # Config defaults still come from repo_root/config in repo mode;
-            # in tarball we included config/ at package root, so asset_root works too.
+            self.logw.write("Ensuring /etc/pqnas config files …")
             ensure_config_files(mp, asset_root)
 
+            self.logw.write("Writing /etc/pqnas/pqnas.env …")
             write_env_file(mp)
-            self.logw.write("Config files copied and environment file written.")
 
             self.logw.write("")
             self.logw.write("== systemd ==")
 
-            # FIX: install binaries from package root OR repo build/bin
+            # If we're re-installing/upgrading, stop the service first so the binary isn't "text file busy".
+            self.logw.write("Stopping pqnas.service (if running) …")
+            subprocess.run(["systemctl", "stop", "pqnas.service"], check=False)
+
+            # Prevent auto-restart loops during upgrade (safe if not enabled yet)
+            subprocess.run(["systemctl", "disable", "--now", "pqnas.service"], check=False)
+
+            # Best-effort kill if something still has it open
+            subprocess.run(["pkill", "-f", r"^/usr/local/bin/pqnas_server$"], check=False)
+            subprocess.run(["pkill", "-f", "pqnas_server"], check=False)
+
             server_exec, keygen_exec = install_binaries(asset_root, "/usr/local/bin")
             self.logw.write(f"Installed server binary: {server_exec}")
             if keygen_exec:
                 self.logw.write(f"Installed keygen binary: {keygen_exec}")
 
+                # --- NEW: sanity-check runtime deps before systemd ---
+            self.logw.write("Checking runtime dependencies (ldd) …")
+            ensure_runtime_deps_for_server(server_exec, log=self.logw)
+
+
             self.logw.write("Generating /etc/pqnas/keys.env …")
-            # FIX: write_keys_env() should accept asset_root, not repo-only paths
             write_keys_env(asset_root, "/etc/pqnas/keys.env")
             self.logw.write("keys.env written (mode 600).")
 
@@ -973,11 +1217,13 @@ class ExecuteScreen(Screen):
             )
             self.logw.write(status.stdout.strip())
 
+            self.logw.write("")
             self.logw.write("Layout created: data/ logs/ apps/ audit/ tmp/")
 
             self.done.update(
                 "\n✅ Done.\n\n"
-                f"Storage mounted at: {mp}\n"
+                f"Storage path: {mp}\n"
+                f"Mode: {mode}\n"
                 f"Backend: {backend}\n\n"
                 "Created folders:\n"
                 "  data/ logs/ apps/ audit/ tmp/\n"
@@ -986,9 +1232,10 @@ class ExecuteScreen(Screen):
         except Exception as e:
             self.logw.write(f"[FINALIZE ERROR] {e}")
             self.done.update(
-                "\n⚠️ Storage created, but finalize failed.\n\n"
-                "Check log above. You may need to fix /etc/fstab or mounts manually.\n"
+                "\n⚠️ Finalize failed.\n\n"
+                "Check log above.\n"
             )
+
 
 
 # -----------------------------------------------------------------------------
@@ -1015,7 +1262,8 @@ class InstallerApp(App):
         if os.geteuid() != 0:
             # Show a simple message and exit.
             # (Textual full-screen still works, but we keep it minimal.)
-            self.exit(message="Run as root: sudo /opt/pqnas-installer/venv/bin/python tools/installer/pqnas_install.py")
+            self.exit(message="Run as root: sudo ./installer/install.sh")
+
 
         self.push_screen(DiskSelectScreen())
 

@@ -9429,7 +9429,6 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
 
                 std::string body;
                 if (!read_file_to_string(manifest.string(), body) || body.empty()) continue;
-
                 json mj;
                 try {
                     mj = json::parse(body);
