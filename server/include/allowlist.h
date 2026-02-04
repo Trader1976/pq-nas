@@ -92,6 +92,12 @@ public:
     */
     bool is_admin(const std::string& fp_hex) const;
 
+    // Bootstrap helpers (used on first successful login)
+    bool empty() const;
+    bool add_admin(const std::string& fp_hex);
+    bool save(const std::string& path) const;
+
+
 private:
     // Internal map of normalized fingerprint string → role flags.
     //

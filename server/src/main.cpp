@@ -3460,6 +3460,31 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             const std::string& st_hash     = vr.st_hash_b64;
             const std::string& computed_fp = vr.fingerprint_hex;
 
+            // Bootstrap: first verified fingerprint becomes admin if this is a fresh install.
+            // Fresh install = users.json empty AND policy.json (allowlist) empty.
+            {
+                static std::mutex bootstrap_mu;
+                std::lock_guard<std::mutex> lk(bootstrap_mu);
+
+                const bool no_users = users.snapshot().empty();
+                const bool no_policy_users = allowlist.empty();
+
+                if (no_users && no_policy_users) {
+
+                    const std::string now_iso = now_iso_utc();
+                    users.ensure_present_disabled_user(computed_fp, now_iso);
+                    users.set_role(computed_fp, "admin");
+                    users.set_status(computed_fp, "enabled");
+                    users.save(users_path);
+
+                    allowlist.add_admin(computed_fp);
+                    allowlist.save(allowlist_path);
+
+                    std::cerr << "[bootstrap] first admin: " << computed_fp << std::endl;
+                }
+            }
+
+
             // ---- Users registry policy (fail-closed) ----
             const std::string now_iso = now_iso_utc();
 

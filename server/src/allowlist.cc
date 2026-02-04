@@ -4,7 +4,9 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <iostream>
-
+#include <filesystem>
+#include <vector>
+#include <algorithm>
 using json = nlohmann::json;
 
 namespace pqnas {
@@ -178,6 +180,76 @@ bool Allowlist::is_admin(const std::string& fp_hex) const {
     auto it = m_.find(norm_fp(fp_hex));
     if (it == m_.end()) return false;
     return it->second.admin;
+}
+
+    bool Allowlist::empty() const {
+    return m_.empty();
+}
+
+    bool Allowlist::add_admin(const std::string& fp_hex) {
+    const std::string fp = norm_fp(fp_hex);
+    if (fp.empty()) return false;
+
+    auto it = m_.find(fp);
+    if (it != m_.end()) {
+        bool changed = false;
+        if (!it->second.admin) { it->second.admin = true; changed = true; }
+        if (!it->second.user)  { it->second.user  = true; changed = true; }
+        return changed;
+    }
+
+    AllowEntry e;
+    e.admin = true;
+    e.user  = true;
+    m_[fp] = e;
+    return true;
+}
+
+    bool Allowlist::save(const std::string& path) const {
+    // Stable output ordering
+    std::vector<std::string> keys;
+    keys.reserve(m_.size());
+    for (const auto& kv : m_) keys.push_back(kv.first);
+    std::sort(keys.begin(), keys.end());
+
+    json j;
+    j["users"] = json::array();
+
+    // Persist in the simple "role" form (load() supports it)
+    for (const auto& fp : keys) {
+        const auto& e = m_.at(fp);
+        if (!e.user && !e.admin) continue;
+
+        const std::string role = e.admin ? "admin" : "user";
+        j["users"].push_back(json{
+            {"fingerprint", fp},
+            {"role", role}
+        });
+    }
+
+    // Atomic-ish write: tmp + rename
+    std::filesystem::path p(path);
+    std::filesystem::create_directories(p.parent_path());
+    auto tmp = p;
+    tmp += ".tmp";
+
+    {
+        std::ofstream out(tmp.string(), std::ios::trunc);
+        if (!out.good()) return false;
+        out << j.dump(2) << "\n";
+        out.flush();
+    }
+
+    std::error_code ec;
+    std::filesystem::rename(tmp, p, ec);
+    if (ec) {
+        std::filesystem::remove(p, ec);
+        ec.clear();
+        std::filesystem::rename(tmp, p, ec);
+        if (ec) return false;
+    }
+
+    return true;
 }
 
 } // namespace pqnas
