@@ -1,3 +1,42 @@
+INSTALLING PROCEDURE
+
+Download pqnas-1.2.0-linux-x86_64.tar.gz (or whatever version is avaiable) and
+run tar -xzf pqnas-1.2.0-linux-x86_64.tar.gz
+
+This will extract all required files into pqnas folder. 
+Now do this
+cd pqnas
+sudo ./install.sh
+
+
+After install, open your NAS url in browser. You should now see QR code.
+
+Common errors:
+
+After scanning QR code, DNA-messenger says:
+
+Authentication Failed
+Server returned 301
+
+That means there is mismatch in what server is presenting for login URL
+and what you actually have set in  /etc/pqnas/pqnas.env
+If you already have https sertificate, you most likely have still http
+in pqnas.env
+
+Open sudo nano /etc/pqnas/pqnas.env and find the line that is
+PQNAS_ORIGIN=http://.......
+
+Change it to
+PQNAS_ORIGIN=https://.....
+
+and restart server
+sudo systemctl restart pqnas.service
+
+
+
+
+
+
 # PQ-NAS User Manual — Admin Settings
 
 This section explains the **Admin → Settings** page in PQ-NAS.

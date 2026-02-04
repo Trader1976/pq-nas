@@ -24,3 +24,8 @@ apps/users/
 # Installed apps + user app data are runtime state
 apps/installed/
 apps/users/
+
+# PQ-NAS runtime state (never commit)
+config/policy.json
+config/users.json
+config/shares.json

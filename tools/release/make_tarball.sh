@@ -84,9 +84,29 @@ else
   echo "[!] Missing $REPO_ROOT/install.sh (top-level installer launcher)."
 fi
 
+# Top-level SAFE uninstaller entrypoint (keeps /srv/pqnas data + /etc/pqnas config)
+if [[ -f "$REPO_ROOT/uninstall.sh" ]]; then
+  install -m 0755 "$REPO_ROOT/uninstall.sh" "$STAGE/uninstall.sh"
+else
+  echo "[!] Missing $REPO_ROOT/uninstall.sh (safe uninstaller)."
+fi
+
+
 # Binaries at package root
 install -m 0755 "$REPO_ROOT/build/bin/pqnas_server" "$STAGE/pqnas_server"
 install -m 0755 "$REPO_ROOT/build/bin/pqnas_keygen" "$STAGE/pqnas_keygen"
+
+# DNA engine shared library (needed by /api/v4/verify)
+DNA_SRC="$REPO_ROOT/server/third_party/dna/lib/linux/x64/libdna_lib.so"
+if [[ -f "$DNA_SRC" ]]; then
+  install -d "$STAGE/lib/dna"
+  install -m 0755 "$DNA_SRC" "$STAGE/lib/dna/libdna_lib.so"
+else
+  echo "ERROR: Missing DNA lib: $DNA_SRC"
+  echo "Build or fetch libdna_lib.so before making a release."
+  exit 3
+fi
+
 
 # Static web assets (package-mode)
 rsync -a --delete \

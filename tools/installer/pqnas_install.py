@@ -6,8 +6,9 @@ Flow:
   1) Disk selection (safe: system disks marked + blocked)
   2) Backend selection: ext4 / btrfs / zfs
   3) Plan preview (exact commands shown)
-  4) Typed confirm: "WIPE <diskname>" or "INSTALL <mountpoint>"
-  5) Execute with live log
+  4) Optional reverse proxy (nginx, HTTP-only)
+  5) Typed confirm: "WIPE <diskname>" or "INSTALL <mountpoint>"
+  6) Execute with live log
 
 Notes:
 - Run as root (sudo). Disk operations + systemd need it.
@@ -50,14 +51,38 @@ from textual.widgets import (
 # Small UI/log helpers
 # -----------------------------------------------------------------------------
 
+
 def log_line(logw: Log, msg: str) -> None:
     # Force each message to be a separate line in Textual Log widget
     logw.write(msg.rstrip("\n") + "\n")
 
+import re
+
+def looks_like_ip(host: str) -> bool:
+    host = (host or "").strip()
+    if not host:
+        return False
+    # IPv4
+    if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", host):
+        parts = host.split(".")
+        try:
+            return all(0 <= int(p) <= 255 for p in parts)
+        except Exception:
+            return False
+    # Very loose IPv6 detection (good enough for our note logic)
+    if ":" in host and re.fullmatch(r"[0-9a-fA-F:]+", host):
+        return True
+    return False
+
+
+def run_cmd_capture(argv: List[str]) -> str:
+    p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    return (p.stdout or "").strip()
 
 # -----------------------------------------------------------------------------
 # Upgrade/rollback helpers
 # -----------------------------------------------------------------------------
+
 
 def detect_existing_install(dest_dir: str = "/usr/local/bin") -> bool:
     return os.path.exists(os.path.join(dest_dir, "pqnas_server"))
@@ -85,6 +110,7 @@ def rollback_binaries(dest_dir: str = "/usr/local/bin") -> None:
 # -----------------------------------------------------------------------------
 # Runtime dependency checks (ldd + apt)
 # -----------------------------------------------------------------------------
+
 
 def have_cmd(name: str) -> bool:
     return shutil.which(name) is not None
@@ -141,32 +167,60 @@ def apt_install(pkgs: List[str], log: Optional[Log] = None) -> None:
         raise RuntimeError(f"apt-get install failed:\n{(p2.stdout or '').strip()}")
 
 
-def ensure_runtime_deps_for_server(server_exec: str, log: Optional[Log] = None) -> None:
+def ensure_runtime_deps_for_server(server_exec: str, log: Optional[Log] = None, extra_ldd_paths: Optional[List[str]] = None) -> None:
     """
-    Ensure pqnas_server has all shared libraries.
+    Ensure pqnas_server (and optionally extra .so paths) have all shared libraries.
     Debian/Ubuntu only; other distros fail with clear error.
     """
-    missing = ldd_missing_libs(server_exec)
-    if not missing:
-        if log:
-            log.write("[*] Runtime deps: OK (ldd clean).")
-        return
+    paths = [server_exec] + (extra_ldd_paths or [])
 
     # Explicit SONAME -> package mapping (extend only when proven missing)
     soname_to_pkg = {
         "libqrencode.so.4": "libqrencode4",
-        # Add more mappings only when ldd shows them missing.
+
+        # Needed by libdna_lib.so on your VPS (Ubuntu noble)
+        "libfmt.so.9": "libfmt9",
+        "libjsoncpp.so.25": "libjsoncpp25",
     }
 
+    # Collect missing libs across all checked binaries/DSOs
+    missing_all: List[str] = []
+    missing_by_path: dict[str, List[str]] = {}
+
+    for p in paths:
+        missing = ldd_missing_libs(p)
+        if missing:
+            missing_by_path[p] = missing
+            missing_all.extend(missing)
+
+    if not missing_all:
+        if log:
+            log.write("[*] Runtime deps: OK (ldd clean) for server + extras.")
+        return
+
+    # Map missing sonames -> packages
     pkgs: List[str] = []
     unknown: List[str] = []
 
-    for lib in missing:
+    # De-duplicate missing list but keep stable order
+    seen = set()
+    missing_unique: List[str] = []
+    for lib in missing_all:
+        if lib not in seen:
+            seen.add(lib)
+            missing_unique.append(lib)
+
+    for lib in missing_unique:
         pkg = soname_to_pkg.get(lib)
         if pkg:
             pkgs.append(pkg)
         else:
             unknown.append(lib)
+
+    if log:
+        log.write("[*] Missing runtime libs (combined): " + ", ".join(missing_unique))
+        for p, miss in missing_by_path.items():
+            log.write(f"    - {p}: " + ", ".join(miss))
 
     if unknown:
         raise RuntimeError(
@@ -176,26 +230,30 @@ def ensure_runtime_deps_for_server(server_exec: str, log: Optional[Log] = None) 
         )
 
     if log:
-        log.write("[*] Missing runtime libs: " + ", ".join(missing))
         log.write("[*] Installing via apt: " + ", ".join(sorted(set(pkgs))))
 
     apt_install(sorted(set(pkgs)), log=log)
 
-    # Re-check
-    missing2 = ldd_missing_libs(server_exec)
-    if missing2:
+    # Re-check all paths
+    still_missing: List[str] = []
+    for p in paths:
+        miss2 = ldd_missing_libs(p)
+        if miss2:
+            still_missing.extend([f"{p}: {x}" for x in miss2])
+
+    if still_missing:
         raise RuntimeError(
             "Runtime deps still missing after apt install:\n"
-            + "\n".join(f"  - {x}" for x in missing2)
+            + "\n".join(f"  - {x}" for x in still_missing)
         )
 
     if log:
-        log.write("[*] Runtime deps resolved (ldd now OK).")
-
+        log.write("[*] Runtime deps resolved (ldd now OK) for server + extras.")
 
 # -----------------------------------------------------------------------------
 # Repo / package asset discovery
 # -----------------------------------------------------------------------------
+
 
 def find_repo_root() -> str:
     # 1) explicit override
@@ -248,15 +306,16 @@ REPO_ROOT = ASSET_ROOT
 # Models + state
 # -----------------------------------------------------------------------------
 
+
 @dataclass
 class Disk:
-    name: str          # e.g. "nvme0n1"
-    path: str          # e.g. "/dev/nvme0n1"
-    size: str          # e.g. "931.5G"
+    name: str  # e.g. "nvme0n1"
+    path: str  # e.g. "/dev/nvme0n1"
+    size: str  # e.g. "931.5G"
     model: str
     serial: str
     mountpoints: str
-    is_system: bool    # heuristic: contains "/" mountpoint
+    is_system: bool  # heuristic: contains "/" mountpoint
 
 
 @dataclass
@@ -264,14 +323,20 @@ class InstallState:
     disk: Optional[Disk] = None
     backend: str = "btrfs"
     mountpoint: str = "/srv/pqnas"
-    install_mode: str = "disk"   # "disk" (wipe) or "existing" (no partitioning)
+    install_mode: str = "disk"  # "disk" (wipe) or "existing" (no partitioning)
     plan: List[List[str]] = None
     plan_notes: List[str] = None
+
+    # Optional nginx reverse proxy (HTTP-only for now)
+    nginx_enabled: bool = False
+    nginx_hostname: str = ""  # server_name (e.g. nas.example.com or 192.168.1.50)
+    nginx_listen_port: int = 80
 
 
 # -----------------------------------------------------------------------------
 # System helpers
 # -----------------------------------------------------------------------------
+
 
 def run_cmd(argv: List[str]) -> str:
     p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -382,6 +447,28 @@ def create_pqnas_layout(root: str) -> None:
         ensure_dir(os.path.join(root, p))
     ensure_dir("/opt/pqnas/static")
 
+def find_dna_lib_source(asset_root: str) -> str:
+    """
+    Locate libdna_lib.so inside assets (package or repo layout).
+    Returns absolute path to source .so.
+    """
+    candidates = [
+        # package mode candidates (you decide your release layout)
+        os.path.join(asset_root, "lib", "dna", "libdna_lib.so"),
+        os.path.join(asset_root, "dna", "libdna_lib.so"),
+        os.path.join(asset_root, "third_party", "dna", "lib", "linux", "x64", "libdna_lib.so"),
+
+        # repo mode candidate
+        os.path.join(asset_root, "server", "third_party", "dna", "lib", "linux", "x64", "libdna_lib.so"),
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    raise RuntimeError(
+        "libdna_lib.so not found in assets. Tried:\n"
+        + "\n".join(f"  - {p}" for p in candidates)
+        + "\nFix your release packaging to include libdna_lib.so, or set PQNAS_ASSET_ROOT correctly."
+    )
 
 def install_static_assets(asset_root: str, dest_root: str = "/opt/pqnas/static") -> None:
     """
@@ -486,11 +573,12 @@ def ensure_config_files(root: str, asset_root: str) -> None:
         pass
 
 
-def write_env_file(root: str) -> None:
+def write_env_file(root: str, *, origin: Optional[str] = None, rp_id: Optional[str] = None, dna_lib_path: Optional[str] = None) -> None:
     etc_dir = "/etc/pqnas"
     os.makedirs(etc_dir, exist_ok=True)
 
     env_path = os.path.join(etc_dir, "pqnas.env")
+
     lines = [
         f"PQNAS_ROOT={root}",
         "PQNAS_CONFIG=/etc/pqnas",
@@ -509,9 +597,18 @@ def write_env_file(root: str) -> None:
         f"PQNAS_APPS_ROOT={root}/apps",
     ]
 
+    # URL / relying party settings (used by v4 QR auth)
+    if origin:
+        lines += ["", f"PQNAS_ORIGIN={origin}"]
+    if rp_id:
+        lines += [f"PQNAS_RP_ID={rp_id}"]
+
+    # DNA engine .so path for /api/v4/verify
+    if dna_lib_path:
+        lines += ["", f"PQNAS_DNA_LIB={dna_lib_path}"]
+
     with open(env_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
-
 
 def write_keys_env(asset_root: str, path: str = "/etc/pqnas/keys.env") -> None:
     """
@@ -561,6 +658,7 @@ def write_keys_env(asset_root: str, path: str = "/etc/pqnas/keys.env") -> None:
 # -----------------------------------------------------------------------------
 # Install binaries
 # -----------------------------------------------------------------------------
+
 
 def install_binaries(asset_root: str, dest_dir: str = "/usr/local/bin") -> Tuple[str, Optional[str], bool]:
     """
@@ -624,6 +722,7 @@ def install_binaries(asset_root: str, dest_dir: str = "/usr/local/bin") -> Tuple
 # systemd helpers
 # -----------------------------------------------------------------------------
 
+
 def write_systemd_unit(
         exec_path: str,
         env_file: str = "/etc/pqnas/pqnas.env",
@@ -661,8 +760,132 @@ def run_systemctl(args: List[str]) -> str:
 
 
 # -----------------------------------------------------------------------------
+# nginx reverse-proxy helpers (optional)
+# -----------------------------------------------------------------------------
+
+
+def ensure_nginx_installed(log: Optional[Log] = None) -> None:
+    """
+    Debian/Ubuntu: installs nginx via apt if missing.
+    """
+    if have_cmd("nginx"):
+        if log:
+            log.write("[*] nginx: already installed.")
+        return
+    if log:
+        log.write("[*] Installing nginx (apt) …")
+    apt_install(["nginx"], log=log)
+
+
+def nginx_sites_layout() -> str:
+    """
+    Returns:
+      - "sites"  for /etc/nginx/sites-available + sites-enabled
+      - "confd"  for /etc/nginx/conf.d
+    """
+    if os.path.isdir("/etc/nginx/sites-available") and os.path.isdir("/etc/nginx/sites-enabled"):
+        return "sites"
+    if os.path.isdir("/etc/nginx/conf.d"):
+        return "confd"
+    return "sites"
+
+
+def write_nginx_site_http_only(
+        server_name: str,
+        upstream_host: str = "127.0.0.1",
+        upstream_port: int = 8081,
+        listen_port: int = 80,
+) -> str:
+    """
+    Writes an HTTP-only reverse proxy config for PQ-NAS.
+    Returns the config path written.
+    """
+    server_name = (server_name or "").strip()
+    if not server_name:
+        raise RuntimeError("nginx server_name is empty.")
+
+    layout = nginx_sites_layout()
+
+    conf_text = f"""# PQ-NAS nginx reverse proxy (HTTP-only)
+# Generated by pqnas_install.py
+#
+# Upstream: http://{upstream_host}:{upstream_port}
+# Server:   http://{server_name}:{listen_port}
+
+server {{
+    listen {listen_port};
+    server_name {server_name};
+
+    # Uploads: adjust if needed
+    client_max_body_size 2g;
+
+    location / {{
+        proxy_pass http://{upstream_host}:{upstream_port};
+
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Safe defaults (helpful for future websockets/SSE)
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }}
+}}
+"""
+
+    if layout == "sites":
+        avail = "/etc/nginx/sites-available/pqnas"
+        enabled = "/etc/nginx/sites-enabled/pqnas"
+        with open(avail, "w", encoding="utf-8") as f:
+            f.write(conf_text)
+
+        # enable symlink
+        if os.path.islink(enabled) or os.path.exists(enabled):
+            try:
+                os.remove(enabled)
+            except Exception:
+                pass
+        os.symlink(avail, enabled)
+
+        # Disable default site if present (common on Debian/Ubuntu)
+        default_enabled = "/etc/nginx/sites-enabled/default"
+        if os.path.exists(default_enabled):
+            try:
+                os.remove(default_enabled)
+            except Exception:
+                pass
+
+        return avail
+
+    # conf.d fallback
+    confd = "/etc/nginx/conf.d/pqnas.conf"
+    with open(confd, "w", encoding="utf-8") as f:
+        f.write(conf_text)
+    return confd
+
+
+def nginx_test_reload(log: Optional[Log] = None) -> None:
+    """
+    Validate config and reload nginx.
+    """
+    p = subprocess.run(["nginx", "-t"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    out = (p.stdout or "").strip()
+    if p.returncode != 0:
+        raise RuntimeError(f"nginx -t failed:\n{out}")
+    if log:
+        log.write("[*] nginx -t OK")
+    run_systemctl(["enable", "--now", "nginx"])
+    run_systemctl(["reload", "nginx"])
+    if log:
+        log.write("[*] nginx reloaded.")
+
+
+# -----------------------------------------------------------------------------
 # Plan generation (ext4 / btrfs / zfs)
 # -----------------------------------------------------------------------------
+
 
 def plan_for(state: InstallState) -> Tuple[List[List[str]], List[str]]:
     """
@@ -743,6 +966,7 @@ def plan_for(state: InstallState) -> Tuple[List[List[str]], List[str]]:
 # UI components
 # -----------------------------------------------------------------------------
 
+
 class DiskListItem(ListItem):
     def __init__(self, disk: Disk) -> None:
         self.disk = disk
@@ -760,7 +984,7 @@ class DiskSelectScreen(Screen):
         with Horizontal():
             with Vertical(id="left"):
                 yield Static(
-                    "[b]Step 1/5[/b] Select target disk\n\n"
+                    "[b]Step 1/6[/b] Select target disk\n\n"
                     "[r]R[/r] refresh  •  [r]N[/r] next  •  [r]Q[/r] quit\n",
                     classes="muted",
                 )
@@ -864,7 +1088,7 @@ class BackendSelectScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical():
-            yield Static("[b]Step 2/5[/b] Select storage backend\n", classes="muted")
+            yield Static("[b]Step 2/6[/b] Select storage backend\n", classes="muted")
 
             self.radio = RadioSet(
                 RadioButton("ext4 (simple, no snapshots)", id="ext4"),
@@ -929,7 +1153,7 @@ class PlanScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical():
-            yield Static("[b]Step 3/5[/b] Plan preview (exact commands)\n", classes="muted")
+            yield Static("[b]Step 3/6[/b] Plan preview (exact commands)\n", classes="muted")
             self.plan_box = Static("", classes="muted")
             yield self.plan_box
             with Horizontal():
@@ -980,7 +1204,93 @@ class PlanScreen(Screen):
         self.app.pop_screen()
 
     def action_next(self) -> None:
-        self.app.push_screen(ConfirmScreen())
+        self.app.push_screen(ReverseProxyScreen())
+
+
+class ReverseProxyScreen(Screen):
+    BINDINGS = [("b", "back", "Back"), ("n", "next", "Next"), ("q", "quit", "Quit")]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical():
+            yield Static("[b]Step 4/6[/b] Optional reverse proxy (nginx)\n", classes="muted")
+
+            yield Static(
+                "If enabled, PQ-NAS will be reachable via:\n"
+                "  http://<hostname>/   (no :8081)\n\n"
+                "Hostname can be a domain or an IP.\n"
+                "For real-world use, the hostname must resolve to this server (DNS / router DNS / hosts).\n",
+                classes="muted",
+            )
+
+            self.enable = RadioSet(
+                RadioButton("No reverse proxy (keep :8081)", id="off"),
+                RadioButton("Enable nginx reverse proxy (HTTP-only)", id="on"),
+            )
+            yield self.enable
+
+            yield Static("\n[b]Hostname or IP[/b] (nginx server_name):", classes="muted")
+            self.host_in = Input(value="", placeholder="nas.example.com  (or 192.168.1.50)")
+            yield self.host_in
+
+            with Horizontal():
+                yield Button("Back", id="back", variant="default")
+                yield Button("Next", id="next", variant="primary")
+
+            self.err = Static("", classes="warn")
+            yield self.err
+
+        yield Footer()
+
+    def on_mount(self) -> None:
+        app: InstallerApp = self.app  # type: ignore
+        st = app.state
+
+        for btn in self.enable.query(RadioButton):
+            if btn.id == ("on" if st.nginx_enabled else "off"):
+                btn.value = True
+
+        self.host_in.value = st.nginx_hostname or ""
+        self._sync()
+
+    def _sync(self) -> None:
+        enabled = any(btn.value and btn.id == "on" for btn in self.enable.query(RadioButton))
+        self.host_in.disabled = not enabled
+        if not enabled:
+            self.err.update("")
+
+    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+        self._sync()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "back":
+            self.action_back()
+        elif event.button.id == "next":
+            self.action_next()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    def action_next(self) -> None:
+        app: InstallerApp = self.app  # type: ignore
+        st = app.state
+
+        enabled = any(btn.value and btn.id == "on" for btn in self.enable.query(RadioButton))
+        host = (self.host_in.value or "").strip()
+
+        if enabled:
+            if not host or " " in host or "/" in host:
+                self.err.update("Enter a hostname or IP (no spaces, no slashes).")
+                return
+            st.nginx_enabled = True
+            st.nginx_hostname = host
+            st.nginx_listen_port = 80
+        else:
+            st.nginx_enabled = False
+            st.nginx_hostname = ""
+            st.nginx_listen_port = 80
+
+        app.push_screen(ConfirmScreen())
 
 
 class ConfirmScreen(Screen):
@@ -989,7 +1299,7 @@ class ConfirmScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical():
-            yield Static("[b]Step 4/5[/b] Destructive confirmation\n", classes="warn")
+            yield Static("[b]Step 5/6[/b] Destructive confirmation\n", classes="warn")
             self.msg = Static("", classes="muted")
             yield self.msg
 
@@ -1154,6 +1464,133 @@ class RollbackScreen(Screen):
             self.out.write("❌ Rollback attempted but service still failed to start:")
             self.out.write((p.stdout or "").strip() or "(no output)")
 
+class HealthScreen(Screen):
+    BINDINGS = [
+        ("q", "quit", "Quit"),
+        ("b", "back", "Back"),
+        ("r", "refresh", "Refresh"),
+    ]
+
+    def __init__(
+            self,
+            *,
+            mp: str,
+            mode: str,
+            backend: str,
+            nginx_enabled: bool,
+            nginx_hostname: str,
+            nginx_port: int,
+    ) -> None:
+        super().__init__()
+        self.mp = mp
+        self.mode = mode
+        self.backend = backend
+        self.nginx_enabled = nginx_enabled
+        self.nginx_hostname = nginx_hostname
+        self.nginx_port = nginx_port
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical():
+            yield Static("[b]Install health[/b]\n", classes="muted")
+
+            self.summary = Static("", classes="muted")
+            yield self.summary
+
+            with Horizontal():
+                yield Button("Refresh checks", id="refresh", variant="primary")
+                yield Button("systemctl status pqnas", id="status_pqnas", variant="default")
+                yield Button("journalctl pqnas", id="logs_pqnas", variant="default")
+                yield Button("nginx -t", id="nginx_test", variant="default")
+                yield Button("ip addr", id="ip_addr", variant="default")
+
+            self.out = Log()
+            yield self.out
+
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._render_summary()
+        self.action_refresh()
+
+    def _render_summary(self) -> None:
+        if self.nginx_enabled and self.nginx_hostname:
+            url = f"http://{self.nginx_hostname}/"
+        else:
+            url = "http://<server-ip>:8081/"
+
+        lines = [
+            f"[b]Storage:[/b] {self.mp}",
+            f"[b]Mode:[/b] {self.mode}",
+            f"[b]Backend:[/b] {self.backend}",
+            "",
+            f"[b]Access URL:[/b] {url}",
+        ]
+
+        if self.nginx_enabled and self.nginx_hostname:
+            if looks_like_ip(self.nginx_hostname):
+                lines.append("[b]DNS:[/b] not needed (you used an IP).")
+            else:
+                lines.append("[b]DNS:[/b] make sure this hostname resolves to this server (DNS/router/hosts).")
+
+        self.summary.update("\n".join(lines))
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    def action_refresh(self) -> None:
+        self.out.write("== checks ==")
+
+        # pqnas.service status
+        self.out.write("$ systemctl is-active pqnas.service")
+        self.out.write(run_cmd_capture(["systemctl", "is-active", "pqnas.service"]) or "(no output)")
+
+        self.out.write("$ systemctl status pqnas.service --no-pager -l")
+        self.out.write(run_cmd_capture(["systemctl", "status", "pqnas.service", "--no-pager", "-l"]) or "(no output)")
+
+        if self.nginx_enabled:
+            self.out.write("")
+            self.out.write("$ systemctl is-active nginx")
+            self.out.write(run_cmd_capture(["systemctl", "is-active", "nginx"]) or "(no output)")
+
+            self.out.write("$ nginx -t")
+            self.out.write(run_cmd_capture(["nginx", "-t"]) or "(no output)")
+
+        self.out.write("")
+        self.out.write("$ ss -lntp | rg ':80|:8081'  (best effort)")
+        # Don't fail if ss/rg missing; just show what we can.
+        try:
+            ss = run_cmd_capture(["ss", "-lntp"])
+            filt = "\n".join([ln for ln in ss.splitlines() if (":80" in ln or ":8081" in ln)])
+            self.out.write(filt or "(no listeners found for :80/:8081 in ss output)")
+        except Exception as e:
+            self.out.write(f"(could not run ss: {e})")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id
+        if bid == "refresh":
+            self.action_refresh()
+            return
+
+        if bid == "status_pqnas":
+            self.out.write("$ systemctl status pqnas.service --no-pager -l")
+            self.out.write(run_cmd_capture(["systemctl", "status", "pqnas.service", "--no-pager", "-l"]) or "(no output)")
+            return
+
+        if bid == "logs_pqnas":
+            self.out.write("$ journalctl -u pqnas.service -n 200 --no-pager")
+            self.out.write(run_cmd_capture(["journalctl", "-u", "pqnas.service", "-n", "200", "--no-pager"]) or "(no output)")
+            return
+
+        if bid == "nginx_test":
+            self.out.write("$ nginx -t")
+            self.out.write(run_cmd_capture(["nginx", "-t"]) or "(no output)")
+            return
+
+        if bid == "ip_addr":
+            self.out.write("$ ip -br addr")
+            self.out.write(run_cmd_capture(["ip", "-br", "addr"]) or "(no output)")
+            return
 
 class ExecuteScreen(Screen):
     BINDINGS = [("q", "quit", "Quit")]
@@ -1161,7 +1598,7 @@ class ExecuteScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         with Vertical():
-            yield Static("[b]Step 5/5[/b] Executing… (live log)\n", classes="muted")
+            yield Static("[b]Step 6/6[/b] Executing… (live log)\n", classes="muted")
             self.logw = Log()
             yield self.logw
             self.done = Static("", classes="muted")
@@ -1265,6 +1702,23 @@ class ExecuteScreen(Screen):
             install_static_assets(asset_root, "/opt/pqnas/static")
             subprocess.run(["chown", "-R", "root:root", "/opt/pqnas/static"], check=False)
 
+            self.logw.write("Installing DNA engine library to /opt/pqnas/lib/dna …")
+            os.makedirs("/opt/pqnas/lib/dna", exist_ok=True)
+
+            src_dna = find_dna_lib_source(asset_root)
+            dst_dna = "/opt/pqnas/lib/dna/libdna_lib.so"
+
+            tmp_dna = dst_dna + ".new"
+            shutil.copy2(src_dna, tmp_dna)
+            os.chmod(tmp_dna, 0o755)
+            os.replace(tmp_dna, dst_dna)
+
+            subprocess.run(["chown", "root:root", dst_dna], check=False)
+            subprocess.run(["chmod", "755", dst_dna], check=False)
+
+            self.logw.write(f"DNA lib installed: {dst_dna}  (from {src_dna})")
+
+
             self.logw.write(f"Installing bundled apps to {mp}/apps/bundled …")
             install_bundled_apps(asset_root, os.path.join(mp, "apps", "bundled"))
 
@@ -1272,7 +1726,40 @@ class ExecuteScreen(Screen):
             ensure_config_files(mp, asset_root)
 
             self.logw.write("Writing /etc/pqnas/pqnas.env …")
-            write_env_file(mp)
+
+            dna_path = "/opt/pqnas/lib/dna/libdna_lib.so"
+
+            # Decide origin/rp_id from your nginx hostname if enabled
+            origin = None
+            rp_id = None
+            if st.nginx_enabled and st.nginx_hostname:
+                # If certbot has already deployed a cert, prefer https; otherwise http
+                # (this avoids manual edits after certbot)
+                origin = None
+                rp_id = None
+                if st.nginx_enabled and st.nginx_hostname:
+                    origin = f"http://{st.nginx_hostname}"
+                    rp_id = st.nginx_hostname
+
+                rp_id = st.nginx_hostname
+
+            write_env_file(mp, origin=origin, rp_id=rp_id, dna_lib_path=dna_path)
+
+            # Make canonical URL handling impossible to miss
+            if origin and rp_id:
+                self.logw.write("")
+                self.logw.write("🔒 Public URL locked to: " + origin)
+                self.logw.write(
+                    "[!] If you change domain or enable TLS later, update:\n"
+                    "    /etc/pqnas/pqnas.env (PQNAS_ORIGIN + PQNAS_RP_ID)"
+                )
+            else:
+                self.logw.write("")
+                self.logw.write(
+                    "[!] No public URL configured yet.\n"
+                    "    If you later add nginx or HTTPS, update:\n"
+                    "    /etc/pqnas/pqnas.env (PQNAS_ORIGIN + PQNAS_RP_ID)"
+                )
 
             self.logw.write("")
             self.logw.write("== systemd ==")
@@ -1297,7 +1784,12 @@ class ExecuteScreen(Screen):
                 self.logw.write(f"Installed keygen binary: {keygen_exec}")
 
             self.logw.write("Checking runtime dependencies (ldd) …")
-            ensure_runtime_deps_for_server(server_exec, log=self.logw)
+            ensure_runtime_deps_for_server(
+                server_exec,
+                log=self.logw,
+                extra_ldd_paths=["/opt/pqnas/lib/dna/libdna_lib.so"],
+            )
+
 
             self.logw.write("Generating /etc/pqnas/keys.env …")
             write_keys_env(asset_root, "/etc/pqnas/keys.env")
@@ -1332,6 +1824,43 @@ class ExecuteScreen(Screen):
             )
             self.logw.write((status.stdout or "").strip())
 
+            # Optional: nginx reverse proxy (HTTP-only)
+            if st.nginx_enabled:
+                self.logw.write("")
+                self.logw.write("== nginx reverse proxy ==")
+                self.logw.write(f"Host: {st.nginx_hostname}")
+                self.logw.write(f"Listen: {st.nginx_listen_port}")
+                self.logw.write("Installing nginx if needed …")
+                ensure_nginx_installed(log=self.logw)
+
+                self.logw.write("Writing nginx site config …")
+                conf_path = write_nginx_site_http_only(
+                    server_name=st.nginx_hostname,
+                    upstream_host="127.0.0.1",
+                    upstream_port=8081,
+                    listen_port=st.nginx_listen_port,
+                )
+                self.logw.write(f"Wrote: {conf_path}")
+
+                self.logw.write("Testing + reloading nginx …")
+                nginx_test_reload(log=self.logw)
+
+                self.logw.write(f"✅ nginx enabled: http://{st.nginx_hostname}/")
+                self.logw.write("")
+                self.logw.write("If you later enable HTTPS (certbot), update /etc/pqnas/pqnas.env:")
+                self.logw.write(f"  PQNAS_ORIGIN=https://{st.nginx_hostname}")
+                self.logw.write(f"  PQNAS_RP_ID={st.nginx_hostname}")
+                self.logw.write("Then restart: systemctl restart pqnas.service")
+
+                # DNS note (only meaningful for hostnames, not IPs)
+                if not looks_like_ip(st.nginx_hostname):
+                    self.logw.write("Note: if you used a hostname, ensure it resolves to this server (DNS/router/hosts).")
+                else:
+                    self.logw.write("Note: you used an IP, so DNS is not needed.")
+            else:
+                self.logw.write("")
+                self.logw.write("nginx reverse proxy: (disabled)")
+
             self.logw.write("")
             self.logw.write("Layout created: data/ logs/ apps/ audit/ tmp/")
 
@@ -1343,6 +1872,17 @@ class ExecuteScreen(Screen):
                 "Created folders:\n"
                 "  data/ logs/ apps/ audit/ tmp/\n"
             )
+            self.app.push_screen(
+                HealthScreen(
+                    mp=mp,
+                    mode=mode,
+                    backend=backend,
+                    nginx_enabled=st.nginx_enabled,
+                    nginx_hostname=st.nginx_hostname,
+                    nginx_port=st.nginx_listen_port,
+                )
+            )
+            return
 
         except Exception as e:
             self.logw.write(f"[FINALIZE ERROR] {e}")
@@ -1350,11 +1890,13 @@ class ExecuteScreen(Screen):
                 "\n⚠️ Finalize failed.\n\n"
                 "Check log above.\n"
             )
+            return
 
 
 # -----------------------------------------------------------------------------
 # App
 # -----------------------------------------------------------------------------
+
 
 class InstallerApp(App):
     TITLE = "PQ-NAS Installer (TUI)"
