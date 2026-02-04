@@ -277,6 +277,8 @@ POST /api/v4/files/save_text
 GET  /api/v4/files/stat  
 POST /api/v4/files/stat
 POST /api/v4/files/stat_sel
+GET  /api/v4/shares/list
+srv.Get(R"(/s/([A-Za-z0-9_-]+))",
 
 /api/v4/files/stat
 Returns metadata about a file or directory.
