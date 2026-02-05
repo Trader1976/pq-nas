@@ -124,6 +124,26 @@ else
   mkdir -p "$STAGE/bundled"
 fi
 
+# Installed apps (folders: apps/installed/<app>/<ver>/{manifest.json,www/...})
+if [[ -d "$REPO_ROOT/apps/installed" ]]; then
+  # sanity: each version dir must contain manifest.json + www/
+  while IFS= read -r -d '' m; do
+    verdir="$(dirname "$m")"
+    if [[ ! -d "$verdir/www" ]]; then
+      echo "ERROR: Installed app missing www/: $verdir"
+      exit 4
+    fi
+  done < <(find "$REPO_ROOT/apps/installed" -mindepth 3 -maxdepth 3 -type f -name manifest.json -print0)
+
+  rsync -a --delete \
+    --exclude '__pycache__/' \
+    --exclude '*.pyc' \
+    "$REPO_ROOT/apps/installed/" "$STAGE/installed/"
+else
+  echo "ERROR: Missing apps/installed (expected installed apps in repo)."
+  exit 4
+fi
+
 # Clean default config (IMPORTANT: from tools/release/config, not repo config/)
 rsync -a --delete \
   --exclude '__pycache__/' \
