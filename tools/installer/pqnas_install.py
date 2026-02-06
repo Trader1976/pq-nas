@@ -327,10 +327,14 @@ class InstallState:
     plan: List[List[str]] = None
     plan_notes: List[str] = None
 
+    # Login authentication mode (picked by installer; used by login page)
+    auth_mode: str = "auto"   # "auto" | "v4" | "v5"
+
     # Optional nginx reverse proxy (HTTP-only for now)
     nginx_enabled: bool = False
     nginx_hostname: str = ""  # server_name (e.g. nas.example.com or 192.168.1.50)
     nginx_listen_port: int = 80
+
 
 
 # -----------------------------------------------------------------------------
@@ -573,7 +577,15 @@ def ensure_config_files(root: str, asset_root: str) -> None:
         pass
 
 
-def write_env_file(root: str, *, origin: Optional[str] = None, rp_id: Optional[str] = None, dna_lib_path: Optional[str] = None) -> None:
+def write_env_file(
+        root: str,
+        *,
+        origin: Optional[str] = None,
+        rp_id: Optional[str] = None,
+        dna_lib_path: Optional[str] = None,
+        auth_mode: Optional[str] = None,
+) -> None:
+
     etc_dir = "/etc/pqnas"
     os.makedirs(etc_dir, exist_ok=True)
 
@@ -602,6 +614,11 @@ def write_env_file(root: str, *, origin: Optional[str] = None, rp_id: Optional[s
         lines += ["", f"PQNAS_ORIGIN={origin}"]
     if rp_id:
         lines += [f"PQNAS_RP_ID={rp_id}"]
+
+    # Login authentication mode (v4 | v5 | auto)
+    if auth_mode:
+        lines += [f"PQNAS_AUTH_MODE={auth_mode}"]
+
 
     # DNA engine .so path for /api/v4/verify
     if dna_lib_path:
@@ -1363,6 +1380,15 @@ class ReverseProxyScreen(Screen):
             )
             yield self.enable
 
+
+            yield Static("\n[b]Login authentication mode[/b]:", classes="muted")
+            self.auth = RadioSet(
+                RadioButton("auto (default; server decides)", id="auto"),
+                RadioButton("v4 (current QR flow)", id="v4"),
+                RadioButton("v5 (stateless / future)", id="v5"),
+            )
+            yield self.auth
+
             yield Static("\n[b]Hostname or IP[/b] (nginx server_name):", classes="muted")
             self.host_in = Input(value="", placeholder="nas.example.com  (or 192.168.1.50)")
             yield self.host_in
@@ -1385,7 +1411,17 @@ class ReverseProxyScreen(Screen):
                 btn.value = True
 
         self.host_in.value = st.nginx_hostname or ""
+
+        # auth mode
+        am = (st.auth_mode or "auto").strip()
+        if am not in ("auto", "v4", "v5"):
+            am = "auto"
+        for btn in self.auth.query(RadioButton):
+            if btn.id == am:
+                btn.value = True
+
         self._sync()
+
 
     def _sync(self) -> None:
         enabled = any(btn.value and btn.id == "on" for btn in self.enable.query(RadioButton))
@@ -1423,6 +1459,16 @@ class ReverseProxyScreen(Screen):
             st.nginx_enabled = False
             st.nginx_hostname = ""
             st.nginx_listen_port = 80
+
+        # auth mode
+        auth_mode = "auto"
+        for btn in self.auth.query(RadioButton):
+            if btn.value:
+                auth_mode = btn.id
+                break
+        if auth_mode not in ("auto", "v4", "v5"):
+            auth_mode = "auto"
+        st.auth_mode = auth_mode
 
         app.push_screen(ConfirmScreen())
 
@@ -1614,6 +1660,7 @@ class HealthScreen(Screen):
             nginx_enabled: bool,
             nginx_hostname: str,
             nginx_port: int,
+            auth_mode: str,
     ) -> None:
         super().__init__()
         self.mp = mp
@@ -1622,6 +1669,7 @@ class HealthScreen(Screen):
         self.nginx_enabled = nginx_enabled
         self.nginx_hostname = nginx_hostname
         self.nginx_port = nginx_port
+        self.auth_mode = auth_mode
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1657,9 +1705,11 @@ class HealthScreen(Screen):
             f"[b]Storage:[/b] {self.mp}",
             f"[b]Mode:[/b] {self.mode}",
             f"[b]Backend:[/b] {self.backend}",
+            f"[b]Auth mode:[/b] {self.auth_mode}",
             "",
             f"[b]Access URL:[/b] {url}",
         ]
+
 
         if self.nginx_enabled and self.nginx_hostname:
             if looks_like_ip(self.nginx_hostname):
@@ -1876,7 +1926,14 @@ class ExecuteScreen(Screen):
                 rp_id = st.nginx_hostname
 
 
-            write_env_file(mp, origin=origin, rp_id=rp_id, dna_lib_path=dna_path)
+            write_env_file(
+                mp,
+                origin=origin,
+                rp_id=rp_id,
+                dna_lib_path=dna_path,
+                auth_mode=st.auth_mode,
+            )
+
 
             # Make canonical URL handling impossible to miss
             if origin and rp_id:
@@ -2019,8 +2076,10 @@ class ExecuteScreen(Screen):
                     nginx_enabled=st.nginx_enabled,
                     nginx_hostname=st.nginx_hostname,
                     nginx_port=st.nginx_listen_port,
+                    auth_mode=st.auth_mode,
                 )
             )
+
             return
 
         except Exception as e:

@@ -133,6 +133,7 @@ add_executable(pqnas_server
         server/src/system_metrics.cc
         server/src/storage_info.cc
         server/src/share_links.cc
+        server/src/static_serve.cc
 )
 
 target_include_directories(pqnas_server PRIVATE

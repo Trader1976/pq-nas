@@ -188,6 +188,7 @@ const std::string STATIC_SYSTEM_HTML         = static_path("system.html");
 const std::string STATIC_SYSTEM_JS           = static_path("system.js");
 const std::string STATIC_LOGIN               = static_path("login.html");
 const std::string STATIC_JS                  = static_path("pqnas_v4.js");
+const std::string STATIC_AUTH_JS             = static_path("pqnas_auth.js");
 const std::string STATIC_ADMIN_SETTINGS_HTML = static_path("admin_settings.html");
 const std::string STATIC_ADMIN_SETTINGS_JS   = static_path("admin_settings.js");
 const std::string STATIC_APPROVALS_HTML      = static_path("admin_approvals.html");
@@ -1608,6 +1609,18 @@ int main()
     if (const char* v = std::getenv("PQNAS_SESS_TTL")) SESS_TTL = std::atoi(v);
     if (const char* v = std::getenv("PQNAS_LISTEN_PORT")) LISTEN_PORT = std::atoi(v);
 
+	std::string AUTH_MODE = "v4";
+	if (const char* v = std::getenv("PQNAS_AUTH_MODE")) AUTH_MODE = v;
+
+	// normalize + clamp
+	AUTH_MODE = pqnas::lower_ascii(AUTH_MODE);
+	if (AUTH_MODE != "v4" && AUTH_MODE != "v5" && AUTH_MODE != "auto") {
+	    std::cerr << "Invalid PQNAS_AUTH_MODE='" << AUTH_MODE
+        	      << "' (expected v4|v5|auto). Defaulting to 'auto'.\n";
+    	AUTH_MODE = "auto";
+	}
+
+
 
     // ---- Audit log (hash-chained JSONL) ----
     std::string audit_dir = exe_dir() + "/audit";
@@ -1824,55 +1837,6 @@ auto maybe_auto_rotate_before_append = [&]() {
     }
 
 
-// Generic static handler: /static/<anything>
-// Must come AFTER specific /static/*.js handlers so those remain unchanged.
-srv.Get(R"(/static/(.+))", [&](const httplib::Request& req, httplib::Response& res) {
-    // req.matches[1] is the captured path after /static/
-    if (req.matches.size() < 2) {
-        res.status = 400;
-        res.set_header("Content-Type", "text/plain");
-        res.body = "Bad static request";
-        return;
-    }
-
-    const std::string rel = req.matches[1].str();
-
-    if (!is_safe_static_relpath(rel)) {
-        res.status = 403;
-        res.set_header("Content-Type", "text/plain");
-        res.body = "Forbidden";
-        return;
-    }
-
-    const std::filesystem::path base = std::filesystem::path(static_root_dir());
-    const std::filesystem::path full = base / rel;
-
-    // Fail-closed: only serve known safe extensions
-    if (!has_allowed_static_ext(full)) {
-        res.status = 404;
-        res.set_header("Content-Type", "text/plain");
-        res.body = "Not found";
-        return;
-    }
-
-    std::string body;
-    if (!read_file_to_string(full.string(), body) || body.empty()) {
-        res.status = 404;
-        res.set_header("Content-Type", "text/plain");
-        res.body = "Missing static file: " + full.string();
-        return;
-    }
-
-    std::string ext = full.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){ return (char)std::tolower(c); });
-    const std::string ct = mime_for_ext(ext);
-    res.status = 200;
-    res.set_header("Content-Type", ct.c_str());
-    // Most static assets can be cached; but if you want no-cache everywhere, change here.
-    // res.set_header("Cache-Control", "no-store");
-    res.body = std::move(body);
-});
-
 
     // Option A: fixed policy location in repo, with optional env override
     std::string allowlist_path =
@@ -1898,6 +1862,25 @@ srv.Get(R"(/static/(.+))", [&](const httplib::Request& req, httplib::Response& r
     	std::cerr << "[users] FATAL: failed to load users registry: " << users_path << std::endl;
     	return 4;
 	}
+
+
+// GET /api/public/auth_mode
+// Returns installer-selected auth mode for login page: v4 | v5 | auto
+srv.Get("/api/public/auth_mode", [&](const httplib::Request& /*req*/, httplib::Response& res) {
+    std::string mode = "v4";
+    if (const char* v = std::getenv("PQNAS_AUTH_MODE")) mode = v;
+
+    mode = pqnas::lower_ascii(mode);
+    if (mode != "v4" && mode != "v5" && mode != "auto") mode = "auto";
+
+    nlohmann::json out = {
+        {"ok", true},
+        {"auth_mode", mode}
+    };
+    reply_json(res, 200, out.dump());
+});
+
+
 
 // ----- GET /api/v4/system (user+admin) --------------------------------------
 srv.Get("/api/v4/system", [&](const httplib::Request& req, httplib::Response& res) {
@@ -2095,11 +2078,30 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
         res.body = body;
     });
 
+
+	// GET /static/pqnas_auth.js
+	srv.Get("/static/pqnas_auth.js", [&](const httplib::Request&, httplib::Response& res) {
+    	std::string body;
+    	if (!read_file_to_string(STATIC_AUTH_JS, body)) {
+        	res.status = 500;
+	        res.set_header("Content-Type", "text/plain");
+    	    res.body = "Missing static file: " + STATIC_AUTH_JS;
+        	return;
+	    }
+    	res.status = 200;
+	    res.set_header("Content-Type", "application/javascript; charset=utf-8");
+    	res.body = body;
+	});
+
+
     // after successful consume, browser goes here
     srv.Get("/success", [&](const httplib::Request&, httplib::Response& res) {
         res.status = 302;
         res.set_header("Location", "/app");
     });
+
+
+
 /*
     srv.Get("/app", [&](const httplib::Request&, httplib::Response& res) {
         const std::string body = slurp_file(STATIC_APP_HTML);
@@ -3794,6 +3796,59 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
     	res.set_header("Cache-Control", "no-store");
 	    res.set_content(body, "application/javascript; charset=utf-8");
 	});
+
+
+	// Generic static handler: /static/<anything>
+	// Must come AFTER specific /static/*.js handlers so those remain unchanged.
+	srv.Get(R"(/static/(.+))", [&](const httplib::Request& req, httplib::Response& res) {
+    	// req.matches[1] is the captured path after /static/
+    	if (req.matches.size() < 2) {
+        	res.status = 400;
+	        res.set_header("Content-Type", "text/plain");
+    	    res.body = "Bad static request";
+        	return;
+	    }
+
+    	const std::string rel = req.matches[1].str();
+
+	    if (!is_safe_static_relpath(rel)) {
+    	    res.status = 403;
+        	res.set_header("Content-Type", "text/plain");
+	        res.body = "Forbidden";
+    	    return;
+    	}
+
+    	const std::filesystem::path base = std::filesystem::path(static_root_dir());
+    	const std::filesystem::path full = base / rel;
+
+	    // Fail-closed: only serve known safe extensions
+    	if (!has_allowed_static_ext(full)) {
+        	res.status = 404;
+	        res.set_header("Content-Type", "text/plain");
+    	    res.body = "Not found";
+        	return;
+	    }
+
+	    std::string ext = full.extension().string();
+    	std::transform(
+        	ext.begin(),
+	        ext.end(),
+    	    ext.begin(),
+        	[](unsigned char c) { return (char)std::tolower(c); }
+	    );
+
+    	const std::string ct = mime_for_ext(ext);
+
+	    // Hardened static serving (headers + cache control handled inside)
+    	// Set to true if you want /static to be completely no-cache.
+	    const bool no_store = false;
+
+	    if (!serve_static_file(req, res, full.string(), ct, no_store)) {
+    	    // serve_static_file already set status/body
+        	return;
+	    }
+	});
+
 
     auto now_iso_utc = []() -> std::string {
         using namespace std::chrono;
