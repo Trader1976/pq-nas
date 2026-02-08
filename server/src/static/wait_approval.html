@@ -7,13 +7,11 @@
 
     <style>
         :root{
-            --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
             --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
         }
-
         *{ box-sizing:border-box; }
         html,body{ height:100%; }
-
         body{
             margin:0;
             font-family:var(--sans);
@@ -24,7 +22,6 @@
             color:var(--fg);
             overflow:hidden;
         }
-
         a{ color:var(--fg); text-decoration:none; }
         a:hover{ text-shadow: 0 0 10px rgba(var(--fg-rgb),0.25); }
 
@@ -35,13 +32,11 @@
             gap: 14px;
             padding: 14px;
         }
-
         @media (max-width: 980px){
             body{ overflow:auto; }
             .desktop{ grid-template-columns: 1fr; overflow: visible; }
         }
 
-        /* Sidebar */
         .sidebar{
             border: 1px solid var(--border);
             border-radius: var(--radius2);
@@ -61,7 +56,6 @@
             border-bottom: 1px solid var(--border2);
             margin-bottom: 12px;
         }
-
         .brand .logoDot{
             width: 14px; height: 14px;
             border-radius: 50%;
@@ -69,72 +63,16 @@
             box-shadow: 0 0 18px rgba(var(--fg-rgb),0.38);
             flex: 0 0 auto;
         }
-
         .brand h1{
             margin: 0;
             font-size: 16px;
             font-weight: 950;
             letter-spacing: 0.2px;
         }
-
         .brand .sub{
             margin-top: 2px;
             font-size: 12px;
             color: var(--fg-dim);
-        }
-
-        .nav{
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            padding: 10px 6px;
-            overflow: auto;
-            min-height: 0;
-        }
-
-        .nav .sectionLabel{
-            margin: 10px 6px 2px;
-            font-size: 11px;
-            color: rgba(var(--fg-rgb),0.55);
-            letter-spacing: 0.6px;
-            text-transform: uppercase;
-        }
-
-        .navbtn{
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            gap: 10px;
-            padding: 10px 12px;
-            border-radius: 14px;
-            border: 1px solid var(--border2);
-            background: rgba(0,0,0,0.22);
-            color: var(--fg);
-            cursor: pointer;
-            user-select:none;
-            text-decoration:none;
-            transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
-        }
-
-        .navbtn:hover{
-            transform: translateY(-1px);
-            background: rgba(var(--fg-rgb),0.06);
-            border-color: rgba(var(--fg-rgb),0.30);
-        }
-
-        .navbtn.active{
-            background: rgba(var(--fg-rgb),0.10);
-            border-color: rgba(var(--fg-rgb),0.38);
-            box-shadow: 0 0 18px rgba(var(--fg-rgb),0.12);
-        }
-
-        .navbtn .k{
-            font-size: 12px;
-            color: rgba(var(--fg-rgb),0.55);
-            border: 1px solid rgba(var(--fg-rgb),0.16);
-            border-radius: 10px;
-            padding: 2px 8px;
-            background: rgba(0,0,0,0.22);
         }
 
         .bottom{
@@ -145,14 +83,12 @@
             flex-direction: column;
             gap: 10px;
         }
-
         .statusCard{
             border: 1px solid var(--border2);
             border-radius: 16px;
             background: rgba(0,0,0,0.22);
             padding: 10px 12px;
         }
-
         .mini{
             margin-top: 8px;
             font-size: 12px;
@@ -162,7 +98,6 @@
             overflow-wrap: anywhere;
         }
 
-        /* Workspace */
         .workspace{
             border: 1px solid var(--border);
             border-radius: var(--radius2);
@@ -174,7 +109,6 @@
             min-height: 0;
             overflow: hidden;
         }
-
         .topbar{
             display:flex;
             align-items:center;
@@ -184,13 +118,7 @@
             border-bottom: 1px solid var(--border2);
             background: rgba(0,0,0,0.18);
         }
-
-        .crumbs{
-            display:flex;
-            flex-direction: column;
-            min-width: 0;
-        }
-
+        .crumbs{ display:flex; flex-direction: column; min-width: 0; }
         .crumbs .title{
             font-weight: 950;
             letter-spacing: 0.2px;
@@ -199,7 +127,6 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
-
         .crumbs .sub{
             margin-top: 2px;
             font-size: 12px;
@@ -228,7 +155,6 @@
         .pill.warn{ border-color: rgba(var(--warn-rgb),0.38); background: rgba(var(--warn-rgb),0.10); color: rgba(var(--warn-rgb),0.92); }
         .pill.fail{ border-color: rgba(var(--fail-rgb),0.42); background: rgba(var(--fail-rgb),0.10); color: rgba(var(--fail-rgb),0.92); }
 
-
         .content{
             padding: 14px;
             min-width: 0;
@@ -238,7 +164,6 @@
             justify-content:center;
             align-items:center;
         }
-
         .card{
             width: min(820px, 100%);
             border:1px solid rgba(var(--fg-rgb),0.12);
@@ -246,7 +171,6 @@
             background: rgba(0,0,0,0.22);
             overflow:hidden;
         }
-
         .card .hd{
             display:flex;
             align-items:center;
@@ -256,7 +180,6 @@
             border-bottom:1px solid rgba(var(--fg-rgb),0.12);
             background: linear-gradient(180deg, rgba(var(--fg-rgb),0.06), transparent);
         }
-
         .card .hd .h{
             font-size:12px;
             color: rgba(var(--fg-rgb),0.60);
@@ -264,18 +187,14 @@
             text-transform:uppercase;
             font-weight: 900;
         }
-
         .card .bd{ padding:16px 14px 14px; }
-
         .hint{
             color: var(--fg-dim);
             font-size: 13px;
             line-height: 1.55;
             margin: 0;
         }
-
         .mono{ font-family: var(--mono); }
-
         .kv{
             display:flex;
             align-items: baseline;
@@ -303,7 +222,6 @@
             min-width: 0;
             text-align: right;
         }
-
         .footerline{
             padding: 10px 14px;
             border-top: 1px solid var(--border2);
@@ -314,9 +232,9 @@
             background: rgba(0,0,0,0.12);
         }
     </style>
+
     <link rel="stylesheet" href="/static/theme.css">
     <script src="/static/theme.js"></script>
-
 </head>
 
 <body>
@@ -330,15 +248,13 @@
             </div>
         </div>
 
-
-
         <div class="bottom">
             <div class="statusCard">
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
                     <div style="font-weight:950;">Approval status</div>
                     <span id="statusPill" class="pill warn"><span class="k">State:</span> <span class="v">checking…</span></span>
                 </div>
-                <div class="mini" id="statusText">Checking /api/v4/status…</div>
+                <div class="mini" id="statusText">Checking /api/v5/status…</div>
             </div>
 
             <div class="statusCard">
@@ -383,8 +299,6 @@
                         <div class="k">If you’re the admin</div>
                         <div class="v">Open <span class="mono">/admin/users</span> in another tab</div>
                     </div>
-
-
                 </div>
                 <div class="footerline">© CPUNK 2026</div>
             </section>
@@ -392,6 +306,129 @@
     </main>
 </div>
 
-<script src="/static/wait_approval.js?v=1"></script>
+<script>
+    (() => {
+        const qs = new URLSearchParams(location.search);
+        const k  = (qs.get("k")  || "").trim();
+        const st = (qs.get("st") || "").trim(); // optional fallback
+
+        const sidEl = document.getElementById("sid");
+        const statusText = document.getElementById("statusText");
+        const statusPill = document.getElementById("statusPill");
+        const mainPill = document.getElementById("mainPill");
+
+        function setPill(pill, kind, text) {
+            if (!pill) return;
+            pill.className = "pill " + (kind || "");
+            const v = pill.querySelector(".v");
+            if (v) v.textContent = text;
+        }
+
+        function setText(msg) {
+            if (statusText) statusText.textContent = msg;
+        }
+
+        const body = () => (k ? { k } : (st ? { st } : null));
+
+        if (sidEl) sidEl.textContent = k ? ("k:" + k) : (st ? "st:(provided)" : "(missing k/st)");
+
+        if (!body()) {
+            setPill(statusPill, "fail", "missing k");
+            setPill(mainPill, "fail", "error");
+            setText("Missing k (or st) in URL. Go back and start a new sign-in.");
+            return;
+        }
+
+        async function pollOnce() {
+            try {
+                setPill(statusPill, "warn", "checking…");
+                setText("Checking /api/v5/status…");
+
+                const r = await fetch("/api/v5/status", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(body()),
+                    cache: "no-store",
+                    credentials: "include",
+                });
+
+                const j = await r.json().catch(() => ({}));
+
+                if (!r.ok || j.ok === false) {
+                    setPill(statusPill, "fail", "error");
+                    setPill(mainPill, "fail", "error");
+                    setText(`Status error: ${j.message || j.error || ("HTTP " + r.status)}`);
+                    return;
+                }
+
+                if (j.state === "missing") {
+                    setPill(statusPill, "fail", "missing");
+                    setPill(mainPill, "fail", "missing");
+                    setText("This sign-in request is no longer known by the server. Go back and start again.");
+                    return;
+                }
+
+                if (j.state === "pending") {
+                    setPill(statusPill, "warn", "pending");
+                    setPill(mainPill, "warn", "pending");
+                    setText("Waiting for admin approval…");
+                    return;
+                }
+
+                if (j.state === "approved" || j.approved === true) {
+                    setPill(statusPill, "ok", "approved");
+                    setPill(mainPill, "ok", "approved");
+                    setText("Approved ✔ Finalizing sign-in…");
+
+                    // Turn approval into a real cookie
+                    const cres = await fetch("/api/v5/consume", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(body()),
+                        cache: "no-store",
+                        credentials: "include",
+                    });
+
+                    const cj = await cres.json().catch(() => ({}));
+                    if (!cres.ok || cj.ok === false) {
+                        setPill(statusPill, "fail", "cookie failed");
+                        setPill(mainPill, "fail", "error");
+                        setText(`Approved, but cookie set failed: ${cj.message || cj.error || ("HTTP " + cres.status)}`);
+                        return;
+                    }
+
+                    // Verify cookie landed
+                    const ping = await fetch("/api/v4/me", {
+                        cache: "no-store",
+                        credentials: "include",
+                    });
+
+                    if (!ping.ok) {
+                        setPill(statusPill, "fail", "no cookie");
+                        setPill(mainPill, "fail", "no cookie");
+                        setText(`Consume OK, but cookie did not stick: HTTP ${ping.status}`);
+                        return;
+                    }
+
+                    location.href = "/app";
+                    return;
+                }
+
+                setPill(statusPill, "warn", "waiting");
+                setPill(mainPill, "warn", "waiting");
+                setText("Waiting…");
+            } catch (e) {
+                setPill(statusPill, "fail", "network");
+                setPill(mainPill, "fail", "network");
+                setText("Network error while checking approval status.");
+            }
+        }
+
+        pollOnce();
+        (function loop() {
+            pollOnce().finally(() => setTimeout(loop, 1200));
+        })();
+    })();
+</script>
 </body>
 </html>

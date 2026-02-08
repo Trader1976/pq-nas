@@ -34,6 +34,7 @@
     let currentView = "home";   // "home" or "app:<id>@<ver>"
     let currentApp = null;      // {id, version} or null
     let lastAppsKey = "";
+    let authed = false;
 
     function show(el, on) {
         if (!el) return;
@@ -214,6 +215,7 @@
     }
 
     async function loadMe() {
+        authed = false;
         show(stateDisabled, false);
         show(stateUnauth, false);
 
@@ -232,6 +234,7 @@
 
                 const role = j.role || "?";
                 const ok = !!j.ok;
+                authed = ok && r.ok;
 
                 const isAdmin = ok && role === "admin";
 
@@ -245,6 +248,7 @@
                 show(navLogin, !ok);
 
                 if (!r.ok || !ok) {
+                    authed = false;
                     const err = String(j.error || "").toLowerCase();
                     const msg = String(j.message || "");
 
@@ -271,6 +275,7 @@
             }
 
             // Non-JSON body
+            authed = false;
             show(navAdmin, false);
             show(navUsers, false);
             show(navAudit, false);
@@ -284,6 +289,7 @@
                 out.textContent = `${r.status}${ct ? " · " + ct.split(";")[0] : ""}\n\n${body}`;
             }
         } catch (e) {
+            authed = false;
             show(navAdmin, false);
             show(navUsers, false);
             show(navAudit, false);
@@ -331,10 +337,19 @@
     // Default view
     renderHome();
 
-    // Load status immediately, then refresh periodically
+// Load once immediately
     loadMe();
-    setInterval(loadMe, 2000);
 
-    // Also refresh app list occasionally (in case installs/uninstalls happen)
-    setInterval(loadApps, 4000);
+// Refresh auth state when tab comes back / user focuses
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) loadMe();
+    });
+    window.addEventListener("focus", () => loadMe());
+
+// Slow refresh (only to keep UI honest; not a heartbeat)
+    setInterval(() => { if (authed) loadMe(); }, 30000);
+
+// Apps list can be even slower
+    setInterval(() => { if (authed) loadApps(); }, 60000);
+
 })();

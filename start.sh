@@ -86,6 +86,17 @@ set -a
 source "./$ENV_FILE"
 set +a
 
+# --- Dev overrides (must be AFTER /etc/pqnas/pqnas.env and .env.pqnas are sourced) ---
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+export PQNAS_AUTH_MODE="v5"
+export PQNAS_STATIC_ROOT="$REPO_ROOT/server/src/static"
+
+echo "[*] Dev overrides:"
+echo "    PQNAS_AUTH_MODE=$PQNAS_AUTH_MODE"
+echo "    PQNAS_STATIC_ROOT=$PQNAS_STATIC_ROOT"
+
+
 echo "[✓] Ready"
 echo "    PQNAS_ORIGIN=$PQNAS_ORIGIN"
 echo "    PQNAS_RP_ID=$PQNAS_RP_ID"

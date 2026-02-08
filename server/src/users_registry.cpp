@@ -5,6 +5,8 @@
 #include <vector>
 #include <algorithm>
 #include <cstdint>
+#include <ctime>
+#include <unistd.h>
 
 using json = nlohmann::json;
 
@@ -90,7 +92,7 @@ bool UsersRegistry::load(const std::string& path) {
   return true;
 }
 
-bool UsersRegistry::save(const std::string& path) const {
+  bool UsersRegistry::save(const std::string& path) const {
   std::lock_guard<std::mutex> lk(mu_);
 
   std::vector<std::string> keys;
@@ -127,31 +129,44 @@ bool UsersRegistry::save(const std::string& path) const {
     });
   }
 
-  // Atomic-ish write: write temp then rename
   std::filesystem::path p(path);
-  std::filesystem::create_directories(p.parent_path());
-  auto tmp = p;
-  tmp += ".tmp";
+  std::error_code ec;
 
+  // Ensure parent dir exists
+  std::filesystem::create_directories(p.parent_path(), ec);
+  if (ec) return false;
+
+  // Unique temp file in the same directory (atomic rename guarantee)
+  std::filesystem::path tmp = p;
+  tmp += ".tmp.";
+  tmp += std::to_string(::getpid());
+  tmp += ".";
+  tmp += std::to_string(static_cast<long long>(std::time(nullptr)));
+
+  // Write temp
   {
     std::ofstream out(tmp.string(), std::ios::trunc);
     if (!out.good()) return false;
     out << j.dump(2) << "\n";
     out.flush();
+    if (!out.good()) {
+      std::filesystem::remove(tmp, ec);
+      return false;
+    }
   }
 
-  std::error_code ec;
+  // Atomic replace: rename tmp -> target
+  ec.clear();
   std::filesystem::rename(tmp, p, ec);
   if (ec) {
-    // fallback: try remove + rename
-    std::filesystem::remove(p, ec);
-    ec.clear();
-    std::filesystem::rename(tmp, p, ec);
-    if (ec) return false;
+    // Cleanup tmp on failure
+    std::filesystem::remove(tmp, ec);
+    return false;
   }
 
   return true;
 }
+
 
 bool UsersRegistry::exists(const std::string& fp_hex) const {
   std::lock_guard<std::mutex> lk(mu_);

@@ -69,6 +69,9 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 extern "C" {
 #include "qrauth_v4.h"
 }
+#include "routes_v5.h"
+#include "verify_login_common.h"
+
 #include <chrono>
 #include <cstdio>
 #include <sys/wait.h>
@@ -188,6 +191,7 @@ const std::string STATIC_SYSTEM_HTML         = static_path("system.html");
 const std::string STATIC_SYSTEM_JS           = static_path("system.js");
 const std::string STATIC_LOGIN               = static_path("login.html");
 const std::string STATIC_JS                  = static_path("pqnas_v4.js");
+const std::string STATIC_V5_JS               = static_path("pqnas_v5.js");
 const std::string STATIC_AUTH_JS             = static_path("pqnas_auth.js");
 const std::string STATIC_ADMIN_SETTINGS_HTML = static_path("admin_settings.html");
 const std::string STATIC_ADMIN_SETTINGS_JS   = static_path("admin_settings.js");
@@ -1635,6 +1639,8 @@ int main()
     }
 
     const std::string audit_jsonl_path = audit_dir + "/pqnas_audit.jsonl";
+	std::cerr << "[pqnas] audit_jsonl_path=" << audit_jsonl_path << std::endl;
+
     const std::string audit_state_path = audit_dir + "/pqnas_audit.state";
     pqnas::AuditLog audit(audit_jsonl_path, audit_state_path);
     // declare early so routes can call it
@@ -1807,6 +1813,7 @@ auto maybe_auto_rotate_before_append = [&]() {
 
     httplib::Server srv;
 
+
     // ---- Load admin settings once at startup (audit min level) ----
     try {
         std::ifstream f(admin_settings_path);
@@ -1863,6 +1870,176 @@ auto maybe_auto_rotate_before_append = [&]() {
     	return 4;
 	}
 
+
+	RoutesV5Context v5;
+	v5.origin = &ORIGIN;
+	v5.rp_id  = &RP_ID;
+	v5.app    = &APP_NAME;
+
+	v5.req_ttl  = &REQ_TTL;
+	v5.sess_ttl = &SESS_TTL;
+
+	v5.server_pk  = SERVER_PK;
+	v5.server_sk  = SERVER_SK;
+	v5.cookie_key = COOKIE_KEY;
+
+	v5.allowlist = &allowlist;
+	v5.users     = &users;
+
+	v5.allowlist_path = &allowlist_path;
+	v5.users_path     = &users_path;
+
+	// ---- hook existing helpers (these already exist in main.cpp today) ----
+	v5.now_epoch = []() { return pqnas::now_epoch(); };
+	v5.now_iso_utc = []() { return pqnas::now_iso_utc(); };
+
+
+	v5.random_b64url = [&](int n) { return random_b64url(n); };
+	v5.url_encode    = [&](const std::string& s) { return url_encode(s); };
+
+	v5.build_req_payload_canonical = [&](const std::string& sid,
+                                     const std::string& chal,
+                                     const std::string& nonce,
+                                     long iat,
+                                     long exp) {
+    	return build_req_payload_canonical(sid, chal, nonce, iat, exp);
+	};
+
+	v5.sign_req_token = [&](const std::string& payload) { return sign_req_token(payload); };
+	v5.qr_svg_from_text = [&](const std::string& t, int sc, int b) { return qr_svg_from_text(t, sc, b); };
+
+    // v5 stateless-ready correlation key (k):
+    // Must match verify_login_common.cc v5 approval_key = vr.st_hash_b64.
+    // We define: k = b64_std(SHA256(st_token)).
+    v5.st_hash_b64_from_st = [&](const std::string& st_token) -> std::string {
+        unsigned char md[EVP_MAX_MD_SIZE];
+        unsigned int md_len = 0;
+
+        EVP_MD_CTX* c = EVP_MD_CTX_new();
+        if (!c) return std::string{};
+        struct Guard { EVP_MD_CTX* p; ~Guard(){ if(p) EVP_MD_CTX_free(p); } } g{c};
+
+        if (EVP_DigestInit_ex(c, EVP_sha256(), nullptr) != 1) return std::string{};
+        if (!st_token.empty()) {
+            if (EVP_DigestUpdate(c, st_token.data(), st_token.size()) != 1) return std::string{};
+        }
+        if (EVP_DigestFinal_ex(c, md, &md_len) != 1) return std::string{};
+
+        // st_hash_b64 in your verify path is "b64" (standard base64), so reuse pqnas::b64_std.
+        return pqnas::b64_std(md, (size_t)md_len);
+    };
+
+
+	// approvals/pending
+	v5.approvals_prune = [&](long now) { approvals_prune(now); };
+	v5.pending_prune   = [&](long now) { pending_prune(now); };
+
+	v5.approvals_get = [&](const std::string& sid, RoutesV5Context::ApprovalEntry& out) {
+    	ApprovalEntry e;
+	    if (!approvals_get(sid, e)) return false;
+    	out.cookie_val  = e.cookie_val;
+	    out.fingerprint = e.fingerprint;
+    	out.expires_at  = e.expires_at;
+    	return true;
+	};
+	v5.approvals_put = [&](const std::string& sid, const RoutesV5Context::ApprovalEntry& in) {
+    	ApprovalEntry e;
+	    e.cookie_val  = in.cookie_val;
+    	e.fingerprint = in.fingerprint;
+	    e.expires_at  = in.expires_at;
+    	approvals_put(sid, e);
+	};
+	v5.approvals_pop = [&](const std::string& sid) { approvals_pop(sid); };
+
+	v5.pending_get = [&](const std::string& sid, RoutesV5Context::PendingEntry& out) {
+    	PendingEntry p;
+	    if (!pending_get(sid, p)) return false;
+    	out.expires_at = p.expires_at;
+	    out.reason     = p.reason;
+    	return true;
+	};
+	v5.pending_put = [&](const std::string& sid, const RoutesV5Context::PendingEntry& in) {
+    	PendingEntry p;
+	    p.expires_at = in.expires_at;
+    	p.reason     = in.reason;
+	    pending_put(sid, p);
+	};
+	v5.pending_pop = [&](const std::string& sid) { pending_pop(sid); };
+
+	// cookie minting + base64
+	v5.session_cookie_mint = [&](const unsigned char* key,
+                             const std::string& fp_b64,
+                             long iat,
+                             long exp,
+                             std::string& out_cookie) {
+    	return session_cookie_mint(key, fp_b64, iat, exp, out_cookie);
+	};
+
+    v5.sign_token_v4_ed25519 = [&](const nlohmann::json& p, const unsigned char* sk) {
+        return sign_token_v4_ed25519(p, sk);
+    };
+
+
+
+	v5.b64_std = [&](const unsigned char* data, size_t len) { return pqnas::b64_std(data, len); };
+	v5.client_ip = [&](const httplib::Request& r) { return client_ip(r); };
+	v5.shorten   = [&](const std::string& s, size_t n) { return pqnas::shorten(s, n); };
+
+	// audit bridge: keep it simple (you already have audit_append(ev) etc.)
+	v5.audit_emit = [&](const std::string& event,
+                    const std::string& outcome,
+                    const std::function<void(std::map<std::string,std::string>&)>& fill) {
+    	pqnas::AuditEvent ev;
+	    ev.event   = event;
+    	ev.outcome = outcome;
+	    std::map<std::string,std::string> f;
+    	fill(f);
+	    for (auto& kv : f) ev.f[kv.first] = kv.second;
+    	maybe_auto_rotate_before_append();
+	    audit_append(ev);
+	};
+
+	// v4 verify bridge (phase-1)
+	v5.verify_v4_json = [&](const std::string& body) -> RoutesV5Context::VerifyResult {
+    	pqnas::VerifyV4Config cfg;
+    	cfg.now_unix_sec = 0;
+	    cfg.expected_origin = ORIGIN;
+    	cfg.expected_rp_id  = RP_ID;
+	    cfg.enforce_allowlist = false;
+
+	    std::array<unsigned char, 32> pk{};
+    	std::memcpy(pk.data(), SERVER_PK, 32);
+
+    	auto vr = pqnas::verify_v4_json(body, pk, cfg);
+
+	    RoutesV5Context::VerifyResult out;
+    	out.ok = vr.ok;
+	    out.detail = vr.detail;
+
+	    out.sid         = vr.sid;
+    	out.origin      = vr.origin;
+	    out.rp_id_hash  = vr.rp_id_hash;
+    	out.st_hash_b64 = vr.st_hash_b64;
+	    out.fingerprint_hex = vr.fingerprint_hex;
+
+    // map rc (coarse)
+    if (vr.ok) out.rc = RoutesV5Context::VerifyRc::OK;
+	    else {
+    	    switch (vr.rc) {
+        	    case pqnas::VerifyV4Rc::ST_EXPIRED: out.rc = RoutesV5Context::VerifyRc::ST_EXPIRED; break;
+            	case pqnas::VerifyV4Rc::RP_ID_HASH_MISMATCH: out.rc = RoutesV5Context::VerifyRc::RP_ID_HASH_MISMATCH; break;
+	            case pqnas::VerifyV4Rc::FINGERPRINT_MISMATCH: out.rc = RoutesV5Context::VerifyRc::FINGERPRINT_MISMATCH; break;
+    	        case pqnas::VerifyV4Rc::PQ_SIG_INVALID: out.rc = RoutesV5Context::VerifyRc::PQ_SIG_INVALID; break;
+        	    case pqnas::VerifyV4Rc::POLICY_DENY: out.rc = RoutesV5Context::VerifyRc::POLICY_DENY; break;
+            	default: out.rc = RoutesV5Context::VerifyRc::OTHER; break;
+	        }
+    	}
+	    return out;
+	};
+
+	// (leave v5.sign_token_v4_ed25519 unset for now; we’ll wire once v5 verify uses it)
+
+	register_routes_v5(srv, v5);
 
 // GET /api/public/auth_mode
 // Returns installer-selected auth mode for login page: v4 | v5 | auto
@@ -2091,6 +2268,18 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
     	res.status = 200;
 	    res.set_header("Content-Type", "application/javascript; charset=utf-8");
     	res.body = body;
+	});
+
+	srv.Get("/static/pqnas_v5.js", [&](const httplib::Request&, httplib::Response& res) {
+    	std::string body;
+    	if (!read_file_to_string(STATIC_V5_JS, body) || body.empty()) {
+        	res.status = 404;
+	        res.set_content("missing pqnas_v5.js", "text/plain; charset=utf-8");
+    	    return;
+	    }
+    	res.set_header("Cache-Control", "no-store");
+	    res.set_header("Content-Type", "application/javascript; charset=utf-8");
+    	res.body = std::move(body);
 	});
 
 
@@ -3313,331 +3502,122 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             res.body = json({{"ok", false}, {"error", "server_error"}, {"message", e.what()}}).dump();
         }
     });
+// --- Shared verify context (used by both /api/v4/verify and /api/v5/verify) ---
+VerifyLoginCommonContext c;
 
-    // POST /api/v4/verify
-    srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& res) {
-        auto fail = [&](int code, const std::string& msg, const std::string& detail = "") {
-            json out = {
-                {"ok", false},
-                {"error", (code == 400 ? "bad_request" : "not_authorized")},
-                {"message", msg}
-            };
-            if (!detail.empty()) out["detail"] = detail;
-            reply_json(res, code, out.dump());
-        };
+c.origin = &ORIGIN;
+c.rp_id  = &RP_ID;
 
-        // --- audit context (filled after verify_v4_json) ---
-        std::string audit_sid;
-        std::string audit_st_hash_b64;
-        std::string audit_origin;
-        std::string audit_rp_id_hash;
-        std::string audit_fp;
+c.server_pk  = SERVER_PK;
+c.server_sk  = SERVER_SK;
+c.cookie_key = COOKIE_KEY;
 
-        auto audit_ua = [&]() -> std::string {
-            auto it = req.headers.find("User-Agent");
-            return pqnas::shorten(it == req.headers.end() ? "" : it->second);
-        };
+c.sess_ttl = &SESS_TTL;
 
-        auto audit_fail = [&](const std::string& reason, const std::string& detail = "") {
-            pqnas::AuditEvent ev;
-            ev.event = "v4.verify_fail";
-            ev.outcome = "fail";
-            if (!audit_sid.empty()) ev.f["sid"] = audit_sid;
-            if (!audit_st_hash_b64.empty()) ev.f["st_hash_b64"] = audit_st_hash_b64;
-            if (!audit_origin.empty()) ev.f["origin"] = audit_origin;
-            if (!audit_rp_id_hash.empty()) ev.f["rp_id_hash"] = audit_rp_id_hash;
-            if (!audit_fp.empty()) ev.f["fingerprint"] = audit_fp;
-            ev.f["reason"] = reason;
-            if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+c.allowlist = &allowlist;
+c.users     = &users;
+c.allowlist_path = &allowlist_path;
+c.users_path     = &users_path;
 
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+// approvals/pending (bridge)
+c.approvals_prune = [&](long now){ approvals_prune(now); };
+c.pending_prune   = [&](long now){ pending_prune(now); };
 
-            auto it_cf = req.headers.find("CF-Connecting-IP");
-            if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+c.approvals_get = [&](const std::string& sid, VerifyLoginCommonContext::ApprovalEntry& out){
+    ApprovalEntry e;
+    if (!approvals_get(sid, e)) return false;
+    out.cookie_val  = e.cookie_val;
+    out.fingerprint = e.fingerprint;
+    out.expires_at  = e.expires_at;
+    return true;
+};
 
-            auto it_xff = req.headers.find("X-Forwarded-For");
-            if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+c.approvals_put = [&](const std::string& sid, const VerifyLoginCommonContext::ApprovalEntry& in){
+    ApprovalEntry e;
+    e.cookie_val  = in.cookie_val;
+    e.fingerprint = in.fingerprint;
+    e.expires_at  = in.expires_at;
+    approvals_put(sid, e);
+};
 
-            ev.f["ua"] = audit_ua();
-            maybe_auto_rotate_before_append();
-            audit_append(ev);
-        };
+c.approvals_pop = [&](const std::string& sid){ approvals_pop(sid); };
 
-        auto audit_info = [&](const std::string& event, const std::string& outcome,
-                              const std::string& reason = "", const std::string& detail = "") {
-            pqnas::AuditEvent ev;
-            ev.event = event;
-            ev.outcome = outcome;
-            if (!audit_sid.empty()) ev.f["sid"] = audit_sid;
-            if (!audit_st_hash_b64.empty()) ev.f["st_hash_b64"] = audit_st_hash_b64;
-            if (!audit_origin.empty()) ev.f["origin"] = audit_origin;
-            if (!audit_rp_id_hash.empty()) ev.f["rp_id_hash"] = audit_rp_id_hash;
-            if (!audit_fp.empty()) ev.f["fingerprint"] = audit_fp;
+c.pending_get = [&](const std::string& sid, VerifyLoginCommonContext::PendingEntry& out){
+    PendingEntry p;
+    if (!pending_get(sid, p)) return false;
+    out.expires_at = p.expires_at;
+    out.reason     = p.reason;
+    return true;
+};
 
-            if (!reason.empty()) ev.f["reason"] = reason;
-            if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+c.pending_put = [&](const std::string& sid, const VerifyLoginCommonContext::PendingEntry& in){
+    PendingEntry p;
+    p.expires_at = in.expires_at;
+    p.reason     = in.reason;
+    pending_put(sid, p);
+};
 
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+c.pending_pop = [&](const std::string& sid){ pending_pop(sid); };
 
-            auto it_cf = req.headers.find("CF-Connecting-IP");
-            if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+// time + helpers
+c.now_epoch   = [](){ return pqnas::now_epoch(); };
+c.now_iso_utc = [](){ return pqnas::now_iso_utc(); }; // pqnas_util
 
-            auto it_xff = req.headers.find("X-Forwarded-For");
-            if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+c.client_ip = [&](const httplib::Request& r){ return client_ip(r); };
+c.shorten   = [&](const std::string& s, size_t n){ return pqnas::shorten(s, n); };
 
-            ev.f["ua"] = audit_ua();
-            maybe_auto_rotate_before_append();
-            audit_append(ev);
-        };
+// crypto hooks
+c.sign_token_v4_ed25519 = [&](const json& payload, const unsigned char* sk){
+    return sign_token_v4_ed25519(payload, sk);
+};
 
-        // ISO UTC helper (avoid relying on a missing pqnas::now_iso_utc())
-        auto now_iso_utc = [&]() -> std::string {
-            using namespace std::chrono;
-            auto now = system_clock::now();
-            auto ms  = duration_cast<milliseconds>(now.time_since_epoch()) % 1000;
+c.session_cookie_mint = [&](const unsigned char* key,
+                            const std::string& fp_b64,
+                            long iat, long exp,
+                            std::string& out_cookie){
+    return session_cookie_mint(key, fp_b64, iat, exp, out_cookie);
+};
 
-            std::time_t t = system_clock::to_time_t(now);
-            std::tm tm{};
-            gmtime_r(&t, &tm);
+c.b64_std = [&](const unsigned char* data, size_t len){
+    return pqnas::b64_std(data, len);
+};
 
-            char buf[64];
-            std::snprintf(buf, sizeof(buf),
-                          "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
-                          tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                          tm.tm_hour, tm.tm_min, tm.tm_sec,
-                          (int)ms.count());
-            return std::string(buf);
-        };
+c.audit_emit = [&](const std::string& event,
+                   const std::string& outcome,
+                   const std::function<void(std::map<std::string,std::string>&)>& fill){
+    pqnas::AuditEvent ev;
+    ev.event   = event;
+    ev.outcome = outcome;
 
-        try {
-            // ---- v4 shared verification (crypto + bindings) ----
-            pqnas::VerifyV4Config cfg;
-            cfg.now_unix_sec = 0;
-            cfg.expected_origin = ORIGIN;
-            cfg.expected_rp_id  = RP_ID;
+    std::map<std::string,std::string> f;
+    fill(f);
+    for (auto& kv : f) ev.f[kv.first] = kv.second;
 
-            // Let crypto/bindings verify first; enforce users registry after we know who it is.
-            cfg.enforce_allowlist = false;
+    maybe_auto_rotate_before_append();
+    audit_append(ev);
+};
 
-            std::array<unsigned char, 32> server_pk{};
-            std::memcpy(server_pk.data(), SERVER_PK, 32);
-
-            auto vr = pqnas::verify_v4_json(req.body, server_pk, cfg);
-
-            audit_sid         = vr.sid;
-            audit_origin      = vr.origin;
-            audit_rp_id_hash  = vr.rp_id_hash;
-            audit_st_hash_b64 = vr.st_hash_b64;
-            audit_fp          = vr.fingerprint_hex;
-
-            if (!vr.ok) {
-                int http = 400;
-                switch (vr.rc) {
-                    case pqnas::VerifyV4Rc::ST_EXPIRED:
-                        http = 410;
-                        break;
-                    case pqnas::VerifyV4Rc::RP_ID_HASH_MISMATCH:
-                    case pqnas::VerifyV4Rc::FINGERPRINT_MISMATCH:
-                    case pqnas::VerifyV4Rc::PQ_SIG_INVALID:
-                        http = 403;
-                        break;
-                    case pqnas::VerifyV4Rc::POLICY_DENY:
-                        http = 403;
-                        break;
-                    default:
-                        http = 400;
-                        break;
-                }
-
-                audit_fail(std::string("v4_shared_rc_") + std::to_string((int)vr.rc), vr.detail);
-
-                if (http == 410) return fail(410, "st expired");
-                return fail(http, "verify failed", vr.detail);
-            }
-
-            const bool vectors_mode = (std::getenv("PQNAS_V4_VECTORS") != nullptr);
-            const long at_ttl = vectors_mode ? (10L * 365 * 24 * 3600) : 60L;
-            long now = pqnas::now_epoch();
-
-            const std::string& st_hash     = vr.st_hash_b64;
-            const std::string& computed_fp = vr.fingerprint_hex;
-
-            // Bootstrap: first verified fingerprint becomes admin if this is a fresh install.
-            // Fresh install = users.json empty AND policy.json (allowlist) empty.
-            {
-                static std::mutex bootstrap_mu;
-                std::lock_guard<std::mutex> lk(bootstrap_mu);
-
-                const bool no_users = users.snapshot().empty();
-                const bool no_policy_users = allowlist.empty();
-
-                if (no_users && no_policy_users) {
-
-                    const std::string now_iso = now_iso_utc();
-                    users.ensure_present_disabled_user(computed_fp, now_iso);
-                    users.set_role(computed_fp, "admin");
-                    users.set_status(computed_fp, "enabled");
-                    users.save(users_path);
-
-                    allowlist.add_admin(computed_fp);
-                    allowlist.save(allowlist_path);
-
-                    std::cerr << "[bootstrap] first admin: " << computed_fp << std::endl;
-                }
-            }
-
-
-            // ---- Users registry policy (fail-closed) ----
-            const std::string now_iso = now_iso_utc();
-
-            // Unknown user: create disabled record, persist, mark as pending, deny.
-            if (!users.exists(computed_fp)) {
-                const bool created = users.ensure_present_disabled_user(computed_fp, now_iso);
-                const bool saved   = created ? users.save(users_path) : false;
-
-                audit_info("v4.user_auto_created_disabled", "ok",
-                           created ? "created" : "already_exists_race",
-                           saved ? "" : "users_save_failed");
-
-                // Mark this sid as pending admin approval so /api/v4/status can surface it
-                {
-                    PendingEntry p;
-                    p.expires_at = now + 120; // keep in sync with approvals TTL window
-                    pending_put(vr.sid, p);
-                }
-
-                return fail(403, "user disabled");
-            }
-
-            // Known user must be enabled (role user/admin is fine; status must be enabled)
-            if (!users.is_enabled_user(computed_fp)) {
-                audit_info("v4.user_disabled", "fail", "not_enabled");
-
-                // Mark this sid as pending admin approval so browser can show wait-approval UX
-                {
-                    PendingEntry p;
-                    p.expires_at = now + 120; // keep in sync with approvals TTL window
-                    pending_put(vr.sid, p);
-                }
-
-                return fail(403, "user disabled");
-            }
-
-            // Update last_seen on successful verify (best-effort persist)
-            const bool touched = users.touch_last_seen(computed_fp, now_iso);
-            const bool saved   = touched ? users.save(users_path) : false;
-
-            if (touched && saved) {
-                audit_info("v4.user_last_seen_updated", "ok");
-            } else if (touched && !saved) {
-                audit_info("v4.user_last_seen_updated", "fail", "users_save_failed");
-            } else {
-                audit_info("v4.user_last_seen_updated", "fail", "touch_failed");
-            }
-
-            // ---- vectors logging ----
-            if (vectors_mode) {
-                std::cerr << "[v4_vectors] FP_HEX " << computed_fp
-                          << " SID " << vr.sid
-                          << " ST_HASH " << st_hash
-                          << "\n";
-                std::cerr << "[v4_vectors] CANON_SHA256_B64 " << vr.canonical_sha256_b64 << "\n";
-            }
-
-            // ---- mint AT (short-lived) ----
-            json at_payload = {
-                {"v",4},
-                {"typ","at"},
-                {"sid", vr.sid},
-                {"st_hash", st_hash},
-                {"rp_id_hash", vr.rp_id_hash},
-                {"fingerprint", computed_fp},
-                {"issued_at", now},
-                {"expires_at", now + at_ttl}
-            };
-            std::string at = sign_token_v4_ed25519(at_payload, SERVER_SK);
-
-            if (vectors_mode) {
-                std::cerr << "[v4_vectors] AT_ISSUED " << at << "\n";
-            }
-
-            // ---- mint browser session cookie (stored for /consume) ----
-            std::string cookieVal;
-            long sess_iat = now;
-            long sess_exp = now + SESS_TTL;
-
-            // Cookie embeds fingerprint as standard base64 of UTF-8 fingerprint hex string
-            std::string fp_b64 = pqnas::b64_std(
-                reinterpret_cast<const unsigned char*>(computed_fp.data()),
-                computed_fp.size()
-            );
-
-            if (session_cookie_mint(COOKIE_KEY, fp_b64, sess_iat, sess_exp, cookieVal)) {
-                ApprovalEntry e;
-                e.cookie_val  = cookieVal;
-                e.fingerprint = computed_fp;
-                e.expires_at  = now + 120;
-                approvals_put(vr.sid, e);
-
-                {
-                    pqnas::AuditEvent ev;
-                    ev.event = "v4.cookie_minted";
-                    ev.outcome = "ok";
-                    ev.f["sid"] = vr.sid;
-                    ev.f["st_hash_b64"] = st_hash;
-                    ev.f["rp_id_hash"] = vr.rp_id_hash;
-                    ev.f["fingerprint"] = computed_fp;
-                    ev.f["sess_iat"] = std::to_string(sess_iat);
-                    ev.f["sess_exp"] = std::to_string(sess_exp);
-
-                    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-
-                    auto it_cf = req.headers.find("CF-Connecting-IP");
-                    if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
-
-                    auto it_xff = req.headers.find("X-Forwarded-For");
-                    if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
-
-                    ev.f["ua"] = audit_ua();
-                    maybe_auto_rotate_before_append();
-                    audit_append(ev);
-                }
-            } else {
-                audit_fail("cookie_mint_failed");
-            }
-
-            // ---- verify ok audit ----
-            {
-                pqnas::AuditEvent ev;
-                ev.event = "v4.verify_ok";
-                ev.outcome = "ok";
-                ev.f["sid"] = vr.sid;
-                ev.f["st_hash_b64"] = st_hash;
-                ev.f["origin"] = vr.origin;
-                ev.f["rp_id_hash"] = vr.rp_id_hash;
-                ev.f["fingerprint"] = computed_fp;
-
-                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-
-                auto it_cf = req.headers.find("CF-Connecting-IP");
-                if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
-
-                auto it_xff = req.headers.find("X-Forwarded-For");
-                if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
-
-                ev.f["ua"] = audit_ua();
-                maybe_auto_rotate_before_append();
-                audit_append(ev);
-            }
-
-            json out = {{"ok",true},{"v",4},{"at",at}};
-            reply_json(res, 200, out.dump());
-        }
-        catch (const std::exception& e) {
-            audit_fail("exception", e.what());
-            return fail(400, "exception", e.what());
-        }
+// ---- Verify routes (short wrappers) ----
+srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& res) {
+    if (c.audit_emit) c.audit_emit("route.hit", "ok", [&](std::map<std::string,std::string>& f){
+        f["path"] = "/api/v4/verify";
+        f["ip"]   = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it = req.headers.find("User-Agent");
+        if (it != req.headers.end()) f["ua"] = c.shorten ? c.shorten(it->second, 120) : it->second;
     });
+    handle_verify_login_common(req, res, 4, c);
+});
+
+srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& res) {
+    if (c.audit_emit) c.audit_emit("route.hit", "ok", [&](std::map<std::string,std::string>& f){
+        f["path"] = "/api/v5/verify";
+        f["ip"]   = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it = req.headers.find("User-Agent");
+        if (it != req.headers.end()) f["ua"] = c.shorten ? c.shorten(it->second, 120) : it->second;
+    });
+    handle_verify_login_common(req, res, 5, c);
+});
+
 
     // GET /wait-approval (static UI)
     srv.Get("/wait-approval", [&](const httplib::Request&, httplib::Response& res) {

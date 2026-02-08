@@ -125,6 +125,7 @@ target_link_libraries(pqnas_verify_v4 PUBLIC
 # -----------------------------------------------------------------------------
 add_executable(pqnas_server
         server/src/main.cpp
+        server/src/routes_v5.cc
         server/src/session_cookie.cc
         server/src/policy.cc
         server/src/audit_log.cc
@@ -134,6 +135,7 @@ add_executable(pqnas_server
         server/src/storage_info.cc
         server/src/share_links.cc
         server/src/static_serve.cc
+        server/src/verify_login_common.cc
 )
 
 target_include_directories(pqnas_server PRIVATE
