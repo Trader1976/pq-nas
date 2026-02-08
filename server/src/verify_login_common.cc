@@ -1,3 +1,25 @@
+// verify_login_common.cc
+//
+// Shared login verification handler for v4 and v5 routes.
+//
+// Responsibilities
+// - Parse and cryptographically verify the client proof (verify_v4_json).
+// - Enforce origin + rp_id binding and fingerprint binding (fail-closed).
+// - Apply server-side policy:
+//     * bootstrap first admin on fresh install
+//     * unknown user -> create disabled + deny
+//     * disabled user -> deny
+//     * update last_seen on success
+// - Mint:
+//     * AT (access token)  -> currently v4 format (phase-1 compatibility)
+//     * browser session cookie value -> stored into approvals map for /consume
+// - Emit structured audit events with enough context for debugging while keeping
+//   sensitive data bounded (ctx.shorten).
+//
+// Non-responsibilities
+// - This file does not define HTTP routes; it is called by routes for /api/v4/verify
+//   and /api/v5/verify. Cookie delivery is done by /api/v5/consume.
+
 #include "verify_login_common.h"
 
 #include "allowlist.h"
@@ -25,6 +47,20 @@ static std::string hdr(const httplib::Request& req, const char* key) {
     return (it == req.headers.end()) ? "" : it->second;
 }
 
+// handle_verify_login_common
+//
+// One implementation for both v4 and v5 verify endpoints.
+// `api_version` controls:
+// - audit event naming (v4.* vs v5.*)
+// - approval key selection:
+//     v4: approval_key = sid (legacy)
+//     v5: approval_key = st_hash_b64 (stateless-ready correlation key)
+// - response payload fields (v5 includes `k` for browser polling/consume)
+//
+// Invariants
+// - Verification must be fail-closed: any ambiguity or missing server config
+//   results in denial (4xx) or explicit server misconfiguration (5xx).
+// - User enablement is enforced *after* cryptographic verification, keyed by fingerprint.
 void handle_verify_login_common(const httplib::Request& req,
                                httplib::Response& res,
                                int api_version,
@@ -149,6 +185,13 @@ void handle_verify_login_common(const httplib::Request& req,
         //
         // v4 legacy uses vr.sid (session id).
         // v5 should NOT rely on sid; key off st_hash_b64 (derived from signed st).
+		// approval_key contract
+		// - v5 MUST be stateless-ready: do not key flow state by server-minted sid.
+		// - We key approvals/pending by st_hash_b64, derived from signed request token `st`.
+		// - v4 keeps sid to preserve old client behavior.
+		// The key is used to:
+		//   * attach "pending_admin" reason (UX)
+		//   * store approval cookie value for /api/v5/consume
         const std::string approval_key = (api_version == 5) ? st_hash : vr.sid;
         if (approval_key.empty()) {
             audit_fail("missing_approval_key");
@@ -234,6 +277,9 @@ void handle_verify_login_common(const httplib::Request& req,
         }
 
         // ---- vectors logging ----
+		// Vectors mode
+		// - When PQNAS_V4_VECTORS is set, TTLs become huge and additional debug prints
+		//   are emitted. This is test-only behavior to support deterministic verification vectors.
         if (vectors_mode) {
             std::cerr << "[v4_vectors] FP_HEX " << computed_fp
                       << " SID " << vr.sid
@@ -243,6 +289,9 @@ void handle_verify_login_common(const httplib::Request& req,
         }
 
         // ---- mint AT (still v4 format in phase-1) ----
+		// Phase-1 compatibility
+		// - AT remains v4 format while we transition the ecosystem.
+		// - The route version (v4/v5) controls the wrapper response, but AT is identical.
         if (!ctx.sign_token_v4_ed25519 || !ctx.server_sk) {
             audit_fail("server_misconfig_at");
             return fail(500, "server misconfigured");
@@ -261,6 +310,11 @@ void handle_verify_login_common(const httplib::Request& req,
         std::string at = ctx.sign_token_v4_ed25519(at_payload, ctx.server_sk);
 
         // ---- mint browser session cookie (stored for /consume) ----
+		// Cookie minting strategy (v5)
+		// - We mint the cookie value here after successful verify + policy checks.
+		// - We DO NOT set Set-Cookie here; v5 sets it only in /api/v5/consume so the
+		//   browser can poll status and then explicitly "consume" the approval.
+		// - The cookie value is stored in approvals map keyed by approval_key (k).
         std::string cookieVal;
         const long sess_iat = now;
         const long sess_exp = now + (ctx.sess_ttl ? *ctx.sess_ttl : 3600);

@@ -135,7 +135,8 @@ static std::string getenv_str(const char* k) {
     return (v && *v) ? std::string(v) : std::string();
 }
 
-static std::string env_or(const char* k, const std::string& fallback) {
+[[maybe_unused]] static std::string env_or(const char* k, const std::string& fallback) {
+
     const std::string v = getenv_str(k);
     return v.empty() ? fallback : v;
 }
@@ -3320,7 +3321,7 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
 
 	    auto audit_ok = [&](const std::string& fp_b64, long exp, const std::string& role) {
         	pqnas::AuditEvent ev;
-    	    ev.event = "v4.me_ok";
+    	    ev.event = "me_ok";
 	        ev.outcome = "ok";
         	ev.f["fingerprint_b64"] = pqnas::shorten(fp_b64, 120);
     	    ev.f["exp"] = std::to_string(exp);
@@ -9479,7 +9480,7 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
         reply_json(res, 200, json({{"ok",true}}).dump());
     });
 
-    srv.Get("/api/v4/apps/list", [&](const httplib::Request& req, httplib::Response& res) {
+    srv.Get("/api/v4/apps/list", [&](const httplib::Request&, httplib::Response& res) {
     json out;
     out["ok"] = true;
     out["installed"] = json::array();

@@ -2,6 +2,7 @@
     "use strict";
 
     const $ = (id) => document.getElementById(id);
+    const appVersionEl = $("appVersion");
 
     const btnRefresh = $("btnRefresh");
     const btnRevokeExpired = $("btnRevokeExpired");
@@ -36,6 +37,24 @@
     function fmtTsMaybe(iso) {
         if (!iso) return "—";
         return iso;
+    }
+
+    async function loadVersion() {
+        if (!appVersionEl) return;
+
+        try {
+            const { r, j } = await apiJson("GET", "/api/v4/apps");
+            if (!r.ok || !j) return;
+
+            const installed = j.installed || [];
+            const me = installed.find(a => a.id === "sharesmgr");
+
+            if (me && me.version) {
+                appVersionEl.textContent = ` • v${me.version}`;
+            }
+        } catch (e) {
+            console.warn("version lookup failed:", e);
+        }
     }
 
     function isExpired(s) {
@@ -400,6 +419,7 @@
     if (showToken) showToken.onchange = () => render();
 
 // Boot
+    loadVersion();
     loadShares().catch(() => {
         if (statusLine) statusLine.textContent = "Failed to load (network error).";
         render();

@@ -1,4 +1,38 @@
 // server/src/routes_v5.cc
+// routes_v5.cc
+//
+// v5 Stateless Login ("2A" flow) HTTP routes.
+//
+// Design goals
+// - Stateless-ready correlation: clients can use `k = H(st)` (st_hash_b64) as the
+//   primary lookup key. This avoids reliance on `sid` for v5.
+// - Separation of concerns: this file is *transport + orchestration only*.
+//   All crypto, token signing, storage, and auditing are delegated to callbacks
+//   in RoutesV5Context (dependency injection).
+// - Short-lived server-side state: the server keeps only minimal "pending" +
+//   "approval" entries for UX and single-use consumption. These are pruned
+//   aggressively by TTL to keep memory bounded.
+//
+// Flow summary
+//   1) /api/v5/session
+//      - Mint request token `st` (signed), return {sid, st, k, iat, exp, qr_svg}
+//      - Insert PendingEntry keyed by `k` so status can immediately report "pending"
+//   2) /api/v5/qr.svg
+//      - Render QR containing dna://auth?v=5&st=...&origin=...&app=...
+//   3) /api/v5/status (GET or POST)
+//      - Resolve correlation key from {st|k|sid}
+//      - Report {approved|pending|missing} with TTL metadata
+//   4) /api/v5/consume
+//      - Resolve correlation key from {st|k|sid}
+//      - If approved, issue Set-Cookie(pqnas_session=...) and atomically consume
+//        approval + pending entries (one-time use).
+//
+// Security notes
+// - `st` is a signed request token. `k` is derived from st and is safe to expose.
+// - `/consume` is intentionally strict: if approval exists but cookie is missing,
+//   we fail loudly (500) because a partially-approved login is a server bug.
+// - All JSON responses are no-store to avoid caching sensitive flow state.
+
 #include "routes_v5.h"
 
 #include <algorithm>
@@ -6,12 +40,21 @@
 
 using nlohmann::json;
 
+
+// Uniform JSON response helper:
+// - forces application/json + no-store
+// - caller provides already-serialized JSON string (avoids double-encoding)
 static void reply_json(httplib::Response& res, int status, const std::string& body) {
     res.status = status;
     res.set_header("Content-Type", "application/json; charset=utf-8");
     res.set_header("Cache-Control", "no-store");
     res.body = body;
 }
+
+
+// Normalizes base64 values that arrive via URL/query decoding.
+// Some stacks decode '+' as space in query parameters (application/x-www-form-urlencoded).
+// We reverse that and trim surrounding whitespace to keep k parsing robust.
 static std::string normalize_query_b64(std::string s) {
     // In URL query params, '+' often becomes ' ' after form-style decoding.
     // Our k is standard base64, so undo that when it happens.
@@ -24,6 +67,9 @@ static std::string normalize_query_b64(std::string s) {
     return s;
 }
 
+
+// Strictly parse request body as a JSON object. Returns false with a stable
+// machine-readable error string for consistent 400 responses.
 static bool parse_json_body(const httplib::Request& req, json& out, std::string& err) {
     try {
         if (req.body.empty()) { err = "empty_body"; return false; }
@@ -36,6 +82,11 @@ static bool parse_json_body(const httplib::Request& req, json& out, std::string&
     }
 }
 
+// Extract a correlation key from a JSON object:
+// - If "k" is present, use it directly (normalized base64).
+// - Else if "st" is present, derive k = H(st) via ctx.st_hash_b64_from_st.
+// This supports "2A" POST /status style polling where the browser only has `st`.
+// Returns false with a stable error code if fields are missing/invalid.
 static bool get_key_from_json(const RoutesV5Context& ctx,
                               const json& j,
                               std::string& out_key,
@@ -61,19 +112,29 @@ static bool get_key_from_json(const RoutesV5Context& ctx,
     return false;
 }
 
-
+// resolve_approval_key_from_req
+// Resolve the lookup key used by /status and /consume.
+// Inputs can arrive via query (GET) or body (POST). Body fields override query.
+// Accepted fields (in priority order):
+//   1) st  -> derive k = H(st) (preferred, stateless-ready)
+//   2) k   -> direct correlation key (normalized base64)
+//   3) sid -> legacy/debug correlation key
+//
+// Rationale
+// - v5 prefers `k` derived from signed `st` to avoid server-issued session IDs.
+// - sid remains accepted for debugging and transitional compatibility.
 static bool resolve_approval_key_from_req(const RoutesV5Context& ctx,
                                          const httplib::Request& req,
                                          const json* body_opt,
                                          std::string& out_key,
                                          std::string& err) {
-auto get_param = [&](const char* name) -> std::string {
-    auto it = req.params.find(name);
-    if (it == req.params.end()) return "";
-    std::string v = it->second;
-    if (std::string(name) == "k") v = normalize_query_b64(std::move(v));
-    return v;
-};
+	auto get_param = [&](const char* name) -> std::string {
+    	auto it = req.params.find(name);
+    	if (it == req.params.end()) return "";
+    	std::string v = it->second;
+    	if (std::string(name) == "k") v = normalize_query_b64(std::move(v));
+    	return v;
+	};
 
 	std::string st;
 	std::string k   = normalize_query_b64(get_param("k"));
@@ -102,6 +163,9 @@ auto get_param = [&](const char* name) -> std::string {
 
 void register_routes_v5(httplib::Server& srv, const RoutesV5Context& ctx) {
     // ---- POST/GET /api/v5/session ----
+	// Route group: /api/v5/session
+	// Issues a signed request token (st) and correlation key (k). Inserts PendingEntry.
+
     auto session_handler = [&](const httplib::Request& req, httplib::Response& res) {
         const long now = ctx.now_epoch ? ctx.now_epoch() : 0;
 
@@ -304,6 +368,8 @@ void register_routes_v5(httplib::Server& srv, const RoutesV5Context& ctx) {
     });
 
 // ---- 2A: POST /api/v5/consume {st|k|sid} ----
+// Route group: /api/v5/session
+// Issues a signed request token (st) and correlation key (k). Inserts PendingEntry.
 srv.Post("/api/v5/consume", [&](const httplib::Request& req, httplib::Response& res) {
     const long now = ctx.now_epoch ? ctx.now_epoch() : 0;
     if (ctx.approvals_prune) ctx.approvals_prune(now);

@@ -20,7 +20,10 @@
             <div class="logo">PQ</div>
             <div class="titles">
                 <div class="h1">Shares Manager</div>
-                <div class="sub">Manage your public share links (/s/&lt;token&gt;).</div>
+                <div class="sub">
+                    Manage your public share links (/s/&lt;token&gt;).
+                    <span class="muted" id="appVersion"></span>
+                </div>
             </div>
         </div>
 
@@ -68,12 +71,10 @@
                     </div>
 
                     <div class="tool toolRight">
-                        <label class="lblSmall">Show token</label>
-                        <label class="switch">
-                            <input type="checkbox" id="showToken" />
-                            <span class="slider"></span>
-                        </label>
+                        <label class="lblSmall" for="showToken">Show token</label>
+                        <input type="checkbox" id="showToken" />
                     </div>
+
                 </div>
 
                 <div class="tableWrap">
