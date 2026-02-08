@@ -29,3 +29,6 @@ apps/users/
 config/policy.json
 config/users.json
 config/shares.json
+
+# built app zips
+apps/bundled/**/filemgr-*.zip
