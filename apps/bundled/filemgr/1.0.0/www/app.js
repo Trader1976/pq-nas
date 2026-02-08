@@ -1,6 +1,6 @@
 (() => {
   "use strict";
-  // ===========================================================================
+    // ===========================================================================
   // PQ-NAS File Manager (example bundled app)
   //
   // Purpose
@@ -88,11 +88,15 @@
   const shareOut = document.getElementById("shareOut");
   const shareCopyBtn = document.getElementById("shareCopyBtn");
   const shareStatus = document.getElementById("shareStatus");
+  const emptyState = document.getElementById("emptyState");
 
 
   // ---- State ----------------------------------------------------------------
   // Current folder path (server-relative, no leading "/"; "" means root).
   let curPath = "";
+  // if storare is unallocated etc.
+  let storageBlocked = false;
+
 
   // Multi-select: keys are stable within the *current folder listing*:
   // "dir:<name>" or "file:<name>" (name is a single path segment).
@@ -132,6 +136,112 @@
   function setBadge(kind, text) {
     badge.className = `badge ${kind}`;
     badge.textContent = text;
+  }
+  function hideEmptyState() {
+    storageBlocked = false;
+    if (emptyState) {
+      emptyState.classList.add("hidden");
+      emptyState.innerHTML = "";
+    }
+    if (gridEl) gridEl.classList.remove("hidden");
+  }
+
+  function setStorageBlocked(on, j) {
+    storageBlocked = !!on;
+
+    // Disable/enable UI that implies write access
+    if (upBtn) upBtn.disabled = storageBlocked;
+    if (refreshBtn) refreshBtn.disabled = false; // refresh should still work
+
+    // When blocked, show friendly panel; when unblocked, hide it
+    if (storageBlocked) showStorageUnallocatedState(j || null);
+    else hideEmptyState();
+  }
+
+  function requireStorageOrExplain(actionLabel) {
+    if (!storageBlocked) return true;
+    setBadge("warn", "storage");
+    status.textContent = actionLabel
+        ? `${actionLabel} not available: storage not allocated yet. Ask an admin to allocate quota.`
+        : "Storage not allocated yet. Ask an admin to allocate quota.";
+    return false;
+  }
+  function showStorageUnallocatedState(j) {
+    storageBlocked = true;
+    setBadge("warn", "storage");
+    status.textContent = "Storage not allocated for this user.";
+
+    // Disable drag-drop overlay hint (optional)
+    showDropOverlay(false);
+    if (gridEl) gridEl.classList.add("hidden");
+    if (!emptyState) return;
+
+    const fp = (j && j.fingerprint_hex) ? String(j.fingerprint_hex) : "";
+    const quota = (j && j.quota_bytes != null) ? fmtSize(Number(j.quota_bytes) || 0) : "";
+
+    emptyState.classList.remove("hidden");
+    emptyState.innerHTML = "";
+
+    const h = document.createElement("div");
+    h.className = "h";
+    h.textContent = "Storage not allocated yet";
+
+    const p = document.createElement("div");
+    p.className = "p";
+    p.textContent =
+        "Your account exists, but no storage has been allocated for it yet. " +
+        "Ask an admin to allocate storage, or if you are an admin, open User profiles and allocate quota.";
+
+    const row = document.createElement("div");
+    row.className = "row";
+
+    const a = document.createElement("a");
+    a.className = "btn";
+    a.href = "/admin/users";
+    a.textContent = "Open Admin → User profiles";
+
+    const refresh = document.createElement("button");
+    refresh.className = "btn secondary";
+    refresh.type = "button";
+    refresh.textContent = "Refresh";
+    refresh.onclick = () => load();
+
+    row.appendChild(a);
+    row.appendChild(refresh);
+
+    emptyState.appendChild(h);
+    emptyState.appendChild(p);
+    emptyState.appendChild(row);
+
+    if (fp || quota) {
+      const info = document.createElement("div");
+      info.className = "monoBox";
+      info.style.marginTop = "12px";
+      info.textContent =
+          (quota ? `Quota (configured): ${quota}\n` : "") +
+          (fp ? `Fingerprint:\n${fp}` : "");
+
+      emptyState.appendChild(info);
+
+      if (fp) {
+        const row2 = document.createElement("div");
+        row2.className = "row";
+        row2.style.marginTop = "10px";
+
+        const copyBtn = document.createElement("button");
+        copyBtn.className = "btn secondary";
+        copyBtn.type = "button";
+        copyBtn.textContent = "Copy fingerprint";
+        copyBtn.onclick = async () => {
+          const ok = await copyText(fp);
+          copyBtn.textContent = ok ? "Copied" : "Copy failed";
+          setTimeout(() => (copyBtn.textContent = "Copy fingerprint"), 1100);
+        };
+
+        row2.appendChild(copyBtn);
+        emptyState.appendChild(row2);
+      }
+    }
   }
 
   // showTransientWarning() is used for browser quirks / UX hints that should
@@ -307,22 +417,6 @@
     return `${location.origin}/s/${token}`;
   }
 
-  async function createShareForPath(relPath, expiresSec = 0) {
-    const r = await fetch("/api/v4/shares/create", {
-      method: "POST",
-      credentials: "include",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ path: relPath, expires_sec: expiresSec })
-    });
-    const j = await r.json().catch(() => null);
-    if (!r.ok || !j || !j.ok) {
-      const msg = j && (j.message || j.error) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`;
-      throw new Error(msg || "share create failed");
-    }
-    return j; // {token,url,...}
-  }
-
   async function revokeShareToken(token) {
     const r = await fetch("/api/v4/shares/revoke", {
       method: "POST",
@@ -346,23 +440,6 @@
     return Date.now() >= ms;
   }
 
-  async function copyTextToClipboard(text) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch (_) {
-      // fallback
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.left = "-9999px";
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand("copy"); } catch (_) {}
-      ta.remove();
-      return true;
-    }
-  }
 
   // ---- Properties modal helpers ---------------------------------------------
   // Modal shows either single-item properties, or selection summary.
@@ -569,6 +646,8 @@
     return base + "file.png";
   }
 
+
+
   // Clear the tile grid (used before rendering a new listing).
   function clear() { gridEl.innerHTML = ""; }
 
@@ -761,6 +840,7 @@
   // - sequential deletes for predictable UX + simpler server load
   // - shows summary, logs failures to console
   async function deleteSelection() {
+    if (!requireStorageOrExplain("Delete")) return;
     const paths = selectedRelPaths(); // absolute-rel paths (includes curPath prefix)
     if (!paths.length) {
       status.textContent = "Nothing selected.";
@@ -904,6 +984,7 @@
   // - uploads sequentially to keep server load predictable
   // - progress is computed by total bytes across all files
   async function uploadRelFiles(relFiles) {
+    if (!relFiles.length) return;
     // relFiles: Array<{ rel: string, file: File }>
     if (!relFiles.length) return;
 
@@ -1003,13 +1084,25 @@
 
   // Trigger hidden file picker.
   function pickFiles() {
+    if (storageBlocked) {
+      setBadge("warn", "storage");
+      status.textContent = "Storage not allocated yet. Ask an admin to allocate quota.";
+      return;
+    }
+
     if (!filePick) return;
     filePick.value = ""; // allow selecting same file twice
     filePick.click();
   }
 
-  // Trigger hidden folder picker (Chromium + some others).
+// Trigger hidden folder picker (Chromium + some others).
   function pickFolder() {
+    if (storageBlocked) {
+      setBadge("warn", "storage");
+      status.textContent = "Storage not allocated yet. Ask an admin to allocate quota.";
+      return;
+    }
+
     if (!folderPick) return;
     folderPick.value = "";
     folderPick.click();
@@ -1112,16 +1205,22 @@
 
   // dragenter: allow drop + show overlay if possible
   gridWrap?.addEventListener("dragenter", (e) => {
-    e.preventDefault(); // ALWAYS allow drop
+    e.preventDefault(); // ALWAYS allow drop event to fire
+    if (storageBlocked) return; // don't show overlay
     if (hasFiles(e.dataTransfer)) showDropOverlay(true);
   });
 
-  // dragover: MUST preventDefault or the browser won't populate drop data
   gridWrap?.addEventListener("dragover", (e) => {
     e.preventDefault(); // CRITICAL
+    if (storageBlocked) {
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+      showDropOverlay(false);
+      return;
+    }
     if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
     showDropOverlay(true);
   });
+
 
   // dragleave: hide overlay when leaving the container
   gridWrap?.addEventListener("dragleave", (e) => {
@@ -1138,6 +1237,9 @@
   gridWrap?.addEventListener("drop", async (e) => {
     e.preventDefault();
     showDropOverlay(false);
+
+    // NEW: block uploads when storage is not allocated
+    if (!requireStorageOrExplain("Upload")) return;
 
     try {
       const dt = e.dataTransfer;
@@ -1502,6 +1604,7 @@
 
   // Rename (move within same directory) using server move endpoint.
   async function doRename(item) {
+    if (!requireStorageOrExplain("Rename")) return;
     const oldRel = currentRelPathFor(item);
     const oldName = String(item.name || "");
     const newName = prompt("Rename to:", oldName);
@@ -1539,6 +1642,7 @@
 
   // Delete a single file/folder using server delete endpoint.
   async function doDelete(item) {
+    if (!requireStorageOrExplain("Delete")) return;
     const rel = currentRelPathFor(item);
     const isDir = item.type === "dir";
 
@@ -1567,6 +1671,7 @@
 
   // Create a folder (mkdir) at relDir (or current path).
   async function doMkdirAt(relDir) {
+    if (!requireStorageOrExplain("Create folder")) return;
     const baseShown = relDir ? `/${relDir}` : curPath ? `/${curPath}` : "/";
     const name = prompt(`New folder name in ${baseShown}:`, "New Folder");
     if (!name) return;
@@ -1604,22 +1709,7 @@
     if (v === "7d") return 7 * 86400;
     return 0; // never
   }
-  async function revokeShareToken(token) {
-    const r = await fetch("/api/v4/shares/revoke", {
-      method: "POST",
-      credentials: "include",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ token })
-    });
-    const j = await r.json().catch(() => null);
-    if (!r.ok || !j || !j.ok) {
-      const msg = j && (j.message || j.error)
-          ? `${j.error || ""} ${j.message || ""}`.trim()
-          : `HTTP ${r.status}`;
-      throw new Error(msg || "share revoke failed");
-    }
-  }
+
 
   async function createShareLinkFor(relPath, expiresSec) {
     const r = await fetch("/api/v4/shares/create", {
@@ -1859,6 +1949,18 @@
         }
       }
 
+      ctxEl.setAttribute("aria-hidden", "false");
+      placeMenu(x, y);
+      return;
+    }
+
+    if (storageBlocked) {
+      ctxEl.innerHTML = "";
+      ctxOpenForKey = "__blocked__";
+      ctxEl.appendChild(menuItem("Storage not allocated", "", () => {}, {}));
+      ctxEl.appendChild(menuSep());
+      ctxEl.appendChild(menuItem("Open Admin → User profiles", "", () => { window.location.href = "/admin/users"; }));
+      ctxEl.appendChild(menuItem("Refresh", "", () => load()));
       ctxEl.setAttribute("aria-hidden", "false");
       placeMenu(x, y);
       return;
@@ -2647,7 +2749,8 @@
     setBadge("warn", "loading…");
     status.textContent = "Loading…";
     clear();
-
+    hideEmptyState();
+    if (gridEl) gridEl.classList.remove("hidden");
     // Snapshot path for this load (prevents stale decorate after navigation)
     const loadPath = curPath;
 
@@ -2663,6 +2766,12 @@
       const j = await r.json().catch(() => null);
 
       if (!r.ok || !j || !j.ok) {
+        // Friendly UX: storage not allocated yet
+        if (j && j.error === "storage_unallocated") {
+          showStorageUnallocatedState(j);
+          return;
+        }
+
         setBadge("err", "error");
         status.textContent = `List failed: HTTP ${r.status}`;
         const msg = j && (j.message || j.error)
@@ -2676,6 +2785,7 @@
         gridEl.appendChild(err);
         return;
       }
+
 
       curPath = typeof j.path === "string" ? j.path : curPath;
       renderBreadcrumb();

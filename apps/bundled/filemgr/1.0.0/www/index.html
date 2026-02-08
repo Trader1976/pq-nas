@@ -563,6 +563,46 @@
     }
 
 
+    /* Empty / blocked state (e.g. storage not allocated) */
+    #emptyState{
+      border: 1px solid var(--border2);
+      border-radius: 18px;
+      background: rgba(0,0,0,0.22);
+      padding: 16px;
+      margin-bottom: 14px;
+      box-shadow: 0 0 18px rgba(var(--fg-rgb),0.06);
+    }
+
+    #emptyState .h{
+      font-weight: 950;
+      font-size: 16px;
+      letter-spacing: .2px;
+      margin-bottom: 6px;
+    }
+
+    #emptyState .p{
+      color: var(--fg-dim);
+      line-height: 1.45;
+      margin-bottom: 12px;
+    }
+
+    #emptyState .row{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      align-items:center;
+    }
+
+    #emptyState .monoBox{
+      border: 1px solid var(--border2);
+      border-radius: 14px;
+      background: rgba(0,0,0,0.22);
+      padding: 10px 12px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: rgba(var(--fg-rgb),0.92);
+      overflow-wrap: anywhere;
+    }
 
 
   </style>
@@ -602,7 +642,7 @@
           <div class="small">Uploads into the current folder</div>
         </div>
       </div>
-
+      <div id="emptyState" class="emptyState hidden" aria-live="polite"></div>
       <div class="grid" id="grid"></div>
     </div>
 

@@ -32,3 +32,9 @@ config/shares.json
 
 # built app zips
 apps/bundled/**/filemgr-*.zip
+
+# runtime-installed apps live under /srv/pqnas, not in repo
+apps/installed/
+
+# runtime-installed apps live under /srv/pqnas, not in repo
+apps/installed/
