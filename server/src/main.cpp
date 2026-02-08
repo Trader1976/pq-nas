@@ -3612,11 +3612,32 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
     if (c.audit_emit) c.audit_emit("route.hit", "ok", [&](std::map<std::string,std::string>& f){
         f["path"] = "/api/v5/verify";
         f["ip"]   = req.remote_addr.empty() ? "?" : req.remote_addr;
+
         auto it = req.headers.find("User-Agent");
         if (it != req.headers.end()) f["ua"] = c.shorten ? c.shorten(it->second, 120) : it->second;
+
+        auto ct = req.headers.find("Content-Type");
+        if (ct != req.headers.end()) f["content_type"] = c.shorten ? c.shorten(ct->second, 80) : ct->second;
+
+        f["body_len"] = std::to_string(req.body.size());
+
+        // Store the exact JSON body verified by server (TRUNCATED for safety).
+        // Increase limit if your proof JSON is larger, but keep an upper bound.
+        const size_t MAX_AUDIT_BODY = 32 * 1024; // 32 KiB
+        if (!req.body.empty()) {
+            if (req.body.size() <= MAX_AUDIT_BODY) {
+                f["verify_body_json"] = req.body; // exact bytes (assumes UTF-8 JSON)
+                f["verify_body_trunc"] = "0";
+            } else {
+                f["verify_body_json"] = req.body.substr(0, MAX_AUDIT_BODY);
+                f["verify_body_trunc"] = "1";
+            }
+        }
     });
+
     handle_verify_login_common(req, res, 5, c);
 });
+
 
 
     // GET /wait-approval (static UI)

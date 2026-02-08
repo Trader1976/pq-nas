@@ -143,7 +143,6 @@ void register_routes_v5(httplib::Server& srv, const RoutesV5Context& ctx) {
         }
 
         // mark pending so status can return "pending" immediately
-        // mark pending so status can return "pending" immediately
         if (!ctx.pending_put) {
             reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "pending_put_not_configured"}}.dump());
             return;

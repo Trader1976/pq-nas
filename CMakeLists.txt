@@ -175,8 +175,9 @@ add_custom_command(TARGET pqnas_server POST_BUILD
 # Tool: verify_vectors
 # -----------------------------------------------------------------------------
 add_executable(verify_vectors
-        tools/verify_vectors.c
+        tests/vectors/verify_vectors.c
 )
+
 
 target_include_directories(verify_vectors PRIVATE
         ${CMAKE_SOURCE_DIR}/core
@@ -208,8 +209,9 @@ add_custom_target(run_verify_vectors
 # Tool: verify_v4_vectors (JSON protocol freeze; uses shared verifier)
 # -----------------------------------------------------------------------------
 add_executable(verify_v4_vectors
-        tools/verify_v4_vectors.cpp
+        tests/v4_vectors/verify_v4_vectors.cpp
 )
+
 
 target_link_libraries(verify_v4_vectors PRIVATE
         pqnas_verify_v4
@@ -237,18 +239,51 @@ add_custom_command(TARGET verify_v4_vectors POST_BUILD
         "${PQNAS_DNA_LIB_SRC}"
         "$<TARGET_FILE_DIR:verify_v4_vectors>/libdna_lib.so"
 )
+# -----------------------------------------------------------------------------
+# Tool: verify_v5_vectors (v5 glue checks; derives/compares k == st_hash_b64)
+# -----------------------------------------------------------------------------
+add_executable(verify_v5_vectors
+        tests/v5_vectors/verify_v5_vectors.cpp
+)
+
+target_link_libraries(verify_v5_vectors PRIVATE
+        pqnas_verify_v4
+)
+
+set_target_properties(verify_v5_vectors PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+
+target_compile_options(verify_v5_vectors PRIVATE
+        ${SODIUM_CFLAGS_OTHER}
+)
+
+target_include_directories(verify_v5_vectors PRIVATE
+        ${CMAKE_SOURCE_DIR}/core
+        ${CMAKE_SOURCE_DIR}/server/src
+        ${CMAKE_SOURCE_DIR}/server/include
+        ${CMAKE_SOURCE_DIR}/server/third_party
+        ${SODIUM_INCLUDE_DIRS}
+)
+
+add_custom_command(TARGET verify_v5_vectors POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${PQNAS_DNA_LIB_SRC}"
+        "$<TARGET_FILE_DIR:verify_v5_vectors>/libdna_lib.so"
+)
 
 # -----------------------------------------------------------------------------
 # Tool: test_admin_cookie (regression test for cookie+policy admin checks)
 # -----------------------------------------------------------------------------
 add_executable(test_admin_cookie
-        tools/test_admin_cookie.cpp
+        tests/cookies/test_admin_cookie.cpp
         server/src/authz.cc
         server/src/allowlist.cc
         server/src/session_cookie.cc
         server/src/pqnas_util.cc
         server/src/users_registry.cpp
 )
+
 
 target_include_directories(test_admin_cookie PRIVATE
         ${CMAKE_SOURCE_DIR}/server/include
@@ -288,4 +323,24 @@ target_link_libraries(pqnas_keygen PRIVATE
 
 set_target_properties(pqnas_keygen PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+# Run targets
+
+add_custom_target(run_verify_v4_vectors
+        COMMAND "${CMAKE_BINARY_DIR}/bin/verify_v4_vectors" "${CMAKE_SOURCE_DIR}/tests/v4_vectors/vectors.json"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS verify_v4_vectors
+)
+
+add_custom_target(run_verify_v5_vectors
+        COMMAND "${CMAKE_BINARY_DIR}/bin/verify_v5_vectors" "${CMAKE_SOURCE_DIR}/tests/v5_vectors/v5_vectors.json"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS verify_v5_vectors
+)
+
+add_custom_target(run_test_admin_cookie
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_admin_cookie"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_admin_cookie
 )
