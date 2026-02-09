@@ -93,14 +93,7 @@
         if (warn) warn.textContent = s.warning ? ("Note: " + s.warning) : "";
     }
 
-    function cssVar(name, fallback) {
-        try {
-            const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-            return v || fallback;
-        } catch (_) {
-            return fallback;
-        }
-    }
+
 
     // ---------------- Network graph (local deltas) ----------------
     const netState = {
@@ -135,6 +128,138 @@
     function pushHist(arr, v, maxPoints) {
         arr.push(v);
         while (arr.length > maxPoints) arr.shift();
+    }
+    function cpuKind(pct) {
+        if (!Number.isFinite(pct)) return "warn";
+        if (pct >= 92) return "fail";
+        if (pct >= 80) return "warn";
+        return "ok";
+    }
+
+    function kindColor(kind) {
+        // Use theme vars when present; fall back to sane defaults.
+        if (kind === "fail") return cssVar("--fail-rgb", "255,80,80");     // red
+        if (kind === "warn") return cssVar("--warn-rgb", "255,205,70");    // yellow/amber
+        // ok:
+        return cssVar("--ok-rgb", "80,220,140");                           // green
+    }
+
+    function drawCpuGauge(canvas, pct) {
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        const cssW = canvas.clientWidth || 84;
+        const cssH = canvas.clientHeight || 84;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width  = Math.floor(cssW * dpr);
+        canvas.height = Math.floor(cssH * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        ctx.clearRect(0, 0, cssW, cssH);
+
+        const w = cssW, h = cssH;
+        const cx = w / 2, cy = h / 2 + 6;
+        const r = Math.min(w, h) * 0.36;
+
+        // Gauge arc from 210° to -30° (240° sweep)
+        const start = (210 * Math.PI) / 180;
+        const end   = (-30 * Math.PI) / 180;
+        const sweep = end - start;
+
+        // Clamp value
+        const p = Math.max(0, Math.min(100, Number(pct)));
+
+        // Segment thresholds (traffic light)
+        const t1 = 60;  // green up to 60%
+        const t2 = 85;  // yellow 60..85, red 85..100
+
+        // Theme colors (fallbacks included)
+        const rgbG = cssVar("--ok-rgb",   "80,220,140");
+        const rgbY = cssVar("--warn-rgb", "255,205,70");
+        const rgbR = cssVar("--fail-rgb", "255,80,80");
+
+        function arcTo(valPct) {
+            return start + sweep * (valPct / 100);
+        }
+
+        // Background track (subtle)
+        ctx.lineWidth = 10;
+        ctx.lineCap = "round";
+        ctx.strokeStyle = cssVar("--border2", "rgba(255,255,255,0.18)");
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, start, end, false);
+        ctx.stroke();
+
+        // Traffic light segments (slightly translucent, sit on top of track)
+        ctx.lineWidth = 10;
+        ctx.lineCap = "round";
+
+        // green segment
+        ctx.strokeStyle = `rgba(${rgbG},0.55)`;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, arcTo(0), arcTo(t1), false);
+        ctx.stroke();
+
+        // yellow segment
+        ctx.strokeStyle = `rgba(${rgbY},0.55)`;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, arcTo(t1), arcTo(t2), false);
+        ctx.stroke();
+
+        // red segment
+        ctx.strokeStyle = `rgba(${rgbR},0.55)`;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, arcTo(t2), arcTo(100), false);
+        ctx.stroke();
+
+        // Value arc overlay (solid, color by current zone)
+        let rgb = rgbG;
+        if (p >= t2) rgb = rgbR;
+        else if (p >= t1) rgb = rgbY;
+
+        ctx.strokeStyle = `rgba(${rgb},0.98)`;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, start, start + sweep * (p / 100), false);
+        ctx.stroke();
+
+        // Center text (percent) with halo
+        ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        const txt = `${p.toFixed(0)}%`;
+
+        ctx.fillStyle = cssVar("--fg", "#111");
+        ctx.fillText(txt, cx, cy);
+    }
+
+
+    function renderCpuGauges(perCorePct) {
+        const host = el("cpuGaugeGrid");
+        if (!host) return;
+
+        const arr = Array.isArray(perCorePct) ? perCorePct : [];
+        if (!arr.length) {
+            host.innerHTML = "";
+            return;
+        }
+
+        // Build DOM once then draw
+        host.innerHTML = arr.map((_, i) => `
+        <div class="cpuGauge">
+            <canvas id="cpuGauge_${i}" width="84" height="84" style="width:84px;height:84px;display:block;"></canvas>
+            <div class="lbl">core ${i}</div>
+            <div class="val" id="cpuGaugeVal_${i}">—</div>
+        </div>
+    `).join("");
+
+        for (let i = 0; i < arr.length; i++) {
+            const p = Number(arr[i]);
+            const valEl = el(`cpuGaugeVal_${i}`);
+            if (valEl) valEl.textContent = Number.isFinite(p) ? `${p.toFixed(1)}%` : "—";
+            drawCpuGauge(el(`cpuGauge_${i}`), p);
+        }
     }
 
     function drawNet(canvas, rxArr, txArr) {
@@ -427,9 +552,14 @@
                 if (Number.isFinite(p)) parts.push(`c${i} ${p.toFixed(0)}%`);
             }
             el("cpuUsageCores").textContent = parts.length ? parts.join("  ") : "—";
+
+            renderCpuGauges(arr);
+
         } else {
             el("cpuUsageTotal").textContent = "—";
             el("cpuUsageCores").textContent = "—";
+
+            renderCpuGauges([]);
         }
 
         // Memory
