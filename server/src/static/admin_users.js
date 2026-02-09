@@ -63,6 +63,11 @@ function esc(s) {
     return (s || "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+function avatarSrc(u) {
+    const s = String(u?.avatar_url || "").trim();
+    return s || "";
+}
+
 function fmtGBFromBytes(b) {
     const n = Number(b || 0);
     if (!isFinite(n) || n <= 0) return "";
@@ -81,6 +86,51 @@ function shortFp(fp) {
     fp = String(fp || "");
     if (fp.length <= 20) return fp;
     return fp.slice(0, 12) + "…" + fp.slice(-12);
+}
+function avatarThumb(u) {
+    const src = avatarSrc(u);
+    if (!src) return `<div class="muted">—</div>`;
+    return `
+      <img
+        src="${esc(src)}"
+        alt="avatar"
+        style="width:26px;height:26px;border-radius:8px;object-fit:cover;border:1px solid var(--border);background:var(--panel2);"
+        title="Avatar"
+        onerror="this.style.opacity='0.35'; this.title='Avatar failed to load';"
+      />
+    `.trim();
+}
+let avatarModalFp = "";
+let avatarModalUrl = "";
+
+function openAvatarModal(fp, url) {
+    avatarModalFp = String(fp || "");
+    avatarModalUrl = String(url || "");
+
+    const m = $("avatarModal");
+    const img = $("avatarModalImg");
+    const rm = $("avatarRemoveBtn");
+
+    if (!m || !img || !rm) return;
+
+    img.src = avatarModalUrl || "";
+    rm.disabled = !avatarModalFp;
+
+    m.classList.add("open");
+    m.setAttribute("aria-hidden", "false");
+}
+
+function closeAvatarModal() {
+    const m = $("avatarModal");
+    const img = $("avatarModalImg");
+    if (img) img.src = ""; // stop loading / free memory
+    avatarModalFp = "";
+    avatarModalUrl = "";
+
+    if (m) {
+        m.classList.remove("open");
+        m.setAttribute("aria-hidden", "true");
+    }
 }
 
 function storagePill(state) {
@@ -167,6 +217,7 @@ function render() {
     if (!tb) return;
 
     tb.innerHTML = rows.map(u => {
+
         const fp = String(u.fingerprint || "");
         const isOpen = openUsers.has(fp);
         const isSelf = actorFp && fp === actorFp;
@@ -176,8 +227,18 @@ function render() {
             : "";
 
         // Disallow self-modification (Allocate is allowed for self)
-        const disAttr = isSelf ? ` disabled title="Refusing to modify your own admin entry"` : "";
-        const disClass = isSelf ? ` style="opacity:0.45; cursor:not-allowed;"` : "";
+        // Allow self profile editing, but block dangerous self-actions
+        const disEditAttr = "";
+        const disEditClass = "";
+
+        const disDangerAttr = isSelf
+            ? ` disabled title="Refusing to modify your own admin entry"`
+            : "";
+
+        const disDangerClass = isSelf
+            ? ` style="opacity:0.45; cursor:not-allowed;"`
+            : "";
+
 
         // detail content
         const quotaBytes = Number(u.quota_bytes || 0);
@@ -195,14 +256,38 @@ function render() {
                     "";
 
         const detailRow = isOpen ? `
+
 <tr class="detailRow" data-fp="${esc(fp)}">
   <td colspan="10">
     <div class="detailGrid">
       <div class="detailBox">
         <h3>Profile</h3>
-        
+        ${avatarSrc(u) ? `
+          <div style="display:flex; gap:12px; align-items:center; margin:10px 0 14px;">
+            <img
+              src="${esc(avatarSrc(u))}"
+              alt="avatar"
+              data-avatar-open="1"
+              data-fp="${esc(fp)}"
+              style="width:128px; height:128px; border-radius:22px; object-fit:cover; border:1px solid var(--border); background:var(--panel2); cursor:pointer;"
+              title="Click to preview"
+              onerror="this.style.borderColor='red'; this.title='Avatar failed to load';"
+            />
+
+
+            <div class="muted" style="line-height:1.25;">
+              Avatar<br/>
+              <span class="mono" style="font-size:12px;">${esc(avatarSrc(u))}</span>
+            </div>
+          </div>
+        ` : `
+          <div class="muted" style="margin:8px 0 14px;">
+            Avatar: <span class="mono">—</span>
+          </div>
+        `}
+
         <div class="detailActions">
-            <button class="btn secondary" data-edit="${esc(fp)}" type="button" ${disAttr}${disClass}>Edit</button>
+            <button class="btn secondary" data-edit="${esc(fp)}" type="button" ${disEditAttr}${disEditClass}>Edit</button>
         </div>
 
         <div class="detailKV"><div class="k">Fingerprint</div><div class="v mono">${esc(fp)}</div></div>
@@ -210,6 +295,7 @@ function render() {
         <div class="detailKV"><div class="k">Role</div><div class="v">${esc(u.role || "—")}</div></div>
         <div class="detailKV"><div class="k">Status</div><div class="v">${pill(u.status)}</div></div>
         <div class="detailKV"><div class="k">Group</div><div class="v">${esc(u.group || "—")}</div></div>
+        <div class="detailKV"><div class="k">Email</div><div class="v">${esc(u.email || "—")}</div></div>
         <div class="detailKV"><div class="k">Storage</div><div class="v">${storagePill(u.storage_state)}</div></div>
         <div class="detailKV"><div class="k">Quota</div><div class="v mono">${esc(quotaText)}</div></div>
         <div class="detailKV"><div class="k">Added</div><div class="v mono">${esc(u.added_at || "—")}</div></div>
@@ -231,17 +317,46 @@ function render() {
         </div>
       </div>
 
-      <div class="detailBox">
-        <h3>Actions</h3>
-        <div class="detailActions">
-          <button class="btn secondary" data-act="enable" data-fp="${esc(fp)}" type="button"${disAttr}${disClass}>Enable</button>
-          <button class="btn secondary" data-act="disable" data-fp="${esc(fp)}" type="button"${disAttr}${disClass}>Disable</button>
-          <button class="btn secondary" data-act="revoke" data-fp="${esc(fp)}" type="button"${disAttr}${disClass}>Revoke</button>
-          <button class="btn secondary" data-act="allocate" data-fp="${esc(fp)}" type="button">Allocate</button>
-          <button class="btn danger" data-act="delete" data-fp="${esc(fp)}" type="button"${disAttr}${disClass}>Delete</button>
-        </div>
-        ${isSelf ? `<div class="muted" style="margin-top:10px;">Self-protection: enable/disable/revoke/delete are blocked for your own fingerprint.</div>` : ``}
-      </div>
+<div class="detailBox">
+  <h3>Actions</h3>
+  <div class="detailActions">
+    <button class="btn secondary"
+            data-act="enable"
+            data-fp="${esc(fp)}"
+            type="button"
+            ${disDangerAttr}${disDangerClass}>Enable</button>
+
+    <button class="btn secondary"
+            data-act="disable"
+            data-fp="${esc(fp)}"
+            type="button"
+            ${disDangerAttr}${disDangerClass}>Disable</button>
+
+    <button class="btn secondary"
+            data-act="revoke"
+            data-fp="${esc(fp)}"
+            type="button"
+            ${disDangerAttr}${disDangerClass}>Revoke</button>
+
+    <button class="btn secondary"
+            data-act="allocate"
+            data-fp="${esc(fp)}"
+            type="button">Allocate</button>
+
+    <button class="btn danger"
+            data-act="delete"
+            data-fp="${esc(fp)}"
+            type="button"
+            ${disDangerAttr}${disDangerClass}>Delete</button>
+  </div>
+
+  ${isSelf
+            ? `<div class="muted" style="margin-top:10px;">
+         Self-protection: enable / disable / revoke / delete are blocked for your own fingerprint.
+       </div>`
+            : ``}
+</div>
+
     </div>
   </td>
 </tr>
@@ -250,6 +365,8 @@ function render() {
 
         return `
 <tr class="userRow" data-fp="${esc(fp)}" aria-expanded="${isOpen ? "true" : "false"}">
+  <td>${avatarThumb(u)}</td>
+
   <td class="mono">
     <button class="expBtn" data-exp="${esc(fp)}" type="button" aria-expanded="${isOpen ? "true" : "false"}" title="Expand/collapse">
       ${isOpen ? "▾" : "▸"}
@@ -264,21 +381,32 @@ function render() {
 
   <td>${esc(u.role || "")}</td>
   <td>${pill(u.status)}</td>
-
   <td>${esc(u.group || "")}</td>
   <td>${storagePill(u.storage_state)}</td>
   <td class="mono">${fmtQuotaCell(u)}</td>
-
   <td class="mono">${esc(u.added_at || "")}</td>
-  <td class="mono">${esc(u.last_seen || "")}</td>
 
   <td class="row-actions">
-    <span class="muted">Open ▸ to manage</span>
+    <span class="muted">Open ▸</span>
   </td>
 </tr>
 ${detailRow}
-    `.trim();
+`.trim();
+
     }).join("");
+
+    // ✅ Attach avatar modal click via delegation (works across rerenders)
+    tb.onclick = (ev) => {
+        const img = ev.target?.closest?.('img[data-avatar-open="1"]');
+        if (!img) return;
+        ev.stopPropagation();
+        const fp = img.getAttribute("data-fp") || "";
+        const src = img.getAttribute("src") || "";
+        if (!src) return;
+        openAvatarModal(fp, src);
+    };
+
+
 // -------------------- Edit button: load user into form --------------------
     tb.querySelectorAll("button[data-edit]").forEach(btn => {
         btn.addEventListener("click", (ev) => {
@@ -295,6 +423,8 @@ ${detailRow}
             $("name").value = u.name || "";
             $("role").value = (u.role || "user");
             $("notes").value = u.notes || "";
+            $("email").value = u.email || "";
+            $("avatar_url").value = u.avatar_url || "";
 
             // bring it into view + focus
             $("fp").scrollIntoView({ behavior: "smooth", block: "center" });
@@ -459,12 +589,25 @@ async function upsertFromForm() {
     const role = ($("role")?.value || "user").trim();
     const notes = ($("notes")?.value || "").trim();
 
+    const email = ($("email")?.value || "").trim();
+    const avatar_url = ($("avatar_url")?.value || "").trim(); // only if you add this input
+
     if (!fp || fp.length < 32) throw new Error("fingerprint looks invalid");
-    await apiPost("/api/v4/admin/users/upsert", { fingerprint: fp, name, role, notes });
+
+    await apiPost("/api/v4/admin/users/upsert", {
+        fingerprint: fp,
+        name,
+        role,
+        notes,
+        email,
+        avatar_url,
+    });
+
     await refresh();
     setMsg("Upsert OK");
     showToast("User upserted");
 }
+
 
 window.addEventListener("load", async () => {
     $("btnRefresh")?.addEventListener("click", refresh);
@@ -476,6 +619,82 @@ window.addEventListener("load", async () => {
         catch (e) { setMsg("Error: " + e.message); }
     });
 
+    // ---------------- Avatar picker wiring ----------------
+    // Avatar modal wiring
+    $("avatarCloseBtn")?.addEventListener("click", closeAvatarModal);
+    $("avatarModal")?.addEventListener("click", (ev) => {
+        // click on backdrop closes; click inside card does not
+        if (ev.target && ev.target.id === "avatarModal") closeAvatarModal();
+    });
+    document.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape") closeAvatarModal();
+    });
+
+    $("avatarRemoveBtn")?.addEventListener("click", async () => {
+        if (!avatarModalFp) return;
+        if (!confirm("Remove this user's avatar?")) return;
+
+        try {
+            setMsg("Removing avatar…");
+            await apiPost("/api/v4/admin/users/avatar_remove", { fingerprint: avatarModalFp });
+            closeAvatarModal();
+            await refresh();
+            setMsg("Avatar removed");
+            showToast("Avatar removed");
+        } catch (e) {
+            setMsg("Error: " + e.message);
+            alert("Remove failed: " + e.message);
+        }
+    });
+
+    $("avatar_url")?.addEventListener("click", () => {
+        $("avatar_file")?.click();
+    });
+
+    $("avatar_file")?.addEventListener("change", async () => {
+        const file = $("avatar_file").files?.[0];
+        if (!file) return;
+
+        const fp = ($("fp")?.value || "").trim();
+        if (!fp || fp.length < 32) {
+            showToast("Select a user first (fingerprint missing).");
+            return;
+        }
+
+        try {
+            setMsg("Uploading avatar…");
+
+            const buf = await file.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+
+            let bin = "";
+            for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+            const data_b64 = btoa(bin);
+
+            const body = {
+                fingerprint: fp,
+                filename: file.name || "avatar",
+                mime: file.type || "application/octet-stream",
+                data_b64,
+            };
+
+            const j = await apiPost("/api/v4/admin/users/avatar_upload", body);
+
+            $("avatar_url").value = j.avatar_url || "";
+            setMsg("Avatar uploaded (click Upsert to save)");
+            showToast("Avatar uploaded");
+        } catch (e) {
+            setMsg("Error: " + e.message);
+            alert("Upload failed: " + e.message);
+        } finally {
+            $("avatar_file").value = "";
+        }
+    });
+
+
+    // ------------------------------------------------------
+
     try { await refresh(); }
     catch (e) { setMsg("Failed to load users: " + e.message); }
 });
+

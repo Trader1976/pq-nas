@@ -78,6 +78,7 @@ bool UsersRegistry::load(const std::string& path) {
     u.group   = it.value("group", "");
     u.email   = it.value("email", "");
     u.address = it.value("address", "");
+	u.avatar_url = it.value("avatar_url", "");
 
     // New: storage metadata (defaults for backward compatibility)
     u.storage_state = norm_storage_state(it.value("storage_state", "unallocated"));
@@ -119,6 +120,8 @@ bool UsersRegistry::load(const std::string& path) {
       {"group", u.group},
       {"email", u.email},
       {"address", u.address},
+	  {"address", u.address},
+	  {"avatar_url", u.avatar_url},
 
       // New: storage metadata
       {"storage_state", norm_storage_state(u.storage_state)},
@@ -214,6 +217,7 @@ bool UsersRegistry::ensure_present_disabled_user(const std::string& fp_hex, cons
   u.group = "";
   u.email = "";
   u.address = "";
+  u.avatar_url = "";
 
   u.storage_state = "unallocated";
   u.quota_bytes = 0;
