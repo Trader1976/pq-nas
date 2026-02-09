@@ -467,7 +467,13 @@
             transform: rotate(90deg);
             opacity: 0.95;
         }
-
+        /* admin_settings: Notes text should wrap normally (not token-style breaking) */
+        #notesCard .mini{
+            white-space: normal;
+            overflow-wrap: break-word;
+            word-break: normal;
+            hyphens: auto;
+        }
         .hidden { display:none !important; }
     </style>
     <link rel="stylesheet" href="/static/theme.css">
@@ -518,7 +524,7 @@
 
 
         <div class="bottom">
-            <div class="statusCard">
+            <div class="statusCard" id="notesCard">
                 <div style="font-weight:950;">Notes</div>
                 <div class="mini">
                     Settings are admin-only.
