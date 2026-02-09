@@ -413,6 +413,24 @@
         el("cpuLoad").textContent = loadText;
         el("uptime").textContent = (j.uptime_s != null) ? fmtUptime(j.uptime_s) : "—";
         setPill(el("cpuPill"), "ok", load ? load.one.toFixed(2) : "—");
+        // CPU usage (from /proc/stat deltas computed on server)
+        const u = (j.cpu && j.cpu.usage) ? j.cpu.usage : null;
+
+        if (u && u.ok) {
+            const tp = Number(u.total_pct);
+            el("cpuUsageTotal").textContent = Number.isFinite(tp) ? `${tp.toFixed(1)}%` : "—";
+
+            const arr = Array.isArray(u.per_core_pct) ? u.per_core_pct : [];
+            const parts = [];
+            for (let i = 0; i < arr.length; i++) {
+                const p = Number(arr[i]);
+                if (Number.isFinite(p)) parts.push(`c${i} ${p.toFixed(0)}%`);
+            }
+            el("cpuUsageCores").textContent = parts.length ? parts.join("  ") : "—";
+        } else {
+            el("cpuUsageTotal").textContent = "—";
+            el("cpuUsageCores").textContent = "—";
+        }
 
         // Memory
         const mt = j.mem ? j.mem.total_bytes : null;

@@ -533,7 +533,10 @@
                         <div class="kv"><div class="k">Cores</div><div class="v" id="cpuCores">—</div></div>
                         <div class="kv"><div class="k">Load (1 / 5 / 15)</div><div class="v mono" id="cpuLoad">—</div></div>
                         <div class="kv"><div class="k">Uptime</div><div class="v" id="uptime">—</div></div>
-                        <div class="note">Load is system-wide. If you want per-core usage later, we can sample /proc/stat deltas.</div>
+                        <div class="kv"><div class="k">Usage (total)</div><div class="v mono" id="cpuUsageTotal">—</div></div>
+                        <div class="kv"><div class="k">Per-core</div><div class="v mono" id="cpuUsageCores">—</div></div>
+                        <div class="note">Load is system-wide. Usage is sampled from /proc/stat deltas.</div>
+
                     </div>
                 </section>
 
