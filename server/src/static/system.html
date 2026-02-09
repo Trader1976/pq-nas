@@ -4,12 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>PQ-NAS • System</title>
-
+    <link rel="stylesheet" href="/static/theme.css">
+    <script src="/static/theme.js"></script>
     <style>
-        :root{
-            --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-        }
 
         *{ box-sizing:border-box; }
         html,body{ height:100%; }
@@ -423,9 +420,32 @@
         @media (max-width: 980px){
             .span-6,.span-4,.span-8,.span-12{ grid-column: span 12; }
         }
+        /* Tone down “everything is 900+” */
+        .brand h1,
+        .crumbs .title{
+            font-weight: 800;
+        }
+
+        .btn{
+            font-weight: 700;
+        }
+
+        .card .hd .h{
+            font-weight: 700;
+        }
+
+        .kv .v,
+        .pill .v{
+            font-weight: 700;
+        }
+
+        /* optional: keep Live status label bold but not insane */
+        .statusCard > div > div{
+            font-weight: 700;
+        }
+
     </style>
-    <link rel="stylesheet" href="/static/theme.css">
-    <script src="/static/theme.js"></script>
+
 
 </head>
 

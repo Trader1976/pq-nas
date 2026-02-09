@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import shutil
@@ -51,12 +52,11 @@ from textual.widgets import (
 # Small UI/log helpers
 # -----------------------------------------------------------------------------
 
-
 def log_line(logw: Log, msg: str) -> None:
     # Force each message to be a separate line in Textual Log widget
     logw.write(msg.rstrip("\n") + "\n")
 
-import re
+
 
 def looks_like_ip(host: str) -> bool:
     host = (host or "").strip()
@@ -327,8 +327,8 @@ class InstallState:
     plan: List[List[str]] = None
     plan_notes: List[str] = None
 
-    # Login authentication mode (picked by installer; used by login page)
-    auth_mode: str = "auto"   # "auto" | "v4" | "v5"
+    # Login authentication mode (installer forces v5-only)
+    auth_mode: str = "v5"   # v5-only
 
     # Optional nginx reverse proxy (HTTP-only for now)
     nginx_enabled: bool = False
@@ -450,6 +450,7 @@ def create_pqnas_layout(root: str) -> None:
     for p in ("data", "logs", "apps/bundled", "apps/installed", "apps/users", "audit", "tmp"):
         ensure_dir(os.path.join(root, p))
     ensure_dir("/opt/pqnas/static")
+
 
 def find_dna_lib_source(asset_root: str) -> str:
     """
@@ -578,12 +579,12 @@ def ensure_config_files(root: str, asset_root: str) -> None:
 
 
 def write_env_file(
-        root: str,
-        *,
-        origin: Optional[str] = None,
-        rp_id: Optional[str] = None,
-        dna_lib_path: Optional[str] = None,
-        auth_mode: Optional[str] = None,
+    root: str,
+    *,
+    origin: Optional[str] = None,
+    rp_id: Optional[str] = None,
+    dna_lib_path: Optional[str] = None,
+    auth_mode: Optional[str] = None,
 ) -> None:
 
     etc_dir = "/etc/pqnas"
@@ -1381,13 +1382,8 @@ class ReverseProxyScreen(Screen):
             yield self.enable
 
 
-            yield Static("\n[b]Login authentication mode[/b]:", classes="muted")
-            self.auth = RadioSet(
-                RadioButton("auto (default; server decides)", id="auto"),
-                RadioButton("v4 (current QR flow)", id="v4"),
-                RadioButton("v5 (stateless / future)", id="v5"),
-            )
-            yield self.auth
+            yield Static("\n[b]Login authentication mode:[/b] v5 (stateless) — forced by installer", classes="muted")
+
 
             yield Static("\n[b]Hostname or IP[/b] (nginx server_name):", classes="muted")
             self.host_in = Input(value="", placeholder="nas.example.com  (or 192.168.1.50)")
@@ -1412,16 +1408,7 @@ class ReverseProxyScreen(Screen):
 
         self.host_in.value = st.nginx_hostname or ""
 
-        # auth mode
-        am = (st.auth_mode or "auto").strip()
-        if am not in ("auto", "v4", "v5"):
-            am = "auto"
-        for btn in self.auth.query(RadioButton):
-            if btn.id == am:
-                btn.value = True
-
         self._sync()
-
 
     def _sync(self) -> None:
         enabled = any(btn.value and btn.id == "on" for btn in self.enable.query(RadioButton))
@@ -1459,17 +1446,8 @@ class ReverseProxyScreen(Screen):
             st.nginx_enabled = False
             st.nginx_hostname = ""
             st.nginx_listen_port = 80
-
-        # auth mode
-        auth_mode = "auto"
-        for btn in self.auth.query(RadioButton):
-            if btn.value:
-                auth_mode = btn.id
-                break
-        if auth_mode not in ("auto", "v4", "v5"):
-            auth_mode = "auto"
-        st.auth_mode = auth_mode
-
+        # auth mode: v5-only
+        st.auth_mode = "v5"
         app.push_screen(ConfirmScreen())
 
 
@@ -1652,15 +1630,15 @@ class HealthScreen(Screen):
     ]
 
     def __init__(
-            self,
-            *,
-            mp: str,
-            mode: str,
-            backend: str,
-            nginx_enabled: bool,
-            nginx_hostname: str,
-            nginx_port: int,
-            auth_mode: str,
+        self,
+        *,
+        mp: str,
+        mode: str,
+        backend: str,
+        nginx_enabled: bool,
+        nginx_hostname: str,
+        nginx_port: int,
+        auth_mode: str,
     ) -> None:
         super().__init__()
         self.mp = mp
@@ -1705,7 +1683,7 @@ class HealthScreen(Screen):
             f"[b]Storage:[/b] {self.mp}",
             f"[b]Mode:[/b] {self.mode}",
             f"[b]Backend:[/b] {self.backend}",
-            f"[b]Auth mode:[/b] {self.auth_mode}",
+            f"[b]Auth mode:[/b] v5 (forced by installer)",
             "",
             f"[b]Access URL:[/b] {url}",
         ]
@@ -2031,7 +2009,7 @@ class ExecuteScreen(Screen):
                     client_max_body_size="2g",
                 )
                 if have_letsencrypt_cert(st.nginx_hostname):
-                     self.logw.write(f"✅ nginx enabled: https://{st.nginx_hostname}/ (http redirects with 308)")
+                    self.logw.write(f"✅ nginx enabled: https://{st.nginx_hostname}/ (http redirects with 308)")
                 else:
                     self.logw.write(f"✅ nginx enabled: http://{st.nginx_hostname}/ (no TLS cert detected)")
 
