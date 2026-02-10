@@ -279,7 +279,6 @@
             retention: { keep_days: 7, keep_min: 12, keep_max: 500 }
         };
     }
-
     function applySnapshotsToUi(sn) {
         const s = sn && typeof sn === "object" ? sn : defaultSnapshots();
         const enabled = !!s.enabled;
@@ -295,25 +294,22 @@
 
         // v1: one volume "data"
         let root = "/srv/pqnas/.snapshots/data";
+        let src  = "/srv/pqnas/data";
         try {
             const vols = Array.isArray(s.volumes) ? s.volumes : [];
-            if (vols[0] && typeof vols[0] === "object" && typeof vols[0].snap_root === "string") root = vols[0].snap_root;
+            if (vols[0] && typeof vols[0] === "object") {
+                if (typeof vols[0].snap_root === "string") root = vols[0].snap_root;
+                if (typeof vols[0].source_subvolume === "string") src = vols[0].source_subvolume;
+            }
         } catch (_) {}
+
         if (snapRoot) snapRoot.value = root;
 
-        // Grey out UI when disabled, but still show values
-        const card = snapPill?.closest?.(".card") || null;
-        const bd = card ? card.querySelector(".bd") : null;
-        if (bd) {
-            bd.classList.toggle("disabled-ui", !enabled);
-            // keep checkbox clickable even when disabled
-            if (!enabled) bd.classList.remove("disabled-ui");
-        }
+        // Store src on the checkbox as data- so currentSnapshotsFromUi() can reuse it
+        if (snapEnabled) snapEnabled.dataset.src = src;
 
-        setSnapshotsPill(enabled ? "ok" : "warn", enabled ? "Enabled" : "Disabled");
-        syncSnapshotsEnabledUi()
+        syncSnapshotsEnabledUi();
     }
-
     function currentSnapshotsFromUi() {
         const enabled = !!snapEnabled?.checked;
 
@@ -322,32 +318,51 @@
 
         const root = String(snapRoot?.value || "/srv/pqnas/.snapshots/data").trim();
 
-        // Keep v1 shape consistent with server normalize_snapshots
+        // Use source_subvolume from server if we have it, otherwise sane default
+        const src = String(snapEnabled?.dataset?.src || "/srv/pqnas/data");
+
         return {
             enabled,
             backend: "btrfs",
             volumes: [{
                 name: "data",
-                source_subvolume: "/srv/pqnas/data",
+                source_subvolume: src,
                 snap_root: root
             }],
             schedule: { mode: "times_per_day", times_per_day: tpd, jitter_seconds: jitter },
             retention: { keep_days: 7, keep_min: 12, keep_max: 500 }
         };
     }
+
     function syncSnapshotsEnabledUi() {
         const enabled = !!snapEnabled?.checked;
-        const els = [snapTimesPerDay, snapJitter, snapRoot, btnSnapSave];
-        for (const el of els) {
+
+        // Grey out the section visually when disabled
+        const card = snapEnabled?.closest?.(".card");
+        const bd = card ? card.querySelector(".bd") : null;
+        if (bd) bd.classList.toggle("disabled-ui", !enabled);
+
+        // Always allow toggling + saving + reload
+        if (snapEnabled) snapEnabled.disabled = false;
+        if (btnSnapSave) btnSnapSave.disabled = false;
+        if (btnSnapReload) btnSnapReload.disabled = false;
+
+        // Disable only “detail” inputs when disabled
+        const detailEls = [snapTimesPerDay, snapJitter, snapRoot];
+        for (const el of detailEls) {
             if (!el) continue;
             el.disabled = !enabled;
         }
+
         setSnapshotsPill(enabled ? "ok" : "warn", enabled ? "Enabled" : "Disabled");
     }
 
     snapEnabled?.addEventListener("change", () => {
         syncSnapshotsEnabledUi();
     });
+
+
+
 
     // ---------------------------
     // Retention UI helpers
