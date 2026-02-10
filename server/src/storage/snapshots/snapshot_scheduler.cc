@@ -276,7 +276,7 @@ std::thread start_snapshot_scheduler(
 
             const long long now = (long long)std::time(nullptr);
             const long long interval = 86400LL / (long long)tpd;
-            
+
             // Stage 3: prevent restart-storm.
             // If we have never run in this process, initialize last_run from existing snapshots.
             if (last_run == 0) {

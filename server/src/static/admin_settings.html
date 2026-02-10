@@ -474,6 +474,12 @@
             word-break: normal;
             hyphens: auto;
         }
+        .disabled-ui {
+            opacity: 0.55;
+            filter: grayscale(0.2);
+            pointer-events: none;
+        }
+
         .hidden { display:none !important; }
     </style>
     <link rel="stylesheet" href="/static/theme.css">
@@ -613,10 +619,10 @@
                 <div class="bd">
                     <div class="row">
                         <select id="rotMode" aria-label="Rotation mode">
-                            <option value="off">Off</option>
+                            <option value="manual">Manual</option>
                             <option value="daily">Daily (UTC)</option>
                             <option value="size_mb">When active log exceeds N MB</option>
-                            <option value="size_or_daily">Size OR daily (whichever first)</option>
+                            <option value="daily_or_size_mb">Size OR daily (whichever first)</option>
                         </select>
 
                         <input id="rotMaxMB"
@@ -698,6 +704,60 @@
 
                     <div class="note">
                         Preview is a dry-run: it lists what would be deleted. “Run prune now” deletes only those candidates, and logs an admin audit event.
+                    </div>
+                </div>
+            </div>
+            <!-- Snapshots -->
+            <div class="card accordion" data-acc="settings">
+                <div class="hd" role="button" tabindex="0" aria-expanded="false">
+                    <div class="h">Snapshots (Btrfs)</div>
+                    <div class="pill info" id="snapPill">
+                        <span class="k">Status:</span> <span class="v">—</span>
+                    </div>
+                    <span class="chev" aria-hidden="true">▸</span>
+                </div>
+
+                <div class="bd">
+                    <div class="row">
+                        <label class="pill" style="gap:10px;">
+                            <span class="k">Enabled</span>
+                            <input id="snapEnabled" type="checkbox" />
+                        </label>
+
+                        <select id="snapTimesPerDay" aria-label="Snapshots per day">
+                            <option value="1">1 / day</option>
+                            <option value="2">2 / day</option>
+                            <option value="4">4 / day</option>
+                            <option value="6">6 / day</option>
+                            <option value="12">12 / day</option>
+                            <option value="24">24 / day</option>
+                        </select>
+
+                        <input id="snapJitter"
+                               class="input mono"
+                               style="min-width:180px"
+                               type="number"
+                               min="0"
+                               max="3600"
+                               placeholder="jitter seconds (0..3600)" />
+
+                        <button id="btnSnapSave" class="btn primary" type="button">Save snapshots</button>
+                        <button id="btnSnapReload" class="btn" type="button">Reload</button>
+                    </div>
+
+                    <div class="row">
+                        <input id="snapRoot"
+                               class="input mono"
+                               style="min-width:520px; flex: 1 1 auto;"
+                               type="text"
+                               placeholder="/srv/pqnas/.snapshots/data" />
+                    </div>
+
+                    <div class="note">
+                        Uses <span class="mono">btrfs subvolume snapshot -r</span>.
+                        The destination must be an empty path (server cleans up if it exists).
+                        <br/>
+                        If snapshots are disabled, settings stay visible but inputs are greyed out.
                     </div>
                 </div>
             </div>

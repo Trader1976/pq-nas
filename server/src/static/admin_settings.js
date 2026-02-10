@@ -57,6 +57,16 @@
     const btnThemeSave = $("btnThemeSave");
     const btnThemeApply = $("btnThemeApply");
 
+    // --- snapshots ---
+    const snapPill = $("snapPill");
+    const snapEnabled = $("snapEnabled");
+    const snapTimesPerDay = $("snapTimesPerDay");
+    const snapJitter = $("snapJitter");
+    const snapRoot = $("snapRoot");
+    const btnSnapSave = $("btnSnapSave");
+    const btnSnapReload = $("btnSnapReload");
+
+
     const ALLOWED_THEMES = new Set(["dark", "bright", "cpunk_orange", "win_classic"]);
     const ALLOWED_ROT_MODES = new Set(["manual", "daily", "size_mb", "daily_or_size_mb"]);
 
@@ -67,6 +77,11 @@
             .replaceAll(">", "&gt;")
             .replaceAll('"', "&quot;")
             .replaceAll("'", "&#39;");
+    }
+    function setSnapshotsPill(kind, text) {
+        if (!snapPill) return;
+        snapPill.className = "pill " + (kind || "");
+        snapPill.innerHTML = `<span class="k">Status:</span> <span class="v">${escapeHtml(text)}</span>`;
     }
 
     function showToast(kind, title, msg) {
@@ -251,6 +266,88 @@
             body: JSON.stringify({}),
         });
     }
+    function defaultSnapshots() {
+        return {
+            enabled: false,
+            backend: "btrfs",
+            volumes: [{
+                name: "data",
+                source_subvolume: (window.PQNAS_DATA_ROOT ? String(window.PQNAS_DATA_ROOT) : "/srv/pqnas/data"),
+                snap_root: "/srv/pqnas/.snapshots/data"
+            }],
+            schedule: { mode: "times_per_day", times_per_day: 6, jitter_seconds: 120 },
+            retention: { keep_days: 7, keep_min: 12, keep_max: 500 }
+        };
+    }
+
+    function applySnapshotsToUi(sn) {
+        const s = sn && typeof sn === "object" ? sn : defaultSnapshots();
+        const enabled = !!s.enabled;
+
+        if (snapEnabled) snapEnabled.checked = enabled;
+
+        const sched = s.schedule || {};
+        const tpd = Number(sched.times_per_day ?? 6);
+        const jit = Number(sched.jitter_seconds ?? 120);
+
+        if (snapTimesPerDay) snapTimesPerDay.value = String(Math.min(24, Math.max(1, tpd)));
+        if (snapJitter) snapJitter.value = String(Math.min(3600, Math.max(0, jit)));
+
+        // v1: one volume "data"
+        let root = "/srv/pqnas/.snapshots/data";
+        try {
+            const vols = Array.isArray(s.volumes) ? s.volumes : [];
+            if (vols[0] && typeof vols[0] === "object" && typeof vols[0].snap_root === "string") root = vols[0].snap_root;
+        } catch (_) {}
+        if (snapRoot) snapRoot.value = root;
+
+        // Grey out UI when disabled, but still show values
+        const card = snapPill?.closest?.(".card") || null;
+        const bd = card ? card.querySelector(".bd") : null;
+        if (bd) {
+            bd.classList.toggle("disabled-ui", !enabled);
+            // keep checkbox clickable even when disabled
+            if (!enabled) bd.classList.remove("disabled-ui");
+        }
+
+        setSnapshotsPill(enabled ? "ok" : "warn", enabled ? "Enabled" : "Disabled");
+        syncSnapshotsEnabledUi()
+    }
+
+    function currentSnapshotsFromUi() {
+        const enabled = !!snapEnabled?.checked;
+
+        const tpd = Math.min(24, Math.max(1, parseInt(snapTimesPerDay?.value || "6", 10) || 6));
+        const jitter = Math.min(3600, Math.max(0, parseInt(snapJitter?.value || "120", 10) || 120));
+
+        const root = String(snapRoot?.value || "/srv/pqnas/.snapshots/data").trim();
+
+        // Keep v1 shape consistent with server normalize_snapshots
+        return {
+            enabled,
+            backend: "btrfs",
+            volumes: [{
+                name: "data",
+                source_subvolume: "/srv/pqnas/data",
+                snap_root: root
+            }],
+            schedule: { mode: "times_per_day", times_per_day: tpd, jitter_seconds: jitter },
+            retention: { keep_days: 7, keep_min: 12, keep_max: 500 }
+        };
+    }
+    function syncSnapshotsEnabledUi() {
+        const enabled = !!snapEnabled?.checked;
+        const els = [snapTimesPerDay, snapJitter, snapRoot, btnSnapSave];
+        for (const el of els) {
+            if (!el) continue;
+            el.disabled = !enabled;
+        }
+        setSnapshotsPill(enabled ? "ok" : "warn", enabled ? "Enabled" : "Disabled");
+    }
+
+    snapEnabled?.addEventListener("change", () => {
+        syncSnapshotsEnabledUi();
+    });
 
     // ---------------------------
     // Retention UI helpers
@@ -452,6 +549,8 @@
             // theme (server -> apply)
             const serverTheme = j && j.ui_theme ? String(j.ui_theme) : "dark";
             applyTheme(serverTheme);
+            // snapshots
+            applySnapshotsToUi(j.snapshots || defaultSnapshots());
 
             // active audit file info
             updateActiveSizePill(j);
@@ -586,6 +685,31 @@
             showToast("fail", "Prune failed", String(e.message || e));
         } finally {
             btnRetentionPrune.disabled = false;
+        }
+    });
+    // ---------------------------
+    // Wire snapshot buttons
+    // ---------------------------
+    btnSnapReload?.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        refreshAll();
+    });
+
+    btnSnapSave?.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+        const sn = currentSnapshotsFromUi();
+        btnSnapSave.disabled = true;
+        setSnapshotsPill("warn", "Saving…");
+        try {
+            const j = await apiSettingsPost({ snapshots: sn });
+            applySnapshotsToUi(j.snapshots || sn);
+            showToast("ok", "Saved", "Snapshots settings updated");
+        } catch (e) {
+            console.error(e);
+            setSnapshotsPill("fail", "Error");
+            showToast("fail", "Save failed", String(e.message || e));
+        } finally {
+            btnSnapSave.disabled = false;
         }
     });
 
