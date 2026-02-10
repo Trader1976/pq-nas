@@ -12,6 +12,9 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <ctime>
+
+
 
 #include <fcntl.h>
 #include <sys/file.h>
@@ -150,6 +153,93 @@ static void prune_snapshots(
     }
 }
 
+static bool looks_like_snapshot_name(const std::string& s) {
+    // We only need to recognize our own naming style:
+    // "YYYY-MM-DDTHH-MM-SS" (then maybe ".msZ-rrrr" etc)
+    if (s.size() < 19) return false;
+    auto isd = [&](size_t i){ return i < s.size() && s[i] >= '0' && s[i] <= '9'; };
+    return isd(0)&&isd(1)&&isd(2)&&isd(3) && s[4]=='-' &&
+           isd(5)&&isd(6) && s[7]=='-' &&
+           isd(8)&&isd(9) && s[10]=='T' &&
+           isd(11)&&isd(12) && s[13]=='-' &&
+           isd(14)&&isd(15) && s[16]=='-' &&
+           isd(17)&&isd(18);
+}
+
+static long long parse_snapshot_name_epoch_utc(const std::string& name) {
+    // Parses only: YYYY-MM-DDTHH-MM-SS (ignores .msZ-xxxx)
+    if (!looks_like_snapshot_name(name)) return 0;
+
+    auto to_i = [&](size_t pos, size_t len) -> int {
+        return std::stoi(name.substr(pos, len));
+    };
+
+    try {
+        const int Y  = to_i(0,4);
+        const int Mo = to_i(5,2);
+        const int D  = to_i(8,2);
+        const int H  = to_i(11,2);
+        const int Mi = to_i(14,2);
+        const int S  = to_i(17,2);
+
+        std::tm tm{};
+        tm.tm_year = Y - 1900;
+        tm.tm_mon  = Mo - 1;
+        tm.tm_mday = D;
+        tm.tm_hour = H;
+        tm.tm_min  = Mi;
+        tm.tm_sec  = S;
+        tm.tm_isdst = 0;
+
+        // Linux/glibc: timegm available (UTC)
+        const time_t t = timegm(&tm);
+        if (t < 0) return 0;
+        return (long long)t;
+    } catch (...) {
+        return 0;
+    }
+}
+
+static long long latest_snapshot_epoch_under_root(const std::string& snap_root) {
+    // Find lexicographically newest snapshot name, then parse to epoch.
+    // Your naming is fixed-width ISO-ish so lexicographic order == time order.
+    std::error_code ec;
+    if (!std::filesystem::exists(snap_root, ec) || ec) return 0;
+    if (!std::filesystem::is_directory(snap_root, ec) || ec) return 0;
+
+    std::string best_name;
+
+    for (const auto& de : std::filesystem::directory_iterator(snap_root, ec)) {
+        if (ec) break;
+        if (!de.is_directory(ec) || ec) continue;
+
+        const std::string nm = de.path().filename().string();
+        if (!looks_like_snapshot_name(nm)) continue;
+
+        if (best_name.empty() || nm > best_name) best_name = nm;
+    }
+
+    if (best_name.empty()) return 0;
+    return parse_snapshot_name_epoch_utc(best_name);
+}
+
+static long long latest_snapshot_epoch_from_settings(const nlohmann::json& sn) {
+    long long best = 0;
+    const auto vols = sn.value("volumes", nlohmann::json::array());
+    if (!vols.is_array()) return 0;
+
+    for (const auto& v : vols) {
+        if (!v.is_object()) continue;
+        const std::string root = v.value("snap_root", "");
+        if (root.empty()) continue;
+
+        const long long t = latest_snapshot_epoch_under_root(root);
+        if (t > best) best = t;
+    }
+    return best;
+}
+
+
 std::thread start_snapshot_scheduler(
     const std::string& admin_settings_path,
     std::atomic<bool>& stop_flag)
@@ -186,6 +276,17 @@ std::thread start_snapshot_scheduler(
 
             const long long now = (long long)std::time(nullptr);
             const long long interval = 86400LL / (long long)tpd;
+            
+            // Stage 3: prevent restart-storm.
+            // If we have never run in this process, initialize last_run from existing snapshots.
+            if (last_run == 0) {
+                const long long init = latest_snapshot_epoch_from_settings(sn);
+                if (init > 0) {
+                    last_run = init;
+                    std::cerr << "[snapshots] last_run init from disk epoch=" << last_run << "\n";
+                }
+            }
+
             if (last_run != 0 && (now - last_run) < interval) continue;
 
             // jitter (best-effort)
