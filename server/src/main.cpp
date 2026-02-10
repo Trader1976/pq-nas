@@ -66,6 +66,11 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include "audit_fields.h"
 #include <limits>
 #include <cstdint>
+#include <thread>
+#include <atomic>
+#include <random>
+#include <fcntl.h>
+
 extern "C" {
 #include "qrauth_v4.h"
 }
@@ -91,6 +96,9 @@ extern "C" {
 
 //sharing
 #include "share_links.h"
+
+// snapshots
+#include "storage/snapshots/snapshot_scheduler.h"
 
 //apps
 #include "static_serve.h"
@@ -514,6 +522,7 @@ static std::vector<ArchivePair> list_rotated_archives_local(const std::string& a
 
     return out;
 }
+
 
 
 static nlohmann::json normalize_retention_or_default_local(const nlohmann::json& in_ret) {
@@ -1658,6 +1667,8 @@ int main()
         std::cerr << "PQNAS_DATA_ROOT is required when PQNAS_STATIC_ROOT is set (installed mode)." << std::endl;
         return 2;
     }
+    std::atomic<bool> snapshots_stop{false};
+    std::thread snapshots_thread = pqnas::snapshots::start_snapshot_scheduler(admin_settings_path, snapshots_stop);
 
     // ---------------------------
     // Auto-rotation (checked before every audit.append)
@@ -3010,6 +3021,94 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             {"max_total_mb", max_total_mb},
         };
     };
+    auto normalize_snapshots = [&](const json& in_snap, std::string& err) -> json {
+        err.clear();
+        if (!in_snap.is_object()) { err = "snapshots must be an object"; return json(); }
+
+        bool enabled = in_snap.value("enabled", false);
+        if (in_snap.contains("enabled") && !in_snap["enabled"].is_boolean()) {
+            err = "snapshots.enabled must be boolean"; return json();
+        }
+
+        std::string backend = in_snap.value("backend", "btrfs");
+        if (in_snap.contains("backend") && !in_snap["backend"].is_string()) {
+            err = "snapshots.backend must be string"; return json();
+        }
+        if (backend != "btrfs") { err = "snapshots.backend must be: btrfs"; return json(); }
+
+        // schedule
+        json sched = in_snap.value("schedule", json::object());
+        if (!sched.is_object()) { err = "snapshots.schedule must be an object"; return json(); }
+
+        std::string mode = sched.value("mode", "times_per_day");
+        if (sched.contains("mode") && !sched["mode"].is_string()) { err = "snapshots.schedule.mode must be string"; return json(); }
+        if (mode != "times_per_day") { err = "snapshots.schedule.mode must be: times_per_day"; return json(); }
+
+        int tpd = sched.value("times_per_day", 6);
+        if (sched.contains("times_per_day") && !sched["times_per_day"].is_number_integer()) {
+            err = "snapshots.schedule.times_per_day must be integer"; return json();
+        }
+        if (tpd < 1 || tpd > 24) { err = "snapshots.schedule.times_per_day must be 1..24"; return json(); }
+
+        int jitter = sched.value("jitter_seconds", 120);
+        if (sched.contains("jitter_seconds") && !sched["jitter_seconds"].is_number_integer()) {
+            err = "snapshots.schedule.jitter_seconds must be integer"; return json();
+        }
+        if (jitter < 0 || jitter > 3600) { err = "snapshots.schedule.jitter_seconds must be 0..3600"; return json(); }
+
+        // retention
+        json ret = in_snap.value("retention", json::object());
+        if (!ret.is_object()) { err = "snapshots.retention must be an object"; return json(); }
+
+        auto get_int = [&](const char* key, int def, int lo, int hi) -> int {
+            auto it = ret.find(key);
+            if (it == ret.end() || it->is_null()) return def;
+            if (!it->is_number_integer()) { err = std::string("snapshots.retention.") + key + " must be integer"; return def; }
+            int v = it->get<int>();
+            if (v < lo) v = lo;
+            if (v > hi) v = hi;
+            return v;
+        };
+
+        int keep_days = get_int("keep_days", 7, 0, 3650);
+        if (!err.empty()) return json();
+        int keep_min  = get_int("keep_min", 12, 0, 5000);
+        if (!err.empty()) return json();
+        int keep_max  = get_int("keep_max", 500, 1, 50000);
+        if (!err.empty()) return json();
+        if (keep_max < keep_min) { err = "snapshots.retention.keep_max must be >= keep_min"; return json(); }
+
+        // volumes
+        json vols = in_snap.value("volumes", json::array());
+        if (!vols.is_array()) { err = "snapshots.volumes must be array"; return json(); }
+
+        json out_vols = json::array();
+        for (const auto& v : vols) {
+            if (!v.is_object()) { err = "snapshots.volumes[] must be object"; return json(); }
+            if (!v.contains("name") || !v["name"].is_string()) { err = "snapshots.volumes[].name must be string"; return json(); }
+            if (!v.contains("source_subvolume") || !v["source_subvolume"].is_string()) { err = "snapshots.volumes[].source_subvolume must be string"; return json(); }
+            if (!v.contains("snap_root") || !v["snap_root"].is_string()) { err = "snapshots.volumes[].snap_root must be string"; return json(); }
+
+            std::string src = v["source_subvolume"].get<std::string>();
+            std::string dst = v["snap_root"].get<std::string>();
+            if (src.empty() || src[0] != '/') { err = "snapshots.volumes[].source_subvolume must be absolute path"; return json(); }
+            if (dst.empty() || dst[0] != '/') { err = "snapshots.volumes[].snap_root must be absolute path"; return json(); }
+
+            out_vols.push_back(json{
+                {"name", v["name"].get<std::string>()},
+                {"source_subvolume", src},
+                {"snap_root", dst}
+            });
+        }
+
+        return json{
+            {"enabled", enabled},
+            {"backend", backend},
+            {"schedule", json{{"mode", mode},{"times_per_day", tpd},{"jitter_seconds", jitter}}},
+            {"retention", json{{"keep_days", keep_days},{"keep_min", keep_min},{"keep_max", keep_max}}},
+            {"volumes", out_vols}
+        };
+    };
 
     try {
         if (req.body.empty()) {
@@ -3066,6 +3165,7 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
         bool changed_ret      = false;
         bool changed_rotation = false;
         bool changed_theme    = false;
+        bool changed_snapshots = false;
 
         json patch = json::object();
 
@@ -3141,6 +3241,40 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
                 audit_append(ev);
             } catch (...) {}
         }
+        // ---- snapshots (optional) ----
+        if (in.contains("snapshots")) {
+            std::string e2;
+            json norm = normalize_snapshots(in["snapshots"], e2);
+            if (!e2.empty()) {
+                reply_json(res, 400, json{{"ok", false}, {"message", e2}});
+                return;
+            }
+
+            json before_snap = json::object();
+            if (persisted.contains("snapshots") && persisted["snapshots"].is_object()) {
+                before_snap = persisted["snapshots"];
+            }
+
+            patch["snapshots"] = norm;
+            persisted["snapshots"] = norm; // for response shaping
+
+            changed_snapshots = true;
+
+            // Audit (best-effort)
+            try {
+                pqnas::AuditEvent ev;
+                ev.event = "admin.settings_changed";
+                ev.outcome = "ok";
+                ev.f["snapshots_before"] = before_snap.is_null() ? json::object() : before_snap;
+                ev.f["snapshots_after"]  = norm;
+                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                auto it_ua = req.headers.find("User-Agent");
+                ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
+                maybe_auto_rotate_before_append();
+                audit_append(ev);
+            } catch (...) {}
+
+        }
 
 		// ---- ui_theme (optional) ----
 		if (in.contains("ui_theme")) {
@@ -3215,13 +3349,18 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             } catch (...) {}
         }
 
-        if (!changed_level && !changed_ret && !changed_rotation && !changed_theme) {
+        if (!changed_level && !changed_ret && !changed_rotation && !changed_theme && !changed_snapshots) {
             reply_json(res, 400, json{
                 {"ok", false},
                 {"error", "bad_request"},
-                {"message", "nothing to update (provide audit_min_level and/or audit_retention and/or audit_rotation and/or ui_theme)"}
+                {"message", "nothing to update (provide audit_min_level and/or audit_retention and/or audit_rotation and/or ui_theme and/or snapshots)"}
             }.dump());
             return;
+        }
+
+        json snapshots = json::object();
+        if (persisted.contains("snapshots") && persisted["snapshots"].is_object()) {
+            snapshots = persisted["snapshots"];
         }
 
         if (!save_settings_patch(patch)) {
@@ -3277,7 +3416,8 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             {"audit_active_path", audit_jsonl_path},
             {"audit_active_bytes", active_bytes},
 
-            {"ui_theme", ui_theme_value}
+            {"ui_theme", ui_theme_value},
+            {"snapshots", snapshots}
         }.dump());
 
         return;
@@ -4081,20 +4221,20 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
         	std::string fs_err;
     	    const std::filesystem::path parent = udir.parent_path();
 	        if (!ensure_dir_exists(parent, &fs_err)) {
-        	    // Audit (best-effort)
-    	        try {
-	                pqnas::AuditEvent ev;
-                	ev.event = "admin.user_storage_mkdir_failed";
-            	    ev.outcome = "fail";
-        	        ev.f["fingerprint"] = fp;
-    	            ev.f["path"] = parent.string();
-	                ev.f["detail"] = pqnas::shorten(fs_err, 180);
-                	ev.f["ts"] = now_iso;
-            	    ev.f["actor_fp"] = actor_fp;
-        	        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-    	            maybe_auto_rotate_before_append();
-	                audit_append(ev);
-            	} catch (...) {}
+	            // Audit (best-effort)
+                try {
+                    pqnas::AuditEvent ev;
+                    ev.event = "admin.user_storage_mkdir_failed";
+                    ev.outcome = "fail";
+                    ev.f["fingerprint"] = fp;
+                    ev.f["path"] = parent.string();
+                    ev.f["detail"] = pqnas::shorten(fs_err, 180);
+                    ev.f["ts"] = now_iso;
+                    ev.f["actor_fp"] = actor_fp;
+                    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                    maybe_auto_rotate_before_append();
+                    audit_append(ev);
+                } catch (...) {}
 
             	reply_json(res, 500, json({
         	        {"ok", false},
@@ -10904,5 +11044,10 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
 
     std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
     srv.listen("0.0.0.0", LISTEN_PORT);
+
+    snapshots_stop.store(true);
+    if (snapshots_thread.joinable()) snapshots_thread.join();
+
     return 0;
+
 }

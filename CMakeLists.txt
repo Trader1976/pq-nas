@@ -125,6 +125,11 @@ target_link_libraries(pqnas_verify_v4 PUBLIC
 # -----------------------------------------------------------------------------
 add_executable(pqnas_server
         server/src/main.cpp
+
+        server/src/storage/snapshots/snapshot_provider_btrfs.cc
+        server/src/storage/snapshots/snapshot_naming.cc
+        server/src/storage/snapshots/snapshot_scheduler.cc
+
         server/src/routes_v5.cc
         server/src/session_cookie.cc
         server/src/policy.cc

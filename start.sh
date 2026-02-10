@@ -91,6 +91,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 export PQNAS_AUTH_MODE="v5"
 export PQNAS_STATIC_ROOT="$REPO_ROOT/server/src/static"
+export PQNAS_ADMIN_SETTINGS_PATH="/etc/pqnas/admin_settings.json"
 
 echo "[*] Dev overrides:"
 echo "    PQNAS_AUTH_MODE=$PQNAS_AUTH_MODE"
