@@ -2812,6 +2812,19 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
         }
 
 		const long long active_bytes = file_size_bytes_safe(audit_jsonl_path);
+// Snapshots defaults (if absent)
+json snapshots = json::object();
+if (persisted.contains("snapshots") && persisted["snapshots"].is_object()) {
+    snapshots = persisted["snapshots"];
+} else {
+    snapshots = json{
+        {"enabled", false},
+        {"backend", "btrfs"},
+        {"volumes", json::array()},
+        {"schedule", json{{"mode","times_per_day"},{"times_per_day",6},{"jitter_seconds",120}}},
+        {"retention", json{{"keep_days",7},{"keep_min",12},{"keep_max",500}}}
+    };
+}
 
 		reply_json(res, 200, json{
     		{"ok", true},
@@ -2826,9 +2839,10 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
     		{"audit_active_path", audit_jsonl_path},
     		{"audit_active_bytes", active_bytes},
 
-    		{"ui_theme", ui_theme}
-		}.dump());
+    		{"ui_theme", ui_theme},
 
+			{"snapshots", snapshots},
+		}.dump());
 
     });
 
