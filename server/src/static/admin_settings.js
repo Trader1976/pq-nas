@@ -60,18 +60,21 @@
     // --- snapshots ---
     const snapPill = $("snapPill");
     const snapEnabled = $("snapEnabled");
-    const snapPerVolume = $("snapPerVolume");
     const snapTimesPerDay = $("snapTimesPerDay");
     const snapJitter = $("snapJitter");
     const snapRoot = $("snapRoot");
     const btnSnapSave = $("btnSnapSave");
     const btnSnapReload = $("btnSnapReload");
+    const snapPerVolume = $("snapPerVolume");
+    const snapVolTbody = $("snapVolTbody");
 
 
 
     const ALLOWED_THEMES = new Set(["dark", "bright", "cpunk_orange", "win_classic"]);
     const ALLOWED_ROT_MODES = new Set(["manual", "daily", "size_mb", "daily_or_size_mb"]);
     let gStorageRoots = null; // populated from GET /api/v4/admin/settings
+    let gSnapshotsLast = null; // last snapshots object received from server (prevents wiping volumes)
+
     function serverDataRootOrFallback() {
         const dr = gStorageRoots && typeof gStorageRoots.data_root === "string" ? gStorageRoots.data_root.trim() : "";
         return dr || "/srv/pqnas/data";
@@ -88,6 +91,52 @@
         if (!snapPill) return;
         snapPill.className = "pill " + (kind || "");
         snapPill.innerHTML = `<span class="k">Status:</span> <span class="v">${escapeHtml(text)}</span>`;
+    }
+    function tpdOptionsHtml(selected) {
+        const vals = [1,2,4,6,12,24];
+        return vals.map(v => `<option value="${v}" ${String(v)===String(selected)?"selected":""}>${v}</option>`).join("");
+    }
+
+    function renderSnapshotVolumesTable(sn) {
+        if (!snapVolTbody) return;
+        snapVolTbody.innerHTML = "";
+
+        const vols = Array.isArray(sn?.volumes) ? sn.volumes : [];
+        const globalSched = sn?.schedule && typeof sn.schedule === "object" ? sn.schedule : {};
+        const globalTpd = Number(globalSched.times_per_day ?? 6);
+        const globalJit = Number(globalSched.jitter_seconds ?? 120);
+
+        const perVol = !!(snapPerVolume && snapPerVolume.checked);
+
+        for (let i = 0; i < vols.length; i++) {
+            const v = vols[i] && typeof vols[i] === "object" ? vols[i] : {};
+            const name = String(v.name || `vol${i}`);
+            const src  = String(v.source_subvolume || "");
+
+            const vs = (v.schedule && typeof v.schedule === "object") ? v.schedule : {};
+            const tpd = perVol ? Number(vs.times_per_day ?? globalTpd) : globalTpd;
+            const jit = perVol ? Number(vs.jitter_seconds ?? globalJit) : globalJit;
+
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+          <td class="mono" title="${escapeHtml(name)}">${escapeHtml(name)}</td>
+          <td class="mono" title="${escapeHtml(src)}">${escapeHtml(src)}</td>
+          <td>
+            <select class="snapVolTpd" data-i="${i}" ${perVol ? "" : "disabled"}>
+              ${tpdOptionsHtml(Math.min(24, Math.max(1, tpd || 6)))}
+            </select>
+          </td>
+          <td>
+            <input class="input mono snapVolJit"
+                   style="min-width:120px"
+                   type="number" min="0" max="3600"
+                   data-i="${i}"
+                   value="${String(Math.min(3600, Math.max(0, jit || 120)))}"
+                   ${perVol ? "" : "disabled"} />
+          </td>
+        `;
+            snapVolTbody.appendChild(tr);
+        }
     }
 
     function showToast(kind, title, msg) {
@@ -272,32 +321,35 @@
             body: JSON.stringify({}),
         });
     }
-    function serverDataRootOrFallback() {
-        const dr = gStorageRoots && typeof gStorageRoots.data_root === "string" ? gStorageRoots.data_root.trim() : "";
-        return dr || "/srv/pqnas/data";
-    }
 
     function defaultSnapshots() {
         return {
             enabled: false,
-            per_volume_policy: false,
             backend: "btrfs",
+            per_volume_policy: false,
             volumes: [{
                 name: "data",
                 source_subvolume: serverDataRootOrFallback(),
-
                 snap_root: "/srv/pqnas/.snapshots/data"
             }],
             schedule: { mode: "times_per_day", times_per_day: 6, jitter_seconds: 120 },
             retention: { keep_days: 7, keep_min: 12, keep_max: 500 }
         };
     }
+
     function applySnapshotsToUi(sn) {
         const s = sn && typeof sn === "object" ? sn : defaultSnapshots();
+        gSnapshotsLast = s;
         const enabled = !!s.enabled;
 
         if (snapEnabled) snapEnabled.checked = enabled;
-        if (snapPerVolume) snapPerVolume.checked = !!s.per_volume_policy;
+        const vols = Array.isArray(s.volumes) ? s.volumes : [];
+        const inferredPerVol = (typeof s.per_volume_policy === "boolean")
+            ? s.per_volume_policy
+            : vols.some(v => v && typeof v === "object" && v.schedule && typeof v.schedule === "object");
+
+        if (snapPerVolume) snapPerVolume.checked = !!inferredPerVol;
+
 
         const sched = s.schedule || {};
         const tpd = Number(sched.times_per_day ?? 6);
@@ -308,50 +360,90 @@
 
         // v1: one volume "data"
         let root = "/srv/pqnas/.snapshots/data";
-        let src = serverDataRootOrFallback();
+        let src  = serverDataRootOrFallback();
 
         try {
-            const vols = Array.isArray(s.volumes) ? s.volumes : [];
             if (vols[0] && typeof vols[0] === "object") {
                 if (typeof vols[0].snap_root === "string") root = vols[0].snap_root;
                 if (typeof vols[0].source_subvolume === "string") src = vols[0].source_subvolume;
             }
         } catch (_) {}
 
+
         if (snapRoot) snapRoot.value = root;
 
         // Store src on the checkbox as data- so currentSnapshotsFromUi() can reuse it
         if (snapEnabled) snapEnabled.dataset.src = src;
 
+        renderSnapshotVolumesTable(s);
         syncSnapshotsEnabledUi();
     }
+
     function currentSnapshotsFromUi() {
         const enabled = !!snapEnabled?.checked;
 
-        const tpd = Math.min(24, Math.max(1, parseInt(snapTimesPerDay?.value || "6", 10) || 6));
-        const jitter = Math.min(3600, Math.max(0, parseInt(snapJitter?.value || "120", 10) || 120));
+        const global_tpd = Math.min(24, Math.max(1, parseInt(snapTimesPerDay?.value || "6", 10) || 6));
+        const global_jitter = Math.min(3600, Math.max(0, parseInt(snapJitter?.value || "120", 10) || 120));
 
-        const root = String(snapRoot?.value || "/srv/pqnas/.snapshots/data").trim();
+        const root0 = String(snapRoot?.value || "/srv/pqnas/.snapshots/data").trim();
+        const src0 = String(snapEnabled?.dataset?.src || serverDataRootOrFallback());
 
-        // Use source_subvolume from server if we have it, otherwise sane default
-        const src = String(snapEnabled?.dataset?.src || serverDataRootOrFallback());
+        const perVol = !!snapPerVolume?.checked;
 
-        return {
+        // Start from last server snapshots if available so we don't wipe multi-volume configs
+        const base = (gSnapshotsLast && typeof gSnapshotsLast === "object") ? gSnapshotsLast : defaultSnapshots();
+        const baseVols = Array.isArray(base.volumes) ? base.volumes : [];
+
+        // Clone volumes so we can edit safely
+        const volumes = baseVols.map(v => (v && typeof v === "object") ? { ...v } : {}).filter(v => !!v);
+
+        // If server had no volumes, keep at least one
+        if (volumes.length === 0) {
+            volumes.push({ name: "data", source_subvolume: src0, snap_root: root0 });
+        }
+
+        // Always keep volume[0] wired to the simple UI root + src (for now)
+        volumes[0].name = String(volumes[0].name || "data");
+        volumes[0].source_subvolume = String(volumes[0].source_subvolume || src0);
+        volumes[0].snap_root = root0;
+
+        // Global schedule is always present (A mode)
+        const out = {
             enabled,
-            per_volume_policy: !!snapPerVolume?.checked,
             backend: "btrfs",
-            volumes: [{
-                name: "data",
-                source_subvolume: src,
-                snap_root: root
-            }],
-            schedule: { mode: "times_per_day", times_per_day: tpd, jitter_seconds: jitter },
-            retention: { keep_days: 7, keep_min: 12, keep_max: 500 }
+            per_volume_policy: perVol,
+            volumes,
+            schedule: { mode: "times_per_day", times_per_day: global_tpd, jitter_seconds: global_jitter },
+            retention: base.retention && typeof base.retention === "object"
+                ? base.retention
+                : { keep_days: 7, keep_min: 12, keep_max: 500 }
         };
+
+        // If per-volume enabled, apply table values to each volume schedule
+        if (perVol && snapVolTbody) {
+            for (let i = 0; i < volumes.length; i++) {
+                const tpdSel = snapVolTbody.querySelector(`.snapVolTpd[data-i="${i}"]`);
+                const jitInp = snapVolTbody.querySelector(`.snapVolJit[data-i="${i}"]`);
+
+                const vtpd = Math.min(24, Math.max(1, parseInt(tpdSel?.value || String(global_tpd), 10) || global_tpd));
+                const vjit = Math.min(3600, Math.max(0, parseInt(jitInp?.value || String(global_jitter), 10) || global_jitter));
+
+                volumes[i].schedule = { mode: "times_per_day", times_per_day: vtpd, jitter_seconds: vjit };
+            }
+        } else {
+            // If per-volume disabled, remove per-volume schedules to keep config clean
+            for (const v of volumes) {
+                if (v && typeof v === "object") delete v.schedule;
+            }
+        }
+
+        return out;
     }
+
 
     function syncSnapshotsEnabledUi() {
         const enabled = !!snapEnabled?.checked;
+        const perVol = !!snapPerVolume?.checked;
 
         // Grey out the section visually when disabled
         const card = snapEnabled?.closest?.(".card");
@@ -364,28 +456,26 @@
         if (btnSnapReload) btnSnapReload.disabled = false;
 
         // Disable only “detail” inputs when disabled
-        const detailEls = [snapTimesPerDay, snapJitter, snapRoot];
+        const detailEls = [snapTimesPerDay, snapJitter, snapRoot, snapPerVolume];
         for (const el of detailEls) {
             if (!el) continue;
             el.disabled = !enabled;
         }
-        const pv = !!snapPerVolume?.checked;
-        const label = enabled
-            ? (pv ? "Enabled • per-volume" : "Enabled")
-            : "Disabled";
+
+        // Enable/disable the per-volume table inputs based on enabled + perVol
+        if (snapVolTbody) {
+            const rowControls = snapVolTbody.querySelectorAll(".snapVolTpd, .snapVolJit");
+            for (const el of rowControls) {
+                el.disabled = !(enabled && perVol);
+            }
+        }
+
+        const label = enabled ? (perVol ? "Enabled • per-volume" : "Enabled") : "Disabled";
         setSnapshotsPill(enabled ? "ok" : "warn", label);
-        return;
 
-        setSnapshotsPill(enabled ? "ok" : "warn", enabled ? "Enabled" : "Disabled");
+        // Re-render table using latest loaded config (or current UI)
+        renderSnapshotVolumesTable(gSnapshotsLast || currentSnapshotsFromUi());
     }
-
-    snapEnabled?.addEventListener("change", () => {
-        syncSnapshotsEnabledUi();
-    });
-
-    snapPerVolume?.addEventListener("change", () => {
-        syncSnapshotsEnabledUi();
-    });
 
 
     // ---------------------------
@@ -657,6 +747,11 @@
         clearPreview();
     });
 
+    snapPerVolume?.addEventListener("change", () => {
+        renderSnapshotVolumesTable(gSnapshotsLast || currentSnapshotsFromUi());
+        syncSnapshotsEnabledUi();
+    });
+
     btnRetentionSave?.addEventListener("click", async (ev) => {
         ev.preventDefault();
         const pol = currentRetentionPolicyFromUi();
@@ -743,8 +838,22 @@
         setSnapshotsPill("warn", "Saving…");
         try {
             const j = await apiSettingsPost({ snapshots: sn });
-            applySnapshotsToUi(j.snapshots || sn);
+
+            // Merge: server may omit per_volume_policy and/or schedules; don’t let that reset UI.
+            const merged = (j && j.snapshots && typeof j.snapshots === "object")
+                ? {
+                    ...sn,
+                    ...j.snapshots,
+                    per_volume_policy: (typeof j.snapshots.per_volume_policy === "boolean")
+                        ? j.snapshots.per_volume_policy
+                        : sn.per_volume_policy,
+                    volumes: Array.isArray(j.snapshots.volumes) ? j.snapshots.volumes : sn.volumes
+                }
+                : sn;
+
+            applySnapshotsToUi(merged);
             showToast("ok", "Saved", "Snapshots settings updated");
+
         } catch (e) {
             console.error(e);
             setSnapshotsPill("fail", "Error");

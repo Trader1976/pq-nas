@@ -3054,6 +3054,15 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
         }
         if (backend != "btrfs") { err = "snapshots.backend must be: btrfs"; return json(); }
 
+        // per-volume policy flag (persist it!)
+        bool per_volume_policy = false;
+        if (in_snap.contains("per_volume_policy")) {
+            if (!in_snap["per_volume_policy"].is_boolean()) {
+                err = "snapshots.per_volume_policy must be boolean";
+                return json();
+            }
+            per_volume_policy = in_snap["per_volume_policy"].get<bool>();
+        }
         // schedule
         json sched = in_snap.value("schedule", json::object());
         if (!sched.is_object()) { err = "snapshots.schedule must be an object"; return json(); }
@@ -3110,18 +3119,56 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             std::string src = v["source_subvolume"].get<std::string>();
             std::string dst = v["snap_root"].get<std::string>();
             if (src.empty() || src[0] != '/') { err = "snapshots.volumes[].source_subvolume must be absolute path"; return json(); }
-            if (dst.empty() || dst[0] != '/') { err = "snapshots.volumes[].snap_root must be absolute path"; return json(); }
 
-            out_vols.push_back(json{
+			            if (dst.empty() || dst[0] != '/') { err = "snapshots.volumes[].snap_root must be absolute path"; return json(); }
+
+            // optional per-volume override schedule (only if per_volume_policy=true)
+            json vsched = json(); // null by default
+            if (per_volume_policy && v.contains("schedule")) {
+                if (!v["schedule"].is_object()) { err = "snapshots.volumes[].schedule must be object"; return json(); }
+
+                std::string vmode = v["schedule"].value("mode", "times_per_day");
+                if (v["schedule"].contains("mode") && !v["schedule"]["mode"].is_string()) {
+                    err = "snapshots.volumes[].schedule.mode must be string";
+                    return json();
+                }
+                if (vmode != "times_per_day") {
+                    err = "snapshots.volumes[].schedule.mode must be: times_per_day";
+                    return json();
+                }
+
+                int vtpd = v["schedule"].value("times_per_day", tpd);
+                if (v["schedule"].contains("times_per_day") && !v["schedule"]["times_per_day"].is_number_integer()) {
+                    err = "snapshots.volumes[].schedule.times_per_day must be integer";
+                    return json();
+                }
+                if (vtpd < 1 || vtpd > 24) { err = "snapshots.volumes[].schedule.times_per_day must be 1..24"; return json(); }
+
+                int vjit = v["schedule"].value("jitter_seconds", jitter);
+                if (v["schedule"].contains("jitter_seconds") && !v["schedule"]["jitter_seconds"].is_number_integer()) {
+                    err = "snapshots.volumes[].schedule.jitter_seconds must be integer";
+                    return json();
+                }
+                if (vjit < 0 || vjit > 3600) { err = "snapshots.volumes[].schedule.jitter_seconds must be 0..3600"; return json(); }
+
+                vsched = json{{"mode","times_per_day"},{"times_per_day", vtpd},{"jitter_seconds", vjit}};
+            }
+
+            json outv = json{
                 {"name", v["name"].get<std::string>()},
                 {"source_subvolume", src},
                 {"snap_root", dst}
-            });
+            };
+            if (per_volume_policy && vsched.is_object()) outv["schedule"] = vsched;
+
+            out_vols.push_back(outv);
+
         }
 
-        return json{
+       return json{
             {"enabled", enabled},
             {"backend", backend},
+            {"per_volume_policy", per_volume_policy},
             {"schedule", json{{"mode", mode},{"times_per_day", tpd},{"jitter_seconds", jitter}}},
             {"retention", json{{"keep_days", keep_days},{"keep_min", keep_min},{"keep_max", keep_max}}},
             {"volumes", out_vols}

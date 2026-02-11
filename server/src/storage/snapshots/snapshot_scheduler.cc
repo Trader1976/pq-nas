@@ -249,7 +249,7 @@ std::thread start_snapshot_scheduler(
     return std::thread([admin_settings_path, &stop_flag]() {
         long long last_run_global = 0;
         std::unordered_map<std::string, long long> last_run_by_vol;
-
+        bool did_init_per_vol = false;
 
         std::mt19937 rng{std::random_device{}()};
 
@@ -266,7 +266,8 @@ std::thread start_snapshot_scheduler(
 
             if (!s.contains("snapshots") || !s["snapshots"].is_object()) continue;
             json sn = s["snapshots"];
-            const bool per_vol = sn.value("per_volume_policy", false);
+            const bool per_vol = sn.value("per_volume_schedule", false);
+
 
 
             if (!sn.value("enabled", false)) continue;
@@ -292,18 +293,15 @@ std::thread start_snapshot_scheduler(
                         std::cerr << "[snapshots] last_run init from disk epoch=" << last_run_global << "\n";
                     }
                 }
-            } else {
+            } else if (!did_init_per_vol) {
                 const json vols0 = sn.value("volumes", json::array());
                 if (vols0.is_array()) {
                     for (const auto& v : vols0) {
                         if (!v.is_object()) continue;
                         const std::string root = v.value("snap_root", "");
-                        const std::string name = v.value("name", "");
-                        const std::string src  = v.value("source_subvolume", "");
                         if (root.empty()) continue;
 
-                        // stable key: prefer explicit name, else src, else root
-                        const std::string key = !name.empty() ? name : (!src.empty() ? src : root);
+                        const std::string key = root; // stable: snap_root is unique per volume
 
                         if (last_run_by_vol.find(key) == last_run_by_vol.end()) {
                             const long long init = latest_snapshot_epoch_under_root(root);
@@ -311,6 +309,7 @@ std::thread start_snapshot_scheduler(
                         }
                     }
                 }
+                did_init_per_vol = true;
             }
 
 
@@ -319,6 +318,7 @@ std::thread start_snapshot_scheduler(
             if (!per_vol) {
                 if (last_run_global != 0 && (now - last_run_global) < interval) continue;
                 any_due = true; // due for whole batch
+
             } else {
                 // Determine if ANY volume is due; otherwise skip this loop iteration
                 const json vols0 = sn.value("volumes", json::array());
@@ -383,7 +383,7 @@ std::thread start_snapshot_scheduler(
                     if (src.empty() || root.empty()) continue;
 
                     const std::string vname = v.value("name", "");
-                    const std::string key = !vname.empty() ? vname : (!src.empty() ? src : root);
+                    const std::string key = root;
 
                     int keep_days = keep_days_g;
                     int keep_min  = keep_min_g;
