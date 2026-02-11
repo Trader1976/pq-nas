@@ -2826,6 +2826,9 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
     		};
 		}
 
+		json storage_roots = json::object();
+		storage_roots["data_root"] = data_root_dir();
+
 		reply_json(res, 200, json{
     		{"ok", true},
 
@@ -2842,6 +2845,7 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
     		{"ui_theme", ui_theme},
 
 			{"snapshots", snapshots},
+			{"storage_roots", storage_roots},
 		}.dump());
 
     });

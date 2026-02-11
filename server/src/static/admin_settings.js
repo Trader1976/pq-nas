@@ -60,6 +60,7 @@
     // --- snapshots ---
     const snapPill = $("snapPill");
     const snapEnabled = $("snapEnabled");
+    const snapPerVolume = $("snapPerVolume");
     const snapTimesPerDay = $("snapTimesPerDay");
     const snapJitter = $("snapJitter");
     const snapRoot = $("snapRoot");
@@ -67,9 +68,14 @@
     const btnSnapReload = $("btnSnapReload");
 
 
+
     const ALLOWED_THEMES = new Set(["dark", "bright", "cpunk_orange", "win_classic"]);
     const ALLOWED_ROT_MODES = new Set(["manual", "daily", "size_mb", "daily_or_size_mb"]);
-
+    let gStorageRoots = null; // populated from GET /api/v4/admin/settings
+    function serverDataRootOrFallback() {
+        const dr = gStorageRoots && typeof gStorageRoots.data_root === "string" ? gStorageRoots.data_root.trim() : "";
+        return dr || "/srv/pqnas/data";
+    }
     function escapeHtml(s) {
         return String(s ?? "")
             .replaceAll("&", "&amp;")
@@ -266,13 +272,20 @@
             body: JSON.stringify({}),
         });
     }
+    function serverDataRootOrFallback() {
+        const dr = gStorageRoots && typeof gStorageRoots.data_root === "string" ? gStorageRoots.data_root.trim() : "";
+        return dr || "/srv/pqnas/data";
+    }
+
     function defaultSnapshots() {
         return {
             enabled: false,
+            per_volume_policy: false,
             backend: "btrfs",
             volumes: [{
                 name: "data",
-                source_subvolume: (window.PQNAS_DATA_ROOT ? String(window.PQNAS_DATA_ROOT) : "/srv/pqnas/data"),
+                source_subvolume: serverDataRootOrFallback(),
+
                 snap_root: "/srv/pqnas/.snapshots/data"
             }],
             schedule: { mode: "times_per_day", times_per_day: 6, jitter_seconds: 120 },
@@ -284,6 +297,7 @@
         const enabled = !!s.enabled;
 
         if (snapEnabled) snapEnabled.checked = enabled;
+        if (snapPerVolume) snapPerVolume.checked = !!s.per_volume_policy;
 
         const sched = s.schedule || {};
         const tpd = Number(sched.times_per_day ?? 6);
@@ -294,7 +308,8 @@
 
         // v1: one volume "data"
         let root = "/srv/pqnas/.snapshots/data";
-        let src  = "/srv/pqnas/data";
+        let src = serverDataRootOrFallback();
+
         try {
             const vols = Array.isArray(s.volumes) ? s.volumes : [];
             if (vols[0] && typeof vols[0] === "object") {
@@ -319,10 +334,11 @@
         const root = String(snapRoot?.value || "/srv/pqnas/.snapshots/data").trim();
 
         // Use source_subvolume from server if we have it, otherwise sane default
-        const src = String(snapEnabled?.dataset?.src || "/srv/pqnas/data");
+        const src = String(snapEnabled?.dataset?.src || serverDataRootOrFallback());
 
         return {
             enabled,
+            per_volume_policy: !!snapPerVolume?.checked,
             backend: "btrfs",
             volumes: [{
                 name: "data",
@@ -353,6 +369,12 @@
             if (!el) continue;
             el.disabled = !enabled;
         }
+        const pv = !!snapPerVolume?.checked;
+        const label = enabled
+            ? (pv ? "Enabled • per-volume" : "Enabled")
+            : "Disabled";
+        setSnapshotsPill(enabled ? "ok" : "warn", label);
+        return;
 
         setSnapshotsPill(enabled ? "ok" : "warn", enabled ? "Enabled" : "Disabled");
     }
@@ -361,7 +383,9 @@
         syncSnapshotsEnabledUi();
     });
 
-
+    snapPerVolume?.addEventListener("change", () => {
+        syncSnapshotsEnabledUi();
+    });
 
 
     // ---------------------------
@@ -543,6 +567,8 @@
         setStatusPill("warn", "loading…");
         try {
             const j = await apiSettingsGet();
+
+            gStorageRoots = (j && typeof j.storage_roots === "object" && j.storage_roots) ? j.storage_roots : null;
 
             const allowed = Array.isArray(j.allowed) ? j.allowed : ["SECURITY", "ADMIN", "INFO", "DEBUG"];
             const persisted = j.audit_min_level || "ADMIN";

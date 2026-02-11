@@ -13,6 +13,8 @@
 #include <thread>
 #include <vector>
 #include <ctime>
+#include <unordered_map>
+
 
 
 
@@ -245,7 +247,9 @@ std::thread start_snapshot_scheduler(
     std::atomic<bool>& stop_flag)
 {
     return std::thread([admin_settings_path, &stop_flag]() {
-        long long last_run = 0;
+        long long last_run_global = 0;
+        std::unordered_map<std::string, long long> last_run_by_vol;
+
 
         std::mt19937 rng{std::random_device{}()};
 
@@ -262,6 +266,8 @@ std::thread start_snapshot_scheduler(
 
             if (!s.contains("snapshots") || !s["snapshots"].is_object()) continue;
             json sn = s["snapshots"];
+            const bool per_vol = sn.value("per_volume_policy", false);
+
 
             if (!sn.value("enabled", false)) continue;
             if (sn.value("backend", std::string("btrfs")) != "btrfs") continue;
@@ -278,23 +284,78 @@ std::thread start_snapshot_scheduler(
             const long long interval = 86400LL / (long long)tpd;
 
             // Stage 3: prevent restart-storm.
-            // If we have never run in this process, initialize last_run from existing snapshots.
-            if (last_run == 0) {
-                const long long init = latest_snapshot_epoch_from_settings(sn);
-                if (init > 0) {
-                    last_run = init;
-                    std::cerr << "[snapshots] last_run init from disk epoch=" << last_run << "\n";
+            if (!per_vol) {
+                if (last_run_global == 0) {
+                    const long long init = latest_snapshot_epoch_from_settings(sn);
+                    if (init > 0) {
+                        last_run_global = init;
+                        std::cerr << "[snapshots] last_run init from disk epoch=" << last_run_global << "\n";
+                    }
+                }
+            } else {
+                const json vols0 = sn.value("volumes", json::array());
+                if (vols0.is_array()) {
+                    for (const auto& v : vols0) {
+                        if (!v.is_object()) continue;
+                        const std::string root = v.value("snap_root", "");
+                        const std::string name = v.value("name", "");
+                        const std::string src  = v.value("source_subvolume", "");
+                        if (root.empty()) continue;
+
+                        // stable key: prefer explicit name, else src, else root
+                        const std::string key = !name.empty() ? name : (!src.empty() ? src : root);
+
+                        if (last_run_by_vol.find(key) == last_run_by_vol.end()) {
+                            const long long init = latest_snapshot_epoch_under_root(root);
+                            if (init > 0) last_run_by_vol[key] = init;
+                        }
+                    }
                 }
             }
 
-            if (last_run != 0 && (now - last_run) < interval) continue;
+
+            bool any_due = false;
+
+            if (!per_vol) {
+                if (last_run_global != 0 && (now - last_run_global) < interval) continue;
+                any_due = true; // due for whole batch
+            } else {
+                // Determine if ANY volume is due; otherwise skip this loop iteration
+                const json vols0 = sn.value("volumes", json::array());
+                if (!vols0.is_array()) continue;
+
+                for (const auto& v : vols0) {
+                    if (!v.is_object()) continue;
+                    const std::string root = v.value("snap_root", "");
+                    const std::string name = v.value("name", "");
+                    const std::string src  = v.value("source_subvolume", "");
+                    if (root.empty() || src.empty()) continue;
+
+                    const std::string key = !name.empty() ? name : (!src.empty() ? src : root);
+                    const long long lr = last_run_by_vol.count(key) ? last_run_by_vol[key] : 0;
+
+                    // interval for this volume: use v.schedule if present else global
+                    const json vs = v.value("schedule", json::object());
+                    int v_tpd = vs.value("times_per_day", tpd);
+                    if (v_tpd < 1) v_tpd = 1;
+                    if (v_tpd > 24) v_tpd = 24;
+                    const long long v_interval = 86400LL / (long long)v_tpd;
+
+                    if (lr == 0 || (now - lr) >= v_interval) { any_due = true; break; }
+                }
+
+                if (!any_due) continue;
+            }
+
 
             // jitter (best-effort)
-            if (jitter > 0) {
+            // A: apply once per batch. B: applied per-volume later.
+            if (!per_vol && jitter > 0) {
                 std::uniform_int_distribution<int> dist(0, jitter);
                 std::this_thread::sleep_for(std::chrono::seconds(dist(rng)));
                 if (stop_flag.load()) return;
             }
+
 
             // lock (single runner)
             std::string lock_path = "/run/pqnas_snapshot.lock";
@@ -308,10 +369,10 @@ std::thread start_snapshot_scheduler(
             try {
                 const json vols = sn.value("volumes", json::array());
 
-                const json ret = sn.value("retention", json::object());
-                int keep_days = ret.value("keep_days", 7);
-                int keep_min  = ret.value("keep_min", 12);
-                int keep_max  = ret.value("keep_max", 500);
+                const json ret_g = sn.value("retention", json::object());
+                int keep_days_g = ret_g.value("keep_days", 7);
+                int keep_min_g  = ret_g.value("keep_min", 12);
+                int keep_max_g  = ret_g.value("keep_max", 500);
 
                 for (const auto& v : vols) {
                     if (stop_flag.load()) break;
@@ -320,6 +381,51 @@ std::thread start_snapshot_scheduler(
                     const std::string src  = v.value("source_subvolume", "");
                     const std::string root = v.value("snap_root", "");
                     if (src.empty() || root.empty()) continue;
+
+                    const std::string vname = v.value("name", "");
+                    const std::string key = !vname.empty() ? vname : (!src.empty() ? src : root);
+
+                    int keep_days = keep_days_g;
+                    int keep_min  = keep_min_g;
+                    int keep_max  = keep_max_g;
+
+                    int v_tpd = tpd;
+                    int v_jitter = jitter;
+
+                    if (per_vol) {
+                        const json vs = v.value("schedule", json::object());
+                        if (vs.is_object()) {
+                            v_tpd    = vs.value("times_per_day", v_tpd);
+                            v_jitter = vs.value("jitter_seconds", v_jitter);
+                        }
+
+                        if (v_tpd < 1) v_tpd = 1;
+                        if (v_tpd > 24) v_tpd = 24;
+                        if (v_jitter < 0) v_jitter = 0;
+                        if (v_jitter > 3600) v_jitter = 3600;
+
+                        const long long now2 = (long long)std::time(nullptr);
+                        const long long v_interval = 86400LL / (long long)v_tpd;
+                        const long long lr = last_run_by_vol.count(key) ? last_run_by_vol[key] : 0;
+
+                        if (lr != 0 && (now2 - lr) < v_interval) {
+                            continue;
+                        }
+
+                        const json vr = v.value("retention", json::object());
+                        if (vr.is_object()) {
+                            keep_days = vr.value("keep_days", keep_days);
+                            keep_min  = vr.value("keep_min", keep_min);
+                            keep_max  = vr.value("keep_max", keep_max);
+                        }
+
+                        if (v_jitter > 0) {
+                            std::uniform_int_distribution<int> dist(0, v_jitter);
+                            std::this_thread::sleep_for(std::chrono::seconds(dist(rng)));
+                            if (stop_flag.load()) break;
+                        }
+                    }
+
 
                     std::error_code ec;
                     std::filesystem::create_directories(root, ec);
@@ -357,12 +463,19 @@ std::thread start_snapshot_scheduler(
                     }
 
                     std::cerr << "[snapshots] snapshot OK src=" << src << " dst=" << dst << "\n";
+                    if (per_vol) {
+                        last_run_by_vol[key] = (long long)std::time(nullptr);
+                    }
+
 
                     // prune after each successful snapshot (your choice)
                     prune_snapshots(*prov, root, keep_days, keep_min, keep_max);
                 }
 
-                last_run = (long long)std::time(nullptr);
+                if (!per_vol) {
+                    last_run_global = (long long)std::time(nullptr);
+                }
+
             } catch (...) {}
 
             unlockfile(lock_path, lock_fd);
