@@ -27,7 +27,12 @@
 
     const badge = el("badge");
     const status = el("status");
-
+    const warnBanner = el("warnBanner");
+// modal bits
+    const modalOverlay = el("modalOverlay");
+    const modalTitle = el("modalTitle");
+    const modalBody = el("modalBody");
+    const modalCloseBtn = el("modalCloseBtn");
 
     const volList = el("volList");
     const snapList = el("snapList");
@@ -59,6 +64,38 @@
         if (!r.ok || !j.ok) throw new Error(j.message || j.error || `HTTP ${r.status}`);
         return j;
     }
+    function showBanner(html) {
+        if (!warnBanner) return;
+        if (!html) { warnBanner.style.display = "none"; warnBanner.innerHTML = ""; return; }
+        warnBanner.innerHTML = html;
+        warnBanner.style.display = "";
+    }
+
+    function openModal(title, html) {
+        if (!modalOverlay || !modalBody || !modalTitle) {
+            console.error("Modal DOM missing:", { modalOverlay, modalBody, modalTitle });
+            return;
+        }
+        modalTitle.textContent = title || "Details";
+        modalBody.innerHTML = html || "";
+        modalOverlay.style.display = "flex";
+        modalOverlay.setAttribute("aria-hidden", "false");
+    }
+
+    function closeModal() {
+        if (!modalOverlay) return;
+        modalOverlay.style.display = "none";
+        modalOverlay.setAttribute("aria-hidden", "true");
+        if (modalBody) modalBody.innerHTML = "";
+    }
+
+    modalCloseBtn?.addEventListener("click", closeModal);
+    modalOverlay?.addEventListener("click", (e) => {
+        if (e.target === modalOverlay) closeModal();
+    });
+    window.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeModal();
+    });
 
     async function apiPost(path, body) {
         const r = await fetch(path, {
@@ -71,6 +108,29 @@
         const j = await r.json().catch(() => ({}));
         if (!r.ok || !j.ok) throw new Error(j.message || j.error || `HTTP ${r.status}`);
         return j;
+    }
+
+    function sudoSetupHtml() {
+        return `
+    <div style="font-weight:900; margin-bottom:8px;">How to enable btrfs probing (no password prompt)</div>
+    <div style="opacity:.9; margin-bottom:10px;">
+      Snapshot Manager calls <span class="mono">sudo -n btrfs subvolume show ...</span> to verify that entries are real snapshots.
+      If sudo requires a password, probing becomes <b>no-privs</b> and restore stays disabled.
+    </div>
+
+    <div style="font-weight:900; margin:12px 0 6px;" id="sudo">Recommended sudoers rule</div>
+    <pre class="mono">sudo visudo
+
+# If pqnas runs as user 'john' (your ./start.sh case):
+john ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *
+
+# If later you run pqnas as service user 'pqnas':
+# pqnas ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
+
+    <div style="opacity:.9; margin-top:10px;">
+      After saving sudoers, reload this page. The list should show <b>latest</b>/<b>ro</b> instead of <b>⚠</b>.
+    </div>
+  `;
     }
 
     function clearChildren(x) { while (x.firstChild) x.removeChild(x.firstChild); }
@@ -151,13 +211,27 @@
             // Right-side label logic
             let right = "";
             if (isLatest) right = "latest";
-            else if (probe === "no_privs") right = "no-privs";
+            else if (probe === "no_privs") right = "⚠";
             else if (!isSub) right = "junk";
             else right = (s.readonly ? "ro" : "rw");
 
             const sub = s.created_utc || s.path || "";
 
             const d = row(s.id, right, sub, isSel);
+            if (probe === "no_privs") d.classList.add("noPrivs");
+            if (!isSub) d.classList.add("notSubvol");
+
+// tooltip on right-side label
+            const rightEl = d.querySelector(".top .mono");
+            if (rightEl) {
+                if (probe === "no_privs") {
+                    rightEl.innerHTML = `<span class="pillWarn" title="No sudo privileges to verify btrfs subvolume (sudo -n failed)">⚠</span>`;
+                } else if (!isSub) {
+                    rightEl.title = "This folder is not a btrfs snapshot subvolume (junk under snap_root)";
+                } else if (isLatest) {
+                    rightEl.title = "Newest snapshot (server sorted newest-first)";
+                }
+            }
 
             // Visual cue for non-subvol / no-privs
             if (!isSub) d.style.opacity = "0.70";
@@ -225,6 +299,31 @@
             snap_root: j.snap_root || selectedVol.snap_root || "",
             count: snapshots.length
         };
+
+
+        const noPrivsCount = snapshots.filter(s => String(s.probe || "") === "no_privs").length;
+        const junkCount = snapshots.filter(s => s.is_btrfs_subvolume !== true).length;
+
+        if (noPrivsCount > 0) {
+            showBanner(
+                `⚠ Snapshot verification needs sudo privileges on this host. ` +
+                `${noPrivsCount} item(s) could not be verified. ` +
+                `<a href="#" id="sudoHelpLink">Show sudo setup</a>`
+            );
+            // link handler
+            setTimeout(() => {
+                const a = document.getElementById("sudoHelpLink");
+                a?.addEventListener("click", (ev) => {
+                    ev.preventDefault();
+                    openModal("Sudo setup", sudoSetupHtml());
+                });
+            }, 0);
+        } else if (junkCount > 0) {
+            showBanner(`Note: ${junkCount} item(s) under snap_root are not btrfs snapshot subvolumes (junk folders).`);
+        } else {
+            showBanner("");
+        }
+
         renderSnapshots();
         if (!selectedSnap && snapshots.length) {
             selectedSnap = snapshots[0]; // list is already newest-first server-side
@@ -242,20 +341,68 @@
         try {
             setBadge("warn", "loading…");
             status.textContent = "Loading details…";
+
             const qs = new URLSearchParams({ volume: selectedVol.name, id: selectedSnap.id });
             const j = await apiGet(`/api/v4/snapshots/info?${qs.toString()}`);
 
-            if (j && j.btrfs_show_ok === false) {
-                // clean user-facing warning (no giant blob)
-                alert(
-                    `Snapshot details require sudo/root on this host.\n\n` +
-                    `btrfs_show_rc=${j.btrfs_show_rc}\n` +
-                    `${j.hint ? "\n" + j.hint : ""}\n\n` +
-                    `Raw output:\n${j.btrfs_show || ""}`
+            const raw = JSON.stringify(j, null, 2);
+
+            const needsSudo =
+                (j && typeof j.btrfs_show === "string" && j.btrfs_show.toLowerCase().includes("operation not permitted")) ||
+                (selectedSnap && String(selectedSnap.probe || "") === "no_privs");
+
+            if (needsSudo) {
+                openModal(
+                    `Snapshot details: ${selectedSnap.id}`,
+                    `
+      <div class="modalGrid">
+        <div class="modalPanel">
+          <h3><span class="warnIcon">⚠</span> Details require sudo privileges</h3>
+          <div class="modalNote">
+            Snapshot Manager calls <span class="mono">sudo -n btrfs subvolume show ...</span>.
+            If sudo prompts for a password, probing becomes <b>no-privs</b> and restore stays disabled.
+          </div>
+
+          <div class="modalNote">
+            <a href="#" id="sudoInlineLink">Show sudo setup instructions</a>
+          </div>
+
+          <div id="sudoBlock" style="display:none;">
+            ${sudoSetupHtml()}
+          </div>
+        </div>
+
+        <div class="modalPanel">
+          <h3>Raw JSON</h3>
+          <pre class="mono">${escapeHtml(raw)}</pre>
+        </div>
+      </div>
+    `
                 );
+
+                setTimeout(() => {
+                    const a = document.getElementById("sudoInlineLink");
+                    const b = document.getElementById("sudoBlock");
+                    a?.addEventListener("click", (ev) => {
+                        ev.preventDefault();
+                        if (!b) return;
+                        const on = (b.style.display !== "none");
+                        b.style.display = on ? "none" : "";
+                        if (!on) b.scrollIntoView({ behavior: "smooth", block: "start" });
+                    });
+                }, 0);
             } else {
-                alert(JSON.stringify(j, null, 2));
+                openModal(
+                    `Snapshot details: ${selectedSnap.id}`,
+                    `<div class="modalGrid">
+       <div class="modalPanel">
+         <h3>Raw JSON</h3>
+         <pre class="mono">${escapeHtml(raw)}</pre>
+       </div>
+     </div>`
+                );
             }
+
 
             setBadge("ok", "ready");
             status.textContent = "Ready.";
@@ -264,6 +411,16 @@
             status.textContent = `Details failed: ${String(e && e.message ? e.message : e)}`;
         }
     }
+
+    function escapeHtml(s) {
+        return String(s)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+    }
+
 
     async function doRestore() {
         if (!selectedVol || !selectedSnap) return;
