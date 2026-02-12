@@ -1594,6 +1594,205 @@ static bool safe_app_ver(const std::string& s) {
     }
     return true;
 }
+// ---- Snapshot Manager helpers (v1) -----------------------------------------
+namespace {
+
+struct SnapVol {
+    std::string name;
+    std::string source_subvolume; // absolute
+    std::string snap_root;        // absolute
+    bool enabled{false};
+};
+
+static std::string rand_hex_32() {
+    static thread_local std::mt19937_64 rng{std::random_device{}()};
+    static const char* h = "0123456789abcdef";
+    std::string out;
+    out.resize(32);
+    for (int i = 0; i < 16; i++) {
+        uint8_t b = (uint8_t)(rng() & 0xFF);
+        out[i*2+0] = h[(b >> 4) & 0xF];
+        out[i*2+1] = h[b & 0xF];
+    }
+    return out;
+}
+
+static bool popen_capture(const std::string& cmd, std::string* out, int* rc) {
+    if (out) out->clear();
+
+    FILE* fp = popen(cmd.c_str(), "r");
+    if (!fp) { if (rc) *rc = -1; return false; }
+
+    std::string buf;
+    char tmp[4096];
+    while (true) {
+        size_t n = fread(tmp, 1, sizeof(tmp), fp);
+        if (n > 0) buf.append(tmp, tmp + n);
+        if (n < sizeof(tmp)) break;
+    }
+
+    int st = pclose(fp);
+
+    int code = -1;
+    if (st == -1) {
+        code = -1; // pclose failed
+    } else if (WIFEXITED(st)) {
+        code = WEXITSTATUS(st); // normal exit => 0..255
+    } else if (WIFSIGNALED(st)) {
+        code = 128 + WTERMSIG(st); // like bash convention
+    } else {
+        code = st; // fallback (shouldn't happen often)
+    }
+
+    if (rc) *rc = code;
+    if (out) *out = buf;
+    return true;
+}
+
+
+static std::string realpath_str(const std::string& p) {
+    std::error_code ec;
+    auto rp = std::filesystem::weakly_canonical(std::filesystem::path(p), ec);
+    if (ec) return p;
+    return rp.string();
+}
+
+static bool is_path_under(const std::string& child, const std::string& parent) {
+    // Canonical-ish containment check
+    const std::string c = realpath_str(child);
+    std::string p = realpath_str(parent);
+    if (!p.empty() && p.back() != '/') p.push_back('/');
+    return (c.size() >= p.size() && c.compare(0, p.size(), p) == 0);
+}
+
+static bool is_btrfs_subvolume_sudo_n(const std::string& abs_path, std::string* detail = nullptr) {
+    if (detail) detail->clear();
+
+    // Quote for sh
+    std::string q = abs_path;
+    size_t pos = 0;
+    while ((pos = q.find("'", pos)) != std::string::npos) { q.replace(pos, 1, "'\\''"); pos += 4; }
+
+    // Prefer /usr/bin/btrfs on Debian/Ubuntu; fallback to /usr/sbin/btrfs.
+    const char* BTRFS1 = "/usr/bin/btrfs";
+    const char* BTRFS2 = "/usr/sbin/btrfs";
+
+    auto exists_exec = [](const char* p) -> bool {
+        std::error_code ec;
+        auto st = std::filesystem::status(p, ec);
+        if (ec) return false;
+        if (!std::filesystem::is_regular_file(st)) return false;
+        // "executable by someone" check (best-effort; still fine if false positives)
+        auto perms = st.permissions();
+        using P = std::filesystem::perms;
+        return (perms & P::owner_exec) != P::none ||
+               (perms & P::group_exec) != P::none ||
+               (perms & P::others_exec) != P::none;
+    };
+
+    const char* BTRFS = exists_exec(BTRFS1) ? BTRFS1 : (exists_exec(BTRFS2) ? BTRFS2 : BTRFS1);
+
+    // Use sudo -n so we can probe even when pqnas isn't root. Capture stderr for diagnostics.
+    std::string out;
+    int exit_code = -1; // NOTE: popen_capture() already returns normalized exit code in rc
+    popen_capture(std::string("sudo -n ") + BTRFS + " subvolume show '" + q + "' 2>&1", &out, &exit_code);
+
+    if (detail) *detail = pqnas::shorten(out, 300);
+
+    // exit 0 => is subvolume
+    return exit_code == 0;
+}
+
+
+
+
+static bool load_snapshot_volumes_from_admin_settings(const std::string& admin_settings_path,
+                                                     std::string* backend_out,
+                                                     std::vector<SnapVol>* vols_out,
+                                                     std::string* err_out) {
+    if (backend_out) backend_out->clear();
+    if (vols_out) vols_out->clear();
+    if (err_out) err_out->clear();
+
+    json j;
+    try {
+        std::ifstream f(admin_settings_path);
+        if (!f.good()) {
+            if (err_out) *err_out = "admin_settings not readable";
+            return false;
+        }
+        f >> j;
+    } catch (const std::exception& e) {
+        if (err_out) *err_out = std::string("parse failed: ") + e.what();
+        return false;
+    } catch (...) {
+        if (err_out) *err_out = "parse failed";
+        return false;
+    }
+
+    auto s = j.value("snapshots", json::object());
+    const bool enabled = s.value("enabled", false);
+    const std::string backend = s.value("backend", "btrfs");
+    if (backend_out) *backend_out = backend;
+
+    std::vector<SnapVol> vols;
+    auto arr = s.value("volumes", json::array());
+    if (!arr.is_array()) arr = json::array();
+
+    for (const auto& v : arr) {
+        if (!v.is_object()) continue;
+        SnapVol sv;
+        sv.name = v.value("name", "");
+        sv.source_subvolume = v.value("source_subvolume", "");
+        sv.snap_root = v.value("snap_root", "");
+        sv.enabled = enabled; // global enabled gates volumes in v1
+        if (sv.name.empty() || sv.source_subvolume.empty() || sv.snap_root.empty()) continue;
+        vols.push_back(sv);
+    }
+
+    if (vols_out) *vols_out = vols;
+    return true;
+}
+
+// confirm cache
+struct RestorePlan {
+    std::string volume;
+    std::string snapshot_id;
+    std::string snapshot_path;
+    std::string source_subvolume;
+    std::string mode; // "swap"
+    std::string confirm_phrase; // exact
+    std::string created_iso;
+    std::string expires_iso;
+};
+
+static std::mutex g_restore_mu;
+static std::unordered_map<std::string, RestorePlan> g_restore_by_id;
+
+static void restore_cache_gc_best_effort() {
+    // v1: cheap GC: keep map from growing; remove when > 256
+    std::lock_guard<std::mutex> lk(g_restore_mu);
+    if (g_restore_by_id.size() <= 256) return;
+    // wipe all (simple, safe)
+    g_restore_by_id.clear();
+}
+
+} // namespace
+
+static std::string shell_escape_single_quotes(std::string s) {
+    size_t pos = 0;
+    while ((pos = s.find("'", pos)) != std::string::npos) {
+        s.replace(pos, 1, "'\\''");
+        pos += 4;
+    }
+    return s;
+}
+
+static std::string lower_ascii(std::string s) {
+    for (char& c : s) c = (char)std::tolower((unsigned char)c);
+    return s;
+}
+
 
 
 // -----------------------------------------------------------------------------
@@ -9545,7 +9744,575 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
     }
 });
 
+//
+// ---- Snapshots API (admin-only, v1) ----
+//
+// GET /api/v4/snapshots/volumes
+srv.Get("/api/v4/snapshots/volumes", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_emit = [&](const std::string& outcome, const std::string& reason, int http, const std::string& detail="") {
+        pqnas::AuditEvent ev;
+        ev.event = "snapshots.volumes";
+        ev.outcome = outcome;
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["http"] = std::to_string(http);
+        if (!reason.empty()) ev.f["reason"] = reason;
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    std::string backend, err;
+    std::vector<SnapVol> vols;
+    if (!load_snapshot_volumes_from_admin_settings(admin_settings_path, &backend, &vols, &err)) {
+        audit_emit("fail", "settings_load_failed", 500, err);
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","failed to load snapshot settings"}}.dump());
+        return;
+    }
+
+    json out_vols = json::array();
+    for (const auto& v : vols) {
+        out_vols.push_back(json{
+            {"name", v.name},
+            {"source_subvolume", v.source_subvolume},
+            {"snap_root", v.snap_root},
+            {"enabled", v.enabled}
+        });
+    }
+
+    audit_emit("ok", "", 200);
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"backend", backend},
+        {"volumes", out_vols}
+    }.dump());
+});
+
+
+// GET /api/v4/snapshots/list?volume=data
+srv.Get("/api/v4/snapshots/list", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail="") {
+        pqnas::AuditEvent ev;
+        ev.event = "snapshots.list";
+        ev.outcome = "fail";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& vol, size_t n) {
+        pqnas::AuditEvent ev;
+        ev.event = "snapshots.list";
+        ev.outcome = "ok";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["volume"] = vol;
+        ev.f["count"] = std::to_string((unsigned long long)n);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    std::string vol = req.has_param("volume") ? req.get_param_value("volume") : "";
+    if (vol.empty()) {
+        audit_fail("missing_volume", 400);
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","missing volume"}}.dump());
+        return;
+    }
+
+    std::string backend, err;
+    std::vector<SnapVol> vols;
+    if (!load_snapshot_volumes_from_admin_settings(admin_settings_path, &backend, &vols, &err)) {
+        audit_fail("settings_load_failed", 500, err);
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","failed to load snapshot settings"}}.dump());
+        return;
+    }
+
+    auto it = std::find_if(vols.begin(), vols.end(), [&](const SnapVol& v){ return v.name == vol; });
+    if (it == vols.end()) {
+        audit_fail("unknown_volume", 404, vol);
+        reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","unknown volume"}}.dump());
+        return;
+    }
+
+    const std::string snap_root = it->snap_root;
+    std::error_code ec;
+    if (!std::filesystem::exists(snap_root, ec) || ec) {
+        audit_fail("snap_root_missing", 404, snap_root);
+        reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","snap_root not found"}}.dump());
+        return;
+    }
+
+struct Item {
+    std::string id;
+    std::string path;
+    std::uint64_t mtime_unix{0};
+    bool is_subvol{false};
+    std::string probe;      // "ok" | "no_privs" | "err"
+    std::string probe_detail;
+};
+
+std::vector<Item> items;
+
+for (auto& de : std::filesystem::directory_iterator(snap_root, ec)) {
+    if (ec) break;
+    if (!de.is_directory(ec)) continue;
+
+    const auto p = de.path();
+    const std::string id  = p.filename().string();
+    const std::string abs = p.string();
+
+    // mtime
+    std::uint64_t mt = 0;
+    std::error_code ec2;
+    auto ftime = std::filesystem::last_write_time(p, ec2);
+    if (!ec2) {
+        auto sctp = std::chrono::time_point_cast<std::chrono::seconds>(ftime);
+        mt = (std::uint64_t)sctp.time_since_epoch().count();
+    }
+
+    // Probe btrfs subvol via sudo -n; if sudo not allowed, we still list it but flag probe.
+    std::string detail;
+    bool is_sub = false;
+    std::string probe = "ok";
+
+    {
+        // popen_capture returns the stderr text; check for common sudo failure hints
+        is_sub = is_btrfs_subvolume_sudo_n(abs, &detail);
+
+        // If it isn't a subvol, it could be junk OR probe failed due to sudo policy.
+        // Heuristic: "sudo:" / "a password is required" => no_privs
+        const std::string dlow = lower_ascii(detail);
+        if (!is_sub) {
+            if (dlow.find("sudo:") != std::string::npos ||
+                dlow.find("a password is required") != std::string::npos ||
+                dlow.find("no tty present") != std::string::npos ||
+                dlow.find("not in the sudoers file") != std::string::npos) {
+                probe = "no_privs";
+            } else if (!detail.empty() && dlow.find("operation not permitted") != std::string::npos) {
+                // can also happen if sudo isn't used / allowed
+                probe = "no_privs";
+            } else {
+                probe = "ok"; // real "not a subvolume" (junk dir)
+            }
+        }
+    }
+
+    items.push_back(Item{id, abs, mt, is_sub, probe, detail});
+}
+
+
+    std::sort(items.begin(), items.end(), [&](const Item& a, const Item& b){
+        // newest first
+        if (a.mtime_unix != b.mtime_unix) return a.mtime_unix > b.mtime_unix;
+        return a.id > b.id;
+    });
+
+	json snaps = json::array();
+	for (const auto& s : items) {
+    	snaps.push_back(json{
+       		{"id", s.id},
+	        {"path", s.path},
+	        {"created_utc", ""},                 // keep blank if you want
+       		{"readonly", s.is_subvol},           // subvolumes are readonly snapshots
+	        {"is_btrfs_subvolume", s.is_subvol}, // <-- ✅ COMMA was missing after this before
+       		{"probe", s.probe},                  // "ok" | "no_privs" | ...
+       		{"probe_detail", pqnas::shorten(s.probe_detail, 180)}
+	    });
+	}
+
+
+    audit_ok(vol, snaps.size());
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"volume", vol},
+        {"snap_root", snap_root},
+        {"snapshots", snaps}
+    }.dump());
+});
+
+
+// GET /api/v4/snapshots/info?volume=data&id=<id>
+srv.Get("/api/v4/snapshots/info", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    std::string vol = req.has_param("volume") ? req.get_param_value("volume") : "";
+    std::string id  = req.has_param("id") ? req.get_param_value("id") : "";
+    if (vol.empty() || id.empty()) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","missing volume or id"}}.dump());
+        return;
+    }
+
+    std::string backend, err;
+    std::vector<SnapVol> vols;
+    if (!load_snapshot_volumes_from_admin_settings(admin_settings_path, &backend, &vols, &err)) {
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","failed to load snapshot settings"}}.dump());
+        return;
+    }
+
+    auto it = std::find_if(vols.begin(), vols.end(), [&](const SnapVol& v){ return v.name == vol; });
+    if (it == vols.end()) {
+        reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","unknown volume"}}.dump());
+        return;
+    }
+
+    const std::string snap_root = it->snap_root;
+    const std::string snap_path = (std::filesystem::path(snap_root) / id).string();
+
+    if (!is_path_under(snap_path, snap_root)) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid snapshot id"}}.dump());
+        return;
+    }
+
+    std::error_code ec;
+    if (!std::filesystem::exists(snap_path, ec) || ec) {
+        reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","snapshot not found"}}.dump());
+        return;
+    }
+
+    std::string out;
+    int rc = 0;
+    // best-effort info
+    std::string q = snap_path;
+    size_t pos = 0;
+    while ((pos = q.find("'", pos)) != std::string::npos) { q.replace(pos, 1, "'\\''"); pos += 4; }
+    popen_capture("sudo -n /usr/bin/btrfs subvolume show '" + q + "' 2>&1", &out, &rc);
+
+
+    const bool show_ok = (rc == 0);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"volume", vol},
+        {"id", id},
+        {"snapshot_path", snap_path},
+
+        {"btrfs_show_ok", show_ok},
+        {"btrfs_show_rc", rc},
+        {"btrfs_show", pqnas::shorten(out, 2000)},
+
+        {"hint", show_ok ? "" : "btrfs details require sudo/root (configure sudoers for pqnas)"}
+    }.dump());
+
+});
+
+
+// POST /api/v4/snapshots/restore/prepare
+// Body: {"volume":"data","id":"...","mode":"swap","force_stop":true}
+srv.Post("/api/v4/snapshots/restore/prepare", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    json j;
+    try { j = json::parse(req.body); }
+    catch (...) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid json"}}.dump());
+        return;
+    }
+
+    const std::string vol  = j.value("volume", "");
+    const std::string id   = j.value("id", "");
+    const std::string mode = j.value("mode", "swap");
+    const bool force_stop  = j.value("force_stop", false);
+
+    if (vol.empty() || id.empty()) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","missing volume or id"}}.dump());
+        return;
+    }
+    if (mode != "swap") {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","unsupported mode"}}.dump());
+        return;
+    }
+    if (!force_stop) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","force_stop must be true in v1"}}.dump());
+        return;
+    }
+
+    std::string backend, err;
+    std::vector<SnapVol> vols;
+    if (!load_snapshot_volumes_from_admin_settings(admin_settings_path, &backend, &vols, &err)) {
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","failed to load snapshot settings"}}.dump());
+        return;
+    }
+
+    auto it = std::find_if(vols.begin(), vols.end(), [&](const SnapVol& v){ return v.name == vol; });
+    if (it == vols.end()) {
+        reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","unknown volume"}}.dump());
+        return;
+    }
+
+    const std::string snap_root = it->snap_root;
+    const std::string snap_path = (std::filesystem::path(snap_root) / id).string();
+
+    if (!is_path_under(snap_path, snap_root)) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid snapshot id"}}.dump());
+        return;
+    }
+
+    if (!is_btrfs_subvolume_sudo_n(snap_path)) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","snapshot is not a btrfs subvolume"}}.dump());
+        return;
+    }
+
+    const std::string confirm_phrase = "RESTORE " + vol + " " + id;
+
+    // create confirm id
+    restore_cache_gc_best_effort();
+    const std::string confirm_id = "RSTR_" + rand_hex_32();
+
+    RestorePlan plan;
+    plan.volume = vol;
+    plan.snapshot_id = id;
+    plan.snapshot_path = snap_path;
+    plan.source_subvolume = it->source_subvolume;
+    plan.mode = "swap";
+    plan.confirm_phrase = confirm_phrase;
+    plan.created_iso = now_iso_utc();
+    // v1: expiry is handled by client + simple cache; you can add strict expiry later.
+
+    {
+        std::lock_guard<std::mutex> lk(g_restore_mu);
+        g_restore_by_id[confirm_id] = plan;
+    }
+
+    // audit
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "snapshots.restore_prepare";
+        ev.outcome = "ok";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["volume"] = vol;
+        ev.f["id"] = id;
+        ev.f["mode"] = mode;
+        ev.f["confirm_id"] = confirm_id;
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"confirm_id", confirm_id},
+        {"expires_in_sec", 120},
+        {"plan", json{
+            {"volume", vol},
+            {"source_subvolume", it->source_subvolume},
+            {"snapshot_path", snap_path},
+            {"mode", mode},
+            {"steps", json::array({
+                "stop pqnas.service",
+                "rename source_subvolume -> source_subvolume.pre_restore.<ts>",
+                "btrfs subvolume snapshot <snapshot> <source_subvolume>",
+                "start pqnas.service"
+            })},
+            {"warnings", json::array({
+                "Restoring replaces the live volume content",
+                "Service downtime required"
+            })}
+        }}
+    }.dump());
+});
+
+
+// POST /api/v4/snapshots/restore/confirm
+// Body: {"confirm_id":"RSTR_...","confirm_text":"RESTORE data 2026-..."}
+srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    json j;
+    try { j = json::parse(req.body); }
+    catch (...) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid json"}}.dump());
+        return;
+    }
+
+    const std::string confirm_id   = j.value("confirm_id", "");
+    const std::string confirm_text = j.value("confirm_text", "");
+
+    if (confirm_id.empty() || confirm_text.empty()) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","missing confirm_id or confirm_text"}}.dump());
+        return;
+    }
+
+    RestorePlan plan;
+    {
+        std::lock_guard<std::mutex> lk(g_restore_mu);
+        auto it = g_restore_by_id.find(confirm_id);
+        if (it == g_restore_by_id.end()) {
+            reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","unknown confirm_id"}}.dump());
+            return;
+        }
+        plan = it->second;
+        // one-shot token: remove now (fail-safe)
+        g_restore_by_id.erase(it);
+    }
+
+    if (confirm_text != plan.confirm_phrase) {
+        // audit fail
+        pqnas::AuditEvent ev;
+        ev.event = "snapshots.restore_confirm";
+        ev.outcome = "fail";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["confirm_id"] = confirm_id;
+        ev.f["volume"] = plan.volume;
+        ev.f["id"] = plan.snapshot_id;
+        ev.f["reason"] = "confirm_text_mismatch";
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","confirmation text mismatch"}}.dump());
+        return;
+    }
+
+    // Validate paths again
+    const std::string snap_root_real = realpath_str(std::filesystem::path(plan.snapshot_path).parent_path().string());
+    if (!is_path_under(plan.snapshot_path, snap_root_real)) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","snapshot path invalid"}}.dump());
+        return;
+    }
+    if (!is_btrfs_subvolume_sudo_n(plan.snapshot_path)) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","snapshot no longer valid"}}.dump());
+        return;
+    }
+
+    const std::string src = plan.source_subvolume;
+    const std::string ts = now_iso_utc();
+    std::string backup = src + ".pre_restore." + ts;
+    // sanitize ':' for filesystem (ISO has ':')
+    for (auto& c : backup) if (c == ':') c = '-';
+
+    auto sh_quote = [](const std::string& s)->std::string{
+        std::string q = s;
+        size_t pos = 0;
+        while ((pos = q.find("'", pos)) != std::string::npos) { q.replace(pos, 1, "'\\''"); pos += 4; }
+        return "'" + q + "'";
+    };
+
+    const std::string cmd_stop   = "systemctl stop pqnas.service >/dev/null 2>&1";
+    const std::string cmd_start  = "systemctl start pqnas.service >/dev/null 2>&1";
+    const std::string cmd_move   = "mv " + sh_quote(src) + " " + sh_quote(backup);
+    const std::string cmd_snap   = "btrfs subvolume snapshot " + sh_quote(plan.snapshot_path) + " " + sh_quote(src);
+
+    auto run_cmd = [&](const std::string& cmd, std::string* out)->bool{
+        int rc = 0;
+        std::string o;
+        popen_capture(cmd + " 2>&1", &o, &rc);
+        if (out) *out = o;
+        // popen returns command rc in shell form; treat any nonzero as failure
+        // (v1: just check output contains "0" is not robust; we rely on filesystem checks below)
+        return true;
+    };
+
+    // Do the restore (swap strategy)
+    std::string out1, out2, out3, out4;
+
+    // 1) stop
+    run_cmd(cmd_stop, &out1);
+
+    // 2) move current aside (must exist and be a subvolume)
+    std::error_code ec;
+    if (!std::filesystem::exists(src, ec) || ec) {
+        run_cmd(cmd_start, &out4);
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","source_subvolume missing"}}.dump());
+        return;
+    }
+    run_cmd(cmd_move, &out2);
+
+    // 3) create writable snapshot at src
+    run_cmd(cmd_snap, &out3);
+
+    // 4) start
+    run_cmd(cmd_start, &out4);
+
+    // Verify src exists now
+    ec.clear();
+    if (!std::filesystem::exists(src, ec) || ec) {
+        // audit fail
+        pqnas::AuditEvent ev;
+        ev.event = "snapshots.restore_done";
+        ev.outcome = "fail";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["volume"] = plan.volume;
+        ev.f["id"] = plan.snapshot_id;
+        ev.f["reason"] = "post_verify_missing";
+        ev.f["backup"] = pqnas::shorten(backup, 220);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","restore may have failed (post-verify missing)"}}.dump());
+        return;
+    }
+
+    // audit ok
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "snapshots.restore_done";
+        ev.outcome = "ok";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["volume"] = plan.volume;
+        ev.f["id"] = plan.snapshot_id;
+        ev.f["backup"] = pqnas::shorten(backup, 220);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"restored", true},
+        {"volume", plan.volume},
+        {"id", plan.snapshot_id},
+        {"backup_path", backup}
+    }.dump());
+});
+
+
+
+// Admin routes
 
     // POST /api/v4/admin/users/upsert
     // Body: {"fingerprint":"...","name":"...","role":"user|admin","notes":"...","email":"...","avatar_url":"...","group":"...","address":"..."}

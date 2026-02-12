@@ -29,12 +29,13 @@
 
     const appsList = document.getElementById("appsList");
 
-    // app state
+// app state
     let installedApps = [];     // [{id, version, has_manifest, root}, ...]
     let currentView = "home";   // "home" or "app:<id>@<ver>"
     let currentApp = null;      // {id, version} or null
     let lastAppsKey = "";
     let authed = false;
+    let isAdmin = false;
 
     // small UI state
     let versionShown = false;
@@ -192,7 +193,13 @@
             if (!r.ok || !j || !j.ok) return;
 
             const installed = Array.isArray(j.installed) ? j.installed : [];
-            const usable = installed.filter(x => x && x.id && x.version && x.has_manifest);
+            let usable = installed.filter(x => x && x.id && x.version && x.has_manifest);
+
+            // Admin-only apps (UI visibility)
+            if (!isAdmin) {
+                usable = usable.filter(x => x.id !== "snapshotmgr");
+            }
+
 
             // stable order: id then version
             usable.sort((a, b) => {
@@ -215,12 +222,17 @@
                 addAppNavButton(a.id, label, href);
             }
 
-            // keep current view alive if app still exists; otherwise go home
+            // keep current view alive if app still exists and is allowed; otherwise go home
             if (currentApp) {
-                const still = installedApps.find(x => x.id === currentApp.id);
-                if (!still) renderHome();
-                else setActiveApp(currentApp.id);
+                if (!isAdmin && currentApp.id === "snapshotmgr") {
+                    renderHome();
+                } else {
+                    const still = installedApps.find(x => x.id === currentApp.id);
+                    if (!still) renderHome();
+                    else setActiveApp(currentApp.id);
+                }
             }
+
         } catch {
             // ignore
         }
@@ -228,6 +240,7 @@
 
     async function loadMe() {
         authed = false;
+        isAdmin = false;
         show(stateDisabled, false);
         show(stateUnauth, false);
 
@@ -252,7 +265,7 @@
                     versionShown = true;
                 }
 
-                const isAdmin = ok && role === "admin";
+                isAdmin = ok && role === "admin";
 
                 // show admin-only links
                 show(navAdmin, isAdmin);

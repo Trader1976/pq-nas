@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>PQ-NAS • Snapshot Manager</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <script src="/static/theme.js"></script>
+    <link rel="stylesheet" href="/static/theme.css">
+    <style>
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body { margin: 0; color: var(--fg); font-family: var(--sans); background: var(--bg); }
+        body.embedded { background: transparent; }
+
+        .app {
+            height: 100%;
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            gap: 12px;
+            padding: 12px;
+        }
+
+        .topbar {
+            display:flex; align-items:center; justify-content:space-between;
+            padding: 10px 12px;
+            border: 1px solid rgba(var(--fg-rgb),0.14);
+            border-radius: 14px;
+            background: rgba(var(--panel-rgb),0.55);
+            backdrop-filter: blur(10px);
+        }
+        .title { font-weight: 900; letter-spacing: 0.2px; }
+        .badge { font-weight: 900; padding: 6px 10px; border-radius: 999px; border:1px solid rgba(var(--fg-rgb),0.18); }
+        .badge.ok { background: rgba(0,0,0,0.12); }
+        .badge.warn { background: rgba(255,190,0,0.12); }
+        .badge.err { background: rgba(255,60,60,0.12); }
+
+        .btn {
+            border:1px solid rgba(var(--fg-rgb),0.18);
+            background: rgba(var(--panel-rgb),0.35);
+            color: var(--fg);
+            padding: 10px 12px;
+            border-radius: 12px;
+            font-weight: 800;
+            cursor: pointer;
+        }
+        .btn.danger { border-color: rgba(255,60,60,0.45); }
+        .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+        .main {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 12px;
+            min-height: 0;
+        }
+
+        .card {
+            border: 1px solid rgba(var(--fg-rgb),0.14);
+            border-radius: 16px;
+            background: rgba(var(--panel-rgb),0.35);
+            min-height: 0;
+            overflow: hidden;
+            display: grid;
+            grid-template-rows: auto 1fr;
+        }
+
+        .cardHead {
+            display:flex; align-items:center; justify-content:space-between;
+            padding: 10px 12px;
+            border-bottom: 1px solid rgba(var(--fg-rgb),0.12);
+            background: rgba(var(--panel-rgb),0.45);
+            font-weight: 900;
+        }
+
+        .list { overflow:auto; padding: 8px; display:flex; flex-direction:column; gap:8px; }
+        .row {
+            border: 1px solid rgba(var(--fg-rgb),0.12);
+            background: rgba(var(--panel-rgb),0.25);
+            border-radius: 14px;
+            padding: 10px 10px;
+            cursor: pointer;
+        }
+        .row.sel { outline: 2px solid rgba(var(--fg-rgb),0.28); }
+        .row .top { display:flex; justify-content:space-between; gap:10px; font-weight: 900; }
+        .row .sub { opacity: 0.85; font-size: 13px; margin-top: 4px; }
+
+        .footer {
+            display:flex; gap:10px; align-items:center; justify-content:space-between;
+            padding: 10px 12px;
+            border: 1px solid rgba(var(--fg-rgb),0.14);
+            border-radius: 14px;
+            background: rgba(var(--panel-rgb),0.35);
+        }
+        .row.warn { filter: grayscale(0.2); }
+
+        .row.notSubvol {
+            background: rgba(255, 200, 0, 0.12);
+            border: 1px solid rgba(255, 180, 0, 0.4);
+        }
+        #appVersion {
+            margin-left: 10px;
+            font-size: 0.85em;
+            opacity: 0.65;
+            font-weight: 700;
+        }
+
+
+
+
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+        .hint { opacity: 0.9; }
+    </style>
+</head>
+<body>
+<div class="app">
+    <div class="topbar">
+        <div class="title" id="titleLine">
+            Snapshot Manager <span id="appVersion" class="ver"></span>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center;">
+            <span class="badge ok" id="badge">ready</span>
+        </div>
+    </div>
+
+
+    <div class="main">
+        <div class="card">
+            <div class="cardHead">
+                <span>Volumes</span>
+                <span class="hint mono" id="volHint"></span>
+            </div>
+            <div class="list" id="volList"></div>
+        </div>
+
+        <div class="card">
+            <div class="cardHead">
+                <span>Snapshots</span>
+                <span class="hint mono" id="snapHint"></span>
+            </div>
+            <div class="list" id="snapList"></div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <div id="status" class="hint">Ready.</div>
+        <div style="display:flex; gap:10px; align-items:center;">
+            <button class="btn" id="detailsBtn" disabled>Details</button>
+            <button class="btn danger" id="restoreBtn" disabled>Restore…</button>
+        </div>
+    </div>
+</div>
+
+<script src="./app.js"></script>
+</body>
+</html>
