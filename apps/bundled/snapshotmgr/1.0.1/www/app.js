@@ -1,5 +1,6 @@
 (() => {
     "use strict";
+    const el = (id) => document.getElementById(id);
 
     try {
         if (window.self !== window.top) document.body.classList.add("embedded");
@@ -11,25 +12,28 @@
 
     (async () => {
         if (!appVersionEl) return;
-        try {
-            // manifest.json is one level above /www/
-            const r = await fetch("../manifest.json", { cache: "no-store" });
-            const j = await r.json().catch(() => ({}));
-            const ver = (j && typeof j.version === "string") ? j.version.trim() : "";
-            if (ver) appVersionEl.textContent = "v" + ver;
-        } catch (_) {
-            // keep empty if not available
+        const candidates = ["./manifest.json", "../manifest.json"];
+        for (const url of candidates) {
+            try {
+                const r = await fetch(url, { cache: "no-store" });
+                if (!r.ok) continue;
+                const j = await r.json().catch(() => ({}));
+                const ver = (j && typeof j.version === "string") ? j.version.trim() : "";
+                if (ver) { appVersionEl.textContent = "v" + ver; return; }
+            } catch (_) {}
         }
     })();
 
+
     const badge = el("badge");
     const status = el("status");
+
 
     const volList = el("volList");
     const snapList = el("snapList");
     const volHint = el("volHint");
     const snapHint = el("snapHint");
-
+    const refreshBtn = el("refreshBtn");
     const detailsBtn = el("detailsBtn");
     const restoreBtn = el("restoreBtn");
 
@@ -340,6 +344,7 @@
 
     detailsBtn?.addEventListener("click", showDetails);
     restoreBtn?.addEventListener("click", doRestore);
+    refreshBtn?.addEventListener("click", () => loadAll());
 
     loadAll();
 })();
