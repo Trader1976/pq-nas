@@ -111,27 +111,32 @@
     }
 
     function sudoSetupHtml() {
+        const user = window.__pqnasRuntimeUser || "<YOUR_USER>";
+
         return `
-    <div style="font-weight:900; margin-bottom:8px;">How to enable btrfs probing (no password prompt)</div>
+    <div style="font-weight:900; margin-bottom:8px;">Enable btrfs probing (no password prompt)</div>
+
     <div style="opacity:.9; margin-bottom:10px;">
-      Snapshot Manager calls <span class="mono">sudo -n btrfs subvolume show ...</span> to verify that entries are real snapshots.
+      Snapshot Manager calls <span class="mono">sudo -n btrfs subvolume show ...</span>
+      to verify that entries are real snapshots.
       If sudo requires a password, probing becomes <b>no-privs</b> and restore stays disabled.
     </div>
 
-    <div style="font-weight:900; margin:12px 0 6px;" id="sudo">Recommended sudoers rule</div>
-    <pre class="mono">sudo visudo
+    <div style="font-weight:900; margin:12px 0 6px;">Recommended sudoers rule</div>
 
-# If pqnas runs as user 'john' (your ./start.sh case):
-john ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *
+<pre class="mono">sudo visudo
 
-# If later you run pqnas as service user 'pqnas':
-# pqnas ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
+# PQ-NAS running as:
+${user}
+
+${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
     <div style="opacity:.9; margin-top:10px;">
-      After saving sudoers, reload this page. The list should show <b>latest</b>/<b>ro</b> instead of <b>⚠</b>.
+      After saving sudoers, reload this page.
     </div>
   `;
     }
+
 
     function clearChildren(x) { while (x.firstChild) x.removeChild(x.firstChild); }
 
@@ -262,12 +267,18 @@ john ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *
     }
 
 
-
     async function loadVolumes() {
         setBadge("warn", "loading…");
         status.textContent = "Loading volumes…";
 
         const j = await apiGet("/api/v4/snapshots/volumes");
+
+        // Store runtime user for sudo help modal
+        window.__pqnasRuntimeUser =
+            (j && typeof j.runtime_user === "string" && j.runtime_user.trim())
+                ? j.runtime_user.trim()
+                : "";
+
         volumes = Array.isArray(j.volumes) ? j.volumes : [];
         volumes.sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
@@ -277,6 +288,7 @@ john ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *
         setBadge("ok", "ready");
         status.textContent = "Volumes loaded.";
     }
+
 
     async function loadSnapshotsForSelectedVol() {
         updateButtons();
@@ -468,16 +480,39 @@ john ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *
             setBadge("warn", "working…");
             status.textContent = "Restoring…";
 
-            await apiPost("/api/v4/snapshots/restore/confirm", {
+            const done = await apiPost("/api/v4/snapshots/restore/confirm", {
                 confirm_id: prep.confirm_id,
                 confirm_text: phrase
             });
 
+// Build a clear “what happened” message from server response
+            const backupPath = (done && typeof done.backup_path === "string") ? done.backup_path : "";
+            const warns = (done && Array.isArray(done.warnings)) ? done.warnings : [];
+
             setBadge("ok", "done");
-            status.textContent = `Restored ${vol} to ${id}. Refreshing…`;
+            status.textContent = `✅ Restore completed for ${vol} → ${id}. Refreshing…`;
+
+            openModal(
+                "Restore completed",
+                `
+    <div class="modalNote">
+      Volume <b>${escapeHtml(vol)}</b> restored to snapshot <b>${escapeHtml(id)}</b>.
+    </div>
+    ${backupPath ? `<div class="modalNote">Backup saved as:<br><span class="mono">${escapeHtml(backupPath)}</span></div>` : ""}
+    ${warns.length ? `
+      <div class="modalNote" style="margin-top:10px;">
+        <div style="font-weight:900; margin-bottom:6px;">Warnings</div>
+        <ul style="margin:0; padding-left:18px;">
+          ${warns.map(w => `<li>${escapeHtml(String(w))}</li>`).join("")}
+        </ul>
+      </div>
+    ` : ""}
+  `
+            );
 
             selectedSnap = null;
             await loadSnapshotsForSelectedVol();
+
 
         } catch (e) {
             setBadge("err", "error");

@@ -70,6 +70,7 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include <atomic>
 #include <random>
 #include <fcntl.h>
+#include <pwd.h>
 
 extern "C" {
 #include "qrauth_v4.h"
@@ -9792,14 +9793,20 @@ srv.Get("/api/v4/snapshots/volumes", [&](const httplib::Request& req, httplib::R
             {"enabled", v.enabled}
         });
     }
-
+	// Runtime user (for sudoers help text in snapshotmgr)
+	std::string runtime_user;
+	{
+    	struct passwd* pw = getpwuid(geteuid());
+    	if (pw && pw->pw_name) runtime_user = pw->pw_name;
+	}
     audit_emit("ok", "", 200);
-    reply_json(res, 200, json{
-        {"ok", true},
-        {"backend", backend},
-        {"volumes", out_vols}
-    }.dump());
-});
+	reply_json(res, 200, json{
+    	{"ok", true},
+    	{"backend", backend},
+	    {"volumes", out_vols},
+    	{"runtime_user", runtime_user}
+	}.dump());
+	});
 
 
 // GET /api/v4/snapshots/list?volume=data
@@ -10130,6 +10137,31 @@ srv.Post("/api/v4/snapshots/restore/prepare", [&](const httplib::Request& req, h
         maybe_auto_rotate_before_append();
         audit_append(ev);
     }
+	auto has_systemd_unit = [&]() -> bool {
+    	// We only claim stop/start steps if systemctl exists AND pqnas.service is known
+	    int rc1 = std::system("command -v systemctl >/dev/null 2>&1");
+    	if (rc1 != 0) return false;
+    	int rc2 = std::system("systemctl status pqnas.service >/dev/null 2>&1");
+    	return (rc2 == 0);
+	};
+
+	const bool can_service = has_systemd_unit();
+
+	json steps = json::array();
+	if (can_service) steps.push_back("stop pqnas.service");
+	else steps.push_back("STOP PQ-NAS manually (dev mode: running via ./start.sh)");
+
+	steps.push_back("rename source_subvolume -> source_subvolume.pre_restore.<ts>");
+	steps.push_back("btrfs subvolume snapshot <snapshot> <source_subvolume>");
+
+	if (can_service) steps.push_back("start pqnas.service");
+	else steps.push_back("START PQ-NAS manually (dev mode)");
+
+	json warnings = json::array({
+    	"Restoring replaces the live volume content",
+    	"Service downtime required"
+	});
+	if (!can_service) warnings.push_back("Dev mode: pqnas.service not detected; you must stop/start PQ-NAS yourself");
 
     reply_json(res, 200, json{
         {"ok", true},
@@ -10140,16 +10172,8 @@ srv.Post("/api/v4/snapshots/restore/prepare", [&](const httplib::Request& req, h
             {"source_subvolume", it->source_subvolume},
             {"snapshot_path", snap_path},
             {"mode", mode},
-            {"steps", json::array({
-                "stop pqnas.service",
-                "rename source_subvolume -> source_subvolume.pre_restore.<ts>",
-                "btrfs subvolume snapshot <snapshot> <source_subvolume>",
-                "start pqnas.service"
-            })},
-            {"warnings", json::array({
-                "Restoring replaces the live volume content",
-                "Service downtime required"
-            })}
+			{"steps", steps},
+			{"warnings", warnings}
         }}
     }.dump());
 });
@@ -10231,41 +10255,178 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
         return "'" + q + "'";
     };
 
-    const std::string cmd_stop   = "systemctl stop pqnas.service >/dev/null 2>&1";
-    const std::string cmd_start  = "systemctl start pqnas.service >/dev/null 2>&1";
+	auto cmd_rc = [&](const std::string& cmd) -> int {
+	    int rc = std::system(cmd.c_str());
+    	if (rc == -1) return 127;
+    	// on Linux, system() returns encoded status
+    	if (WIFEXITED(rc)) return WEXITSTATUS(rc);
+    	return 128;
+	};
+
+	auto path_exists = [&](const std::string& p) -> bool {
+    	std::error_code ec;
+    	return std::filesystem::exists(p, ec);
+	};
+
+	auto file_read_all = [&](const std::string& p) -> std::string {
+    	std::ifstream f(p);
+	    if (!f) return {};
+    	std::ostringstream ss;
+	    ss << f.rdbuf();
+    	return ss.str();
+	};
+
+	// Returns UUID line from `sudo -n /usr/bin/btrfs subvolume show <path>` or empty string
+	auto btrfs_uuid = [&](const std::string& path) -> std::string {
+    	// NOTE: you already have sudo+ btrfs path logic elsewhere; reuse if you can.
+    	// Here we keep it simple and consistent with your environment:
+    	const std::string cmd = "sudo -n /usr/bin/btrfs subvolume show " + sh_quote(path) + " 2>/dev/null | rg -m1 '^\\s*UUID:'";
+
+    	// If you don't have shell_escape helper, use your existing one. Don't ship without escaping.
+    	FILE* fp = popen(cmd.c_str(), "r");
+    	if (!fp) return {};
+    	char buf[512];
+    	std::string out;
+    	while (fgets(buf, sizeof(buf), fp)) out += buf;
+	    pclose(fp);
+    	// out like: "UUID: \t\t...."
+	    return out;
+	};
+
+	const std::string cmd_stop  = "systemctl stop pqnas.service";
+	const std::string cmd_start = "systemctl start pqnas.service";
+	const std::string cmd_has_systemctl = "command -v systemctl >/dev/null 2>&1";
+	const std::string cmd_has_unit = "systemctl status pqnas.service >/dev/null 2>&1";
+
+	int rc_has_systemctl = cmd_rc(cmd_has_systemctl);
+	int rc_has_unit      = (rc_has_systemctl == 0) ? cmd_rc(cmd_has_unit) : 1;
+
+	bool can_service = (rc_has_systemctl == 0 && rc_has_unit == 0);
+	std::vector<std::string> warnings;
+	if (!can_service) warnings.push_back("systemd not available or pqnas.service not present; skipping stop/start (dev mode)");
+
+
     const std::string cmd_move   = "mv " + sh_quote(src) + " " + sh_quote(backup);
     const std::string cmd_snap   = "btrfs subvolume snapshot " + sh_quote(plan.snapshot_path) + " " + sh_quote(src);
 
-    auto run_cmd = [&](const std::string& cmd, std::string* out)->bool{
-        int rc = 0;
-        std::string o;
-        popen_capture(cmd + " 2>&1", &o, &rc);
-        if (out) *out = o;
-        // popen returns command rc in shell form; treat any nonzero as failure
-        // (v1: just check output contains "0" is not robust; we rely on filesystem checks below)
-        return true;
-    };
+	auto run_cmd = [&](const std::string& cmd, std::string* out, int* rc_out)->bool{
+    	int rc = 0;
+	    std::string o;
+    	popen_capture(cmd + " 2>&1", &o, &rc);
+    	if (out) *out = o;
+	    if (rc_out) *rc_out = rc;
+    	return (rc == 0);
+	};
+
 
     // Do the restore (swap strategy)
     std::string out1, out2, out3, out4;
 
     // 1) stop
-    run_cmd(cmd_stop, &out1);
+    int rc1 = 0;
+	if (can_service) {
+    	if (!run_cmd(cmd_stop, &out1, &rc1)) {
+        	reply_json(res, 500, json{
+            	{"ok",false},{"error","service_stop_failed"},
+	            {"message","systemctl stop pqnas.service failed"},
+    	        {"rc",rc1},
+        	    {"out", pqnas::shorten(out1, 500)}
+	        }.dump());
+    	    return;
+	    }
+	} else {
+    	warnings.push_back("Skipped systemctl stop/start (dev mode)");
+	}
+
 
     // 2) move current aside (must exist and be a subvolume)
     std::error_code ec;
     if (!std::filesystem::exists(src, ec) || ec) {
-        run_cmd(cmd_start, &out4);
+        int rc_tmp = 0;
+		run_cmd(cmd_start, &out4, &rc_tmp);
+
         reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","source_subvolume missing"}}.dump());
         return;
     }
-    run_cmd(cmd_move, &out2);
+    int rc2 = 0;
+	if (!run_cmd(cmd_move, &out2, &rc2)) {
+    	// If we didn't stop the service, don't try to start it.
+	    if (can_service) {
+    	    int rc_start_tmp = 0;
+        	run_cmd(cmd_start, &out4, &rc_start_tmp);
+	    }
+    	reply_json(res, 500, json{
+        	{"ok",false},{"error","backup_move_failed"},
+	        {"message","Failed to move live subvolume aside"},
+    	    {"rc",rc2},
+        	{"src", src},
+	        {"backup_path", backup},
+    	    {"out", pqnas::shorten(out2, 800)}
+    	}.dump());
+    	return;
+	}
+
+	// VERIFY: backup now exists, and src should NOT exist at this point
+	if (!path_exists(backup)) {
+    	reply_json(res, 500, json{
+        	{"ok",false},{"error","backup_missing"},
+	        {"message","Backup path does not exist after move"},
+    	    {"backup_path", backup}
+    	}.dump());
+    	return;
+	}
+	if (path_exists(src)) {
+    	reply_json(res, 500, json{
+        	{"ok",false},{"error","move_no_effect"},
+	        {"message","Move reported success but src still exists (unexpected)"},
+    	    {"src", src},
+        	{"backup_path", backup}
+	    }.dump());
+    	return;
+	}
+
 
     // 3) create writable snapshot at src
-    run_cmd(cmd_snap, &out3);
+    int rc3 = 0;
+	if (!run_cmd(cmd_snap, &out3, &rc3)) {
+    	// rollback attempt: move backup back to src
+    	std::string out_rb;
+	    int rc_rb = 0;
+    	run_cmd("mv " + sh_quote(backup) + " " + sh_quote(src), &out_rb, &rc_rb);
+
+	    reply_json(res, 500, json{
+    	    {"ok",false},{"error","snapshot_create_failed"},
+        	{"message","Failed to create restored subvolume from snapshot"},
+	        {"rc",rc3},
+    	    {"snapshot_path", plan.snapshot_path},
+        	{"src", src},
+        	{"out", pqnas::shorten(out3, 800)},
+	        {"rollback_rc", rc_rb},
+    	    {"rollback_out", pqnas::shorten(out_rb, 500)}
+	    }.dump());
+    	return;
+	}
+
+	// Verify src exists AND is a btrfs subvolume
+	if (!path_exists(src)) {
+    	reply_json(res, 500, json{{"ok",false},{"error","post_verify_missing"},{"message","Restored src missing after snapshot"}}.dump());
+	    return;
+	}
+	if (!is_btrfs_subvolume_sudo_n(src)) {
+    	reply_json(res, 500, json{{"ok",false},{"error","post_verify_not_subvolume"},{"message","Restored src is not a btrfs subvolume"}}.dump());
+    	return;
+	}
+
 
     // 4) start
-    run_cmd(cmd_start, &out4);
+    int rc4 = 0;
+	if (can_service) {
+    	// start failures should be surfaced (or at least warned)
+    	if (!run_cmd(cmd_start, &out4, &rc4)) {
+        	warnings.push_back("systemctl start pqnas.service failed; start manually");
+	    }
+	}
+
 
     // Verify src exists now
     ec.clear();
@@ -10301,13 +10462,15 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
         audit_append(ev);
     }
 
-    reply_json(res, 200, json{
-        {"ok", true},
-        {"restored", true},
-        {"volume", plan.volume},
-        {"id", plan.snapshot_id},
-        {"backup_path", backup}
-    }.dump());
+	reply_json(res, 200, json{
+    	{"ok", true},
+    	{"restored", true},
+    	{"volume", plan.volume},
+    	{"id", plan.snapshot_id},
+    	{"backup_path", backup},
+    	{"warnings", warnings}
+	}.dump());
+
 });
 
 
