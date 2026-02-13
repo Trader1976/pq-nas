@@ -36,8 +36,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iomanip>
-
-
+#include <cstdint>
+#include <algorithm>
 // -----------------------------------------------------------------------------
 // Linux / POSIX
 // -----------------------------------------------------------------------------
@@ -151,6 +151,105 @@ static std::string now_iso_utc_ms() {
                   (int)ms.count());
     return std::string(buf);
 }
+namespace {
+
+// ---- /proc/stat per-core usage sampler ---------------------------------
+struct CpuJiffies {
+    std::string name; // "cpu", "cpu0", ...
+    uint64_t user=0, nice=0, system=0, idle=0, iowait=0, irq=0, softirq=0, steal=0;
+};
+
+static bool read_proc_stat(std::vector<CpuJiffies>& out) {
+    out.clear();
+    std::ifstream f("/proc/stat");
+    if (!f.is_open()) return false;
+
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.rfind("cpu", 0) != 0) break; // stop after cpu lines
+
+        CpuJiffies c;
+        std::istringstream iss(line);
+        iss >> c.name;
+        if (c.name.empty()) continue;
+
+        // cpuN user nice system idle iowait irq softirq steal ...
+        iss >> c.user >> c.nice >> c.system >> c.idle >> c.iowait >> c.irq >> c.softirq;
+        if (!(iss >> c.steal)) c.steal = 0;
+
+        out.push_back(c);
+    }
+    return !out.empty();
+}
+
+static inline uint64_t idle_all(const CpuJiffies& c) { return c.idle + c.iowait; }
+static inline uint64_t nonidle_all(const CpuJiffies& c) { return c.user + c.nice + c.system + c.irq + c.softirq + c.steal; }
+static inline uint64_t total_all(const CpuJiffies& c) { return idle_all(c) + nonidle_all(c); }
+
+struct CpuUsage {
+    bool ok = false;
+    int64_t window_ms = 0;
+    double total_pct = 0.0;
+    std::vector<double> per_core_pct; // cpu0.. in order
+};
+
+static CpuUsage cpu_usage_from_cached_delta() {
+    static std::mutex mu;
+    static bool have_prev = false;
+    static std::vector<CpuJiffies> prev;
+    static std::chrono::steady_clock::time_point prev_t;
+
+    std::lock_guard<std::mutex> lock(mu);
+
+    std::vector<CpuJiffies> cur;
+    if (!read_proc_stat(cur)) return {};
+
+    const auto now = std::chrono::steady_clock::now();
+
+    CpuUsage out;
+
+    if (!have_prev) {
+        prev = std::move(cur);
+        prev_t = now;
+        have_prev = true;
+        return out; // ok=false
+    }
+
+    out.window_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - prev_t).count();
+    if (out.window_ms < 0) out.window_ms = 0;
+
+    const size_t n = std::min(prev.size(), cur.size());
+    if (n == 0) return {};
+
+    auto pct_usage = [](const CpuJiffies& a, const CpuJiffies& b) -> double {
+        const uint64_t totald = total_all(b) - total_all(a);
+        const uint64_t idled  = idle_all(b)  - idle_all(a);
+        if (totald == 0) return 0.0;
+        double pct = (double)(totald - idled) * 100.0 / (double)totald;
+        if (pct < 0.0) pct = 0.0;
+        if (pct > 100.0) pct = 100.0;
+        return pct;
+    };
+
+    // aggregate "cpu" is index 0
+    out.total_pct = pct_usage(prev[0], cur[0]);
+
+    out.per_core_pct.clear();
+    for (size_t i = 1; i < n; i++) {
+        // accept only cpuN
+        if (cur[i].name.rfind("cpu", 0) == 0 && cur[i].name != "cpu") {
+            out.per_core_pct.push_back(pct_usage(prev[i], cur[i]));
+        }
+    }
+
+    out.ok = true;
+
+    prev = std::move(cur);
+    prev_t = now;
+    return out;
+}
+
+} // namespace
 
 /*
  * collect_system_snapshot()
@@ -252,6 +351,25 @@ nlohmann::json collect_system_snapshot(const std::string& repo_root) {
         if (cores < 1) cores = 1;
         out["cpu"]["cores"] = (int)cores;
     }
+    // Per-core CPU usage (sampled from /proc/stat deltas)
+    {
+        auto u = cpu_usage_from_cached_delta();
+
+        nlohmann::json usage;
+        usage["ok"] = u.ok;
+        usage["window_ms"] = u.window_ms;
+
+        if (u.ok) {
+            usage["total_pct"] = u.total_pct;
+
+            nlohmann::json arr = nlohmann::json::array();
+            for (double p : u.per_core_pct) arr.push_back(p);
+            usage["per_core_pct"] = arr;
+        }
+
+        out["cpu"]["usage"] = usage;
+    }
+
 
     // ---------------------------------------------------------------------
     // System uptime

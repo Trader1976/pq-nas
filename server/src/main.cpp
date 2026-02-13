@@ -66,9 +66,18 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include "audit_fields.h"
 #include <limits>
 #include <cstdint>
+#include <thread>
+#include <atomic>
+#include <random>
+#include <fcntl.h>
+#include <pwd.h>
+
 extern "C" {
 #include "qrauth_v4.h"
 }
+#include "routes_v5.h"
+#include "verify_login_common.h"
+
 #include <chrono>
 #include <cstdio>
 #include <sys/wait.h>
@@ -88,6 +97,9 @@ extern "C" {
 
 //sharing
 #include "share_links.h"
+
+// snapshots
+#include "storage/snapshots/snapshot_scheduler.h"
 
 //apps
 #include "static_serve.h"
@@ -132,7 +144,8 @@ static std::string getenv_str(const char* k) {
     return (v && *v) ? std::string(v) : std::string();
 }
 
-static std::string env_or(const char* k, const std::string& fallback) {
+[[maybe_unused]] static std::string env_or(const char* k, const std::string& fallback) {
+
     const std::string v = getenv_str(k);
     return v.empty() ? fallback : v;
 }
@@ -188,6 +201,8 @@ const std::string STATIC_SYSTEM_HTML         = static_path("system.html");
 const std::string STATIC_SYSTEM_JS           = static_path("system.js");
 const std::string STATIC_LOGIN               = static_path("login.html");
 const std::string STATIC_JS                  = static_path("pqnas_v4.js");
+const std::string STATIC_V5_JS               = static_path("pqnas_v5.js");
+const std::string STATIC_AUTH_JS             = static_path("pqnas_auth.js");
 const std::string STATIC_ADMIN_SETTINGS_HTML = static_path("admin_settings.html");
 const std::string STATIC_ADMIN_SETTINGS_JS   = static_path("admin_settings.js");
 const std::string STATIC_APPROVALS_HTML      = static_path("admin_approvals.html");
@@ -508,6 +523,7 @@ static std::vector<ArchivePair> list_rotated_archives_local(const std::string& a
 
     return out;
 }
+
 
 
 static nlohmann::json normalize_retention_or_default_local(const nlohmann::json& in_ret) {
@@ -1579,6 +1595,205 @@ static bool safe_app_ver(const std::string& s) {
     }
     return true;
 }
+// ---- Snapshot Manager helpers (v1) -----------------------------------------
+namespace {
+
+struct SnapVol {
+    std::string name;
+    std::string source_subvolume; // absolute
+    std::string snap_root;        // absolute
+    bool enabled{false};
+};
+
+static std::string rand_hex_32() {
+    static thread_local std::mt19937_64 rng{std::random_device{}()};
+    static const char* h = "0123456789abcdef";
+    std::string out;
+    out.resize(32);
+    for (int i = 0; i < 16; i++) {
+        uint8_t b = (uint8_t)(rng() & 0xFF);
+        out[i*2+0] = h[(b >> 4) & 0xF];
+        out[i*2+1] = h[b & 0xF];
+    }
+    return out;
+}
+
+static bool popen_capture(const std::string& cmd, std::string* out, int* rc) {
+    if (out) out->clear();
+
+    FILE* fp = popen(cmd.c_str(), "r");
+    if (!fp) { if (rc) *rc = -1; return false; }
+
+    std::string buf;
+    char tmp[4096];
+    while (true) {
+        size_t n = fread(tmp, 1, sizeof(tmp), fp);
+        if (n > 0) buf.append(tmp, tmp + n);
+        if (n < sizeof(tmp)) break;
+    }
+
+    int st = pclose(fp);
+
+    int code = -1;
+    if (st == -1) {
+        code = -1; // pclose failed
+    } else if (WIFEXITED(st)) {
+        code = WEXITSTATUS(st); // normal exit => 0..255
+    } else if (WIFSIGNALED(st)) {
+        code = 128 + WTERMSIG(st); // like bash convention
+    } else {
+        code = st; // fallback (shouldn't happen often)
+    }
+
+    if (rc) *rc = code;
+    if (out) *out = buf;
+    return true;
+}
+
+
+static std::string realpath_str(const std::string& p) {
+    std::error_code ec;
+    auto rp = std::filesystem::weakly_canonical(std::filesystem::path(p), ec);
+    if (ec) return p;
+    return rp.string();
+}
+
+static bool is_path_under(const std::string& child, const std::string& parent) {
+    // Canonical-ish containment check
+    const std::string c = realpath_str(child);
+    std::string p = realpath_str(parent);
+    if (!p.empty() && p.back() != '/') p.push_back('/');
+    return (c.size() >= p.size() && c.compare(0, p.size(), p) == 0);
+}
+
+static bool is_btrfs_subvolume_sudo_n(const std::string& abs_path, std::string* detail = nullptr) {
+    if (detail) detail->clear();
+
+    // Quote for sh
+    std::string q = abs_path;
+    size_t pos = 0;
+    while ((pos = q.find("'", pos)) != std::string::npos) { q.replace(pos, 1, "'\\''"); pos += 4; }
+
+    // Prefer /usr/bin/btrfs on Debian/Ubuntu; fallback to /usr/sbin/btrfs.
+    const char* BTRFS1 = "/usr/bin/btrfs";
+    const char* BTRFS2 = "/usr/sbin/btrfs";
+
+    auto exists_exec = [](const char* p) -> bool {
+        std::error_code ec;
+        auto st = std::filesystem::status(p, ec);
+        if (ec) return false;
+        if (!std::filesystem::is_regular_file(st)) return false;
+        // "executable by someone" check (best-effort; still fine if false positives)
+        auto perms = st.permissions();
+        using P = std::filesystem::perms;
+        return (perms & P::owner_exec) != P::none ||
+               (perms & P::group_exec) != P::none ||
+               (perms & P::others_exec) != P::none;
+    };
+
+    const char* BTRFS = exists_exec(BTRFS1) ? BTRFS1 : (exists_exec(BTRFS2) ? BTRFS2 : BTRFS1);
+
+    // Use sudo -n so we can probe even when pqnas isn't root. Capture stderr for diagnostics.
+    std::string out;
+    int exit_code = -1; // NOTE: popen_capture() already returns normalized exit code in rc
+    popen_capture(std::string("sudo -n ") + BTRFS + " subvolume show '" + q + "' 2>&1", &out, &exit_code);
+
+    if (detail) *detail = pqnas::shorten(out, 300);
+
+    // exit 0 => is subvolume
+    return exit_code == 0;
+}
+
+
+
+
+static bool load_snapshot_volumes_from_admin_settings(const std::string& admin_settings_path,
+                                                     std::string* backend_out,
+                                                     std::vector<SnapVol>* vols_out,
+                                                     std::string* err_out) {
+    if (backend_out) backend_out->clear();
+    if (vols_out) vols_out->clear();
+    if (err_out) err_out->clear();
+
+    json j;
+    try {
+        std::ifstream f(admin_settings_path);
+        if (!f.good()) {
+            if (err_out) *err_out = "admin_settings not readable";
+            return false;
+        }
+        f >> j;
+    } catch (const std::exception& e) {
+        if (err_out) *err_out = std::string("parse failed: ") + e.what();
+        return false;
+    } catch (...) {
+        if (err_out) *err_out = "parse failed";
+        return false;
+    }
+
+    auto s = j.value("snapshots", json::object());
+    const bool enabled = s.value("enabled", false);
+    const std::string backend = s.value("backend", "btrfs");
+    if (backend_out) *backend_out = backend;
+
+    std::vector<SnapVol> vols;
+    auto arr = s.value("volumes", json::array());
+    if (!arr.is_array()) arr = json::array();
+
+    for (const auto& v : arr) {
+        if (!v.is_object()) continue;
+        SnapVol sv;
+        sv.name = v.value("name", "");
+        sv.source_subvolume = v.value("source_subvolume", "");
+        sv.snap_root = v.value("snap_root", "");
+        sv.enabled = enabled; // global enabled gates volumes in v1
+        if (sv.name.empty() || sv.source_subvolume.empty() || sv.snap_root.empty()) continue;
+        vols.push_back(sv);
+    }
+
+    if (vols_out) *vols_out = vols;
+    return true;
+}
+
+// confirm cache
+struct RestorePlan {
+    std::string volume;
+    std::string snapshot_id;
+    std::string snapshot_path;
+    std::string source_subvolume;
+    std::string mode; // "swap"
+    std::string confirm_phrase; // exact
+    std::string created_iso;
+    std::string expires_iso;
+};
+
+static std::mutex g_restore_mu;
+static std::unordered_map<std::string, RestorePlan> g_restore_by_id;
+
+static void restore_cache_gc_best_effort() {
+    // v1: cheap GC: keep map from growing; remove when > 256
+    std::lock_guard<std::mutex> lk(g_restore_mu);
+    if (g_restore_by_id.size() <= 256) return;
+    // wipe all (simple, safe)
+    g_restore_by_id.clear();
+}
+
+} // namespace
+
+static std::string shell_escape_single_quotes(std::string s) {
+    size_t pos = 0;
+    while ((pos = s.find("'", pos)) != std::string::npos) {
+        s.replace(pos, 1, "'\\''");
+        pos += 4;
+    }
+    return s;
+}
+
+static std::string lower_ascii(std::string s) {
+    for (char& c : s) c = (char)std::tolower((unsigned char)c);
+    return s;
+}
+
 
 
 // -----------------------------------------------------------------------------
@@ -1608,6 +1823,18 @@ int main()
     if (const char* v = std::getenv("PQNAS_SESS_TTL")) SESS_TTL = std::atoi(v);
     if (const char* v = std::getenv("PQNAS_LISTEN_PORT")) LISTEN_PORT = std::atoi(v);
 
+	std::string AUTH_MODE = "v4";
+	if (const char* v = std::getenv("PQNAS_AUTH_MODE")) AUTH_MODE = v;
+
+	// normalize + clamp
+	AUTH_MODE = pqnas::lower_ascii(AUTH_MODE);
+	if (AUTH_MODE != "v4" && AUTH_MODE != "v5" && AUTH_MODE != "auto") {
+	    std::cerr << "Invalid PQNAS_AUTH_MODE='" << AUTH_MODE
+        	      << "' (expected v4|v5|auto). Defaulting to 'auto'.\n";
+    	AUTH_MODE = "auto";
+	}
+
+
 
     // ---- Audit log (hash-chained JSONL) ----
     std::string audit_dir = exe_dir() + "/audit";
@@ -1622,6 +1849,8 @@ int main()
     }
 
     const std::string audit_jsonl_path = audit_dir + "/pqnas_audit.jsonl";
+	std::cerr << "[pqnas] audit_jsonl_path=" << audit_jsonl_path << std::endl;
+
     const std::string audit_state_path = audit_dir + "/pqnas_audit.state";
     pqnas::AuditLog audit(audit_jsonl_path, audit_state_path);
     // declare early so routes can call it
@@ -1638,6 +1867,8 @@ int main()
         std::cerr << "PQNAS_DATA_ROOT is required when PQNAS_STATIC_ROOT is set (installed mode)." << std::endl;
         return 2;
     }
+    std::atomic<bool> snapshots_stop{false};
+    std::thread snapshots_thread = pqnas::snapshots::start_snapshot_scheduler(admin_settings_path, snapshots_stop);
 
     // ---------------------------
     // Auto-rotation (checked before every audit.append)
@@ -1794,6 +2025,7 @@ auto maybe_auto_rotate_before_append = [&]() {
 
     httplib::Server srv;
 
+
     // ---- Load admin settings once at startup (audit min level) ----
     try {
         std::ifstream f(admin_settings_path);
@@ -1824,55 +2056,6 @@ auto maybe_auto_rotate_before_append = [&]() {
     }
 
 
-// Generic static handler: /static/<anything>
-// Must come AFTER specific /static/*.js handlers so those remain unchanged.
-srv.Get(R"(/static/(.+))", [&](const httplib::Request& req, httplib::Response& res) {
-    // req.matches[1] is the captured path after /static/
-    if (req.matches.size() < 2) {
-        res.status = 400;
-        res.set_header("Content-Type", "text/plain");
-        res.body = "Bad static request";
-        return;
-    }
-
-    const std::string rel = req.matches[1].str();
-
-    if (!is_safe_static_relpath(rel)) {
-        res.status = 403;
-        res.set_header("Content-Type", "text/plain");
-        res.body = "Forbidden";
-        return;
-    }
-
-    const std::filesystem::path base = std::filesystem::path(static_root_dir());
-    const std::filesystem::path full = base / rel;
-
-    // Fail-closed: only serve known safe extensions
-    if (!has_allowed_static_ext(full)) {
-        res.status = 404;
-        res.set_header("Content-Type", "text/plain");
-        res.body = "Not found";
-        return;
-    }
-
-    std::string body;
-    if (!read_file_to_string(full.string(), body) || body.empty()) {
-        res.status = 404;
-        res.set_header("Content-Type", "text/plain");
-        res.body = "Missing static file: " + full.string();
-        return;
-    }
-
-    std::string ext = full.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){ return (char)std::tolower(c); });
-    const std::string ct = mime_for_ext(ext);
-    res.status = 200;
-    res.set_header("Content-Type", ct.c_str());
-    // Most static assets can be cached; but if you want no-cache everywhere, change here.
-    // res.set_header("Cache-Control", "no-store");
-    res.body = std::move(body);
-});
-
 
     // Option A: fixed policy location in repo, with optional env override
     std::string allowlist_path =
@@ -1898,6 +2081,195 @@ srv.Get(R"(/static/(.+))", [&](const httplib::Request& req, httplib::Response& r
     	std::cerr << "[users] FATAL: failed to load users registry: " << users_path << std::endl;
     	return 4;
 	}
+
+
+	RoutesV5Context v5;
+	v5.origin = &ORIGIN;
+	v5.rp_id  = &RP_ID;
+	v5.app    = &APP_NAME;
+
+	v5.req_ttl  = &REQ_TTL;
+	v5.sess_ttl = &SESS_TTL;
+
+	v5.server_pk  = SERVER_PK;
+	v5.server_sk  = SERVER_SK;
+	v5.cookie_key = COOKIE_KEY;
+
+	v5.allowlist = &allowlist;
+	v5.users     = &users;
+
+	v5.allowlist_path = &allowlist_path;
+	v5.users_path     = &users_path;
+
+	// ---- hook existing helpers (these already exist in main.cpp today) ----
+	v5.now_epoch = []() { return pqnas::now_epoch(); };
+	v5.now_iso_utc = []() { return pqnas::now_iso_utc(); };
+
+
+	v5.random_b64url = [&](int n) { return random_b64url(n); };
+	v5.url_encode    = [&](const std::string& s) { return url_encode(s); };
+
+	v5.build_req_payload_canonical = [&](const std::string& sid,
+                                     const std::string& chal,
+                                     const std::string& nonce,
+                                     long iat,
+                                     long exp) {
+    	return build_req_payload_canonical(sid, chal, nonce, iat, exp);
+	};
+
+	v5.sign_req_token = [&](const std::string& payload) { return sign_req_token(payload); };
+	v5.qr_svg_from_text = [&](const std::string& t, int sc, int b) { return qr_svg_from_text(t, sc, b); };
+
+    // v5 stateless-ready correlation key (k):
+    // Must match verify_login_common.cc v5 approval_key = vr.st_hash_b64.
+    // We define: k = b64_std(SHA256(st_token)).
+    v5.st_hash_b64_from_st = [&](const std::string& st_token) -> std::string {
+        unsigned char md[EVP_MAX_MD_SIZE];
+        unsigned int md_len = 0;
+
+        EVP_MD_CTX* c = EVP_MD_CTX_new();
+        if (!c) return std::string{};
+        struct Guard { EVP_MD_CTX* p; ~Guard(){ if(p) EVP_MD_CTX_free(p); } } g{c};
+
+        if (EVP_DigestInit_ex(c, EVP_sha256(), nullptr) != 1) return std::string{};
+        if (!st_token.empty()) {
+            if (EVP_DigestUpdate(c, st_token.data(), st_token.size()) != 1) return std::string{};
+        }
+        if (EVP_DigestFinal_ex(c, md, &md_len) != 1) return std::string{};
+
+        // st_hash_b64 in your verify path is "b64" (standard base64), so reuse pqnas::b64_std.
+        return pqnas::b64_std(md, (size_t)md_len);
+    };
+
+
+	// approvals/pending
+	v5.approvals_prune = [&](long now) { approvals_prune(now); };
+	v5.pending_prune   = [&](long now) { pending_prune(now); };
+
+	v5.approvals_get = [&](const std::string& sid, RoutesV5Context::ApprovalEntry& out) {
+    	ApprovalEntry e;
+	    if (!approvals_get(sid, e)) return false;
+    	out.cookie_val  = e.cookie_val;
+	    out.fingerprint = e.fingerprint;
+    	out.expires_at  = e.expires_at;
+    	return true;
+	};
+	v5.approvals_put = [&](const std::string& sid, const RoutesV5Context::ApprovalEntry& in) {
+    	ApprovalEntry e;
+	    e.cookie_val  = in.cookie_val;
+    	e.fingerprint = in.fingerprint;
+	    e.expires_at  = in.expires_at;
+    	approvals_put(sid, e);
+	};
+	v5.approvals_pop = [&](const std::string& sid) { approvals_pop(sid); };
+
+	v5.pending_get = [&](const std::string& sid, RoutesV5Context::PendingEntry& out) {
+    	PendingEntry p;
+	    if (!pending_get(sid, p)) return false;
+    	out.expires_at = p.expires_at;
+	    out.reason     = p.reason;
+    	return true;
+	};
+	v5.pending_put = [&](const std::string& sid, const RoutesV5Context::PendingEntry& in) {
+    	PendingEntry p;
+	    p.expires_at = in.expires_at;
+    	p.reason     = in.reason;
+	    pending_put(sid, p);
+	};
+	v5.pending_pop = [&](const std::string& sid) { pending_pop(sid); };
+
+	// cookie minting + base64
+	v5.session_cookie_mint = [&](const unsigned char* key,
+                             const std::string& fp_b64,
+                             long iat,
+                             long exp,
+                             std::string& out_cookie) {
+    	return session_cookie_mint(key, fp_b64, iat, exp, out_cookie);
+	};
+
+    v5.sign_token_v4_ed25519 = [&](const nlohmann::json& p, const unsigned char* sk) {
+        return sign_token_v4_ed25519(p, sk);
+    };
+
+
+
+	v5.b64_std = [&](const unsigned char* data, size_t len) { return pqnas::b64_std(data, len); };
+	v5.client_ip = [&](const httplib::Request& r) { return client_ip(r); };
+	v5.shorten   = [&](const std::string& s, size_t n) { return pqnas::shorten(s, n); };
+
+	// audit bridge: keep it simple (you already have audit_append(ev) etc.)
+	v5.audit_emit = [&](const std::string& event,
+                    const std::string& outcome,
+                    const std::function<void(std::map<std::string,std::string>&)>& fill) {
+    	pqnas::AuditEvent ev;
+	    ev.event   = event;
+    	ev.outcome = outcome;
+	    std::map<std::string,std::string> f;
+    	fill(f);
+	    for (auto& kv : f) ev.f[kv.first] = kv.second;
+    	maybe_auto_rotate_before_append();
+	    audit_append(ev);
+	};
+
+	// v4 verify bridge (phase-1)
+	v5.verify_v4_json = [&](const std::string& body) -> RoutesV5Context::VerifyResult {
+    	pqnas::VerifyV4Config cfg;
+    	cfg.now_unix_sec = 0;
+	    cfg.expected_origin = ORIGIN;
+    	cfg.expected_rp_id  = RP_ID;
+	    cfg.enforce_allowlist = false;
+
+	    std::array<unsigned char, 32> pk{};
+    	std::memcpy(pk.data(), SERVER_PK, 32);
+
+    	auto vr = pqnas::verify_v4_json(body, pk, cfg);
+
+	    RoutesV5Context::VerifyResult out;
+    	out.ok = vr.ok;
+	    out.detail = vr.detail;
+
+	    out.sid         = vr.sid;
+    	out.origin      = vr.origin;
+	    out.rp_id_hash  = vr.rp_id_hash;
+    	out.st_hash_b64 = vr.st_hash_b64;
+	    out.fingerprint_hex = vr.fingerprint_hex;
+
+    // map rc (coarse)
+    if (vr.ok) out.rc = RoutesV5Context::VerifyRc::OK;
+	    else {
+    	    switch (vr.rc) {
+        	    case pqnas::VerifyV4Rc::ST_EXPIRED: out.rc = RoutesV5Context::VerifyRc::ST_EXPIRED; break;
+            	case pqnas::VerifyV4Rc::RP_ID_HASH_MISMATCH: out.rc = RoutesV5Context::VerifyRc::RP_ID_HASH_MISMATCH; break;
+	            case pqnas::VerifyV4Rc::FINGERPRINT_MISMATCH: out.rc = RoutesV5Context::VerifyRc::FINGERPRINT_MISMATCH; break;
+    	        case pqnas::VerifyV4Rc::PQ_SIG_INVALID: out.rc = RoutesV5Context::VerifyRc::PQ_SIG_INVALID; break;
+        	    case pqnas::VerifyV4Rc::POLICY_DENY: out.rc = RoutesV5Context::VerifyRc::POLICY_DENY; break;
+            	default: out.rc = RoutesV5Context::VerifyRc::OTHER; break;
+	        }
+    	}
+	    return out;
+	};
+
+	// (leave v5.sign_token_v4_ed25519 unset for now; we’ll wire once v5 verify uses it)
+
+	register_routes_v5(srv, v5);
+
+// GET /api/public/auth_mode
+// Returns installer-selected auth mode for login page: v4 | v5 | auto
+srv.Get("/api/public/auth_mode", [&](const httplib::Request& /*req*/, httplib::Response& res) {
+    std::string mode = "v4";
+    if (const char* v = std::getenv("PQNAS_AUTH_MODE")) mode = v;
+
+    mode = pqnas::lower_ascii(mode);
+    if (mode != "v4" && mode != "v5" && mode != "auto") mode = "auto";
+
+    nlohmann::json out = {
+        {"ok", true},
+        {"auth_mode", mode}
+    };
+    reply_json(res, 200, out.dump());
+});
+
+
 
 // ----- GET /api/v4/system (user+admin) --------------------------------------
 srv.Get("/api/v4/system", [&](const httplib::Request& req, httplib::Response& res) {
@@ -2095,11 +2467,42 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
         res.body = body;
     });
 
+
+	// GET /static/pqnas_auth.js
+	srv.Get("/static/pqnas_auth.js", [&](const httplib::Request&, httplib::Response& res) {
+    	std::string body;
+    	if (!read_file_to_string(STATIC_AUTH_JS, body)) {
+        	res.status = 500;
+	        res.set_header("Content-Type", "text/plain");
+    	    res.body = "Missing static file: " + STATIC_AUTH_JS;
+        	return;
+	    }
+    	res.status = 200;
+	    res.set_header("Content-Type", "application/javascript; charset=utf-8");
+    	res.body = body;
+	});
+
+	srv.Get("/static/pqnas_v5.js", [&](const httplib::Request&, httplib::Response& res) {
+    	std::string body;
+    	if (!read_file_to_string(STATIC_V5_JS, body) || body.empty()) {
+        	res.status = 404;
+	        res.set_content("missing pqnas_v5.js", "text/plain; charset=utf-8");
+    	    return;
+	    }
+    	res.set_header("Cache-Control", "no-store");
+	    res.set_header("Content-Type", "application/javascript; charset=utf-8");
+    	res.body = std::move(body);
+	});
+
+
     // after successful consume, browser goes here
     srv.Get("/success", [&](const httplib::Request&, httplib::Response& res) {
         res.status = 302;
         res.set_header("Location", "/app");
     });
+
+
+
 /*
     srv.Get("/app", [&](const httplib::Request&, httplib::Response& res) {
         const std::string body = slurp_file(STATIC_APP_HTML);
@@ -2609,6 +3012,22 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
         }
 
 		const long long active_bytes = file_size_bytes_safe(audit_jsonl_path);
+		// Snapshots defaults (if absent)
+		json snapshots = json::object();
+		if (persisted.contains("snapshots") && persisted["snapshots"].is_object()) {
+    		snapshots = persisted["snapshots"];
+		} else {
+    		snapshots = json{
+	    	    {"enabled", false},
+    	    	{"backend", "btrfs"},
+		        {"volumes", json::array()},
+		        {"schedule", json{{"mode","times_per_day"},{"times_per_day",6},{"jitter_seconds",120}}},
+        		{"retention", json{{"keep_days",7},{"keep_min",12},{"keep_max",500}}}
+    		};
+		}
+
+		json storage_roots = json::object();
+		storage_roots["data_root"] = data_root_dir();
 
 		reply_json(res, 200, json{
     		{"ok", true},
@@ -2623,9 +3042,11 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
     		{"audit_active_path", audit_jsonl_path},
     		{"audit_active_bytes", active_bytes},
 
-    		{"ui_theme", ui_theme}
-		}.dump());
+    		{"ui_theme", ui_theme},
 
+			{"snapshots", snapshots},
+			{"storage_roots", storage_roots},
+		}.dump());
 
     });
 
@@ -2818,6 +3239,141 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             {"max_total_mb", max_total_mb},
         };
     };
+    auto normalize_snapshots = [&](const json& in_snap, std::string& err) -> json {
+        err.clear();
+        if (!in_snap.is_object()) { err = "snapshots must be an object"; return json(); }
+
+        bool enabled = in_snap.value("enabled", false);
+        if (in_snap.contains("enabled") && !in_snap["enabled"].is_boolean()) {
+            err = "snapshots.enabled must be boolean"; return json();
+        }
+
+        std::string backend = in_snap.value("backend", "btrfs");
+        if (in_snap.contains("backend") && !in_snap["backend"].is_string()) {
+            err = "snapshots.backend must be string"; return json();
+        }
+        if (backend != "btrfs") { err = "snapshots.backend must be: btrfs"; return json(); }
+
+        // per-volume policy flag (persist it!)
+        bool per_volume_policy = false;
+        if (in_snap.contains("per_volume_policy")) {
+            if (!in_snap["per_volume_policy"].is_boolean()) {
+                err = "snapshots.per_volume_policy must be boolean";
+                return json();
+            }
+            per_volume_policy = in_snap["per_volume_policy"].get<bool>();
+        }
+        // schedule
+        json sched = in_snap.value("schedule", json::object());
+        if (!sched.is_object()) { err = "snapshots.schedule must be an object"; return json(); }
+
+        std::string mode = sched.value("mode", "times_per_day");
+        if (sched.contains("mode") && !sched["mode"].is_string()) { err = "snapshots.schedule.mode must be string"; return json(); }
+        if (mode != "times_per_day") { err = "snapshots.schedule.mode must be: times_per_day"; return json(); }
+
+        int tpd = sched.value("times_per_day", 6);
+        if (sched.contains("times_per_day") && !sched["times_per_day"].is_number_integer()) {
+            err = "snapshots.schedule.times_per_day must be integer"; return json();
+        }
+        if (tpd < 1 || tpd > 24) { err = "snapshots.schedule.times_per_day must be 1..24"; return json(); }
+
+        int jitter = sched.value("jitter_seconds", 120);
+        if (sched.contains("jitter_seconds") && !sched["jitter_seconds"].is_number_integer()) {
+            err = "snapshots.schedule.jitter_seconds must be integer"; return json();
+        }
+        if (jitter < 0 || jitter > 3600) { err = "snapshots.schedule.jitter_seconds must be 0..3600"; return json(); }
+
+        // retention
+        json ret = in_snap.value("retention", json::object());
+        if (!ret.is_object()) { err = "snapshots.retention must be an object"; return json(); }
+
+        auto get_int = [&](const char* key, int def, int lo, int hi) -> int {
+            auto it = ret.find(key);
+            if (it == ret.end() || it->is_null()) return def;
+            if (!it->is_number_integer()) { err = std::string("snapshots.retention.") + key + " must be integer"; return def; }
+            int v = it->get<int>();
+            if (v < lo) v = lo;
+            if (v > hi) v = hi;
+            return v;
+        };
+
+        int keep_days = get_int("keep_days", 7, 0, 3650);
+        if (!err.empty()) return json();
+        int keep_min  = get_int("keep_min", 12, 0, 5000);
+        if (!err.empty()) return json();
+        int keep_max  = get_int("keep_max", 500, 1, 50000);
+        if (!err.empty()) return json();
+        if (keep_max < keep_min) { err = "snapshots.retention.keep_max must be >= keep_min"; return json(); }
+
+        // volumes
+        json vols = in_snap.value("volumes", json::array());
+        if (!vols.is_array()) { err = "snapshots.volumes must be array"; return json(); }
+
+        json out_vols = json::array();
+        for (const auto& v : vols) {
+            if (!v.is_object()) { err = "snapshots.volumes[] must be object"; return json(); }
+            if (!v.contains("name") || !v["name"].is_string()) { err = "snapshots.volumes[].name must be string"; return json(); }
+            if (!v.contains("source_subvolume") || !v["source_subvolume"].is_string()) { err = "snapshots.volumes[].source_subvolume must be string"; return json(); }
+            if (!v.contains("snap_root") || !v["snap_root"].is_string()) { err = "snapshots.volumes[].snap_root must be string"; return json(); }
+
+            std::string src = v["source_subvolume"].get<std::string>();
+            std::string dst = v["snap_root"].get<std::string>();
+            if (src.empty() || src[0] != '/') { err = "snapshots.volumes[].source_subvolume must be absolute path"; return json(); }
+
+			            if (dst.empty() || dst[0] != '/') { err = "snapshots.volumes[].snap_root must be absolute path"; return json(); }
+
+            // optional per-volume override schedule (only if per_volume_policy=true)
+            json vsched = json(); // null by default
+            if (per_volume_policy && v.contains("schedule")) {
+                if (!v["schedule"].is_object()) { err = "snapshots.volumes[].schedule must be object"; return json(); }
+
+                std::string vmode = v["schedule"].value("mode", "times_per_day");
+                if (v["schedule"].contains("mode") && !v["schedule"]["mode"].is_string()) {
+                    err = "snapshots.volumes[].schedule.mode must be string";
+                    return json();
+                }
+                if (vmode != "times_per_day") {
+                    err = "snapshots.volumes[].schedule.mode must be: times_per_day";
+                    return json();
+                }
+
+                int vtpd = v["schedule"].value("times_per_day", tpd);
+                if (v["schedule"].contains("times_per_day") && !v["schedule"]["times_per_day"].is_number_integer()) {
+                    err = "snapshots.volumes[].schedule.times_per_day must be integer";
+                    return json();
+                }
+                if (vtpd < 1 || vtpd > 24) { err = "snapshots.volumes[].schedule.times_per_day must be 1..24"; return json(); }
+
+                int vjit = v["schedule"].value("jitter_seconds", jitter);
+                if (v["schedule"].contains("jitter_seconds") && !v["schedule"]["jitter_seconds"].is_number_integer()) {
+                    err = "snapshots.volumes[].schedule.jitter_seconds must be integer";
+                    return json();
+                }
+                if (vjit < 0 || vjit > 3600) { err = "snapshots.volumes[].schedule.jitter_seconds must be 0..3600"; return json(); }
+
+                vsched = json{{"mode","times_per_day"},{"times_per_day", vtpd},{"jitter_seconds", vjit}};
+            }
+
+            json outv = json{
+                {"name", v["name"].get<std::string>()},
+                {"source_subvolume", src},
+                {"snap_root", dst}
+            };
+            if (per_volume_policy && vsched.is_object()) outv["schedule"] = vsched;
+
+            out_vols.push_back(outv);
+
+        }
+
+       return json{
+            {"enabled", enabled},
+            {"backend", backend},
+            {"per_volume_policy", per_volume_policy},
+            {"schedule", json{{"mode", mode},{"times_per_day", tpd},{"jitter_seconds", jitter}}},
+            {"retention", json{{"keep_days", keep_days},{"keep_min", keep_min},{"keep_max", keep_max}}},
+            {"volumes", out_vols}
+        };
+    };
 
     try {
         if (req.body.empty()) {
@@ -2874,6 +3430,7 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
         bool changed_ret      = false;
         bool changed_rotation = false;
         bool changed_theme    = false;
+        bool changed_snapshots = false;
 
         json patch = json::object();
 
@@ -2949,6 +3506,40 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
                 audit_append(ev);
             } catch (...) {}
         }
+        // ---- snapshots (optional) ----
+        if (in.contains("snapshots")) {
+            std::string e2;
+            json norm = normalize_snapshots(in["snapshots"], e2);
+            if (!e2.empty()) {
+                reply_json(res, 400, json{{"ok", false}, {"message", e2}});
+                return;
+            }
+
+            json before_snap = json::object();
+            if (persisted.contains("snapshots") && persisted["snapshots"].is_object()) {
+                before_snap = persisted["snapshots"];
+            }
+
+            patch["snapshots"] = norm;
+            persisted["snapshots"] = norm; // for response shaping
+
+            changed_snapshots = true;
+
+            // Audit (best-effort)
+            try {
+                pqnas::AuditEvent ev;
+                ev.event = "admin.settings_changed";
+                ev.outcome = "ok";
+                ev.f["snapshots_before"] = before_snap.is_null() ? json::object() : before_snap;
+                ev.f["snapshots_after"]  = norm;
+                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                auto it_ua = req.headers.find("User-Agent");
+                ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
+                maybe_auto_rotate_before_append();
+                audit_append(ev);
+            } catch (...) {}
+
+        }
 
 		// ---- ui_theme (optional) ----
 		if (in.contains("ui_theme")) {
@@ -3023,13 +3614,18 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             } catch (...) {}
         }
 
-        if (!changed_level && !changed_ret && !changed_rotation && !changed_theme) {
+        if (!changed_level && !changed_ret && !changed_rotation && !changed_theme && !changed_snapshots) {
             reply_json(res, 400, json{
                 {"ok", false},
                 {"error", "bad_request"},
-                {"message", "nothing to update (provide audit_min_level and/or audit_retention and/or audit_rotation and/or ui_theme)"}
+                {"message", "nothing to update (provide audit_min_level and/or audit_retention and/or audit_rotation and/or ui_theme and/or snapshots)"}
             }.dump());
             return;
+        }
+
+        json snapshots = json::object();
+        if (persisted.contains("snapshots") && persisted["snapshots"].is_object()) {
+            snapshots = persisted["snapshots"];
         }
 
         if (!save_settings_patch(patch)) {
@@ -3085,7 +3681,8 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             {"audit_active_path", audit_jsonl_path},
             {"audit_active_bytes", active_bytes},
 
-            {"ui_theme", ui_theme_value}
+            {"ui_theme", ui_theme_value},
+            {"snapshots", snapshots}
         }.dump());
 
         return;
@@ -3129,7 +3726,7 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
 
 	    auto audit_ok = [&](const std::string& fp_b64, long exp, const std::string& role) {
         	pqnas::AuditEvent ev;
-    	    ev.event = "v4.me_ok";
+    	    ev.event = "me_ok";
 	        ev.outcome = "ok";
         	ev.f["fingerprint_b64"] = pqnas::shorten(fp_b64, 120);
     	    ev.f["exp"] = std::to_string(exp);
@@ -3311,331 +3908,143 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             res.body = json({{"ok", false}, {"error", "server_error"}, {"message", e.what()}}).dump();
         }
     });
+// --- Shared verify context (used by both /api/v4/verify and /api/v5/verify) ---
+VerifyLoginCommonContext c;
 
-    // POST /api/v4/verify
-    srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& res) {
-        auto fail = [&](int code, const std::string& msg, const std::string& detail = "") {
-            json out = {
-                {"ok", false},
-                {"error", (code == 400 ? "bad_request" : "not_authorized")},
-                {"message", msg}
-            };
-            if (!detail.empty()) out["detail"] = detail;
-            reply_json(res, code, out.dump());
-        };
+c.origin = &ORIGIN;
+c.rp_id  = &RP_ID;
 
-        // --- audit context (filled after verify_v4_json) ---
-        std::string audit_sid;
-        std::string audit_st_hash_b64;
-        std::string audit_origin;
-        std::string audit_rp_id_hash;
-        std::string audit_fp;
+c.server_pk  = SERVER_PK;
+c.server_sk  = SERVER_SK;
+c.cookie_key = COOKIE_KEY;
 
-        auto audit_ua = [&]() -> std::string {
-            auto it = req.headers.find("User-Agent");
-            return pqnas::shorten(it == req.headers.end() ? "" : it->second);
-        };
+c.sess_ttl = &SESS_TTL;
 
-        auto audit_fail = [&](const std::string& reason, const std::string& detail = "") {
-            pqnas::AuditEvent ev;
-            ev.event = "v4.verify_fail";
-            ev.outcome = "fail";
-            if (!audit_sid.empty()) ev.f["sid"] = audit_sid;
-            if (!audit_st_hash_b64.empty()) ev.f["st_hash_b64"] = audit_st_hash_b64;
-            if (!audit_origin.empty()) ev.f["origin"] = audit_origin;
-            if (!audit_rp_id_hash.empty()) ev.f["rp_id_hash"] = audit_rp_id_hash;
-            if (!audit_fp.empty()) ev.f["fingerprint"] = audit_fp;
-            ev.f["reason"] = reason;
-            if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+c.allowlist = &allowlist;
+c.users     = &users;
+c.allowlist_path = &allowlist_path;
+c.users_path     = &users_path;
 
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+// approvals/pending (bridge)
+c.approvals_prune = [&](long now){ approvals_prune(now); };
+c.pending_prune   = [&](long now){ pending_prune(now); };
 
-            auto it_cf = req.headers.find("CF-Connecting-IP");
-            if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+c.approvals_get = [&](const std::string& sid, VerifyLoginCommonContext::ApprovalEntry& out){
+    ApprovalEntry e;
+    if (!approvals_get(sid, e)) return false;
+    out.cookie_val  = e.cookie_val;
+    out.fingerprint = e.fingerprint;
+    out.expires_at  = e.expires_at;
+    return true;
+};
 
-            auto it_xff = req.headers.find("X-Forwarded-For");
-            if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+c.approvals_put = [&](const std::string& sid, const VerifyLoginCommonContext::ApprovalEntry& in){
+    ApprovalEntry e;
+    e.cookie_val  = in.cookie_val;
+    e.fingerprint = in.fingerprint;
+    e.expires_at  = in.expires_at;
+    approvals_put(sid, e);
+};
 
-            ev.f["ua"] = audit_ua();
-            maybe_auto_rotate_before_append();
-            audit_append(ev);
-        };
+c.approvals_pop = [&](const std::string& sid){ approvals_pop(sid); };
 
-        auto audit_info = [&](const std::string& event, const std::string& outcome,
-                              const std::string& reason = "", const std::string& detail = "") {
-            pqnas::AuditEvent ev;
-            ev.event = event;
-            ev.outcome = outcome;
-            if (!audit_sid.empty()) ev.f["sid"] = audit_sid;
-            if (!audit_st_hash_b64.empty()) ev.f["st_hash_b64"] = audit_st_hash_b64;
-            if (!audit_origin.empty()) ev.f["origin"] = audit_origin;
-            if (!audit_rp_id_hash.empty()) ev.f["rp_id_hash"] = audit_rp_id_hash;
-            if (!audit_fp.empty()) ev.f["fingerprint"] = audit_fp;
+c.pending_get = [&](const std::string& sid, VerifyLoginCommonContext::PendingEntry& out){
+    PendingEntry p;
+    if (!pending_get(sid, p)) return false;
+    out.expires_at = p.expires_at;
+    out.reason     = p.reason;
+    return true;
+};
 
-            if (!reason.empty()) ev.f["reason"] = reason;
-            if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+c.pending_put = [&](const std::string& sid, const VerifyLoginCommonContext::PendingEntry& in){
+    PendingEntry p;
+    p.expires_at = in.expires_at;
+    p.reason     = in.reason;
+    pending_put(sid, p);
+};
 
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+c.pending_pop = [&](const std::string& sid){ pending_pop(sid); };
 
-            auto it_cf = req.headers.find("CF-Connecting-IP");
-            if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+// time + helpers
+c.now_epoch   = [](){ return pqnas::now_epoch(); };
+c.now_iso_utc = [](){ return pqnas::now_iso_utc(); }; // pqnas_util
 
-            auto it_xff = req.headers.find("X-Forwarded-For");
-            if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+c.client_ip = [&](const httplib::Request& r){ return client_ip(r); };
+c.shorten   = [&](const std::string& s, size_t n){ return pqnas::shorten(s, n); };
 
-            ev.f["ua"] = audit_ua();
-            maybe_auto_rotate_before_append();
-            audit_append(ev);
-        };
+// crypto hooks
+c.sign_token_v4_ed25519 = [&](const json& payload, const unsigned char* sk){
+    return sign_token_v4_ed25519(payload, sk);
+};
 
-        // ISO UTC helper (avoid relying on a missing pqnas::now_iso_utc())
-        auto now_iso_utc = [&]() -> std::string {
-            using namespace std::chrono;
-            auto now = system_clock::now();
-            auto ms  = duration_cast<milliseconds>(now.time_since_epoch()) % 1000;
+c.session_cookie_mint = [&](const unsigned char* key,
+                            const std::string& fp_b64,
+                            long iat, long exp,
+                            std::string& out_cookie){
+    return session_cookie_mint(key, fp_b64, iat, exp, out_cookie);
+};
 
-            std::time_t t = system_clock::to_time_t(now);
-            std::tm tm{};
-            gmtime_r(&t, &tm);
+c.b64_std = [&](const unsigned char* data, size_t len){
+    return pqnas::b64_std(data, len);
+};
 
-            char buf[64];
-            std::snprintf(buf, sizeof(buf),
-                          "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
-                          tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                          tm.tm_hour, tm.tm_min, tm.tm_sec,
-                          (int)ms.count());
-            return std::string(buf);
-        };
+c.audit_emit = [&](const std::string& event,
+                   const std::string& outcome,
+                   const std::function<void(std::map<std::string,std::string>&)>& fill){
+    pqnas::AuditEvent ev;
+    ev.event   = event;
+    ev.outcome = outcome;
 
-        try {
-            // ---- v4 shared verification (crypto + bindings) ----
-            pqnas::VerifyV4Config cfg;
-            cfg.now_unix_sec = 0;
-            cfg.expected_origin = ORIGIN;
-            cfg.expected_rp_id  = RP_ID;
+    std::map<std::string,std::string> f;
+    fill(f);
+    for (auto& kv : f) ev.f[kv.first] = kv.second;
 
-            // Let crypto/bindings verify first; enforce users registry after we know who it is.
-            cfg.enforce_allowlist = false;
+    maybe_auto_rotate_before_append();
+    audit_append(ev);
+};
 
-            std::array<unsigned char, 32> server_pk{};
-            std::memcpy(server_pk.data(), SERVER_PK, 32);
+// ---- Verify routes (short wrappers) ----
+srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& res) {
+    if (c.audit_emit) c.audit_emit("route.hit", "ok", [&](std::map<std::string,std::string>& f){
+        f["path"] = "/api/v4/verify";
+        f["ip"]   = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it = req.headers.find("User-Agent");
+        if (it != req.headers.end()) f["ua"] = c.shorten ? c.shorten(it->second, 120) : it->second;
+    });
+    handle_verify_login_common(req, res, 4, c);
+});
 
-            auto vr = pqnas::verify_v4_json(req.body, server_pk, cfg);
+srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& res) {
+    if (c.audit_emit) c.audit_emit("route.hit", "ok", [&](std::map<std::string,std::string>& f){
+        f["path"] = "/api/v5/verify";
+        f["ip"]   = req.remote_addr.empty() ? "?" : req.remote_addr;
 
-            audit_sid         = vr.sid;
-            audit_origin      = vr.origin;
-            audit_rp_id_hash  = vr.rp_id_hash;
-            audit_st_hash_b64 = vr.st_hash_b64;
-            audit_fp          = vr.fingerprint_hex;
+        auto it = req.headers.find("User-Agent");
+        if (it != req.headers.end()) f["ua"] = c.shorten ? c.shorten(it->second, 120) : it->second;
 
-            if (!vr.ok) {
-                int http = 400;
-                switch (vr.rc) {
-                    case pqnas::VerifyV4Rc::ST_EXPIRED:
-                        http = 410;
-                        break;
-                    case pqnas::VerifyV4Rc::RP_ID_HASH_MISMATCH:
-                    case pqnas::VerifyV4Rc::FINGERPRINT_MISMATCH:
-                    case pqnas::VerifyV4Rc::PQ_SIG_INVALID:
-                        http = 403;
-                        break;
-                    case pqnas::VerifyV4Rc::POLICY_DENY:
-                        http = 403;
-                        break;
-                    default:
-                        http = 400;
-                        break;
-                }
+        auto ct = req.headers.find("Content-Type");
+        if (ct != req.headers.end()) f["content_type"] = c.shorten ? c.shorten(ct->second, 80) : ct->second;
 
-                audit_fail(std::string("v4_shared_rc_") + std::to_string((int)vr.rc), vr.detail);
+        f["body_len"] = std::to_string(req.body.size());
 
-                if (http == 410) return fail(410, "st expired");
-                return fail(http, "verify failed", vr.detail);
-            }
-
-            const bool vectors_mode = (std::getenv("PQNAS_V4_VECTORS") != nullptr);
-            const long at_ttl = vectors_mode ? (10L * 365 * 24 * 3600) : 60L;
-            long now = pqnas::now_epoch();
-
-            const std::string& st_hash     = vr.st_hash_b64;
-            const std::string& computed_fp = vr.fingerprint_hex;
-
-            // Bootstrap: first verified fingerprint becomes admin if this is a fresh install.
-            // Fresh install = users.json empty AND policy.json (allowlist) empty.
-            {
-                static std::mutex bootstrap_mu;
-                std::lock_guard<std::mutex> lk(bootstrap_mu);
-
-                const bool no_users = users.snapshot().empty();
-                const bool no_policy_users = allowlist.empty();
-
-                if (no_users && no_policy_users) {
-
-                    const std::string now_iso = now_iso_utc();
-                    users.ensure_present_disabled_user(computed_fp, now_iso);
-                    users.set_role(computed_fp, "admin");
-                    users.set_status(computed_fp, "enabled");
-                    users.save(users_path);
-
-                    allowlist.add_admin(computed_fp);
-                    allowlist.save(allowlist_path);
-
-                    std::cerr << "[bootstrap] first admin: " << computed_fp << std::endl;
-                }
-            }
-
-
-            // ---- Users registry policy (fail-closed) ----
-            const std::string now_iso = now_iso_utc();
-
-            // Unknown user: create disabled record, persist, mark as pending, deny.
-            if (!users.exists(computed_fp)) {
-                const bool created = users.ensure_present_disabled_user(computed_fp, now_iso);
-                const bool saved   = created ? users.save(users_path) : false;
-
-                audit_info("v4.user_auto_created_disabled", "ok",
-                           created ? "created" : "already_exists_race",
-                           saved ? "" : "users_save_failed");
-
-                // Mark this sid as pending admin approval so /api/v4/status can surface it
-                {
-                    PendingEntry p;
-                    p.expires_at = now + 120; // keep in sync with approvals TTL window
-                    pending_put(vr.sid, p);
-                }
-
-                return fail(403, "user disabled");
-            }
-
-            // Known user must be enabled (role user/admin is fine; status must be enabled)
-            if (!users.is_enabled_user(computed_fp)) {
-                audit_info("v4.user_disabled", "fail", "not_enabled");
-
-                // Mark this sid as pending admin approval so browser can show wait-approval UX
-                {
-                    PendingEntry p;
-                    p.expires_at = now + 120; // keep in sync with approvals TTL window
-                    pending_put(vr.sid, p);
-                }
-
-                return fail(403, "user disabled");
-            }
-
-            // Update last_seen on successful verify (best-effort persist)
-            const bool touched = users.touch_last_seen(computed_fp, now_iso);
-            const bool saved   = touched ? users.save(users_path) : false;
-
-            if (touched && saved) {
-                audit_info("v4.user_last_seen_updated", "ok");
-            } else if (touched && !saved) {
-                audit_info("v4.user_last_seen_updated", "fail", "users_save_failed");
+        // Store the exact JSON body verified by server (TRUNCATED for safety).
+        // Increase limit if your proof JSON is larger, but keep an upper bound.
+        const size_t MAX_AUDIT_BODY = 32 * 1024; // 32 KiB
+        if (!req.body.empty()) {
+            if (req.body.size() <= MAX_AUDIT_BODY) {
+                f["verify_body_json"] = req.body; // exact bytes (assumes UTF-8 JSON)
+                f["verify_body_trunc"] = "0";
             } else {
-                audit_info("v4.user_last_seen_updated", "fail", "touch_failed");
+                f["verify_body_json"] = req.body.substr(0, MAX_AUDIT_BODY);
+                f["verify_body_trunc"] = "1";
             }
-
-            // ---- vectors logging ----
-            if (vectors_mode) {
-                std::cerr << "[v4_vectors] FP_HEX " << computed_fp
-                          << " SID " << vr.sid
-                          << " ST_HASH " << st_hash
-                          << "\n";
-                std::cerr << "[v4_vectors] CANON_SHA256_B64 " << vr.canonical_sha256_b64 << "\n";
-            }
-
-            // ---- mint AT (short-lived) ----
-            json at_payload = {
-                {"v",4},
-                {"typ","at"},
-                {"sid", vr.sid},
-                {"st_hash", st_hash},
-                {"rp_id_hash", vr.rp_id_hash},
-                {"fingerprint", computed_fp},
-                {"issued_at", now},
-                {"expires_at", now + at_ttl}
-            };
-            std::string at = sign_token_v4_ed25519(at_payload, SERVER_SK);
-
-            if (vectors_mode) {
-                std::cerr << "[v4_vectors] AT_ISSUED " << at << "\n";
-            }
-
-            // ---- mint browser session cookie (stored for /consume) ----
-            std::string cookieVal;
-            long sess_iat = now;
-            long sess_exp = now + SESS_TTL;
-
-            // Cookie embeds fingerprint as standard base64 of UTF-8 fingerprint hex string
-            std::string fp_b64 = pqnas::b64_std(
-                reinterpret_cast<const unsigned char*>(computed_fp.data()),
-                computed_fp.size()
-            );
-
-            if (session_cookie_mint(COOKIE_KEY, fp_b64, sess_iat, sess_exp, cookieVal)) {
-                ApprovalEntry e;
-                e.cookie_val  = cookieVal;
-                e.fingerprint = computed_fp;
-                e.expires_at  = now + 120;
-                approvals_put(vr.sid, e);
-
-                {
-                    pqnas::AuditEvent ev;
-                    ev.event = "v4.cookie_minted";
-                    ev.outcome = "ok";
-                    ev.f["sid"] = vr.sid;
-                    ev.f["st_hash_b64"] = st_hash;
-                    ev.f["rp_id_hash"] = vr.rp_id_hash;
-                    ev.f["fingerprint"] = computed_fp;
-                    ev.f["sess_iat"] = std::to_string(sess_iat);
-                    ev.f["sess_exp"] = std::to_string(sess_exp);
-
-                    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-
-                    auto it_cf = req.headers.find("CF-Connecting-IP");
-                    if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
-
-                    auto it_xff = req.headers.find("X-Forwarded-For");
-                    if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
-
-                    ev.f["ua"] = audit_ua();
-                    maybe_auto_rotate_before_append();
-                    audit_append(ev);
-                }
-            } else {
-                audit_fail("cookie_mint_failed");
-            }
-
-            // ---- verify ok audit ----
-            {
-                pqnas::AuditEvent ev;
-                ev.event = "v4.verify_ok";
-                ev.outcome = "ok";
-                ev.f["sid"] = vr.sid;
-                ev.f["st_hash_b64"] = st_hash;
-                ev.f["origin"] = vr.origin;
-                ev.f["rp_id_hash"] = vr.rp_id_hash;
-                ev.f["fingerprint"] = computed_fp;
-
-                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-
-                auto it_cf = req.headers.find("CF-Connecting-IP");
-                if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
-
-                auto it_xff = req.headers.find("X-Forwarded-For");
-                if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
-
-                ev.f["ua"] = audit_ua();
-                maybe_auto_rotate_before_append();
-                audit_append(ev);
-            }
-
-            json out = {{"ok",true},{"v",4},{"at",at}};
-            reply_json(res, 200, out.dump());
-        }
-        catch (const std::exception& e) {
-            audit_fail("exception", e.what());
-            return fail(400, "exception", e.what());
         }
     });
+
+    handle_verify_login_common(req, res, 5, c);
+});
+
+
 
     // GET /wait-approval (static UI)
     srv.Get("/wait-approval", [&](const httplib::Request&, httplib::Response& res) {
@@ -3760,6 +4169,7 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
 		        {"group", u.group},
 		        {"email", u.email},
 		        {"address", u.address},
+				{"avatar_url", u.avatar_url},
 
 		        // storage metadata
 		        {"storage_state", u.storage_state},
@@ -3794,6 +4204,59 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
     	res.set_header("Cache-Control", "no-store");
 	    res.set_content(body, "application/javascript; charset=utf-8");
 	});
+
+
+	// Generic static handler: /static/<anything>
+	// Must come AFTER specific /static/*.js handlers so those remain unchanged.
+	srv.Get(R"(/static/(.+))", [&](const httplib::Request& req, httplib::Response& res) {
+    	// req.matches[1] is the captured path after /static/
+    	if (req.matches.size() < 2) {
+        	res.status = 400;
+	        res.set_header("Content-Type", "text/plain");
+    	    res.body = "Bad static request";
+        	return;
+	    }
+
+    	const std::string rel = req.matches[1].str();
+
+	    if (!is_safe_static_relpath(rel)) {
+    	    res.status = 403;
+        	res.set_header("Content-Type", "text/plain");
+	        res.body = "Forbidden";
+    	    return;
+    	}
+
+    	const std::filesystem::path base = std::filesystem::path(static_root_dir());
+    	const std::filesystem::path full = base / rel;
+
+	    // Fail-closed: only serve known safe extensions
+    	if (!has_allowed_static_ext(full)) {
+        	res.status = 404;
+	        res.set_header("Content-Type", "text/plain");
+    	    res.body = "Not found";
+        	return;
+	    }
+
+	    std::string ext = full.extension().string();
+    	std::transform(
+        	ext.begin(),
+	        ext.end(),
+    	    ext.begin(),
+        	[](unsigned char c) { return (char)std::tolower(c); }
+	    );
+
+    	const std::string ct = mime_for_ext(ext);
+
+	    // Hardened static serving (headers + cache control handled inside)
+    	// Set to true if you want /static to be completely no-cache.
+	    const bool no_store = false;
+
+	    if (!serve_static_file(req, res, full.string(), ct, no_store)) {
+    	    // serve_static_file already set status/body
+        	return;
+	    }
+	});
+
 
     auto now_iso_utc = []() -> std::string {
         using namespace std::chrono;
@@ -4023,20 +4486,20 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
         	std::string fs_err;
     	    const std::filesystem::path parent = udir.parent_path();
 	        if (!ensure_dir_exists(parent, &fs_err)) {
-        	    // Audit (best-effort)
-    	        try {
-	                pqnas::AuditEvent ev;
-                	ev.event = "admin.user_storage_mkdir_failed";
-            	    ev.outcome = "fail";
-        	        ev.f["fingerprint"] = fp;
-    	            ev.f["path"] = parent.string();
-	                ev.f["detail"] = pqnas::shorten(fs_err, 180);
-                	ev.f["ts"] = now_iso;
-            	    ev.f["actor_fp"] = actor_fp;
-        	        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-    	            maybe_auto_rotate_before_append();
-	                audit_append(ev);
-            	} catch (...) {}
+	            // Audit (best-effort)
+                try {
+                    pqnas::AuditEvent ev;
+                    ev.event = "admin.user_storage_mkdir_failed";
+                    ev.outcome = "fail";
+                    ev.f["fingerprint"] = fp;
+                    ev.f["path"] = parent.string();
+                    ev.f["detail"] = pqnas::shorten(fs_err, 180);
+                    ev.f["ts"] = now_iso;
+                    ev.f["actor_fp"] = actor_fp;
+                    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                    maybe_auto_rotate_before_append();
+                    audit_append(ev);
+                } catch (...) {}
 
             	reply_json(res, 500, json({
         	        {"ok", false},
@@ -9282,10 +9745,778 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
     }
 });
 
+//
+// ---- Snapshots API (admin-only, v1) ----
+//
+// GET /api/v4/snapshots/volumes
+srv.Get("/api/v4/snapshots/volumes", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_emit = [&](const std::string& outcome, const std::string& reason, int http, const std::string& detail="") {
+        pqnas::AuditEvent ev;
+        ev.event = "snapshots.volumes";
+        ev.outcome = outcome;
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["http"] = std::to_string(http);
+        if (!reason.empty()) ev.f["reason"] = reason;
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    std::string backend, err;
+    std::vector<SnapVol> vols;
+    if (!load_snapshot_volumes_from_admin_settings(admin_settings_path, &backend, &vols, &err)) {
+        audit_emit("fail", "settings_load_failed", 500, err);
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","failed to load snapshot settings"}}.dump());
+        return;
+    }
+
+    json out_vols = json::array();
+    for (const auto& v : vols) {
+        out_vols.push_back(json{
+            {"name", v.name},
+            {"source_subvolume", v.source_subvolume},
+            {"snap_root", v.snap_root},
+            {"enabled", v.enabled}
+        });
+    }
+	// Runtime user (for sudoers help text in snapshotmgr)
+	std::string runtime_user;
+	{
+    	struct passwd* pw = getpwuid(geteuid());
+    	if (pw && pw->pw_name) runtime_user = pw->pw_name;
+	}
+    audit_emit("ok", "", 200);
+	reply_json(res, 200, json{
+    	{"ok", true},
+    	{"backend", backend},
+	    {"volumes", out_vols},
+    	{"runtime_user", runtime_user}
+	}.dump());
+	});
+
+
+// GET /api/v4/snapshots/list?volume=data
+srv.Get("/api/v4/snapshots/list", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail="") {
+        pqnas::AuditEvent ev;
+        ev.event = "snapshots.list";
+        ev.outcome = "fail";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& vol, size_t n) {
+        pqnas::AuditEvent ev;
+        ev.event = "snapshots.list";
+        ev.outcome = "ok";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["volume"] = vol;
+        ev.f["count"] = std::to_string((unsigned long long)n);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    std::string vol = req.has_param("volume") ? req.get_param_value("volume") : "";
+    if (vol.empty()) {
+        audit_fail("missing_volume", 400);
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","missing volume"}}.dump());
+        return;
+    }
+
+    std::string backend, err;
+    std::vector<SnapVol> vols;
+    if (!load_snapshot_volumes_from_admin_settings(admin_settings_path, &backend, &vols, &err)) {
+        audit_fail("settings_load_failed", 500, err);
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","failed to load snapshot settings"}}.dump());
+        return;
+    }
+
+    auto it = std::find_if(vols.begin(), vols.end(), [&](const SnapVol& v){ return v.name == vol; });
+    if (it == vols.end()) {
+        audit_fail("unknown_volume", 404, vol);
+        reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","unknown volume"}}.dump());
+        return;
+    }
+
+    const std::string snap_root = it->snap_root;
+    std::error_code ec;
+    if (!std::filesystem::exists(snap_root, ec) || ec) {
+        audit_fail("snap_root_missing", 404, snap_root);
+        reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","snap_root not found"}}.dump());
+        return;
+    }
+
+struct Item {
+    std::string id;
+    std::string path;
+    std::uint64_t mtime_unix{0};
+    bool is_subvol{false};
+    std::string probe;      // "ok" | "no_privs" | "err"
+    std::string probe_detail;
+};
+
+std::vector<Item> items;
+
+for (auto& de : std::filesystem::directory_iterator(snap_root, ec)) {
+    if (ec) break;
+    if (!de.is_directory(ec)) continue;
+
+    const auto p = de.path();
+    const std::string id  = p.filename().string();
+    const std::string abs = p.string();
+
+    // mtime
+    std::uint64_t mt = 0;
+    std::error_code ec2;
+    auto ftime = std::filesystem::last_write_time(p, ec2);
+    if (!ec2) {
+        auto sctp = std::chrono::time_point_cast<std::chrono::seconds>(ftime);
+        mt = (std::uint64_t)sctp.time_since_epoch().count();
+    }
+
+    // Probe btrfs subvol via sudo -n; if sudo not allowed, we still list it but flag probe.
+    std::string detail;
+    bool is_sub = false;
+    std::string probe = "ok";
+
+    {
+        // popen_capture returns the stderr text; check for common sudo failure hints
+        is_sub = is_btrfs_subvolume_sudo_n(abs, &detail);
+
+        // If it isn't a subvol, it could be junk OR probe failed due to sudo policy.
+        // Heuristic: "sudo:" / "a password is required" => no_privs
+        const std::string dlow = lower_ascii(detail);
+        if (!is_sub) {
+            if (dlow.find("sudo:") != std::string::npos ||
+                dlow.find("a password is required") != std::string::npos ||
+                dlow.find("no tty present") != std::string::npos ||
+                dlow.find("not in the sudoers file") != std::string::npos) {
+                probe = "no_privs";
+            } else if (!detail.empty() && dlow.find("operation not permitted") != std::string::npos) {
+                // can also happen if sudo isn't used / allowed
+                probe = "no_privs";
+            } else {
+                probe = "ok"; // real "not a subvolume" (junk dir)
+            }
+        }
+    }
+
+    items.push_back(Item{id, abs, mt, is_sub, probe, detail});
+}
+
+
+    std::sort(items.begin(), items.end(), [&](const Item& a, const Item& b){
+        // newest first
+        if (a.mtime_unix != b.mtime_unix) return a.mtime_unix > b.mtime_unix;
+        return a.id > b.id;
+    });
+
+	json snaps = json::array();
+	for (const auto& s : items) {
+    	snaps.push_back(json{
+       		{"id", s.id},
+	        {"path", s.path},
+	        {"created_utc", ""},                 // keep blank if you want
+       		{"readonly", s.is_subvol},           // subvolumes are readonly snapshots
+	        {"is_btrfs_subvolume", s.is_subvol}, // <-- ✅ COMMA was missing after this before
+       		{"probe", s.probe},                  // "ok" | "no_privs" | ...
+       		{"probe_detail", pqnas::shorten(s.probe_detail, 180)}
+	    });
+	}
+
+
+    audit_ok(vol, snaps.size());
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"volume", vol},
+        {"snap_root", snap_root},
+        {"snapshots", snaps}
+    }.dump());
+});
+
+
+// GET /api/v4/snapshots/info?volume=data&id=<id>
+srv.Get("/api/v4/snapshots/info", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    std::string vol = req.has_param("volume") ? req.get_param_value("volume") : "";
+    std::string id  = req.has_param("id") ? req.get_param_value("id") : "";
+    if (vol.empty() || id.empty()) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","missing volume or id"}}.dump());
+        return;
+    }
+
+    std::string backend, err;
+    std::vector<SnapVol> vols;
+    if (!load_snapshot_volumes_from_admin_settings(admin_settings_path, &backend, &vols, &err)) {
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","failed to load snapshot settings"}}.dump());
+        return;
+    }
+
+    auto it = std::find_if(vols.begin(), vols.end(), [&](const SnapVol& v){ return v.name == vol; });
+    if (it == vols.end()) {
+        reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","unknown volume"}}.dump());
+        return;
+    }
+
+    const std::string snap_root = it->snap_root;
+    const std::string snap_path = (std::filesystem::path(snap_root) / id).string();
+
+    if (!is_path_under(snap_path, snap_root)) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid snapshot id"}}.dump());
+        return;
+    }
+
+    std::error_code ec;
+    if (!std::filesystem::exists(snap_path, ec) || ec) {
+        reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","snapshot not found"}}.dump());
+        return;
+    }
+
+    std::string out;
+    int rc = 0;
+    // best-effort info
+    std::string q = snap_path;
+    size_t pos = 0;
+    while ((pos = q.find("'", pos)) != std::string::npos) { q.replace(pos, 1, "'\\''"); pos += 4; }
+    popen_capture("sudo -n /usr/bin/btrfs subvolume show '" + q + "' 2>&1", &out, &rc);
+
+
+    const bool show_ok = (rc == 0);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"volume", vol},
+        {"id", id},
+        {"snapshot_path", snap_path},
+
+        {"btrfs_show_ok", show_ok},
+        {"btrfs_show_rc", rc},
+        {"btrfs_show", pqnas::shorten(out, 2000)},
+
+        {"hint", show_ok ? "" : "btrfs details require sudo/root (configure sudoers for pqnas)"}
+    }.dump());
+
+});
+
+
+// POST /api/v4/snapshots/restore/prepare
+// Body: {"volume":"data","id":"...","mode":"swap","force_stop":true}
+srv.Post("/api/v4/snapshots/restore/prepare", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    json j;
+    try { j = json::parse(req.body); }
+    catch (...) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid json"}}.dump());
+        return;
+    }
+
+    const std::string vol  = j.value("volume", "");
+    const std::string id   = j.value("id", "");
+    const std::string mode = j.value("mode", "swap");
+    const bool force_stop  = j.value("force_stop", false);
+
+    if (vol.empty() || id.empty()) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","missing volume or id"}}.dump());
+        return;
+    }
+    if (mode != "swap") {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","unsupported mode"}}.dump());
+        return;
+    }
+    if (!force_stop) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","force_stop must be true in v1"}}.dump());
+        return;
+    }
+
+    std::string backend, err;
+    std::vector<SnapVol> vols;
+    if (!load_snapshot_volumes_from_admin_settings(admin_settings_path, &backend, &vols, &err)) {
+        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","failed to load snapshot settings"}}.dump());
+        return;
+    }
+
+    auto it = std::find_if(vols.begin(), vols.end(), [&](const SnapVol& v){ return v.name == vol; });
+    if (it == vols.end()) {
+        reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","unknown volume"}}.dump());
+        return;
+    }
+
+    const std::string snap_root = it->snap_root;
+    const std::string snap_path = (std::filesystem::path(snap_root) / id).string();
+
+    if (!is_path_under(snap_path, snap_root)) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid snapshot id"}}.dump());
+        return;
+    }
+
+    if (!is_btrfs_subvolume_sudo_n(snap_path)) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","snapshot is not a btrfs subvolume"}}.dump());
+        return;
+    }
+
+    const std::string confirm_phrase = "RESTORE " + vol + " " + id;
+
+    // create confirm id
+    restore_cache_gc_best_effort();
+    const std::string confirm_id = "RSTR_" + rand_hex_32();
+
+    RestorePlan plan;
+    plan.volume = vol;
+    plan.snapshot_id = id;
+    plan.snapshot_path = snap_path;
+    plan.source_subvolume = it->source_subvolume;
+    plan.mode = "swap";
+    plan.confirm_phrase = confirm_phrase;
+    plan.created_iso = now_iso_utc();
+    // v1: expiry is handled by client + simple cache; you can add strict expiry later.
+
+    {
+        std::lock_guard<std::mutex> lk(g_restore_mu);
+        g_restore_by_id[confirm_id] = plan;
+    }
+
+    // audit
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "snapshots.restore_prepare";
+        ev.outcome = "ok";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["volume"] = vol;
+        ev.f["id"] = id;
+        ev.f["mode"] = mode;
+        ev.f["confirm_id"] = confirm_id;
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    }
+	auto has_systemd_unit = [&]() -> bool {
+    	// We only claim stop/start steps if systemctl exists AND pqnas.service is known
+	    int rc1 = std::system("command -v systemctl >/dev/null 2>&1");
+    	if (rc1 != 0) return false;
+    	int rc2 = std::system("systemctl status pqnas.service >/dev/null 2>&1");
+    	return (rc2 == 0);
+	};
+
+	const bool can_service = has_systemd_unit();
+
+	json steps = json::array();
+	if (can_service) steps.push_back("stop pqnas.service");
+	else steps.push_back("STOP PQ-NAS manually (dev mode: running via ./start.sh)");
+
+	steps.push_back("rename source_subvolume -> source_subvolume.pre_restore.<ts>");
+	steps.push_back("btrfs subvolume snapshot <snapshot> <source_subvolume>");
+
+	if (can_service) steps.push_back("start pqnas.service");
+	else steps.push_back("START PQ-NAS manually (dev mode)");
+
+	json warnings = json::array({
+    	"Restoring replaces the live volume content",
+    	"Service downtime required"
+	});
+	if (!can_service) warnings.push_back("Dev mode: pqnas.service not detected; you must stop/start PQ-NAS yourself");
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"confirm_id", confirm_id},
+        {"expires_in_sec", 120},
+        {"plan", json{
+            {"volume", vol},
+            {"source_subvolume", it->source_subvolume},
+            {"snapshot_path", snap_path},
+            {"mode", mode},
+			{"steps", steps},
+			{"warnings", warnings}
+        }}
+    }.dump());
+});
+
+// GET /api/v4/snapshots/restore/status?job_id=RJOB_...
+srv.Get("/api/v4/snapshots/restore/status", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    const std::string job_id = req.has_param("job_id") ? req.get_param_value("job_id") : "";
+    if (job_id.empty()) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","missing job_id"}}.dump());
+        return;
+    }
+    // basic sanity: only allow our own job ids
+    if (job_id.rfind("RJOB_", 0) != 0) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid job_id"}}.dump());
+        return;
+    }
+
+    const std::filesystem::path run_dir = "/run/pqnas/restore";
+    const std::filesystem::path job_path = run_dir / (job_id + ".json");
+    const std::filesystem::path result_path = run_dir / (job_id + ".result.json");
+
+    auto file_read_all = [&](const std::filesystem::path& p) -> std::string {
+        std::ifstream f(p);
+        if (!f) return {};
+        std::ostringstream ss;
+        ss << f.rdbuf();
+        return ss.str();
+    };
+
+    std::error_code ec;
+
+    // If result exists, return it (pass-through)
+    if (std::filesystem::exists(result_path, ec) && !ec) {
+        const std::string body = file_read_all(result_path);
+        if (body.empty()) {
+            reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","result file unreadable"}}.dump());
+            return;
+        }
+        // Validate it's JSON (best effort)
+        try {
+            json jr = json::parse(body);
+            // Ensure job_id matches (defensive)
+            if (jr.value("job_id","") != job_id) {
+                reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","result job_id mismatch"}}.dump());
+                return;
+            }
+            jr["ok"] = true;
+            reply_json(res, 200, jr.dump());
+            return;
+        } catch (...) {
+            reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","result file contains invalid json"}}.dump());
+            return;
+        }
+    }
+
+    // No result yet — if job exists, report queued/running
+    ec.clear();
+    if (std::filesystem::exists(job_path, ec) && !ec) {
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"job_id", job_id},
+            {"status", "queued"},
+            {"hint", "result not written yet"}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","unknown job_id"}}.dump());
+});
+
+// POST /api/v4/snapshots/restore/confirm
+// Body: {"confirm_id":"RSTR_...","confirm_text":"RESTORE data 2026-..."}
+srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    json j;
+    try { j = json::parse(req.body); }
+    catch (...) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid json"}}.dump());
+        return;
+    }
+
+    const std::string confirm_id   = j.value("confirm_id", "");
+    const std::string confirm_text = j.value("confirm_text", "");
+
+    if (confirm_id.empty() || confirm_text.empty()) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","missing confirm_id or confirm_text"}}.dump());
+        return;
+    }
+
+    RestorePlan plan;
+    {
+        std::lock_guard<std::mutex> lk(g_restore_mu);
+        auto it = g_restore_by_id.find(confirm_id);
+        if (it == g_restore_by_id.end()) {
+            reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","unknown confirm_id"}}.dump());
+            return;
+        }
+        plan = it->second;
+        // one-shot token: remove now (fail-safe)
+        g_restore_by_id.erase(it);
+    }
+
+    if (confirm_text != plan.confirm_phrase) {
+        // audit fail
+        pqnas::AuditEvent ev;
+        ev.event = "snapshots.restore_confirm";
+        ev.outcome = "fail";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["confirm_id"] = confirm_id;
+        ev.f["volume"] = plan.volume;
+        ev.f["id"] = plan.snapshot_id;
+        ev.f["reason"] = "confirm_text_mismatch";
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","confirmation text mismatch"}}.dump());
+        return;
+    }
+
+    // Validate paths again
+    const std::string snap_root_real = realpath_str(std::filesystem::path(plan.snapshot_path).parent_path().string());
+    if (!is_path_under(plan.snapshot_path, snap_root_real)) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","snapshot path invalid"}}.dump());
+        return;
+    }
+    if (!is_btrfs_subvolume_sudo_n(plan.snapshot_path)) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","snapshot no longer valid"}}.dump());
+        return;
+    }
+
+    // ---- systemd restore job enqueue (does NOT stop pqnas.service here) ----
+
+    const std::string job_id = "RJOB_" + random_b64url(18);
+    const std::string created_utc = now_iso_utc();
+
+    // Runtime dir for restore jobs
+    const std::filesystem::path run_dir = "/run/pqnas/restore";
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(run_dir, ec);
+        if (ec) {
+            reply_json(res, 500, json{
+                {"ok",false},
+                {"error","server_error"},
+                {"message","failed to create /run/pqnas/restore"},
+                {"detail", pqnas::shorten(ec.message(), 200)}
+            }.dump());
+            return;
+        }
+    }
+
+    const std::filesystem::path job_path = run_dir / (job_id + ".json");
+    const std::filesystem::path tmp_path = run_dir / (job_id + ".tmp." + random_b64url(10));
+
+    // Build job JSON (v1)
+    json job = {
+        {"job_id", job_id},
+        {"created_utc", created_utc},
+        {"api_version", 4},
+        {"service_name", "pqnas.service"},
+        {"volume", {
+            {"name", plan.volume},
+            {"live_path", plan.source_subvolume},
+            {"snap_path", plan.snapshot_path}
+        }},
+        {"snapshot_id", plan.snapshot_id},
+        {"request", {
+            {"confirm_id", confirm_id},
+            {"actor_fp", actor_fp},
+            {"ip", req.remote_addr.empty() ? "?" : req.remote_addr}
+        }}
+    };
+
+    const std::string job_text = job.dump(2) + "\n";
+
+    // Atomic write: temp + rename
+    {
+        std::ofstream out(tmp_path, std::ios::binary | std::ios::out | std::ios::trunc);
+        if (!out.good()) {
+            std::error_code ec2;
+            std::filesystem::remove(tmp_path, ec2);
+
+            reply_json(res, 500, json{
+                {"ok",false},
+                {"error","server_error"},
+                {"message","failed to create temp job file"},
+                {"path", tmp_path.string()}
+            }.dump());
+            return;
+        }
+        out.write(job_text.data(), (std::streamsize)job_text.size());
+        if (!out.good()) {
+            std::error_code ec2;
+            std::filesystem::remove(tmp_path, ec2);
+
+            reply_json(res, 500, json{
+                {"ok",false},
+                {"error","server_error"},
+                {"message","failed to write temp job file"},
+                {"path", tmp_path.string()}
+            }.dump());
+            return;
+        }
+    }
+
+    {
+        std::error_code ec;
+        // If job_path exists (shouldn't), remove first to avoid rename failure.
+        if (std::filesystem::exists(job_path, ec) && !ec) {
+            ec.clear();
+            std::filesystem::remove(job_path, ec);
+            if (ec) {
+                std::error_code ec2;
+                std::filesystem::remove(tmp_path, ec2);
+
+                reply_json(res, 500, json{
+                    {"ok",false},
+                    {"error","server_error"},
+                    {"message","failed to overwrite existing job file"},
+                    {"path", job_path.string()},
+                    {"detail", pqnas::shorten(ec.message(), 200)}
+                }.dump());
+                return;
+            }
+        }
+
+        ec.clear();
+        std::filesystem::rename(tmp_path, job_path, ec);
+        if (ec) {
+            std::error_code ec2;
+            std::filesystem::remove(tmp_path, ec2);
+
+            reply_json(res, 500, json{
+                {"ok",false},
+                {"error","server_error"},
+                {"message","failed to finalize job file"},
+                {"path", job_path.string()},
+                {"detail", pqnas::shorten(ec.message(), 200)}
+            }.dump());
+            return;
+        }
+
+        // Best-effort: restrict perms (root helper refuses world-writable)
+        {
+            std::error_code ec_perm;
+            std::filesystem::permissions(
+                job_path,
+                std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+                std::filesystem::perm_options::replace,
+                ec_perm
+            );
+        }
+    }
+
+
+    // Start systemd restore unit via sudo (pqnas user must be allowed in sudoers)
+    auto sh_quote = [](const std::string& s)->std::string{
+        std::string q = s;
+        size_t pos = 0;
+        while ((pos = q.find("'", pos)) != std::string::npos) { q.replace(pos, 1, "'\\''"); pos += 4; }
+        return "'" + q + "'";
+    };
+
+    auto run_cmd = [&](const std::string& cmd, std::string* out, int* rc_out)->bool{
+        int rc = 0;
+        std::string o;
+        popen_capture(cmd + " 2>&1", &o, &rc);
+        if (out) *out = o;
+        if (rc_out) *rc_out = rc;
+        return (rc == 0);
+    };
+
+    const std::string unit = "pqnas-restore@" + job_id + ".service";
+    const std::string cmd_start_restore =
+        "sudo -n /usr/bin/systemctl start " + sh_quote(unit);
+
+    std::string out_start;
+    int rc_start = 0;
+    if (!run_cmd(cmd_start_restore, &out_start, &rc_start)) {
+        // audit fail
+        pqnas::AuditEvent ev;
+        ev.event = "snapshots.restore_job_start";
+        ev.outcome = "fail";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["confirm_id"] = confirm_id;
+        ev.f["job_id"] = job_id;
+        ev.f["volume"] = plan.volume;
+        ev.f["id"] = plan.snapshot_id;
+        ev.f["reason"] = "systemctl_start_failed";
+        ev.f["rc"] = std::to_string(rc_start);
+        ev.f["out"] = pqnas::shorten(out_start, 300);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+
+        reply_json(res, 500, json{
+            {"ok",false},
+            {"error","restore_start_failed"},
+            {"message","failed to start restore unit"},
+            {"job_id", job_id},
+            {"unit", unit},
+            {"rc", rc_start},
+            {"out", pqnas::shorten(out_start, 400)}
+        }.dump());
+        return;
+    }
+
+    // audit ok
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "snapshots.restore_job_start";
+        ev.outcome = "ok";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["confirm_id"] = confirm_id;
+        ev.f["job_id"] = job_id;
+        ev.f["volume"] = plan.volume;
+        ev.f["id"] = plan.snapshot_id;
+        ev.f["job_path"] = pqnas::shorten(job_path.string(), 220);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"job_id", job_id},
+        {"volume", plan.volume},
+        {"id", plan.snapshot_id}
+    }.dump());
+
+});
+
+
+// Admin routes
 
     // POST /api/v4/admin/users/upsert
-    // Body: {"fingerprint":"...","name":"...","role":"user|admin","notes":"..."}
+    // Body: {"fingerprint":"...","name":"...","role":"user|admin","notes":"...","email":"...","avatar_url":"...","group":"...","address":"..."}
     srv.Post("/api/v4/admin/users/upsert", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
         if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
@@ -9301,6 +10532,10 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
         const std::string name  = j.value("name", "");
         const std::string role  = j.value("role", "user");
         const std::string notes = j.value("notes", "");
+		const std::string email = j.value("email", "");
+		const std::string avatar_url = j.value("avatar_url", "");
+        const std::string group   = j.value("group", "");
+        const std::string address = j.value("address", "");
 
         if (fp.empty()) {
             reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
@@ -9324,12 +10559,24 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
             u.role = "user";
             u.name = "";
             u.notes = "";
+			u.avatar_url = "";
         }
+
+        const bool is_self = (!actor_fp.empty() && fp == actor_fp);
 
         // Apply fields from request
         u.name  = name;
         u.notes = notes;
-        u.role  = role;  // normalized inside upsert()
+        u.email = email;
+        u.address = address;   // if you accept it
+        u.group = group;       // if you accept it
+        u.avatar_url = avatar_url;
+
+        // Prevent self-demotion: keep your existing role when editing yourself.
+        if (!is_self) {
+            u.role = role;   // normalized inside upsert()
+        }
+
 
         const bool ok_upsert = users.upsert(u);
         const bool ok_save   = ok_upsert ? users.save(users_path) : false;
@@ -9340,7 +10587,9 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
             ev.outcome = (ok_upsert && ok_save) ? "ok" : "fail";
             ev.f["fingerprint"] = fp;
             ev.f["existed"] = existed ? "true" : "false";
-            ev.f["role"] = role;
+            ev.f["role_requested"] = role;
+            ev.f["role_effective"] = u.role;
+            if (is_self && role != u.role) ev.f["self_role_change_blocked"] = "true";
             if (!name.empty()) ev.f["name"] = pqnas::shorten(name, 80);
             if (!notes.empty()) ev.f["notes"] = pqnas::shorten(notes, 120);
             ev.f["ts"] = now_iso;
@@ -9423,7 +10672,160 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
         reply_json(res, 200, json({{"ok",true}}).dump());
     });
 
-    srv.Get("/api/v4/apps/list", [&](const httplib::Request& req, httplib::Response& res) {
+srv.Post("/api/v4/admin/users/avatar_upload", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    json j;
+    try { j = json::parse(req.body); }
+    catch (...) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+        return;
+    }
+
+    const std::string fp   = j.value("fingerprint", "");
+    const std::string mime = j.value("mime", "");
+    const std::string b64  = j.value("data_b64", "");
+
+    if (fp.empty() || b64.empty()) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint or data"}}).dump());
+        return;
+    }
+
+    // Allowlist types
+    std::string ext;
+    if (mime == "image/png") ext = ".png";
+    else if (mime == "image/jpeg") ext = ".jpg";
+    else if (mime == "image/webp") ext = ".webp";
+    else {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","unsupported image type"}}).dump());
+        return;
+    }
+
+    // Decode standard base64 (with padding) -> bytes
+    std::string bytes;
+    if (!b64std_decode_to_bytes(b64, bytes)) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","base64 decode failed"}}).dump());
+        return;
+    }
+
+
+    if (bytes.size() > 256 * 1024) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","file too large"}}).dump());
+        return;
+    }
+
+    std::filesystem::path dir = std::filesystem::path(data_root_dir()) / "avatars";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) {
+        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","mkdir failed"}}).dump());
+        return;
+    }
+
+    std::filesystem::path out = dir / (fp + ext);
+    {
+        std::ofstream o(out.string(), std::ios::binary | std::ios::trunc);
+        if (!o.good()) {
+            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","write failed"}}).dump());
+            return;
+        }
+        o.write(bytes.data(), (std::streamsize)bytes.size());
+    }
+
+    const std::string url = std::string("/api/v4/admin/users/avatar?fingerprint=") + fp;
+    reply_json(res, 200, json({{"ok",true},{"avatar_url",url}}).dump());
+});
+
+
+    // GET /api/v4/admin/users/avatar?fingerprint=...
+    srv.Get("/api/v4/admin/users/avatar", [&](const httplib::Request& req, httplib::Response& res) {
+
+        std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp))
+            return;
+
+        const std::string fp = req.get_param_value("fingerprint");
+        if (fp.empty()) {
+            reply_json(res, 400,
+                json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+            return;
+        }
+
+        // Serve from data_root_dir()/avatars/<fp>.<ext>
+        const std::filesystem::path dir = std::filesystem::path(data_root_dir()) / "avatars";
+        const std::filesystem::path p_png  = dir / (fp + ".png");
+        const std::filesystem::path p_jpg  = dir / (fp + ".jpg");
+        const std::filesystem::path p_webp = dir / (fp + ".webp");
+
+        std::filesystem::path p;
+        std::string ct;
+
+        if (std::filesystem::exists(p_png))      { p = p_png;  ct = "image/png"; }
+        else if (std::filesystem::exists(p_jpg)) { p = p_jpg;  ct = "image/jpeg"; }
+        else if (std::filesystem::exists(p_webp)){ p = p_webp; ct = "image/webp"; }
+        else {
+            reply_json(res, 404,
+                json({{"ok",false},{"error","not_found"},{"message","file missing"}}).dump());
+            return;
+        }
+
+        std::ifstream f(p, std::ios::binary);
+        std::string bytes(
+            (std::istreambuf_iterator<char>(f)),
+            std::istreambuf_iterator<char>());
+
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(bytes, ct.c_str());
+    });
+
+    // POST /api/v4/admin/users/avatar_remove
+    srv.Post("/api/v4/admin/users/avatar_remove", [&](const httplib::Request& req, httplib::Response& res) {
+        std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+        json j;
+        try { j = json::parse(req.body); }
+        catch (...) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+            return;
+        }
+
+        const std::string fp = j.value("fingerprint", "");
+        if (fp.empty()) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+            return;
+        }
+
+        auto cur = users.get(fp);
+        if (!cur.has_value()) {
+            reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
+            return;
+        }
+
+        // delete any avatar files (best-effort)
+        const std::filesystem::path dir = std::filesystem::path(data_root_dir()) / "avatars";
+        std::error_code ec;
+        std::filesystem::remove(dir / (fp + ".png"), ec);
+        std::filesystem::remove(dir / (fp + ".jpg"), ec);
+        std::filesystem::remove(dir / (fp + ".webp"), ec);
+
+        // clear stored url
+        pqnas::UserRec u = *cur;
+        u.avatar_url.clear();
+
+        const bool ok_upsert = users.upsert(u);
+        const bool ok_save   = ok_upsert ? users.save(users_path) : false;
+
+        if (!ok_upsert || !ok_save) {
+            reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","save failed"}}).dump());
+            return;
+        }
+
+        reply_json(res, 200, json({{"ok",true}}).dump());
+    });
+
+    srv.Get("/api/v4/apps/list", [&](const httplib::Request&, httplib::Response& res) {
     json out;
     out["ok"] = true;
     out["installed"] = json::array();
@@ -10675,5 +12077,10 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
 
     std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
     srv.listen("0.0.0.0", LISTEN_PORT);
+
+    snapshots_stop.store(true);
+    if (snapshots_thread.joinable()) snapshots_thread.join();
+
     return 0;
+
 }

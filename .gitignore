@@ -29,3 +29,14 @@ apps/users/
 config/policy.json
 config/users.json
 config/shares.json
+
+# built app zips
+apps/bundled/**/filemgr-*.zip
+
+# runtime-installed apps live under /srv/pqnas, not in repo
+apps/installed/
+
+
+# Bundled app artifacts
+apps/bundled/**/**/*.zip
+apps/bundled/**/*.zip

@@ -6,11 +6,6 @@
     <title>PQ-NAS • Admin Settings</title>
 
     <style>
-        :root{
-            --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
-        }
-
         *{ box-sizing:border-box; }
         html,body{ height:100%; }
 
@@ -91,6 +86,7 @@
             overflow: auto;
             min-height: 0;
         }
+
         /* Approvals attention badge */
         .navAlertBadge {
             margin-left: 10px;
@@ -108,7 +104,7 @@
             background: rgba(var(--fail-rgb), 0.22);
             box-shadow: 0 0 18px rgba(var(--fail-rgb), 0.25);
         }
-        /* Make the Approvals button pop when pending */
+
         .navbtn.needs-attn{
             border-color: rgba(var(--fail-rgb),0.55);
             background: rgba(var(--fail-rgb),0.08);
@@ -298,8 +294,7 @@
         .pill.warn{ border-color: rgba(var(--warn-rgb),0.38); background: rgba(var(--warn-rgb),0.10); color: rgba(var(--warn-rgb),0.92); }
         .pill.info{ border-color: rgba(var(--info-rgb),0.38); background: rgba(var(--info-rgb),0.08); color: rgba(var(--info-rgb),0.92); }
 
-
-            .input, select{
+        .input, select{
             border:1px solid rgba(var(--fg-rgb),0.18);
             background:rgba(0,0,0,0.24);
             color:rgba(var(--fg-rgb),0.92);
@@ -365,7 +360,7 @@
             line-height:1.5;
         }
 
-        /* Retention preview table */
+        /* Tables */
         .tableWrap{
             border:1px solid rgba(var(--fg-rgb),0.12);
             border-radius: 16px;
@@ -400,10 +395,6 @@
             text-overflow:ellipsis;
             white-space:nowrap;
         }
-        .col-name{ width: 52%; }
-        .col-size{ width: 14%; }
-        .col-age{ width: 18%; }
-        .col-reason{ width: 16%; }
 
         /* Toast */
         .toast{
@@ -425,40 +416,20 @@
         .toast .t{ font-weight:950; margin-bottom:2px; }
         .toast .m{ font-size:12px; color:var(--fg-dim); white-space: pre-wrap; overflow-wrap:anywhere; }
 
-        .footerline{
-            padding: 10px 14px;
-            border-top: 1px solid var(--border2);
-            color: rgba(var(--fg-rgb),0.55);
-            font-size: 12px;
-            text-align: right;
-            user-select: none;
-            background: rgba(0,0,0,0.12);
-        }
-        /* -------------------------
-          Accordion cards (Settings)
-          - multi-open allowed
-          - works with current .card/.hd/.bd structure
-          ------------------------- */
-
+        /* Accordion */
         .card.accordion .hd{
             cursor: pointer;
             user-select: none;
         }
-
         .card.accordion .hd:focus{
             outline: none;
             box-shadow: 0 0 0 3px rgba(var(--fg-rgb),0.10);
             border-radius: 12px;
         }
-
-        /* body visibility */
         .card.accordion .bd{ display: none; }
         .card.accordion.open .bd{ display: block; }
-
-        /* header border when collapsed */
         .card.accordion:not(.open) .hd{ border-bottom: none; }
 
-        /* chevron */
         .card.accordion .chev{
             margin-left: 10px;
             opacity: 0.75;
@@ -472,16 +443,26 @@
             opacity: 0.95;
         }
 
+        #notesCard .mini{
+            white-space: normal;
+            overflow-wrap: break-word;
+            word-break: normal;
+            hyphens: auto;
+        }
+
+        .disabled-ui {
+            opacity: 0.55;
+            filter: grayscale(0.2);
+        }
         .hidden { display:none !important; }
     </style>
+
     <link rel="stylesheet" href="/static/theme.css">
     <script src="/static/theme.js"></script>
-
 </head>
 
 <body>
 <div class="desktop">
-    <!-- Left launcher -->
     <aside class="sidebar">
         <div class="brand">
             <div class="logoDot" aria-hidden="true"></div>
@@ -493,36 +474,19 @@
 
         <nav class="nav" aria-label="Admin navigation">
             <div class="sectionLabel">Admin</div>
-            <a class="navbtn" href="/admin">
-                <span>Overview</span><span class="k">O</span>
-            </a>
-            <a class="navbtn" href="/admin/users">
-                <span>User profiles</span><span class="k">U</span>
-            </a>
-            <a class="navbtn" href="/admin/approvals">
-                <span>Approvals</span><span class="k">A</span>
-            </a>
-            <a class="navbtn" href="/admin/apps">
-                <span>Apps</span><span class="k">📦</span>
-            </a>
-            <a class="navbtn" href="/admin/audit">
-                <span>Audit log UI</span><span class="k">D</span>
-            </a>
-            <a class="navbtn active" href="/admin/settings">
-                <span>Settings</span><span class="k">S</span>
-            </a>
-            <a class="navbtn" href="/system">
-                <span>System</span><span class="k">Y</span>
-            </a>
+            <a class="navbtn" href="/admin"><span>Overview</span><span class="k">O</span></a>
+            <a class="navbtn" href="/admin/users"><span>User profiles</span><span class="k">U</span></a>
+            <a class="navbtn" href="/admin/approvals"><span>Approvals</span><span class="k">A</span></a>
+            <a class="navbtn" href="/admin/apps"><span>Apps</span><span class="k">📦</span></a>
+            <a class="navbtn" href="/admin/audit"><span>Audit log UI</span><span class="k">D</span></a>
+            <a class="navbtn active" href="/admin/settings"><span>Settings</span><span class="k">S</span></a>
+            <a class="navbtn" href="/system"><span>System</span><span class="k">Y</span></a>
             <div class="sectionLabel"> </div>
-            <a class="navbtn" href="/app">
-                <span>Back...</span><span class="k">↩</span>
-            </a>
+            <a class="navbtn" href="/app"><span>Back...</span><span class="k">↩</span></a>
         </nav>
 
-
         <div class="bottom">
-            <div class="statusCard">
+            <div class="statusCard" id="notesCard">
                 <div style="font-weight:950;">Notes</div>
                 <div class="mini">
                     Settings are admin-only.
@@ -533,14 +497,12 @@
         </div>
     </aside>
 
-    <!-- Right workspace -->
     <main class="workspace">
         <div class="topbar">
             <div class="crumbs">
                 <div class="title">Admin • Settings</div>
                 <div class="sub">Admin-only runtime controls</div>
             </div>
-
             <div class="actions">
                 <a class="btn" href="/admin">Back</a>
             </div>
@@ -548,26 +510,23 @@
 
         <div class="content">
 
-            <!-- Audit verbosity (OPEN by default) -->
+            <!-- Audit verbosity -->
             <div class="card accordion open" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="true">
                     <div class="h">Audit verbosity</div>
                     <div class="pill warn" id="statusPill"><span class="k">Status:</span> <span class="v">loading…</span></div>
                     <span class="chev" aria-hidden="true">▸</span>
                 </div>
-
                 <div class="bd">
                     <div class="row">
                         <span class="pill"><span class="k">Persisted:</span> <span class="v mono" id="persistedVal">—</span></span>
                         <span class="pill"><span class="k">Runtime:</span> <span class="v mono" id="runtimeVal">—</span></span>
                     </div>
-
                     <div class="row">
                         <select id="levelSelect" aria-label="audit minimum level"></select>
                         <button id="btnSave" class="btn primary" type="button">Save</button>
                         <button id="btnReload" class="btn" type="button">Reload</button>
                     </div>
-
                     <div class="note">
                         <b>Meaning:</b> DEBUG logs everything • INFO hides noisy lifecycle • ADMIN is default • SECURITY keeps only security-relevant events.
                         <br/>
@@ -580,17 +539,13 @@
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">Audit rotation</div>
-                    <div class="pill info" id="activeSizePill">
-                        <span class="k">Active log:</span> <span class="v">—</span>
-                    </div>
+                    <div class="pill info" id="activeSizePill"><span class="k">Active log:</span> <span class="v">—</span></div>
                     <span class="chev" aria-hidden="true">▸</span>
                 </div>
-
                 <div class="bd">
                     <div class="row">
                         <button id="btnRotateNow" class="btn" type="button">Rotate now</button>
                     </div>
-
                     <div class="note">
                         Rotation renames the active <span class="mono">pqnas_audit.jsonl</span> into a timestamped archive
                         and starts a fresh active log. Retention rules apply only to rotated archives.
@@ -598,23 +553,20 @@
                 </div>
             </div>
 
-            <!-- Audit rotation policy (automatic) -->
+            <!-- Audit rotation policy -->
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">Audit rotation policy</div>
-                    <div class="pill info" id="rotatePolicyPill">
-                        <span class="k">Policy:</span> <span class="v">—</span>
-                    </div>
+                    <div class="pill info" id="rotatePolicyPill"><span class="k">Policy:</span> <span class="v">—</span></div>
                     <span class="chev" aria-hidden="true">▸</span>
                 </div>
-
                 <div class="bd">
                     <div class="row">
                         <select id="rotMode" aria-label="Rotation mode">
-                            <option value="off">Off</option>
+                            <option value="manual">Manual</option>
                             <option value="daily">Daily (UTC)</option>
                             <option value="size_mb">When active log exceeds N MB</option>
-                            <option value="size_or_daily">Size OR daily (whichever first)</option>
+                            <option value="daily_or_size_mb">Size OR daily (whichever first)</option>
                         </select>
 
                         <input id="rotMaxMB"
@@ -639,9 +591,7 @@
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">Audit retention</div>
-                    <div class="pill info" id="retentionPill">
-                        <span class="k">Policy:</span> <span class="v">—</span>
-                    </div>
+                    <div class="pill info" id="retentionPill"><span class="k">Policy:</span> <span class="v">—</span></div>
                     <span class="chev" aria-hidden="true">▸</span>
                 </div>
 
@@ -684,10 +634,10 @@
                         <table>
                             <thead>
                             <tr>
-                                <th class="col-name">File</th>
-                                <th class="col-size">Size</th>
-                                <th class="col-age">Modified</th>
-                                <th class="col-reason">Reason</th>
+                                <th style="width:52%;">File</th>
+                                <th style="width:14%;">Size</th>
+                                <th style="width:18%;">Modified</th>
+                                <th style="width:16%;">Reason</th>
                             </tr>
                             </thead>
                             <tbody id="retTbody"></tbody>
@@ -696,6 +646,77 @@
 
                     <div class="note">
                         Preview is a dry-run: it lists what would be deleted. “Run prune now” deletes only those candidates, and logs an admin audit event.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Snapshots (FIXED: only one snapVolTbody) -->
+            <div class="card accordion" data-acc="settings">
+                <div class="hd" role="button" tabindex="0" aria-expanded="false">
+                    <div class="h">Snapshots (Btrfs)</div>
+                    <div class="pill info" id="snapPill"><span class="k">Status:</span> <span class="v">—</span></div>
+                    <span class="chev" aria-hidden="true">▸</span>
+                </div>
+
+                <div class="bd">
+                    <div class="row">
+                        <label class="pill" style="gap:10px;">
+                            <span class="k">Enabled</span>
+                            <input id="snapEnabled" type="checkbox" />
+                        </label>
+
+                        <label class="pill" style="gap:10px;">
+                            <span class="k">Per-volume schedule</span>
+                            <input id="snapPerVolume" type="checkbox" />
+                        </label>
+
+                        <select id="snapTimesPerDay" aria-label="Snapshots per day">
+                            <option value="1">1 / day</option>
+                            <option value="2">2 / day</option>
+                            <option value="4">4 / day</option>
+                            <option value="6">6 / day</option>
+                            <option value="12">12 / day</option>
+                            <option value="24">24 / day</option>
+                        </select>
+
+                        <input id="snapJitter" class="input mono" style="min-width:180px" type="number" min="0" max="3600"
+                               placeholder="jitter seconds (0..3600)" />
+
+                        <button id="btnSnapSave" class="btn primary" type="button">Save snapshots</button>
+                        <button id="btnSnapReload" class="btn" type="button">Reload</button>
+                    </div>
+
+                    <div class="row">
+                        <input id="snapRoot" class="input mono" style="min-width:520px; flex: 1 1 auto;" type="text"
+                               placeholder="/srv/pqnas/.snapshots/data" />
+                    </div>
+
+                    <div class="row" style="width:100%;">
+                        <div class="tableWrap" style="width:100%;">
+                            <table>
+                                <thead>
+                                <tr>
+                                    <th style="width:28%;">Volume</th>
+                                    <th style="width:42%;">Source subvolume</th>
+                                    <th style="width:15%;">Times/day</th>
+                                    <th style="width:15%;">Jitter (s)</th>
+                                </tr>
+                                </thead>
+                                <tbody id="snapVolTbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="note">
+                        If per-volume schedule is enabled, each volume can override the global times/day + jitter.
+                        Otherwise the global schedule applies to all volumes.
+                    </div>
+
+                    <div class="note">
+                        Uses <span class="mono">btrfs subvolume snapshot -r</span>.
+                        The destination must be an empty path (server cleans up if it exists).
+                        <br/>
+                        If snapshots are disabled, settings stay visible but inputs are greyed out.
                     </div>
                 </div>
             </div>
@@ -740,7 +761,6 @@
             (function () {
                 function isInteractive(el) {
                     if (!el) return false;
-                    // NOTE: do NOT include [role="button"] or you'll match the header itself.
                     return !!el.closest('a,button,input,select,textarea,label,summary');
                 }
 
@@ -773,7 +793,9 @@
             })();
         </script>
 
-<script src="/static/admin_badges.js"></script>
-<script src="/static/admin_settings.js?v=3"></script>
+        <script src="/static/admin_badges.js"></script>
+        <script src="/static/admin_settings.js?v=3"></script>
+    </main>
+</div>
 </body>
 </html>

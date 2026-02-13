@@ -7,9 +7,8 @@
 #
 # What it does:
 #   - Generates PQNAS env keys into .env.pqnas
-#   - Starts a NEW Cloudflare Quick Tunnel to http://127.0.0.1:8081
-#   - Extracts the public https://*.trycloudflare.com URL from cloudflared logs
-#   - Appends PQNAS_ORIGIN / PQNAS_RP_ID exports to .env.pqnas
+#   - Loads /etc/pqnas/pqnas.env if present (system install env)
+#   - Sets a STABLE origin/rp_id for Cloudflare named tunnel (no quick tunnel)
 #   - Exports everything into your current shell
 #
 
@@ -24,53 +23,17 @@ fi
 set -euo pipefail
 
 ENV_FILE=".env.pqnas"
-TUNNEL_URL="http://127.0.0.1:8081"
-LOG_FILE="/tmp/pqnas_cloudflared_quicktunnel.log"
 
-# If we previously started cloudflared from this shell, stop it first
-if [[ -n "${PQNAS_CLOUDFLARED_PID:-}" ]]; then
-  if kill -0 "$PQNAS_CLOUDFLARED_PID" 2>/dev/null; then
-    echo "[*] Stopping previous cloudflared (pid=$PQNAS_CLOUDFLARED_PID)"
-    kill "$PQNAS_CLOUDFLARED_PID" 2>/dev/null || true
-  fi
-  unset PQNAS_CLOUDFLARED_PID
-fi
+# ---- Stable public hostname (named tunnel) ----
+# Change if you want a different hostname.
+PQNAS_HOSTNAME_DEFAULT="pqnas-dev.pqnas-test.uk"
+
+# ---- Local listen URL (what cloudflared forwards to) ----
+LOCAL_URL_DEFAULT="http://127.0.0.1:8081"
 
 echo "[*] Generating PQNAS keys -> $ENV_FILE"
 ./build/bin/pqnas_keygen > "$ENV_FILE"
 
-echo "[*] Starting Cloudflare Quick Tunnel -> $TUNNEL_URL"
-rm -f "$LOG_FILE"
-
-# Start cloudflared in background and capture logs
-# (We keep the process running; the URL stays valid only while it runs.)
-cloudflared tunnel --url "$TUNNEL_URL" --loglevel info 2>&1 | tee "$LOG_FILE" >/dev/null &
-PQNAS_CLOUDFLARED_PID=$!
-export PQNAS_CLOUDFLARED_PID
-
-# Extract URL from logs (wait up to ~20 seconds)
-ORIGIN=""
-for _ in $(seq 1 200); do
-  ORIGIN="$(grep -Eo 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$LOG_FILE" | head -n1 || true)"
-  if [[ -n "$ORIGIN" ]]; then break; fi
-  sleep 0.1
-done
-
-if [[ -z "$ORIGIN" ]]; then
-  echo "ERROR: Could not detect trycloudflare URL from cloudflared output." >&2
-  echo "Log file: $LOG_FILE" >&2
-  echo "cloudflared pid: $PQNAS_CLOUDFLARED_PID" >&2
-  return 1
-fi
-
-RP_ID="${ORIGIN#https://}"
-
-echo "[*] Writing tunnel env vars to $ENV_FILE"
-cat >> "$ENV_FILE" <<EOF
-
-export PQNAS_ORIGIN="$ORIGIN"
-export PQNAS_RP_ID="$RP_ID"
-EOF
 # --- Load system install env (config + storage paths) if present ---
 if [[ -f /etc/pqnas/pqnas.env ]]; then
   echo "[*] Loading system env: /etc/pqnas/pqnas.env"
@@ -80,22 +43,59 @@ if [[ -f /etc/pqnas/pqnas.env ]]; then
   set +a
 fi
 
+# Determine hostname/origin/rp_id (prefer existing env, otherwise default)
+PQNAS_HOSTNAME="${PQNAS_HOSTNAME:-$PQNAS_HOSTNAME_DEFAULT}"
+export PQNAS_HOSTNAME
+
+export PQNAS_ORIGIN="${PQNAS_ORIGIN:-https://$PQNAS_HOSTNAME}"
+export PQNAS_RP_ID="${PQNAS_RP_ID:-$PQNAS_HOSTNAME}"
+
+# Local URL (informational)
+export PQNAS_LOCAL_URL="${PQNAS_LOCAL_URL:-$LOCAL_URL_DEFAULT}"
+
+echo "[*] Writing stable origin env vars to $ENV_FILE"
+cat >> "$ENV_FILE" <<EOF
+
+export PQNAS_HOSTNAME="$PQNAS_HOSTNAME"
+export PQNAS_ORIGIN="$PQNAS_ORIGIN"
+export PQNAS_RP_ID="$PQNAS_RP_ID"
+export PQNAS_LOCAL_URL="$PQNAS_LOCAL_URL"
+EOF
+
 echo "[*] Exporting variables into current shell (source $ENV_FILE)"
 set -a
 # shellcheck disable=SC1090
 source "./$ENV_FILE"
 set +a
 
+# --- Dev overrides (must be AFTER /etc/pqnas/pqnas.env and .env.pqnas are sourced) ---
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+export PQNAS_AUTH_MODE="${PQNAS_AUTH_MODE:-v5}"
+export PQNAS_STATIC_ROOT="${PQNAS_STATIC_ROOT:-$REPO_ROOT/server/src/static}"
+export PQNAS_ADMIN_SETTINGS_PATH="${PQNAS_ADMIN_SETTINGS_PATH:-/etc/pqnas/admin_settings.json}"
+
+echo "[*] Dev overrides:"
+echo "    PQNAS_AUTH_MODE=$PQNAS_AUTH_MODE"
+echo "    PQNAS_STATIC_ROOT=$PQNAS_STATIC_ROOT"
+echo "    PQNAS_ADMIN_SETTINGS_PATH=$PQNAS_ADMIN_SETTINGS_PATH"
+
 echo "[✓] Ready"
 echo "    PQNAS_ORIGIN=$PQNAS_ORIGIN"
 echo "    PQNAS_RP_ID=$PQNAS_RP_ID"
-echo "    cloudflared pid=$PQNAS_CLOUDFLARED_PID"
-echo "    cloudflared log=$LOG_FILE"
+echo "    PQNAS_HOSTNAME=$PQNAS_HOSTNAME"
+echo "    PQNAS_LOCAL_URL=$PQNAS_LOCAL_URL"
 echo "./build/bin/pqnas_server"
-echo "    PQNAS_ADMIN_SETTINGS_PATH=${PQNAS_ADMIN_SETTINGS_PATH:-<unset>}"
 echo "    PQNAS_DATA_ROOT=${PQNAS_DATA_ROOT:-<unset>}"
 
-echo "Open local:  http://127.0.0.1:8081/"
-echo "Static test: http://127.0.0.1:8081/static/theme.css"
-echo "Open tunnel: $PQNAS_ORIGIN/"
-echo "Static test: $PQNAS_ORIGIN/static/theme.css"
+echo "Open local:  ${PQNAS_LOCAL_URL}/"
+echo "Static test: ${PQNAS_LOCAL_URL}/static/theme.css"
+echo "Open tunnel: ${PQNAS_ORIGIN}/"
+echo "Static test: ${PQNAS_ORIGIN}/static/theme.css"
+
+echo ""
+echo "[i] NOTE:"
+echo "    This script no longer starts Cloudflare Quick Tunnels."
+echo "    Run your named tunnel separately, e.g.:"
+echo "      cloudflared tunnel run pqnas-dev"
+echo "    (or install it as a system service)."

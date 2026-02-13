@@ -7,8 +7,6 @@
 
     <style>
         :root{
-            --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-            --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
             /* admin_users: field surface tuned to match table panels */
             --field-surface: rgba(255,255,255,0.14);
             --field-surface2: rgba(255,255,255,0.18);
@@ -25,7 +23,7 @@
         body{
             margin: 0;
             color: var(--fg);
-            font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial;
+            font-family: var(--sans);
             background:
                     radial-gradient(1200px 700px at 18% 8%, rgba(var(--fg-rgb),0.11), transparent 55%),
                     radial-gradient(1000px 700px at 82% 12%, rgba(var(--fg-rgb),0.07), transparent 60%),
@@ -639,6 +637,79 @@
             background: rgba(var(--fail-rgb),0.75);
         }
 
+        .avatarBig {
+            width: 112px;
+            height: 112px;
+            border-radius: 20px;
+            object-fit: cover;
+            border: 1px solid var(--border);
+            background: var(--panel2);
+            cursor: pointer;
+        }
+        .avatarBig:hover {
+            transform: scale(1.04);
+            box-shadow: var(--shadow);
+        }
+        /* Avatar modal */
+        .avatarModal {
+            position: fixed;
+            inset: 0;
+            z-index: 99999;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 18px;
+            background: rgba(0,0,0,0.55);
+            backdrop-filter: blur(6px);
+        }
+
+        .avatarModal.open { display: flex; }
+
+        .avatarModalCard{
+            width: min(720px, calc(100vw - 36px));
+            max-height: min(84vh, 900px);
+            border-radius: 18px;
+            border: 1px solid var(--border);
+            background: linear-gradient(180deg, var(--panel2), var(--panel));
+            box-shadow: var(--shadow);
+            overflow: hidden;
+        }
+
+        .avatarModalTop{
+            display:flex;
+            align-items:center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .avatarModalTitle{
+            font-weight: 700;
+            font-size: 14px;
+        }
+
+        .avatarModalBody{
+            padding: 14px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+        }
+
+        .avatarModalBody img{
+            max-width: 100%;
+            max-height: 72vh;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: var(--panel2);
+        }
+
+        .avatarModalActions{
+            display:flex;
+            gap: 10px;
+            align-items:center;
+        }
+
 
     </style>
     <link rel="stylesheet" href="/static/theme.css">
@@ -714,12 +785,15 @@
                 <h2>Edit profile</h2>
 
                 <div class="row" style="margin-bottom:10px;">
-                    <input id="filter" placeholder="Filter (fingerprint/name/notes/role/status/group/storage/quota)" style="min-width: 320px; flex:1;" />
+                    <input id="filter" placeholder="Filter (fingerprint/name/email/notes/role/status/group/storage/quota)" style="min-width: 320px; flex:1;" />
                 </div>
 
                 <div class="row" style="margin-bottom:10px;">
                     <input id="fp" class="mono" placeholder="fingerprint hex" style="min-width: 520px; flex:1;" />
                     <input id="name" placeholder="name" style="min-width: 180px;" />
+                    <input id="email" placeholder="email (optional)" style="min-width:260px;" />
+                    <input id="avatar_url" placeholder="avatar (click to choose…)" style="min-width:260px;" readonly />
+                    <input id="avatar_file" type="file" accept="image/*" style="display:none;" />
                     <select id="role">
                         <option value="user">user</option>
                         <option value="admin">admin</option>
@@ -745,17 +819,15 @@
                         <table>
                             <thead>
                             <tr>
+                                <th style="width:6%;">Avatar</th>
                                 <th style="width:28%;">Fingerprint</th>
-                                <th style="width:18%;">Name / Notes</th>
+                                <th style="width:22%;">Name / Notes</th>
                                 <th style="width:6%;">Role</th>
                                 <th style="width:7%;">Status</th>
-
                                 <th style="width:8%;">Group</th>
                                 <th style="width:7%;">Storage</th>
                                 <th style="width:6%;">Quota</th>
-
-                                <th style="width:10%;">Added</th>
-                                <th style="width:10%;">Last seen</th>
+                                <th style="width:12%;">Added</th>
                                 <th style="width:20%;">Actions</th>
                             </tr>
                             </thead>
@@ -769,6 +841,21 @@
 
         <div class="footerline">© CPUNK 2026</div>
     </main>
+</div>
+<!-- Avatar preview modal -->
+<div id="avatarModal" class="avatarModal" aria-hidden="true">
+    <div class="avatarModalCard" role="dialog" aria-modal="true" aria-label="Avatar preview">
+        <div class="avatarModalTop">
+            <div class="avatarModalTitle">Avatar preview</div>
+            <div class="avatarModalActions">
+                <button class="btn danger" id="avatarRemoveBtn" type="button">Remove</button>
+                <button class="btn secondary" id="avatarCloseBtn" type="button">Close</button>
+            </div>
+        </div>
+        <div class="avatarModalBody">
+            <img id="avatarModalImg" alt="avatar preview" />
+        </div>
+    </div>
 </div>
 
 <script src="/static/admin_badges.js"></script>

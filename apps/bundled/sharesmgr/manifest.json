@@ -1,7 +1,7 @@
 {
   "id": "sharesmgr",
   "name": "Shares Manager",
-  "version": "0.9.0",
+  "version": "1.0.0",
   "entry": "www/index.html",
   "api_base": "/api/v4/shares",
   "permissions": []

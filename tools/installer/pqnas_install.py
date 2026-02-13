@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import shutil
@@ -51,12 +52,11 @@ from textual.widgets import (
 # Small UI/log helpers
 # -----------------------------------------------------------------------------
 
-
 def log_line(logw: Log, msg: str) -> None:
     # Force each message to be a separate line in Textual Log widget
     logw.write(msg.rstrip("\n") + "\n")
 
-import re
+
 
 def looks_like_ip(host: str) -> bool:
     host = (host or "").strip()
@@ -327,10 +327,14 @@ class InstallState:
     plan: List[List[str]] = None
     plan_notes: List[str] = None
 
+    # Login authentication mode (installer forces v5-only)
+    auth_mode: str = "v5"   # v5-only
+
     # Optional nginx reverse proxy (HTTP-only for now)
     nginx_enabled: bool = False
     nginx_hostname: str = ""  # server_name (e.g. nas.example.com or 192.168.1.50)
     nginx_listen_port: int = 80
+
 
 
 # -----------------------------------------------------------------------------
@@ -446,6 +450,7 @@ def create_pqnas_layout(root: str) -> None:
     for p in ("data", "logs", "apps/bundled", "apps/installed", "apps/users", "audit", "tmp"):
         ensure_dir(os.path.join(root, p))
     ensure_dir("/opt/pqnas/static")
+
 
 def find_dna_lib_source(asset_root: str) -> str:
     """
@@ -573,7 +578,15 @@ def ensure_config_files(root: str, asset_root: str) -> None:
         pass
 
 
-def write_env_file(root: str, *, origin: Optional[str] = None, rp_id: Optional[str] = None, dna_lib_path: Optional[str] = None) -> None:
+def write_env_file(
+    root: str,
+    *,
+    origin: Optional[str] = None,
+    rp_id: Optional[str] = None,
+    dna_lib_path: Optional[str] = None,
+    auth_mode: Optional[str] = None,
+) -> None:
+
     etc_dir = "/etc/pqnas"
     os.makedirs(etc_dir, exist_ok=True)
 
@@ -602,6 +615,11 @@ def write_env_file(root: str, *, origin: Optional[str] = None, rp_id: Optional[s
         lines += ["", f"PQNAS_ORIGIN={origin}"]
     if rp_id:
         lines += [f"PQNAS_RP_ID={rp_id}"]
+
+    # Login authentication mode (v4 | v5 | auto)
+    if auth_mode:
+        lines += [f"PQNAS_AUTH_MODE={auth_mode}"]
+
 
     # DNA engine .so path for /api/v4/verify
     if dna_lib_path:
@@ -1363,6 +1381,10 @@ class ReverseProxyScreen(Screen):
             )
             yield self.enable
 
+
+            yield Static("\n[b]Login authentication mode:[/b] v5 (stateless) — forced by installer", classes="muted")
+
+
             yield Static("\n[b]Hostname or IP[/b] (nginx server_name):", classes="muted")
             self.host_in = Input(value="", placeholder="nas.example.com  (or 192.168.1.50)")
             yield self.host_in
@@ -1385,6 +1407,7 @@ class ReverseProxyScreen(Screen):
                 btn.value = True
 
         self.host_in.value = st.nginx_hostname or ""
+
         self._sync()
 
     def _sync(self) -> None:
@@ -1423,7 +1446,8 @@ class ReverseProxyScreen(Screen):
             st.nginx_enabled = False
             st.nginx_hostname = ""
             st.nginx_listen_port = 80
-
+        # auth mode: v5-only
+        st.auth_mode = "v5"
         app.push_screen(ConfirmScreen())
 
 
@@ -1606,14 +1630,15 @@ class HealthScreen(Screen):
     ]
 
     def __init__(
-            self,
-            *,
-            mp: str,
-            mode: str,
-            backend: str,
-            nginx_enabled: bool,
-            nginx_hostname: str,
-            nginx_port: int,
+        self,
+        *,
+        mp: str,
+        mode: str,
+        backend: str,
+        nginx_enabled: bool,
+        nginx_hostname: str,
+        nginx_port: int,
+        auth_mode: str,
     ) -> None:
         super().__init__()
         self.mp = mp
@@ -1622,6 +1647,7 @@ class HealthScreen(Screen):
         self.nginx_enabled = nginx_enabled
         self.nginx_hostname = nginx_hostname
         self.nginx_port = nginx_port
+        self.auth_mode = auth_mode
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1657,9 +1683,11 @@ class HealthScreen(Screen):
             f"[b]Storage:[/b] {self.mp}",
             f"[b]Mode:[/b] {self.mode}",
             f"[b]Backend:[/b] {self.backend}",
+            f"[b]Auth mode:[/b] v5 (forced by installer)",
             "",
             f"[b]Access URL:[/b] {url}",
         ]
+
 
         if self.nginx_enabled and self.nginx_hostname:
             if looks_like_ip(self.nginx_hostname):
@@ -1876,7 +1904,14 @@ class ExecuteScreen(Screen):
                 rp_id = st.nginx_hostname
 
 
-            write_env_file(mp, origin=origin, rp_id=rp_id, dna_lib_path=dna_path)
+            write_env_file(
+                mp,
+                origin=origin,
+                rp_id=rp_id,
+                dna_lib_path=dna_path,
+                auth_mode=st.auth_mode,
+            )
+
 
             # Make canonical URL handling impossible to miss
             if origin and rp_id:
@@ -1974,7 +2009,7 @@ class ExecuteScreen(Screen):
                     client_max_body_size="2g",
                 )
                 if have_letsencrypt_cert(st.nginx_hostname):
-                     self.logw.write(f"✅ nginx enabled: https://{st.nginx_hostname}/ (http redirects with 308)")
+                    self.logw.write(f"✅ nginx enabled: https://{st.nginx_hostname}/ (http redirects with 308)")
                 else:
                     self.logw.write(f"✅ nginx enabled: http://{st.nginx_hostname}/ (no TLS cert detected)")
 
@@ -2019,8 +2054,10 @@ class ExecuteScreen(Screen):
                     nginx_enabled=st.nginx_enabled,
                     nginx_hostname=st.nginx_hostname,
                     nginx_port=st.nginx_listen_port,
+                    auth_mode=st.auth_mode,
                 )
             )
+
             return
 
         except Exception as e:

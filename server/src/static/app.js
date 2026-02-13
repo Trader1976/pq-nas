@@ -29,11 +29,16 @@
 
     const appsList = document.getElementById("appsList");
 
-    // app state
+// app state
     let installedApps = [];     // [{id, version, has_manifest, root}, ...]
     let currentView = "home";   // "home" or "app:<id>@<ver>"
     let currentApp = null;      // {id, version} or null
     let lastAppsKey = "";
+    let authed = false;
+    let isAdmin = false;
+
+    // small UI state
+    let versionShown = false;
 
     function show(el, on) {
         if (!el) return;
@@ -42,8 +47,26 @@
 
     function setBadge(kind, text) {
         if (!badge) return;
+
+        const t = (text || "").trim();
+
+        // Hide badge completely when no text
+        if (!t) {
+            badge.style.display = "none";
+            badge.textContent = "";
+            return;
+        }
+
+        // Show badge when there is content
+        badge.style.display = "";
         badge.className = `badge ${kind}`;
-        badge.textContent = text;
+        badge.textContent = t;
+    }
+
+    function setWsSubtitleSafe(txt) {
+        // Don’t override app subtitle while an app is open.
+        if (currentApp) return;
+        if (wsSubtitle) wsSubtitle.textContent = txt;
     }
 
     function setActiveNav(activeId) {
@@ -55,12 +78,12 @@
         }
     }
 
-    function clearAppsList(){
+    function clearAppsList() {
         if (!appsList) return;
         appsList.innerHTML = "";
     }
 
-    function addAppNavButton(appId, label, href){
+    function addAppNavButton(appId, label, href) {
         if (!appsList) return;
 
         const a = document.createElement("a");
@@ -86,14 +109,14 @@
         appsList.appendChild(a);
     }
 
-    function setActiveApp(appId){
+    function setActiveApp(appId) {
         if (!appsList) return;
-        for (const el of appsList.querySelectorAll(".navbtn")){
+        for (const el of appsList.querySelectorAll(".navbtn")) {
             el.classList.toggle("active", el.dataset.appid === appId);
         }
     }
 
-    function renderHome(){
+    function renderHome() {
         currentView = "home";
         currentApp = null;
 
@@ -101,10 +124,10 @@
         setActiveApp(""); // clears app highlight
 
         if (wsTitle) wsTitle.textContent = "Home";
-        if (wsSubtitle) wsSubtitle.textContent = "Session, role, and access status";
+        setWsSubtitleSafe("Session, role, and access status");
         if (mainPaneTitle) mainPaneTitle.textContent = "Workspace";
 
-        // ✅ remove "embedded app" styling when leaving an app
+        // remove "embedded app" styling when leaving an app
         if (homeBlurb) {
             const mainPane = homeBlurb.closest(".pane");
             if (mainPane) mainPane.classList.remove("appHost");
@@ -114,12 +137,12 @@
         if (homeBlurb) {
             homeBlurb.innerHTML =
                 `This is the PQ-NAS desktop shell. The large pane hosts apps and tools.
-             Installed apps appear in the left menu. Admin links appear only when your role is <b>admin</b>.`;
+                 Installed apps appear in the left menu. Admin links appear only when your role is <b>admin</b>.`;
             show(homeBlurb, true);
         }
     }
 
-    function renderApp(app){
+    function renderApp(app) {
         // app = {id, version}
         currentView = `app:${app.id}@${app.version}`;
         currentApp = { id: app.id, version: app.version };
@@ -140,36 +163,28 @@
 
         homeBlurb.innerHTML = "";
 
-        const info = document.createElement("div");
-        info.className = "appHostInfo mono";
-        info.innerHTML = `<b>APP ACTIVE ✅</b> — loading <span class="mono">${app.id} ${app.version}</span>`;
-
         const frame = document.createElement("iframe");
         frame.className = "appFrame";
         frame.src = `/apps/${encodeURIComponent(app.id)}/${encodeURIComponent(app.version)}/www/index.html`;
-
-       // homeBlurb.appendChild(info);
 
         const frameWrap = document.createElement("div");
         frameWrap.className = "appFrameWrap";
         frameWrap.appendChild(frame);
 
-
         homeBlurb.appendChild(frameWrap);
         show(homeBlurb, true);
     }
 
-    function openAppById(appId){
+    function openAppById(appId) {
         const a = installedApps.find(x => x.id === appId);
         if (!a) {
-            // fallback to home
             renderHome();
             return;
         }
         renderApp({ id: a.id, version: a.version });
     }
 
-    async function loadApps(){
+    async function loadApps() {
         if (!appsList) return;
 
         try {
@@ -178,14 +193,20 @@
             if (!r.ok || !j || !j.ok) return;
 
             const installed = Array.isArray(j.installed) ? j.installed : [];
-            const usable = installed.filter(x => x && x.id && x.version && x.has_manifest);
+            let usable = installed.filter(x => x && x.id && x.version && x.has_manifest);
+
+            // Admin-only apps (UI visibility)
+            if (!isAdmin) {
+                usable = usable.filter(x => x.id !== "snapshotmgr");
+            }
+
 
             // stable order: id then version
-            usable.sort((a,b) => {
-                const ai = String(a.id||"");
-                const bi = String(b.id||"");
+            usable.sort((a, b) => {
+                const ai = String(a.id || "");
+                const bi = String(b.id || "");
                 if (ai !== bi) return ai.localeCompare(bi);
-                return String(a.version||"").localeCompare(String(b.version||""));
+                return String(a.version || "").localeCompare(String(b.version || ""));
             });
 
             const key = JSON.stringify(usable.map(x => [x.id, x.version]));
@@ -196,24 +217,30 @@
 
             clearAppsList();
             for (const a of usable) {
-                // label = id for now (we can later fetch manifest.json to show "name")
-                const label = a.id;
+                const label = a.id; // later: load manifest name
                 const href = `/apps/${encodeURIComponent(a.id)}/${encodeURIComponent(a.version)}/www/index.html`;
                 addAppNavButton(a.id, label, href);
             }
 
-            // keep current view alive if app still exists; otherwise go home
+            // keep current view alive if app still exists and is allowed; otherwise go home
             if (currentApp) {
-                const still = installedApps.find(x => x.id === currentApp.id);
-                if (!still) renderHome();
-                else setActiveApp(currentApp.id);
+                if (!isAdmin && currentApp.id === "snapshotmgr") {
+                    renderHome();
+                } else {
+                    const still = installedApps.find(x => x.id === currentApp.id);
+                    if (!still) renderHome();
+                    else setActiveApp(currentApp.id);
+                }
             }
+
         } catch {
-            // ignore (no UI spam)
+            // ignore
         }
     }
 
     async function loadMe() {
+        authed = false;
+        isAdmin = false;
         show(stateDisabled, false);
         show(stateUnauth, false);
 
@@ -221,8 +248,6 @@
             const r = await fetch("/api/v4/me", { credentials: "include", cache: "no-store" });
             const ct = (r.headers.get("content-type") || "").toLowerCase();
             const txt = await r.text();
-
-            if (statusLine) statusLine.textContent = "PQ-NAS v1.0";
 
             let j = null;
             try { j = JSON.parse(txt); } catch {}
@@ -232,8 +257,15 @@
 
                 const role = j.role || "?";
                 const ok = !!j.ok;
+                authed = ok && r.ok;
 
-                const isAdmin = ok && role === "admin";
+                // show version once (don’t stomp useful status text every refresh)
+                if (!versionShown && statusLine) {
+                    statusLine.textContent = "PQ-NAS v1.0";
+                    versionShown = true;
+                }
+
+                isAdmin = ok && role === "admin";
 
                 // show admin-only links
                 show(navAdmin, isAdmin);
@@ -245,24 +277,31 @@
                 show(navLogin, !ok);
 
                 if (!r.ok || !ok) {
+                    authed = false;
                     const err = String(j.error || "").toLowerCase();
                     const msg = String(j.message || "");
 
                     if (r.status === 403 || err.includes("disabled") || msg.toLowerCase().includes("disabled")) {
+                        setWsSubtitleSafe("Waiting for admin approval");
                         setBadge("warn", "waiting for admin");
                         show(stateDisabled, true);
                     } else if (r.status === 401 || err.includes("unauthorized") || msg.toLowerCase().includes("unauthorized")) {
+                        setWsSubtitleSafe("Not signed in");
                         setBadge("warn", "not signed in");
                         show(stateUnauth, true);
                         show(navLogin, true);
                     } else {
+                        setWsSubtitleSafe(`Error (${r.status || "?"})`);
                         setBadge("err", "error");
                     }
                     return;
                 }
 
                 const st = String(j.storage_state || "unallocated");
-                setBadge("ok", `signed in · ${role} · storage: ${st}`);
+                setBadge("ok", "");
+
+
+                setWsSubtitleSafe(`Signed in · ${role} · storage: ${st}`);
 
                 // update installed apps list (only when signed in ok)
                 loadApps();
@@ -271,12 +310,14 @@
             }
 
             // Non-JSON body
+            authed = false;
             show(navAdmin, false);
             show(navUsers, false);
             show(navAudit, false);
             show(navSettings, false);
             show(navLogin, true);
 
+            setWsSubtitleSafe("Unexpected response from /api/v4/me");
             setBadge("err", "unexpected response");
 
             if (out) {
@@ -284,12 +325,14 @@
                 out.textContent = `${r.status}${ct ? " · " + ct.split(";")[0] : ""}\n\n${body}`;
             }
         } catch (e) {
+            authed = false;
             show(navAdmin, false);
             show(navUsers, false);
             show(navAudit, false);
             show(navSettings, false);
             show(navLogin, true);
 
+            setWsSubtitleSafe("Network error");
             setBadge("err", "network error");
             if (statusLine) statusLine.textContent = "Failed to load /api/v4/me";
             if (out) out.textContent = String(e && e.stack ? e.stack : e);
@@ -331,10 +374,19 @@
     // Default view
     renderHome();
 
-    // Load status immediately, then refresh periodically
+    // Load once immediately
     loadMe();
-    setInterval(loadMe, 2000);
 
-    // Also refresh app list occasionally (in case installs/uninstalls happen)
-    setInterval(loadApps, 4000);
+    // Refresh auth state when tab comes back / user focuses
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) loadMe();
+    });
+    window.addEventListener("focus", () => loadMe());
+
+    // Slow refresh (only to keep UI honest; not a heartbeat)
+    setInterval(() => { if (authed) loadMe(); }, 30000);
+
+    // Apps list can be even slower
+    setInterval(() => { if (authed) loadApps(); }, 60000);
+
 })();

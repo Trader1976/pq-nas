@@ -16,6 +16,33 @@
     "mode": "size_mb",
     "rotate_utc_day": ""
   },
+  "snapshots": {
+    "backend": "btrfs",
+    "enabled": false,
+    "per_volume_policy": false,
+    "retention": {
+      "keep_days": 7,
+      "keep_max": 500,
+      "keep_min": 12
+    },
+    "schedule": {
+      "jitter_seconds": 120,
+      "mode": "times_per_day",
+      "times_per_day": 6
+    },
+    "volumes": [
+      {
+        "name": "data",
+        "schedule": {
+          "jitter_seconds": 33,
+          "mode": "times_per_day",
+          "times_per_day": 2
+        },
+        "snap_root": "",
+        "source_subvolume": ""
+      }
+    ]
+  },
   "ui_theme": "win_classic",
   "user_defaults": {
     "auto_allocate_on_enable": false,

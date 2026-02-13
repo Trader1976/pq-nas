@@ -1,6 +1,341 @@
-(() => {
+<!doctype html>
+<html lang="en">
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>PQ-NAS • Waiting for admin approval</title>
+
+<style>
+
+    *{ box-sizing:border-box; }
+    html,body{ height:100%; }
+
+    body{
+    margin:0;
+    font-family:var(--sans);
+    background:
+    radial-gradient(1200px 700px at 18% 8%, rgba(var(--fg-rgb),0.11), transparent 55%),
+    radial-gradient(1000px 700px at 82% 12%, rgba(var(--fg-rgb),0.07), transparent 60%),
+    linear-gradient(180deg, #04050f, var(--bg));
+    color:var(--fg);
+    overflow:hidden;
+}
+
+    a{ color:var(--fg); text-decoration:none; }
+    a:hover{ text-shadow: 0 0 10px rgba(var(--fg-rgb),0.25); }
+
+    .desktop{
+    height: 100%;
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 14px;
+    padding: 14px;
+}
+
+    @media (max-width: 980px){
+    body{ overflow:auto; }
+    .desktop{ grid-template-columns: 1fr; overflow: visible; }
+}
+
+    /* Sidebar */
+    .sidebar{
+    border: 1px solid var(--border);
+    border-radius: var(--radius2);
+    background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.24));
+    box-shadow: var(--shadow);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+    .brand{
+    display:flex;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 10px 14px;
+    border-bottom: 1px solid var(--border2);
+    margin-bottom: 12px;
+}
+
+    .brand .logoDot{
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--fg);
+    box-shadow: 0 0 18px rgba(var(--fg-rgb),0.38);
+    flex: 0 0 auto;
+}
+
+    .brand h1{
+    margin: 0;
+    font-size: 16px;
+    font-weight: 950;
+    letter-spacing: 0.2px;
+}
+
+    .brand .sub{
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--fg-dim);
+}
+
+    .bottom{
+    border-top: 1px solid var(--border2);
+    margin-top: auto;
+    padding-top: 12px;
+    display:flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+    .statusCard{
+    border: 1px solid var(--border2);
+    border-radius: 16px;
+    background: rgba(0,0,0,0.22);
+    padding: 10px 12px;
+}
+
+    .mini{
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--fg-dim);
+    line-height: 1.35;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+    /* Workspace */
+    .workspace{
+    border: 1px solid var(--border);
+    border-radius: var(--radius2);
+    background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
+    box-shadow: var(--shadow);
+    display:flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+    .topbar{
+    display:flex;
+    align-items:center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border2);
+    background: rgba(0,0,0,0.18);
+}
+
+    .crumbs{
+    display:flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+    .crumbs .title{
+    font-weight: 950;
+    letter-spacing: 0.2px;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+    .crumbs .sub{
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--fg-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+    .pill{
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    border:1px solid rgba(var(--fg-rgb),0.16);
+    background:rgba(0,0,0,0.22);
+    padding:6px 10px;
+    border-radius:999px;
+    font-size:12px;
+    color: rgba(var(--fg-rgb),0.70);
+    white-space:nowrap;
+    max-width: 100%;
+}
+    .pill .k{ color: rgba(var(--fg-rgb),0.62); }
+    .pill .v{ color: rgba(var(--fg-rgb),0.92); font-weight: 900; }
+    .pill.ok{ border-color: rgba(var(--fg-rgb),0.38); background: rgba(var(--fg-rgb),0.08); }
+    .pill.warn{ border-color: rgba(var(--warn-rgb),0.38); background: rgba(var(--warn-rgb),0.10); color: rgba(var(--warn-rgb),0.92); }
+    .pill.fail{ border-color: rgba(var(--fail-rgb),0.42); background: rgba(var(--fail-rgb),0.10); color: rgba(var(--fail-rgb),0.92); }
+
+    .content{
+    padding: 14px;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+}
+
+    .card{
+    width: min(820px, 100%);
+    border:1px solid rgba(var(--fg-rgb),0.12);
+    border-radius:var(--radius2);
+    background: rgba(0,0,0,0.22);
+    overflow:hidden;
+}
+
+    .card .hd{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:12px 14px;
+    border-bottom:1px solid rgba(var(--fg-rgb),0.12);
+    background: linear-gradient(180deg, rgba(var(--fg-rgb),0.06), transparent);
+}
+
+    .card .hd .h{
+    font-size:12px;
+    color: rgba(var(--fg-rgb),0.60);
+    letter-spacing:0.10em;
+    text-transform:uppercase;
+    font-weight: 900;
+}
+
+    .card .bd{ padding:16px 14px 14px; }
+
+    .hint{
+    color: var(--fg-dim);
+    font-size: 13px;
+    line-height: 1.55;
+    margin: 0;
+}
+
+    .mono{ font-family: var(--mono); }
+
+    .kv{
+    display:flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(var(--fg-rgb),0.10);
+    background: rgba(0,0,0,0.18);
+    margin-top: 10px;
+    min-width: 0;
+}
+    .kv .k{
+    font-size: 12px;
+    color: rgba(var(--fg-rgb),0.62);
+    flex: 0 0 auto;
+}
+    .kv .v{
+    font-size: 12px;
+    font-weight: 900;
+    color: rgba(var(--fg-rgb),0.92);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    text-align: right;
+}
+
+    .footerline{
+    padding: 10px 14px;
+    border-top: 1px solid var(--border2);
+    color: rgba(var(--fg-rgb),0.55);
+    font-size: 12px;
+    text-align: right;
+    user-select: none;
+    background: rgba(0,0,0,0.12);
+}
+</style>
+
+<link rel="stylesheet" href="/static/theme.css">
+    <script src="/static/theme.js"></script>
+</head>
+
+<body>
+<div class="desktop">
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="logoDot" aria-hidden="true"></div>
+            <div style="min-width:0">
+                <h1>Sign-in</h1>
+                <div class="sub">Admin approval required</div>
+            </div>
+        </div>
+
+        <div class="bottom">
+            <div class="statusCard">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                    <div style="font-weight:950;">Approval status</div>
+                    <span id="statusPill" class="pill warn"><span class="k">State:</span> <span class="v">checking…</span></span>
+                </div>
+                <div class="mini" id="statusText">Checking /api/v5/status…</div>
+            </div>
+
+            <div class="statusCard">
+                <div style="font-weight:950;">Session</div>
+                <!-- Displays k (preferred) or st label -->
+                <div class="mini mono" id="sid">(unknown)</div>
+            </div>
+        </div>
+    </aside>
+
+    <main class="workspace">
+        <div class="topbar">
+            <div class="crumbs">
+                <div class="title">PQ-NAS • Waiting for admin approval</div>
+                <div class="sub">Your DNA identity was received. An admin must enable you.</div>
+            </div>
+            <span class="pill warn"><span class="k">Next:</span> <span class="v">/admin/users</span></span>
+        </div>
+
+        <div class="content">
+            <section class="card">
+                <div class="hd">
+                    <div class="h">What this means</div>
+                    <span class="pill warn" id="mainPill"><span class="k">Access:</span> <span class="v">pending</span></span>
+                </div>
+                <div class="bd">
+                    <p class="hint">
+                        This PQ-NAS server is configured to <span class="mono">fail-closed</span> for new identities.
+                        Your fingerprint must be enabled by an administrator before the browser can finish sign-in.
+                    </p>
+
+                    <div class="kv">
+                        <div class="k">Where the admin approves</div>
+                        <div class="v mono">/admin/users</div>
+                    </div>
+
+                    <div class="kv">
+                        <div class="k">What happens when approved</div>
+                        <div class="v">This page finalizes sign-in automatically</div>
+                    </div>
+
+                    <div class="kv">
+                        <div class="k">If you’re the admin</div>
+                        <div class="v">Open <span class="mono">/admin/users</span> in another tab</div>
+                    </div>
+                </div>
+                <div class="footerline">© CPUNK 2026</div>
+            </section>
+        </div>
+    </main>
+</div>
+
+<!-- v5-compatible wait-approval logic (k/st + /api/v5/status + /api/v5/consume) -->
+<script>
+    (() => {
     const qs = new URLSearchParams(location.search);
-    const sid = (qs.get("sid") || "").trim();
+    const k  = (qs.get("k")  || "").trim();
+    const st = (qs.get("st") || "").trim(); // optional fallback
 
     const sidEl = document.getElementById("sid");
     const statusText = document.getElementById("statusText");
@@ -8,97 +343,118 @@
     const mainPill = document.getElementById("mainPill");
 
     function setPill(pill, kind, text) {
-        if (!pill) return;
-        pill.className = "pill " + (kind || "");
-        const v = pill.querySelector(".v");
-        if (v) v.textContent = text;
-    }
+    if (!pill) return;
+    pill.className = "pill " + (kind || "");
+    const v = pill.querySelector(".v");
+    if (v) v.textContent = text;
+}
 
     function setText(msg) {
-        if (statusText) statusText.textContent = msg;
-    }
+    if (statusText) statusText.textContent = msg;
+}
 
-    if (sidEl) sidEl.textContent = sid || "(missing sid)";
+    const body = () => (k ? { k } : (st ? { st } : null));
 
-    if (!sid) {
-        setPill(statusPill, "fail", "missing sid");
-        setPill(mainPill, "fail", "error");
-        setText("Missing sid in URL. Go back and start a new sign-in.");
-        return;
-    }
+    if (sidEl) sidEl.textContent = k ? ("k:" + k) : (st ? "st:(provided)" : "(missing k/st)");
+
+    if (!body()) {
+    setPill(statusPill, "fail", "missing k");
+    setPill(mainPill, "fail", "error");
+    setText("Missing k (or st) in URL. Go back and start a new sign-in.");
+    return;
+}
 
     async function pollOnce() {
-        try {
-            setPill(statusPill, "warn", "checking…");
-            setText("Checking /api/v4/status…");
+    try {
+    setPill(statusPill, "warn", "checking…");
+    setText("Checking /api/v5/status…");
 
-            const r = await fetch(`/api/v4/status?sid=${encodeURIComponent(sid)}`, {
-                cache: "no-store",
-                credentials: "include",
-            });
+    const r = await fetch("/api/v5/status", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body()),
+    cache: "no-store",
+    credentials: "include",
+});
 
-            const j = await r.json().catch(() => ({}));
+    const j = await r.json().catch(() => ({}));
 
-            if (!r.ok || !j.ok) {
-                setPill(statusPill, "fail", "error");
-                setPill(mainPill, "fail", "error");
-                setText(`Status error: ${j.message || j.error || ("HTTP " + r.status)}`);
-                return;
-            }
+    if (!r.ok || j.ok === false) {
+    setPill(statusPill, "fail", "error");
+    setPill(mainPill, "fail", "error");
+    setText(`Status error: ${j.message || j.error || ("HTTP " + r.status)}`);
+    return;
+}
 
-            if (j.expired) {
-                setPill(statusPill, "fail", "expired");
-                setPill(mainPill, "fail", "expired");
-                setText("This sign-in request expired. Go back and start again.");
-                return;
-            }
+    if (j.state === "missing") {
+    setPill(statusPill, "fail", "missing");
+    setPill(mainPill, "fail", "missing");
+    setText("This sign-in request is no longer known by the server. Go back and start again.");
+    return;
+}
 
-            if (j.approved) {
-                setPill(statusPill, "ok", "approved");
-                setPill(mainPill, "ok", "approved");
-                setText("Approved ✔ Finalizing sign-in…");
+    if (j.state === "pending") {
+    setPill(statusPill, "warn", "pending");
+    setPill(mainPill, "warn", "pending");
+    setText("Waiting for admin approval…");
+    return;
+}
 
-                // turn approval into real cookie
-                const cres = await fetch("/api/v4/consume", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ sid }),
-                    cache: "no-store",
-                    credentials: "include",
-                });
+    if (j.state === "approved" || j.approved === true) {
+    setPill(statusPill, "ok", "approved");
+    setPill(mainPill, "ok", "approved");
+    setText("Approved ✔ Finalizing sign-in…");
 
-                const cj = await cres.json().catch(() => ({}));
-                if (!cres.ok || !cj.ok) {
-                    setPill(statusPill, "fail", "cookie failed");
-                    setPill(mainPill, "fail", "error");
-                    setText(`Approved, but cookie set failed: ${cj.message || cj.error || ("HTTP " + cres.status)}`);
-                    return;
-                }
+    // Turn approval into a real cookie
+    const cres = await fetch("/api/v5/consume", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body()),
+    cache: "no-store",
+    credentials: "include",
+});
 
-                location.href = "/success";
-                return;
-            }
+    const cj = await cres.json().catch(() => ({}));
+    if (!cres.ok || cj.ok === false) {
+    setPill(statusPill, "fail", "cookie failed");
+    setPill(mainPill, "fail", "error");
+    setText(`Approved, but cookie set failed: ${cj.message || cj.error || ("HTTP " + cres.status)}`);
+    return;
+}
 
-            // pending (default)
-            if (j.pending_admin) {
-                setPill(statusPill, "warn", "pending");
-                setPill(mainPill, "warn", "pending");
-                setText("Waiting for admin approval…");
-            } else {
-                // server might not implement pending_admin -> still show correct message
-                setPill(statusPill, "warn", "waiting");
-                setPill(mainPill, "warn", "waiting");
-                setText("Waiting for admin approval…");
-            }
-        } catch (e) {
-            setPill(statusPill, "fail", "network");
-            setPill(mainPill, "fail", "network");
-            setText("Network error while checking approval status.");
-        }
-    }
+    // Verify cookie landed (use an auth endpoint you have)
+    const ping = await fetch("/api/v4/me", {
+    cache: "no-store",
+    credentials: "include",
+});
+
+    if (!ping.ok) {
+    setPill(statusPill, "fail", "no cookie");
+    setPill(mainPill, "fail", "no cookie");
+    setText(`Consume OK, but cookie did not stick: HTTP ${ping.status}`);
+    return;
+}
+
+    location.href = "/app";
+    return;
+}
+
+    // unknown state
+    setPill(statusPill, "warn", "waiting");
+    setPill(mainPill, "warn", "waiting");
+    setText("Waiting…");
+} catch (e) {
+    setPill(statusPill, "fail", "network");
+    setPill(mainPill, "fail", "network");
+    setText("Network error while checking approval status.");
+}
+}
 
     pollOnce();
     (function loop() {
-        pollOnce().finally(() => setTimeout(loop, 1200));
-    })();
+    pollOnce().finally(() => setTimeout(loop, 1200));
 })();
+})();
+</script>
+</body>
+</html>

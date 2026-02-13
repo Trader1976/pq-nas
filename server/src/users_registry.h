@@ -18,6 +18,7 @@ struct UserRec {
     std::string added_at;      // ISO-8601 UTC
     std::string last_seen;     // ISO-8601 UTC
     std::string notes;
+    std::string avatar_url;
 
     // New: admin profile metadata (non-security)
     std::string group;         // e.g. "Family", "Work"

@@ -23,9 +23,10 @@ int main(void) {
     b64url(sk, sizeof(sk), sk_b64, sizeof(sk_b64));
     b64url(cookie_key, sizeof(cookie_key), ck_b64, sizeof(ck_b64));
 
-    printf("export PQNAS_SERVER_PK_B64URL='%s'\n", pk_b64);
-    printf("export PQNAS_SERVER_SK_B64URL='%s'\n", sk_b64);
-    printf("export PQNAS_COOKIE_KEY_B64URL='%s'\n", ck_b64);
+    printf("PQNAS_SERVER_PK_B64URL=%s\n", pk_b64);
+    printf("PQNAS_SERVER_SK_B64URL=%s\n", sk_b64);
+    printf("PQNAS_COOKIE_KEY_B64URL=%s\n", ck_b64);
+
 
     return 0;
 }

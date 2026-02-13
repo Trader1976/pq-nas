@@ -16,6 +16,31 @@
     "mode": "size_mb",
     "rotate_utc_day": ""
   },
+  "snapshots": {
+    "enabled": false,
+
+    "backend": "btrfs",
+
+    "volumes": [
+      {
+        "name": "data",
+        "source_subvolume": "/srv/pqnas/data",
+        "snap_root": "/srv/pqnas/.snapshots/data"
+      }
+    ],
+
+    "schedule": {
+      "mode": "times_per_day",
+      "times_per_day": 6,
+      "jitter_seconds": 120
+    },
+
+    "retention": {
+      "keep_days": 7,
+      "keep_min": 12,
+      "keep_max": 500
+    }
+  },
   "ui_theme": "win_classic",
   "user_defaults": {
     "auto_allocate_on_enable": false,
