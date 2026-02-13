@@ -10178,6 +10178,74 @@ srv.Post("/api/v4/snapshots/restore/prepare", [&](const httplib::Request& req, h
     }.dump());
 });
 
+// GET /api/v4/snapshots/restore/status?job_id=RJOB_...
+srv.Get("/api/v4/snapshots/restore/status", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    const std::string job_id = req.has_param("job_id") ? req.get_param_value("job_id") : "";
+    if (job_id.empty()) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","missing job_id"}}.dump());
+        return;
+    }
+    // basic sanity: only allow our own job ids
+    if (job_id.rfind("RJOB_", 0) != 0) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid job_id"}}.dump());
+        return;
+    }
+
+    const std::filesystem::path run_dir = "/run/pqnas/restore";
+    const std::filesystem::path job_path = run_dir / (job_id + ".json");
+    const std::filesystem::path result_path = run_dir / (job_id + ".result.json");
+
+    auto file_read_all = [&](const std::filesystem::path& p) -> std::string {
+        std::ifstream f(p);
+        if (!f) return {};
+        std::ostringstream ss;
+        ss << f.rdbuf();
+        return ss.str();
+    };
+
+    std::error_code ec;
+
+    // If result exists, return it (pass-through)
+    if (std::filesystem::exists(result_path, ec) && !ec) {
+        const std::string body = file_read_all(result_path);
+        if (body.empty()) {
+            reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","result file unreadable"}}.dump());
+            return;
+        }
+        // Validate it's JSON (best effort)
+        try {
+            json jr = json::parse(body);
+            // Ensure job_id matches (defensive)
+            if (jr.value("job_id","") != job_id) {
+                reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","result job_id mismatch"}}.dump());
+                return;
+            }
+            jr["ok"] = true;
+            reply_json(res, 200, jr.dump());
+            return;
+        } catch (...) {
+            reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","result file contains invalid json"}}.dump());
+            return;
+        }
+    }
+
+    // No result yet — if job exists, report queued/running
+    ec.clear();
+    if (std::filesystem::exists(job_path, ec) && !ec) {
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"job_id", job_id},
+            {"status", "queued"},
+            {"hint", "result not written yet"}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","unknown job_id"}}.dump());
+});
 
 // POST /api/v4/snapshots/restore/confirm
 // Body: {"confirm_id":"RSTR_...","confirm_text":"RESTORE data 2026-..."}
@@ -10242,12 +10310,132 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
         return;
     }
 
-    const std::string src = plan.source_subvolume;
-    const std::string ts = now_iso_utc();
-    std::string backup = src + ".pre_restore." + ts;
-    // sanitize ':' for filesystem (ISO has ':')
-    for (auto& c : backup) if (c == ':') c = '-';
+    // ---- systemd restore job enqueue (does NOT stop pqnas.service here) ----
 
+    const std::string job_id = "RJOB_" + random_b64url(18);
+    const std::string created_utc = now_iso_utc();
+
+    // Runtime dir for restore jobs
+    const std::filesystem::path run_dir = "/run/pqnas/restore";
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(run_dir, ec);
+        if (ec) {
+            reply_json(res, 500, json{
+                {"ok",false},
+                {"error","server_error"},
+                {"message","failed to create /run/pqnas/restore"},
+                {"detail", pqnas::shorten(ec.message(), 200)}
+            }.dump());
+            return;
+        }
+    }
+
+    const std::filesystem::path job_path = run_dir / (job_id + ".json");
+    const std::filesystem::path tmp_path = run_dir / (job_id + ".tmp." + random_b64url(10));
+
+    // Build job JSON (v1)
+    json job = {
+        {"job_id", job_id},
+        {"created_utc", created_utc},
+        {"api_version", 4},
+        {"service_name", "pqnas.service"},
+        {"volume", {
+            {"name", plan.volume},
+            {"live_path", plan.source_subvolume},
+            {"snap_path", plan.snapshot_path}
+        }},
+        {"snapshot_id", plan.snapshot_id},
+        {"request", {
+            {"confirm_id", confirm_id},
+            {"actor_fp", actor_fp},
+            {"ip", req.remote_addr.empty() ? "?" : req.remote_addr}
+        }}
+    };
+
+    const std::string job_text = job.dump(2) + "\n";
+
+    // Atomic write: temp + rename
+    {
+        std::ofstream out(tmp_path, std::ios::binary | std::ios::out | std::ios::trunc);
+        if (!out.good()) {
+            std::error_code ec2;
+            std::filesystem::remove(tmp_path, ec2);
+
+            reply_json(res, 500, json{
+                {"ok",false},
+                {"error","server_error"},
+                {"message","failed to create temp job file"},
+                {"path", tmp_path.string()}
+            }.dump());
+            return;
+        }
+        out.write(job_text.data(), (std::streamsize)job_text.size());
+        if (!out.good()) {
+            std::error_code ec2;
+            std::filesystem::remove(tmp_path, ec2);
+
+            reply_json(res, 500, json{
+                {"ok",false},
+                {"error","server_error"},
+                {"message","failed to write temp job file"},
+                {"path", tmp_path.string()}
+            }.dump());
+            return;
+        }
+    }
+
+    {
+        std::error_code ec;
+        // If job_path exists (shouldn't), remove first to avoid rename failure.
+        if (std::filesystem::exists(job_path, ec) && !ec) {
+            ec.clear();
+            std::filesystem::remove(job_path, ec);
+            if (ec) {
+                std::error_code ec2;
+                std::filesystem::remove(tmp_path, ec2);
+
+                reply_json(res, 500, json{
+                    {"ok",false},
+                    {"error","server_error"},
+                    {"message","failed to overwrite existing job file"},
+                    {"path", job_path.string()},
+                    {"detail", pqnas::shorten(ec.message(), 200)}
+                }.dump());
+                return;
+            }
+        }
+
+        ec.clear();
+        std::filesystem::rename(tmp_path, job_path, ec);
+        if (ec) {
+            std::error_code ec2;
+            std::filesystem::remove(tmp_path, ec2);
+
+            reply_json(res, 500, json{
+                {"ok",false},
+                {"error","server_error"},
+                {"message","failed to finalize job file"},
+                {"path", job_path.string()},
+                {"detail", pqnas::shorten(ec.message(), 200)}
+            }.dump());
+            return;
+        }
+
+        // Best-effort: restrict perms (root helper refuses world-writable)
+        {
+            std::error_code ec_perm;
+            std::filesystem::permissions(
+                job_path,
+                std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+                std::filesystem::perm_options::replace,
+                ec_perm
+            );
+        }
+    }
+
+
+    // Start systemd restore unit via sudo (pqnas user must be allowed in sudoers)
     auto sh_quote = [](const std::string& s)->std::string{
         std::string q = s;
         size_t pos = 0;
@@ -10255,224 +10443,74 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
         return "'" + q + "'";
     };
 
-	auto cmd_rc = [&](const std::string& cmd) -> int {
-	    int rc = std::system(cmd.c_str());
-    	if (rc == -1) return 127;
-    	// on Linux, system() returns encoded status
-    	if (WIFEXITED(rc)) return WEXITSTATUS(rc);
-    	return 128;
-	};
+    auto run_cmd = [&](const std::string& cmd, std::string* out, int* rc_out)->bool{
+        int rc = 0;
+        std::string o;
+        popen_capture(cmd + " 2>&1", &o, &rc);
+        if (out) *out = o;
+        if (rc_out) *rc_out = rc;
+        return (rc == 0);
+    };
 
-	auto path_exists = [&](const std::string& p) -> bool {
-    	std::error_code ec;
-    	return std::filesystem::exists(p, ec);
-	};
+    const std::string unit = "pqnas-restore@" + job_id + ".service";
+    const std::string cmd_start_restore =
+        "sudo -n /usr/bin/systemctl start " + sh_quote(unit);
 
-	auto file_read_all = [&](const std::string& p) -> std::string {
-    	std::ifstream f(p);
-	    if (!f) return {};
-    	std::ostringstream ss;
-	    ss << f.rdbuf();
-    	return ss.str();
-	};
-
-	// Returns UUID line from `sudo -n /usr/bin/btrfs subvolume show <path>` or empty string
-	auto btrfs_uuid = [&](const std::string& path) -> std::string {
-    	// NOTE: you already have sudo+ btrfs path logic elsewhere; reuse if you can.
-    	// Here we keep it simple and consistent with your environment:
-    	const std::string cmd = "sudo -n /usr/bin/btrfs subvolume show " + sh_quote(path) + " 2>/dev/null | rg -m1 '^\\s*UUID:'";
-
-    	// If you don't have shell_escape helper, use your existing one. Don't ship without escaping.
-    	FILE* fp = popen(cmd.c_str(), "r");
-    	if (!fp) return {};
-    	char buf[512];
-    	std::string out;
-    	while (fgets(buf, sizeof(buf), fp)) out += buf;
-	    pclose(fp);
-    	// out like: "UUID: \t\t...."
-	    return out;
-	};
-
-	const std::string cmd_stop  = "systemctl stop pqnas.service";
-	const std::string cmd_start = "systemctl start pqnas.service";
-	const std::string cmd_has_systemctl = "command -v systemctl >/dev/null 2>&1";
-	const std::string cmd_has_unit = "systemctl status pqnas.service >/dev/null 2>&1";
-
-	int rc_has_systemctl = cmd_rc(cmd_has_systemctl);
-	int rc_has_unit      = (rc_has_systemctl == 0) ? cmd_rc(cmd_has_unit) : 1;
-
-	bool can_service = (rc_has_systemctl == 0 && rc_has_unit == 0);
-	std::vector<std::string> warnings;
-	if (!can_service) warnings.push_back("systemd not available or pqnas.service not present; skipping stop/start (dev mode)");
-
-
-    const std::string cmd_move   = "mv " + sh_quote(src) + " " + sh_quote(backup);
-    const std::string cmd_snap   = "btrfs subvolume snapshot " + sh_quote(plan.snapshot_path) + " " + sh_quote(src);
-
-	auto run_cmd = [&](const std::string& cmd, std::string* out, int* rc_out)->bool{
-    	int rc = 0;
-	    std::string o;
-    	popen_capture(cmd + " 2>&1", &o, &rc);
-    	if (out) *out = o;
-	    if (rc_out) *rc_out = rc;
-    	return (rc == 0);
-	};
-
-
-    // Do the restore (swap strategy)
-    std::string out1, out2, out3, out4;
-
-    // 1) stop
-    int rc1 = 0;
-	if (can_service) {
-    	if (!run_cmd(cmd_stop, &out1, &rc1)) {
-        	reply_json(res, 500, json{
-            	{"ok",false},{"error","service_stop_failed"},
-	            {"message","systemctl stop pqnas.service failed"},
-    	        {"rc",rc1},
-        	    {"out", pqnas::shorten(out1, 500)}
-	        }.dump());
-    	    return;
-	    }
-	} else {
-    	warnings.push_back("Skipped systemctl stop/start (dev mode)");
-	}
-
-
-    // 2) move current aside (must exist and be a subvolume)
-    std::error_code ec;
-    if (!std::filesystem::exists(src, ec) || ec) {
-        int rc_tmp = 0;
-		run_cmd(cmd_start, &out4, &rc_tmp);
-
-        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","source_subvolume missing"}}.dump());
-        return;
-    }
-    int rc2 = 0;
-	if (!run_cmd(cmd_move, &out2, &rc2)) {
-    	// If we didn't stop the service, don't try to start it.
-	    if (can_service) {
-    	    int rc_start_tmp = 0;
-        	run_cmd(cmd_start, &out4, &rc_start_tmp);
-	    }
-    	reply_json(res, 500, json{
-        	{"ok",false},{"error","backup_move_failed"},
-	        {"message","Failed to move live subvolume aside"},
-    	    {"rc",rc2},
-        	{"src", src},
-	        {"backup_path", backup},
-    	    {"out", pqnas::shorten(out2, 800)}
-    	}.dump());
-    	return;
-	}
-
-	// VERIFY: backup now exists, and src should NOT exist at this point
-	if (!path_exists(backup)) {
-    	reply_json(res, 500, json{
-        	{"ok",false},{"error","backup_missing"},
-	        {"message","Backup path does not exist after move"},
-    	    {"backup_path", backup}
-    	}.dump());
-    	return;
-	}
-	if (path_exists(src)) {
-    	reply_json(res, 500, json{
-        	{"ok",false},{"error","move_no_effect"},
-	        {"message","Move reported success but src still exists (unexpected)"},
-    	    {"src", src},
-        	{"backup_path", backup}
-	    }.dump());
-    	return;
-	}
-
-
-    // 3) create writable snapshot at src
-    int rc3 = 0;
-	if (!run_cmd(cmd_snap, &out3, &rc3)) {
-    	// rollback attempt: move backup back to src
-    	std::string out_rb;
-	    int rc_rb = 0;
-    	run_cmd("mv " + sh_quote(backup) + " " + sh_quote(src), &out_rb, &rc_rb);
-
-	    reply_json(res, 500, json{
-    	    {"ok",false},{"error","snapshot_create_failed"},
-        	{"message","Failed to create restored subvolume from snapshot"},
-	        {"rc",rc3},
-    	    {"snapshot_path", plan.snapshot_path},
-        	{"src", src},
-        	{"out", pqnas::shorten(out3, 800)},
-	        {"rollback_rc", rc_rb},
-    	    {"rollback_out", pqnas::shorten(out_rb, 500)}
-	    }.dump());
-    	return;
-	}
-
-	// Verify src exists AND is a btrfs subvolume
-	if (!path_exists(src)) {
-    	reply_json(res, 500, json{{"ok",false},{"error","post_verify_missing"},{"message","Restored src missing after snapshot"}}.dump());
-	    return;
-	}
-	if (!is_btrfs_subvolume_sudo_n(src)) {
-    	reply_json(res, 500, json{{"ok",false},{"error","post_verify_not_subvolume"},{"message","Restored src is not a btrfs subvolume"}}.dump());
-    	return;
-	}
-
-
-    // 4) start
-    int rc4 = 0;
-	if (can_service) {
-    	// start failures should be surfaced (or at least warned)
-    	if (!run_cmd(cmd_start, &out4, &rc4)) {
-        	warnings.push_back("systemctl start pqnas.service failed; start manually");
-	    }
-	}
-
-
-    // Verify src exists now
-    ec.clear();
-    if (!std::filesystem::exists(src, ec) || ec) {
+    std::string out_start;
+    int rc_start = 0;
+    if (!run_cmd(cmd_start_restore, &out_start, &rc_start)) {
         // audit fail
         pqnas::AuditEvent ev;
-        ev.event = "snapshots.restore_done";
+        ev.event = "snapshots.restore_job_start";
         ev.outcome = "fail";
         ev.f["actor_fp"] = actor_fp;
+        ev.f["confirm_id"] = confirm_id;
+        ev.f["job_id"] = job_id;
         ev.f["volume"] = plan.volume;
         ev.f["id"] = plan.snapshot_id;
-        ev.f["reason"] = "post_verify_missing";
-        ev.f["backup"] = pqnas::shorten(backup, 220);
+        ev.f["reason"] = "systemctl_start_failed";
+        ev.f["rc"] = std::to_string(rc_start);
+        ev.f["out"] = pqnas::shorten(out_start, 300);
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
         maybe_auto_rotate_before_append();
         audit_append(ev);
 
-        reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","restore may have failed (post-verify missing)"}}.dump());
+        reply_json(res, 500, json{
+            {"ok",false},
+            {"error","restore_start_failed"},
+            {"message","failed to start restore unit"},
+            {"job_id", job_id},
+            {"unit", unit},
+            {"rc", rc_start},
+            {"out", pqnas::shorten(out_start, 400)}
+        }.dump());
         return;
     }
 
     // audit ok
     {
         pqnas::AuditEvent ev;
-        ev.event = "snapshots.restore_done";
+        ev.event = "snapshots.restore_job_start";
         ev.outcome = "ok";
         ev.f["actor_fp"] = actor_fp;
+        ev.f["confirm_id"] = confirm_id;
+        ev.f["job_id"] = job_id;
         ev.f["volume"] = plan.volume;
         ev.f["id"] = plan.snapshot_id;
-        ev.f["backup"] = pqnas::shorten(backup, 220);
+        ev.f["job_path"] = pqnas::shorten(job_path.string(), 220);
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
         maybe_auto_rotate_before_append();
         audit_append(ev);
     }
 
-	reply_json(res, 200, json{
-    	{"ok", true},
-    	{"restored", true},
-    	{"volume", plan.volume},
-    	{"id", plan.snapshot_id},
-    	{"backup_path", backup},
-    	{"warnings", warnings}
-	}.dump());
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"job_id", job_id},
+        {"volume", plan.volume},
+        {"id", plan.snapshot_id}
+    }.dump());
 
 });
-
 
 
 // Admin routes
