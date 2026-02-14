@@ -46,7 +46,7 @@ write_result() {
 
   local now; now="$(ts_utc)"
   local msg="${ERR:-""}"
-  cat >"$RESULTFILE" <<JSON
+cat >"$RESULTFILE" <<JSON
 {
   "ok": ${OK},
   "job_id": "$(printf '%s' "$JOBID" | sed 's/"/\\"/g')",
@@ -55,6 +55,7 @@ write_result() {
   "error": "$(printf '%s' "$msg" | sed 's/"/\\"/g')"
 }
 JSON
+  chown pqnas:pqnas "$RESULTFILE" 2>/dev/null || true
   chmod 0640 "$RESULTFILE" || true
   RESULT_WRITTEN=true
 }
@@ -259,6 +260,7 @@ cat >"$RESULTFILE" <<JSON
   "snapshot_id": "$(printf '%s' "$SNAPSHOT_ID" | sed 's/"/\\"/g')"
 }
 JSON
+chown pqnas:pqnas "$RESULTFILE" 2>/dev/null || true
 chmod 0640 "$RESULTFILE" || true
 RESULT_WRITTEN=true
 exit 0
