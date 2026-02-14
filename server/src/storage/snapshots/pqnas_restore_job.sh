@@ -120,8 +120,8 @@ STEP="ensure_live_exists"
 if [[ ! -e "$LIVE_PATH" ]]; then
   echo "[restore][$JOBID] ensure_live_exists: live missing at $LIVE_PATH"
 
-  #NEWEST_BACKUP="$(/usr/bin/ls -1dt "${LIVE_PATH}".pre_restore.* 2>/dev/null | head -n 1 || true)"
-  NEWEST_BACKUP="$(ls -1d "${LIVE_PATH}".pre_restore.* 2>/dev/null | sort -r | head -n 1 || true)"
+  NEWEST_BACKUP="$(/usr/bin/ls -1dt "${LIVE_PATH}".pre_restore.* 2>/dev/null | head -n 1 || true)"
+
 
   if [[ -z "$NEWEST_BACKUP" ]]; then
     ERR="live missing and no pre_restore backups found for $LIVE_PATH"

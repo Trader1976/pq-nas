@@ -1,0 +1,7 @@
+[Unit]
+Description=PQ-NAS rollback test service (always fails)
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/false

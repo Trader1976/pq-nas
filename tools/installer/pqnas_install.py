@@ -767,6 +767,78 @@ WantedBy=multi-user.target
     with open(unit_path, "w", encoding="utf-8") as f:
         f.write(unit)
     return unit_path
+def install_snapshot_restore_assets(asset_root: str, backend: str, log: Optional[Log] = None) -> None:
+    """
+    Install snapshot restore helper script + systemd units.
+
+    Package layout (release tarball):
+      - <asset_root>/lib/pqnas/pqnas_restore_job.sh
+      - <asset_root>/systemd/pqnas-restore@.service
+      - <asset_root>/systemd/pqnas-ok.service
+      - <asset_root>/systemd/pqnas-fail.service
+
+    Repo layout (dev):
+      - <asset_root>/server/src/storage/snapshots/pqnas_restore_job.sh
+      - <asset_root>/tools/release/systemd/<units>
+    """
+    if backend not in ("btrfs", "zfs"):
+        if log:
+            log.write("[*] Snapshot restore assets: skipped (backend is not snapshot-capable).")
+        return
+
+    # --- restore job script ---
+    script_candidates = [
+        os.path.join(asset_root, "lib", "pqnas", "pqnas_restore_job.sh"),  # package mode
+        os.path.join(asset_root, "server", "src", "storage", "snapshots", "pqnas_restore_job.sh"),  # repo mode
+    ]
+    script_src = next((p for p in script_candidates if os.path.isfile(p)), None)
+    if not script_src:
+        raise RuntimeError(
+            "pqnas_restore_job.sh not found. Tried:\n" +
+            "\n".join(f"  - {p}" for p in script_candidates)
+        )
+
+    os.makedirs("/usr/local/lib/pqnas", exist_ok=True)
+    script_dst = "/usr/local/lib/pqnas/pqnas_restore_job.sh"
+    tmp = script_dst + ".new"
+    shutil.copy2(script_src, tmp)
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, script_dst)
+
+    if log:
+        log.write(f"[*] Installed restore job: {script_dst} (from {script_src})")
+
+    # --- systemd units ---
+    unit_dir_candidates = [
+        os.path.join(asset_root, "systemd"),                 # package mode
+        os.path.join(asset_root, "tools", "release", "systemd"),  # repo mode
+    ]
+    unit_dir = next((p for p in unit_dir_candidates if os.path.isdir(p)), None)
+    if not unit_dir:
+        raise RuntimeError(
+            "systemd unit dir not found. Tried:\n" +
+            "\n".join(f"  - {p}" for p in unit_dir_candidates)
+        )
+
+    units = ["pqnas-restore@.service", "pqnas-ok.service", "pqnas-fail.service"]
+    for u in units:
+        src = os.path.join(unit_dir, u)
+        if not os.path.isfile(src):
+            raise RuntimeError(f"Missing unit asset: {src}")
+        dst = os.path.join("/etc/systemd/system", u)
+        tmpu = dst + ".new"
+        shutil.copy2(src, tmpu)
+        os.chmod(tmpu, 0o644)
+        os.replace(tmpu, dst)
+        if log:
+            log.write(f"[*] Installed unit: {dst}")
+
+    # Make sure systemd sees new units
+    run_systemctl(["daemon-reload"])
+
+    # Optionally enable template (not necessary; templates can be started without enabling)
+    if log:
+        log.write("[*] Snapshot restore assets installed (script + units).")
 
 
 def run_systemctl(args: List[str]) -> str:
@@ -1931,6 +2003,10 @@ class ExecuteScreen(Screen):
 
             self.logw.write("")
             self.logw.write("== systemd ==")
+
+            # Snapshot restore service + helper script (btrfs/zfs only)
+            install_snapshot_restore_assets(asset_root, backend, log=self.logw)
+
 
             self.logw.write("Stopping pqnas.service (if running) …")
             subprocess.run(["systemctl", "stop", "pqnas.service"], check=False)

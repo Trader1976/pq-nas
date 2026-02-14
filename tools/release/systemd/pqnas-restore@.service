@@ -1,0 +1,14 @@
+[Unit]
+Description=PQ-NAS snapshot restore job %i
+After=local-fs.target
+Requires=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/lib/pqnas/pqnas_restore_job.sh %i
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+[Unit]
+Description=PQ-NAS swap test service (always succeeds)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/true

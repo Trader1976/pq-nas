@@ -21,6 +21,8 @@ TARBALL="$OUTDIR/pqnas-${VER}-linux-${ARCH}.tar.gz"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REL_ROOT="$REPO_ROOT/tools/release"
 CLEAN_CONFIG_DIR="$REL_ROOT/config"
+SYSTEMD_DIR="$REL_ROOT/systemd"
+RESTORE_JOB_SRC="$REPO_ROOT/server/src/storage/snapshots/pqnas_restore_job.sh"
 
 echo "[*] Repo root: $REPO_ROOT"
 echo "[*] Version:   $VER"
@@ -107,6 +109,27 @@ else
   exit 3
 fi
 
+# systemd units (restore jobs + helpers)
+if [[ -d "$SYSTEMD_DIR" ]]; then
+  install -d "$STAGE/systemd"
+  rsync -a --delete \
+    --exclude '__pycache__/' \
+    --exclude '*.pyc' \
+    "$SYSTEMD_DIR/" "$STAGE/systemd/"
+else
+  echo "ERROR: Missing systemd dir: $SYSTEMD_DIR"
+  echo "Create tools/release/systemd and add pqnas-restore@.service + pqnas-ok.service + pqnas-fail.service"
+  exit 5
+fi
+
+# Snapshot restore job script (installed to /usr/local/lib/pqnas/)
+if [[ -f "$RESTORE_JOB_SRC" ]]; then
+  install -d "$STAGE/lib/pqnas"
+  install -m 0755 "$RESTORE_JOB_SRC" "$STAGE/lib/pqnas/pqnas_restore_job.sh"
+else
+  echo "[!] Snapshot restore job not found: $RESTORE_JOB_SRC"
+  echo "[!] This is OK only if you intentionally ship without snapshot-restore support."
+fi
 
 # Static web assets (package-mode)
 rsync -a --delete \
@@ -119,30 +142,12 @@ if [[ -d "$REPO_ROOT/apps/bundled" ]]; then
   rsync -a --delete \
     --exclude '__pycache__/' \
     --exclude '*.pyc' \
+    --exclude '*/src/**' \
     "$REPO_ROOT/apps/bundled/" "$STAGE/bundled/"
 else
   mkdir -p "$STAGE/bundled"
 fi
 
-# Installed apps (folders: apps/installed/<app>/<ver>/{manifest.json,www/...})
-if [[ -d "$REPO_ROOT/apps/installed" ]]; then
-  # sanity: each version dir must contain manifest.json + www/
-  while IFS= read -r -d '' m; do
-    verdir="$(dirname "$m")"
-    if [[ ! -d "$verdir/www" ]]; then
-      echo "ERROR: Installed app missing www/: $verdir"
-      exit 4
-    fi
-  done < <(find "$REPO_ROOT/apps/installed" -mindepth 3 -maxdepth 3 -type f -name manifest.json -print0)
-
-  rsync -a --delete \
-    --exclude '__pycache__/' \
-    --exclude '*.pyc' \
-    "$REPO_ROOT/apps/installed/" "$STAGE/installed/"
-else
-  echo "ERROR: Missing apps/installed (expected installed apps in repo)."
-  exit 4
-fi
 
 # Clean default config (IMPORTANT: from tools/release/config, not repo config/)
 rsync -a --delete \
