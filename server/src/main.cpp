@@ -9961,7 +9961,7 @@ for (auto& de : std::filesystem::directory_iterator(snap_root, ec)) {
        		{"id", s.id},
 	        {"path", s.path},
 	        {"created_utc", ""},                 // keep blank if you want
-       		{"readonly", s.is_subvol},           // subvolumes are readonly snapshots
+       		{"readonly", false},
 	        {"is_btrfs_subvolume", s.is_subvol}, // <-- ✅ COMMA was missing after this before
        		{"probe", s.probe},                  // "ok" | "no_privs" | ...
        		{"probe_detail", pqnas::shorten(s.probe_detail, 180)}
@@ -10141,7 +10141,7 @@ srv.Post("/api/v4/snapshots/restore/prepare", [&](const httplib::Request& req, h
     	// We only claim stop/start steps if systemctl exists AND pqnas.service is known
 	    int rc1 = std::system("command -v systemctl >/dev/null 2>&1");
     	if (rc1 != 0) return false;
-    	int rc2 = std::system("systemctl status pqnas.service >/dev/null 2>&1");
+	    int rc2 = std::system("sudo -n /usr/bin/systemctl status pqnas.service >/dev/null 2>&1");
     	return (rc2 == 0);
 	};
 
@@ -10178,6 +10178,7 @@ srv.Post("/api/v4/snapshots/restore/prepare", [&](const httplib::Request& req, h
     }.dump());
 });
 
+    // GET /api/v4/snapshots/restore/status?job_id=RJOB_...
 // GET /api/v4/snapshots/restore/status?job_id=RJOB_...
 srv.Get("/api/v4/snapshots/restore/status", [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp;
@@ -10188,7 +10189,6 @@ srv.Get("/api/v4/snapshots/restore/status", [&](const httplib::Request& req, htt
         reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","missing job_id"}}.dump());
         return;
     }
-    // basic sanity: only allow our own job ids
     if (job_id.rfind("RJOB_", 0) != 0) {
         reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid job_id"}}.dump());
         return;
@@ -10206,25 +10206,43 @@ srv.Get("/api/v4/snapshots/restore/status", [&](const httplib::Request& req, htt
         return ss.str();
     };
 
+    auto sh_quote = [](const std::string& s)->std::string{
+        std::string q = s;
+        size_t pos = 0;
+        while ((pos = q.find("'", pos)) != std::string::npos) { q.replace(pos, 1, "'\\''"); pos += 4; }
+        return "'" + q + "'";
+    };
+
+    auto run_cmd = [&](const std::string& cmd, std::string* out, int* rc_out)->bool{
+        int rc = 0;
+        std::string o;
+        popen_capture(cmd + " 2>&1", &o, &rc);
+        if (out) *out = o;
+        if (rc_out) *rc_out = rc;
+        return (rc == 0);
+    };
+
     std::error_code ec;
 
-    // If result exists, return it (pass-through)
+    // 1) If result exists, wrap it as "done"
     if (std::filesystem::exists(result_path, ec) && !ec) {
         const std::string body = file_read_all(result_path);
         if (body.empty()) {
             reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","result file unreadable"}}.dump());
             return;
         }
-        // Validate it's JSON (best effort)
         try {
             json jr = json::parse(body);
-            // Ensure job_id matches (defensive)
             if (jr.value("job_id","") != job_id) {
                 reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","result job_id mismatch"}}.dump());
                 return;
             }
-            jr["ok"] = true;
-            reply_json(res, 200, jr.dump());
+            reply_json(res, 200, json{
+                {"ok", true},
+                {"job_id", job_id},
+                {"status", "done"},
+                {"result", jr}
+            }.dump());
             return;
         } catch (...) {
             reply_json(res, 500, json{{"ok",false},{"error","server_error"},{"message","result file contains invalid json"}}.dump());
@@ -10232,18 +10250,69 @@ srv.Get("/api/v4/snapshots/restore/status", [&](const httplib::Request& req, htt
         }
     }
 
-    // No result yet — if job exists, report queued/running
+    // 2) No result yet — try systemd state
+    const std::string unit = "pqnas-restore@" + job_id + ".service";
+
+    std::string out_show;
+    int rc_show = 0;
+
+    const std::string cmd_show =
+        "sudo -n /usr/bin/systemctl show " + sh_quote(unit) +
+        " -p ActiveState -p SubState -p Result -p ExecMainStatus -p ExecMainCode";
+
+    if (run_cmd(cmd_show, &out_show, &rc_show)) {
+        auto kv = [&](const std::string& key)->std::string{
+            std::istringstream iss(out_show);
+            std::string line;
+            while (std::getline(iss, line)) {
+                if (line.rfind(key + "=", 0) == 0) return line.substr(key.size() + 1);
+            }
+            return "";
+        };
+
+        const std::string active  = kv("ActiveState");
+        const std::string sub     = kv("SubState");
+        const std::string result  = kv("Result");
+        const std::string code    = kv("ExecMainCode");
+        const std::string status2 = kv("ExecMainStatus");
+
+        std::string derived = "running";
+        if (active == "failed") derived = "failed";
+        else if (active == "active" && sub == "running") derived = "running";
+        else if (active == "inactive" && sub == "dead") derived = "queued";
+        else if (active == "inactive" && sub == "exited") derived = "exited";
+        else derived = active.empty() ? "unknown" : active;
+
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"job_id", job_id},
+            {"status", derived},
+            {"unit", unit},
+            {"systemd", {
+                {"ActiveState", active},
+                {"SubState", sub},
+                {"Result", result},
+                {"ExecMainCode", code},
+                {"ExecMainStatus", status2}
+            }},
+            {"hint", "result not written yet"}
+        }.dump());
+        return;
+    }
+
+    // 3) If systemd query not permitted, fall back to job file existence
     ec.clear();
     if (std::filesystem::exists(job_path, ec) && !ec) {
         reply_json(res, 200, json{
             {"ok", true},
             {"job_id", job_id},
             {"status", "queued"},
-            {"hint", "result not written yet"}
+            {"hint", "result not written yet (and systemd status unavailable)"}
         }.dump());
         return;
     }
 
+    // 4) Unknown
     reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","unknown job_id"}}.dump());
 });
 
@@ -10278,7 +10347,7 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
         }
         plan = it->second;
         // one-shot token: remove now (fail-safe)
-        g_restore_by_id.erase(it);
+        //g_restore_by_id.erase(it);
     }
 
     if (confirm_text != plan.confirm_phrase) {
@@ -10298,7 +10367,10 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
         reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","confirmation text mismatch"}}.dump());
         return;
     }
-
+    {
+        std::lock_guard<std::mutex> lk(g_restore_mu);
+        g_restore_by_id.erase(confirm_id);
+    }
     // Validate paths again
     const std::string snap_root_real = realpath_str(std::filesystem::path(plan.snapshot_path).parent_path().string());
     if (!is_path_under(plan.snapshot_path, snap_root_real)) {
@@ -10334,11 +10406,13 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
     const std::filesystem::path job_path = run_dir / (job_id + ".json");
     const std::filesystem::path tmp_path = run_dir / (job_id + ".tmp." + random_b64url(10));
 
-    // Build job JSON (v1)
+    // Build job JSON (matches /usr/local/lib/pqnas/pqnas_restore_job.sh contract)
     json job = {
         {"job_id", job_id},
         {"created_utc", created_utc},
         {"api_version", 4},
+
+        // REQUIRED by script:
         {"service_name", "pqnas.service"},
         {"volume", {
             {"name", plan.volume},
@@ -10347,11 +10421,16 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
         }},
         {"snapshot_id", plan.snapshot_id},
         {"request", {
+            // REQUIRED by script:
+            {"mode", "swap"},
             {"confirm_id", confirm_id},
+
+            // extra metadata (ok for script to ignore):
             {"actor_fp", actor_fp},
             {"ip", req.remote_addr.empty() ? "?" : req.remote_addr}
         }}
     };
+
 
     const std::string job_text = job.dump(2) + "\n";
 

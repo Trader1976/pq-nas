@@ -439,6 +439,12 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
         const vol = selectedVol.name;
         const id = selectedSnap.id;
+        const isSub = (selectedSnap && selectedSnap.is_btrfs_subvolume === true);
+        const probe = String((selectedSnap && selectedSnap.probe) || "ok");
+        if (!isSub || probe === "no_privs") {
+            status.textContent = "Restore disabled: snapshot not verified as a btrfs subvolume (or sudo missing).";
+            return;
+        }
 
         const phrase = `RESTORE ${vol} ${id}`;
 
@@ -484,35 +490,83 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
                 confirm_id: prep.confirm_id,
                 confirm_text: phrase
             });
+            // confirm starts an ASYNC systemd job now
+            const jobId = String((done && done.job_id) || "");
+            if (!jobId) throw new Error("Restore started but server did not return job_id");
 
-// Build a clear “what happened” message from server response
-            const backupPath = (done && typeof done.backup_path === "string") ? done.backup_path : "";
-            const warns = (done && Array.isArray(done.warnings)) ? done.warnings : [];
+            setBadge("warn", "restoring…");
+            status.textContent = `Restoring… (job ${jobId})`;
 
-            setBadge("ok", "done");
-            status.textContent = `✅ Restore completed for ${vol} → ${id}. Refreshing…`;
+            const pollEveryMs = 1200;
+            const timeoutMs = 10 * 60 * 1000;
+            const t0 = Date.now();
 
-            openModal(
-                "Restore completed",
-                `
-    <div class="modalNote">
-      Volume <b>${escapeHtml(vol)}</b> restored to snapshot <b>${escapeHtml(id)}</b>.
-    </div>
+            while (true) {
+                if (Date.now() - t0 > timeoutMs) {
+                    throw new Error(`Restore timed out waiting for result (job ${jobId})`);
+                }
+
+                let st;
+                try {
+                    st = await apiGet(`/api/v4/snapshots/restore/status?job_id=${encodeURIComponent(jobId)}`);
+                } catch (e) {
+                    // transient polling error; retry
+                    await new Promise(r => setTimeout(r, pollEveryMs));
+                    continue;
+                }
+
+                // Compat: server may return wrapped {status,result} OR raw result JSON
+                const hasWrapped = (st && typeof st.status === "string");
+                const stStatus = hasWrapped
+                    ? String(st.status || "unknown")
+                    : (st && typeof st.step === "string") ? "done" : "unknown";
+
+                const r = hasWrapped ? (st.result || null) : st;
+
+// If we have a result (wrapped or raw), treat as done
+                if (stStatus === "done" && r) {
+                    const ok = !!r.ok;
+                    const backupPath = (r && typeof r.backup_path === "string") ? r.backup_path : "";
+
+                    setBadge(ok ? "ok" : "err", ok ? "done" : "failed");
+                    status.textContent = ok
+                        ? `✅ Restore completed for ${vol} → ${id}. Refreshing…`
+                        : `❌ Restore failed for ${vol} → ${id}.`;
+
+                    openModal(
+                        ok ? "Restore completed" : "Restore failed",
+                        `
+<div class="modalGrid">
+  <div class="modalPanel">
+    <h3>${ok ? "Result" : "Error"}</h3>
+    <div class="modalNote">Volume <b>${escapeHtml(vol)}</b> → snapshot <b>${escapeHtml(id)}</b></div>
+    <div class="modalNote mono">job_id=${escapeHtml(jobId)}</div>
     ${backupPath ? `<div class="modalNote">Backup saved as:<br><span class="mono">${escapeHtml(backupPath)}</span></div>` : ""}
-    ${warns.length ? `
-      <div class="modalNote" style="margin-top:10px;">
-        <div style="font-weight:900; margin-bottom:6px;">Warnings</div>
-        <ul style="margin:0; padding-left:18px;">
-          ${warns.map(w => `<li>${escapeHtml(String(w))}</li>`).join("")}
-        </ul>
-      </div>
-    ` : ""}
-  `
-            );
+    ${!ok ? `<div class="modalNote">Step: <span class="mono">${escapeHtml(String(r.step || ""))}</span></div>
+             <div class="modalNote">Error: <span class="mono">${escapeHtml(String(r.error || ""))}</span></div>` : ""}
+  </div>
+  <div class="modalPanel">
+    <h3>Raw result JSON</h3>
+    <pre class="mono">${escapeHtml(JSON.stringify(r, null, 2))}</pre>
+  </div>
+</div>
+`
+                    );
 
-            selectedSnap = null;
-            await loadSnapshotsForSelectedVol();
+                    selectedSnap = null;
+                    await loadSnapshotsForSelectedVol();
+                    return;
+                }
 
+                if (stStatus === "failed") {
+                    throw new Error(`Restore job failed (systemd failed) job=${jobId}`);
+                }
+
+
+                // queued / running / exited / unknown
+                status.textContent = `Restoring… (job ${jobId}) status=${stStatus}`;
+                await new Promise(r => setTimeout(r, pollEveryMs));
+            }
 
         } catch (e) {
             setBadge("err", "error");
@@ -521,7 +575,6 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
             updateButtons();
         }
     }
-
     async function loadAll() {
         try {
             await loadVolumes();
@@ -532,7 +585,6 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
             status.textContent = String(e && e.message ? e.message : e);
         }
     }
-
 
     detailsBtn?.addEventListener("click", showDetails);
     restoreBtn?.addEventListener("click", doRestore);

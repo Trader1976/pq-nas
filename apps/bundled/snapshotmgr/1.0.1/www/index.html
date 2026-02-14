@@ -15,7 +15,7 @@
         .app {
             height: 100%;
             display: grid;
-            grid-template-rows: auto 1fr auto;
+            grid-template-rows: auto auto 1fr auto;
             gap: 12px;
             padding: 12px;
         }
@@ -290,7 +290,12 @@
             background: rgba(255,255,255,0.96);
             outline: 1px solid rgba(0,0,0,0.08);
         }
-
+        #warnBanner{
+            position: relative;
+            z-index: 5;
+            /* optional: make it feel “inside” the same card spacing */
+            margin-top: -6px;   /* tweak if you want it closer to topbar */
+        }
         /* WIN_CLASSIC: use classic panel colors */
         html[data-theme="win_classic"] .modalCard,
         html[data-theme="win_classic"] .modalHead{
