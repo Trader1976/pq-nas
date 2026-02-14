@@ -428,4 +428,318 @@ Administrators may:
 
 ---
 
+# Snapshot Manager — Restore and Manual Snapshots
+
+The Snapshot Manager allows administrators to:
+
+- View all snapshots for each volume
+- Inspect snapshot details
+- Restore any snapshot safely
+- Create a new snapshot manually ("Snapshot now")
+
+Automatic snapshot scheduling is configured separately in:
+
+Admin → Settings → Snapshots (Btrfs)
+
+Snapshot Manager is used for manual operations and recovery.
+
+---
+
+# Opening Snapshot Manager
+
+Open:
+
+Admin → Snapshot Manager
+
+The page contains two main columns:
+
+Left column — Volumes  
+Right column — Snapshots for the selected volume
+
+Top bar contains:
+
+Refresh — reload volumes and snapshots  
+Details — show detailed snapshot information  
+Restore — restore the selected snapshot  
+Snapshot now — create a new snapshot immediately
+
+---
+
+# Volume List (Left Side)
+
+Each row represents a configured snapshot volume.
+
+Example row:
+
+data    enabled  
+/srv/pqnas/data  |  /srv/pqnas/.snapshots/data
+
+Fields:
+
+Volume name  
+Logical volume identifier.
+
+enabled / disabled  
+Whether automatic snapshots are enabled for that volume.
+
+source_subvolume  
+The live data location.
+
+snap_root  
+Directory where snapshots are stored.
+
+Selecting a volume loads its snapshots.
+
+---
+
+# Snapshot List (Right Side)
+
+Each row represents one snapshot.
+
+Example:
+
+2026-02-14T11-21-40.805Z    ro
+
+Fields:
+
+Snapshot ID  
+Timestamp-based identifier.
+
+Status label (right side)
+
+Possible values:
+
+latest  
+Newest snapshot available.
+
+ro  
+Read-only snapshot (normal and expected).
+
+rw  
+Read-write snapshot (unusual; typically indicates a manual or non-standard snapshot).
+
+⚠  
+Snapshot could not be verified due to missing sudo permissions.
+
+junk  
+Directory exists but is not a valid Btrfs snapshot subvolume.
+
+Creation time  
+Displayed below the snapshot ID.
+
+Snapshots are sorted newest first.
+
+---
+
+# What ro and rw Mean
+
+ro — Read-only snapshot  
+This is the normal and safe snapshot type.
+
+Properties:
+
+Cannot be modified  
+Fully safe for restore  
+Created using:
+
+btrfs subvolume snapshot -r <source> <destination>
+
+rw — Read-write snapshot  
+This is not normally created by PQ-NAS.
+
+May indicate:
+
+Manual test snapshot  
+External tool snapshot  
+Improper snapshot
+
+PQ-NAS restore still works, but read-only snapshots are recommended.
+
+---
+
+# Snapshot now Button
+
+Snapshot now creates a new snapshot immediately.
+
+This is useful when:
+
+Before software upgrades  
+Before risky changes  
+Before deleting or moving large files  
+Before maintenance
+
+When clicked, PQ-NAS runs:
+
+btrfs subvolume snapshot -r <source_subvolume> <snap_root>/<timestamp>
+
+The new snapshot appears in the list within seconds.
+
+This does not affect automatic scheduling.
+
+---
+
+# Restore Button
+
+Restore replaces the live volume with the selected snapshot.
+
+Steps:
+
+1. Select a snapshot
+2. Click Restore
+3. Confirm the action
+4. Type the confirmation phrase exactly
+5. Confirm restore plan
+
+PQ-NAS will:
+
+Stop pqnas.service briefly  
+Preserve current data as backup  
+Replace live data with snapshot  
+Restart pqnas.service
+
+Downtime is typically less than a few seconds.
+
+---
+
+# Backup Safety During Restore
+
+Before restore, PQ-NAS automatically creates a backup of the current live volume.
+
+Example:
+
+/srv/pqnas/data.pre_restore.2026-02-14T11-28-08.838Z
+
+This allows recovery if needed.
+
+Backups can be removed manually after verification.
+
+---
+
+# Details Button
+
+Shows technical information about the selected snapshot.
+
+Includes:
+
+Full filesystem path  
+Verification result  
+Internal metadata  
+Btrfs subvolume information
+
+This is useful for troubleshooting.
+
+---
+
+# Refresh Button
+
+Reloads volumes and snapshots from the server.
+
+Use this when:
+
+A new snapshot was created  
+Another admin performed changes  
+You want the latest status
+
+---
+
+# Status Labels and Meaning
+
+latest  
+Newest snapshot available.
+
+ro  
+Safe read-only snapshot.
+
+rw  
+Writable snapshot (not standard).
+
+⚠  
+Verification failed due to missing sudo permission.
+
+junk  
+Directory is not a valid snapshot.
+
+Only valid Btrfs snapshots can be restored.
+
+---
+
+# Restore Safety Model
+
+Restore uses atomic subvolume swap.
+
+This means:
+
+No partial restores  
+No inconsistent state  
+Instant rollback capability
+
+PQ-NAS guarantees either:
+
+Restore fully succeeds  
+or  
+System remains unchanged
+
+---
+
+# Recommended Usage
+
+Create snapshot now before:
+
+System upgrades  
+Configuration changes  
+File deletions  
+Testing
+
+Restore snapshot when:
+
+Files were deleted accidentally  
+Data became corrupted  
+Ransomware or unwanted changes occurred
+
+---
+
+# Relationship with Automatic Snapshots
+
+Snapshot Manager does not control automatic snapshot schedules.
+
+Scheduling is configured in:
+
+Admin → Settings → Snapshots
+
+Snapshot Manager is used for:
+
+Manual snapshots  
+Restore operations  
+Inspection
+
+---
+
+# Safety and Permissions
+
+All Snapshot Manager operations require administrator privileges.
+
+All actions are audited.
+
+Restore operations require explicit confirmation.
+
+Snapshots are always created inside configured snap_root directories.
+
+---
+
+# Summary
+
+Snapshot Manager provides safe and reliable recovery.
+
+Key capabilities:
+
+View snapshots  
+Create snapshots manually  
+Restore any snapshot  
+Inspect snapshot details
+
+Snapshots are fast, space-efficient, and safe.
+
+---
+
 © CPUNK 2026 — PQ-NAS Security Platform
+
