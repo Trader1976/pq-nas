@@ -24,11 +24,11 @@
         }
     })();
 
-
     const badge = el("badge");
     const status = el("status");
     const warnBanner = el("warnBanner");
-// modal bits
+
+    // modal bits
     const modalOverlay = el("modalOverlay");
     const modalTitle = el("modalTitle");
     const modalBody = el("modalBody");
@@ -48,22 +48,69 @@
     let selectedSnap = null;  // {id, path, created_utc, readonly}
     let lastSnapListMeta = null; // { snap_root, volume, count }
 
+    // ---- badge lock (prevents late errors from overwriting badge) ----
+    let badgeLockUntil = 0;
     function setBadge(kind, text) {
+        const now = Date.now();
+        if (now < badgeLockUntil && kind === "err") {
+            // Ignore late “err” updates during lock
+            return;
+        }
         badge.className = `badge ${kind}`;
         badge.textContent = text;
     }
+    function lockBadge(ms) {
+        badgeLockUntil = Date.now() + Math.max(0, ms || 0);
+    }
+
+    // ---- fetch helpers (improved error surface for 502 / downtime) ----
+
+    async function parseJsonBestEffort(r) {
+        try { return await r.json(); } catch (_) { return {}; }
+    }
+
+    function errorFromResponse(r, j) {
+        const msg = (j && (j.message || j.error)) ? (j.message || j.error) : "";
+        return new Error(msg || `HTTP ${r.status}`);
+    }
 
     async function apiGet(path) {
-        const r = await fetch(path, {
-            method: "GET",
-            credentials: "include",
-            cache: "no-store",
-            headers: { "Accept": "application/json" }
-        });
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok || !j.ok) throw new Error(j.message || j.error || `HTTP ${r.status}`);
+        let r;
+        try {
+            r = await fetch(path, {
+                method: "GET",
+                credentials: "include",
+                cache: "no-store",
+                headers: { "Accept": "application/json" }
+            });
+        } catch (e) {
+            throw new Error("network_error");
+        }
+
+        const j = await parseJsonBestEffort(r);
+        if (!r.ok || (j && j.ok === false)) throw errorFromResponse(r, j);
         return j;
     }
+
+    async function apiPost(path, body) {
+        let r;
+        try {
+            r = await fetch(path, {
+                method: "POST",
+                credentials: "include",
+                cache: "no-store",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body: JSON.stringify(body || {})
+            });
+        } catch (e) {
+            throw new Error("network_error");
+        }
+
+        const j = await parseJsonBestEffort(r);
+        if (!r.ok || (j && j.ok === false)) throw errorFromResponse(r, j);
+        return j;
+    }
+
     function showBanner(html) {
         if (!warnBanner) return;
         if (!html) { warnBanner.style.display = "none"; warnBanner.innerHTML = ""; return; }
@@ -89,6 +136,17 @@
         if (modalBody) modalBody.innerHTML = "";
     }
 
+    // Small helper for “progress modal” updates
+    function isModalOpen() {
+        return !!(modalOverlay && modalOverlay.style.display !== "none" && modalOverlay.getAttribute("aria-hidden") !== "true");
+    }
+
+    function setModalHtml(title, html) {
+        if (!isModalOpen()) return;
+        if (modalTitle) modalTitle.textContent = title || (modalTitle.textContent || "Details");
+        if (modalBody) modalBody.innerHTML = html || "";
+    }
+
     modalCloseBtn?.addEventListener("click", closeModal);
     modalOverlay?.addEventListener("click", (e) => {
         if (e.target === modalOverlay) closeModal();
@@ -96,19 +154,6 @@
     window.addEventListener("keydown", (e) => {
         if (e.key === "Escape") closeModal();
     });
-
-    async function apiPost(path, body) {
-        const r = await fetch(path, {
-            method: "POST",
-            credentials: "include",
-            cache: "no-store",
-            headers: { "Content-Type": "application/json", "Accept": "application/json" },
-            body: JSON.stringify(body || {})
-        });
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok || !j.ok) throw new Error(j.message || j.error || `HTTP ${r.status}`);
-        return j;
-    }
 
     function sudoSetupHtml() {
         const user = window.__pqnasRuntimeUser || "<YOUR_USER>";
@@ -137,6 +182,14 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
   `;
     }
 
+    function escapeHtml(s) {
+        return String(s)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+    }
 
     function clearChildren(x) { while (x.firstChild) x.removeChild(x.firstChild); }
 
@@ -177,8 +230,6 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         restoreBtn.disabled = !(hasVol && hasSnap && isSub && probe !== "no_privs");
     }
 
-
-
     function renderVolumes() {
         clearChildren(volList);
         volHint.textContent = volumes.length ? `${volumes.length}` : "";
@@ -195,7 +246,7 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
                 selectedVol = v;
                 selectedSnap = null;
                 renderVolumes();
-                loadSnapshotsForSelectedVol();
+                loadSnapshotsForSelectedVol().catch(() => {});
             });
             volList.appendChild(d);
         }
@@ -226,7 +277,7 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
             if (probe === "no_privs") d.classList.add("noPrivs");
             if (!isSub) d.classList.add("notSubvol");
 
-// tooltip on right-side label
+            // tooltip on right-side label
             const rightEl = d.querySelector(".top .mono");
             if (rightEl) {
                 if (probe === "no_privs") {
@@ -266,14 +317,12 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         }
     }
 
-
     async function loadVolumes() {
         setBadge("warn", "loading…");
         status.textContent = "Loading volumes…";
 
         const j = await apiGet("/api/v4/snapshots/volumes");
 
-        // Store runtime user for sudo help modal
         window.__pqnasRuntimeUser =
             (j && typeof j.runtime_user === "string" && j.runtime_user.trim())
                 ? j.runtime_user.trim()
@@ -288,7 +337,6 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         setBadge("ok", "ready");
         status.textContent = "Volumes loaded.";
     }
-
 
     async function loadSnapshotsForSelectedVol() {
         updateButtons();
@@ -312,7 +360,6 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
             count: snapshots.length
         };
 
-
         const noPrivsCount = snapshots.filter(s => String(s.probe || "") === "no_privs").length;
         const junkCount = snapshots.filter(s => s.is_btrfs_subvolume !== true).length;
 
@@ -322,7 +369,6 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
                 `${noPrivsCount} item(s) could not be verified. ` +
                 `<a href="#" id="sudoHelpLink">Show sudo setup</a>`
             );
-            // link handler
             setTimeout(() => {
                 const a = document.getElementById("sudoHelpLink");
                 a?.addEventListener("click", (ev) => {
@@ -338,10 +384,9 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
         renderSnapshots();
         if (!selectedSnap && snapshots.length) {
-            selectedSnap = snapshots[0]; // list is already newest-first server-side
+            selectedSnap = snapshots[0];
             renderSnapshots();
         }
-
 
         setBadge("ok", "ready");
         status.textContent = `Snapshots loaded for ${selectedVol.name}.`;
@@ -415,7 +460,6 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
                 );
             }
 
-
             setBadge("ok", "ready");
             status.textContent = "Ready.";
         } catch (e) {
@@ -424,15 +468,54 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         }
     }
 
-    function escapeHtml(s) {
-        return String(s)
-            .replaceAll("&", "&amp;")
-            .replaceAll("<", "&lt;")
-            .replaceAll(">", "&gt;")
-            .replaceAll('"', "&quot;")
-            .replaceAll("'", "&#39;");
+    // ---- Restore ----
+
+    function restoreProgressModalHtml(jobId, phase, extra) {
+        const phaseText = phase || "starting";
+        const extraText = extra ? `<div class="modalNote" style="margin-top:8px;">${extra}</div>` : "";
+        return `
+<div class="modalGrid">
+  <div class="modalPanel">
+    <h3>Restore in progress</h3>
+    <div class="modalNote">
+      PQ-NAS stops briefly during restore. Behind Cloudflare Tunnel you may see temporary <b>502</b>.
+    </div>
+    <div class="modalNote mono">job_id=${escapeHtml(jobId || "(pending)")}</div>
+    <div class="modalNote">Status: <b>${escapeHtml(phaseText)}</b></div>
+    ${extraText}
+  </div>
+  <div class="modalPanel">
+    <h3>What’s happening</h3>
+    <pre class="mono" style="white-space:pre-wrap; overflow:auto; max-height:260px;">${escapeHtml(
+            [
+                "1) Prepare restore plan",
+                "2) Start systemd restore job",
+                "3) Stop pqnas.service",
+                "4) Swap live subvolume from snapshot",
+                "5) Start pqnas.service",
+                "6) Job writes /run/pqnas/restore/<job>.result.json"
+            ].join("\n")
+        )}</pre>
+  </div>
+</div>`;
     }
 
+    function isRetryableDuringRestore(err) {
+        const msg = String(err && err.message ? err.message : err || "");
+        if (msg === "network_error") return true;
+        if (msg.includes("HTTP 502")) return true;
+        if (msg.includes("HTTP 503")) return true;
+        if (msg.includes("HTTP 504")) return true;
+        if (msg.includes("HTTP 520")) return true;
+        if (msg.includes("HTTP 521")) return true;
+        if (msg.includes("HTTP 522")) return true;
+        if (msg.includes("HTTP 523")) return true;
+        if (msg.includes("HTTP 524")) return true;
+        if (msg.includes("Failed to fetch")) return true;
+        if (msg.includes("NetworkError")) return true;
+        if (msg.includes("Load failed")) return true;
+        return false;
+    }
 
     async function doRestore() {
         if (!selectedVol || !selectedSnap) return;
@@ -474,7 +557,6 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
                 force_stop: true
             });
 
-            // Optional: show the plan before final confirm
             const planText = JSON.stringify(prep.plan || {}, null, 2);
             const ok2 = confirm(`Restore plan:\n\n${planText}\n\nProceed now?`);
             if (!ok2) {
@@ -484,22 +566,26 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
             }
 
             setBadge("warn", "working…");
-            status.textContent = "Restoring…";
+            status.textContent = "Starting restore job…";
 
             const done = await apiPost("/api/v4/snapshots/restore/confirm", {
                 confirm_id: prep.confirm_id,
                 confirm_text: phrase
             });
-            // confirm starts an ASYNC systemd job now
+
             const jobId = String((done && done.job_id) || "");
             if (!jobId) throw new Error("Restore started but server did not return job_id");
+
+            openModal("Restore", restoreProgressModalHtml(jobId, "queued", ""));
 
             setBadge("warn", "restoring…");
             status.textContent = `Restoring… (job ${jobId})`;
 
             const pollEveryMs = 1200;
             const timeoutMs = 10 * 60 * 1000;
+            const graceMs = 90 * 1000;
             const t0 = Date.now();
+            const tGraceStart = Date.now();
 
             while (true) {
                 if (Date.now() - t0 > timeoutMs) {
@@ -510,12 +596,18 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
                 try {
                     st = await apiGet(`/api/v4/snapshots/restore/status?job_id=${encodeURIComponent(jobId)}`);
                 } catch (e) {
-                    // transient polling error; retry
-                    await new Promise(r => setTimeout(r, pollEveryMs));
-                    continue;
+                    const inGrace = (Date.now() - tGraceStart) < graceMs;
+                    if (inGrace && isRetryableDuringRestore(e)) {
+                        status.textContent = `Restoring… (job ${jobId}) restarting server…`;
+                        setModalHtml("Restore", restoreProgressModalHtml(jobId, "restarting server…", "Waiting for PQ-NAS to come back online (temporary 502 is expected)."));
+                        // IMPORTANT: do NOT set badge to err on retryable errors during restore
+                        setBadge("warn", "restoring…");
+                        await new Promise(r => setTimeout(r, pollEveryMs));
+                        continue;
+                    }
+                    throw e;
                 }
 
-                // Compat: server may return wrapped {status,result} OR raw result JSON
                 const hasWrapped = (st && typeof st.status === "string");
                 const stStatus = hasWrapped
                     ? String(st.status || "unknown")
@@ -523,7 +615,10 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
                 const r = hasWrapped ? (st.result || null) : st;
 
-// If we have a result (wrapped or raw), treat as done
+                if (stStatus !== "done") {
+                    setModalHtml("Restore", restoreProgressModalHtml(jobId, stStatus, ""));
+                }
+
                 if (stStatus === "done" && r) {
                     const ok = !!r.ok;
                     const backupPath = (r && typeof r.backup_path === "string") ? r.backup_path : "";
@@ -553,8 +648,29 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 `
                     );
 
+                    // Prevent late “err” from loadAll()/anything while we refresh UI
+                    lockBadge(6000);
+
                     selectedSnap = null;
-                    await loadSnapshotsForSelectedVol();
+
+                    // Refresh snapshots, but NEVER allow refresh failure to flip badge to error
+                    try {
+                        await loadSnapshotsForSelectedVol();
+                    } catch (e) {
+                        const msg = String(e && e.message ? e.message : e);
+                        status.textContent = `Restore completed. (Refresh failed: ${msg})`;
+                    }
+
+                    // Always end in ready state if restore ok
+                    if (ok) {
+                        setBadge("ok", "ready");
+                        status.textContent = "Restore completed. Ready.";
+                    } else {
+                        // For failures keep error
+                        setBadge("err", "failed");
+                    }
+
+                    updateButtons();
                     return;
                 }
 
@@ -562,27 +678,43 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
                     throw new Error(`Restore job failed (systemd failed) job=${jobId}`);
                 }
 
-
-                // queued / running / exited / unknown
                 status.textContent = `Restoring… (job ${jobId}) status=${stStatus}`;
                 await new Promise(r => setTimeout(r, pollEveryMs));
             }
 
         } catch (e) {
-            setBadge("err", "error");
-            status.textContent = `Restore failed: ${String(e && e.message ? e.message : e)}`;
+            const msg = String(e && e.message ? e.message : e);
+
+            if (isRetryableDuringRestore(e)) {
+                // Don’t scare user with a red badge for tunnel hiccups
+                setBadge("warn", "waiting…");
+                status.textContent = `Temporary connection issue (expected during restore): ${msg}`;
+            } else {
+                setBadge("err", "error");
+                status.textContent = `Restore failed: ${msg}`;
+            }
         } finally {
             updateButtons();
         }
     }
+
     async function loadAll() {
         try {
             await loadVolumes();
             await loadSnapshotsForSelectedVol();
             updateButtons();
         } catch (e) {
+            const msg = String(e && e.message ? e.message : e);
+
+            // IMPORTANT: if tunnel/origin is flapping, don’t flip to “error”
+            if (isRetryableDuringRestore(e)) {
+                setBadge("warn", "waiting…");
+                status.textContent = `Waiting for PQ-NAS… (${msg})`;
+                return;
+            }
+
             setBadge("err", "error");
-            status.textContent = String(e && e.message ? e.message : e);
+            status.textContent = msg;
         }
     }
 
