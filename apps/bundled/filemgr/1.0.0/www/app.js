@@ -52,6 +52,10 @@
   const titleLine = document.getElementById("titleLine");
   const upIcon = document.getElementById("upIcon");
 
+  // View toggle (grid/list)
+  const viewToggleBtn = document.getElementById("viewToggleBtn");
+  const viewToggleTxt = document.getElementById("viewToggleTxt");
+
   // (Optional legacy buttons - some versions hide these and use context menu)
   const uploadBtn = document.getElementById("uploadBtn");
   const uploadFolderBtn = document.getElementById("uploadFolderBtn");
@@ -96,6 +100,44 @@
   let curPath = "";
   // if storare is unallocated etc.
   let storageBlocked = false;
+  // View mode: "grid" or "list" (persisted)
+  const VIEW_KEY = "pqnas_filemgr_view_mode";
+  let viewMode = "grid";
+
+  function loadViewMode() {
+    try {
+      const v = String(localStorage.getItem(VIEW_KEY) || "").toLowerCase();
+      if (v === "list" || v === "grid") viewMode = v;
+    } catch (_) {}
+  }
+
+  function saveViewMode() {
+    try { localStorage.setItem(VIEW_KEY, viewMode); } catch (_) {}
+  }
+
+  function applyViewModeToDom() {
+    if (gridEl) gridEl.classList.toggle("list", viewMode === "list");
+
+    // Update button label
+    if (viewToggleTxt) viewToggleTxt.textContent = (viewMode === "list") ? "Grid" : "List";
+    if (viewToggleBtn) viewToggleBtn.title = (viewMode === "list")
+        ? "Switch to grid view"
+        : "Switch to list view";
+  }
+
+  function setViewMode(next) {
+    const n = (next === "list") ? "list" : "grid";
+    if (viewMode === n) return;
+    viewMode = n;
+    saveViewMode();
+    applyViewModeToDom();
+
+    // Keep selection visuals correct after layout change
+    applySelectionToDom();
+  }
+
+  // Init view mode early
+  loadViewMode();
 
 
   // Multi-select: keys are stable within the *current folder listing*:
@@ -1858,8 +1900,8 @@
       ctxEl.appendChild(menuSep());
     }
 
-    // Directory menu
     if (item.type === "dir") {
+      // Directory menu
       ctxEl.appendChild(menuItem("Open", "↩", () => {
         curPath = joinPath(curPath, item.name);
         clearSelection();
@@ -1871,7 +1913,6 @@
         downloadFolderZip(relDir);
       }));
 
-      // Share (single place; label changes if already shared)
       ctxEl.appendChild(menuItem(shareLabel, "", () => openShareDialogFor(item)));
 
       ctxEl.appendChild(menuItem("New folder here…", "", () => {
@@ -1879,31 +1920,28 @@
         doMkdirAt(relDir);
       }));
 
-      // Properties is single-item only (keeps UI clean when multi-select active).
+      ctxEl.appendChild(menuSep());
+      ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
+      ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
+
       if (!(selectedKeys && selectedKeys.size > 1)) {
         ctxEl.appendChild(menuSep());
         ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
       }
-
-      ctxEl.appendChild(menuSep());
-      ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
-      ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
 
     } else {
       // File menu
       ctxEl.appendChild(menuItem("Download", "⤓", () => doDownload(item)));
-
-      // Share (single place; label changes if already shared)
       ctxEl.appendChild(menuItem(shareLabel, "", () => openShareDialogFor(item)));
+
+      ctxEl.appendChild(menuSep());
+      ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
+      ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
 
       if (!(selectedKeys && selectedKeys.size > 1)) {
         ctxEl.appendChild(menuSep());
         ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
       }
-
-      ctxEl.appendChild(menuSep());
-      ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
-      ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
     }
 
     ctxEl.setAttribute("aria-hidden", "false");
@@ -2751,6 +2789,7 @@
     clear();
     hideEmptyState();
     if (gridEl) gridEl.classList.remove("hidden");
+    applyViewModeToDom();
     // Snapshot path for this load (prevents stale decorate after navigation)
     const loadPath = curPath;
 
@@ -2840,6 +2879,11 @@
     clearSelection();
     load();
   });
+
+  viewToggleBtn?.addEventListener("click", () => {
+    setViewMode(viewMode === "grid" ? "list" : "grid");
+  });
+  applyViewModeToDom();
 
   // Initial load on startup
   load();

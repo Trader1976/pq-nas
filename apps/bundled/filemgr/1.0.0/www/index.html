@@ -218,6 +218,76 @@
       gap: 12px;
       align-content: start;
     }
+    /* View mode hook (JS toggles .list on #grid) */
+    .grid.list{
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    /* ---------- List view row styling ---------- */
+    .grid.list .tile{
+      min-height: unset;
+      padding: 6px 10px;
+      border-radius: 12px;
+
+      display: grid;
+      grid-template-columns: 26px 1fr auto auto;
+      gap: 10px;
+      align-items: center;
+
+      border: 1px solid rgba(var(--fg-rgb),0.10);
+      background: rgba(0,0,0,0.12);
+    }
+
+    /* smaller icon in list */
+    .grid.list .tile .ico{
+      width: 20px;
+      height: 20px;
+      opacity: 0.85;
+    }
+
+    /* name becomes multi-line-safe but still trims */
+    .grid.list .tile .name{
+      font-size: 12px;
+      font-weight: 600;
+      opacity: 0.92;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin: 0;
+    }
+
+    /* meta becomes two separate columns: size + mtime */
+    .grid.list .tile .meta{
+      font-size: 11px;
+      opacity: 0.65;
+      margin-top: 0;
+      color: var(--fg-dim);
+      font-size: 12px;
+      display: contents; /* let meta children become grid columns */
+    }
+    .grid.list .tile{
+      border-bottom: 1px solid rgba(var(--fg-rgb),0.08);
+    }
+
+    .grid.list .tile:hover{
+      background: rgba(var(--fg-rgb),0.05);
+      border-color: rgba(var(--fg-rgb),0.18);
+    }
+    /* the two spans inside meta become the last 2 columns */
+    .grid.list .tile .meta > span{
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* keep share badge position reasonable in list rows */
+    .grid.list .tile .shareBadge{
+      top: 8px;
+      right: 8px;
+      width: 26px;
+      height: 26px;
+      font-size: 15px;
+    }
 
     .tile{
       border: 1px solid var(--border2);
@@ -621,6 +691,9 @@
         <button class="btn secondary" id="upBtn" type="button" title="Up">
           <img class="btnIco" id="upIcon" src="./icons/updir_small.png" alt="">
           <span class="btnTxt">Up</span>
+        </button>
+        <button class="btn secondary" id="viewToggleBtn" type="button" title="Toggle list/grid view">
+          <span class="btnTxt" id="viewToggleTxt">List</span>
         </button>
 
         <button class="btn" id="refreshBtn" type="button" title="Refresh">
