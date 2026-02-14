@@ -41,6 +41,7 @@
     const refreshBtn = el("refreshBtn");
     const detailsBtn = el("detailsBtn");
     const restoreBtn = el("restoreBtn");
+    const snapNowBtn = el("snapNowBtn");
 
     let volumes = [];
     let selectedVol = null;   // {name, source_subvolume, snap_root, enabled}
@@ -227,6 +228,7 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         const probe = String((selectedSnap && selectedSnap.probe) || "ok");
 
         detailsBtn.disabled = !hasSnap;
+        snapNowBtn.disabled = !hasVol;
         restoreBtn.disabled = !(hasVol && hasSnap && isSub && probe !== "no_privs");
     }
 
@@ -516,6 +518,57 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         if (msg.includes("Load failed")) return true;
         return false;
     }
+    async function doSnapshotNow() {
+        if (!selectedVol) return;
+
+        const vol = selectedVol.name;
+
+        // Optional name; empty means server auto-generates ID
+        const suggested = `MANUAL_${new Date().toISOString().replaceAll(":", "-")}`;
+        const name = prompt(`Snapshot now\n\nVolume: ${vol}\n\nOptional name (leave empty for automatic):`, suggested);
+        if (name === null) return; // user cancelled
+
+        setBadge("warn", "working…");
+        status.textContent = `Creating snapshot for ${vol}…`;
+
+        try {
+            // TODO: replace endpoint + body once we confirm your actual API
+            const res = await apiPost("/api/v4/snapshots/create", {
+                volume: vol,
+                id: String(name || "").trim() || undefined,
+                kind: "manual"
+            });
+
+            // Expect server to return snapshot id in one of these fields
+            const newId =
+                (res && typeof res.id === "string" && res.id) ? res.id :
+                    (res && typeof res.snapshot_id === "string" && res.snapshot_id) ? res.snapshot_id :
+                        "";
+
+            setBadge("ok", "done");
+            status.textContent = newId ? `✅ Snapshot created: ${newId}` : "✅ Snapshot created.";
+
+            // Refresh list and select new snapshot if we know its id
+            await loadSnapshotsForSelectedVol();
+            if (newId) {
+                const found = snapshots.find(s => s.id === newId);
+                if (found) {
+                    selectedSnap = found;
+                    renderSnapshots();
+                    updateButtons();
+                }
+            }
+
+            setBadge("ok", "ready");
+            status.textContent = "Ready.";
+        } catch (e) {
+            const msg = String(e && e.message ? e.message : e);
+            setBadge("err", "error");
+            status.textContent = `Snapshot now failed: ${msg}`;
+        } finally {
+            updateButtons();
+        }
+    }
 
     async function doRestore() {
         if (!selectedVol || !selectedSnap) return;
@@ -720,6 +773,7 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
     detailsBtn?.addEventListener("click", showDetails);
     restoreBtn?.addEventListener("click", doRestore);
+    snapNowBtn?.addEventListener("click", doSnapshotNow);
     refreshBtn?.addEventListener("click", () => loadAll());
 
     loadAll();
