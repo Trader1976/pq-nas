@@ -146,6 +146,8 @@
   // after reloads in the same directory.
   let selectedKeys = new Set();
 
+  // Shift+click range selection anchor (last “focused” item)
+  let selectionAnchorKey = "";
 
 
   // Share overlay state: path -> count of active shares for that path
@@ -706,6 +708,39 @@
     for (const el of gridEl.querySelectorAll(".tile")) {
       el.classList.toggle("sel", selectedKeys.has(el.dataset.key));
     }
+  }
+  // Return currently visible tile keys in DOM order (works for grid + list)
+  function visibleKeysInOrder() {
+    return Array.from(gridEl.querySelectorAll(".tile")).map(el => String(el.dataset.key || ""));
+  }
+
+  // Select an inclusive range between two keys in current view order.
+  // If additive=true, keep existing selection and add the range (Ctrl/Cmd+Shift behavior).
+  function selectRange(fromKey, toKey, additive) {
+    const keys = visibleKeysInOrder();
+    const a = keys.indexOf(String(fromKey || ""));
+    const b = keys.indexOf(String(toKey || ""));
+    if (a < 0 || b < 0) {
+      // Fallback: if something went weird, behave like single select
+      setSingleSelection(String(toKey || fromKey || ""));
+      selectionAnchorKey = String(toKey || fromKey || "");
+      return;
+    }
+
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+
+    const next = additive ? new Set(selectedKeys) : new Set();
+    for (let i = lo; i <= hi; i++) {
+      const k = keys[i];
+      if (k) next.add(k);
+    }
+
+    selectedKeys = next;
+    applySelectionToDom();
+
+    // Update anchor to the last clicked item
+    selectionAnchorKey = String(toKey || "");
   }
 
   // Clears selection state + DOM.
@@ -2316,9 +2351,28 @@
     // - plain click selects only this item
     t.addEventListener("click", (e) => {
       if (marqueeOn) return; // ignore accidental click after marquee drag
-      if (e.ctrlKey || e.metaKey) toggleSelection(key);
-      else setSingleSelection(key);
+
+      const additive = (e.ctrlKey || e.metaKey);
+
+      // Shift+click selects a range from the anchor to this item
+      if (e.shiftKey) {
+        // If we don't have an anchor yet, use the first selected item, or fall back to this key
+        const anchor = selectionAnchorKey || (selectedKeys.size ? Array.from(selectedKeys)[0] : key);
+        selectRange(anchor, key, additive);
+        return;
+      }
+
+      // Normal click behaviors
+      if (additive) {
+        toggleSelection(key);
+        // If we just selected it (not deselected), make it the anchor
+        if (selectedKeys.has(key)) selectionAnchorKey = key;
+      } else {
+        setSingleSelection(key);
+        selectionAnchorKey = key;
+      }
     });
+
 
     // Right click: ensure item is selected, then show menu.
     t.addEventListener("contextmenu", (e) => {

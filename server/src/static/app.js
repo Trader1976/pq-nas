@@ -30,9 +30,9 @@
     const appsList = document.getElementById("appsList");
 
 // app state
-    let installedApps = [];     // [{id, version, has_manifest, root}, ...]
+    let installedApps = [];     // [{id, ver, name?, title?, ...}, ...]
     let currentView = "home";   // "home" or "app:<id>@<ver>"
-    let currentApp = null;      // {id, version} or null
+    let currentApp = null;      // {id, ver} or null
     let lastAppsKey = "";
     let authed = false;
     let isAdmin = false;
@@ -143,20 +143,21 @@
     }
 
     function renderApp(app) {
-        // app = {id, version}
-        currentView = `app:${app.id}@${app.version}`;
-        currentApp = { id: app.id, version: app.version };
+        // app = {id, ver, name?}
+        currentView = `app:${app.id}@${app.ver}`;
+        currentApp = { id: app.id, ver: app.ver };
+
+        const appLabel = app.name || app.id;
 
         setActiveNav(""); // Home not active
         setActiveApp(app.id);
 
-        if (wsTitle) wsTitle.textContent = app.id;
+        if (wsTitle) wsTitle.textContent = appLabel;
         if (wsSubtitle) wsSubtitle.textContent = "App (embedded)";
-        if (mainPaneTitle) mainPaneTitle.textContent = app.id;
+        if (mainPaneTitle) mainPaneTitle.textContent = appLabel;
 
         if (!homeBlurb) return;
 
-        // mark main pane + blurb as app host mode (for tighter padding)
         const mainPane = homeBlurb.closest(".pane");
         if (mainPane) mainPane.classList.add("appHost");
         homeBlurb.classList.add("appHostBlurb");
@@ -165,7 +166,7 @@
 
         const frame = document.createElement("iframe");
         frame.className = "appFrame";
-        frame.src = `/apps/${encodeURIComponent(app.id)}/${encodeURIComponent(app.version)}/www/index.html`;
+        frame.src = `/apps/${encodeURIComponent(app.id)}/${encodeURIComponent(app.ver)}/www/index.html`;
 
         const frameWrap = document.createElement("div");
         frameWrap.className = "appFrameWrap";
@@ -175,41 +176,43 @@
         show(homeBlurb, true);
     }
 
+
     function openAppById(appId) {
         const a = installedApps.find(x => x.id === appId);
         if (!a) {
             renderHome();
             return;
         }
-        renderApp({ id: a.id, version: a.version });
-    }
+        renderApp({ id: a.id, ver: a.ver, name: a.name || a.title });
 
+
+    }
     async function loadApps() {
         if (!appsList) return;
 
         try {
-            const r = await fetch("/api/v4/apps", { credentials: "include", cache: "no-store" });
+            const r = await fetch("/api/v4/apps/list", { credentials: "include", cache: "no-store" });
             const j = await r.json().catch(() => null);
             if (!r.ok || !j || !j.ok) return;
 
             const installed = Array.isArray(j.installed) ? j.installed : [];
-            let usable = installed.filter(x => x && x.id && x.version && x.has_manifest);
+
+            // server uses: {id, ver, name?, title? ...}
+            let usable = installed.filter(x => x && x.id && x.ver);
 
             // Admin-only apps (UI visibility)
-            if (!isAdmin) {
-                usable = usable.filter(x => x.id !== "snapshotmgr");
-            }
+            if (!isAdmin) usable = usable.filter(x => x.id !== "snapshotmgr");
 
-
-            // stable order: id then version
+            // stable order: id then ver
             usable.sort((a, b) => {
                 const ai = String(a.id || "");
                 const bi = String(b.id || "");
                 if (ai !== bi) return ai.localeCompare(bi);
-                return String(a.version || "").localeCompare(String(b.version || ""));
+                return String(a.ver || "").localeCompare(String(b.ver || ""));
             });
 
-            const key = JSON.stringify(usable.map(x => [x.id, x.version]));
+            // include name/title so UI updates when only name changes
+            const key = JSON.stringify(usable.map(x => [x.id, x.ver, x.name || x.title || ""]));
             if (key === lastAppsKey) return;
             lastAppsKey = key;
 
@@ -217,8 +220,9 @@
 
             clearAppsList();
             for (const a of usable) {
-                const label = a.id; // later: load manifest name
-                const href = `/apps/${encodeURIComponent(a.id)}/${encodeURIComponent(a.version)}/www/index.html`;
+                const label = a.name || a.title || a.id; // name from manifest.json
+
+                const href = `/apps/${encodeURIComponent(a.id)}/${encodeURIComponent(a.ver)}/www/index.html`;
                 addAppNavButton(a.id, label, href);
             }
 
@@ -228,116 +232,120 @@
                     renderHome();
                 } else {
                     const still = installedApps.find(x => x.id === currentApp.id);
-                    if (!still) renderHome();
-                    else setActiveApp(currentApp.id);
+                    if (!still) {
+                        renderHome();
+                    } else {
+                        // refresh titles + keep highlight (uses name/title)
+                        renderApp({ id: still.id, ver: still.ver, name: still.name || still.title });
+                    }
                 }
             }
-
         } catch {
             // ignore
         }
     }
 
-    async function loadMe() {
-        authed = false;
-        isAdmin = false;
-        show(stateDisabled, false);
-        show(stateUnauth, false);
 
-        try {
-            const r = await fetch("/api/v4/me", { credentials: "include", cache: "no-store" });
-            const ct = (r.headers.get("content-type") || "").toLowerCase();
-            const txt = await r.text();
+        async function loadMe() {
+            authed = false;
+            isAdmin = false;
+            show(stateDisabled, false);
+            show(stateUnauth, false);
 
-            let j = null;
-            try { j = JSON.parse(txt); } catch {}
+            try {
+                const r = await fetch("/api/v4/me", { credentials: "include", cache: "no-store" });
+                const ct = (r.headers.get("content-type") || "").toLowerCase();
+                const txt = await r.text();
 
-            if (j) {
-                if (out) out.textContent = JSON.stringify(j, null, 2);
+                let j = null;
+                try { j = JSON.parse(txt); } catch {}
 
-                const role = j.role || "?";
-                const ok = !!j.ok;
-                authed = ok && r.ok;
+                if (j) {
+                    if (out) out.textContent = JSON.stringify(j, null, 2);
 
-                // show version once (don’t stomp useful status text every refresh)
-                if (!versionShown && statusLine) {
-                    statusLine.textContent = "PQ-NAS v1.0";
-                    versionShown = true;
-                }
+                    const role = j.role || "?";
+                    const ok = !!j.ok;
+                    authed = ok && r.ok;
 
-                isAdmin = ok && role === "admin";
-
-                // show admin-only links
-                show(navAdmin, isAdmin);
-                show(navUsers, isAdmin);
-                show(navAudit, isAdmin);
-                show(navSettings, isAdmin);
-
-                // signed-in vs not-signed-in nav
-                show(navLogin, !ok);
-
-                if (!r.ok || !ok) {
-                    authed = false;
-                    const err = String(j.error || "").toLowerCase();
-                    const msg = String(j.message || "");
-
-                    if (r.status === 403 || err.includes("disabled") || msg.toLowerCase().includes("disabled")) {
-                        setWsSubtitleSafe("Waiting for admin approval");
-                        setBadge("warn", "waiting for admin");
-                        show(stateDisabled, true);
-                    } else if (r.status === 401 || err.includes("unauthorized") || msg.toLowerCase().includes("unauthorized")) {
-                        setWsSubtitleSafe("Not signed in");
-                        setBadge("warn", "not signed in");
-                        show(stateUnauth, true);
-                        show(navLogin, true);
-                    } else {
-                        setWsSubtitleSafe(`Error (${r.status || "?"})`);
-                        setBadge("err", "error");
+                    // show version once (don’t stomp useful status text every refresh)
+                    if (!versionShown && statusLine) {
+                        statusLine.textContent = "PQ-NAS v1.0";
+                        versionShown = true;
                     }
+
+                    isAdmin = ok && role === "admin";
+
+                    // show admin-only links
+                    show(navAdmin, isAdmin);
+                    show(navUsers, isAdmin);
+                    show(navAudit, isAdmin);
+                    show(navSettings, isAdmin);
+
+                    // signed-in vs not-signed-in nav
+                    show(navLogin, !ok);
+
+                    if (!r.ok || !ok) {
+                        authed = false;
+                        const err = String(j.error || "").toLowerCase();
+                        const msg = String(j.message || "");
+
+                        if (r.status === 403 || err.includes("disabled") || msg.toLowerCase().includes("disabled")) {
+                            setWsSubtitleSafe("Waiting for admin approval");
+                            setBadge("warn", "waiting for admin");
+                            show(stateDisabled, true);
+                        } else if (r.status === 401 || err.includes("unauthorized") || msg.toLowerCase().includes("unauthorized")) {
+                            setWsSubtitleSafe("Not signed in");
+                            setBadge("warn", "not signed in");
+                            show(stateUnauth, true);
+                            show(navLogin, true);
+                        } else {
+                            setWsSubtitleSafe(`Error (${r.status || "?"})`);
+                            setBadge("err", "error");
+                        }
+                        return;
+                    }
+
+                    const st = String(j.storage_state || "unallocated");
+                    setBadge("ok", "");
+                    setWsSubtitleSafe(`Signed in · ${role} · storage: ${st}`);
+
+                    // Update installed apps list (only when signed in ok)
+                    // NOTE: don't await; keep UI snappy and avoid blocking auth render
+                    loadApps();
+
                     return;
                 }
 
-                const st = String(j.storage_state || "unallocated");
-                setBadge("ok", "");
+                // Non-JSON body
+                authed = false;
+                show(navAdmin, false);
+                show(navUsers, false);
+                show(navAudit, false);
+                show(navSettings, false);
+                show(navLogin, true);
 
+                setWsSubtitleSafe("Unexpected response from /api/v4/me");
+                setBadge("err", "unexpected response");
 
-                setWsSubtitleSafe(`Signed in · ${role} · storage: ${st}`);
+                if (out) {
+                    const body = txt.length > 4000 ? (txt.slice(0, 4000) + "\n…(truncated)…") : txt;
+                    out.textContent = `${r.status}${ct ? " · " + ct.split(";")[0] : ""}\n\n${body}`;
+                }
+            } catch (e) {
+                authed = false;
+                show(navAdmin, false);
+                show(navUsers, false);
+                show(navAudit, false);
+                show(navSettings, false);
+                show(navLogin, true);
 
-                // update installed apps list (only when signed in ok)
-                loadApps();
-
-                return;
+                setWsSubtitleSafe("Network error");
+                setBadge("err", "network error");
+                if (statusLine) statusLine.textContent = "Failed to load /api/v4/me";
+                if (out) out.textContent = String(e && e.stack ? e.stack : e);
             }
-
-            // Non-JSON body
-            authed = false;
-            show(navAdmin, false);
-            show(navUsers, false);
-            show(navAudit, false);
-            show(navSettings, false);
-            show(navLogin, true);
-
-            setWsSubtitleSafe("Unexpected response from /api/v4/me");
-            setBadge("err", "unexpected response");
-
-            if (out) {
-                const body = txt.length > 4000 ? (txt.slice(0, 4000) + "\n…(truncated)…") : txt;
-                out.textContent = `${r.status}${ct ? " · " + ct.split(";")[0] : ""}\n\n${body}`;
-            }
-        } catch (e) {
-            authed = false;
-            show(navAdmin, false);
-            show(navUsers, false);
-            show(navAudit, false);
-            show(navSettings, false);
-            show(navLogin, true);
-
-            setWsSubtitleSafe("Network error");
-            setBadge("err", "network error");
-            if (statusLine) statusLine.textContent = "Failed to load /api/v4/me";
-            if (out) out.textContent = String(e && e.stack ? e.stack : e);
         }
-    }
+
 
     if (refreshBtn) refreshBtn.addEventListener("click", () => {
         loadMe();
@@ -388,5 +396,6 @@
 
     // Apps list can be even slower
     setInterval(() => { if (authed) loadApps(); }, 60000);
+
 
 })();

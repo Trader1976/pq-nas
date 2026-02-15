@@ -274,6 +274,41 @@
       background: rgba(var(--fg-rgb),0.05);
       border-color: rgba(var(--fg-rgb),0.18);
     }
+    /* ---------- List view: selected row must override .grid.list .tile ---------- */
+    .grid.list .tile.sel{
+      background: rgba(var(--fg-rgb),0.12);                 /* stronger than normal row */
+      border-color: rgba(var(--fg-rgb),0.48);
+      box-shadow: 0 0 18px rgba(var(--fg-rgb),0.14);
+    }
+
+    /* Make selection still distinct even while hovering it */
+    .grid.list .tile.sel:hover{
+      background: rgba(var(--fg-rgb),0.16);
+      border-color: rgba(var(--fg-rgb),0.58);
+    }
+
+    /* Optional: “left accent bar” like desktop file managers */
+    .grid.list .tile.sel::before{
+      content:"";
+      position:absolute;
+      left:0;
+      top:6px;
+      bottom:6px;
+      width:4px;
+      border-radius: 999px;
+      background: rgba(var(--fg-rgb),0.85);
+    }
+
+    /* Optional: punch up text contrast in selected rows */
+    .grid.list .tile.sel .name{
+      opacity: 1;
+      font-weight: 900;
+    }
+    .grid.list .tile.sel .meta > span{
+      opacity: 0.9;
+      color: rgba(var(--fg-rgb),0.82);
+    }
+
     /* the two spans inside meta become the last 2 columns */
     .grid.list .tile .meta > span{
       white-space: nowrap;

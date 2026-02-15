@@ -132,10 +132,34 @@ else
 fi
 
 # Static web assets (package-mode)
+# Copies: server/src/static/*  ->  <tarball>/pqnas/static/*
 rsync -a --delete \
   --exclude '__pycache__/' \
   --exclude '*.pyc' \
   "$REPO_ROOT/server/src/static/" "$STAGE/static/"
+
+# HARD GUARD: fail release if static didn't stage
+test -f "$STAGE/static/app.js" || {
+  echo "ERROR: static assets did not stage to $STAGE/static (missing app.js)"
+  echo "REPO_ROOT=$REPO_ROOT"
+  echo "STAGE=$STAGE"
+  ls -la "$REPO_ROOT/server/src/static" | head -n 80 || true
+  ls -la "$STAGE" | head -n 120 || true
+  exit 90
+}
+
+# Inject version into static HTML to bust CDN/browser caches.
+# app.html should contain: __PQNAS_VERSION__
+if [[ -f "$STAGE/static/app.html" ]]; then
+  # Use a temp file to be portable across sed variants.
+  tmp="$(mktemp)"
+  sed "s/__PQNAS_VERSION__/${VER}/g" "$STAGE/static/app.html" > "$tmp"
+  install -m 0644 "$tmp" "$STAGE/static/app.html"
+  rm -f "$tmp"
+else
+  echo "[!] Missing staged static HTML: $STAGE/static/app.html"
+fi
+
 
 # Bundled apps (zips + any bundled folders)
 if [[ -d "$REPO_ROOT/apps/bundled" ]]; then
