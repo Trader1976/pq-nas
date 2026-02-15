@@ -1,4 +1,8 @@
 
+<img width="1174" height="757" alt="Pasted image" src="https://github.com/user-attachments/assets/521c5a73-6457-44de-8de5-1cb646ed757c" />
+
+<img width="1174" height="757" alt="Pasted image (2)" src="https://github.com/user-attachments/assets/7ee1f614-e2ed-4685-855f-069e5da07dd8" />
+
 # PQ-NAS
 
 ## 🚀 Quick Install (Linux x86_64)
@@ -9,9 +13,6 @@ Download the release tarball and run:
 tar -xzf pqnas-<version>-linux-x86_64.tar.gz
 cd pqnas
 sudo ./install.sh
-
-<img width="1518" height="1100" alt="pqnas_system" src="https://github.com/user-attachments/assets/0d32cc2d-fdbc-4232-bfab-048a7533a22e" />
-<img width="1518" height="1100" alt="pqnas_log" src="https://github.com/user-attachments/assets/adbeba5d-b370-4dab-9f6d-46467109d6f9" />
 
 
 
