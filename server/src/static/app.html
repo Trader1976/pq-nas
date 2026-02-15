@@ -299,6 +299,12 @@
             border-radius: 0;
             background: transparent;
         }
+        .pane.homeHost{
+            padding: 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+        }
 
         /* The area where renderApp() injects content */
         #homeBlurb.appHostBlurb{
@@ -441,9 +447,9 @@
             flex: 1 1 auto;
             min-height: 260px;
             height: 100%;
-            border: 1px dashed rgba(var(--fg-rgb),0.12);
+            border: 0;
             border-radius: 16px;
-            background: rgba(0,0,0,0.10);
+            background: transparent;
             overflow: hidden;
         }
 
@@ -505,7 +511,21 @@
             color: rgba(var(--fg-rgb),0.55);
         }
 
-
+        .desktopSelectionBox{
+            position:absolute;
+            border:1px solid rgba(var(--fg-rgb),0.7);
+            background:rgba(var(--fg-rgb),0.15);
+            pointer-events:none;
+            border-radius:6px;
+            z-index:1000;
+        }
+        /* Home desktop should NOT be framed inside another framed pane */
+        .pane.homeHost{
+            padding: 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+        }
 
     </style>
     <link rel="stylesheet" href="/static/theme.css">
@@ -579,7 +599,8 @@
         <div class="content" id="contentGrid">
             <!-- Large primary pane (future file manager / apps) -->
             <section class="pane" aria-label="Main pane">
-                <h2 id="mainPaneTitle">Workspace</h2>
+                <h2 id="mainPaneTitle" style="display:none"></h2>
+
 
                 <div id="state_disabled" class="bigState">
                     <h3>Waiting for admin approval…</h3>
@@ -601,9 +622,6 @@
                 </div>
 
                 <div class="mono" id="homeBlurb" style="color: var(--fg-dim); line-height: 1.5; margin-top: 10px;">
-                    <div id="desktopHint" style="margin-bottom:10px;">
-                        Drag icons to arrange your desktop. Double-click an icon to open the app.
-                    </div>
                     <div id="desktopSurface" class="desktopSurface" aria-label="Desktop"></div>
                 </div>
 

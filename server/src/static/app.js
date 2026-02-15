@@ -38,9 +38,14 @@
 
     const manifestCache = new Map(); // key: "id@ver" -> parsed manifest json
     let desktopLayout = null;        // loaded from localStorage
-    const DESKTOP_GRID_X = 80;
-    const DESKTOP_GRID_Y = 88;
-    let desktopSelectedKey = "";     // currently selected icon key
+    const DESKTOP_GRID_X = 20;
+    const DESKTOP_GRID_Y = 22;
+    let desktopSelectedKeys = new Set();
+    let selectionBox = null;
+    let selectionStartX = 0;
+    let selectionStartY = 0;
+    let selectionActive = false;
+
 
     let currentView = "home";   // "home" or "app:<id>@<ver>"
     let currentApp = null;      // {id, ver} or null
@@ -143,18 +148,114 @@
         return `pqnas_desktop_layout_v1::${fp}::${theme}`;
     }
 
-    function bindDesktopSurfaceOnce() {
+    function bindDesktopSurfaceOnce()
+    {
         const surface = getDesktopSurface();
         if (!surface) return;
         if (surface.dataset.bound === "1") return;
         surface.dataset.bound = "1";
 
-        surface.addEventListener("pointerdown", (ev) => {
-            if (ev.target === surface) setSelectedIcon("");
+        surface.addEventListener("pointerdown", (ev) =>
+        {
+            if (ev.target !== surface) return;
+
+            selectionActive = true;
+
+            selectionStartX = ev.offsetX;
+            selectionStartY = ev.offsetY;
+
+            selectionBox = document.createElement("div");
+            selectionBox.className = "desktopSelectionBox";
+
+            selectionBox.style.left = selectionStartX + "px";
+            selectionBox.style.top = selectionStartY + "px";
+
+            surface.appendChild(selectionBox);
+
+            desktopSelectedKeys.clear();
+            updateSelectionVisual();
         });
 
-        // Optional: prevent text selection drag inside surface
-        surface.addEventListener("dragstart", (ev) => ev.preventDefault());
+        surface.addEventListener("pointermove", (ev) =>
+        {
+            if (!selectionActive) return;
+
+            const x = ev.offsetX;
+            const y = ev.offsetY;
+
+            const left = Math.min(x, selectionStartX);
+            const top  = Math.min(y, selectionStartY);
+
+            const width  = Math.abs(x - selectionStartX);
+            const height = Math.abs(y - selectionStartY);
+
+            selectionBox.style.left = left + "px";
+            selectionBox.style.top  = top + "px";
+            selectionBox.style.width  = width + "px";
+            selectionBox.style.height = height + "px";
+
+            selectIconsInRect(left, top, width, height);
+        });
+
+        surface.addEventListener("pointerup", () =>
+        {
+            selectionActive = false;
+
+            if (selectionBox)
+            {
+                selectionBox.remove();
+                selectionBox = null;
+            }
+        });
+    }
+
+    function selectIconsInRect(left, top, width, height)
+    {
+        const surface = getDesktopSurface();
+        if (!surface) return;
+
+        const rect =
+            {
+                left,
+                right: left + width,
+                top,
+                bottom: top + height
+            };
+
+        desktopSelectedKeys.clear();
+
+        for (const el of surface.querySelectorAll(".desktopIcon"))
+        {
+            const x = parseFloat(el.style.left || "0");
+            const y = parseFloat(el.style.top  || "0");
+
+            const w = el.offsetWidth;
+            const h = el.offsetHeight;
+
+            if (
+                x < rect.right &&
+                x + w > rect.left &&
+                y < rect.bottom &&
+                y + h > rect.top
+            )
+            {
+                desktopSelectedKeys.add(el.dataset.key);
+            }
+        }
+
+        updateSelectionVisual();
+    }
+
+    function updateSelectionVisual()
+    {
+        const surface = getDesktopSurface();
+        if (!surface) return;
+
+        for (const el of surface.querySelectorAll(".desktopIcon"))
+        {
+            el.classList.toggle("selected",
+                desktopSelectedKeys.has(el.dataset.key));
+        }
     }
 
     function loadDesktopLayout() {
@@ -247,8 +348,8 @@
 
         const rect = surface.getBoundingClientRect();
         const pad = 14;
-        const colW = DESKTOP_GRID_X;
-        const rowH = DESKTOP_GRID_Y;
+        const colW = DESKTOP_GRID_X * 4;
+        const rowH = DESKTOP_GRID_Y * 4;
 
 
         let i = 0;
@@ -267,14 +368,24 @@
         saveDesktopLayout();
     }
 
-    function setSelectedIcon(key) {
-        desktopSelectedKey = key || "";
+    function setSelectedIcon(key, additive=false)
+    {
+        if (!additive)
+            desktopSelectedKeys.clear();
+
+        if (key)
+            desktopSelectedKeys.add(key);
+
         const surface = getDesktopSurface();
         if (!surface) return;
-        for (const el of surface.querySelectorAll(".desktopIcon")) {
-            el.classList.toggle("selected", el.dataset.key === desktopSelectedKey);
+
+        for (const el of surface.querySelectorAll(".desktopIcon"))
+        {
+            el.classList.toggle("selected",
+                desktopSelectedKeys.has(el.dataset.key));
         }
     }
+
 
     function attachDrag(iconEl, app) {
         const surface = getDesktopSurface();
@@ -285,6 +396,11 @@
         let baseX = 0, baseY = 0;
 
         const key = layoutKeyFor(app);
+
+
+        // --- NEW: capture base positions for group drag (prevents drift) ---
+        let dragKeys = null;                 // Set<string>
+        let dragBase = new Map();            // key -> {x,y}
 
         const onMove = (ev) => {
             if (!dragging) return;
@@ -304,29 +420,73 @@
             nx = clamp(nx, 6, Math.max(6, rect.width - iconW - 6));
             ny = clamp(ny, 6, Math.max(6, rect.height - iconH - 6));
 
-            const snapped = snapToGrid(nx, ny);
-
-            iconEl.style.left = `${snapped.x}px`;
-            iconEl.style.top = `${snapped.y}px`;
+            // free move while dragging (no snap yet)
+            iconEl.style.left = `${nx}px`;
+            iconEl.style.top  = `${ny}px`;
 
             if (!desktopLayout) loadDesktopLayout();
-            desktopLayout.items[key] = snapped;
+
+            // Move the whole selection together (raw, no snap)
+            const keys = (dragKeys && dragKeys.size) ? dragKeys
+                : ((desktopSelectedKeys && desktopSelectedKeys.size) ? desktopSelectedKeys : new Set([key]));
+
+            for (const k of keys) {
+                const el = surface.querySelector(`.desktopIcon[data-key="${CSS.escape(k)}"]`);
+                if (!el) continue;
+
+                const base = dragBase.get(k) || { x: 0, y: 0 };
+                const x = base.x + dx;
+                const y = base.y + dy;
+
+                el.style.left = `${x}px`;
+                el.style.top  = `${y}px`;
+
+                desktopLayout.items[k] = { x, y };
+            }
+
+
+
 
         };
 
         const onUp = (ev) => {
             if (!dragging) return;
             dragging = false;
+
+            if (!desktopLayout) loadDesktopLayout();
+
+            const keys = (dragKeys && dragKeys.size) ? dragKeys
+                : ((desktopSelectedKeys && desktopSelectedKeys.size) ? desktopSelectedKeys : new Set([key]));
+
+            // snap each selected icon to grid
+            for (const k of keys) {
+                const el = surface ? surface.querySelector(`.desktopIcon[data-key="${CSS.escape(k)}"]`) : null;
+                if (!el) continue;
+
+                const left = parseFloat(el.style.left || "0") || 0;
+                const top  = parseFloat(el.style.top  || "0") || 0;
+
+                const s = snapToGrid(left, top);
+                el.style.left = `${s.x}px`;
+                el.style.top  = `${s.y}px`;
+                desktopLayout.items[k] = s;
+            }
+
             iconEl.releasePointerCapture(ev.pointerId);
+            dragKeys = null;
+            dragBase.clear();
             saveDesktopLayout();
         };
+
 
         iconEl.addEventListener("pointerdown", (ev) => {
             // Only left click / primary
             if (ev.button !== 0) return;
 
-            // Don’t start drag on double-click (browser will send second click quickly)
-            setSelectedIcon(key);
+            // If the clicked icon is not in current selection, select it (support ctrl/meta additive)
+            if (!(desktopSelectedKeys && desktopSelectedKeys.has(key))) {
+                setSelectedIcon(key, ev.ctrlKey || ev.metaKey);
+            }
 
             dragging = true;
             iconEl.setPointerCapture(ev.pointerId);
@@ -338,6 +498,23 @@
             startY = ev.clientY;
             baseX = left;
             baseY = top;
+            if (!desktopLayout) loadDesktopLayout();
+
+            dragKeys = (desktopSelectedKeys && desktopSelectedKeys.size)
+                ? new Set(desktopSelectedKeys)
+                : new Set([key]);
+
+            // capture starting positions once (prevents drift)
+            dragBase.clear();
+            for (const k of dragKeys) {
+                const el = surface.querySelector(`.desktopIcon[data-key="${CSS.escape(k)}"]`);
+                if (!el) continue;
+
+                dragBase.set(k, {
+                    x: parseFloat(el.style.left || "0") || 0,
+                    y: parseFloat(el.style.top  || "0") || 0
+                });
+            }
 
             ev.preventDefault();
         });
@@ -397,8 +574,9 @@
             // single click selects
             el.addEventListener("click", (ev) => {
                 ev.preventDefault();
-                setSelectedIcon(key);
+                setSelectedIcon(key, ev.ctrlKey || ev.metaKey);
             });
+
 
             // double click opens
             el.addEventListener("dblclick", (ev) => {
@@ -411,7 +589,7 @@
             surface.appendChild(el);
         }
 
-        setSelectedIcon(desktopSelectedKey);
+        updateSelectionVisual();
     }
     function renderHome() {
         currentView = "home";
@@ -424,12 +602,17 @@
         setWsSubtitleSafe("Session, role, and access status");
         if (mainPaneTitle) mainPaneTitle.textContent = "Workspace";
 
-        // remove "embedded app" styling when leaving an app
+        // Home should be frameless too (avoid border-within-border)
         if (homeBlurb) {
             const mainPane = homeBlurb.closest(".pane");
-            if (mainPane) mainPane.classList.remove("appHost");
+            if (mainPane) {
+                mainPane.classList.remove("appHost");
+                mainPane.classListadd?.("homeHost"); // safety for older paste? (see next line)
+                mainPane.classList.add("homeHost");
+            }
             homeBlurb.classList.remove("appHostBlurb");
         }
+
 
         if (homeBlurb) {
             show(homeBlurb, true);
@@ -444,9 +627,6 @@
                 </div>
                 <div id="desktopSurface" class="desktopSurface" aria-label="Desktop"></div>
             `;
-            } else {
-                const hint = document.getElementById("desktopHint");
-                if (hint) hint.textContent = "Drag icons to arrange your desktop. Double-click an icon to open the app.";
             }
         }
 
@@ -471,7 +651,11 @@
         if (!homeBlurb) return;
 
         const mainPane = homeBlurb.closest(".pane");
-        if (mainPane) mainPane.classList.add("appHost");
+        if (mainPane) {
+            mainPane.classList.remove("homeHost");
+            mainPane.classList.add("appHost");
+        }
+
         homeBlurb.classList.add("appHostBlurb");
 
         homeBlurb.innerHTML = "";
