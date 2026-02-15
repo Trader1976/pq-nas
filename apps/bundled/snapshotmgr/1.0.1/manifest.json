@@ -4,5 +4,14 @@
   "version": "1.0.1",
   "entry": "www/index.html",
   "api_base": "/api/v4/snapshots",
-  "permissions": ["admin"]
+  "permissions": [
+    "admin"
+  ],
+  "icons": {
+    "win_classic": "www/snaps_win.png",
+    "cpunk_orange": "www/snaps_ora.png",
+    "dark": "www/snaps_dark.png",
+    "bright": "www/snaps_bright.png",
+    "default": "www/snaps_dark.png"
+  }
 }

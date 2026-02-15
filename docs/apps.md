@@ -3,7 +3,7 @@
 This document is for **PQ-NAS developers** and **app authors**. It describes:
 
 - App package format (zip)
-- Where apps live on disk after install
+- Where apps live on disk (repo vs runtime)
 - How to bundle and install apps
 - Current server endpoints (“app manager” + file APIs) available to apps
 
@@ -19,7 +19,7 @@ An “app” is a **static web bundle**:
 - icons/images/fonts/etc.
 - a `manifest.json`
 
-PQ-NAS installs the zip under an “installed apps” directory and serves it at:
+Apps are served at:
 
 `/apps/<id>/<version>/www/...`
 
@@ -31,10 +31,23 @@ Apps run in the browser and call PQ-NAS APIs via `fetch()` (cookie-based auth).
 
 ### Repo layout (source tree)
 
-Bundled zips shipped with PQ-NAS live in:
+Bundled app sources and versioned bundles live under:
+
 
 ```
-apps/bundled/<appId>/<appId>-<version>.zip
+apps/bundled/<appId>/<version>/
+manifest.json
+www/
+index.html
+app.js
+*.png
+```
+
+Optional dev/source copy (may exist for some apps):
+```
+apps/bundled/<appId>/src/
+manifest.json
+www/
 ```
 
 Installed apps live in:
@@ -51,6 +64,25 @@ apps/installed/<appId>/<version>/
 
 > Note: In development you may also see absolute paths in API responses depending on build; the server tries to return repo-relative paths where possible.
 
+> Repo does **not** contain installed runtime app copies. Anything under `apps/installed/` is treated as runtime state and must not be committed.
+
+### Runtime layout (installed system)
+
+At runtime PQ-NAS uses an “apps root” directory resolved by `apps_root_dir()` (env-first).
+Under that root it uses these subdirectories:
+
+- `APPS_BUNDLED_DIR   = <apps_root>/bundled`
+- `APPS_INSTALLED_DIR = <apps_root>/installed`
+- `APPS_USERS_DIR     = <apps_root>/users`
+
+Typical installation uses:
+```
+/srv/pqnas/apps/
+bundled/
+installed/
+users/
+    ...
+```
 ---
 
 ## 3) Zip package format (required)
@@ -73,7 +105,6 @@ myapp-0.1.0.zip
     icons/
       file.png
       folder.png
-      updir_small.png
     css/
     img/
 ```
@@ -86,8 +117,15 @@ Example:
 {
   "id": "filemgr",
   "name": "File Manager",
-  "version": "0.9.0",
+  "version": "1.0.0",
   "entry": "www/index.html",
+  "icons": {
+    "win_classic": "www/files_win.png",
+    "cpunk_orange": "www/files_ora.png",
+    "dark": "www/files_dark.png",
+    "bright": "www/files_bright.png",
+    "default": "www/files_dark.png"
+  },
   "api_base": "/api/v4/files",
   "permissions": []
 }
@@ -98,6 +136,7 @@ Notes:
 - id must match the app folder and install request id.
 - version is used as the install directory name.
 - entry is informational today (we currently serve /www/index.html directly).
+- icons is used by the PQ-NAS desktop to show per-theme app icons.
 - api_base and permissions are informational today (future use).
 
 ---
@@ -119,6 +158,13 @@ cat > /tmp/pqnas_myapp/manifest.json <<'EOF'
   "name": "My App",
   "version": "0.1.0",
   "entry": "www/index.html",
+  "icons": {
+    "win_classic": "www/myapp_win.png",
+    "cpunk_orange": "www/myapp_ora.png",
+    "dark": "www/myapp_dark.png",
+    "bright": "www/myapp_bright.png",
+    "default": "www/myapp_dark.png"
+  },
   "api_base": "/api/v4/files",
   "permissions": []
 }
@@ -144,7 +190,9 @@ Build the zip into the PQ-NAS repo bundled directory:
 
 ```bash
 mkdir -p apps/bundled/myapp
-(cd /tmp/pqnas_myapp && zip -r "$OLDPWD/apps/bundled/myapp/myapp-0.1.0.zip" .)
+mkdir -p apps/bundled/myapp/0.1.0
+cp -a /tmp/pqnas_myapp/manifest.json apps/bundled/myapp/0.1.0/
+cp -a /tmp/pqnas_myapp/www apps/bundled/myapp/0.1.0/
 ```
 
 ---
@@ -154,7 +202,7 @@ mkdir -p apps/bundled/myapp
 Endpoint:
 
 - GET /api/v4/apps
-
+- The server may return a combined view of bundled + installed apps depending on implementation.
 ---
 
 ## 6) Installing a bundled app
@@ -170,11 +218,12 @@ Example:
 curl -s -X POST http://127.0.0.1:8081/api/v4/apps/install_bundled \
   -H 'Content-Type: application/json' \
   -d '{"id":"filemgr","zip":"filemgr-0.1.0.zip"}' | jq .
+
 ```
 
 Notes:
 
-- Server installs into apps/installed/<id>/<version>/
+- Server installs into APPS_INSTALLED_DIR/<id>/<version>/
 - If that version already exists, install returns a conflict (remove first).
 
 ---
@@ -191,7 +240,8 @@ Example:
 ```bash
 curl -s -X POST http://127.0.0.1:8081/api/v4/apps/uninstall \
   -H 'Content-Type: application/json' \
-  -d '{"id":"filemgr","version":"0.9.0"}' | jq .
+  -d '{"id":"filemgr","version":"1.0.0"}' | jq .
+
 ```
 
 ---
@@ -237,6 +287,25 @@ Mutating endpoints always use POST/PUT/DELETE.
 ```js
 fetch("/api/v4/...", { credentials: "include", cache: "no-store" })
 ```
+## 11) Security notes
+
+Apps are not sandboxed yet.
+- File APIs must enforce:
+- cookie auth
+- user root confinement
+- storage allocation requirement
+- symlink rejection (where applicable)
+
+Static serving must ensure:
+- no traversal escapes
+- correct content-type
+- X-Content-Type-Options: nosniff
+- Cache-Control: no-store during dev (and for sensitive pages)
+
+Shares/public links must ensure:
+- no path traversal via stored share paths
+- expired tokens return 410
+- avoid leaking whether a path exists (prefer 404 in many invalid-path cases)
 
 ### Identity/session
 

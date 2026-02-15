@@ -29,8 +29,19 @@
 
     const appsList = document.getElementById("appsList");
 
-// app state
+    // app state
     let installedApps = [];     // [{id, ver, name?, title?, ...}, ...]
+    let meFpHex = "";           // fingerprint_hex from /api/v4/me (for desktop layout storage)
+
+
+    // desktop state (icon layout + manifests)
+
+    const manifestCache = new Map(); // key: "id@ver" -> parsed manifest json
+    let desktopLayout = null;        // loaded from localStorage
+    const DESKTOP_GRID_X = 80;
+    const DESKTOP_GRID_Y = 88;
+    let desktopSelectedKey = "";     // currently selected icon key
+
     let currentView = "home";   // "home" or "app:<id>@<ver>"
     let currentApp = null;      // {id, ver} or null
     let lastAppsKey = "";
@@ -115,7 +126,293 @@
             el.classList.toggle("active", el.dataset.appid === appId);
         }
     }
+    function currentThemeName() {
+        // Try data-theme set by your theme system, then localStorage, then default
+        const dt = (document.documentElement.getAttribute("data-theme") || "").trim();
+        if (dt) return dt;
+        try {
+            const v = (localStorage.getItem("pqnas_theme") || "").trim();
+            if (v) return v;
+        } catch {}
+        return "dark";
+    }
 
+    function desktopStorageKey() {
+        const fp = meFpHex ? meFpHex : "anon";
+        const theme = currentThemeName();
+        return `pqnas_desktop_layout_v1::${fp}::${theme}`;
+    }
+
+    function bindDesktopSurfaceOnce() {
+        const surface = getDesktopSurface();
+        if (!surface) return;
+        if (surface.dataset.bound === "1") return;
+        surface.dataset.bound = "1";
+
+        surface.addEventListener("pointerdown", (ev) => {
+            if (ev.target === surface) setSelectedIcon("");
+        });
+
+        // Optional: prevent text selection drag inside surface
+        surface.addEventListener("dragstart", (ev) => ev.preventDefault());
+    }
+
+    function loadDesktopLayout() {
+        const k = desktopStorageKey();
+        try {
+            const raw = localStorage.getItem(k);
+            desktopLayout = raw ? JSON.parse(raw) : { items: {} };
+        } catch {
+            desktopLayout = { items: {} };
+        }
+        if (!desktopLayout || typeof desktopLayout !== "object") desktopLayout = { items: {} };
+        if (!desktopLayout.items || typeof desktopLayout.items !== "object") desktopLayout.items = {};
+        return desktopLayout;
+    }
+
+    function saveDesktopLayout() {
+        const k = desktopStorageKey();
+        try { localStorage.setItem(k, JSON.stringify(desktopLayout || { items: {} })); } catch {}
+    }
+
+    function getDesktopSurface() {
+        return document.getElementById("desktopSurface");
+    }
+
+    async function fetchManifest(id, ver) {
+        const key = `${id}@${ver}`;
+        if (manifestCache.has(key)) return manifestCache.get(key);
+
+        // Try the served manifest at app root
+        const url = `/apps/${encodeURIComponent(id)}/${encodeURIComponent(ver)}/manifest.json`;
+        try {
+            const r = await fetch(url, { credentials: "include", cache: "no-store" });
+            const j = await r.json().catch(() => null);
+            if (r.ok && j && typeof j === "object") {
+                manifestCache.set(key, j);
+                return j;
+            }
+        } catch {}
+        manifestCache.set(key, null);
+        return null;
+    }
+
+    function resolveIconUrl(app, mani) {
+        const base = `/apps/${encodeURIComponent(app.id)}/${encodeURIComponent(app.ver)}/`;
+        const bust = `?v=${encodeURIComponent(app.ver || "")}`;
+
+        const withBust = (rel) => (base + rel + bust);
+
+        if (mani && mani.icons && typeof mani.icons === "object") {
+            const theme = currentThemeName();
+
+            if (mani.icons[theme]) return withBust(mani.icons[theme]);
+
+            const map = {
+                "cpunk": "cpunk_orange",
+                "orange": "cpunk_orange",
+                "win": "win_classic",
+                "classic": "win_classic"
+            };
+            if (map[theme] && mani.icons[map[theme]]) return withBust(mani.icons[map[theme]]);
+
+            if (mani.icons.default) return withBust(mani.icons.default);
+
+            const first = Object.values(mani.icons)[0];
+            if (first) return withBust(first);
+        }
+
+        return base + "www/icon.png" + bust;
+    }
+
+
+
+
+    function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+
+    function layoutKeyFor(app) {
+        return `${app.id}@${app.ver}`;
+    }
+    function snapToGrid(x, y) {
+
+        return {
+            x: Math.round(x / DESKTOP_GRID_X) * DESKTOP_GRID_X,
+            y: Math.round(y / DESKTOP_GRID_Y) * DESKTOP_GRID_Y
+        };
+    }
+
+    function ensureDefaultLayout(surface, apps) {
+        if (!desktopLayout) loadDesktopLayout();
+        if (!surface) return;
+
+        const rect = surface.getBoundingClientRect();
+        const pad = 14;
+        const colW = DESKTOP_GRID_X;
+        const rowH = DESKTOP_GRID_Y;
+
+
+        let i = 0;
+        for (const app of apps) {
+            const k = layoutKeyFor(app);
+            if (desktopLayout.items[k]) continue;
+
+            const col = (i % 5);
+            const row = Math.floor(i / 5);
+            const x = pad + col * colW;
+            const y = pad + row * rowH;
+
+            desktopLayout.items[k] = { x, y };
+            i++;
+        }
+        saveDesktopLayout();
+    }
+
+    function setSelectedIcon(key) {
+        desktopSelectedKey = key || "";
+        const surface = getDesktopSurface();
+        if (!surface) return;
+        for (const el of surface.querySelectorAll(".desktopIcon")) {
+            el.classList.toggle("selected", el.dataset.key === desktopSelectedKey);
+        }
+    }
+
+    function attachDrag(iconEl, app) {
+        const surface = getDesktopSurface();
+        if (!surface) return;
+
+        let dragging = false;
+        let startX = 0, startY = 0;
+        let baseX = 0, baseY = 0;
+
+        const key = layoutKeyFor(app);
+
+        const onMove = (ev) => {
+            if (!dragging) return;
+            ev.preventDefault();
+
+            const dx = ev.clientX - startX;
+            const dy = ev.clientY - startY;
+
+            const rect = surface.getBoundingClientRect();
+            const iconW = iconEl.offsetWidth || 92;
+            const iconH = iconEl.offsetHeight || 92;
+
+            let nx = baseX + dx;
+            let ny = baseY + dy;
+
+            // clamp within surface
+            nx = clamp(nx, 6, Math.max(6, rect.width - iconW - 6));
+            ny = clamp(ny, 6, Math.max(6, rect.height - iconH - 6));
+
+            const snapped = snapToGrid(nx, ny);
+
+            iconEl.style.left = `${snapped.x}px`;
+            iconEl.style.top = `${snapped.y}px`;
+
+            if (!desktopLayout) loadDesktopLayout();
+            desktopLayout.items[key] = snapped;
+
+        };
+
+        const onUp = (ev) => {
+            if (!dragging) return;
+            dragging = false;
+            iconEl.releasePointerCapture(ev.pointerId);
+            saveDesktopLayout();
+        };
+
+        iconEl.addEventListener("pointerdown", (ev) => {
+            // Only left click / primary
+            if (ev.button !== 0) return;
+
+            // Don’t start drag on double-click (browser will send second click quickly)
+            setSelectedIcon(key);
+
+            dragging = true;
+            iconEl.setPointerCapture(ev.pointerId);
+
+            const left = parseFloat(iconEl.style.left || "0") || 0;
+            const top = parseFloat(iconEl.style.top || "0") || 0;
+
+            startX = ev.clientX;
+            startY = ev.clientY;
+            baseX = left;
+            baseY = top;
+
+            ev.preventDefault();
+        });
+
+        iconEl.addEventListener("pointermove", onMove);
+        iconEl.addEventListener("pointerup", onUp);
+        iconEl.addEventListener("pointercancel", onUp);
+    }
+
+    async function renderDesktopIcons() {
+        const surface = getDesktopSurface();
+        if (!surface) return;
+
+        // Only render on home view
+        if (currentView !== "home") return;
+
+        surface.innerHTML = "";
+        if (!authed) return;
+        bindDesktopSurfaceOnce();
+
+        // We show installed apps as icons
+        const apps = installedApps.slice();
+
+        loadDesktopLayout();
+        ensureDefaultLayout(surface, apps);
+
+        for (const app of apps) {
+            const key = layoutKeyFor(app);
+            const pos = (desktopLayout && desktopLayout.items && desktopLayout.items[key]) || { x: 16, y: 16 };
+
+            const el = document.createElement("div");
+            el.className = "desktopIcon";
+            el.dataset.key = key;
+            el.style.left = `${pos.x}px`;
+            el.style.top = `${pos.y}px`;
+
+            const img = document.createElement("img");
+            img.alt = (app.name || app.title || app.id || "App");
+            img.draggable = false;
+
+            // load icon from manifest (async)
+            const mani = await fetchManifest(app.id, app.ver);
+            img.src = resolveIconUrl(app, mani);
+
+            const label = document.createElement("div");
+            label.className = "label";
+            label.textContent = app.name || app.title || app.id;
+
+            const sub = document.createElement("div");
+            sub.className = "sub";
+            sub.textContent = app.ver;
+
+            el.appendChild(img);
+            el.appendChild(label);
+            el.appendChild(sub);
+
+            // single click selects
+            el.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                setSelectedIcon(key);
+            });
+
+            // double click opens
+            el.addEventListener("dblclick", (ev) => {
+                ev.preventDefault();
+                openAppById(app.id);
+            });
+
+            attachDrag(el, app);
+
+            surface.appendChild(el);
+        }
+
+        setSelectedIcon(desktopSelectedKey);
+    }
     function renderHome() {
         currentView = "home";
         currentApp = null;
@@ -135,11 +432,26 @@
         }
 
         if (homeBlurb) {
-            homeBlurb.innerHTML =
-                `This is the PQ-NAS desktop shell. The large pane hosts apps and tools.
-                 Installed apps appear in the left menu. Admin links appear only when your role is <b>admin</b>.`;
             show(homeBlurb, true);
+
+            // IMPORTANT: renderApp() overwrote homeBlurb.innerHTML with the iframe.
+            // So when returning Home, rebuild the desktop DOM if it’s missing.
+            let surface = document.getElementById("desktopSurface");
+            if (!surface) {
+                homeBlurb.innerHTML = `
+                <div id="desktopHint" style="margin-bottom:10px;">
+                    Drag icons to arrange your desktop. Double-click an icon to open the app.
+                </div>
+                <div id="desktopSurface" class="desktopSurface" aria-label="Desktop"></div>
+            `;
+            } else {
+                const hint = document.getElementById("desktopHint");
+                if (hint) hint.textContent = "Drag icons to arrange your desktop. Double-click an icon to open the app.";
+            }
         }
+
+        // Render desktop icons on Home
+        renderDesktopIcons();
     }
 
     function renderApp(app) {
@@ -178,7 +490,9 @@
 
 
     function openAppById(appId) {
-        const a = installedApps.find(x => x.id === appId);
+        const matches = installedApps.filter(x => x.id === appId);
+        const a = matches.length ? matches[matches.length - 1] : null;
+
         if (!a) {
             renderHome();
             return;
@@ -217,6 +531,8 @@
             lastAppsKey = key;
 
             installedApps = usable;
+            // If we're on Home, refresh desktop icons too
+            if (currentView === "home") renderDesktopIcons();
 
             clearAppsList();
             for (const a of usable) {
@@ -262,6 +578,7 @@
 
                 if (j) {
                     if (out) out.textContent = JSON.stringify(j, null, 2);
+                    meFpHex = String(j.fingerprint_hex || "");
 
                     const role = j.role || "?";
                     const ok = !!j.ok;

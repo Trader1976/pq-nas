@@ -432,6 +432,78 @@
             background: transparent;
         }
 
+        /* =======================
+           Desktop (Home icons)
+           ======================= */
+
+        .desktopSurface{
+            position: relative;
+            flex: 1 1 auto;
+            min-height: 260px;
+            height: 100%;
+            border: 1px dashed rgba(var(--fg-rgb),0.12);
+            border-radius: 16px;
+            background: rgba(0,0,0,0.10);
+            overflow: hidden;
+        }
+
+        .desktopIcon{
+            position: absolute;
+            width: 72px; /* icon + label */
+            user-select: none;
+            cursor: default;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 6px;
+            border-radius: 14px;
+            border: 1px solid transparent;
+            background: transparent;
+            transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+        }
+
+        .desktopIcon:hover{
+            background: rgba(var(--fg-rgb),0.06);
+            border-color: rgba(var(--fg-rgb),0.14);
+            transform: translateY(-1px);
+        }
+
+        .desktopIcon:active{
+            transform: translateY(0px);
+        }
+
+        .desktopIcon.selected{
+            background: rgba(var(--fg-rgb),0.10);
+            border-color: rgba(var(--fg-rgb),0.22);
+            box-shadow: 0 0 18px rgba(var(--fg-rgb),0.10);
+        }
+
+        .desktopIcon img{
+            width: 56px;
+            height: 56px;
+            image-rendering: auto;
+            border-radius: 12px;
+            background: rgba(0,0,0,0.18);
+            border: 1px solid rgba(255,255,255,0.10);
+        }
+
+        .desktopIcon .label{
+            max-width: 86px;
+            text-align: center;
+            font-size: 12px;
+            line-height: 1.1;
+            color: rgba(var(--fg-rgb),0.88);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .desktopIcon .sub{
+            margin-top: -4px;
+            font-size: 10px;
+            color: rgba(var(--fg-rgb),0.55);
+        }
 
 
 
@@ -529,9 +601,12 @@
                 </div>
 
                 <div class="mono" id="homeBlurb" style="color: var(--fg-dim); line-height: 1.5; margin-top: 10px;">
-                This is the PQ-NAS desktop shell. The large pane will later host the file manager, apps, and tools.
-                    Use the left menu to switch views. Admin tools are available from the admin page.
+                    <div id="desktopHint" style="margin-bottom:10px;">
+                        Drag icons to arrange your desktop. Double-click an icon to open the app.
+                    </div>
+                    <div id="desktopSurface" class="desktopSurface" aria-label="Desktop"></div>
                 </div>
+
             </section>
 
             <!-- Right inspector pane (JSON state / logs preview etc) -->
@@ -548,6 +623,13 @@
     </main>
 </div>
 
-<script src="/static/app.js?v=__PQNAS_VERSION__"></script>
+<script>
+    (function(){
+        var s = document.createElement("script");
+        s.src = "/static/app.js?v=" + Date.now();
+        document.head.appendChild(s);
+    })();
+</script>
+
 </body>
 </html>

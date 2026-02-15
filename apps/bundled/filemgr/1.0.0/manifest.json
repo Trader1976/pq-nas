@@ -4,5 +4,13 @@
   "version": "1.0.0",
   "entry": "www/index.html",
   "api_base": "/api/v4/files",
-  "permissions": []
+  "permissions": [],
+  "icons": {
+    "win_classic": "www/files_win.png",
+    "cpunk_orange": "www/files_ora.png",
+    "dark": "www/files_dark.png",
+    "bright": "www/files_bright.png",
+    "default": "www/files_dark.png"
+  }
 }
+

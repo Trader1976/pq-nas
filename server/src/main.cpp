@@ -2417,7 +2417,8 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
         }
 
 
-    // Installed: apps/installed/<id>/<ver>/manifest.json (or at least www/index.html)
+        // Bundled apps: APPS_BUNDLED_DIR/<id>/<ver>/manifest.json
+        // Installed apps: APPS_INSTALLED_DIR/<id>/<ver>/manifest.json
     {
         std::error_code ec;
         fs::path installed(APPS_INSTALLED_DIR);
@@ -11489,7 +11490,7 @@ srv.Post("/api/v4/admin/users/avatar_upload", [&](const httplib::Request& req, h
         return;
     }
 
-    // Extract to temp dir under apps/installed
+    // Extract to temp dir under APPS_INSTALLED_DIR (runtime install area)
     const std::filesystem::path tmp =
         std::filesystem::path(APPS_INSTALLED_DIR) / (".tmp_install_" + id + "_" + rand_hex_16());
 
@@ -11637,7 +11638,7 @@ srv.Post("/api/v4/apps/install_bundled", [&](const httplib::Request& req, httpli
         return;
     }
 
-    // Extract to temp dir under apps/installed
+    // Extract to temp dir under APPS_INSTALLED_DIR (runtime install area)
     const std::filesystem::path tmp =
         std::filesystem::path(APPS_INSTALLED_DIR) / (".tmp_install_" + id + "_" + rand_hex_16());
 

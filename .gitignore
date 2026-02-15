@@ -15,8 +15,6 @@ __pycache__/
 .env.pqnas
 
 
-# Installed apps are runtime state
-apps/installed/
 
 # Per-user app installs/data are runtime state
 apps/users/
@@ -32,9 +30,6 @@ config/shares.json
 
 # built app zips
 apps/bundled/**/filemgr-*.zip
-
-# runtime-installed apps live under /srv/pqnas, not in repo
-apps/installed/
 
 
 # Bundled app artifacts
