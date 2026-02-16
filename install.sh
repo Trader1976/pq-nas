@@ -24,6 +24,9 @@ ensure_os_deps() {
     echo "[*] Installing OS dependencies (apt)..."
     export DEBIAN_FRONTEND=noninteractive
 
+    # If previous installs were interrupted, finish configuring packages first
+    dpkg --configure -a || true
+
     apt-get update -y
 
     # Tooling deps required by pqnas_install.py when using disk mode:
@@ -68,23 +71,36 @@ ensure_os_deps() {
 ensure_venv() {
   local venv="/opt/pqnas-installer/venv"
   local py="$venv/bin/python"
-  local pip="$venv/bin/pip"
 
+  # Always make sure parent exists
+  mkdir -p /opt/pqnas-installer
+
+  # (Re)create venv if missing OR if python is not executable
   if [[ ! -x "$py" ]]; then
-    echo "[*] Creating venv at $venv"
-    mkdir -p /opt/pqnas-installer
+    echo "[*] Creating venv at $venv" >&2
+    rm -rf "$venv"
     python3 -m venv "$venv"
   fi
 
-  # Install textual if missing
-  if ! "$py" -c "import textual" >/dev/null 2>&1; then
-    echo "[*] Installing Textual into venv..."
-    "$pip" install --upgrade pip >/dev/null
-    "$pip" install textual
-  fi
+  # Ensure pip works inside venv (avoid relying on venv/bin/pip symlink health)
+  "$py" -m pip --version >/dev/null 2>&1 || {
+    echo "[*] Bootstrapping pip in venv..." >&2
+    "$py" -m ensurepip --upgrade >/dev/null 2>&1 || true
+  }
+
+  # Upgrade core packaging tools (quiet but reliable)
+  echo "[*] Ensuring installer Python deps..." >&2
+  "$py" -m pip install --upgrade pip setuptools wheel >/dev/null
+
+  # Install textual if missing (quiet)
+  "$py" -c "import textual" >/dev/null 2>&1 || {
+    echo "[*] Installing Textual into venv..." >&2
+    "$py" -m pip install textual
+  }
 
   echo "$py"
 }
+
 
 main() {
   need_root

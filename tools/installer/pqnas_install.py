@@ -335,6 +335,10 @@ class InstallState:
     nginx_hostname: str = ""  # server_name (e.g. nas.example.com or 192.168.1.50)
     nginx_listen_port: int = 80
 
+    # Optional Let's Encrypt HTTPS (only used if nginx_enabled)
+    https_enabled: bool = False
+    https_email: str = ""
+    https_redirect: bool = True
 
 
 # -----------------------------------------------------------------------------
@@ -868,12 +872,60 @@ def install_snapshot_restore_assets(asset_root: str, backend: str, log: Optional
         log.write("[*] Snapshot restore assets installed (script + units).")
 
 
+def enable_letsencrypt_nginx(domain: str, email: str, redirect: bool, logw=None) -> bool:
+    """
+    Returns True on success, False on failure (installer should continue with HTTP if False).
+    """
+    try:
+        apt_install(["certbot", "python3-certbot-nginx"], log=logw)
+
+        cmd = [
+            "certbot", "--nginx",
+            "-d", domain,
+            "--non-interactive",
+            "--agree-tos",
+            "--email", email,
+        ]
+        if redirect:
+            cmd.append("--redirect")
+        else:
+            cmd.append("--no-redirect")
+
+        if logw: logw.write("Running: " + " ".join(cmd))
+        subprocess.run(cmd, check=True)
+
+        # nginx should already be reloaded by certbot, but this is harmless
+        subprocess.run(["systemctl", "reload", "nginx"], check=False)
+        return True
+    except Exception as e:
+        if logw: logw.write(f"[WARN] HTTPS setup failed: {e}")
+        return False
+
+
 def run_systemctl(args: List[str]) -> str:
     p = subprocess.run(["systemctl", *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     out = (p.stdout or "").strip()
     if p.returncode != 0:
         raise RuntimeError(f"systemctl {' '.join(args)} failed:\n{out}")
     return out
+
+def systemd_unit_exists(unit: str) -> bool:
+    """
+    True if systemd knows about the unit file (fresh install => False).
+    We use list-unit-files because it answers 'does a unit file exist' rather than 'is it running'.
+    """
+    try:
+        r = subprocess.run(
+            ["systemctl", "list-unit-files", unit, "--no-pager", "--no-legend"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        # Output line usually begins with: "pqnas.service enabled" etc.
+        return (r.returncode == 0) and (unit in (r.stdout or ""))
+    except Exception:
+        return False
 
 
 # -----------------------------------------------------------------------------
@@ -1132,8 +1184,7 @@ def nginx_test_reload(log: Optional[Log] = None) -> None:
     if log:
         log.write("[*] nginx reloaded.")
 
-
-# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------
 # Plan generation (ext4 / btrfs / zfs)
 # -----------------------------------------------------------------------------
 
@@ -1457,7 +1508,6 @@ class PlanScreen(Screen):
     def action_next(self) -> None:
         self.app.push_screen(ReverseProxyScreen())
 
-
 class ReverseProxyScreen(Screen):
     BINDINGS = [("b", "back", "Back"), ("n", "next", "Next"), ("q", "quit", "Quit")]
 
@@ -1476,17 +1526,32 @@ class ReverseProxyScreen(Screen):
 
             self.enable = RadioSet(
                 RadioButton("No reverse proxy (keep :8081)", id="off"),
-                RadioButton("Enable nginx reverse proxy (HTTP-only)", id="on"),
+                RadioButton("Enable nginx reverse proxy", id="on"),
             )
             yield self.enable
 
-
             yield Static("\n[b]Login authentication mode:[/b] v5 (stateless) — forced by installer", classes="muted")
-
 
             yield Static("\n[b]Hostname or IP[/b] (nginx server_name):", classes="muted")
             self.host_in = Input(value="", placeholder="nas.example.com  (or 192.168.1.50)")
             yield self.host_in
+
+            yield Static("\n[b]HTTPS (optional)[/b]", classes="muted")
+            self.https_enable = RadioSet(
+                RadioButton("HTTP only", id="https_off"),
+                RadioButton("Enable HTTPS (Let’s Encrypt)", id="https_on"),
+            )
+            yield self.https_enable
+
+            yield Static("\n[b]Email[/b] (required for Let’s Encrypt):", classes="muted")
+            self.email_in = Input(value="", placeholder="you@example.com")
+            yield self.email_in
+
+            self.redirect_btn = RadioSet(
+                RadioButton("No redirect (keep HTTP)", id="redir_off"),
+                RadioButton("Redirect HTTP → HTTPS", id="redir_on"),
+            )
+            yield self.redirect_btn
 
             with Horizontal():
                 yield Button("Back", id="back", variant="default")
@@ -1501,21 +1566,42 @@ class ReverseProxyScreen(Screen):
         app: InstallerApp = self.app  # type: ignore
         st = app.state
 
+        # nginx on/off
         for btn in self.enable.query(RadioButton):
-            if btn.id == ("on" if st.nginx_enabled else "off"):
-                btn.value = True
+            btn.value = (btn.id == ("on" if st.nginx_enabled else "off"))
 
         self.host_in.value = st.nginx_hostname or ""
+
+        # https on/off
+        for btn in self.https_enable.query(RadioButton):
+            btn.value = (btn.id == ("https_on" if st.https_enabled else "https_off"))
+
+        self.email_in.value = st.https_email or ""
+
+        # redirect
+        for btn in self.redirect_btn.query(RadioButton):
+            btn.value = (btn.id == ("redir_on" if st.https_redirect else "redir_off"))
 
         self._sync()
 
     def _sync(self) -> None:
         enabled = any(btn.value and btn.id == "on" for btn in self.enable.query(RadioButton))
         self.host_in.disabled = not enabled
+
+        https_on = enabled and any(btn.value and btn.id == "https_on" for btn in self.https_enable.query(RadioButton))
+        self.email_in.disabled = not https_on
+
+        for btn in self.redirect_btn.query(RadioButton):
+            btn.disabled = not https_on
+
         if not enabled:
+            self.err.update("")
+        else:
+            # Clear errors on toggles; validation happens on Next
             self.err.update("")
 
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+        # Any radio toggle updates enabled/disabled widgets
         self._sync()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -1538,17 +1624,29 @@ class ReverseProxyScreen(Screen):
             if not host or " " in host or "/" in host:
                 self.err.update("Enter a hostname or IP (no spaces, no slashes).")
                 return
+
             st.nginx_enabled = True
             st.nginx_hostname = host
             st.nginx_listen_port = 80
+
+            st.https_enabled = any(btn.value and btn.id == "https_on" for btn in self.https_enable.query(RadioButton))
+            st.https_email = (self.email_in.value or "").strip()
+            st.https_redirect = any(btn.value and btn.id == "redir_on" for btn in self.redirect_btn.query(RadioButton))
+
+            if st.https_enabled:
+                if not st.https_email or "@" not in st.https_email:
+                    self.err.update("HTTPS enabled: please enter a valid email for Let’s Encrypt.")
+                    return
         else:
             st.nginx_enabled = False
             st.nginx_hostname = ""
             st.nginx_listen_port = 80
-        # auth mode: v5-only
+            st.https_enabled = False
+            st.https_email = ""
+            st.https_redirect = True
+
         st.auth_mode = "v5"
         app.push_screen(ConfirmScreen())
-
 
 class ConfirmScreen(Screen):
     BINDINGS = [("b", "back", "Back"), ("enter", "try_start", "Start"), ("q", "quit", "Quit")]
@@ -1578,6 +1676,11 @@ class ConfirmScreen(Screen):
     def on_mount(self) -> None:
         app: InstallerApp = self.app  # type: ignore
         d = app.state.disk
+        # Give instant feedback (Textual can look "stuck" before first log lines)
+        self.logw.write("Starting installer… please wait.")
+        self.logw.write("Tip: disk operations + apt installs can take a while on VPS.")
+        self.logw.write("")
+
         mode = app.state.install_mode
 
         if mode == "existing":
@@ -1699,7 +1802,16 @@ class RollbackScreen(Screen):
 
     def _do_rollback(self) -> None:
         self.out.write("[*] Stopping pqnas.service …")
-        subprocess.run(["systemctl", "stop", "pqnas.service"], check=False)
+        if systemd_unit_exists("pqnas.service"):
+            subprocess.run(
+                ["systemctl", "stop", "pqnas.service"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        else:
+            self.out.write("[*] pqnas.service not installed; skip stop.")
+
 
         self.out.write("[*] Restoring /usr/local/bin/*.bak → active binaries …")
         rollback_binaries("/usr/local/bin")
@@ -2036,9 +2148,21 @@ class ExecuteScreen(Screen):
 
 
             self.logw.write("Stopping pqnas.service (if running) …")
-            subprocess.run(["systemctl", "stop", "pqnas.service"], check=False)
-
-            subprocess.run(["systemctl", "disable", "--now", "pqnas.service"], check=False)
+            if systemd_unit_exists("pqnas.service"):
+                subprocess.run(
+                    ["systemctl", "stop", "pqnas.service"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                subprocess.run(
+                    ["systemctl", "disable", "--now", "pqnas.service"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                self.logw.write("pqnas.service not installed yet; skipping stop/disable.")
 
             subprocess.run(["pkill", "-f", r"^/usr/local/bin/pqnas_server$"], check=False)
             subprocess.run(["pkill", "-f", "pqnas_server"], check=False)
@@ -2055,6 +2179,7 @@ class ExecuteScreen(Screen):
                 self.logw.write(f"Installed keygen binary: {keygen_exec}")
 
             self.logw.write("Checking runtime dependencies (ldd) …")
+            self.logw.write("This may take a while (apt-get update/install).")
             ensure_runtime_deps_for_server(
                 server_exec,
                 log=self.logw,
@@ -2120,6 +2245,42 @@ class ExecuteScreen(Screen):
 
                 self.logw.write("Testing + reloading nginx …")
                 nginx_test_reload(log=self.logw)
+                # Optional: Let's Encrypt HTTPS (only if user enabled it)
+                if st.https_enabled:
+                    self.logw.write("")
+                    self.logw.write("== Let's Encrypt HTTPS ==")
+                    ok = enable_letsencrypt_nginx(
+                        domain=st.nginx_hostname,
+                        email=st.https_email,
+                        redirect=st.https_redirect,
+                        logw=self.logw,
+                    )
+                    # Update PQNAS_ORIGIN/PQNAS_RP_ID to https now that TLS exists
+                    self.logw.write("Updating /etc/pqnas/pqnas.env to use https origin …")
+                    write_env_file(
+                        mp,
+                        origin=f"https://{st.nginx_hostname}",
+                        rp_id=st.nginx_hostname,
+                        dna_lib_path=dna_path,
+                        auth_mode=st.auth_mode,
+                    )
+                    run_systemctl(["restart", "pqnas.service"])
+
+                if ok:
+                    self.logw.write("[OK] HTTPS enabled via certbot.")
+                    # Re-write nginx config so it switches to 443 + redirect (now cert exists)
+                    self.logw.write("Rewriting nginx site config for HTTPS …")
+                    conf_path = write_nginx_site_https_if_available(
+                        server_name=st.nginx_hostname,
+                        upstream_host="127.0.0.1",
+                        upstream_port=8081,
+                        client_max_body_size="2g",
+                    )
+                    self.logw.write(f"Wrote: {conf_path}")
+                    self.logw.write("Testing + reloading nginx …")
+                    nginx_test_reload(log=self.logw)
+                else:
+                    self.logw.write("[WARN] HTTPS setup failed; continuing with HTTP.")
 
                 if have_letsencrypt_cert(st.nginx_hostname):
                     self.logw.write(f"✅ nginx ready: https://{st.nginx_hostname}/  (http redirects with 308)")
