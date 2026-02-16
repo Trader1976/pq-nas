@@ -35,3 +35,4 @@ apps/bundled/**/filemgr-*.zip
 # Bundled app artifacts
 apps/bundled/**/**/*.zip
 apps/bundled/**/*.zip
+apps/bundled/*/*.zip

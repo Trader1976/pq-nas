@@ -1,6 +1,6 @@
 (() => {
   "use strict";
-  // ===========================================================================
+    // ===========================================================================
   // PQ-NAS File Manager (example bundled app)
   //
   // Purpose
@@ -52,6 +52,10 @@
   const titleLine = document.getElementById("titleLine");
   const upIcon = document.getElementById("upIcon");
 
+  // View toggle (grid/list)
+  const viewToggleBtn = document.getElementById("viewToggleBtn");
+  const viewToggleTxt = document.getElementById("viewToggleTxt");
+
   // (Optional legacy buttons - some versions hide these and use context menu)
   const uploadBtn = document.getElementById("uploadBtn");
   const uploadFolderBtn = document.getElementById("uploadFolderBtn");
@@ -88,11 +92,53 @@
   const shareOut = document.getElementById("shareOut");
   const shareCopyBtn = document.getElementById("shareCopyBtn");
   const shareStatus = document.getElementById("shareStatus");
+  const emptyState = document.getElementById("emptyState");
 
 
   // ---- State ----------------------------------------------------------------
   // Current folder path (server-relative, no leading "/"; "" means root).
   let curPath = "";
+  // if storare is unallocated etc.
+  let storageBlocked = false;
+  // View mode: "grid" or "list" (persisted)
+  const VIEW_KEY = "pqnas_filemgr_view_mode";
+  let viewMode = "grid";
+
+  function loadViewMode() {
+    try {
+      const v = String(localStorage.getItem(VIEW_KEY) || "").toLowerCase();
+      if (v === "list" || v === "grid") viewMode = v;
+    } catch (_) {}
+  }
+
+  function saveViewMode() {
+    try { localStorage.setItem(VIEW_KEY, viewMode); } catch (_) {}
+  }
+
+  function applyViewModeToDom() {
+    if (gridEl) gridEl.classList.toggle("list", viewMode === "list");
+
+    // Update button label
+    if (viewToggleTxt) viewToggleTxt.textContent = (viewMode === "list") ? "Grid" : "List";
+    if (viewToggleBtn) viewToggleBtn.title = (viewMode === "list")
+        ? "Switch to grid view"
+        : "Switch to list view";
+  }
+
+  function setViewMode(next) {
+    const n = (next === "list") ? "list" : "grid";
+    if (viewMode === n) return;
+    viewMode = n;
+    saveViewMode();
+    applyViewModeToDom();
+
+    // Keep selection visuals correct after layout change
+    applySelectionToDom();
+  }
+
+  // Init view mode early
+  loadViewMode();
+
 
   // Multi-select: keys are stable within the *current folder listing*:
   // "dir:<name>" or "file:<name>" (name is a single path segment).
@@ -100,6 +146,8 @@
   // after reloads in the same directory.
   let selectedKeys = new Set();
 
+  // Shift+click range selection anchor (last “focused” item)
+  let selectionAnchorKey = "";
 
 
   // Share overlay state: path -> count of active shares for that path
@@ -132,6 +180,112 @@
   function setBadge(kind, text) {
     badge.className = `badge ${kind}`;
     badge.textContent = text;
+  }
+  function hideEmptyState() {
+    storageBlocked = false;
+    if (emptyState) {
+      emptyState.classList.add("hidden");
+      emptyState.innerHTML = "";
+    }
+    if (gridEl) gridEl.classList.remove("hidden");
+  }
+
+  function setStorageBlocked(on, j) {
+    storageBlocked = !!on;
+
+    // Disable/enable UI that implies write access
+    if (upBtn) upBtn.disabled = storageBlocked;
+    if (refreshBtn) refreshBtn.disabled = false; // refresh should still work
+
+    // When blocked, show friendly panel; when unblocked, hide it
+    if (storageBlocked) showStorageUnallocatedState(j || null);
+    else hideEmptyState();
+  }
+
+  function requireStorageOrExplain(actionLabel) {
+    if (!storageBlocked) return true;
+    setBadge("warn", "storage");
+    status.textContent = actionLabel
+        ? `${actionLabel} not available: storage not allocated yet. Ask an admin to allocate quota.`
+        : "Storage not allocated yet. Ask an admin to allocate quota.";
+    return false;
+  }
+  function showStorageUnallocatedState(j) {
+    storageBlocked = true;
+    setBadge("warn", "storage");
+    status.textContent = "Storage not allocated for this user.";
+
+    // Disable drag-drop overlay hint (optional)
+    showDropOverlay(false);
+    if (gridEl) gridEl.classList.add("hidden");
+    if (!emptyState) return;
+
+    const fp = (j && j.fingerprint_hex) ? String(j.fingerprint_hex) : "";
+    const quota = (j && j.quota_bytes != null) ? fmtSize(Number(j.quota_bytes) || 0) : "";
+
+    emptyState.classList.remove("hidden");
+    emptyState.innerHTML = "";
+
+    const h = document.createElement("div");
+    h.className = "h";
+    h.textContent = "Storage not allocated yet";
+
+    const p = document.createElement("div");
+    p.className = "p";
+    p.textContent =
+        "Your account exists, but no storage has been allocated for it yet. " +
+        "Ask an admin to allocate storage, or if you are an admin, open User profiles and allocate quota.";
+
+    const row = document.createElement("div");
+    row.className = "row";
+
+    const a = document.createElement("a");
+    a.className = "btn";
+    a.href = "/admin/users";
+    a.textContent = "Open Admin → User profiles";
+
+    const refresh = document.createElement("button");
+    refresh.className = "btn secondary";
+    refresh.type = "button";
+    refresh.textContent = "Refresh";
+    refresh.onclick = () => load();
+
+    row.appendChild(a);
+    row.appendChild(refresh);
+
+    emptyState.appendChild(h);
+    emptyState.appendChild(p);
+    emptyState.appendChild(row);
+
+    if (fp || quota) {
+      const info = document.createElement("div");
+      info.className = "monoBox";
+      info.style.marginTop = "12px";
+      info.textContent =
+          (quota ? `Quota (configured): ${quota}\n` : "") +
+          (fp ? `Fingerprint:\n${fp}` : "");
+
+      emptyState.appendChild(info);
+
+      if (fp) {
+        const row2 = document.createElement("div");
+        row2.className = "row";
+        row2.style.marginTop = "10px";
+
+        const copyBtn = document.createElement("button");
+        copyBtn.className = "btn secondary";
+        copyBtn.type = "button";
+        copyBtn.textContent = "Copy fingerprint";
+        copyBtn.onclick = async () => {
+          const ok = await copyText(fp);
+          copyBtn.textContent = ok ? "Copied" : "Copy failed";
+          setTimeout(() => (copyBtn.textContent = "Copy fingerprint"), 1100);
+        };
+
+        row2.appendChild(copyBtn);
+        emptyState.appendChild(row2);
+      }
+    }
   }
 
   // showTransientWarning() is used for browser quirks / UX hints that should
@@ -307,22 +461,6 @@
     return `${location.origin}/s/${token}`;
   }
 
-  async function createShareForPath(relPath, expiresSec = 0) {
-    const r = await fetch("/api/v4/shares/create", {
-      method: "POST",
-      credentials: "include",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ path: relPath, expires_sec: expiresSec })
-    });
-    const j = await r.json().catch(() => null);
-    if (!r.ok || !j || !j.ok) {
-      const msg = j && (j.message || j.error) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`;
-      throw new Error(msg || "share create failed");
-    }
-    return j; // {token,url,...}
-  }
-
   async function revokeShareToken(token) {
     const r = await fetch("/api/v4/shares/revoke", {
       method: "POST",
@@ -346,23 +484,6 @@
     return Date.now() >= ms;
   }
 
-  async function copyTextToClipboard(text) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch (_) {
-      // fallback
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.left = "-9999px";
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand("copy"); } catch (_) {}
-      ta.remove();
-      return true;
-    }
-  }
 
   // ---- Properties modal helpers ---------------------------------------------
   // Modal shows either single-item properties, or selection summary.
@@ -569,6 +690,8 @@
     return base + "file.png";
   }
 
+
+
   // Clear the tile grid (used before rendering a new listing).
   function clear() { gridEl.innerHTML = ""; }
 
@@ -585,6 +708,39 @@
     for (const el of gridEl.querySelectorAll(".tile")) {
       el.classList.toggle("sel", selectedKeys.has(el.dataset.key));
     }
+  }
+  // Return currently visible tile keys in DOM order (works for grid + list)
+  function visibleKeysInOrder() {
+    return Array.from(gridEl.querySelectorAll(".tile")).map(el => String(el.dataset.key || ""));
+  }
+
+  // Select an inclusive range between two keys in current view order.
+  // If additive=true, keep existing selection and add the range (Ctrl/Cmd+Shift behavior).
+  function selectRange(fromKey, toKey, additive) {
+    const keys = visibleKeysInOrder();
+    const a = keys.indexOf(String(fromKey || ""));
+    const b = keys.indexOf(String(toKey || ""));
+    if (a < 0 || b < 0) {
+      // Fallback: if something went weird, behave like single select
+      setSingleSelection(String(toKey || fromKey || ""));
+      selectionAnchorKey = String(toKey || fromKey || "");
+      return;
+    }
+
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+
+    const next = additive ? new Set(selectedKeys) : new Set();
+    for (let i = lo; i <= hi; i++) {
+      const k = keys[i];
+      if (k) next.add(k);
+    }
+
+    selectedKeys = next;
+    applySelectionToDom();
+
+    // Update anchor to the last clicked item
+    selectionAnchorKey = String(toKey || "");
   }
 
   // Clears selection state + DOM.
@@ -761,6 +917,7 @@
   // - sequential deletes for predictable UX + simpler server load
   // - shows summary, logs failures to console
   async function deleteSelection() {
+    if (!requireStorageOrExplain("Delete")) return;
     const paths = selectedRelPaths(); // absolute-rel paths (includes curPath prefix)
     if (!paths.length) {
       status.textContent = "Nothing selected.";
@@ -904,6 +1061,7 @@
   // - uploads sequentially to keep server load predictable
   // - progress is computed by total bytes across all files
   async function uploadRelFiles(relFiles) {
+    if (!relFiles.length) return;
     // relFiles: Array<{ rel: string, file: File }>
     if (!relFiles.length) return;
 
@@ -1003,13 +1161,25 @@
 
   // Trigger hidden file picker.
   function pickFiles() {
+    if (storageBlocked) {
+      setBadge("warn", "storage");
+      status.textContent = "Storage not allocated yet. Ask an admin to allocate quota.";
+      return;
+    }
+
     if (!filePick) return;
     filePick.value = ""; // allow selecting same file twice
     filePick.click();
   }
 
-  // Trigger hidden folder picker (Chromium + some others).
+// Trigger hidden folder picker (Chromium + some others).
   function pickFolder() {
+    if (storageBlocked) {
+      setBadge("warn", "storage");
+      status.textContent = "Storage not allocated yet. Ask an admin to allocate quota.";
+      return;
+    }
+
     if (!folderPick) return;
     folderPick.value = "";
     folderPick.click();
@@ -1112,16 +1282,22 @@
 
   // dragenter: allow drop + show overlay if possible
   gridWrap?.addEventListener("dragenter", (e) => {
-    e.preventDefault(); // ALWAYS allow drop
+    e.preventDefault(); // ALWAYS allow drop event to fire
+    if (storageBlocked) return; // don't show overlay
     if (hasFiles(e.dataTransfer)) showDropOverlay(true);
   });
 
-  // dragover: MUST preventDefault or the browser won't populate drop data
   gridWrap?.addEventListener("dragover", (e) => {
     e.preventDefault(); // CRITICAL
+    if (storageBlocked) {
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+      showDropOverlay(false);
+      return;
+    }
     if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
     showDropOverlay(true);
   });
+
 
   // dragleave: hide overlay when leaving the container
   gridWrap?.addEventListener("dragleave", (e) => {
@@ -1138,6 +1314,9 @@
   gridWrap?.addEventListener("drop", async (e) => {
     e.preventDefault();
     showDropOverlay(false);
+
+    // NEW: block uploads when storage is not allocated
+    if (!requireStorageOrExplain("Upload")) return;
 
     try {
       const dt = e.dataTransfer;
@@ -1502,6 +1681,7 @@
 
   // Rename (move within same directory) using server move endpoint.
   async function doRename(item) {
+    if (!requireStorageOrExplain("Rename")) return;
     const oldRel = currentRelPathFor(item);
     const oldName = String(item.name || "");
     const newName = prompt("Rename to:", oldName);
@@ -1539,6 +1719,7 @@
 
   // Delete a single file/folder using server delete endpoint.
   async function doDelete(item) {
+    if (!requireStorageOrExplain("Delete")) return;
     const rel = currentRelPathFor(item);
     const isDir = item.type === "dir";
 
@@ -1567,6 +1748,7 @@
 
   // Create a folder (mkdir) at relDir (or current path).
   async function doMkdirAt(relDir) {
+    if (!requireStorageOrExplain("Create folder")) return;
     const baseShown = relDir ? `/${relDir}` : curPath ? `/${curPath}` : "/";
     const name = prompt(`New folder name in ${baseShown}:`, "New Folder");
     if (!name) return;
@@ -1604,22 +1786,7 @@
     if (v === "7d") return 7 * 86400;
     return 0; // never
   }
-  async function revokeShareToken(token) {
-    const r = await fetch("/api/v4/shares/revoke", {
-      method: "POST",
-      credentials: "include",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ token })
-    });
-    const j = await r.json().catch(() => null);
-    if (!r.ok || !j || !j.ok) {
-      const msg = j && (j.message || j.error)
-          ? `${j.error || ""} ${j.message || ""}`.trim()
-          : `HTTP ${r.status}`;
-      throw new Error(msg || "share revoke failed");
-    }
-  }
+
 
   async function createShareLinkFor(relPath, expiresSec) {
     const r = await fetch("/api/v4/shares/create", {
@@ -1768,8 +1935,8 @@
       ctxEl.appendChild(menuSep());
     }
 
-    // Directory menu
     if (item.type === "dir") {
+      // Directory menu
       ctxEl.appendChild(menuItem("Open", "↩", () => {
         curPath = joinPath(curPath, item.name);
         clearSelection();
@@ -1781,7 +1948,6 @@
         downloadFolderZip(relDir);
       }));
 
-      // Share (single place; label changes if already shared)
       ctxEl.appendChild(menuItem(shareLabel, "", () => openShareDialogFor(item)));
 
       ctxEl.appendChild(menuItem("New folder here…", "", () => {
@@ -1789,31 +1955,28 @@
         doMkdirAt(relDir);
       }));
 
-      // Properties is single-item only (keeps UI clean when multi-select active).
+      ctxEl.appendChild(menuSep());
+      ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
+      ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
+
       if (!(selectedKeys && selectedKeys.size > 1)) {
         ctxEl.appendChild(menuSep());
         ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
       }
-
-      ctxEl.appendChild(menuSep());
-      ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
-      ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
 
     } else {
       // File menu
       ctxEl.appendChild(menuItem("Download", "⤓", () => doDownload(item)));
-
-      // Share (single place; label changes if already shared)
       ctxEl.appendChild(menuItem(shareLabel, "", () => openShareDialogFor(item)));
+
+      ctxEl.appendChild(menuSep());
+      ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
+      ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
 
       if (!(selectedKeys && selectedKeys.size > 1)) {
         ctxEl.appendChild(menuSep());
         ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
       }
-
-      ctxEl.appendChild(menuSep());
-      ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
-      ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
     }
 
     ctxEl.setAttribute("aria-hidden", "false");
@@ -1859,6 +2022,18 @@
         }
       }
 
+      ctxEl.setAttribute("aria-hidden", "false");
+      placeMenu(x, y);
+      return;
+    }
+
+    if (storageBlocked) {
+      ctxEl.innerHTML = "";
+      ctxOpenForKey = "__blocked__";
+      ctxEl.appendChild(menuItem("Storage not allocated", "", () => {}, {}));
+      ctxEl.appendChild(menuSep());
+      ctxEl.appendChild(menuItem("Open Admin → User profiles", "", () => { window.location.href = "/admin/users"; }));
+      ctxEl.appendChild(menuItem("Refresh", "", () => load()));
       ctxEl.setAttribute("aria-hidden", "false");
       placeMenu(x, y);
       return;
@@ -2176,9 +2351,28 @@
     // - plain click selects only this item
     t.addEventListener("click", (e) => {
       if (marqueeOn) return; // ignore accidental click after marquee drag
-      if (e.ctrlKey || e.metaKey) toggleSelection(key);
-      else setSingleSelection(key);
+
+      const additive = (e.ctrlKey || e.metaKey);
+
+      // Shift+click selects a range from the anchor to this item
+      if (e.shiftKey) {
+        // If we don't have an anchor yet, use the first selected item, or fall back to this key
+        const anchor = selectionAnchorKey || (selectedKeys.size ? Array.from(selectedKeys)[0] : key);
+        selectRange(anchor, key, additive);
+        return;
+      }
+
+      // Normal click behaviors
+      if (additive) {
+        toggleSelection(key);
+        // If we just selected it (not deselected), make it the anchor
+        if (selectedKeys.has(key)) selectionAnchorKey = key;
+      } else {
+        setSingleSelection(key);
+        selectionAnchorKey = key;
+      }
     });
+
 
     // Right click: ensure item is selected, then show menu.
     t.addEventListener("contextmenu", (e) => {
@@ -2647,7 +2841,9 @@
     setBadge("warn", "loading…");
     status.textContent = "Loading…";
     clear();
-
+    hideEmptyState();
+    if (gridEl) gridEl.classList.remove("hidden");
+    applyViewModeToDom();
     // Snapshot path for this load (prevents stale decorate after navigation)
     const loadPath = curPath;
 
@@ -2663,6 +2859,12 @@
       const j = await r.json().catch(() => null);
 
       if (!r.ok || !j || !j.ok) {
+        // Friendly UX: storage not allocated yet
+        if (j && j.error === "storage_unallocated") {
+          showStorageUnallocatedState(j);
+          return;
+        }
+
         setBadge("err", "error");
         status.textContent = `List failed: HTTP ${r.status}`;
         const msg = j && (j.message || j.error)
@@ -2676,6 +2878,7 @@
         gridEl.appendChild(err);
         return;
       }
+
 
       curPath = typeof j.path === "string" ? j.path : curPath;
       renderBreadcrumb();
@@ -2730,6 +2933,11 @@
     clearSelection();
     load();
   });
+
+  viewToggleBtn?.addEventListener("click", () => {
+    setViewMode(viewMode === "grid" ? "list" : "grid");
+  });
+  applyViewModeToDom();
 
   // Initial load on startup
   load();
