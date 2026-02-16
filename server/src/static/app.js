@@ -770,7 +770,7 @@
 
                     // show version once (don’t stomp useful status text every refresh)
                     if (!versionShown && statusLine) {
-                        statusLine.textContent = "PQ-NAS v1.0";
+                        statusLine.textContent = "PQ-NAS v__PQNAS_VERSION__";
                         versionShown = true;
                     }
 
