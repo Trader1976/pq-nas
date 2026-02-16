@@ -505,29 +505,56 @@ def install_static_assets(asset_root: str, dest_root: str = "/opt/pqnas/static")
 
 def install_bundled_apps(asset_root: str, apps_bundled_dest: str) -> None:
     """
-    Copy bundled apps into the storage root.
+    Install bundled app ZIPs into the storage root.
 
-    repo mode:    <repo>/apps/bundled/*
-    package mode: <pkg>/bundled/*
+    Expected source layouts:
+
+    Package mode (release tarball):
+      - <asset_root>/bundled/<app>/<id>-<version>.zip
+
+    Repo mode (dev):
+      - <asset_root>/apps/bundled/<app>/<id>-<version>.zip
+        (source lives in src/, but we only install zips)
+
+    Destination layout:
+      - <apps_bundled_dest>/<app>/<id>-<version>.zip
     """
     pkg = os.path.join(asset_root, "bundled")
     repo = os.path.join(asset_root, "apps", "bundled")
 
-    src = pkg if os.path.isdir(pkg) else repo
-    if not os.path.isdir(src):
+    src_root = pkg if os.path.isdir(pkg) else repo
+    if not os.path.isdir(src_root):
         return
 
     os.makedirs(apps_bundled_dest, exist_ok=True)
 
-    for name in os.listdir(src):
-        s = os.path.join(src, name)
-        d = os.path.join(apps_bundled_dest, name)
+    for app in sorted(os.listdir(src_root)):
+        app_src = os.path.join(src_root, app)
+        if not os.path.isdir(app_src):
+            continue
 
-        if os.path.isdir(s):
-            if os.path.exists(d):
-                shutil.rmtree(d)
-            shutil.copytree(s, d)
-        else:
+        # pick all zips in the app folder
+        zips = sorted([f for f in os.listdir(app_src) if f.endswith(".zip")])
+
+        if not zips:
+            raise RuntimeError(f"No bundled zip found for app '{app}' under: {app_src}\n"
+                       f"Run: tools/build_all_bundled_zips.sh")
+
+        app_dst = os.path.join(apps_bundled_dest, app)
+        os.makedirs(app_dst, exist_ok=True)
+
+        # Optional: clear old zips in dest app dir to avoid stale versions hanging around
+        for old in os.listdir(app_dst):
+            if old.endswith(".zip"):
+                try:
+                    os.remove(os.path.join(app_dst, old))
+                except Exception:
+                    pass
+
+        # Copy current zips
+        for z in zips:
+            s = os.path.join(app_src, z)
+            d = os.path.join(app_dst, z)
             shutil.copy2(s, d)
 
 

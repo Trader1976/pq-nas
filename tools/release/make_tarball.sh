@@ -159,14 +159,47 @@ if [[ -f "$STAGE/static/app.html" ]]; then
 else
   echo "[!] Missing staged static HTML: $STAGE/static/app.html"
 fi
+# Inject version into static JS too (desktop status line)
+if [[ -f "$STAGE/static/app.js" ]]; then
+  tmp="$(mktemp)"
+  sed "s/__PQNAS_VERSION__/${VER}/g" "$STAGE/static/app.js" > "$tmp"
+  install -m 0644 "$tmp" "$STAGE/static/app.js"
+  rm -f "$tmp"
+else
+  echo "[!] Missing staged static JS: $STAGE/static/app.js"
+fi
+
+# ---- 4.x) Build bundled app zips from src (source of truth) ----
+# Ensures release tarball ships fresh <id>-<version>.zip artifacts.
+if [[ -x "$REPO_ROOT/tools/build_all_bundled_zips.sh" ]]; then
+  echo "[*] Building bundled app zips..."
+  "$REPO_ROOT/tools/build_all_bundled_zips.sh"
+else
+  echo "ERROR: Missing zip builder: $REPO_ROOT/tools/build_all_bundled_zips.sh"
+  echo "Add it, or run your app zip build step before making a tarball."
+  exit 11
+fi
+
+# HARD GUARD: fail if any app directory has src/ but no zip
+missing_zips=0
+for appdir in "$REPO_ROOT/apps/bundled"/*; do
+  [[ -d "$appdir" ]] || continue
+  if [[ -d "$appdir/src" ]]; then
+    if ! ls "$appdir"/*.zip >/dev/null 2>&1; then
+      echo "ERROR: App has src/ but no zip: $appdir"
+      missing_zips=1
+    fi
+  fi
+done
+[[ "$missing_zips" -eq 0 ]] || exit 12
 
 
 # Bundled apps (zips + any bundled folders)
 if [[ -d "$REPO_ROOT/apps/bundled" ]]; then
   rsync -a --delete \
-    --exclude '__pycache__/' \
-    --exclude '*.pyc' \
-    --exclude '*/src/**' \
+    --include '*/' \
+    --include '*.zip' \
+    --exclude '*' \
     "$REPO_ROOT/apps/bundled/" "$STAGE/bundled/"
 else
   mkdir -p "$STAGE/bundled"
