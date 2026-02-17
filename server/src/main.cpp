@@ -1788,11 +1788,610 @@ static std::string shell_escape_single_quotes(std::string s) {
     }
     return s;
 }
-
+static std::string sh_quote(const std::string& s) {
+    // Wrap in single quotes and escape any embedded single quotes safely.
+    return "'" + shell_escape_single_quotes(s) + "'";
+}
 static std::string lower_ascii(std::string s) {
     for (char& c : s) c = (char)std::tolower((unsigned char)c);
     return s;
 }
+
+
+// ============================================================================
+// Storage Manager v1 (read-only): disk + btrfs status helpers
+// ============================================================================
+
+// Cap string size to prevent huge JSON responses or memory abuse
+static inline void cap_string(std::string& s, size_t cap_bytes) {
+    if (s.size() > cap_bytes) {
+        s.resize(cap_bytes);
+    }
+}
+
+static bool getenv_bool(const char* k, bool defv) {
+    const char* v = std::getenv(k);
+    if (!v) return defv;
+    std::string s(v);
+    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
+    if (s == "1" || s == "true" || s == "yes" || s == "on") return true;
+    if (s == "0" || s == "false" || s == "no" || s == "off") return false;
+    return defv;
+}
+
+static int run_capture(const std::string& cmd, std::string* out) {
+    if (out) out->clear();
+    std::array<char, 8192> buf{};
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) return -1;
+    while (true) {
+        size_t n = fread(buf.data(), 1, buf.size(), pipe);
+        if (n > 0 && out) out->append(buf.data(), n);
+        if (n < buf.size()) break;
+    }
+    int rc = pclose(pipe);
+    // pclose returns wait status; keep it simple: 0 means success in practice for our uses.
+    return rc;
+}
+
+static bool is_abs_path_safe(const std::string& p) {
+    if (p.empty()) return false;
+    if (p[0] != '/') return false;
+    // crude hardening against shell injection + traversal
+    if (p.find("..") != std::string::npos) return false;
+    if (p.find(';') != std::string::npos) return false;
+    if (p.find('|') != std::string::npos) return false;
+    if (p.find('&') != std::string::npos) return false;
+    if (p.find('`') != std::string::npos) return false;
+    if (p.find('$') != std::string::npos) return false;
+    if (p.find('\n') != std::string::npos) return false;
+    if (p.find('\r') != std::string::npos) return false;
+    return true;
+}
+
+
+// trim trailing whitespace/newlines (for command outputs)
+static inline void rtrim_inplace(std::string& s) {
+    while (!s.empty()) {
+        char c = s.back();
+        if (c == '\n' || c == '\r' || c == ' ' || c == '\t') s.pop_back();
+        else break;
+    }
+}
+
+static inline std::string dev_path_from_lsblk_obj(const json& o) {
+    // Prefer lsblk's "path" if present (usually "/dev/...")
+    std::string p;
+    try {
+        if (o.contains("path") && !o["path"].is_null()) p = o["path"].get<std::string>();
+    } catch (...) {}
+
+    if (!p.empty()) return p;
+
+    // Fallback: build "/dev/<name>"
+    std::string name;
+    try {
+        if (o.contains("name") && !o["name"].is_null()) name = o["name"].get<std::string>();
+    } catch (...) {}
+
+    if (!name.empty()) return "/dev/" + name;
+    return "";
+}
+
+// Return string value from json, capped to max_len bytes (safe for firmware junk)
+static inline std::string jstr_cap(const json& o, const char* k, size_t max_len = 256) {
+    auto it = o.find(k);
+    if (it == o.end() || it->is_null()) return "";
+
+    std::string s;
+    try {
+        if (it->is_string()) s = it->get<std::string>();
+        else s = it->dump();
+    } catch (...) {
+        return "";
+    }
+
+    if (s.size() > max_len) s.resize(max_len);
+    return s;
+}
+
+// Convert lsblk JSON into a safer, smaller disk list.
+// - keeps only TYPE=="disk"
+// - by default excludes /dev/loop* (snap loops), unless PQNAS_STORAGE_ALLOW_LOOP=1
+static json storage_list_disks_json(std::string* raw_lsblk_json_out = nullptr) {
+    std::string out;
+    // -J JSON, -b bytes, -O all props
+    // NOTE: lsblk output is trusted system tool; we still filter hard.
+    run_capture("lsblk -J -b -O 2>/dev/null", &out);
+
+    // Only cap the *debug/raw* string, never cap the parsed JSON input
+    if (raw_lsblk_json_out) {
+        std::string raw = out;
+        cap_string(raw, 1024 * 1024); // 1 MiB cap (debug safety)
+        *raw_lsblk_json_out = raw;
+    }
+
+    json root;
+    try {
+        root = json::parse(out);
+    } catch (...) {
+        return json{
+            {"ok", false},
+            {"error", "lsblk_parse_failed"}
+        };
+    }
+
+    const bool allow_loop = getenv_bool("PQNAS_STORAGE_ALLOW_LOOP", false);
+
+    json disks = json::array();
+    json by_path = json::object();
+    json by_name = json::object();
+
+    if (!root.contains("blockdevices") || !root["blockdevices"].is_array()) {
+        return json{{"ok", true}, {"disks", disks}, {"by_path", by_path}, {"by_name", by_name}};
+    }
+
+
+    for (const auto& d : root["blockdevices"]) {
+        // type
+        const std::string type = d.value("type", "");
+        if (type != "disk") continue;
+
+        std::string name = d.value("name", "");
+        if (name.size() > 256) name.resize(256);
+
+        std::string path = d.value("path", "");
+        if (path.size() > 256) path.resize(256);
+
+        if (name.empty()) continue;
+        if (path.empty()) continue;
+
+        // filter loop devices unless explicitly allowed (snap uses tons of /dev/loop*)
+        if (!allow_loop) {
+            if (name.rfind("loop", 0) == 0) continue;
+        }
+
+        // collect mountpoints (lsblk sometimes returns array or string; handle both)
+        json mps = json::array();
+        if (d.contains("mountpoints")) {
+            const auto& mp = d["mountpoints"];
+            if (mp.is_array()) {
+                for (const auto& x : mp) {
+                    if (x.is_string() && !x.get<std::string>().empty()) mps.push_back(x);
+                }
+            } else if (mp.is_string()) {
+                auto s = mp.get<std::string>();
+                if (!s.empty()) mps.push_back(s);
+            }
+        } else if (d.contains("mountpoint") && d["mountpoint"].is_string()) {
+            auto s = d["mountpoint"].get<std::string>();
+            if (!s.empty()) mps.push_back(s);
+        }
+
+        // children count (partitions)
+        int children = 0;
+        if (d.contains("children") && d["children"].is_array()) children = (int)d["children"].size();
+
+        // size: lsblk -b gives size bytes as string or number depending on version; normalize to uint64.
+        uint64_t size_bytes = 0;
+        if (d.contains("size")) {
+            if (d["size"].is_number_unsigned()) size_bytes = d["size"].get<uint64_t>();
+            else if (d["size"].is_number()) size_bytes = (uint64_t)d["size"].get<double>();
+            else if (d["size"].is_string()) {
+                try { size_bytes = (uint64_t)std::stoull(d["size"].get<std::string>()); } catch (...) {}
+            }
+        }
+
+        // Use capped strings consistently in both the object and the index maps
+        const std::string name_c = name;
+        const std::string path_c = path;
+
+        json one{
+            {"path", path_c},
+            {"name", name_c},
+            {"size_bytes", size_bytes},
+
+            {"model",  jstr_cap(d, "model")},
+            {"serial", jstr_cap(d, "serial")},
+            {"vendor", jstr_cap(d, "vendor")},
+            {"tran",   jstr_cap(d, "tran")},
+
+            {"rota", d.contains("rota") ? d["rota"] : json(nullptr)},
+            {"rm",   d.contains("rm")   ? d["rm"]   : json(nullptr)},
+            {"mountpoints", mps},
+            {"children", children},
+
+            {"fstype", jstr_cap(d, "fstype")},
+            {"fsver",  jstr_cap(d, "fsver")},
+            {"label",  jstr_cap(d, "label")},
+            {"uuid",   jstr_cap(d, "uuid")}
+        };
+
+        disks.push_back(one);
+        const int idx = (int)disks.size() - 1;
+
+        by_path[path_c] = idx;
+        by_name[name_c] = idx;
+
+    }
+
+    return json{{"ok", true}, {"disks", disks}, {"by_path", by_path}, {"by_name", by_name}};
+}
+
+static inline bool str_contains(const std::string& s, const char* needle) {
+    return s.find(needle) != std::string::npos;
+}
+
+// Parse human size like "20.27MiB", "238.47GiB", "0.00B" into bytes (double->uint64).
+// Returns true on success.
+static inline bool parse_human_bytes(const std::string& tok, uint64_t* out_bytes) {
+    if (!out_bytes) return false;
+    *out_bytes = 0;
+
+    std::string s = tok;
+    // trim whitespace
+    while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.erase(s.begin());
+    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\n' || s.back() == '\r')) s.pop_back();
+    if (s.empty()) return false;
+
+    // split numeric prefix and suffix
+    size_t i = 0;
+    bool seen_digit = false;
+    while (i < s.size()) {
+        char c = s[i];
+        if ((c >= '0' && c <= '9') || c == '.') { seen_digit = true; i++; continue; }
+        break;
+    }
+    if (!seen_digit) return false;
+
+    const std::string num_str = s.substr(0, i);
+    const std::string unit = s.substr(i);
+
+    char* endp = nullptr;
+    const double v = std::strtod(num_str.c_str(), &endp);
+    if (!endp || endp == num_str.c_str()) return false;
+
+    double mul = 1.0;
+    if (unit == "B" || unit.empty()) mul = 1.0;
+    else if (unit == "KiB") mul = 1024.0;
+    else if (unit == "MiB") mul = 1024.0 * 1024.0;
+    else if (unit == "GiB") mul = 1024.0 * 1024.0 * 1024.0;
+    else if (unit == "TiB") mul = 1024.0 * 1024.0 * 1024.0 * 1024.0;
+    else if (unit == "PiB") mul = 1024.0 * 1024.0 * 1024.0 * 1024.0 * 1024.0;
+    else return false;
+
+    const double bytes = v * mul;
+    if (bytes < 0) return false;
+    *out_bytes = static_cast<uint64_t>(bytes + 0.5);
+    return true;
+}
+
+// Parent disk from a /dev path:
+//  - /dev/nvme0n1p1 -> /dev/nvme0n1
+//  - /dev/sda1      -> /dev/sda
+//  - /dev/mmcblk0p2 -> /dev/mmcblk0
+static inline std::string parent_disk_from_dev(const std::string& dev) {
+    if (dev.rfind("/dev/", 0) != 0) return "";
+
+    // nvme: ...n1p1
+    if (dev.find("/dev/nvme") == 0) {
+        size_t p = dev.rfind('p');
+        if (p != std::string::npos && p > 5) {
+            bool all_digits = true;
+            for (size_t i = p + 1; i < dev.size(); ++i) {
+                if (dev[i] < '0' || dev[i] > '9') { all_digits = false; break; }
+            }
+            if (all_digits) return dev.substr(0, p);
+        }
+        return dev;
+    }
+
+    // mmcblk: ...p2
+    if (dev.find("/dev/mmcblk") == 0) {
+        size_t p = dev.rfind('p');
+        if (p != std::string::npos && p > 5) {
+            bool all_digits = true;
+            for (size_t i = p + 1; i < dev.size(); ++i) {
+                if (dev[i] < '0' || dev[i] > '9') { all_digits = false; break; }
+            }
+            if (all_digits) return dev.substr(0, p);
+        }
+        return dev;
+    }
+
+    // sdX / vdX / xvdX / etc: strip trailing digits
+    size_t end = dev.size();
+    while (end > 0 && dev[end - 1] >= '0' && dev[end - 1] <= '9') end--;
+    if (end > 5 && end < dev.size()) return dev.substr(0, end);
+
+    return dev;
+}
+
+// Parse a "btrfs filesystem df" line like:
+// "Data, single: total=2.01GiB, used=19.12MiB"
+// Returns true and fills (name, total_bytes, used_bytes) on success.
+static inline bool parse_btrfs_df_line(const std::string& line,
+                                      std::string* out_name,
+                                      uint64_t* out_total_bytes,
+                                      uint64_t* out_used_bytes,
+                                      std::string* out_total_str,
+                                      std::string* out_used_str) {
+    if (out_name) out_name->clear();
+    if (out_total_bytes) *out_total_bytes = 0;
+    if (out_used_bytes) *out_used_bytes = 0;
+    if (out_total_str) out_total_str->clear();
+    if (out_used_str) out_used_str->clear();
+
+    // name is before the first comma or colon
+    size_t name_end = line.find(',');
+    if (name_end == std::string::npos) name_end = line.find(':');
+    if (name_end == std::string::npos || name_end == 0) return false;
+
+    std::string name = line.substr(0, name_end);
+    // trim
+    while (!name.empty() && (name.front() == ' ' || name.front() == '\t')) name.erase(name.begin());
+    while (!name.empty() && (name.back() == ' ' || name.back() == '\t')) name.pop_back();
+    if (name.empty()) return false;
+
+    // find total=... and used=...
+    size_t pt = line.find("total=");
+    size_t pu = line.find("used=");
+    if (pt == std::string::npos || pu == std::string::npos) return false;
+
+    pt += 6;
+    pu += 5;
+
+    size_t pt_end = line.find_first_of(", \t\r\n", pt);
+    if (pt_end == std::string::npos) pt_end = line.size();
+    size_t pu_end = line.find_first_of(", \t\r\n", pu);
+    if (pu_end == std::string::npos) pu_end = line.size();
+
+    if (pt_end <= pt || pu_end <= pu) return false;
+
+    std::string total_tok = line.substr(pt, pt_end - pt);
+    std::string used_tok  = line.substr(pu, pu_end - pu);
+
+    uint64_t total_b = 0, used_b = 0;
+    if (!parse_human_bytes(total_tok, &total_b)) return false;
+    if (!parse_human_bytes(used_tok, &used_b)) return false;
+
+    if (out_name) *out_name = name;
+    if (out_total_bytes) *out_total_bytes = total_b;
+    if (out_used_bytes) *out_used_bytes = used_b;
+    if (out_total_str) *out_total_str = total_tok;
+    if (out_used_str) *out_used_str = used_tok;
+    return true;
+}
+
+static json storage_btrfs_status_json(const std::string& mountpoint) {
+    json j;
+    j["ok"] = true;
+    j["btrfs_mount"] = mountpoint;
+
+    const std::string mp = sh_quote(mountpoint);
+
+    std::string show, df, stats;
+
+    // -n = non-interactive (fails fast if sudo not permitted)
+    // Use full paths so sudoers rules can be tight.
+    const std::string cmd_show  = "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + mp + " 2>&1";
+    const std::string cmd_df    = "/usr/bin/sudo -n /usr/bin/btrfs filesystem df "   + mp + " 2>&1";
+    const std::string cmd_stats = "/usr/bin/sudo -n /usr/bin/btrfs device stats "    + mp + " 2>&1";
+
+    int rc_show  = run_capture(cmd_show,  &show);
+    int rc_df    = run_capture(cmd_df,    &df);
+    int rc_stats = run_capture(cmd_stats, &stats);
+
+    // Cap outputs
+    cap_string(show,  256 * 1024);
+    cap_string(df,    256 * 1024);
+    cap_string(stats, 256 * 1024);
+
+    j["btrfs_filesystem_show"] = show;
+    j["btrfs_filesystem_df"]   = df;
+    j["btrfs_device_stats"]    = stats;
+    // ---- df_summary (best effort) parsed from "btrfs filesystem df" ----
+    // Example lines:
+    // "Data, single: total=2.01GiB, used=19.12MiB"
+    // "Metadata, DUP: total=1.00GiB, used=1.14MiB"
+    json df_summary = json::object();
+
+    {
+        size_t pos = 0;
+        while (pos < df.size()) {
+            size_t end = df.find('\n', pos);
+            if (end == std::string::npos) end = df.size();
+            std::string line = df.substr(pos, end - pos);
+            rtrim_inplace(line);
+
+            std::string name, total_s, used_s;
+            uint64_t total_b = 0, used_b = 0;
+            if (parse_btrfs_df_line(line, &name, &total_b, &used_b, &total_s, &used_s)) {
+                df_summary[name] = json{
+                        {"total", total_s},
+                        {"used", used_s},
+                        {"total_bytes", total_b},
+                        {"used_bytes", used_b}
+                };
+            }
+
+            if (end == df.size()) break;
+            pos = end + 1;
+        }
+    }
+
+    // Always include for stable schema (may be empty)
+    j["df_summary"] = df_summary;
+
+    j["rc_show"]  = rc_show;
+    j["rc_df"]    = rc_df;
+    j["rc_stats"] = rc_stats;
+
+    // ---- summary (best effort) parsed from "btrfs filesystem show" ----
+    // Works for lines like:
+    //   Label: 'PQNAS_DATA'  uuid: ...
+    //   Total devices 1 FS bytes used 20.27MiB
+    //   devid 1 size 238.47GiB used 4.02GiB path /dev/nvme0n1p1
+    json summary = json::object();
+
+    // label + uuid
+    {
+        const std::string k1 = "Label:";
+        const std::string k2 = "uuid:";
+        auto p1 = show.find(k1);
+        auto p2 = show.find(k2);
+        if (p1 != std::string::npos && p2 != std::string::npos && p2 > p1) {
+            std::string label_part = show.substr(p1 + k1.size(), p2 - (p1 + k1.size()));
+            // trim label_part
+            while (!label_part.empty() && (label_part.front() == ' ' || label_part.front() == '\t')) label_part.erase(label_part.begin());
+            while (!label_part.empty() && (label_part.back() == ' ' || label_part.back() == '\t')) label_part.pop_back();
+
+            // label_part often looks like "'PQNAS_DATA'"
+            if (!label_part.empty() && label_part.front() == '\'') {
+                size_t q = label_part.find('\'', 1);
+                if (q != std::string::npos && q > 1) {
+                    summary["label"] = label_part.substr(1, q - 1);
+                } else {
+                    summary["label"] = label_part;
+                }
+            } else if (!label_part.empty()) {
+                summary["label"] = label_part;
+            }
+
+            // uuid token until whitespace/newline
+            size_t ustart = p2 + k2.size();
+            while (ustart < show.size() && (show[ustart] == ' ' || show[ustart] == '\t')) ustart++;
+            size_t uend = ustart;
+            while (uend < show.size()) {
+                char c = show[uend];
+                if (c == ' ' || c == '\t' || c == '\n' || c == '\r') break;
+                uend++;
+            }
+            if (uend > ustart) summary["uuid"] = show.substr(ustart, uend - ustart);
+        }
+    }
+
+    // total devices + FS bytes used
+    {
+        const std::string key = "Total devices";
+        auto p = show.find(key);
+        if (p != std::string::npos) {
+            // Grab the line
+            size_t line_end = show.find('\n', p);
+            if (line_end == std::string::npos) line_end = show.size();
+            std::string line = show.substr(p, line_end - p);
+
+            // naive token scan
+            // "Total devices 1 FS bytes used 20.27MiB"
+            size_t td = line.find("Total devices");
+            if (td != std::string::npos) {
+                size_t pos = td + std::string("Total devices").size();
+                while (pos < line.size() && line[pos] == ' ') pos++;
+                size_t pos2 = pos;
+                while (pos2 < line.size() && line[pos2] >= '0' && line[pos2] <= '9') pos2++;
+                if (pos2 > pos) {
+                    summary["total_devices"] = std::atoi(line.substr(pos, pos2 - pos).c_str());
+                }
+            }
+
+            const std::string k_used = "FS bytes used";
+            auto pu = line.find(k_used);
+            if (pu != std::string::npos) {
+                size_t pos = pu + k_used.size();
+                while (pos < line.size() && line[pos] == ' ') pos++;
+                size_t pos2 = pos;
+                while (pos2 < line.size() && line[pos2] != ' ' && line[pos2] != '\t') pos2++;
+                if (pos2 > pos) {
+                    const std::string tok = line.substr(pos, pos2 - pos);
+                    uint64_t bytes = 0;
+                    if (parse_human_bytes(tok, &bytes)) {
+                        summary["fs_bytes_used"] = tok;
+                        summary["fs_bytes_used_bytes"] = bytes;
+                    } else {
+                        summary["fs_bytes_used"] = tok;
+                    }
+                }
+            }
+        }
+    }
+
+    // device line: size/used/path
+    {
+        const std::string key = "devid";
+        auto p = show.find(key);
+        while (p != std::string::npos) {
+            size_t line_end = show.find('\n', p);
+            if (line_end == std::string::npos) line_end = show.size();
+            std::string line = show.substr(p, line_end - p);
+
+            auto ps = line.find("size ");
+            auto pu = line.find("used ");
+            auto pp = line.find("path ");
+            if (ps != std::string::npos && pu != std::string::npos && pp != std::string::npos) {
+                // size token
+                size_t s1 = ps + 5;
+                size_t s2 = line.find(' ', s1);
+                if (s2 == std::string::npos) s2 = line.size();
+                std::string size_tok = line.substr(s1, s2 - s1);
+
+                // used token
+                size_t u1 = pu + 5;
+                size_t u2 = line.find(' ', u1);
+                if (u2 == std::string::npos) u2 = line.size();
+                std::string used_tok = line.substr(u1, u2 - u1);
+
+                // path token to end
+                size_t p1 = pp + 5;
+                while (p1 < line.size() && (line[p1] == ' ' || line[p1] == '\t')) p1++;
+                std::string path_tok = (p1 < line.size()) ? line.substr(p1) : std::string();
+
+                if (!path_tok.empty()) {
+                    summary["device_path"] = path_tok;
+                    const std::string parent = parent_disk_from_dev(path_tok);
+                    if (!parent.empty()) summary["device_parent_disk"] = parent;
+                }
+
+                if (!size_tok.empty()) {
+                    summary["device_size"] = size_tok;
+                    uint64_t bytes = 0;
+                    if (parse_human_bytes(size_tok, &bytes)) summary["device_size_bytes"] = bytes;
+                }
+                if (!used_tok.empty()) {
+                    summary["device_used"] = used_tok;
+                    uint64_t bytes = 0;
+                    if (parse_human_bytes(used_tok, &bytes)) summary["device_used_bytes"] = bytes;
+                }
+                break; // take first matching devid line
+            }
+
+            p = show.find(key, line_end);
+        }
+    }
+
+    // Always include summary for stable schema (may be empty if parsing failed)
+    j["summary"] = summary;
+
+
+    // ---- ok/error classification (fail-closed for "ok") ----
+    if (rc_show != 0 || rc_df != 0 || rc_stats != 0) {
+        j["ok"] = false;
+
+        // More specific errors for common cases
+        if (str_contains(show, "sudo:") || str_contains(df, "sudo:") || str_contains(stats, "sudo:")) {
+            j["error"] = "sudo_not_allowed";
+        } else if (str_contains(show, "not a valid btrfs filesystem") ||
+                   str_contains(df, "not a valid btrfs filesystem") ||
+                   str_contains(stats, "not a valid btrfs filesystem")) {
+            j["error"] = "not_btrfs";
+        } else {
+            j["error"] = "btrfs_failed";
+        }
+    }
+
+    return j;
+}
+
+
 
 
 
@@ -2639,6 +3238,269 @@ srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& re
     // 3) Default: not approved (normal "still waiting for phone approval" case)
     reply_json(res, 200, json({{"ok",true},{"approved",false}}).dump());
 });
+
+// ----- GET /api/v4/storage/disks (admin-only) --------------------------------
+srv.Get("/api/v4/storage/disks", [&](const httplib::Request& req, httplib::Response& res) {
+pqnas::UsersRegistry users;
+
+// IMPORTANT: load users from disk before checking admin role
+if (!users.load(users_path)) {
+    reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
+    return;
+}
+
+if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+
+	std::string raw;
+	json j = storage_list_disks_json(&raw);
+
+	// Optional: include raw lsblk JSON for debugging (cap size to avoid huge responses)
+	if (getenv_bool("PQNAS_STORAGE_DEBUG_LSBLK", false)) {
+    	if (raw.size() > 1024 * 1024) raw.resize(1024 * 1024); // 1 MiB cap
+    	j["lsblk_raw"] = raw;
+	}
+
+
+    reply_json(res, 200, j.dump());
+});
+
+// ----- GET /api/v4/storage/status?mount=/path (admin-only) -------------------
+srv.Get("/api/v4/storage/status", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
+        return;
+    }
+
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+
+    // Default mount: prefer configured storage root
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+
+    // default mount inside allowed_prefix
+    std::string mount = allowed_prefix + "/data";
+
+    // override if caller provided mount param
+    if (req.has_param("mount")) {
+        mount = req.get_param_value("mount");
+    }
+
+
+    if (!is_abs_path_safe(mount)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_mount"}}.dump());
+        return;
+    }
+
+    // --- Resolve mountpoint + fstype first (must happen before running btrfs) ---
+    std::string fs_target_out;
+    int rc_target = run_capture("/usr/bin/findmnt -no TARGET --target " + sh_quote(mount), &fs_target_out);
+    cap_string(fs_target_out, 16 * 1024);
+    rtrim_inplace(fs_target_out);
+
+    std::string fstype_out;
+    int rc_fs = run_capture("/usr/bin/findmnt -no FSTYPE --target " + sh_quote(mount), &fstype_out);
+    cap_string(fstype_out, 16 * 1024);
+    rtrim_inplace(fstype_out);
+
+    std::string source_out;
+    int rc_src = run_capture("/usr/bin/findmnt -no SOURCE --target " + sh_quote(mount), &source_out);
+    cap_string(source_out, 16 * 1024);
+    rtrim_inplace(source_out);
+
+    if (rc_target != 0 || fs_target_out.empty() ||
+        rc_fs != 0 || fstype_out.empty() ||
+        rc_src != 0 || source_out.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "mount_not_found"},
+            {"mount", mount}
+        }.dump());
+        return;
+    }
+
+
+    // Enforce allowlist on the *resolved mountpoint* (not the user-provided directory)
+    const std::string resolved_mount = fs_target_out;
+    const std::string resolved_source = source_out;
+
+
+    if (resolved_mount.rfind(allowed_prefix, 0) != 0) {
+        const std::string test_prefix  = "/srv/pqnas-test";
+        const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
+        if (resolved_mount.rfind(test_prefix, 0) != 0 && resolved_mount.rfind(test_prefix2, 0) != 0) {
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "mount_not_allowed"},
+                {"allowed_prefix", allowed_prefix},
+                {"resolved_mount", resolved_mount},
+                {"resolved_source", resolved_source}
+            }.dump());
+
+            return;
+        }
+    }
+
+    if (fstype_out != "btrfs") {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "not_btrfs"},
+            {"mount", mount},
+            {"resolved_mount", resolved_mount},
+            {"resolved_source", resolved_source},
+            {"fstype", fstype_out}
+        }.dump());
+
+        return;
+    }
+
+    // Run btrfs commands against the resolved mountpoint (fixes /srv/pqnas/data case)
+    json j = storage_btrfs_status_json(resolved_mount);
+    j["input_mount"] = mount;
+    j["resolved_mount"] = resolved_mount;
+    j["resolved_source"] = resolved_source;
+    {
+    const std::string d = parent_disk_from_dev(resolved_source);
+    if (!d.empty()) j["resolved_disk"] = d;
+    }
+    j["fstype"] = fstype_out;
+    reply_json(res, 200, j.dump());
+
+
+});
+
+// ----- GET /api/v4/storage/overview?mount=/path (admin-only) -----------------
+srv.Get("/api/v4/storage/overview", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "users_load_failed"},
+            {"path", users_path}
+        }.dump());
+        return;
+    }
+
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    // -------------------- disks (always returned) --------------------
+    std::string raw_lsblk;
+    json disks_j = storage_list_disks_json(&raw_lsblk);
+
+    // -------------------- mount selection --------------------
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+
+    std::string mount = allowed_prefix + "/data";
+    if (req.has_param("mount")) mount = req.get_param_value("mount");
+
+    json out;
+    out["ok"] = false;  // becomes true only if valid btrfs status included
+
+    out["input_mount"] = mount;
+    out["allowed_prefix"] = allowed_prefix;
+
+    // always include disks and index maps
+    out["disks"]   = disks_j.value("disks", json::array());
+    out["by_path"] = disks_j.value("by_path", json::object());
+    out["by_name"] = disks_j.value("by_name", json::object());
+
+    // Optional debug raw lsblk at top level
+    if (getenv_bool("PQNAS_STORAGE_DEBUG_LSBLK", false)) {
+        cap_string(raw_lsblk, 1024 * 1024);
+        out["lsblk_raw"] = raw_lsblk;
+    }
+
+    // -------------------- input validation --------------------
+    if (!is_abs_path_safe(mount)) {
+        out["error"] = "bad_mount";
+        reply_json(res, 400, out.dump());  // keep 400 for invalid path
+        return;
+    }
+
+    // -------------------- resolve mountpoint, fstype, source --------------------
+    std::string target_out, fstype_out, source_out;
+
+    int rc_target = run_capture(
+        "/usr/bin/findmnt -no TARGET --target " + sh_quote(mount),
+        &target_out
+    );
+    cap_string(target_out, 16 * 1024);
+    rtrim_inplace(target_out);
+
+    int rc_fs = run_capture(
+        "/usr/bin/findmnt -no FSTYPE --target " + sh_quote(mount),
+        &fstype_out
+    );
+    cap_string(fstype_out, 16 * 1024);
+    rtrim_inplace(fstype_out);
+
+    int rc_src = run_capture(
+        "/usr/bin/findmnt -no SOURCE --target " + sh_quote(mount),
+        &source_out
+    );
+    cap_string(source_out, 16 * 1024);
+    rtrim_inplace(source_out);
+
+    if (rc_target != 0 || target_out.empty() ||
+        rc_fs != 0 || fstype_out.empty() ||
+        rc_src != 0 || source_out.empty()) {
+
+        out["error"] = "mount_not_found";
+        reply_json(res, 200, out.dump());  // overview still useful
+        return;
+    }
+
+    const std::string resolved_mount  = target_out;
+    const std::string resolved_source = source_out;
+    const std::string resolved_disk   = parent_disk_from_dev(resolved_source);
+
+    out["resolved_mount"]  = resolved_mount;
+    out["resolved_source"] = resolved_source;
+    out["resolved_disk"]   = resolved_disk;
+    out["fstype"]          = fstype_out;
+
+    // -------------------- allowlist enforcement --------------------
+    if (resolved_mount.rfind(allowed_prefix, 0) != 0) {
+        const std::string test_prefix  = "/srv/pqnas-test";
+        const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
+
+        if (resolved_mount.rfind(test_prefix, 0) != 0 &&
+            resolved_mount.rfind(test_prefix2, 0) != 0) {
+
+            out["error"] = "mount_not_allowed";
+            reply_json(res, 200, out.dump());  // still return disks
+            return;
+        }
+    }
+
+    // -------------------- non-btrfs case --------------------
+    if (fstype_out != "btrfs") {
+        out["error"] = "not_btrfs";
+        reply_json(res, 200, out.dump());  // overview still useful
+        return;
+    }
+
+    // -------------------- btrfs status --------------------
+    json status = storage_btrfs_status_json(resolved_mount);
+
+    status["input_mount"]     = mount;
+    status["resolved_mount"]  = resolved_mount;
+    status["resolved_source"] = resolved_source;
+    status["resolved_disk"]   = resolved_disk;
+    status["fstype"]          = fstype_out;
+
+    out["ok"]     = true;
+    out["status"] = status;
+
+    reply_json(res, 200, out.dump());
+});
+
+
 
     // POST /api/v4/consume
     srv.Post("/api/v4/consume", [&](const httplib::Request& req, httplib::Response& res) {
@@ -9873,20 +10735,6 @@ srv.Post("/api/v4/snapshots/create", [&](const httplib::Request& req, httplib::R
             tm.tm_hour, tm.tm_min, tm.tm_sec,
             (int)ms.count());
         return std::string(buf);
-    };
-
-    auto run_capture = [&](const std::string& cmd, std::string* out) -> int {
-        if (out) out->clear();
-        std::string c = cmd + " 2>&1";
-        FILE* f = ::popen(c.c_str(), "r");
-        if (!f) return 127;
-        char buf[4096];
-        while (fgets(buf, sizeof(buf), f)) {
-            if (out) out->append(buf);
-        }
-        int rc = ::pclose(f);
-        if (WIFEXITED(rc)) return WEXITSTATUS(rc);
-        return 128;
     };
 
     // ---- parse body ----

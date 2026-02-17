@@ -120,7 +120,7 @@ bool require_admin_cookie_users(const httplib::Request& req,
 bool require_admin_cookie_users_actor(const httplib::Request& req,
                                       httplib::Response& res,
                                       const unsigned char cookie_key[32],
-                                      const std::string& /*users_path*/,
+                                      const std::string& users_path,
                                       const pqnas::UsersRegistry* users,
                                       std::string* out_admin_fp_hex)
 {
@@ -155,10 +155,21 @@ bool require_admin_cookie_users_actor(const httplib::Request& req,
         return false;
     }
     const std::string fp_hex(raw.begin(), raw.end());
+    std::cerr << "[authz] require_admin_cookie_users_actor path=" << req.path << "\n";
+    std::cerr << "[authz] fp_hex=" << fp_hex << "\n";
+    std::cerr << "[authz] users_path=" << users_path << "\n";
+    if (users) {
+        std::cerr << "[authz] is_admin_enabled=" << (users->is_admin_enabled(fp_hex) ? "yes" : "no") << "\n";
+
+    } else {
+        std::cerr << "[authz] users=null\n";
+    }
 
     // Admin policy check (fail-closed) via users registry
     if (!users || !users->is_admin_enabled(fp_hex)) {
         reply_text(res, 403, "admin required");
+        std::cerr << "[authz] DENY admin required\n";
+
         return false;
     }
 
