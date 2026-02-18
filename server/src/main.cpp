@@ -72,6 +72,7 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include <fcntl.h>
 #include <pwd.h>
 #include <cmath>
+#include <cerrno>
 
 extern "C" {
 #include "qrauth_v4.h"
@@ -1556,8 +1557,14 @@ static bool sha256_file(const std::filesystem::path& p, std::string* out_hex, st
 }
 
 static bool run_cmd_capture(const std::string& cmd, std::string* out, int* exit_code) {
+    if (out) out->clear();
+    if (exit_code) *exit_code = 127; // default like "command failed"
+
     FILE* fp = popen(cmd.c_str(), "r");
-    if (!fp) return false;
+    if (!fp) {
+        return false; // popen failed (couldn't even start shell)
+    }
+
     std::string s;
     char buf[4096];
     while (true) {
@@ -1565,11 +1572,33 @@ static bool run_cmd_capture(const std::string& cmd, std::string* out, int* exit_
         if (n == 0) break;
         s.append(buf, n);
     }
-    int rc = pclose(fp);
+
+    const int rc = pclose(fp);
+
     if (out) *out = s;
-    if (exit_code) *exit_code = WEXITSTATUS(rc);
-    return true;
+
+    if (rc == -1) {
+        // pclose/waitpid failed; we don't know exit status
+        if (exit_code) *exit_code = 127;
+        return false;
+    }
+
+    if (WIFEXITED(rc)) {
+        if (exit_code) *exit_code = WEXITSTATUS(rc);
+        return true;
+    }
+
+    if (WIFSIGNALED(rc)) {
+        // mimic shell convention: 128 + signal number
+        if (exit_code) *exit_code = 128 + WTERMSIG(rc);
+        return true;
+    }
+
+    // Other cases (stopped/continued) shouldn't normally happen here
+    if (exit_code) *exit_code = 127;
+    return false;
 }
+
 
 static std::string rand_hex_16() {
     static const char* k = "0123456789abcdef";
@@ -1809,6 +1838,83 @@ static inline void cap_string(std::string& s, size_t cap_bytes) {
         s.resize(cap_bytes);
     }
 }
+
+// SHA-256 hex (lowercase), EVP-based. Returns empty string on failure.
+static std::string sha256_hex_lower_evp(const std::string& s) {
+    EVP_MD_CTX* c = EVP_MD_CTX_new();
+    if (!c) return std::string{};
+    unsigned char md[EVP_MAX_MD_SIZE];
+    unsigned int mdlen = 0;
+
+    if (EVP_DigestInit_ex(c, EVP_sha256(), nullptr) != 1) { EVP_MD_CTX_free(c); return std::string{}; }
+    if (!s.empty()) {
+        if (EVP_DigestUpdate(c, s.data(), s.size()) != 1) { EVP_MD_CTX_free(c); return std::string{}; }
+    }
+    if (EVP_DigestFinal_ex(c, md, &mdlen) != 1) { EVP_MD_CTX_free(c); return std::string{}; }
+    EVP_MD_CTX_free(c);
+
+    static const char* hex = "0123456789abcdef";
+    std::string out;
+    out.resize(mdlen * 2);
+    for (unsigned int i = 0; i < mdlen; ++i) {
+        out[i*2 + 0] = hex[(md[i] >> 4) & 0xF];
+        out[i*2 + 1] = hex[(md[i]     ) & 0xF];
+    }
+    return out;
+}
+
+static std::string join_commands_for_hash(const json& commands_arr) {
+    if (!commands_arr.is_array()) return "";
+    std::string s;
+    for (size_t i = 0; i < commands_arr.size(); ++i) {
+        if (!commands_arr[i].is_string()) continue;
+        if (!s.empty()) s.push_back('\n');
+        s += commands_arr[i].get<std::string>();
+    }
+    return s;
+}
+
+static std::string raid_exec_lock_path(const std::string& plan_id) {
+    return "/run/pqnas/raid/exec_" + plan_id + ".json";
+}
+
+static bool write_text_file_atomic(const std::string& path, const std::string& content) {
+    // naive atomic write: write to temp then rename
+    const std::string tmp = path + ".tmp";
+    std::ofstream f(tmp, std::ios::binary);
+    if (!f) return false;
+    f.write(content.data(), (std::streamsize)content.size());
+    f.close();
+    if (!f) return false;
+    std::error_code ec;
+    std::filesystem::rename(tmp, path, ec);
+    if (ec) {
+        std::filesystem::remove(tmp);
+        return false;
+    }
+    return true;
+}
+
+static bool file_exists(const std::string& path) {
+    std::error_code ec;
+    return std::filesystem::exists(path, ec);
+}
+
+// returns true if "btrfs filesystem show <mount>" mentions the given device path
+static bool btrfs_filesystem_has_device(const std::string& mount, const std::string& device_path) {
+    std::string show;
+    int ec = 0;
+
+    const std::string cmd =
+        "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(mount) + " 2>&1";
+
+    const bool ok = run_cmd_capture(cmd, &show, &ec);
+    cap_string(show, 256 * 1024);
+
+    if (!ok || ec != 0) return false;
+    return show.find(device_path) != std::string::npos;
+}
+
 
 static bool getenv_bool(const char* k, bool defv) {
     const char* v = std::getenv(k);
@@ -2169,43 +2275,87 @@ static inline bool parse_human_bytes(const std::string& tok, uint64_t* out_bytes
     *out_bytes = static_cast<uint64_t>(bytes + 0.5);
     return true;
 }
-
 // Parent disk from a /dev path:
 //  - /dev/nvme0n1p1 -> /dev/nvme0n1
 //  - /dev/sda1      -> /dev/sda
 //  - /dev/mmcblk0p2 -> /dev/mmcblk0
-static inline std::string parent_disk_from_dev(const std::string& dev) {
+//  - /dev/loop32p1  -> /dev/loop32
+static inline std::string parent_disk_from_dev(const std::string& dev_in) {
+    // Trim whitespace defensively (lsblk/findmnt output can include \n)
+    std::string dev = dev_in;
+    while (!dev.empty() && (dev.back() == '\n' || dev.back() == '\r' || dev.back() == ' ' || dev.back() == '\t'))
+        dev.pop_back();
+    size_t start_ws = 0;
+    while (start_ws < dev.size() && (dev[start_ws] == ' ' || dev[start_ws] == '\t'))
+        start_ws++;
+    if (start_ws > 0) dev.erase(0, start_ws);
+
     if (dev.rfind("/dev/", 0) != 0) return "";
 
-    // nvme: ...n1p1
-    if (dev.find("/dev/nvme") == 0) {
+    auto is_digit = [](char c) { return (c >= '0' && c <= '9'); };
+
+    // nvme: /dev/nvme0n1p1 -> /dev/nvme0n1
+    if (dev.rfind("/dev/nvme", 0) == 0) {
+        // Only strip a trailing "p<digits>" if it exists
         size_t p = dev.rfind('p');
-        if (p != std::string::npos && p > 5) {
+        if (p != std::string::npos && p + 1 < dev.size()) {
             bool all_digits = true;
             for (size_t i = p + 1; i < dev.size(); ++i) {
-                if (dev[i] < '0' || dev[i] > '9') { all_digits = false; break; }
+                if (!is_digit(dev[i])) { all_digits = false; break; }
             }
             if (all_digits) return dev.substr(0, p);
         }
         return dev;
     }
 
-    // mmcblk: ...p2
-    if (dev.find("/dev/mmcblk") == 0) {
+    // mmcblk: /dev/mmcblk0p2 -> /dev/mmcblk0
+    if (dev.rfind("/dev/mmcblk", 0) == 0) {
         size_t p = dev.rfind('p');
-        if (p != std::string::npos && p > 5) {
+        if (p != std::string::npos && p + 1 < dev.size()) {
             bool all_digits = true;
             for (size_t i = p + 1; i < dev.size(); ++i) {
-                if (dev[i] < '0' || dev[i] > '9') { all_digits = false; break; }
+                if (!is_digit(dev[i])) { all_digits = false; break; }
             }
             if (all_digits) return dev.substr(0, p);
         }
+        return dev;
+    }
+
+    // loop: /dev/loop32p1 -> /dev/loop32 (handle explicitly, no heuristic fallback)
+    if (dev.rfind("/dev/loop", 0) == 0) {
+        const size_t base = std::string("/dev/loop").size(); // 9
+        size_t i = base;
+
+        // require at least one digit after /dev/loop
+        if (i >= dev.size() || !is_digit(dev[i])) return dev;
+
+        while (i < dev.size() && is_digit(dev[i])) i++; // consume loop number digits
+
+        // exact disk form: /dev/loop<digits>
+        if (i == dev.size()) return dev;
+
+        // partition form: /dev/loop<digits>p<digits>
+        if (dev[i] == 'p') {
+            size_t ppos = i;
+            size_t j = i + 1;
+            if (j >= dev.size() || !is_digit(dev[j])) {
+                // weird case like /dev/loop32p (no partition digits) -> treat as disk
+                return dev.substr(0, ppos);
+            }
+            while (j < dev.size() && is_digit(dev[j])) j++;
+            if (j == dev.size()) {
+                // clean match -> return parent disk
+                return dev.substr(0, ppos);
+            }
+        }
+
+        // Anything else: don't guess
         return dev;
     }
 
     // sdX / vdX / xvdX / etc: strip trailing digits
     size_t end = dev.size();
-    while (end > 0 && dev[end - 1] >= '0' && dev[end - 1] <= '9') end--;
+    while (end > 0 && is_digit(dev[end - 1])) end--;
     if (end > 5 && end < dev.size()) return dev.substr(0, end);
 
     return dev;
@@ -2923,7 +3073,6 @@ static BtrfsShowParsed parse_btrfs_filesystem_show(const std::string& raw) {
 
     return out;
 }
-
 // Convert parsed show -> JSON object (UI-friendly)
 static json btrfs_show_parsed_to_json(const BtrfsShowParsed& p,
                                      const json& by_path,
@@ -2937,24 +3086,33 @@ static json btrfs_show_parsed_to_json(const BtrfsShowParsed& p,
     json devices = json::array();
     for (const auto& d : p.devices) {
         json jd;
+
+        // Path (trimmed)
+        std::string path = d.path;
+        rtrim_inplace(path);
+
         jd["devid"]      = d.devid;
-        jd["path"]       = d.path;
+        jd["path"]       = path;
         jd["size_bytes"] = d.size_bytes;
         jd["used_bytes"] = d.used_bytes;
-        if (!d.parent_disk.empty()) jd["parent_disk"] = d.parent_disk;
+
+        // IMPORTANT: compute parent_disk from path (do NOT trust parsed parent_disk)
+        std::string parent = parent_disk_from_dev(path);
+        if (!parent.empty()) jd["parent_disk"] = parent;
 
         // Best-effort mapping to lsblk disk index
         int idx = -1;
 
-        if (!d.parent_disk.empty() && by_path.is_object()) {
-            auto it = by_path.find(d.parent_disk);
+        if (!parent.empty() && by_path.is_object()) {
+            auto it = by_path.find(parent);
             if (it != by_path.end() && it->is_number_integer()) {
                 idx = it->get<int>();
             }
         }
-        if (idx < 0 && !d.parent_disk.empty() && by_name.is_object()) {
+
+        if (idx < 0 && !parent.empty() && by_name.is_object()) {
             // try basename: /dev/nvme0n1 -> nvme0n1
-            std::string name = d.parent_disk;
+            std::string name = parent;
             const size_t slash = name.rfind('/');
             if (slash != std::string::npos) name = name.substr(slash + 1);
 
@@ -2968,8 +3126,8 @@ static json btrfs_show_parsed_to_json(const BtrfsShowParsed& p,
 
         devices.push_back(jd);
     }
-    out["devices"] = devices;
 
+    out["devices"] = devices;
     return out;
 }
 
@@ -4079,7 +4237,6 @@ srv.Get("/api/v4/storage/overview", [&](const httplib::Request& req, httplib::Re
 
     reply_json(res, 200, out.dump());
 });
-
 // ----- GET /api/v4/raid/discovery?mount=/path (admin-only, read-only) --------
 srv.Get("/api/v4/raid/discovery", [&](const httplib::Request& req, httplib::Response& res) {
     pqnas::UsersRegistry users;
@@ -4131,31 +4288,32 @@ srv.Get("/api/v4/raid/discovery", [&](const httplib::Request& req, httplib::Resp
 
     // -------------------- resolve mountpoint, fstype, source --------------------
     std::string target_out, fstype_out, source_out;
+    int ec_target = 0, ec_fs = 0, ec_src = 0;
 
-    int rc_target = run_capture(
+    const bool ok_target = run_cmd_capture(
         "/usr/bin/findmnt -no TARGET --target " + sh_quote(mount),
-        &target_out
+        &target_out, &ec_target
     );
     cap_string(target_out, 16 * 1024);
     rtrim_inplace(target_out);
 
-    int rc_fs = run_capture(
+    const bool ok_fs = run_cmd_capture(
         "/usr/bin/findmnt -no FSTYPE --target " + sh_quote(mount),
-        &fstype_out
+        &fstype_out, &ec_fs
     );
     cap_string(fstype_out, 16 * 1024);
     rtrim_inplace(fstype_out);
 
-    int rc_src = run_capture(
+    const bool ok_src = run_cmd_capture(
         "/usr/bin/findmnt -no SOURCE --target " + sh_quote(mount),
-        &source_out
+        &source_out, &ec_src
     );
     cap_string(source_out, 16 * 1024);
     rtrim_inplace(source_out);
 
-    if (rc_target != 0 || target_out.empty() ||
-        rc_fs != 0 || fstype_out.empty() ||
-        rc_src != 0 || source_out.empty()) {
+    if (!ok_target || ec_target != 0 || target_out.empty() ||
+        !ok_fs     || ec_fs     != 0 || fstype_out.empty() ||
+        !ok_src    || ec_src    != 0 || source_out.empty()) {
 
         out["error"] = "mount_not_found";
         reply_json(res, 200, out.dump());
@@ -4193,16 +4351,18 @@ srv.Get("/api/v4/raid/discovery", [&](const httplib::Request& req, httplib::Resp
     }
 
     // -------------------- btrfs filesystem show (read-only) --------------------
-    const std::string cmd_show = "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(resolved_mount);
-    std::string show_raw;
-    int rc_show = run_capture(cmd_show, &show_raw);
+    const std::string cmd_show =
+        "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(resolved_mount);
 
-    // cap raw early; we might optionally return it
+    std::string show_raw;
+    int ec_show = 0;
+    const bool ok_show = run_cmd_capture(cmd_show + " 2>&1", &show_raw, &ec_show);
+
     cap_string(show_raw, 256 * 1024);
 
-    if (rc_show != 0 || show_raw.empty()) {
+    if (!ok_show || ec_show != 0 || show_raw.empty()) {
         out["error"] = "btrfs_show_failed";
-        out["btrfs_show_rc"] = rc_show;
+        out["btrfs_show_rc"] = ec_show;
 
         if (getenv_bool("PQNAS_RAID_DEBUG_SHOW", false)) {
             cap_string(show_raw, 1024 * 1024);
@@ -4255,7 +4415,7 @@ srv.Get("/api/v4/raid/discovery", [&](const httplib::Request& req, httplib::Resp
     if (getenv_bool("PQNAS_RAID_DEBUG_SHOW", false)) {
         cap_string(show_raw, 1024 * 1024);
         out["btrfs_show_raw"] = show_raw;
-        out["btrfs_show_rc"]  = rc_show;
+        out["btrfs_show_rc"]  = ec_show;
     }
 
     reply_json(res, 200, out.dump());
@@ -4305,23 +4465,26 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
 
     // Resolve mount -> resolved_mount / source / fstype
     std::string target_out, fstype_out, source_out;
+    int ec_target = 0, ec_fs = 0, ec_src = 0;
 
-    int rc_target = run_capture("/usr/bin/findmnt -no TARGET --target " + sh_quote(mount), &target_out);
+    const bool ok_target = run_cmd_capture(
+        "/usr/bin/findmnt -no TARGET --target " + sh_quote(mount), &target_out, &ec_target);
     cap_string(target_out, 16 * 1024);
     rtrim_inplace(target_out);
 
-    int rc_fs = run_capture("/usr/bin/findmnt -no FSTYPE --target " + sh_quote(mount), &fstype_out);
+    const bool ok_fs = run_cmd_capture(
+        "/usr/bin/findmnt -no FSTYPE --target " + sh_quote(mount), &fstype_out, &ec_fs);
     cap_string(fstype_out, 16 * 1024);
     rtrim_inplace(fstype_out);
 
-    int rc_src = run_capture("/usr/bin/findmnt -no SOURCE --target " + sh_quote(mount), &source_out);
+    const bool ok_src = run_cmd_capture(
+        "/usr/bin/findmnt -no SOURCE --target " + sh_quote(mount), &source_out, &ec_src);
     cap_string(source_out, 16 * 1024);
     rtrim_inplace(source_out);
 
-    if (rc_target != 0 || target_out.empty() ||
-        rc_fs != 0 || fstype_out.empty() ||
-        rc_src != 0 || source_out.empty()) {
-
+    if (!ok_target || ec_target != 0 || target_out.empty() ||
+        !ok_fs     || ec_fs     != 0 || fstype_out.empty() ||
+        !ok_src    || ec_src    != 0 || source_out.empty()) {
         reply_json(res, 200, json{
             {"ok", false},
             {"error", "mount_not_found"},
@@ -4386,29 +4549,31 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
 
     // Hard-refuse disks that have ANY mountpoints anywhere (fail-closed even with force)
     // This protects the OS disk where mountpoints live on child partitions (/, /boot/efi, etc.)
-    json mpcheck = lsblk_disk_mountpoints_json(new_disk);
-    if (mpcheck.value("ok", false) && mpcheck.contains("mountpoints") && mpcheck["mountpoints"].is_array()) {
-        if (!mpcheck["mountpoints"].empty()) {
-            reply_json(res, 400, json{
+    {
+        json mpcheck = lsblk_disk_mountpoints_json(new_disk);
+        if (mpcheck.value("ok", false) && mpcheck.contains("mountpoints") && mpcheck["mountpoints"].is_array()) {
+            if (!mpcheck["mountpoints"].empty()) {
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "disk_in_use"},
+                    {"new_disk", new_disk},
+                    {"disk_index", disk_index},
+                    {"model", d.value("model","")},
+                    {"serial", d.value("serial","")},
+                    {"mountpoints", mpcheck["mountpoints"]}
+                }.dump());
+                return;
+            }
+        } else {
+            // If we can't determine, fail-closed in plan (safer)
+            reply_json(res, 500, json{
                 {"ok", false},
-                {"error", "disk_in_use"},
+                {"error", "disk_in_use_check_failed"},
                 {"new_disk", new_disk},
-                {"disk_index", disk_index},
-                {"model", d.value("model","")},
-                {"serial", d.value("serial","")},
-                {"mountpoints", mpcheck["mountpoints"]}
+                {"detail", mpcheck}
             }.dump());
             return;
         }
-    } else {
-        // If we can't determine, fail-closed in plan (safer)
-        reply_json(res, 500, json{
-            {"ok", false},
-            {"error", "disk_in_use_check_failed"},
-            {"new_disk", new_disk},
-            {"detail", mpcheck}
-        }.dump());
-        return;
     }
 
     // Refuse adding the same disk the FS is already on (safety)
@@ -4477,10 +4642,10 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
     warnings.push_back("PLAN ONLY: commands are returned as strings; nothing is executed by this endpoint.");
 
     // Destructive prep (still plan-only)
-    commands.push_back("/usr/bin/sudo -n /usr/bin/sgdisk --zap-all " + sh_quote(new_disk));
-    commands.push_back("/usr/bin/sudo -n /usr/bin/wipefs -a " + sh_quote(new_disk));
-    commands.push_back("/usr/bin/sudo -n /usr/bin/sgdisk -n 1:0:0 -t 1:8300 -c 1:PQNAS_BTRFS " + sh_quote(new_disk));
-    commands.push_back("/usr/bin/sudo -n /usr/bin/partprobe " + sh_quote(new_disk));
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk --zap-all " + sh_quote(new_disk));
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(new_disk));
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk -n 1:0:0 -t 1:8300 -c 1:PQNAS_BTRFS " + sh_quote(new_disk));
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/partprobe " + sh_quote(new_disk));
 
     // Add device to existing filesystem
     commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs device add " + sh_quote(new_part) + " " + sh_quote(resolved_mount));
@@ -4497,9 +4662,396 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
     plan["commands"] = commands;
     plan["warnings"] = warnings;
 
+    // plan_id = sha256(joined commands)
+    {
+        const std::string joined = join_commands_for_hash(commands);
+        const std::string pid = sha256_hex_lower_evp(joined);
+        if (!pid.empty()) plan["plan_id"] = pid;
+    }
+
     reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
 });
 
+
+// ----- POST /api/v4/raid/execute/add-device (admin-only) ---------------------
+// Body: { mount, new_disk, mode:"single|raid1", force:bool, plan_id:string, dry_run?:bool, confirm?:bool }
+srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
+        return;
+    }
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    json in;
+    try { in = json::parse(req.body.empty() ? "{}" : req.body); }
+    catch (...) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+        return;
+    }
+
+    // Inputs
+    std::string mount    = in.value("mount", "");
+    std::string new_disk = in.value("new_disk", "");
+    std::string mode     = in.value("mode", "single"); // single|raid1
+    bool force           = in.value("force", false);
+
+    // Safety: default dry_run=true
+    bool dry_run = in.value("dry_run", true);
+    bool confirm = in.value("confirm", false);
+
+    const std::string client_plan_id = in.value("plan_id", "");
+
+    // Allowed_prefix + default mount
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+    if (mount.empty()) mount = allowed_prefix + "/data";
+
+    // Validate inputs
+    if (!is_abs_path_safe(mount)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_mount"}}.dump());
+        return;
+    }
+    if (!is_dev_path_basic_safe(new_disk)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_device"}, {"message","expected /dev/..."} }.dump());
+        return;
+    }
+    if (mode != "single" && mode != "raid1") {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message","mode must be single|raid1"} }.dump());
+        return;
+    }
+    if (client_plan_id.empty()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message","missing plan_id"} }.dump());
+        return;
+    }
+
+    // If not dry-run, require explicit confirm=true
+    if (!dry_run && !confirm) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "confirm_required"},
+            {"message", "set confirm=true when dry_run=false"}
+        }.dump());
+        return;
+    }
+
+    // Resolve mount -> resolved_mount / source / fstype
+    std::string target_out, fstype_out, source_out;
+    int ec_target = 0, ec_fs = 0, ec_src = 0;
+
+    const bool ok_target = run_cmd_capture(
+        "/usr/bin/findmnt -no TARGET --target " + sh_quote(mount), &target_out, &ec_target);
+    cap_string(target_out, 16 * 1024);
+    rtrim_inplace(target_out);
+
+    const bool ok_fs = run_cmd_capture(
+        "/usr/bin/findmnt -no FSTYPE --target " + sh_quote(mount), &fstype_out, &ec_fs);
+    cap_string(fstype_out, 16 * 1024);
+    rtrim_inplace(fstype_out);
+
+    const bool ok_src = run_cmd_capture(
+        "/usr/bin/findmnt -no SOURCE --target " + sh_quote(mount), &source_out, &ec_src);
+    cap_string(source_out, 16 * 1024);
+    rtrim_inplace(source_out);
+
+    if (!ok_target || ec_target != 0 || target_out.empty() ||
+        !ok_fs     || ec_fs     != 0 || fstype_out.empty() ||
+        !ok_src    || ec_src    != 0 || source_out.empty()) {
+
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "mount_not_found"},
+            {"mount", mount}
+        }.dump());
+        return;
+    }
+
+    const std::string resolved_mount  = target_out;
+    const std::string resolved_source = source_out;
+    const std::string resolved_disk   = parent_disk_from_dev(resolved_source);
+
+    // Allowlist on resolved mount
+    if (resolved_mount.rfind(allowed_prefix, 0) != 0) {
+        const std::string test_prefix  = "/srv/pqnas-test";
+        const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
+        if (resolved_mount.rfind(test_prefix, 0) != 0 && resolved_mount.rfind(test_prefix2, 0) != 0) {
+            reply_json(res, 200, json{
+                {"ok", false},
+                {"error", "mount_not_allowed"},
+                {"allowed_prefix", allowed_prefix},
+                {"resolved_mount", resolved_mount}
+            }.dump());
+            return;
+        }
+    }
+
+    if (fstype_out != "btrfs") {
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "not_btrfs"},
+            {"resolved_mount", resolved_mount},
+            {"fstype", fstype_out}
+        }.dump());
+        return;
+    }
+
+    // Load disks allowlist (inherits PQNAS_STORAGE_ALLOW_LOOP policy)
+    std::string raw_lsblk;
+    json disks_j = storage_list_disks_json(&raw_lsblk);
+    json by_path = disks_j.value("by_path", json::object());
+    json disks   = disks_j.value("disks", json::array());
+
+    if (!by_path.is_object() || !by_path.contains(new_disk)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "device_not_allowed"},
+            {"new_disk", new_disk}
+        }.dump());
+        return;
+    }
+
+    int disk_index = -1;
+    try { disk_index = by_path[new_disk].get<int>(); } catch (...) { disk_index = -1; }
+
+    if (disk_index < 0 || !disks.is_array() || disk_index >= (int)disks.size()) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "lsblk_index_error"}}.dump());
+        return;
+    }
+
+    json d = disks[disk_index];
+
+    // Hard-refuse disks that have ANY mountpoints anywhere (fail-closed even with force)
+    {
+        json mpcheck = lsblk_disk_mountpoints_json(new_disk);
+        if (mpcheck.value("ok", false) && mpcheck.contains("mountpoints") && mpcheck["mountpoints"].is_array()) {
+            if (!mpcheck["mountpoints"].empty()) {
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "disk_in_use"},
+                    {"new_disk", new_disk},
+                    {"disk_index", disk_index},
+                    {"model", d.value("model","")},
+                    {"serial", d.value("serial","")},
+                    {"mountpoints", mpcheck["mountpoints"]}
+                }.dump());
+                return;
+            }
+        } else {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "disk_in_use_check_failed"},
+                {"new_disk", new_disk},
+                {"detail", mpcheck}
+            }.dump());
+            return;
+        }
+    }
+
+    // Refuse adding the same disk the FS is already on (safety)
+    if (!resolved_disk.empty() && new_disk == resolved_disk) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "device_is_current_disk"},
+            {"resolved_disk", resolved_disk},
+            {"new_disk", new_disk}
+        }.dump());
+        return;
+    }
+
+    const int children = d.value("children", 0);
+    const uint64_t new_disk_size = d.value("size_bytes", (uint64_t)0);
+
+    // If disk has partitions: refuse unless force (strict default)
+    if (children > 0 && !force) {
+        json plan;
+        plan["mount"] = resolved_mount;
+        plan["new_disk"] = new_disk;
+        plan["new_disk_index"] = disk_index;
+        plan["new_disk_size_bytes"] = new_disk_size;
+        plan["mode"] = mode;
+        plan["force"] = force;
+        plan["requires_downtime"] = false;
+        plan["children"] = children;
+        plan["warnings"] = json::array({"new_disk_has_partitions", "refusing_to_execute_destructive_partitioning_without_force=true"});
+        reply_json(res, 200, json{{"ok", false}, {"error", "disk_not_empty"}, {"plan", plan}}.dump());
+        return;
+    }
+
+    const std::string new_part = part1_path_from_disk(new_disk);
+    if (new_part.empty()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_device"}}.dump());
+        return;
+    }
+
+    // -------- Build commands exactly like plan endpoint --------
+    json commands = json::array();
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk --zap-all " + sh_quote(new_disk));
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(new_disk));
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk -n 1:0:0 -t 1:8300 -c 1:PQNAS_BTRFS " + sh_quote(new_disk));
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/partprobe " + sh_quote(new_disk));
+    commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs device add " + sh_quote(new_part) + " " + sh_quote(resolved_mount));
+    if (mode == "raid1") {
+        commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs balance start -dconvert=raid1 -mconvert=raid1 " + sh_quote(resolved_mount));
+    }
+
+    // plan_id check (must match exactly)
+    const std::string joined = join_commands_for_hash(commands);
+    const std::string expected_plan_id = sha256_hex_lower_evp(joined);
+    if (expected_plan_id.empty()) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "plan_id_compute_failed"}}.dump());
+        return;
+    }
+    if (client_plan_id != expected_plan_id) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "plan_mismatch"},
+            {"message", "plan_id does not match server recomputed plan"},
+            {"expected_plan_id", expected_plan_id},
+            {"provided_plan_id", client_plan_id}
+        }.dump());
+        return;
+    }
+
+    // Preflight AFTER plan-id verification: if device already added, refuse replay (idempotent safety)
+    if (btrfs_filesystem_has_device(resolved_mount, new_part)) {
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "already_added"},
+            {"message", "device already present in filesystem; refusing to re-run destructive steps"},
+            {"mount", resolved_mount},
+            {"device", new_part},
+            {"plan_id", expected_plan_id}
+        }.dump());
+        return;
+    }
+
+    // Prepare response plan payload (for caller/UI)
+    json plan;
+    plan["plan_id"] = expected_plan_id;
+    plan["mount"] = resolved_mount;
+    plan["input_mount"] = mount;
+    plan["resolved_mount"] = resolved_mount;
+    plan["resolved_source"] = resolved_source;
+    plan["resolved_disk"] = resolved_disk;
+    plan["fstype"] = fstype_out;
+    plan["new_disk"] = new_disk;
+    plan["new_partition"] = new_part;
+    plan["new_disk_index"] = disk_index;
+    plan["new_disk_size_bytes"] = new_disk_size;
+    plan["mode"] = mode;
+    plan["force"] = force;
+    plan["requires_downtime"] = false;
+    plan["commands"] = commands;
+
+    if (dry_run) {
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"dry_run", true},
+            {"plan", plan}
+        }.dump());
+        return;
+    }
+
+    // Replay lock: refuse if already executed (best-effort, but fail-closed for safety)
+    {
+        std::error_code ec;
+        std::filesystem::create_directories("/run/pqnas/raid", ec);
+
+        const std::string lockp = raid_exec_lock_path(expected_plan_id);
+        if (file_exists(lockp)) {
+            reply_json(res, 200, json{
+                {"ok", false},
+                {"error", "already_executed"},
+                {"message", "this plan_id already has an execution record; refusing replay"},
+                {"plan_id", expected_plan_id},
+                {"path", lockp}
+            }.dump());
+            return;
+        }
+
+        json mark = {
+            {"ts", pqnas::now_iso_utc()},
+            {"plan_id", expected_plan_id},
+            {"mount", resolved_mount},
+            {"new_disk", new_disk},
+            {"new_partition", new_part},
+            {"mode", mode},
+            {"force", force},
+            {"state", "started"}
+        };
+
+        // fail-closed: if we cannot write the record, do not execute destructive steps
+        if (!write_text_file_atomic(lockp, mark.dump(2) + "\n")) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "exec_lock_write_failed"},
+                {"message", "failed to write execution record; refusing to execute"},
+                {"path", lockp}
+            }.dump());
+            return;
+        }
+    }
+
+    // -------- Execute commands (stop on first failure) --------
+    json results = json::array();
+    bool all_ok = true;
+
+    for (const auto& c : commands) {
+        if (!c.is_string()) continue;
+        const std::string cmd = c.get<std::string>();
+
+        std::string out;
+        int ec = 0;
+        const bool ok = run_cmd_capture(cmd + " 2>&1", &out, &ec);
+
+        cap_string(out, 128 * 1024);
+
+        results.push_back(json{
+            {"cmd", cmd},
+            {"rc", ec},          // "rc" = exit-code for UI consistency
+            {"ok", ok},
+            {"out", out}
+        });
+
+        if (!ok || ec != 0) { all_ok = false; break; }
+    }
+
+    json outj;
+    outj["ok"] = all_ok;
+    outj["dry_run"] = false;
+    outj["plan"] = plan;
+    outj["results"] = results;
+
+    // Update exec record (best-effort)
+    {
+        const std::string lockp = raid_exec_lock_path(expected_plan_id);
+        json mark = {
+            {"ts", pqnas::now_iso_utc()},
+            {"plan_id", expected_plan_id},
+            {"mount", resolved_mount},
+            {"new_disk", new_disk},
+            {"new_partition", new_part},
+            {"mode", mode},
+            {"force", force},
+            {"state", all_ok ? "done" : "failed"}
+        };
+        (void)write_text_file_atomic(lockp, mark.dump(2) + "\n");
+    }
+
+    // Optional: refresh status after successful run (best-effort)
+    if (all_ok) {
+        json status = storage_btrfs_status_json(resolved_mount);
+        status["input_mount"] = mount;
+        status["resolved_mount"] = resolved_mount;
+        status["resolved_source"] = resolved_source;
+        status["resolved_disk"] = resolved_disk;
+        status["fstype"] = fstype_out;
+        outj["post_status"] = status;
+    }
+
+    reply_json(res, 200, outj.dump());
+});
 
 
 // ----- GET /api/v4/raid/health?mount=/path (admin-only, read-only) -----------
