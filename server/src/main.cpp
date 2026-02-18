@@ -73,6 +73,7 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include <pwd.h>
 #include <cmath>
 #include <cerrno>
+#include <errno.h>
 
 extern "C" {
 #include "qrauth_v4.h"
@@ -1560,9 +1561,15 @@ static bool run_cmd_capture(const std::string& cmd, std::string* out, int* exit_
     if (out) out->clear();
     if (exit_code) *exit_code = 127; // default like "command failed"
 
-    FILE* fp = popen(cmd.c_str(), "r");
+    // Always capture stderr too.
+    std::string cmd2 = cmd;
+    if (cmd2.find("2>&1") == std::string::npos) {
+        cmd2 += " 2>&1";
+    }
+
+    FILE* fp = popen(cmd2.c_str(), "r");
     if (!fp) {
-        return false; // popen failed (couldn't even start shell)
+        return false; // popen failed
     }
 
     std::string s;
@@ -1578,7 +1585,6 @@ static bool run_cmd_capture(const std::string& cmd, std::string* out, int* exit_
     if (out) *out = s;
 
     if (rc == -1) {
-        // pclose/waitpid failed; we don't know exit status
         if (exit_code) *exit_code = 127;
         return false;
     }
@@ -1589,12 +1595,10 @@ static bool run_cmd_capture(const std::string& cmd, std::string* out, int* exit_
     }
 
     if (WIFSIGNALED(rc)) {
-        // mimic shell convention: 128 + signal number
         if (exit_code) *exit_code = 128 + WTERMSIG(rc);
         return true;
     }
 
-    // Other cases (stopped/continued) shouldn't normally happen here
     if (exit_code) *exit_code = 127;
     return false;
 }
@@ -1873,13 +1877,45 @@ static std::string join_commands_for_hash(const json& commands_arr) {
     }
     return s;
 }
+static bool read_text_file(const std::string& path, std::string* out) {
+    if (out) out->clear();
 
-static std::string raid_exec_lock_path(const std::string& plan_id) {
-    return "/run/pqnas/raid/exec_" + plan_id + ".json";
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+
+    constexpr size_t kMax = 16u * 1024u * 1024u; // 16 MiB hard cap
+
+    std::string s;
+    f.seekg(0, std::ios::end);
+    std::streampos n = f.tellg();
+
+    if (n > 0 && (size_t)n < kMax) {
+        s.resize((size_t)n);
+        f.seekg(0, std::ios::beg);
+        f.read(&s[0], (std::streamsize)s.size());
+        if (!f) return false;
+    } else {
+        f.clear();
+        f.seekg(0, std::ios::beg);
+        char buf[4096];
+        while (f) {
+            f.read(buf, sizeof(buf));
+            std::streamsize got = f.gcount();
+            if (got > 0) {
+                if (s.size() + (size_t)got > kMax) {
+                    s.append(buf, (size_t)(kMax - s.size()));
+                    break;
+                }
+                s.append(buf, (size_t)got);
+            }
+        }
+    }
+
+    if (out) *out = s;
+    return true;
 }
 
 static bool write_text_file_atomic(const std::string& path, const std::string& content) {
-    // naive atomic write: write to temp then rename
     const std::string tmp = path + ".tmp";
     std::ofstream f(tmp, std::ios::binary);
     if (!f) return false;
@@ -1895,18 +1931,13 @@ static bool write_text_file_atomic(const std::string& path, const std::string& c
     return true;
 }
 
-static bool file_exists(const std::string& path) {
-    std::error_code ec;
-    return std::filesystem::exists(path, ec);
-}
-
 // returns true if "btrfs filesystem show <mount>" mentions the given device path
 static bool btrfs_filesystem_has_device(const std::string& mount, const std::string& device_path) {
     std::string show;
     int ec = 0;
 
     const std::string cmd =
-        "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(mount) + " 2>&1";
+        "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(mount);
 
     const bool ok = run_cmd_capture(cmd, &show, &ec);
     cap_string(show, 256 * 1024);
@@ -2458,9 +2489,10 @@ static json storage_btrfs_status_json(const std::string& mountpoint) {
 
     // -n = non-interactive (fails fast if sudo not permitted)
     // Use full paths so sudoers rules can be tight.
-    const std::string cmd_show  = "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + mp + " 2>&1";
-    const std::string cmd_df    = "/usr/bin/sudo -n /usr/bin/btrfs filesystem df "   + mp + " 2>&1";
-    const std::string cmd_stats = "/usr/bin/sudo -n /usr/bin/btrfs device stats "    + mp + " 2>&1";
+    const std::string cmd_show  = "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + mp;
+    const std::string cmd_df    = "/usr/bin/sudo -n /usr/bin/btrfs filesystem df "   + mp;
+    const std::string cmd_stats = "/usr/bin/sudo -n /usr/bin/btrfs device stats "    + mp;
+
 
     int rc_show  = run_capture(cmd_show,  &show);
     int rc_df    = run_capture(cmd_df,    &df);
@@ -2859,8 +2891,85 @@ j["no_stats_available"] = has("no stats available");
     return j;
 }
 
-
 // ============================ RAID / Btrfs discovery helpers ============================
+
+static bool ensure_dir_fail_closed(const std::string& dir, std::string* err) {
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) {
+        if (err) *err = "create_directories failed: " + ec.message();
+        return false;
+    }
+
+    // Verify it exists and is a directory (fail-closed)
+    ec.clear();
+    const bool exists = std::filesystem::exists(dir, ec);
+    if (ec || !exists) {
+        if (err) *err = "dir does not exist after create_directories";
+        return false;
+    }
+
+    ec.clear();
+    const bool isdir = std::filesystem::is_directory(dir, ec);
+    if (ec || !isdir) {
+        if (err) *err = "path is not a directory";
+        return false;
+    }
+
+    return true;
+}
+
+static int open_excl_lockfile(const std::string& path, std::string* err) {
+    // O_EXCL is the lock. If it exists, someone already took it.
+    // Use a restrictive mode; sudoers/umask shouldn't matter for /run, but keep it tight.
+    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0640);
+    if (fd < 0) {
+        if (err) *err = std::string("open(O_EXCL) failed: ") + std::strerror(errno);
+        return -1;
+    }
+    return fd;
+}
+
+static bool write_fd_all(int fd, const std::string& s) {
+    const char* p = s.data();
+    size_t n = s.size();
+    while (n > 0) {
+        ssize_t w = ::write(fd, p, n);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        p += (size_t)w;
+        n -= (size_t)w;
+    }
+
+    // Best-effort flush; if it fails we still return false (caller may decide to fail-closed)
+    if (::fsync(fd) != 0) {
+        // Some filesystems may not support fsync meaningfully, but /run is typically tmpfs and should.
+        return false;
+    }
+    return true;
+}
+
+static std::string raid_exec_record_path(const std::string& plan_id) {
+    return std::string("/run/pqnas/raid/") + plan_id + ".json";
+}
+
+static std::string raid_mount_lock_path(const std::string& resolved_mount) {
+    const std::string h = sha256_hex_lower_evp(resolved_mount);
+    // Keep filename deterministic and safe even if hashing fails (shouldn't).
+    return std::string("/run/pqnas/raid/lock-mount-") + (h.empty() ? "bad" : h) + ".lock";
+}
+
+// Strict validator: 64 lowercase hex characters.
+static bool is_sha256_hex_lower(const std::string& s) {
+    if (s.size() != 64) return false;
+    for (char c : s) {
+        const bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+        if (!ok) return false;
+    }
+    return true;
+}
 
 static inline std::string trim_copy(std::string s) {
     // reuse your rtrim + simple ltrim
@@ -2941,7 +3050,7 @@ struct BtrfsShowParsed {
     std::vector<BtrfsShowDevice> devices;
 };
 
-static BtrfsShowParsed parse_btrfs_filesystem_show(const std::string& raw) {
+[[maybe_unused]] static BtrfsShowParsed parse_btrfs_filesystem_show(const std::string& raw) {
     // Parses output of: btrfs filesystem show <mount>
     // Best-effort; ignores unknown lines. Never throws.
     BtrfsShowParsed out;
@@ -3074,7 +3183,7 @@ static BtrfsShowParsed parse_btrfs_filesystem_show(const std::string& raw) {
     return out;
 }
 // Convert parsed show -> JSON object (UI-friendly)
-static json btrfs_show_parsed_to_json(const BtrfsShowParsed& p,
+[[maybe_unused]]static json btrfs_show_parsed_to_json(const BtrfsShowParsed& p,
                                      const json& by_path,
                                      const json& by_name) {
     json out;
@@ -3131,8 +3240,80 @@ static json btrfs_show_parsed_to_json(const BtrfsShowParsed& p,
     return out;
 }
 
+// ============================ GET /api/v4/raid/exec-record ============================
+// ---- forward decls (only needed if the implementations are below this block) ----
+static bool is_sha256_hex_lower(const std::string& s);
+static std::string raid_exec_record_path(const std::string& plan_id);
 
 
+
+
+static void raid_exec_record_append_step(json* rec,
+                                        int step_index_1based,
+                                        int step_total,
+                                        const std::string& cmd,
+                                        bool ok,
+                                        int rc,
+                                        const std::string& out) {
+    if (!rec || !rec->is_object()) return;
+
+    if (!rec->contains("results") || !(*rec)["results"].is_array()) {
+        (*rec)["results"] = json::array();
+    }
+
+    json row;
+    row["i"]   = step_index_1based - 1; // 0-based index for UI consistency
+    row["cmd"] = cmd;
+    row["ok"]  = ok;
+    row["rc"]  = rc;
+    row["out"] = out;
+
+    (*rec)["results"].push_back(row);
+
+    (*rec)["ts_last"]    = pqnas::now_iso_utc();
+    (*rec)["step_index"] = step_index_1based;
+    (*rec)["step_total"] = step_total;
+    (*rec)["busy"]       = true;
+    (*rec)["state"]      = "running";
+}
+
+static bool raid_exec_record_write_atomic(const std::string& plan_id, const json& rec) {
+    if (!is_sha256_hex_lower(plan_id)) return false;
+    const std::string path = raid_exec_record_path(plan_id);
+    return write_text_file_atomic(path, rec.dump(2) + "\n");
+}
+
+static bool raid_exec_record_read(const std::string& plan_id, json* out_rec, std::string* err) {
+    if (out_rec) *out_rec = json::object();
+    if (err) err->clear();
+
+    if (!is_sha256_hex_lower(plan_id)) {
+        if (err) *err = "bad plan_id";
+        return false;
+    }
+
+    const std::string path = raid_exec_record_path(plan_id);
+
+    std::string text;
+    if (!read_text_file(path, &text)) {
+        if (err) *err = "record_not_found";
+        return false;
+    }
+
+    cap_string(text, 1024 * 1024);
+
+    json j;
+    try {
+        j = json::parse(text.empty() ? "{}" : text);
+    } catch (...) {
+        if (err) *err = "record_parse_failed";
+        return false;
+    }
+
+    if (!j.is_object()) j = json::object();
+    if (out_rec) *out_rec = j;
+    return true;
+}
 // -----------------------------------------------------------------------------
 // main
 // -----------------------------------------------------------------------------
@@ -4237,6 +4418,79 @@ srv.Get("/api/v4/storage/overview", [&](const httplib::Request& req, httplib::Re
 
     reply_json(res, 200, out.dump());
 });
+
+
+// ----- GET /api/v4/raid/exec-record?plan_id=<sha256hex>[&full=1] (admin-only) -----
+// Default returns a polling-friendly summary. Add full=1 to return full record (including results[]).
+srv.Get("/api/v4/raid/exec-record", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "users_load_failed"},
+            {"path", users_path}
+        }.dump());
+        return;
+    }
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    const std::string plan_id = req.has_param("plan_id") ? req.get_param_value("plan_id") : "";
+    const bool full = req.has_param("full") && req.get_param_value("full") == "1";
+
+    if (plan_id.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing plan_id"}
+        }.dump());
+        return;
+    }
+    if (!is_sha256_hex_lower(plan_id)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "plan_id must be 64 lowercase hex chars"}
+        }.dump());
+        return;
+    }
+
+    json rec;
+    std::string err;
+    if (!raid_exec_record_read(plan_id, &rec, &err)) {
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", err.empty() ? "record_not_found" : err},
+            {"plan_id", plan_id}
+        }.dump());
+        return;
+    }
+
+    // Always include these fields for UI
+    json out = json::object();
+    out["ok"]       = true;
+    out["plan_id"]  = plan_id;
+    out["state"]    = rec.value("state", "unknown");
+    out["busy"]     = rec.value("busy", false);
+    out["step_index"] = rec.value("step_index", 0);
+    out["step_total"] = rec.value("step_total", 0);
+    out["ts_start"] = rec.value("ts_start", "");
+    out["ts_last"]  = rec.value("ts_last", "");
+    out["ts_end"]   = rec.value("ts_end", nullptr);
+
+    // Include plan always (small enough / useful)
+    if (rec.contains("plan")) out["plan"] = rec["plan"];
+
+    if (full) {
+        // Full payload for debugging
+        if (rec.contains("results")) out["results"] = rec["results"];
+        if (rec.contains("post_status")) out["post_status"] = rec["post_status"];
+        if (rec.contains("error")) out["error"] = rec["error"];
+    }
+
+    reply_json(res, 200, out.dump());
+});
+
 // ----- GET /api/v4/raid/discovery?mount=/path (admin-only, read-only) --------
 srv.Get("/api/v4/raid/discovery", [&](const httplib::Request& req, httplib::Response& res) {
     pqnas::UsersRegistry users;
@@ -4356,7 +4610,9 @@ srv.Get("/api/v4/raid/discovery", [&](const httplib::Request& req, httplib::Resp
 
     std::string show_raw;
     int ec_show = 0;
-    const bool ok_show = run_cmd_capture(cmd_show + " 2>&1", &show_raw, &ec_show);
+
+    // NOTE: stderr capture is now inside run_cmd_capture(); do NOT add "2>&1" here.
+    const bool ok_show = run_cmd_capture(cmd_show, &show_raw, &ec_show);
 
     cap_string(show_raw, 256 * 1024);
 
@@ -4441,7 +4697,7 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
     // Inputs
     std::string mount    = in.value("mount", "");
     std::string new_disk = in.value("new_disk", "");
-    std::string mode     = in.value("mode", "single");  // "single" or "raid1"
+    std::string mode     = in.value("mode", "single");  // single|raid1
     bool force           = in.value("force", false);
 
     // Allowed_prefix + default mount
@@ -4501,7 +4757,8 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
     if (resolved_mount.rfind(allowed_prefix, 0) != 0) {
         const std::string test_prefix  = "/srv/pqnas-test";
         const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
-        if (resolved_mount.rfind(test_prefix, 0) != 0 && resolved_mount.rfind(test_prefix2, 0) != 0) {
+        if (resolved_mount.rfind(test_prefix, 0) != 0 &&
+            resolved_mount.rfind(test_prefix2, 0) != 0) {
             reply_json(res, 200, json{
                 {"ok", false},
                 {"error", "mount_not_allowed"},
@@ -4520,6 +4777,19 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
             {"fstype", fstype_out}
         }.dump());
         return;
+    }
+
+    // Busy signal (per-mount lock). Plan is allowed while busy, but caller should see it.
+    bool busy = false;
+    std::string busy_lock;
+    {
+        const std::string lockp = raid_mount_lock_path(resolved_mount);
+        std::error_code ec;
+        const bool exists = std::filesystem::exists(lockp, ec);
+        if (!ec && exists) {
+            busy = true;
+            busy_lock = lockp;
+        }
     }
 
     // Load disks allowlist (inherits PQNAS_STORAGE_ALLOW_LOOP policy)
@@ -4548,7 +4818,6 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
     json d = disks[disk_index];
 
     // Hard-refuse disks that have ANY mountpoints anywhere (fail-closed even with force)
-    // This protects the OS disk where mountpoints live on child partitions (/, /boot/efi, etc.)
     {
         json mpcheck = lsblk_disk_mountpoints_json(new_disk);
         if (mpcheck.value("ok", false) && mpcheck.contains("mountpoints") && mpcheck["mountpoints"].is_array()) {
@@ -4565,7 +4834,6 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
                 return;
             }
         } else {
-            // If we can't determine, fail-closed in plan (safer)
             reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "disk_in_use_check_failed"},
@@ -4593,6 +4861,12 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
     // Build plan
     json plan;
     plan["mount"] = resolved_mount;
+    plan["input_mount"] = mount;
+    plan["resolved_mount"] = resolved_mount;
+    plan["resolved_source"] = resolved_source;
+    if (!resolved_disk.empty()) plan["resolved_disk"] = resolved_disk;
+    plan["fstype"] = fstype_out;
+
     plan["new_disk"] = new_disk;
     plan["new_disk_index"] = disk_index;
     plan["new_disk_size_bytes"] = new_disk_size;
@@ -4600,12 +4874,15 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
     plan["force"] = force;
     plan["requires_downtime"] = false;
 
+    // Busy surface
+    plan["busy"] = busy;
+    if (busy && !busy_lock.empty()) plan["busy_lock"] = busy_lock;
+
     json warnings = json::array();
     json steps = json::array();
     json commands = json::array();
 
     // If disk has partitions: refuse unless force (strict default)
-    // NOTE: "force" bypasses partitioned-disk refusal, but NOT disk-in-use.
     if (children > 0 && !force) {
         warnings.push_back("new_disk_has_partitions");
         warnings.push_back("refusing_to_plan_destructive_partitioning_without_force=true");
@@ -4633,6 +4910,10 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
     steps.push_back("Sanity-check: new_disk is allowlisted by lsblk and has no mounted partitions.");
     steps.push_back("Sanity-check: new_disk is not the current filesystem disk.");
 
+    if (busy) {
+        warnings.push_back("BUSY: another RAID operation is currently running for this mount; execute will likely return raid_busy until it finishes.");
+    }
+
     if (children > 0 && force) {
         warnings.push_back("DESTRUCTIVE: new_disk has existing partitions; plan includes wiping partition table and signatures.");
     } else {
@@ -4641,16 +4922,12 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
     warnings.push_back("Adding a device and converting profiles can take a long time; expect background IO (balance).");
     warnings.push_back("PLAN ONLY: commands are returned as strings; nothing is executed by this endpoint.");
 
-    // Destructive prep (still plan-only)
     commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk --zap-all " + sh_quote(new_disk));
     commands.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(new_disk));
     commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk -n 1:0:0 -t 1:8300 -c 1:PQNAS_BTRFS " + sh_quote(new_disk));
     commands.push_back("/usr/bin/sudo -n /usr/sbin/partprobe " + sh_quote(new_disk));
-
-    // Add device to existing filesystem
     commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs device add " + sh_quote(new_part) + " " + sh_quote(resolved_mount));
 
-    // Optional convert to RAID1 (data+metadata)
     if (mode == "raid1") {
         commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs balance start -dconvert=raid1 -mconvert=raid1 " + sh_quote(resolved_mount));
         steps.push_back("Convert data/metadata profiles to RAID1 via balance.");
@@ -4664,14 +4941,13 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
 
     // plan_id = sha256(joined commands)
     {
-        const std::string joined = join_commands_for_hash(commands);
-        const std::string pid = sha256_hex_lower_evp(joined);
+        const std::string joined2 = join_commands_for_hash(commands);
+        const std::string pid = sha256_hex_lower_evp(joined2);
         if (!pid.empty()) plan["plan_id"] = pid;
     }
 
     reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
 });
-
 
 // ----- POST /api/v4/raid/execute/add-device (admin-only) ---------------------
 // Body: { mount, new_disk, mode:"single|raid1", force:bool, plan_id:string, dry_run?:bool, confirm?:bool }
@@ -4864,17 +5140,17 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
 
     // If disk has partitions: refuse unless force (strict default)
     if (children > 0 && !force) {
-        json plan;
-        plan["mount"] = resolved_mount;
-        plan["new_disk"] = new_disk;
-        plan["new_disk_index"] = disk_index;
-        plan["new_disk_size_bytes"] = new_disk_size;
-        plan["mode"] = mode;
-        plan["force"] = force;
-        plan["requires_downtime"] = false;
-        plan["children"] = children;
-        plan["warnings"] = json::array({"new_disk_has_partitions", "refusing_to_execute_destructive_partitioning_without_force=true"});
-        reply_json(res, 200, json{{"ok", false}, {"error", "disk_not_empty"}, {"plan", plan}}.dump());
+        json plan_tmp;
+        plan_tmp["mount"] = resolved_mount;
+        plan_tmp["new_disk"] = new_disk;
+        plan_tmp["new_disk_index"] = disk_index;
+        plan_tmp["new_disk_size_bytes"] = new_disk_size;
+        plan_tmp["mode"] = mode;
+        plan_tmp["force"] = force;
+        plan_tmp["requires_downtime"] = false;
+        plan_tmp["children"] = children;
+        plan_tmp["warnings"] = json::array({"new_disk_has_partitions", "refusing_to_execute_destructive_partitioning_without_force=true"});
+        reply_json(res, 200, json{{"ok", false}, {"error", "disk_not_empty"}, {"plan", plan_tmp}}.dump());
         return;
     }
 
@@ -4913,19 +5189,6 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         return;
     }
 
-    // Preflight AFTER plan-id verification: if device already added, refuse replay (idempotent safety)
-    if (btrfs_filesystem_has_device(resolved_mount, new_part)) {
-        reply_json(res, 200, json{
-            {"ok", false},
-            {"error", "already_added"},
-            {"message", "device already present in filesystem; refusing to re-run destructive steps"},
-            {"mount", resolved_mount},
-            {"device", new_part},
-            {"plan_id", expected_plan_id}
-        }.dump());
-        return;
-    }
-
     // Prepare response plan payload (for caller/UI)
     json plan;
     plan["plan_id"] = expected_plan_id;
@@ -4944,6 +5207,29 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     plan["requires_downtime"] = false;
     plan["commands"] = commands;
 
+    // Preflight AFTER plan-id verification: if device already present, return idempotent success
+    if (btrfs_filesystem_has_device(resolved_mount, new_part)) {
+        json status = storage_btrfs_status_json(resolved_mount);
+        status["input_mount"] = mount;
+        status["resolved_mount"] = resolved_mount;
+        status["resolved_source"] = resolved_source;
+        status["resolved_disk"] = resolved_disk;
+        status["fstype"] = fstype_out;
+
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"dry_run", dry_run},
+            {"skipped", true},
+            {"skip_reason", "already_in_filesystem"},
+            {"mount", resolved_mount},
+            {"device", new_part},
+            {"plan_id", expected_plan_id},
+            {"plan", plan},
+            {"post_status", status}
+        }.dump());
+        return;
+    }
+
     if (dry_run) {
         reply_json(res, 200, json{
             {"ok", true},
@@ -4953,66 +5239,148 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         return;
     }
 
-    // Replay lock: refuse if already executed (best-effort, but fail-closed for safety)
-    {
-        std::error_code ec;
-        std::filesystem::create_directories("/run/pqnas/raid", ec);
+    // Locks + execution record (fail-closed)
+    int fd_mount_lock = -1;
+    int fd_plan_rec   = -1;
+    std::string mount_lockp;
+    std::string raid_dir_err;
 
-        const std::string lockp = raid_exec_lock_path(expected_plan_id);
-        if (file_exists(lockp)) {
+    const std::string recp = raid_exec_record_path(expected_plan_id);
+
+    auto close_locks = [&]() {
+        if (fd_plan_rec >= 0) { ::close(fd_plan_rec); fd_plan_rec = -1; }
+        if (fd_mount_lock >= 0) { ::close(fd_mount_lock); fd_mount_lock = -1; }
+        if (!mount_lockp.empty()) {
+            (void)std::filesystem::remove(mount_lockp); // lease
+        }
+    };
+
+    // Ensure state dir exists
+    if (!ensure_dir_fail_closed("/run/pqnas/raid", &raid_dir_err)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "raid_state_dir_failed"},
+            {"message", "cannot create/verify /run/pqnas/raid; refusing to execute"},
+            {"detail", raid_dir_err}
+        }.dump());
+        return;
+    }
+
+    // Acquire per-mount lock first
+    mount_lockp = raid_mount_lock_path(resolved_mount);
+    {
+        std::string mount_lock_err;
+        fd_mount_lock = open_excl_lockfile(mount_lockp, &mount_lock_err);
+        if (fd_mount_lock < 0) {
+            reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "raid_busy"},
+                {"message", "another raid operation is in progress for this mount"},
+                {"mount", resolved_mount},
+                {"path", mount_lockp},
+                {"detail", mount_lock_err}
+            }.dump());
+            return;
+        }
+    }
+
+    // Acquire per-plan execution record lock (replay protection)
+    {
+        std::string rec_err;
+        fd_plan_rec = open_excl_lockfile(recp, &rec_err);
+        if (fd_plan_rec < 0) {
+            close_locks();
             reply_json(res, 200, json{
                 {"ok", false},
                 {"error", "already_executed"},
                 {"message", "this plan_id already has an execution record; refusing replay"},
                 {"plan_id", expected_plan_id},
-                {"path", lockp}
+                {"path", recp},
+                {"detail", rec_err}
             }.dump());
             return;
         }
+    }
 
-        json mark = {
-            {"ts", pqnas::now_iso_utc()},
-            {"plan_id", expected_plan_id},
-            {"mount", resolved_mount},
-            {"new_disk", new_disk},
-            {"new_partition", new_part},
-            {"mode", mode},
-            {"force", force},
-            {"state", "started"}
-        };
+    // Initial record (fail-closed), then live-update via write_text_file_atomic(recp,...)
+    const std::string ts0 = pqnas::now_iso_utc();
+    json record = {
+        {"ts_start", ts0},
+        {"ts_last",  ts0},
+        {"ts_end",   nullptr},
 
-        // fail-closed: if we cannot write the record, do not execute destructive steps
-        if (!write_text_file_atomic(lockp, mark.dump(2) + "\n")) {
+        {"plan_id", expected_plan_id},
+        {"state", "running"},
+        {"busy", true},
+
+        {"mount", resolved_mount},
+        {"input_mount", mount},
+        {"resolved_source", resolved_source},
+        {"resolved_disk", resolved_disk},
+
+        {"new_disk", new_disk},
+        {"new_partition", new_part},
+        {"mode", mode},
+        {"force", force},
+        {"dry_run", false},
+
+        {"plan", plan},
+
+        {"commands", commands},
+        {"step_index", 0},
+        {"step_total", (int)commands.size()},
+        {"results", json::array()}
+    };
+
+    {
+        const std::string txt = record.dump(2) + "\n";
+        if (!write_fd_all(fd_plan_rec, txt)) {
+            const std::string err = std::string("write record failed: ") + std::strerror(errno);
+            close_locks();
             reply_json(res, 500, json{
                 {"ok", false},
-                {"error", "exec_lock_write_failed"},
+                {"error", "exec_record_write_failed"},
                 {"message", "failed to write execution record; refusing to execute"},
-                {"path", lockp}
+                {"detail", err}
             }.dump());
             return;
         }
+
+        // Close fd: existence of record file is the replay lock.
+        ::close(fd_plan_rec);
+        fd_plan_rec = -1;
     }
 
     // -------- Execute commands (stop on first failure) --------
     json results = json::array();
     bool all_ok = true;
 
-    for (const auto& c : commands) {
+    const int total = (int)commands.size();
+
+    for (int i = 0; i < total; i++) {
+        const auto& c = commands[i];
         if (!c.is_string()) continue;
         const std::string cmd = c.get<std::string>();
 
         std::string out;
         int ec = 0;
-        const bool ok = run_cmd_capture(cmd + " 2>&1", &out, &ec);
+        const bool ok = run_cmd_capture(cmd, &out, &ec);
 
         cap_string(out, 128 * 1024);
 
-        results.push_back(json{
+        json one = {
+            {"i", i},
             {"cmd", cmd},
-            {"rc", ec},          // "rc" = exit-code for UI consistency
+            {"rc", ec},
             {"ok", ok},
             {"out", out}
-        });
+        };
+        results.push_back(one);
+
+        raid_exec_record_append_step(&record, i + 1, total, cmd, ok, ec, out);
+        (void)raid_exec_record_write_atomic(expected_plan_id, record);
+
+
 
         if (!ok || ec != 0) { all_ok = false; break; }
     }
@@ -5023,23 +5391,14 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     outj["plan"] = plan;
     outj["results"] = results;
 
-    // Update exec record (best-effort)
-    {
-        const std::string lockp = raid_exec_lock_path(expected_plan_id);
-        json mark = {
-            {"ts", pqnas::now_iso_utc()},
-            {"plan_id", expected_plan_id},
-            {"mount", resolved_mount},
-            {"new_disk", new_disk},
-            {"new_partition", new_part},
-            {"mode", mode},
-            {"force", force},
-            {"state", all_ok ? "done" : "failed"}
-        };
-        (void)write_text_file_atomic(lockp, mark.dump(2) + "\n");
-    }
+    // Finalize record (+ post_status if ok)
+    const std::string ts_end = pqnas::now_iso_utc();
+    record["ts_end"]  = ts_end;
+    record["ts_last"] = ts_end;
+    record["busy"]    = false;
+    record["state"]   = all_ok ? "done" : "failed";
+    record["results"] = results;
 
-    // Optional: refresh status after successful run (best-effort)
     if (all_ok) {
         json status = storage_btrfs_status_json(resolved_mount);
         status["input_mount"] = mount;
@@ -5047,11 +5406,88 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         status["resolved_source"] = resolved_source;
         status["resolved_disk"] = resolved_disk;
         status["fstype"] = fstype_out;
+
+        record["post_status"] = status;
         outj["post_status"] = status;
     }
 
+    (void)write_text_file_atomic(recp, record.dump(2) + "\n");
+
+    close_locks();
     reply_json(res, 200, outj.dump());
 });
+
+
+// ----- GET /api/v4/raid/exec-record?plan_id=<sha256hex> (admin-only, read-only) -----
+// Reads /run/pqnas/raid/<plan_id>.json and returns it as JSON.
+srv.Get("/api/v4/raid/exec-record", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "users_load_failed"},
+            {"path", users_path}
+        }.dump());
+        return;
+    }
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    const std::string plan_id = req.has_param("plan_id") ? req.get_param_value("plan_id") : "";
+
+    if (plan_id.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing plan_id"}
+        }.dump());
+        return;
+    }
+
+    if (!is_sha256_hex_lower(plan_id)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "plan_id must be 64 lowercase hex chars"}
+        }.dump());
+        return;
+    }
+
+    const std::string path = raid_exec_record_path(plan_id);
+
+    std::string text;
+    if (!read_text_file(path, &text)) {
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "record_not_found"},
+            {"plan_id", plan_id}
+        }.dump());
+        return;
+    }
+
+    cap_string(text, 1024 * 1024); // 1 MiB cap for safety
+
+    json record;
+    try {
+        record = json::parse(text.empty() ? "{}" : text);
+    } catch (...) {
+        // Corrupt record file (or partial write etc.)
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "record_parse_failed"},
+            {"plan_id", plan_id}
+        }.dump());
+        return;
+    }
+
+    // Normalize response shape
+    if (!record.is_object()) record = json::object();
+    record["ok"] = true;
+    record["plan_id"] = plan_id;
+
+    reply_json(res, 200, record.dump());
+});
+
 
 
 // ----- GET /api/v4/raid/health?mount=/path (admin-only, read-only) -----------
@@ -5143,9 +5579,10 @@ srv.Get("/api/v4/raid/health", [&](const httplib::Request& req, httplib::Respons
 
     std::string dev_stats, scrub_status, balance_status;
 
-    const std::string cmd_dev_stats = "/usr/bin/sudo -n /usr/bin/btrfs device stats " + mp + " 2>&1";
-    const std::string cmd_scrub     = "/usr/bin/sudo -n /usr/bin/btrfs scrub status " + mp + " 2>&1";
-    const std::string cmd_balance   = "/usr/bin/sudo -n /usr/bin/btrfs balance status " + mp + " 2>&1";
+    const std::string cmd_dev_stats = "/usr/bin/sudo -n /usr/bin/btrfs device stats " + mp;
+    const std::string cmd_scrub     = "/usr/bin/sudo -n /usr/bin/btrfs scrub status " + mp;
+    const std::string cmd_balance   = "/usr/bin/sudo -n /usr/bin/btrfs balance status " + mp;
+
 
     int rc_dev_stats = run_capture(cmd_dev_stats, &dev_stats);
     int rc_scrub     = run_capture(cmd_scrub,     &scrub_status);

@@ -143,6 +143,11 @@ add_executable(pqnas_server
         server/src/verify_login_common.cc
 )
 
+# Treat warnings as errors for the server (security-sensitive)
+if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(pqnas_server PRIVATE -Werror)
+endif()
+
 target_include_directories(pqnas_server PRIVATE
         ${CMAKE_SOURCE_DIR}/core
         ${CMAKE_SOURCE_DIR}/server/include

@@ -13,12 +13,6 @@
 
 namespace pqnas {
 
-static std::string trim(const std::string& s) {
-    size_t a = 0, b = s.size();
-    while (a < b && std::isspace((unsigned char)s[a])) a++;
-    while (b > a && std::isspace((unsigned char)s[b - 1])) b--;
-    return s.substr(a, b - a);
-}
 
 static bool starts_with_path_prefix(const std::string& path, const std::string& prefix) {
     if (prefix.empty()) return false;
