@@ -71,6 +71,7 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include <random>
 #include <fcntl.h>
 #include <pwd.h>
+#include <cmath>
 
 extern "C" {
 #include "qrauth_v4.h"
@@ -1895,6 +1896,105 @@ static inline std::string jstr_cap(const json& o, const char* k, size_t max_len 
     return s;
 }
 
+static void lsblk_collect_mountpoints_recursive(const json& node, json* out_mps) {
+    if (!out_mps || !out_mps->is_array()) return;
+
+    auto push_mp = [&](const std::string& s_in) {
+        std::string s = s_in;
+        // trim minimal whitespace
+        while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) s.erase(s.begin());
+        while (!s.empty() && (s.back()  == ' ' || s.back()  == '\t' || s.back()  == '\r' || s.back()  == '\n')) s.pop_back();
+        if (!s.empty()) out_mps->push_back(s);
+    };
+
+    // mountpoints (array or string)
+    if (node.contains("mountpoints")) {
+        const auto& mp = node["mountpoints"];
+        if (mp.is_array()) {
+            for (const auto& x : mp) {
+                if (x.is_string()) {
+                    push_mp(x.get<std::string>());
+                }
+                // ignore null/other types
+            }
+        } else if (mp.is_string()) {
+            push_mp(mp.get<std::string>());
+        }
+    } else if (node.contains("mountpoint") && node["mountpoint"].is_string()) {
+        push_mp(node["mountpoint"].get<std::string>());
+    }
+
+    if (node.contains("children") && node["children"].is_array()) {
+        for (const auto& ch : node["children"]) {
+            lsblk_collect_mountpoints_recursive(ch, out_mps);
+        }
+    }
+}
+
+
+// Returns ok=true and list of mountpoints for any descendants of a disk.
+// Uses full path /usr/bin/lsblk for consistency with your other code.
+static json lsblk_disk_mountpoints_json(const std::string& disk_path) {
+    json out;
+    out["ok"] = false;
+    out["disk"] = disk_path;
+
+    std::string raw;
+    int rc = run_capture("/usr/bin/lsblk -J -b -O " + sh_quote(disk_path) + " 2>/dev/null", &raw);
+
+    out["rc"] = rc;
+
+    if (rc != 0 || raw.empty()) {
+        out["error"] = "lsblk_failed";
+        std::string raw_cap = raw;
+        cap_string(raw_cap, 64 * 1024); // only for error/debug payload
+        out["raw"] = raw_cap;
+        return out;
+    }
+
+    // Safety: lsblk for a single disk should be small. If it's unexpectedly huge,
+    // fail-closed rather than truncating JSON and mis-parsing.
+    if (raw.size() > 2 * 1024 * 1024) { // 2 MiB
+        out["error"] = "lsblk_too_large";
+        out["raw_bytes"] = (uint64_t)raw.size();
+        return out;
+    }
+
+    json root;
+    try { root = json::parse(raw); }
+    catch (...) {
+        out["error"] = "lsblk_parse_failed";
+        std::string raw_cap = raw;
+        cap_string(raw_cap, 64 * 1024); // only for error/debug payload
+        out["raw"] = raw_cap;
+        return out;
+    }
+
+    json mps = json::array();
+
+    if (root.contains("blockdevices") && root["blockdevices"].is_array()) {
+        for (const auto& bd : root["blockdevices"]) {
+            // Disk node + descendants
+            lsblk_collect_mountpoints_recursive(bd, &mps);
+        }
+    }
+
+    // de-dup mountpoints (stable-ish order: first occurrence wins)
+    std::set<std::string> seen;
+    json uniq = json::array();
+    for (const auto& x : mps) {
+        if (!x.is_string()) continue;
+        std::string s = x.get<std::string>();
+        if (s.empty()) continue;
+        if (seen.insert(s).second) uniq.push_back(s);
+    }
+
+    out["ok"] = true;
+    out["mountpoints"] = uniq;
+    return out;
+}
+
+
 // Convert lsblk JSON into a safer, smaller disk list.
 // - keeps only TYPE=="disk"
 // - by default excludes /dev/loop* (snap loops), unless PQNAS_STORAGE_ALLOW_LOOP=1
@@ -1935,7 +2035,11 @@ static json storage_list_disks_json(std::string* raw_lsblk_json_out = nullptr) {
     for (const auto& d : root["blockdevices"]) {
         // type
         const std::string type = d.value("type", "");
-        if (type != "disk") continue;
+        if (type != "disk") {
+            // Allow loop devices only when explicitly enabled (dev/testing)
+            if (!(allow_loop && type == "loop")) continue;
+        }
+
 
         std::string name = d.value("name", "");
         if (name.size() > 256) name.resize(256);
@@ -2107,6 +2211,26 @@ static inline std::string parent_disk_from_dev(const std::string& dev) {
     return dev;
 }
 
+// Helper: compute partition path for a whole-disk device (/dev/nvmeXnY -> /dev/nvmeXnYp1, /dev/sdX -> /dev/sdX1)
+static std::string part1_path_from_disk(const std::string& disk) {
+    if (disk.rfind("/dev/", 0) != 0) return "";
+    if (disk.find("/dev/nvme") == 0)   return disk + "p1";
+    if (disk.find("/dev/mmcblk") == 0) return disk + "p1";
+    if (disk.find("/dev/loop") == 0)   return disk + "p1";
+    return disk + "1";
+}
+
+
+// Very small validator: require /dev/... and no whitespace
+static bool is_dev_path_basic_safe(const std::string& s) {
+    if (s.rfind("/dev/", 0) != 0) return false;
+    for (char c : s) {
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') return false;
+    }
+    if (s.find("..") != std::string::npos) return false;
+    return true;
+}
+
 // Parse a "btrfs filesystem df" line like:
 // "Data, single: total=2.01GiB, used=19.12MiB"
 // Returns true and fills (name, total_bytes, used_bytes) on success.
@@ -2162,6 +2286,16 @@ static inline bool parse_btrfs_df_line(const std::string& line,
     if (out_used_str) *out_used_str = used_tok;
     return true;
 }
+
+// Round double to N decimal places (safe, deterministic)
+static inline double round_dp(double value, int decimals) {
+    if (decimals <= 0) {
+        return std::round(value);
+    }
+    const double scale = std::pow(10.0, decimals);
+    return std::round(value * scale) / scale;
+}
+
 
 static json storage_btrfs_status_json(const std::string& mountpoint) {
     json j;
@@ -2222,7 +2356,6 @@ static json storage_btrfs_status_json(const std::string& mountpoint) {
 
     // Always include for stable schema (may be empty)
     j["df_summary"] = df_summary;
-
     j["rc_show"]  = rc_show;
     j["rc_df"]    = rc_df;
     j["rc_stats"] = rc_stats;
@@ -2371,7 +2504,62 @@ static json storage_btrfs_status_json(const std::string& mountpoint) {
     // Always include summary for stable schema (may be empty if parsing failed)
     j["summary"] = summary;
 
+    // ---- usage percent (UI-friendly) ----
+    // Prefer filesystem-used vs device-size from the parsed "summary".
+    json usage = json::object();
 
+    // overall: FS bytes used / device size
+    if (j.contains("summary") && j["summary"].is_object()) {
+        const auto& s = j["summary"];
+        if (s.contains("fs_bytes_used_bytes") && s.contains("device_size_bytes") &&
+            s["fs_bytes_used_bytes"].is_number_unsigned() &&
+            s["device_size_bytes"].is_number_unsigned()) {
+
+            const double used = (double)s["fs_bytes_used_bytes"].get<uint64_t>();
+            const double size = (double)s["device_size_bytes"].get<uint64_t>();
+            if (size > 0.0) {
+                double pct = (used * 100.0) / size;
+                if (pct < 0.0) pct = 0.0;
+                if (pct > 100.0) pct = 100.0;
+
+                usage["used_bytes"] = (uint64_t)used;
+                usage["size_bytes"] = (uint64_t)size;
+                usage["used_percent"] = pct;
+                usage["used_percent_1dp"] = round_dp(pct, 1);
+                usage["used_percent_int"] = (int)std::round(pct);
+
+            }
+            }
+    }
+
+    // data profile: df_summary["Data"] used/total (optional, but useful)
+    if (j.contains("df_summary") && j["df_summary"].is_object()) {
+        const auto& ds = j["df_summary"];
+        if (ds.contains("Data") && ds["Data"].is_object()) {
+            const auto& d = ds["Data"];
+            if (d.contains("used_bytes") && d.contains("total_bytes") &&
+                d["used_bytes"].is_number_unsigned() &&
+                d["total_bytes"].is_number_unsigned()) {
+
+                const double used = (double)d["used_bytes"].get<uint64_t>();
+                const double total = (double)d["total_bytes"].get<uint64_t>();
+                if (total > 0.0) {
+                    double pct = (used * 100.0) / total;
+                    if (pct < 0.0) pct = 0.0;
+                    if (pct > 100.0) pct = 100.0;
+
+                    usage["data_used_bytes"] = (uint64_t)used;
+                    usage["data_total_bytes"] = (uint64_t)total;
+                    usage["data_used_percent"] = pct;
+                    usage["data_used_percent_1dp"] = round_dp(pct, 1);
+                    usage["data_used_percent_int"] = (int)std::round(pct);
+
+                }
+                }
+        }
+    }
+
+    j["usage"] = usage;
     // ---- ok/error classification (fail-closed for "ok") ----
     if (rc_show != 0 || rc_df != 0 || rc_stats != 0) {
         j["ok"] = false;
@@ -2391,7 +2579,399 @@ static json storage_btrfs_status_json(const std::string& mountpoint) {
     return j;
 }
 
+static inline std::string pqnas_trim_copy(std::string s) {
+    rtrim_inplace(s);
+    size_t i = 0;
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) i++;
+    if (i > 0) s.erase(0, i);
+    return s;
+}
 
+static uint64_t parse_btrfs_human_bytes_to_u64(const std::string& s_in);
+
+static json parse_btrfs_scrub_status_best_effort(const std::string& raw) {
+    // Best-effort only. We do NOT assume exact formatting across btrfs-progs versions.
+    // Typical outputs:
+    // - "scrub status for <mp>\nno stats available\n" (never run)
+    // - "scrub status for <mp>\nscrub started at ...\nstatus: running\n..."
+    // - "scrub status for <mp>\nscrub started at ...\nscrub done at ...\nstatus: finished\nerrors: 0\n..."
+    json j = json::object();
+    j["raw"] = raw;
+
+    const std::string s = raw; // already capped by caller
+
+    auto has = [&](const char* needle)->bool{ return str_contains(s, needle); };
+
+    // running/finished hints
+    bool running = false;
+    bool finished = false;
+
+    // Common keywords
+    if (has("status: running") || (has("running") && has("scrub started"))) running = true;
+    if (has("status: finished") || (has("finished") && has("scrub started"))) finished = true;
+
+
+    // "no stats available" usually means never run (idle)
+    bool no_stats = has("no stats available");
+
+    std::string state = "unknown";
+    if (running) state = "running";
+    else if (finished) state = "finished";
+    else if (no_stats) state = "never";
+    else if (has("scrub started") || has("scrub done")) state = "idle"; // ran before but not running now
+
+    j["state"] = state;
+    j["running"] = running;
+
+    // Parse "errors: N" if present
+    {
+        const std::string key = "errors:";
+        size_t p = s.find(key);
+        if (p != std::string::npos) {
+            p += key.size();
+            while (p < s.size() && (s[p] == ' ' || s[p] == '\t')) p++;
+            size_t p2 = p;
+            while (p2 < s.size() && (s[p2] >= '0' && s[p2] <= '9')) p2++;
+            if (p2 > p) {
+                j["errors"] = std::atoi(s.substr(p, p2 - p).c_str());
+            }
+        }
+    }
+// UUID:
+{
+    const std::string key = "UUID:";
+    size_t p = s.find(key);
+    if (p != std::string::npos) {
+        size_t a = p + key.size();
+        while (a < s.size() && (s[a] == ' ' || s[a] == '\t')) a++;
+        size_t b = a;
+        while (b < s.size() && s[b] != '\n' && s[b] != '\r') b++;
+        if (b > a) j["uuid"] = pqnas_trim_copy(s.substr(a, b - a));
+    }
+}
+
+// no stats available
+j["no_stats_available"] = has("no stats available");
+
+// Total to scrub:
+{
+    const std::string key = "Total to scrub:";
+    size_t p = s.find(key);
+    if (p != std::string::npos) {
+        size_t a = p + key.size();
+        while (a < s.size() && (s[a] == ' ' || s[a] == '\t')) a++;
+        size_t b = a;
+        while (b < s.size() && s[b] != '\n' && s[b] != '\r') b++;
+        if (b > a) {
+            std::string tok = pqnas_trim_copy(s.substr(a, b - a));
+            j["total_to_scrub"] = tok;
+            uint64_t bytes = parse_btrfs_human_bytes_to_u64(tok);
+            if (bytes) j["total_to_scrub_bytes"] = bytes;
+        }
+    }
+}
+
+// Rate:
+{
+    const std::string key = "Rate:";
+    size_t p = s.find(key);
+    if (p != std::string::npos) {
+        size_t a = p + key.size();
+        while (a < s.size() && (s[a] == ' ' || s[a] == '\t')) a++;
+        size_t b = a;
+        while (b < s.size() && s[b] != '\n' && s[b] != '\r') b++;
+        if (b > a) {
+            std::string tok = pqnas_trim_copy(s.substr(a, b - a));
+            j["rate"] = tok; // e.g. "0.00B/s"
+            // parse "XUNIT/s"
+            if (tok.size() > 2 && tok.rfind("/s") == tok.size() - 2) {
+                std::string numu = tok.substr(0, tok.size() - 2);
+                uint64_t bps = parse_btrfs_human_bytes_to_u64(numu);
+                j["rate_bps"] = bps;
+            }
+        }
+    }
+}
+
+// Error summary:
+{
+    const std::string key = "Error summary:";
+    size_t p = s.find(key);
+    if (p != std::string::npos) {
+        size_t a = p + key.size();
+        while (a < s.size() && (s[a] == ' ' || s[a] == '\t')) a++;
+        size_t b = a;
+        while (b < s.size() && s[b] != '\n' && s[b] != '\r') b++;
+        if (b > a) j["error_summary"] = pqnas_trim_copy(s.substr(a, b - a));
+    }
+}
+
+    return j;
+}
+
+
+// ============================ RAID / Btrfs discovery helpers ============================
+
+static inline std::string trim_copy(std::string s) {
+    // reuse your rtrim + simple ltrim
+    rtrim_inplace(s);
+    size_t i = 0;
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) i++;
+    if (i > 0) s.erase(0, i);
+    return s;
+}
+
+static uint64_t parse_btrfs_human_bytes_to_u64(const std::string& s_in) {
+    // Best-effort parser for tokens like "123.45GiB", "931.51MiB", "1024.00KiB", "123B"
+    // Returns 0 on failure. Never throws.
+    std::string s = trim_copy(s_in);
+    if (s.empty()) return 0;
+
+    // Split numeric prefix and unit suffix
+    size_t i = 0;
+    bool seen_digit = false;
+    while (i < s.size()) {
+        const char c = s[i];
+        if ((c >= '0' && c <= '9') || c == '.') { seen_digit = true; i++; continue; }
+        break;
+    }
+    if (!seen_digit) return 0;
+
+    std::string num = s.substr(0, i);
+    std::string unit = trim_copy(s.substr(i));
+
+    // If unit is empty, assume bytes
+    if (unit.empty()) unit = "B";
+
+    // Normalize unit (strip spaces)
+    {
+        std::string u2;
+        for (char c : unit) if (c != ' ' && c != '\t') u2.push_back(c);
+        unit = u2;
+    }
+
+    double val = 0.0;
+    try {
+        val = std::stod(num);
+    } catch (...) {
+        return 0;
+    }
+
+    uint64_t mul = 1;
+    if (unit == "B") mul = 1ULL;
+    else if (unit == "KiB") mul = 1024ULL;
+    else if (unit == "MiB") mul = 1024ULL * 1024ULL;
+    else if (unit == "GiB") mul = 1024ULL * 1024ULL * 1024ULL;
+    else if (unit == "TiB") mul = 1024ULL * 1024ULL * 1024ULL * 1024ULL;
+    else if (unit == "PiB") mul = 1024ULL * 1024ULL * 1024ULL * 1024ULL * 1024ULL;
+    else {
+        // Unknown unit -> fail safe
+        return 0;
+    }
+
+    const long double bytes_ld = (long double)val * (long double)mul;
+    if (bytes_ld <= 0.0L) return 0;
+    if (bytes_ld > (long double)std::numeric_limits<uint64_t>::max()) return 0;
+    return (uint64_t)(bytes_ld + 0.5L); // round to nearest
+}
+
+struct BtrfsShowDevice {
+    int devid = -1;
+    std::string path;           // capped
+    uint64_t size_bytes = 0;
+    uint64_t used_bytes = 0;
+    std::string parent_disk;    // derived (e.g. /dev/nvme0n1)
+};
+
+struct BtrfsShowParsed {
+    std::string label;          // capped
+    std::string uuid;           // capped
+    int total_devices = -1;
+    uint64_t fs_bytes_used_bytes = 0;
+    std::vector<BtrfsShowDevice> devices;
+};
+
+static BtrfsShowParsed parse_btrfs_filesystem_show(const std::string& raw) {
+    // Parses output of: btrfs filesystem show <mount>
+    // Best-effort; ignores unknown lines. Never throws.
+    BtrfsShowParsed out;
+
+    std::istringstream iss(raw);
+    std::string line;
+
+    while (std::getline(iss, line)) {
+        rtrim_inplace(line);
+
+        // IMPORTANT: btrfs show output is often tab-indented.
+        // Use a trimmed copy for matching/parsing.
+        std::string tline = trim_copy(line);
+        if (tline.empty()) continue;
+
+        // Example header line:
+        // Label: 'pqnas'  uuid: <uuid>
+        if (tline.rfind("Label:", 0) == 0) {
+            // use tline everywhere below in this block
+            const size_t pos_uuid = tline.find("uuid:");
+            std::string left  = (pos_uuid == std::string::npos) ? tline : tline.substr(0, pos_uuid);
+            std::string right = (pos_uuid == std::string::npos) ? ""    : tline.substr(pos_uuid);
+
+            // Extract label from left side
+            // left like: "Label: 'pqnas'  "
+            std::string lbl = left;
+            // remove "Label:"
+            if (lbl.rfind("Label:", 0) == 0) lbl.erase(0, std::string("Label:").size());
+            lbl = trim_copy(lbl);
+            // strip surrounding quotes if present
+            if (!lbl.empty() && (lbl.front() == '\'' || lbl.front() == '"')) {
+                char q = lbl.front();
+                if (lbl.size() >= 2 && lbl.back() == q) {
+                    lbl = lbl.substr(1, lbl.size() - 2);
+                } else {
+                    lbl.erase(0, 1);
+                }
+            }
+            cap_string(lbl, 256);
+            out.label = lbl;
+
+            // Extract uuid from right side
+            // right like: "uuid: XXXXX"
+            if (!right.empty()) {
+                std::string uu = right;
+                const size_t p = uu.find("uuid:");
+                if (p != std::string::npos) uu.erase(0, p + 5);
+                uu = trim_copy(uu);
+                cap_string(uu, 256);
+                out.uuid = uu;
+            }
+            continue;
+        }
+
+	// Example:
+	// Total devices 2 FS bytes used 123.45GiB
+	if (tline.rfind("Total devices", 0) == 0) {
+	    // total_devices: token 3
+    	{
+        	std::istringstream t(tline);
+        	std::string tok;
+	        t >> tok; // Total
+    	    t >> tok; // devices
+        	int n = -1;
+	        if (t >> n) out.total_devices = n;
+    	}
+
+	    // robust: locate "FS bytes used" then parse the following token
+    	const std::string key = "FS bytes used";
+	    const size_t k = tline.find(key);
+    	if (k != std::string::npos) {
+        	std::string rest = tline.substr(k + key.size());
+	        rest = trim_copy(rest);
+    	    // next token
+        	std::string tok;
+	        {
+    	        std::istringstream t2(rest);
+        	    t2 >> tok;
+	        }
+    	    // strip trailing punctuation that sometimes appears
+        	while (!tok.empty()) {
+            	char c = tok.back();
+	            if (c == ',' || c == ')' || c == ';') tok.pop_back();
+    	        else break;
+        	}
+	        out.fs_bytes_used_bytes = parse_btrfs_human_bytes_to_u64(tok);
+    	}
+    	continue;
+	}
+
+
+        // Example device line:
+        // devid    1 size 931.51GiB used 120.03GiB path /dev/nvme0n1p1
+        if (tline.find("devid") != std::string::npos && tline.find(" path ") != std::string::npos) {
+            std::istringstream t(tline);
+            std::string tok;
+            BtrfsShowDevice dev;
+
+            while (t >> tok) {
+                if (tok == "devid") {
+                    int id = -1;
+                    if (t >> id) dev.devid = id;
+                } else if (tok == "size") {
+                    std::string x; if (t >> x) dev.size_bytes = parse_btrfs_human_bytes_to_u64(x);
+                } else if (tok == "used") {
+                    std::string x; if (t >> x) dev.used_bytes = parse_btrfs_human_bytes_to_u64(x);
+                } else if (tok == "path") {
+                    std::string p; if (t >> p) {
+                        // Only accept /dev/... paths (fail-safe)
+                        if (p.rfind("/dev/", 0) == 0) {
+                            cap_string(p, 256);
+                            dev.path = p;
+                            dev.parent_disk = parent_disk_from_dev(p);
+                            if (!dev.parent_disk.empty()) cap_string(dev.parent_disk, 256);
+                        }
+                    }
+                }
+            }
+
+            if (dev.devid >= 0 && !dev.path.empty()) {
+                out.devices.push_back(dev);
+            }
+            continue;
+        }
+    }
+
+    // Safety cap: don't allow pathological outputs to create huge JSON
+    if (out.devices.size() > 128) out.devices.resize(128);
+
+    return out;
+}
+
+// Convert parsed show -> JSON object (UI-friendly)
+static json btrfs_show_parsed_to_json(const BtrfsShowParsed& p,
+                                     const json& by_path,
+                                     const json& by_name) {
+    json out;
+    out["label"] = p.label;
+    out["uuid"]  = p.uuid;
+    if (p.total_devices >= 0) out["total_devices"] = p.total_devices;
+    out["fs_bytes_used_bytes"] = p.fs_bytes_used_bytes;
+
+    json devices = json::array();
+    for (const auto& d : p.devices) {
+        json jd;
+        jd["devid"]      = d.devid;
+        jd["path"]       = d.path;
+        jd["size_bytes"] = d.size_bytes;
+        jd["used_bytes"] = d.used_bytes;
+        if (!d.parent_disk.empty()) jd["parent_disk"] = d.parent_disk;
+
+        // Best-effort mapping to lsblk disk index
+        int idx = -1;
+
+        if (!d.parent_disk.empty() && by_path.is_object()) {
+            auto it = by_path.find(d.parent_disk);
+            if (it != by_path.end() && it->is_number_integer()) {
+                idx = it->get<int>();
+            }
+        }
+        if (idx < 0 && !d.parent_disk.empty() && by_name.is_object()) {
+            // try basename: /dev/nvme0n1 -> nvme0n1
+            std::string name = d.parent_disk;
+            const size_t slash = name.rfind('/');
+            if (slash != std::string::npos) name = name.substr(slash + 1);
+
+            auto it2 = by_name.find(name);
+            if (it2 != by_name.end() && it2->is_number_integer()) {
+                idx = it2->get<int>();
+            }
+        }
+
+        if (idx >= 0) jd["lsblk_disk_index"] = idx;
+
+        devices.push_back(jd);
+    }
+    out["devices"] = devices;
+
+    return out;
+}
 
 
 
@@ -3500,6 +4080,561 @@ srv.Get("/api/v4/storage/overview", [&](const httplib::Request& req, httplib::Re
     reply_json(res, 200, out.dump());
 });
 
+// ----- GET /api/v4/raid/discovery?mount=/path (admin-only, read-only) --------
+srv.Get("/api/v4/raid/discovery", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "users_load_failed"},
+            {"path", users_path}
+        }.dump());
+        return;
+    }
+
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    // -------------------- disks (always returned) --------------------
+    std::string raw_lsblk;
+    json disks_j = storage_list_disks_json(&raw_lsblk);
+
+    // -------------------- mount selection --------------------
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+
+    std::string mount = allowed_prefix + "/data";
+    if (req.has_param("mount")) mount = req.get_param_value("mount");
+
+    json out;
+    out["ok"] = false;
+
+    out["input_mount"] = mount;
+    out["allowed_prefix"] = allowed_prefix;
+
+    out["disks"]   = disks_j.value("disks", json::array());
+    out["by_path"] = disks_j.value("by_path", json::object());
+    out["by_name"] = disks_j.value("by_name", json::object());
+
+    // Optional debug raw lsblk at top level
+    if (getenv_bool("PQNAS_STORAGE_DEBUG_LSBLK", false)) {
+        cap_string(raw_lsblk, 1024 * 1024);
+        out["lsblk_raw"] = raw_lsblk;
+    }
+
+    // -------------------- input validation --------------------
+    if (!is_abs_path_safe(mount)) {
+        out["error"] = "bad_mount";
+        reply_json(res, 400, out.dump());
+        return;
+    }
+
+    // -------------------- resolve mountpoint, fstype, source --------------------
+    std::string target_out, fstype_out, source_out;
+
+    int rc_target = run_capture(
+        "/usr/bin/findmnt -no TARGET --target " + sh_quote(mount),
+        &target_out
+    );
+    cap_string(target_out, 16 * 1024);
+    rtrim_inplace(target_out);
+
+    int rc_fs = run_capture(
+        "/usr/bin/findmnt -no FSTYPE --target " + sh_quote(mount),
+        &fstype_out
+    );
+    cap_string(fstype_out, 16 * 1024);
+    rtrim_inplace(fstype_out);
+
+    int rc_src = run_capture(
+        "/usr/bin/findmnt -no SOURCE --target " + sh_quote(mount),
+        &source_out
+    );
+    cap_string(source_out, 16 * 1024);
+    rtrim_inplace(source_out);
+
+    if (rc_target != 0 || target_out.empty() ||
+        rc_fs != 0 || fstype_out.empty() ||
+        rc_src != 0 || source_out.empty()) {
+
+        out["error"] = "mount_not_found";
+        reply_json(res, 200, out.dump());
+        return;
+    }
+
+    const std::string resolved_mount  = target_out;
+    const std::string resolved_source = source_out;
+    const std::string resolved_disk   = parent_disk_from_dev(resolved_source);
+
+    out["resolved_mount"]  = resolved_mount;
+    out["resolved_source"] = resolved_source;
+    if (!resolved_disk.empty()) out["resolved_disk"] = resolved_disk;
+    out["fstype"]          = fstype_out;
+
+    // -------------------- allowlist enforcement --------------------
+    if (resolved_mount.rfind(allowed_prefix, 0) != 0) {
+        const std::string test_prefix  = "/srv/pqnas-test";
+        const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
+
+        if (resolved_mount.rfind(test_prefix, 0) != 0 &&
+            resolved_mount.rfind(test_prefix2, 0) != 0) {
+
+            out["error"] = "mount_not_allowed";
+            reply_json(res, 200, out.dump());
+            return;
+        }
+    }
+
+    // -------------------- non-btrfs case --------------------
+    if (fstype_out != "btrfs") {
+        out["error"] = "not_btrfs";
+        reply_json(res, 200, out.dump());
+        return;
+    }
+
+    // -------------------- btrfs filesystem show (read-only) --------------------
+    const std::string cmd_show = "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(resolved_mount);
+    std::string show_raw;
+    int rc_show = run_capture(cmd_show, &show_raw);
+
+    // cap raw early; we might optionally return it
+    cap_string(show_raw, 256 * 1024);
+
+    if (rc_show != 0 || show_raw.empty()) {
+        out["error"] = "btrfs_show_failed";
+        out["btrfs_show_rc"] = rc_show;
+
+        if (getenv_bool("PQNAS_RAID_DEBUG_SHOW", false)) {
+            cap_string(show_raw, 1024 * 1024);
+            out["btrfs_show_raw"] = show_raw;
+        }
+
+        reply_json(res, 200, out.dump());
+        return;
+    }
+
+    BtrfsShowParsed parsed = parse_btrfs_filesystem_show(show_raw);
+
+    json by_path = out.value("by_path", json::object());
+    json by_name = out.value("by_name", json::object());
+
+    json btrfs_j = btrfs_show_parsed_to_json(parsed, by_path, by_name);
+
+    // Build device_to_disk_map (best-effort)
+    json map_j = json::object();
+    if (btrfs_j.contains("devices") && btrfs_j["devices"].is_array()) {
+        for (const auto& dev : btrfs_j["devices"]) {
+            if (!dev.is_object()) continue;
+            const std::string p = dev.value("path", "");
+            if (p.empty()) continue;
+
+            json m;
+            const std::string parent = dev.value("parent_disk", "");
+            if (!parent.empty()) m["parent_disk"] = parent;
+
+            if (dev.contains("lsblk_disk_index") && dev["lsblk_disk_index"].is_number_integer()) {
+                m["disk_index"] = dev["lsblk_disk_index"];
+
+                // Add disk_name as a convenience (from parent basename)
+                if (!parent.empty()) {
+                    std::string name = parent;
+                    const size_t slash = name.rfind('/');
+                    if (slash != std::string::npos) name = name.substr(slash + 1);
+                    if (!name.empty()) m["disk_name"] = name;
+                }
+            }
+
+            map_j[p] = m;
+        }
+    }
+
+    out["ok"] = true;
+    out["btrfs"] = btrfs_j;
+    out["device_to_disk_map"] = map_j;
+
+    if (getenv_bool("PQNAS_RAID_DEBUG_SHOW", false)) {
+        cap_string(show_raw, 1024 * 1024);
+        out["btrfs_show_raw"] = show_raw;
+        out["btrfs_show_rc"]  = rc_show;
+    }
+
+    reply_json(res, 200, out.dump());
+});
+
+// ----- POST /api/v4/raid/plan/add-device (admin-only, plan-only) -------------
+srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
+        return;
+    }
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    json in;
+    try { in = json::parse(req.body.empty() ? "{}" : req.body); }
+    catch (...) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+        return;
+    }
+
+    // Inputs
+    std::string mount    = in.value("mount", "");
+    std::string new_disk = in.value("new_disk", "");
+    std::string mode     = in.value("mode", "single");  // "single" or "raid1"
+    bool force           = in.value("force", false);
+
+    // Allowed_prefix + default mount
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+    if (mount.empty()) mount = allowed_prefix + "/data";
+
+    // Validate inputs
+    if (!is_abs_path_safe(mount)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_mount"}}.dump());
+        return;
+    }
+    if (!is_dev_path_basic_safe(new_disk)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_device"}, {"message","expected /dev/..."} }.dump());
+        return;
+    }
+    if (mode != "single" && mode != "raid1") {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message","mode must be single|raid1"} }.dump());
+        return;
+    }
+
+    // Resolve mount -> resolved_mount / source / fstype
+    std::string target_out, fstype_out, source_out;
+
+    int rc_target = run_capture("/usr/bin/findmnt -no TARGET --target " + sh_quote(mount), &target_out);
+    cap_string(target_out, 16 * 1024);
+    rtrim_inplace(target_out);
+
+    int rc_fs = run_capture("/usr/bin/findmnt -no FSTYPE --target " + sh_quote(mount), &fstype_out);
+    cap_string(fstype_out, 16 * 1024);
+    rtrim_inplace(fstype_out);
+
+    int rc_src = run_capture("/usr/bin/findmnt -no SOURCE --target " + sh_quote(mount), &source_out);
+    cap_string(source_out, 16 * 1024);
+    rtrim_inplace(source_out);
+
+    if (rc_target != 0 || target_out.empty() ||
+        rc_fs != 0 || fstype_out.empty() ||
+        rc_src != 0 || source_out.empty()) {
+
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "mount_not_found"},
+            {"mount", mount}
+        }.dump());
+        return;
+    }
+
+    const std::string resolved_mount  = target_out;
+    const std::string resolved_source = source_out;
+    const std::string resolved_disk   = parent_disk_from_dev(resolved_source);
+
+    // Allowlist on resolved mount
+    if (resolved_mount.rfind(allowed_prefix, 0) != 0) {
+        const std::string test_prefix  = "/srv/pqnas-test";
+        const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
+        if (resolved_mount.rfind(test_prefix, 0) != 0 && resolved_mount.rfind(test_prefix2, 0) != 0) {
+            reply_json(res, 200, json{
+                {"ok", false},
+                {"error", "mount_not_allowed"},
+                {"allowed_prefix", allowed_prefix},
+                {"resolved_mount", resolved_mount}
+            }.dump());
+            return;
+        }
+    }
+
+    if (fstype_out != "btrfs") {
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "not_btrfs"},
+            {"resolved_mount", resolved_mount},
+            {"fstype", fstype_out}
+        }.dump());
+        return;
+    }
+
+    // Load disks allowlist (inherits PQNAS_STORAGE_ALLOW_LOOP policy)
+    std::string raw_lsblk;
+    json disks_j = storage_list_disks_json(&raw_lsblk);
+    json by_path = disks_j.value("by_path", json::object());
+    json disks   = disks_j.value("disks", json::array());
+
+    if (!by_path.is_object() || !by_path.contains(new_disk)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "device_not_allowed"},
+            {"new_disk", new_disk}
+        }.dump());
+        return;
+    }
+
+    int disk_index = -1;
+    try { disk_index = by_path[new_disk].get<int>(); } catch (...) { disk_index = -1; }
+
+    if (disk_index < 0 || !disks.is_array() || disk_index >= (int)disks.size()) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "lsblk_index_error"}}.dump());
+        return;
+    }
+
+    json d = disks[disk_index];
+
+    // Hard-refuse disks that have ANY mountpoints anywhere (fail-closed even with force)
+    // This protects the OS disk where mountpoints live on child partitions (/, /boot/efi, etc.)
+    json mpcheck = lsblk_disk_mountpoints_json(new_disk);
+    if (mpcheck.value("ok", false) && mpcheck.contains("mountpoints") && mpcheck["mountpoints"].is_array()) {
+        if (!mpcheck["mountpoints"].empty()) {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "disk_in_use"},
+                {"new_disk", new_disk},
+                {"disk_index", disk_index},
+                {"model", d.value("model","")},
+                {"serial", d.value("serial","")},
+                {"mountpoints", mpcheck["mountpoints"]}
+            }.dump());
+            return;
+        }
+    } else {
+        // If we can't determine, fail-closed in plan (safer)
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "disk_in_use_check_failed"},
+            {"new_disk", new_disk},
+            {"detail", mpcheck}
+        }.dump());
+        return;
+    }
+
+    // Refuse adding the same disk the FS is already on (safety)
+    if (!resolved_disk.empty() && new_disk == resolved_disk) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "device_is_current_disk"},
+            {"resolved_disk", resolved_disk},
+            {"new_disk", new_disk}
+        }.dump());
+        return;
+    }
+
+    const int children = d.value("children", 0);
+    const uint64_t new_disk_size = d.value("size_bytes", (uint64_t)0);
+
+    // Build plan
+    json plan;
+    plan["mount"] = resolved_mount;
+    plan["new_disk"] = new_disk;
+    plan["new_disk_index"] = disk_index;
+    plan["new_disk_size_bytes"] = new_disk_size;
+    plan["mode"] = mode;
+    plan["force"] = force;
+    plan["requires_downtime"] = false;
+
+    json warnings = json::array();
+    json steps = json::array();
+    json commands = json::array();
+
+    // If disk has partitions: refuse unless force (strict default)
+    // NOTE: "force" bypasses partitioned-disk refusal, but NOT disk-in-use.
+    if (children > 0 && !force) {
+        warnings.push_back("new_disk_has_partitions");
+        warnings.push_back("refusing_to_plan_destructive_partitioning_without_force=true");
+        plan["children"] = children;
+        plan["warnings"] = warnings;
+
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "disk_not_empty"},
+            {"plan", plan}
+        }.dump());
+        return;
+    }
+
+    // Partition path (we plan to create p1)
+    const std::string new_part = part1_path_from_disk(new_disk);
+    if (new_part.empty()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_device"}}.dump());
+        return;
+    }
+    plan["new_partition"] = new_part;
+
+    // Steps / commands (plan-only)
+    steps.push_back("Sanity-check: mount resolves to btrfs and is within allowed prefix.");
+    steps.push_back("Sanity-check: new_disk is allowlisted by lsblk and has no mounted partitions.");
+    steps.push_back("Sanity-check: new_disk is not the current filesystem disk.");
+
+    if (children > 0 && force) {
+        warnings.push_back("DESTRUCTIVE: new_disk has existing partitions; plan includes wiping partition table and signatures.");
+    } else {
+        warnings.push_back("DESTRUCTIVE: plan includes wiping any existing signatures on new_disk.");
+    }
+    warnings.push_back("Adding a device and converting profiles can take a long time; expect background IO (balance).");
+    warnings.push_back("PLAN ONLY: commands are returned as strings; nothing is executed by this endpoint.");
+
+    // Destructive prep (still plan-only)
+    commands.push_back("/usr/bin/sudo -n /usr/bin/sgdisk --zap-all " + sh_quote(new_disk));
+    commands.push_back("/usr/bin/sudo -n /usr/bin/wipefs -a " + sh_quote(new_disk));
+    commands.push_back("/usr/bin/sudo -n /usr/bin/sgdisk -n 1:0:0 -t 1:8300 -c 1:PQNAS_BTRFS " + sh_quote(new_disk));
+    commands.push_back("/usr/bin/sudo -n /usr/bin/partprobe " + sh_quote(new_disk));
+
+    // Add device to existing filesystem
+    commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs device add " + sh_quote(new_part) + " " + sh_quote(resolved_mount));
+
+    // Optional convert to RAID1 (data+metadata)
+    if (mode == "raid1") {
+        commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs balance start -dconvert=raid1 -mconvert=raid1 " + sh_quote(resolved_mount));
+        steps.push_back("Convert data/metadata profiles to RAID1 via balance.");
+    } else {
+        steps.push_back("No profile conversion requested (mode=single). Filesystem will remain in its current profiles until converted.");
+    }
+
+    plan["steps"] = steps;
+    plan["commands"] = commands;
+    plan["warnings"] = warnings;
+
+    reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
+});
+
+
+
+// ----- GET /api/v4/raid/health?mount=/path (admin-only, read-only) -----------
+srv.Get("/api/v4/raid/health", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "users_load_failed"},
+            {"path", users_path}
+        }.dump());
+        return;
+    }
+
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    // -------------------- mount selection --------------------
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+
+    std::string mount = allowed_prefix + "/data";
+    if (req.has_param("mount")) mount = req.get_param_value("mount");
+
+    json out;
+    out["ok"] = false;
+    out["input_mount"] = mount;
+    out["allowed_prefix"] = allowed_prefix;
+
+    if (!is_abs_path_safe(mount)) {
+        out["error"] = "bad_mount";
+        reply_json(res, 400, out.dump());
+        return;
+    }
+
+    // -------------------- resolve mountpoint, fstype, source --------------------
+    std::string target_out, fstype_out, source_out;
+
+    int rc_target = run_capture("/usr/bin/findmnt -no TARGET --target " + sh_quote(mount), &target_out);
+    cap_string(target_out, 16 * 1024);
+    rtrim_inplace(target_out);
+
+    int rc_fs = run_capture("/usr/bin/findmnt -no FSTYPE --target " + sh_quote(mount), &fstype_out);
+    cap_string(fstype_out, 16 * 1024);
+    rtrim_inplace(fstype_out);
+
+    int rc_src = run_capture("/usr/bin/findmnt -no SOURCE --target " + sh_quote(mount), &source_out);
+    cap_string(source_out, 16 * 1024);
+    rtrim_inplace(source_out);
+
+    if (rc_target != 0 || target_out.empty() ||
+        rc_fs != 0 || fstype_out.empty() ||
+        rc_src != 0 || source_out.empty()) {
+        out["error"] = "mount_not_found";
+        reply_json(res, 200, out.dump());
+        return;
+    }
+
+    const std::string resolved_mount  = target_out;
+    const std::string resolved_source = source_out;
+    const std::string resolved_disk   = parent_disk_from_dev(resolved_source);
+
+    out["resolved_mount"]  = resolved_mount;
+    out["resolved_source"] = resolved_source;
+    if (!resolved_disk.empty()) out["resolved_disk"] = resolved_disk;
+    out["fstype"]          = fstype_out;
+
+    // -------------------- allowlist enforcement --------------------
+    if (resolved_mount.rfind(allowed_prefix, 0) != 0) {
+        const std::string test_prefix  = "/srv/pqnas-test";
+        const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
+        if (resolved_mount.rfind(test_prefix, 0) != 0 &&
+            resolved_mount.rfind(test_prefix2, 0) != 0) {
+            out["error"] = "mount_not_allowed";
+            reply_json(res, 200, out.dump());
+            return;
+        }
+    }
+
+    // -------------------- non-btrfs case --------------------
+    if (fstype_out != "btrfs") {
+        out["error"] = "not_btrfs";
+        reply_json(res, 200, out.dump());
+        return;
+    }
+
+    // -------------------- btrfs read-only health commands --------------------
+    const std::string mp = sh_quote(resolved_mount);
+
+    std::string dev_stats, scrub_status, balance_status;
+
+    const std::string cmd_dev_stats = "/usr/bin/sudo -n /usr/bin/btrfs device stats " + mp + " 2>&1";
+    const std::string cmd_scrub     = "/usr/bin/sudo -n /usr/bin/btrfs scrub status " + mp + " 2>&1";
+    const std::string cmd_balance   = "/usr/bin/sudo -n /usr/bin/btrfs balance status " + mp + " 2>&1";
+
+    int rc_dev_stats = run_capture(cmd_dev_stats, &dev_stats);
+    int rc_scrub     = run_capture(cmd_scrub,     &scrub_status);
+    int rc_balance   = run_capture(cmd_balance,   &balance_status);
+
+    cap_string(dev_stats,       256 * 1024);
+    cap_string(scrub_status,    256 * 1024);
+    cap_string(balance_status,  256 * 1024);
+
+    out["rc_device_stats"] = rc_dev_stats;
+    out["rc_scrub_status"] = rc_scrub;
+    out["rc_balance_status"] = rc_balance;
+
+    // Always include raw outputs (capped) for now; if you want, you can gate these with PQNAS_RAID_DEBUG_* later.
+    out["btrfs_device_stats"]  = dev_stats;
+    out["btrfs_scrub_status"]  = scrub_status;
+    out["btrfs_balance_status"] = balance_status;
+
+    // Parsed scrub summary (best effort)
+    out["scrub"] = parse_btrfs_scrub_status_best_effort(scrub_status);
+
+    // ok/error classification (match your existing style)
+    if (rc_dev_stats != 0 || rc_scrub != 0 || rc_balance != 0) {
+        out["ok"] = false;
+        if (str_contains(dev_stats, "sudo:") || str_contains(scrub_status, "sudo:") || str_contains(balance_status, "sudo:")) {
+            out["error"] = "sudo_not_allowed";
+        } else if (str_contains(dev_stats, "not a valid btrfs filesystem") ||
+                   str_contains(scrub_status, "not a valid btrfs filesystem") ||
+                   str_contains(balance_status, "not a valid btrfs filesystem")) {
+            out["error"] = "not_btrfs";
+        } else {
+            out["error"] = "btrfs_failed";
+        }
+
+        reply_json(res, 200, out.dump());
+        return;
+    }
+
+    out["ok"] = true;
+    reply_json(res, 200, out.dump());
+});
 
 
     // POST /api/v4/consume
