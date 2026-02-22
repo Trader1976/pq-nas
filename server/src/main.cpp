@@ -74,6 +74,7 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include <cmath>
 #include <cerrno>
 #include <errno.h>
+#include <sys/stat.h>
 
 extern "C" {
 #include "qrauth_v4.h"
@@ -83,7 +84,6 @@ extern "C" {
 
 #include <chrono>
 #include <cstdio>
-#include <sys/wait.h>
 
 #include "pqnas_util.h"
 #include "authz.h"
@@ -1871,6 +1871,28 @@ static std::string sha256_hex_lower_evp(const std::string& s) {
         out[i*2 + 1] = hex[(md[i]     ) & 0xF];
     }
     return out;
+}
+
+static std::string btrfs_membership_fingerprint(const json& btrfs_j) {
+    // Stable across "used bytes" changes etc.
+    // Fingerprint = sha256("uuid=<uuid>\n<sorted device paths>\n")
+    std::string uuid = btrfs_j.value("uuid", "");
+    std::vector<std::string> paths;
+
+    if (btrfs_j.contains("devices") && btrfs_j["devices"].is_array()) {
+        for (const auto& dev : btrfs_j["devices"]) {
+            if (!dev.is_object()) continue;
+            const std::string p = dev.value("path", "");
+            if (!p.empty()) paths.push_back(p);
+        }
+    }
+
+    std::sort(paths.begin(), paths.end());
+
+    std::string material = "uuid=" + uuid + "\n";
+    for (const auto& p : paths) material += p + "\n";
+
+    return sha256_hex_lower_evp(material);
 }
 
 static std::string join_commands_for_hash(const json& commands_arr) {
@@ -5682,7 +5704,6 @@ srv.Get("/api/v4/raid/status", [&](const httplib::Request& req, httplib::Respons
     reply_json(res, 200, out.dump());
 });
 
-
 // ----- POST /api/v4/raid/plan/add-device (admin-only, plan-only) -------------
 srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httplib::Response& res) {
     pqnas::UsersRegistry users;
@@ -5785,6 +5806,25 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
         return;
     }
 
+    // Read btrfs filesystem show (used to salt plan_id so add->remove->add works)
+    const std::string cmd_show =
+        "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(resolved_mount);
+
+    std::string show_raw;
+    int ec_show = 0;
+    const bool ok_show = run_cmd_capture(cmd_show, &show_raw, &ec_show);
+    cap_string(show_raw, 256 * 1024);
+
+    if (!ok_show || ec_show != 0 || show_raw.empty()) {
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "btrfs_show_failed"},
+            {"resolved_mount", resolved_mount},
+            {"btrfs_show_rc", ec_show}
+        }.dump());
+        return;
+    }
+
     // Busy signal (per-mount lock). Plan is allowed while busy, but caller should see it.
     bool busy = false;
     std::string busy_lock;
@@ -5864,6 +5904,22 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
     const int children = d.value("children", 0);
     const uint64_t new_disk_size = d.value("size_bytes", (uint64_t)0);
 
+    // Compute FS membership fingerprint (for plan_id salting)
+    std::string membership_fp;
+    {
+        BtrfsShowParsed parsed2 = parse_btrfs_filesystem_show(show_raw);
+        json btrfs2 = btrfs_show_parsed_to_json(parsed2, by_path, disks_j.value("by_name", json::object()));
+        membership_fp = btrfs_membership_fingerprint(btrfs2);
+    }
+    if (membership_fp.empty()) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "membership_fp_failed"},
+            {"message", "failed to compute btrfs membership fingerprint"}
+        }.dump());
+        return;
+    }
+
     // Build plan
     json plan;
     plan["mount"] = resolved_mount;
@@ -5932,6 +5988,13 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
     commands.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(new_disk));
     commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk -n 1:0:0 -t 1:8300 -c 1:PQNAS_BTRFS " + sh_quote(new_disk));
     commands.push_back("/usr/bin/sudo -n /usr/sbin/partprobe " + sh_quote(new_disk));
+
+    // NEW — must match execute endpoint exactly
+    commands.push_back("/usr/bin/sudo -n /usr/bin/udevadm settle");
+
+    // Wait for partition node to appear (handled internally by executor)
+    commands.push_back("WAIT_BLOCK " + new_part + " 2000");
+
     commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs device add " + sh_quote(new_part) + " " + sh_quote(resolved_mount));
 
     if (mode == "raid1") {
@@ -5945,18 +6008,28 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
     plan["commands"] = commands;
     plan["warnings"] = warnings;
 
-    // plan_id = sha256(joined commands)
+    // plan_nonce: per-attempt uniqueness (prevents add->remove->add collisions)
+    const std::string plan_nonce = rand_hex_16();
+    plan["plan_nonce"] = plan_nonce;
+
+    // plan_id = sha256(joined commands + salt + plan_nonce)
+    // MUST match execute/add-device exactly.
     {
         const std::string joined2 = join_commands_for_hash(commands);
-        const std::string pid = sha256_hex_lower_evp(joined2);
+
+        const std::string salt =
+            std::string("mount=") + resolved_mount + "\n" +
+            std::string("btrfs_membership_fp=") + membership_fp + "\n";
+
+        const std::string pid =
+            sha256_hex_lower_evp(joined2 + "\n" + salt + "plan_nonce=" + plan_nonce + "\n");
+
         if (!pid.empty()) plan["plan_id"] = pid;
     }
 
     reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
 });
-
-
-    // ----- POST /api/v4/raid/plan/remove-device (admin-only, plan-only) ----------
+// ----- POST /api/v4/raid/plan/remove-device (admin-only, plan-only) ----------
 srv.Post("/api/v4/raid/plan/remove-device", [&](const httplib::Request& req, httplib::Response& res) {
     pqnas::UsersRegistry users;
 
@@ -6092,8 +6165,20 @@ srv.Post("/api/v4/raid/plan/remove-device", [&](const httplib::Request& req, htt
         return;
     }
 
+    // Parse show -> json
     BtrfsShowParsed parsed = parse_btrfs_filesystem_show(show_raw);
     json btrfs_j = btrfs_show_parsed_to_json(parsed, by_path, disks_j.value("by_name", json::object()));
+
+    // Compute stable membership fingerprint used for plan_id salting
+    const std::string membership_fp = btrfs_membership_fingerprint(btrfs_j);
+    if (membership_fp.empty()) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "membership_fp_failed"},
+            {"message", "failed to compute btrfs membership fingerprint"}
+        }.dump());
+        return;
+    }
 
     // Find member device in filesystem that corresponds to remove_device
     // Accept:
@@ -6147,7 +6232,6 @@ srv.Post("/api/v4/raid/plan/remove-device", [&](const httplib::Request& req, htt
     }
 
     // Refuse removing current filesystem disk by default (same safety posture as add-device)
-    // NOTE: For btrfs this is not a "wipe", but keeping this guard matches your existing model.
     if (!resolved_disk.empty() && !parent_disk.empty() && parent_disk == resolved_disk && !force) {
         reply_json(res, 400, json{
             {"ok", false},
@@ -6193,6 +6277,9 @@ srv.Post("/api/v4/raid/plan/remove-device", [&](const httplib::Request& req, htt
     plan["busy"] = busy;
     if (busy && !busy_lock.empty()) plan["busy_lock"] = busy_lock;
 
+    // Expose fingerprint (nice for debugging)
+    plan["btrfs_membership_fp"] = membership_fp;
+
     json warnings = json::array();
     json steps = json::array();
     json commands = json::array();
@@ -6209,33 +6296,35 @@ srv.Post("/api/v4/raid/plan/remove-device", [&](const httplib::Request& req, htt
     warnings.push_back("PLAN ONLY: commands are returned as strings; nothing is executed by this endpoint.");
 
     // If this removal would drop from 2 devices -> 1 device, we must convert off RAID1 first
-    // (metadata/system often default to RAID1 on mkfs; system conversion requires --force).
     if (total_devices == 2) {
         warnings.push_back("Pre-step required: converting metadata/system profiles to SINGLE to allow removing down to one device.");
         warnings.push_back("This includes --force because newer btrfs-progs refuse explicit system-chunk operations otherwise.");
-        commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs balance start --force -mconvert=single -sconvert=single " + sh_quote(resolved_mount));
-        steps.push_back("Convert metadata/system profiles to SINGLE via balance (--force for system chunks).");
+        warnings.push_back("Pre-step required: converting DATA profile to SINGLE too (cannot remove a device while DATA remains RAID1).");
+        commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs balance start --force -dconvert=single -mconvert=single -sconvert=single " + sh_quote(resolved_mount));
+        steps.push_back("Convert data/metadata/system profiles to SINGLE via balance (--force for system chunks).");
     }
 
     commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs device remove " + sh_quote(member_path) + " " + sh_quote(resolved_mount));
     steps.push_back("Remove device from filesystem (data migration may take time).");
 
-
     plan["steps"] = steps;
     plan["commands"] = commands;
     plan["warnings"] = warnings;
 
-    // plan_id = sha256(joined commands)
+    // plan_id = sha256(joined commands + salt)
     {
         const std::string joined2 = join_commands_for_hash(commands);
-        const std::string pid = sha256_hex_lower_evp(joined2);
+
+        const std::string salt =
+            std::string("mount=") + resolved_mount + "\n" +
+            std::string("btrfs_membership_fp=") + membership_fp + "\n";
+
+        const std::string pid = sha256_hex_lower_evp(joined2 + "\n" + salt);
         if (!pid.empty()) plan["plan_id"] = pid;
     }
 
     reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
 });
-
-
 // ----- POST /api/v4/raid/execute/add-device (admin-only) ---------------------
 // Body: { mount, new_disk, mode:"single|raid1", force:bool, plan_id:string, dry_run?:bool, confirm?:bool }
 srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, httplib::Response& res) {
@@ -6265,6 +6354,17 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     bool confirm = in.value("confirm", false);
 
     const std::string client_plan_id = in.value("plan_id", "");
+
+    // Per-attempt nonce (must be provided by plan/add-device and echoed back by UI)
+    const std::string client_plan_nonce = in.value("plan_nonce", "");
+    if (client_plan_nonce.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing plan_nonce"}
+        }.dump());
+        return;
+    }
 
     // Allowed_prefix + default mount
     std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
@@ -6358,12 +6458,36 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         }.dump());
         return;
     }
+    // Read btrfs filesystem show (used to salt plan_id so add->remove->add works)
+    const std::string cmd_show =
+        "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(resolved_mount);
+
+    std::string show_raw;
+    int ec_show = 0;
+    const bool ok_show = run_cmd_capture(cmd_show, &show_raw, &ec_show);
+    cap_string(show_raw, 256 * 1024);
+
+    if (!ok_show || ec_show != 0 || show_raw.empty()) {
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "btrfs_show_failed"},
+            {"resolved_mount", resolved_mount},
+            {"btrfs_show_rc", ec_show}
+        }.dump());
+        return;
+    }
+
 
     // Load disks allowlist (inherits PQNAS_STORAGE_ALLOW_LOOP policy)
     std::string raw_lsblk;
     json disks_j = storage_list_disks_json(&raw_lsblk);
     json by_path = disks_j.value("by_path", json::object());
     json disks   = disks_j.value("disks", json::array());
+
+    // Build stable membership fingerprint used for plan_id salting
+    BtrfsShowParsed parsed2 = parse_btrfs_filesystem_show(show_raw);
+    json btrfs2 = btrfs_show_parsed_to_json(parsed2, by_path, disks_j.value("by_name", json::object()));
+    const std::string membership_fp = btrfs_membership_fingerprint(btrfs2);
 
     if (!by_path.is_object() || !by_path.contains(new_disk)) {
         reply_json(res, 400, json{
@@ -6453,6 +6577,12 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     commands.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(new_disk));
     commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk -n 1:0:0 -t 1:8300 -c 1:PQNAS_BTRFS " + sh_quote(new_disk));
     commands.push_back("/usr/bin/sudo -n /usr/sbin/partprobe " + sh_quote(new_disk));
+
+    // NEW: wait for udev + device node to appear (fixes /dev/sda1 race)
+    commands.push_back("/usr/bin/sudo -n /usr/bin/udevadm settle");
+
+    commands.push_back("WAIT_BLOCK " + new_part + " 2000");
+
     commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs device add " + sh_quote(new_part) + " " + sh_quote(resolved_mount));
     if (mode == "raid1") {
         commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs balance start -dconvert=raid1 -mconvert=raid1 " + sh_quote(resolved_mount));
@@ -6460,7 +6590,16 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
 
     // plan_id check (must match exactly)
     const std::string joined = join_commands_for_hash(commands);
-    const std::string expected_plan_id = sha256_hex_lower_evp(joined);
+
+    // Salt with current FS membership/state (MUST match plan/add-device).
+    const std::string salt =
+        std::string("mount=") + resolved_mount + "\n" +
+        std::string("btrfs_membership_fp=") + membership_fp + "\n";
+
+    // NEW: include the per-attempt nonce so add->remove->add can never reuse the same plan_id
+    const std::string expected_plan_id =
+        sha256_hex_lower_evp(joined + "\n" + salt + "plan_nonce=" + client_plan_nonce + "\n");
+
     if (expected_plan_id.empty()) {
         reply_json(res, 500, json{{"ok", false}, {"error", "plan_id_compute_failed"}}.dump());
         return;
@@ -6479,6 +6618,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     // Prepare response plan payload (for caller/UI)
     json plan;
     plan["plan_id"] = expected_plan_id;
+    plan["plan_nonce"] = client_plan_nonce;
+    plan["btrfs_membership_fp"] = membership_fp;
     plan["mount"] = resolved_mount;
     plan["input_mount"] = mount;
     plan["resolved_mount"] = resolved_mount;
@@ -6493,6 +6634,7 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     plan["force"] = force;
     plan["requires_downtime"] = false;
     plan["commands"] = commands;
+
 
     // Preflight AFTER plan-id verification: if device already present, return idempotent success
     if (btrfs_filesystem_has_device(resolved_mount, new_part)) {
@@ -6532,7 +6674,7 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     std::string mount_lockp;
     std::string raid_dir_err;
 
-    const std::string recp = raid_exec_record_path(expected_plan_id);
+    std::string recp = raid_exec_record_path(expected_plan_id);
 
     auto close_locks = [&]() {
         if (fd_plan_rec >= 0) { ::close(fd_plan_rec); fd_plan_rec = -1; }
@@ -6571,21 +6713,64 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         }
     }
 
-    // Acquire per-plan execution record lock (replay protection)
+    // Acquire per-plan execution record lock (replay protection, but allow re-run after completion)
+    // NOTE: recp may change to an attempt-suffixed path if an old (done/failed) record exists.
+    auto read_exec_state_best_effort = [&](const std::string& path) -> std::string {
+        std::string txt;
+        if (!read_text_file(path, &txt)) return "";
+        if (txt.size() > (512 * 1024)) txt.resize(512 * 1024);
+        try {
+            json j = json::parse(txt);
+            if (j.contains("state") && j["state"].is_string()) return j["state"].get<std::string>();
+        } catch (...) {}
+        return "";
+    };
+
+    auto make_attempt_path = [&]() -> std::string {
+        std::string ts = pqnas::now_iso_utc(); // "2026-02-22T02:15:30Z"
+        for (char& c : ts) {
+            if (c == ':' || c == '-') c = '_';
+        }
+        return raid_exec_record_path(expected_plan_id + "." + ts);
+    };
+
     {
         std::string rec_err;
         fd_plan_rec = open_excl_lockfile(recp, &rec_err);
+
         if (fd_plan_rec < 0) {
-            close_locks();
-            reply_json(res, 200, json{
-                {"ok", false},
-                {"error", "already_executed"},
-                {"message", "this plan_id already has an execution record; refusing replay"},
-                {"plan_id", expected_plan_id},
-                {"path", recp},
-                {"detail", rec_err}
-            }.dump());
-            return;
+            const std::string state = read_exec_state_best_effort(recp);
+
+            if (state == "running") {
+                close_locks();
+                reply_json(res, 200, json{
+                    {"ok", false},
+                    {"error", "already_executed"},
+                    {"message", "this plan_id already has a running execution record; refusing replay"},
+                    {"plan_id", expected_plan_id},
+                    {"path", recp},
+                    {"detail", rec_err}
+                }.dump());
+                return;
+            }
+
+            // Not running (done/failed/unknown): allow a new attempt using a unique record path.
+            recp = make_attempt_path();
+            rec_err.clear();
+            fd_plan_rec = open_excl_lockfile(recp, &rec_err);
+
+            if (fd_plan_rec < 0) {
+                close_locks();
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "exec_record_lock_failed"},
+                    {"message", "failed to create execution record for new attempt"},
+                    {"plan_id", expected_plan_id},
+                    {"path", recp},
+                    {"detail", rec_err}
+                }.dump());
+                return;
+            }
         }
     }
 
@@ -6597,6 +6782,7 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         {"ts_end",   nullptr},
 
         {"plan_id", expected_plan_id},
+        {"record_path", recp},
         {"state", "running"},
         {"busy", true},
 
@@ -6651,31 +6837,65 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
 
         std::string out;
         int ec = 0;
-        const bool ok = run_cmd_capture(cmd, &out, &ec);
+        bool step_ok = false;
 
-        cap_string(out, 128 * 1024);
+        if (cmd.rfind("WAIT_BLOCK ", 0) == 0) {
+            std::istringstream iss(cmd);
+            std::string tag, path;
+            int timeout_ms = 2000;
+            iss >> tag >> path >> timeout_ms;
+
+            auto is_block = [](const std::string& p) -> bool {
+                struct stat st;
+                if (::stat(p.c_str(), &st) != 0) return false;
+                return S_ISBLK(st.st_mode);
+            };
+
+            const int step_ms = 100;
+            int waited = 0;
+
+            while (waited < timeout_ms) {
+                if (is_block(path)) {
+                    out = "ok: block device present: " + path + "\n";
+                    ec = 0;
+                    step_ok = true;
+                    break;
+                }
+                ::usleep(step_ms * 1000);
+                waited += step_ms;
+            }
+
+            if (!step_ok) {
+                out = "timeout waiting for block device: " + path + "\n";
+                ec = 1;
+            }
+        } else {
+            const bool ran = run_cmd_capture(cmd, &out, &ec);
+            step_ok = ran && (ec == 0);
+        }
 
         json one = {
             {"i", i},
             {"cmd", cmd},
             {"rc", ec},
-            {"ok", ok},
+            {"ok", step_ok},
             {"out", out}
         };
         results.push_back(one);
 
-        raid_exec_record_append_step(&record, i + 1, total, cmd, ok, ec, out);
+        raid_exec_record_append_step(&record, i + 1, total, cmd, step_ok, ec, out);
         (void)raid_exec_record_write_atomic(expected_plan_id, record);
 
 
 
-        if (!ok || ec != 0) { all_ok = false; break; }
+        if (!step_ok) { all_ok = false; break; }
     }
 
     json outj;
     outj["ok"] = all_ok;
     outj["dry_run"] = false;
     outj["plan"] = plan;
+    outj["record_path"] = recp;
     outj["results"] = results;
 
     // Finalize record (+ post_status if ok)
@@ -6928,16 +7148,28 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
 
     // If this removal would drop from 2 devices -> 1 device, we must convert off RAID1 first
     if (total_devices == 2) {
-        commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs balance start --force -mconvert=single -sconvert=single " + sh_quote(resolved_mount));
+        commands.push_back(
+            "/usr/bin/sudo -n /usr/bin/btrfs balance start --force "
+            "-dconvert=single -mconvert=single -sconvert=single "
+            + sh_quote(resolved_mount)
+        );
     }
 
 
     commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs device remove " + sh_quote(member_path) + " " + sh_quote(resolved_mount));
 
 
-    // plan_id check (must match exactly)
+    // plan_id check (must match exactly plan endpoint)
     const std::string joined = join_commands_for_hash(commands);
-    const std::string expected_plan_id = sha256_hex_lower_evp(joined);
+
+    // Salt plan_id with current FS membership/state so repeats after add/remove
+    // don't collide with old execution records (MUST match plan/remove-device).
+    const std::string salt =
+        std::string("mount=") + resolved_mount + "\n" +
+        std::string("btrfs_membership_fp=") + btrfs_membership_fingerprint(btrfs_j) + "\n";
+
+    const std::string expected_plan_id = sha256_hex_lower_evp(joined + "\n" + salt);
+
     if (expected_plan_id.empty()) {
         reply_json(res, 500, json{{"ok", false}, {"error", "plan_id_compute_failed"}}.dump());
         return;
@@ -6984,7 +7216,7 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     std::string mount_lockp;
     std::string raid_dir_err;
 
-    const std::string recp = raid_exec_record_path(expected_plan_id);
+    std::string recp = raid_exec_record_path(expected_plan_id);
 
     auto close_locks = [&]() {
         if (fd_plan_rec >= 0) { ::close(fd_plan_rec); fd_plan_rec = -1; }
@@ -7023,16 +7255,59 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
         }
     }
 
-    // Acquire per-plan execution record lock (replay protection)
-    {
-        std::string rec_err;
-        fd_plan_rec = open_excl_lockfile(recp, &rec_err);
-        if (fd_plan_rec < 0) {
+// Acquire per-plan execution record lock
+// - If an existing record is "running", refuse replay.
+// - If an existing record is "done"/"failed"/unknown, allow a new attempt by using a unique record path.
+auto read_exec_state_best_effort = [&](const std::string& path) -> std::string {
+    std::string txt;
+    if (!read_text_file(path, &txt)) return "";
+    if (txt.size() > (512 * 1024)) txt.resize(512 * 1024);
+    try {
+        json j = json::parse(txt);
+        if (j.contains("state") && j["state"].is_string()) return j["state"].get<std::string>();
+    } catch (...) {}
+    return "";
+};
+
+auto make_attempt_path = [&]() -> std::string {
+    std::string ts = pqnas::now_iso_utc(); // e.g. 2026-02-22T02:15:30Z
+    for (char& c : ts) {
+        if (c == ':' || c == '-') c = '_';
+    }
+    return raid_exec_record_path(expected_plan_id + "." + ts);
+};
+
+{
+    std::string rec_err;
+    fd_plan_rec = open_excl_lockfile(recp, &rec_err);
+
+    if (fd_plan_rec < 0) {
+        const std::string state = read_exec_state_best_effort(recp);
+
+        if (state == "running") {
             close_locks();
             reply_json(res, 200, json{
                 {"ok", false},
                 {"error", "already_executed"},
-                {"message", "this plan_id already has an execution record; refusing replay"},
+                {"message", "this plan_id already has a running execution record; refusing replay"},
+                {"plan_id", expected_plan_id},
+                {"path", recp},
+                {"detail", rec_err}
+            }.dump());
+            return;
+        }
+
+        // Not running: allow retry with a unique execution record file.
+        recp = make_attempt_path();
+        rec_err.clear();
+        fd_plan_rec = open_excl_lockfile(recp, &rec_err);
+
+        if (fd_plan_rec < 0) {
+            close_locks();
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "exec_record_lock_failed"},
+                {"message", "failed to create execution record for new attempt"},
                 {"plan_id", expected_plan_id},
                 {"path", recp},
                 {"detail", rec_err}
@@ -7040,6 +7315,7 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
             return;
         }
     }
+}
 
     // Initial record (fail-closed)
     const std::string ts0 = pqnas::now_iso_utc();
@@ -7102,7 +7378,40 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
 
         std::string out;
         int ec = 0;
-        const bool ok = run_cmd_capture(cmd, &out, &ec);
+
+        // Pseudo-command: WAIT_BLOCK <path> <timeout_ms>
+    if (cmd.rfind("WAIT_BLOCK ", 0) == 0) {
+        // Format: "WAIT_BLOCK /dev/sda1 2000"
+        std::istringstream iss(cmd);
+        std::string tag, path;
+        int timeout_ms = 0;
+        iss >> tag >> path >> timeout_ms;
+
+        if (path.empty() || timeout_ms <= 0) {
+            out = "err: WAIT_BLOCK format is: WAIT_BLOCK <path> <timeout_ms>\n";
+            ec = 2;
+        } else {
+            const int sleep_step_ms = 50;
+            int waited = 0;
+            bool ok = false;
+
+            for (;;) {
+                if (std::filesystem::exists(path)) { ok = true; break; }
+                if (waited >= timeout_ms) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(sleep_step_ms));
+                waited += sleep_step_ms;
+            }
+
+            if (ok) {
+                out = "ok: block device present: " + path + "\n";
+                ec = 0;
+            } else {
+                out = "err: timed out waiting for block device: " + path + "\n";
+                ec = 1;
+            }
+        }
+
+        const bool step_ok = (ec == 0);
 
         cap_string(out, 128 * 1024);
 
@@ -7110,15 +7419,36 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
             {"i", i},
             {"cmd", cmd},
             {"rc", ec},
-            {"ok", ok},
+            {"ok", step_ok},
             {"out", out}
         };
         results.push_back(one);
 
-        raid_exec_record_append_step(&record, i + 1, total, cmd, ok, ec, out);
+        raid_exec_record_append_step(&record, i + 1, total, cmd, step_ok, ec, out);
         (void)raid_exec_record_write_atomic(expected_plan_id, record);
 
-        if (!ok || ec != 0) { all_ok = false; break; }
+        if (!step_ok) { all_ok = false; break; }
+        continue; // IMPORTANT: do not fall through to run_cmd_capture
+    }
+
+        const bool ran = run_cmd_capture(cmd, &out, &ec);
+        const bool step_ok = ran && (ec == 0);
+
+        cap_string(out, 128 * 1024);
+
+        json one = {
+            {"i", i},
+            {"cmd", cmd},
+            {"rc", ec},
+            {"ok", step_ok},
+            {"out", out}
+        };
+        results.push_back(one);
+
+        raid_exec_record_append_step(&record, i + 1, total, cmd, step_ok, ec, out);
+        (void)raid_exec_record_write_atomic(expected_plan_id, record);
+
+        if (!step_ok) { all_ok = false; break; }
     }
 
     json outj;

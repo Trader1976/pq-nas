@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>PQ-NAS • RAID Manager</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+
+    <!-- Use PQ-NAS global themes -->
+    <link rel="stylesheet" href="/static/theme.css">
+    <script src="/static/theme.js"></script>
+
+    <style>
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            color: var(--fg);
+            font-family: var(--sans);
+            background: var(--bg);
+            overflow: hidden;
+        }
+
+        .wrap{
+            height:100%;
+            display:flex;
+            flex-direction:column;
+            padding:14px;
+            gap:14px;
+        }
+
+        .panel{
+            flex: 1 1 auto;
+            min-height:0;
+            border:1px solid rgba(255,255,255,0.12);
+            border-radius: 18px;
+            background: rgba(0,0,0,0.18);
+            overflow:hidden;
+            display:flex;
+            flex-direction:column;
+        }
+
+        .bar{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:14px;
+            padding:12px 14px;
+            border-bottom:1px solid rgba(255,255,255,0.10);
+            background: rgba(0,0,0,0.14);
+        }
+
+        .left{ display:flex; flex-direction:column; gap:4px; min-width:0; }
+        .title{
+            font-weight: 950;
+            letter-spacing: 0.2px;
+            font-size: 14px;
+            white-space: nowrap;
+            overflow:hidden;
+            text-overflow: ellipsis;
+        }
+        .sub{
+            font-size: 12px;
+            opacity: 0.75;
+            white-space: nowrap;
+            overflow:hidden;
+            text-overflow: ellipsis;
+        }
+
+        .actions{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+        .btn{
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            gap:8px;
+            padding:10px 12px;
+            border-radius: 14px;
+            border:1px solid rgba(255,255,255,0.14);
+            background: rgba(0,0,0,0.18);
+            color: var(--fg);
+            font-weight: 850;
+            cursor:pointer;
+            user-select:none;
+        }
+        .btn:hover{ border-color: rgba(255,255,255,0.22); background: rgba(255,255,255,0.06); }
+        .btn.secondary{ opacity: 0.9; }
+
+        .badge{
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            padding:6px 12px;
+            border-radius:999px;
+            font-size:12px;
+            font-weight: 850;
+            border:1px solid rgba(255,255,255,0.12);
+            background: rgba(0,0,0,0.18);
+            white-space:nowrap;
+        }
+        .badge.ok   { border-color: rgba(0,255,200,0.22); background: rgba(0,255,200,0.08); }
+        .badge.warn { border-color: rgba(255,200,0,0.22); background: rgba(255,200,0,0.10); }
+        .badge.err  { border-color: rgba(255,80,80,0.22); background: rgba(255,80,80,0.10); }
+
+        .main{
+            flex: 1 1 auto;
+            min-height:0;
+            overflow:auto;
+            padding: 14px;
+            display:flex;
+            flex-direction:column;
+            gap: 12px;
+        }
+
+        .card{
+            border:1px solid rgba(255,255,255,0.12);
+            border-radius: 16px;
+            background: rgba(0,0,0,0.16);
+            padding: 12px;
+        }
+        .card h3{
+            margin: 0 0 8px 0;
+            font-size: 13px;
+            font-weight: 950;
+            letter-spacing: 0.2px;
+        }
+
+        .row{
+            display:flex;
+            gap: 10px;
+            align-items:center;
+            flex-wrap: wrap;
+        }
+
+        .k{ opacity: 0.70; font-weight: 850; min-width: 130px; }
+        .v{ font-family: var(--mono); opacity: 0.92; overflow-wrap: anywhere; }
+
+        pre{
+            margin: 0;
+            padding: 10px 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.10);
+            background: rgba(0,0,0,0.22);
+            overflow:auto;
+            max-height: 46vh;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-family: var(--mono);
+            font-size: 12px;
+            line-height: 1.35;
+        }
+        :root{
+            --raid-accent: rgba(0, 140, 255, 0.35);
+            --raid-arrow: rgba(0, 140, 255, 0.65);
+            --raid-arrow-soft: rgba(0, 140, 255, 0.35);
+
+            --raid-bg: rgba(0,0,0,0.05);
+            --raid-mid: rgba(0,0,0,0.06);
+            --raid-border: rgba(0,0,0,0.14);
+        }
+
+        /* If your dark theme uses a class, tweak borders/bg to be brighter */
+        body.theme-dark, body.dark {
+            --raid-bg: rgba(0,0,0,0.12);
+            --raid-mid: rgba(0,0,0,0.18);
+            --raid-border: rgba(255,255,255,0.14);
+        }
+        /* Embedded mode */
+        body.embedded .wrap{ padding:0; }
+        body.embedded .panel{ border:0; border-radius:0; background: transparent; }
+        body.embedded .bar{ border-bottom:1px solid rgba(255,255,255,0.10); border-radius:0; }
+        /* Always red in every theme (beats theme.css win_classic/bright button overrides) */
+        .btn.danger{
+            background: var(--fail, var(--err, #dc322f)) !important;
+            color: #fff !important;
+            border: 1px solid rgba(var(--fail-rgb, 220,50,47), 0.85) !important;
+            box-shadow: none !important;
+        }
+
+        .btn.danger:hover{
+            filter: brightness(1.08);
+        }
+        html[data-theme="win_classic"] .btn.danger{
+            border-color: rgba(0,0,0,0.35) !important;
+        }
+        /* Always red in every theme (beats theme.css per-theme button overrides) */
+        /* Always red in every theme */
+        .btn.danger{
+            background: var(--fail, var(--err, #dc322f)) !important;
+            color: #fff !important;
+            border: 1px solid rgba(var(--fail-rgb, 220,50,47), 0.55) !important;
+        }
+        .btn.danger:hover{ filter: brightness(1.08); }
+        .btn.danger:active{ filter: brightness(0.98); }
+        .btn.danger:hover{ filter: brightness(1.08); }
+    </style>
+</head>
+
+<body>
+<div class="wrap">
+    <div class="panel">
+        <div class="bar">
+            <div class="left">
+                <div class="title" id="titleLine">RAID Manager</div>
+                <div class="sub" id="subLine">Detecting RAID capabilities…</div>
+            </div>
+
+            <div class="actions">
+                <span class="badge warn" id="badge">loading…</span>
+                <button class="btn secondary" id="refreshBtn" type="button">Refresh</button>
+            </div>
+        </div>
+
+        <div class="main">
+            <div class="card">
+                <h3>Probe</h3>
+                <div id="probeOut"></div>
+            </div>
+            <div class="card">
+                <h3>Topology</h3>
+                <div id="topology"></div>
+            </div>
+
+            <div class="card">
+                <h3>Discovery / Status (raw)</h3>
+                <pre id="rawOut">(loading)</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="./app.js"></script>
+</body>
+</html>

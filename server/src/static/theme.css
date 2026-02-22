@@ -37,7 +37,7 @@
     --bg:#050712;
     --fg:#00f0f8;
     --fg-dim: rgba(0,240,248,0.74);
-
+    --ui_is_dark: 1;
     --panel: rgba(255,255,255,0.03);
     --panel2: rgba(0,0,0,0.28);
 
@@ -96,6 +96,7 @@ html[data-theme="bright"]{
     --bg:#f5f7ff;
     --fg:#0b1020;
     --fg-dim: rgba(11,16,32,0.72);
+    --ui_is_dark: 0;
 
     --panel: rgba(0,0,0,0.03);
     --panel2: rgba(0,0,0,0.06);
@@ -163,12 +164,12 @@ html[data-theme="bright"] thead th{
 }
 
 /* keep buttons glassy */
-html[data-theme="bright"] .btn,
+html[data-theme="bright"] .btn:not(.danger),
 html[data-theme="bright"] .navbtn{
     background: rgba(0,0,0,0.16) !important;
     border-color: rgba(var(--fg-rgb),0.18) !important;
 }
-html[data-theme="bright"] .btn:hover,
+html[data-theme="bright"] .btn:not(.danger):hover,
 html[data-theme="bright"] .navbtn:hover{
     background: rgba(var(--fg-rgb),0.08) !important;
     border-color: rgba(var(--fg-rgb),0.26) !important;
@@ -182,6 +183,7 @@ html[data-theme="cpunk_orange"]{
     --bg:#120b06;
     --fg:#ff7a18;
     --fg-dim: rgba(255,122,24,0.72);
+    --ui_is_dark: 1;
 
     --panel: rgba(255,255,255,0.05);
     --panel2: rgba(0,0,0,0.30);
@@ -221,6 +223,7 @@ html[data-theme="win_classic"]{
     --bg:#cfcfcf;               /* page background */
     --fg:#000000;               /* text */
     --fg-dim: rgba(0,0,0,0.70);
+    --ui_is_dark: 0;
 
     /* surfaces */
     --panel:#e6e6e6;            /* main surface */
@@ -344,7 +347,7 @@ html[data-theme="win_classic"] a:hover{
 }
 
 /* Buttons / inputs */
-html[data-theme="win_classic"] .btn,
+html[data-theme="win_classic"] .btn:not(.danger),
 html[data-theme="win_classic"] .navbtn,
 html[data-theme="win_classic"] .input,
 html[data-theme="win_classic"] .pill,
@@ -409,6 +412,45 @@ html[data-theme="win_classic"] thead th{
 html[data-theme="win_classic"] tbody td{
     border-bottom: 1px solid rgba(0,0,0,0.10) !important;
 }
+
+
+/* ============================================
+   Danger button — must look red in ALL themes
+   ============================================ */
+
+.btn.danger{
+    color: #fff !important;
+
+    background: linear-gradient(
+            180deg,
+            rgba(var(--fail-rgb),0.95),
+            rgba(var(--fail-rgb),0.80)
+    ) !important;
+
+    border: 1px solid rgba(var(--fail-rgb),0.95) !important;
+
+    box-shadow:
+            0 0 0 1px rgba(var(--fail-rgb),0.35),
+            0 6px 18px rgba(var(--fail-rgb),0.25);
+}
+
+.btn.danger:hover{
+    background: linear-gradient(
+            180deg,
+            rgba(var(--fail-rgb),1.0),
+            rgba(var(--fail-rgb),0.90)
+    ) !important;
+
+    border-color: rgba(var(--fail-rgb),1.0) !important;
+}
+
+.btn.danger:active{
+    background: linear-gradient(
+            180deg,
+            rgba(var(--fail-rgb),0.85),
+            rgba(var(--fail-rgb),1.0)
+    ) !important;
+}
 /* --------------------------------------------------------------------------
    File Manager (filemgr) app: fix modal + context menu surfaces in win_classic
    These elements are app-local (IDs), so global .card rules don't catch them.
@@ -469,4 +511,38 @@ html[data-theme="win_classic"] #ctxMenu .ctxItem:hover{
 html[data-theme="win_classic"] #ctxMenu .ctxSep{
     background: rgba(0,0,0,0.14) !important;
 }
+/* ==========================================================
+   FORCE .btn.danger to be red in ALL themes
+   (must be AFTER theme-specific .btn { ... !important } rules)
+   ========================================================== */
 
+html[data-theme] button.btn.danger,
+html[data-theme] .btn.danger{
+    color: #fff !important;
+    background: linear-gradient(
+            180deg,
+            rgba(var(--fail-rgb), 0.98),
+            rgba(var(--fail-rgb), 0.82)
+    ) !important;
+    border: 1px solid rgba(var(--fail-rgb), 0.95) !important;
+    box-shadow: 0 8px 20px rgba(var(--fail-rgb), 0.22) !important;
+}
+
+html[data-theme] button.btn.danger:hover,
+html[data-theme] .btn.danger:hover{
+    background: linear-gradient(
+            180deg,
+            rgba(var(--fail-rgb), 1.0),
+            rgba(var(--fail-rgb), 0.90)
+    ) !important;
+    border-color: rgba(var(--fail-rgb), 1.0) !important;
+}
+
+html[data-theme] button.btn.danger:active,
+html[data-theme] .btn.danger:active{
+    background: linear-gradient(
+            180deg,
+            rgba(var(--fail-rgb), 0.85),
+            rgba(var(--fail-rgb), 1.0)
+    ) !important;
+}
