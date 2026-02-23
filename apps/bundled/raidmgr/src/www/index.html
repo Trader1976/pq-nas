@@ -156,7 +156,61 @@
             --raid-mid: rgba(0,0,0,0.06);
             --raid-border: rgba(0,0,0,0.14);
         }
+        /* --- Exec progress bar (async jobs) --- */
+        .pbarWrap{
+            display:flex;
+            flex-direction:column;
+            gap:8px;
+            margin-bottom:10px;
+        }
 
+        .pbarRow{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:10px;
+            flex-wrap:wrap;
+        }
+
+        .pbarMeta{
+            font-size:12px;
+            opacity:0.85;
+            font-family: var(--mono);
+        }
+
+        .pill{
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            padding:4px 10px;
+            border-radius:999px;
+            border:1px solid rgba(255,255,255,0.12);
+            background: rgba(0,0,0,0.14);
+            font-size:12px;
+            font-weight:850;
+            white-space:nowrap;
+        }
+
+        .pill.ok   { border-color: rgba(0,255,200,0.22); background: rgba(0,255,200,0.08); }
+        .pill.warn { border-color: rgba(255,200,0,0.22); background: rgba(255,200,0,0.10); }
+        .pill.err  { border-color: rgba(255,80,80,0.22); background: rgba(255,80,80,0.10); }
+
+        .pbar{
+            width:100%;
+            height:12px;
+            border-radius:999px;
+            border:1px solid rgba(255,255,255,0.12);
+            background: rgba(0,0,0,0.18);
+            overflow:hidden;
+        }
+
+        .pbarFill{
+            height:100%;
+            width:0%;
+            border-radius:999px;
+            background: var(--accent, rgba(0,140,255,0.85));
+            transition: width 160ms ease;
+        }
         /* If your dark theme uses a class, tweak borders/bg to be brighter */
         body.theme-dark, body.dark {
             --raid-bg: rgba(0,0,0,0.12);

@@ -495,7 +495,18 @@
 
   <details class="card" style="margin-top:12px;" open>
     <summary style="cursor:pointer; font-weight:900;">Progress</summary>
-    <pre id="progressOut" style="margin-top:10px;">(idle)</pre>
+
+    <div class="pbarWrap" style="margin-top:10px;">
+      <div class="pbarRow">
+        <div class="pill warn" id="execPill">idle</div>
+        <div class="pbarMeta" id="execMeta">(no job)</div>
+      </div>
+      <div class="pbar" aria-label="Execution progress">
+        <div class="pbarFill" id="execPbarFill"></div>
+      </div>
+    </div>
+
+    <pre id="progressOut">(idle)</pre>
   </details>
 `;
 
@@ -509,6 +520,9 @@
         const forceChk = document.getElementById("forceChk");
         const forceWarn = document.getElementById("forceWarn");
         const progressOut = document.getElementById("progressOut");
+        const execPill = document.getElementById("execPill");
+        const execMeta = document.getElementById("execMeta");
+        const execPbarFill = document.getElementById("execPbarFill");
         const addViz = document.getElementById("addViz");
         const showInternalChk = document.getElementById("showInternalChk");
         const usbOnlyChk = document.getElementById("usbOnlyChk");
@@ -832,6 +846,9 @@
             });
         }
         function setProgress(obj) {
+            // If we are watching an async exec record, don't overwrite progressOut with mount polling.
+            if (execPlanId && execTimer) return;
+
             if (!progressOut) return;
 
             const o = (obj && typeof obj === "object") ? obj : {};
@@ -883,6 +900,185 @@
         }
 
         let pollTimer = null;
+
+// --- NEW: async exec-record polling (plan_id-based) ---
+        let execTimer = null;
+        let execPlanId = "";
+        let execLastState = "";
+        let execLastStep = -1;
+
+        function fmtExecState(s) {
+            s = String(s || "");
+            if (!s) return "(unknown)";
+            return s;
+        }
+
+        function setProgressText(lines) {
+            const txt = lines.join("\n");
+            g_lastProgress = txt;
+            if (progressOut) progressOut.textContent = txt;
+        }
+
+        function stopExecPolling() {
+            if (execTimer) { clearInterval(execTimer); execTimer = null; }
+            execPlanId = "";
+            execLastState = "";
+            execLastStep = -1;
+            setExecUi("idle", -1, -1, "");
+        }
+        function setExecUi(state, stepIndex, stepTotal, planId) {
+            const st = String(state || "idle");
+            const si = Number.isFinite(stepIndex) ? stepIndex : -1;
+            const tot = Number.isFinite(stepTotal) ? stepTotal : -1;
+
+            // Pill class + text
+            if (execPill) {
+                let cls = "pill warn";
+                if (st === "done") cls = "pill ok";
+                else if (st === "failed") cls = "pill err";
+                else if (st === "running") cls = "pill warn";
+                else if (st === "queued") cls = "pill warn";
+                else cls = "pill warn";
+                execPill.className = cls;
+                execPill.textContent = st;
+            }
+
+            // Meta
+            if (execMeta) {
+                if (planId) {
+                    if (si >= 0 && tot > 0) execMeta.textContent = `plan_id=${planId.slice(0,12)}…  ${si}/${tot}`;
+                    else execMeta.textContent = `plan_id=${planId.slice(0,12)}…`;
+                } else {
+                    execMeta.textContent = "(no job)";
+                }
+            }
+
+            // Bar
+            if (execPbarFill) {
+                let pct = 0;
+                if (si >= 0 && tot > 0) pct = Math.max(0, Math.min(100, Math.round((si / tot) * 100)));
+                execPbarFill.style.width = `${pct}%`;
+            }
+        }
+        async function pollExecOnce() {
+            if (!execPlanId) return;
+
+            let rec = null;
+            let http = 0;
+            let errTxt = "";
+
+            try {
+                const q = await fetchJson(`/api/v4/raid/exec-record?plan_id=${encodeURIComponent(execPlanId)}`);
+                http = q.r ? q.r.status : 0;
+                rec = q.j;
+                if (!rec || rec.ok !== true) {
+                    errTxt = prettyError(q.j, q.r, q.txt);
+                }
+            } catch (e) {
+                errTxt = String(e && e.message ? e.message : e);
+            }
+
+            const lines = [];
+            lines.push(`Exec record: plan_id=${execPlanId}`);
+            if (http) lines.push(`HTTP: ${http}`);
+
+            if (!rec || rec.ok !== true) {
+                lines.push(`State: error`);
+                if (errTxt) lines.push(`Error: ${errTxt}`);
+                lines.push("");
+                lines.push("---- raw ----");
+                try { lines.push(JSON.stringify(rec, null, 2)); } catch (_) {}
+                setExecUi("error", -1, -1, execPlanId);
+                setProgressText(lines);
+                return;
+            }
+
+            const state = fmtExecState(rec.state);
+            const busy = !!rec.busy;
+            const si = Number.isFinite(rec.step_index) ? rec.step_index : -1;
+            const st = Number.isFinite(rec.step_total) ? rec.step_total : -1;
+            setExecUi(state, si, st, execPlanId);
+
+            lines.push(`State: ${state} (busy=${busy})`);
+            if (si >= 0 && st > 0) {
+                const pct = Math.max(0, Math.min(100, Math.round((si / st) * 100)));
+                lines.push(`Progress: ${si}/${st} (${pct}%)`);
+            } else {
+                lines.push(`Progress: (unknown)`);
+            }
+
+            if (rec.ts_start) lines.push(`Started: ${rec.ts_start}`);
+            if (rec.ts_last)  lines.push(`Last:    ${rec.ts_last}`);
+            if (rec.ts_end)   lines.push(`Ended:   ${rec.ts_end}`);
+
+            // Optional: if server stores message/error in the record, surface it without assuming keys
+            if (rec.message) lines.push(`Message: ${String(rec.message)}`);
+            if (rec.error)   lines.push(`Error: ${String(rec.error)}`);
+
+            // Show last step output if present (best-effort; safe)
+            // Some records may contain steps[] or results[]; we don't assume schema, we just try.
+            try {
+                if (Array.isArray(rec.steps) && rec.steps.length) {
+                    const last = rec.steps[rec.steps.length - 1];
+                    if (last && typeof last === "object") {
+                        if (last.cmd) lines.push(`Last cmd: ${String(last.cmd)}`);
+                        if (last.ok != null) lines.push(`Last ok: ${String(last.ok)}`);
+                        if (last.rc != null) lines.push(`Last rc: ${String(last.rc)}`);
+                        if (last.out) {
+                            lines.push("Last out:");
+                            lines.push(String(last.out).slice(0, 4000));
+                        }
+                    }
+                } else if (Array.isArray(rec.results) && rec.results.length) {
+                    const last = rec.results[rec.results.length - 1];
+                    if (last && typeof last === "object") {
+                        if (last.cmd) lines.push(`Last cmd: ${String(last.cmd)}`);
+                        if (last.ok != null) lines.push(`Last ok: ${String(last.ok)}`);
+                        if (last.rc != null) lines.push(`Last rc: ${String(last.rc)}`);
+                        if (last.out) {
+                            lines.push("Last out:");
+                            lines.push(String(last.out).slice(0, 4000));
+                        }
+                    }
+                }
+            } catch (_) {}
+
+            lines.push("");
+            lines.push("---- raw ----");
+            try { lines.push(JSON.stringify(rec, null, 2)); } catch (_) {}
+
+            setProgressText(lines);
+
+            // Stop polling when finished
+            const done = (state === "done" || state === "failed");
+            if (done) {
+                // one more probe refresh so UI updates drive membership list
+                setTimeout(() => probe(), 800);
+
+                stopExecPolling();
+                return;
+            }
+
+            // Minor “no spam” logic: if state & step unchanged, do nothing special
+            execLastState = state;
+            execLastStep = si;
+        }
+
+        function startExecPolling(plan_id) {
+            const pid = String(plan_id || "").trim();
+            if (!/^[0-9a-f]{64}$/.test(pid)) {
+                setProgressText([`Exec record: invalid plan_id: ${pid}`]);
+                return;
+            }
+            execPlanId = pid;
+            execLastState = "";
+            execLastStep = -1;
+
+            // start immediately + interval
+            if (execTimer) { clearInterval(execTimer); execTimer = null; }
+            pollExecOnce();
+            execTimer = setInterval(pollExecOnce, 700);
+        }
 
         async function pollOnce() {
             const out = { mount, ts: new Date().toISOString() };
@@ -1143,11 +1339,17 @@
                             response: j ?? txt
                         });
 
-                        if (r.ok) showToast("ok", "Applied ✓ Watching progress…", 2400);
+                        if (r.ok) showToast("ok", "Applied ✓ Watching exec record…", 2400);
                         else showToast("err", "Apply failed. See advanced output.", 4500);
 
+                        // prefer exec-record polling (async worker)
+                        const pid = (j && (j.plan_id || (j.plan && j.plan.plan_id))) ? (j.plan_id || j.plan.plan_id) : "";
+                        if (pid) startExecPolling(pid);
+
+                        // Keep old polling as secondary (balance/scrub/health)
                         startPolling();
-                        setTimeout(() => probe(), 1200);
+
+                        setTimeout(() => probe(), 900);
                     } catch (e) {
                         setActionOut({ error: `Apply remove error: ${String(e && e.stack ? e.stack : e)}` });
                         showToast("err", "Apply crashed. See advanced output.", 5000);
@@ -1326,11 +1528,18 @@
                 request: body,
                 response: j ?? txt
             });
-            if (r.ok) showToast("ok", "Applied ✓ Watching progress…");
+            if (r.ok) showToast("ok", "Applied ✓ Watching exec record…");
             else showToast("err", "Apply failed. See advanced output.");
 
+            // Prefer exec-record polling (async worker)
+            const pid = (j && (j.plan_id || (j.plan && j.plan.plan_id))) ? (j.plan_id || j.plan.plan_id) : "";
+            if (pid) startExecPolling(pid);
+
+            // Keep old polling as secondary (balance/scrub/health)
             startPolling();
-            setTimeout(() => probe(), 1200);
+
+            // Refresh UI soon (drive list will change after done; we also refresh once when job ends)
+            setTimeout(() => probe(), 900);
         });
     }
 
@@ -1338,13 +1547,20 @@
         const elx = document.getElementById("topology");
         if (!elx) return;
 
-        if (!parsed || !parsed.summary) {
+        // Accept either:
+        //  - { summary, usage } (status.parsed)
+        //  - { btrfs: { summary, usage } } (if someone passes whole discovery)
+        const p = (parsed && parsed.summary) ? parsed
+            : (parsed && parsed.btrfs && parsed.btrfs.summary) ? { summary: parsed.btrfs.summary, usage: parsed.btrfs.usage || {} }
+                : null;
+
+        if (!p || !p.summary) {
             elx.textContent = "No topology info.";
             return;
         }
 
-        const s = parsed.summary;
-        const usage = parsed.usage || {};
+        const s = p.summary;
+        const usage = p.usage || {};
 
         let html = "";
 
@@ -1497,9 +1713,22 @@
 
                 if (rawOut) rawOut.textContent = JSON.stringify({ endpoint: "discovery", mount: m, response: j }, null, 2);
 
-                // Actions UI must appear here too
-                renderActions(j, resolved);
+                // Topology: discovery returns { btrfs, disks, ... } (no `parsed`)
+                try {
+                    if (j && j.ok === true && j.btrfs) {
+                        // renderTopology expects { summary, usage } like status.parsed has
+                        // so we pass j.btrfs if it already contains those fields,
+                        // otherwise we just show a simple message.
+                        if (j.btrfs.summary) {
+                            renderTopology({ summary: j.btrfs.summary, usage: j.btrfs.usage || {} });
+                        } else {
+                            // fallback: show whatever btrfs blob is available
+                            if (topologyOut) topologyOut.textContent = "Topology available but schema differs (no btrfs.summary). See raw output.";
+                        }
+                    }
+                } catch (_) {}
 
+                renderActions(j, resolved);
                 return;
             }
 
