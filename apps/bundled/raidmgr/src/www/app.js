@@ -1031,13 +1031,23 @@
                     rmViz.innerHTML = svgRemovePreview({ poolLabel, removeDevLabel: removeDev });
                 }
                 updateRmViz();
-                rmSel?.addEventListener("change", updateRmViz);
+                rmSel?.addEventListener("change", () => {
+                    updateRmViz();
+                    if (rmExecBtn) rmExecBtn.disabled = true;
+                    lastRmPlan = null;
+                    lastRmPlanId = "";
+                });
 
                 rmForceChk?.addEventListener("change", () => {
                     if (!rmForceWarn) return;
                     rmForceWarn.textContent = rmForceChk.checked
                         ? "WARNING: force enabled — you may be removing the drive currently hosting the pool."
                         : "Keep OFF unless you know exactly why you need it.";
+
+                    // force flag changed → old preview is stale; require Preview again
+                    if (rmExecBtn) rmExecBtn.disabled = true;
+                    lastRmPlan = null;
+                    lastRmPlanId = "";
                 });
 
                 let lastRmPlan = null;
@@ -1110,8 +1120,6 @@
                         showToast("info", "Applying…", 2000);
                         setActionOut({ note: "Applying remove…", ts: new Date().toISOString(), mount, remove_device, plan_id: lastRmPlanId });
 
-                        const device = String(addSel?.value || "").trim();
-                        const mode = String(modeSel?.value || "single").trim();
                         const force = !!rmForceChk?.checked;
 
                         const body = {

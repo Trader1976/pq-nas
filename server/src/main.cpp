@@ -7212,19 +7212,17 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
 
     // Locks + execution record (fail-closed)
     int fd_mount_lock = -1;
-    int fd_plan_rec   = -1;
     std::string mount_lockp;
     std::string raid_dir_err;
 
     std::string recp = raid_exec_record_path(expected_plan_id);
 
-    auto close_locks = [&]() {
-        if (fd_plan_rec >= 0) { ::close(fd_plan_rec); fd_plan_rec = -1; }
-        if (fd_mount_lock >= 0) { ::close(fd_mount_lock); fd_mount_lock = -1; }
-        if (!mount_lockp.empty()) {
-            (void)std::filesystem::remove(mount_lockp); // lease
-        }
-    };
+	auto close_locks = [&]() {
+    	if (fd_mount_lock >= 0) { ::close(fd_mount_lock); fd_mount_lock = -1; }
+    	if (!mount_lockp.empty()) {
+        	(void)std::filesystem::remove(mount_lockp); // lease
+    	}
+	};
 
     // Ensure state dir exists
     if (!ensure_dir_fail_closed("/run/pqnas/raid", &raid_dir_err)) {
@@ -7277,45 +7275,28 @@ auto make_attempt_path = [&]() -> std::string {
     return raid_exec_record_path(expected_plan_id + "." + ts);
 };
 
-{
-    std::string rec_err;
-    fd_plan_rec = open_excl_lockfile(recp, &rec_err);
 
-    if (fd_plan_rec < 0) {
+    if (std::filesystem::exists(recp)) {
         const std::string state = read_exec_state_best_effort(recp);
-
         if (state == "running") {
             close_locks();
-            reply_json(res, 200, json{
+            reply_json(res, 409, json{
                 {"ok", false},
-                {"error", "already_executed"},
+                {"error", "already_running"},
                 {"message", "this plan_id already has a running execution record; refusing replay"},
                 {"plan_id", expected_plan_id},
-                {"path", recp},
-                {"detail", rec_err}
+                {"path", recp}
             }.dump());
             return;
         }
 
-        // Not running: allow retry with a unique execution record file.
-        recp = make_attempt_path();
-        rec_err.clear();
-        fd_plan_rec = open_excl_lockfile(recp, &rec_err);
-
-        if (fd_plan_rec < 0) {
-            close_locks();
-            reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "exec_record_lock_failed"},
-                {"message", "failed to create execution record for new attempt"},
-                {"plan_id", expected_plan_id},
-                {"path", recp},
-                {"detail", rec_err}
-            }.dump());
-            return;
+        // Archive old canonical record (best-effort)
+        const std::string archive_path = make_attempt_path();
+        try { std::filesystem::rename(recp, archive_path); }
+        catch (...) {
+            // ignore: we'll overwrite canonical via atomic write below
         }
     }
-}
 
     // Initial record (fail-closed)
     const std::string ts0 = pqnas::now_iso_utc();
@@ -7346,25 +7327,21 @@ auto make_attempt_path = [&]() -> std::string {
         {"results", json::array()}
     };
 
-    {
-        const std::string txt = record.dump(2) + "\n";
-        if (!write_fd_all(fd_plan_rec, txt)) {
-            const std::string err = std::string("write record failed: ") + std::strerror(errno);
-            close_locks();
-            reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "exec_record_write_failed"},
-                {"message", "failed to write execution record; refusing to execute"},
-                {"detail", err}
-            }.dump());
-            return;
-        }
-
-        // Close fd: existence of record file is the replay lock.
-        ::close(fd_plan_rec);
-        fd_plan_rec = -1;
-    }
-
+	{
+	    const std::string txt = record.dump(2) + "\n";
+	    if (!write_text_file_atomic(recp, txt)) {
+    	    const std::string err = std::string("write record failed: ") + std::strerror(errno);
+	        close_locks();
+        	reply_json(res, 500, json{
+        	    {"ok", false},
+    	        {"error", "exec_record_write_failed"},
+	            {"message", "failed to write execution record; refusing to execute"},
+        	    {"detail", err},
+    	        {"path", recp}
+	        }.dump());
+        	return;
+    	}
+	}
     // -------- Execute commands (stop on first failure) --------
     json results = json::array();
     bool all_ok = true;
