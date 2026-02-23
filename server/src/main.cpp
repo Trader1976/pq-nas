@@ -75,6 +75,7 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include <cerrno>
 #include <errno.h>
 #include <sys/stat.h>
+#include <condition_variable>
 
 extern "C" {
 #include "qrauth_v4.h"
@@ -3014,8 +3015,6 @@ static bool ensure_dir_fail_closed(const std::string& dir, std::string* err) {
 }
 
 static int open_excl_lockfile(const std::string& path, std::string* err) {
-    // O_EXCL is the lock. If it exists, someone already took it.
-    // Use a restrictive mode; sudoers/umask shouldn't matter for /run, but keep it tight.
     int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0640);
     if (fd < 0) {
         if (err) *err = std::string("open(O_EXCL) failed: ") + std::strerror(errno);
@@ -3371,6 +3370,431 @@ static void raid_exec_record_append_step(json* rec,
     (*rec)["state"]      = "running";
 }
 
+
+
+// ============================================================================
+// RAID ASYNC JOB ENGINE (MVP): single worker, in-memory queue
+// - execute/* enqueues job + writes canonical record state=queued
+// - worker acquires per-mount lock, runs commands sequentially,
+//   updates canonical /run/pqnas/raid/<plan_id>.json after each step
+// - restart policy (Option A): in-memory queue only; any "running" record is
+//   marked failed at startup (best-effort).
+// ============================================================================
+
+// Forward declarations (async engine needs these; definitions exist later)
+static bool raid_exec_record_read(const std::string& plan_id, json* out, std::string* err);
+static bool raid_exec_record_write_atomic(const std::string& plan_id, const json& rec);
+static std::string raid_exec_record_path(const std::string& plan_id);
+
+struct RaidJob {
+    std::string job_id;
+    std::string plan_id;
+    std::string resolved_mount;
+
+    // Optional: keep some metadata for nicer responses/status
+    json plan;                 // plan payload to echo in response
+    json record;               // execution record JSON we mutate and write
+    json commands;             // array of strings (same as plan["commands"])
+};
+
+static std::mutex g_raid_jobs_mu;
+static std::condition_variable g_raid_jobs_cv;
+static std::deque<RaidJob> g_raid_jobs_q;
+
+static std::unordered_map<std::string, json> g_raid_job_meta; // job_id -> small status/meta
+
+static std::atomic<bool> g_raid_worker_stop{false};
+static std::thread g_raid_worker_thr;
+
+static std::string raid_job_new_id() {
+    // Prefer your existing random hex helper if you have one.
+    // Fallback: SHA256(now+pid+rand) style (best-effort uniqueness).
+    std::string seed = pqnas::now_iso_utc();
+    seed += "|pid=" + std::to_string((int)getpid());
+    seed += "|rnd=" + std::to_string((uint64_t)std::rand());
+    std::string h = sha256_hex_lower_evp(seed);
+    if (h.size() >= 24) return h.substr(0, 24);
+    return h.empty() ? "job_bad" : h;
+}
+
+static json raid_exec_record_read_best_effort_obj(const std::string& plan_id,
+                                                 const std::string& resolved_mount,
+                                                 const json& plan,
+                                                 const json& commands) {
+    json rec = json::object();
+    std::string err;
+    if (raid_exec_record_read(plan_id, &rec, &err)) return rec;
+
+    // fallback minimal (but UI-consistent)
+    const std::string ts0 = pqnas::now_iso_utc();
+
+    rec["plan_id"] = plan_id;
+    rec["record_path"] = raid_exec_record_path(plan_id); // canonical
+    rec["state"] = "queued";
+    rec["busy"] = true;
+
+    rec["mount"] = resolved_mount;
+    rec["plan"] = plan;
+    rec["commands"] = commands;
+
+    rec["step_index"] = 0;
+    rec["step_total"] = commands.is_array() ? (int)commands.size() : 0;
+    rec["results"] = json::array();
+
+    rec["ts_start"] = ts0;
+    rec["ts_last"]  = ts0;
+    rec["ts_end"]   = nullptr;
+    return rec;
+}
+
+static std::string raid_exec_record_archive_path_for_plan(const std::string& plan_id) {
+    // /run/pqnas/raid/<plan_id>.<timestamp>.json
+    std::string ts = pqnas::now_iso_utc(); // e.g. 2026-02-22T02:15:30Z
+    for (char& c : ts) {
+        if (c == ':' || c == '-') c = '_';
+    }
+    return raid_exec_record_path(plan_id + "." + ts);
+}
+
+static std::string raid_exec_state_best_effort_from_path(const std::string& path) {
+    std::string txt;
+    if (!read_text_file(path, &txt)) return "";
+    if (txt.size() > (512 * 1024)) txt.resize(512 * 1024);
+    try {
+        json j = json::parse(txt);
+        if (j.contains("state") && j["state"].is_string()) return j["state"].get<std::string>();
+    } catch (...) {}
+    return "";
+}
+
+static bool raid_write_queued_record_fail_closed(const std::string& plan_id,
+                                                 const std::string& resolved_mount,
+                                                 const json& plan,
+                                                 const json& commands,
+                                                 std::string* err_out) {
+    // Must always write canonical record path: /run/pqnas/raid/<plan_id>.json
+    const std::string ts0 = pqnas::now_iso_utc();
+
+    json rec = {
+        {"ts_start", ts0},
+        {"ts_last",  ts0},
+        {"ts_end",   nullptr},
+
+        {"plan_id", plan_id},
+        {"record_path", raid_exec_record_path(plan_id)}, // canonical
+        {"state", "queued"},
+        {"busy", true},
+
+        {"mount", resolved_mount},
+        {"plan", plan},
+
+        {"commands", commands},
+        {"step_index", 0},
+        {"step_total", commands.is_array() ? (int)commands.size() : 0},
+        {"results", json::array()}
+    };
+
+    if (!raid_exec_record_write_atomic(plan_id, rec)) {
+        if (err_out) *err_out = "raid_exec_record_write_atomic failed";
+        return false;
+    }
+    return true;
+}
+
+static void raid_finalize_record(const std::string& plan_id, json* rec,
+                                bool ok, const std::string& err_msg,
+                                const json* post_status_or_null) {
+    const std::string ts_end = pqnas::now_iso_utc();
+    (*rec)["ts_end"]  = ts_end;
+    (*rec)["ts_last"] = ts_end;
+    (*rec)["busy"]    = false;
+    (*rec)["state"]   = ok ? "done" : "failed";
+    if (!ok && !err_msg.empty()) (*rec)["error"] = err_msg;
+    if (ok && post_status_or_null) (*rec)["post_status"] = *post_status_or_null;
+    (void)raid_exec_record_write_atomic(plan_id, *rec);
+}
+
+static bool raid_run_one_step(const std::string& cmd, std::string* out, int* ec) {
+    if (!out || !ec) return false;
+    out->clear();
+    *ec = 0;
+
+    // Pseudo-command: WAIT_BLOCK <path> <timeout_ms>
+    if (cmd.rfind("WAIT_BLOCK ", 0) == 0) {
+        std::istringstream iss(cmd);
+        std::string tag, path;
+        int timeout_ms = 0;
+        iss >> tag >> path >> timeout_ms;
+
+        if (path.empty() || timeout_ms <= 0) {
+            *out = "err: WAIT_BLOCK format is: WAIT_BLOCK <path> <timeout_ms>\n";
+            *ec = 2;
+            return true;
+        }
+
+        auto is_block = [](const std::string& p) -> bool {
+            struct stat st;
+            if (::stat(p.c_str(), &st) != 0) return false;
+            return S_ISBLK(st.st_mode);
+        };
+
+        const int sleep_step_ms = 50;
+        int waited = 0;
+        while (waited < timeout_ms) {
+            if (is_block(path)) {
+                *out = "ok: block device present: " + path + "\n";
+                *ec = 0;
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleep_step_ms));
+            waited += sleep_step_ms;
+        }
+
+        *out = "err: timed out waiting for block device: " + path + "\n";
+        *ec = 1;
+        return true;
+    }
+
+    // normal command
+    const bool ran = run_cmd_capture(cmd, out, ec);
+    return ran;
+}
+
+static void raid_worker_main() {
+    for (;;) {
+        RaidJob job;
+
+        {
+            std::unique_lock<std::mutex> lk(g_raid_jobs_mu);
+            g_raid_jobs_cv.wait(lk, [&] { return g_raid_worker_stop.load() || !g_raid_jobs_q.empty(); });
+            if (g_raid_worker_stop.load()) return;
+
+            job = std::move(g_raid_jobs_q.front());
+            g_raid_jobs_q.pop_front();
+
+            // mark running in meta
+            g_raid_job_meta[job.job_id]["state"] = "running";
+            g_raid_job_meta[job.job_id]["ts_started"] = pqnas::now_iso_utc();
+        }
+
+        // Move record to running (without adding a fake step)
+		job.record["state"] = "running";
+		job.record["busy"]  = true;
+		job.record["ts_last"] = pqnas::now_iso_utc();
+		(void)raid_exec_record_write_atomic(job.plan_id, job.record);
+
+        // Acquire per-mount lock inside worker (so HTTP returns immediately)
+        int fd_mount_lock = -1;
+        std::string mount_lockp = raid_mount_lock_path(job.resolved_mount);
+        {
+            std::string mount_lock_err;
+            fd_mount_lock = open_excl_lockfile(mount_lockp, &mount_lock_err);
+            if (fd_mount_lock < 0) {
+                raid_finalize_record(job.plan_id, &job.record, false,
+                                    "raid_busy: another raid operation is in progress for this mount",
+                                    nullptr);
+
+                std::lock_guard<std::mutex> lk(g_raid_jobs_mu);
+                g_raid_job_meta[job.job_id]["state"] = "failed";
+                g_raid_job_meta[job.job_id]["error"] = "raid_busy";
+                g_raid_job_meta[job.job_id]["ts_finished"] = pqnas::now_iso_utc();
+                continue;
+            }
+        }
+
+        auto close_mount_lock = [&]() {
+            if (fd_mount_lock >= 0) { ::close(fd_mount_lock); fd_mount_lock = -1; }
+            if (!mount_lockp.empty()) (void)std::filesystem::remove(mount_lockp);
+        };
+
+        bool all_ok = true;
+        json results = json::array();
+
+        const int total = job.commands.is_array() ? (int)job.commands.size() : 0;
+
+        for (int i = 0; i < total; i++) {
+            if (!job.commands[i].is_string()) continue;
+            const std::string cmd = job.commands[i].get<std::string>();
+
+            std::string out;
+            int ec = 0;
+            const bool ran = raid_run_one_step(cmd, &out, &ec);
+            const bool step_ok = ran && (ec == 0);
+
+            cap_string(out, 128 * 1024);
+
+            json one = {
+                {"i", i},
+                {"cmd", cmd},
+                {"rc", ec},
+                {"ok", step_ok},
+                {"out", out}
+            };
+            results.push_back(one);
+
+            raid_exec_record_append_step(&job.record, i + 1, total, cmd, step_ok, ec, out);
+            (void)raid_exec_record_write_atomic(job.plan_id, job.record);
+
+            if (!step_ok) { all_ok = false; break; }
+        }
+
+        // finalize (+ post_status if ok)
+        if (all_ok) {
+            json status = storage_btrfs_status_json(job.resolved_mount);
+            status["resolved_mount"] = job.resolved_mount;
+            raid_finalize_record(job.plan_id, &job.record, true, "", &status);
+        } else {
+            std::string emsg = "command failed";
+			try {
+    			if (!results.empty() && results.back().is_object()) {
+        			emsg = std::string("step failed: ") + results.back().value("cmd","") +
+            			   " rc=" + std::to_string(results.back().value("rc", -1));
+    			}
+			} catch (...) {}
+			raid_finalize_record(job.plan_id, &job.record, false, emsg, nullptr);
+        }
+
+        close_mount_lock();
+
+        {
+            std::lock_guard<std::mutex> lk(g_raid_jobs_mu);
+            g_raid_job_meta[job.job_id]["state"] = all_ok ? "done" : "failed";
+            g_raid_job_meta[job.job_id]["ts_finished"] = pqnas::now_iso_utc();
+        }
+    }
+}
+
+static void raid_worker_start_once() {
+    static std::atomic<bool> started{false};
+    bool expected = false;
+    if (!started.compare_exchange_strong(expected, true)) return;
+    g_raid_worker_stop.store(false);
+    g_raid_worker_thr = std::thread(raid_worker_main);
+}
+
+static void raid_worker_stop_and_join() {
+    g_raid_worker_stop.store(true);
+    g_raid_jobs_cv.notify_all();
+    if (g_raid_worker_thr.joinable()) g_raid_worker_thr.join();
+}
+
+// Restart policy Option A: mark any running/busy canonical records as failed (best-effort).
+static void raid_startup_fail_running_records_best_effort() {
+    const std::string dir = "/run/pqnas/raid";
+    if (!std::filesystem::exists(dir)) return;
+
+    for (auto& de : std::filesystem::directory_iterator(dir)) {
+        if (!de.is_regular_file()) continue;
+        const std::string fn = de.path().filename().string();
+
+        // only canonical: <64hex>.json
+        if (fn.size() != (64 + 5)) continue;
+        if (fn.rfind(".json") != fn.size() - 5) continue;
+
+        const std::string plan_id = fn.substr(0, 64);
+        if (!is_sha256_hex_lower(plan_id)) continue;
+
+        const std::string path = de.path().string();
+        const std::string st = raid_exec_state_best_effort_from_path(path);
+
+        // If it was running, fail it closed. (Also catch busy=true even if state missing.)
+        bool busy = false;
+        try {
+            std::string txt;
+            if (read_text_file(path, &txt)) {
+                if (txt.size() > (512 * 1024)) txt.resize(512 * 1024);
+                json j = json::parse(txt);
+                busy = j.value("busy", false);
+            }
+        } catch (...) {}
+
+        if (st == "running" || busy) {
+            // Rewrite canonical record to failed
+            json rec;
+            try {
+                std::string txt;
+                if (read_text_file(path, &txt)) {
+                    if (txt.size() > (512 * 1024)) txt.resize(512 * 1024);
+                    rec = json::parse(txt);
+                }
+            } catch (...) {
+                rec = json::object();
+            }
+            rec["plan_id"] = plan_id;
+            rec["record_path"] = path;
+            rec["busy"] = false;
+            rec["state"] = "failed";
+            rec["error"] = "server restarted";
+            rec["ts_last"] = pqnas::now_iso_utc();
+            if (!rec.contains("ts_end") || rec["ts_end"].is_null()) rec["ts_end"] = pqnas::now_iso_utc();
+            (void)raid_exec_record_write_atomic(plan_id, rec);
+        }
+    }
+}
+
+static json raid_enqueue_job_fail_closed(const std::string& plan_id,
+                                        const std::string& resolved_mount,
+                                        const json& plan,
+                                        const json& commands) {
+    // Ensure /run/pqnas/raid exists (fail-closed)
+    std::string raid_dir_err;
+    if (!ensure_dir_fail_closed("/run/pqnas/raid", &raid_dir_err)) {
+        throw std::runtime_error("raid_state_dir_failed: " + raid_dir_err);
+    }
+
+    // Replay safety:
+    // - if canonical exists and state==running => refuse
+    // - otherwise archive old canonical to <plan_id>.<ts>.json (best-effort)
+    const std::string canonical = raid_exec_record_path(plan_id);
+    if (std::filesystem::exists(canonical)) {
+        const std::string st = raid_exec_state_best_effort_from_path(canonical);
+        if (st == "running") {
+            throw std::runtime_error("already_running");
+        }
+        const std::string ap = raid_exec_record_archive_path_for_plan(plan_id);
+        try { std::filesystem::rename(canonical, ap); } catch (...) { /* ignore */ }
+    }
+
+	std::string werr;
+	if (!raid_write_queued_record_fail_closed(plan_id, resolved_mount, plan, commands, &werr)) {
+    	throw std::runtime_error("exec_record_write_failed: " + werr);
+	}
+    // start worker if needed
+    raid_worker_start_once();
+
+    // enqueue
+    RaidJob job;
+    job.job_id = raid_job_new_id();
+    job.plan_id = plan_id;
+    job.resolved_mount = resolved_mount;
+    job.plan = plan;
+    job.commands = commands;
+
+	job.record = raid_exec_record_read_best_effort_obj(plan_id, resolved_mount, plan, commands);
+
+    {
+        std::lock_guard<std::mutex> lk(g_raid_jobs_mu);
+        g_raid_jobs_q.push_back(job);
+        g_raid_job_meta[job.job_id] = json{
+            {"job_id", job.job_id},
+            {"plan_id", plan_id},
+            {"resolved_mount", resolved_mount},
+            {"record_path", canonical},
+            {"state", "queued"},
+            {"ts_created", pqnas::now_iso_utc()}
+        };
+    }
+    g_raid_jobs_cv.notify_one();
+
+    return json{
+        {"ok", true},
+        {"job_id", job.job_id},
+        {"plan_id", plan_id},
+        {"record_path", canonical},
+        {"state", "queued"}
+    };
+}
+
 static bool raid_exec_record_write_atomic(const std::string& plan_id, const json& rec) {
     if (!is_sha256_hex_lower(plan_id)) return false;
     const std::string path = raid_exec_record_path(plan_id);
@@ -3654,6 +4078,8 @@ auto maybe_auto_rotate_before_append = [&]() {
 
     httplib::Server srv;
 
+	// RAID async engine startup repair (Option A restart policy)
+	raid_startup_fail_running_records_best_effort();
 
     // ---- Load admin settings once at startup (audit min level) ----
     try {
@@ -6029,6 +6455,9 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
 
     reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
 });
+
+
+
 // ----- POST /api/v4/raid/plan/remove-device (admin-only, plan-only) ----------
 srv.Post("/api/v4/raid/plan/remove-device", [&](const httplib::Request& req, httplib::Response& res) {
     pqnas::UsersRegistry users;
@@ -6325,6 +6754,7 @@ srv.Post("/api/v4/raid/plan/remove-device", [&](const httplib::Request& req, htt
 
     reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
 });
+
 // ----- POST /api/v4/raid/execute/add-device (admin-only) ---------------------
 // Body: { mount, new_disk, mode:"single|raid1", force:bool, plan_id:string, dry_run?:bool, confirm?:bool }
 srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, httplib::Response& res) {
@@ -6668,260 +7098,45 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         return;
     }
 
-    // Locks + execution record (fail-closed)
-    int fd_mount_lock = -1;
-    int fd_plan_rec   = -1;
-    std::string mount_lockp;
-    std::string raid_dir_err;
+    // Async enqueue (fail-closed): create canonical queued record + return immediately.
+    try {
+        json q = raid_enqueue_job_fail_closed(expected_plan_id, resolved_mount, plan, commands);
+        // Keep UX fields consistent with old response shape
+        q["dry_run"] = false;
+        q["plan"] = plan;
+        reply_json(res, 200, q.dump());
+        return;
+    } catch (const std::exception& e) {
+        const std::string msg = e.what();
 
-    std::string recp = raid_exec_record_path(expected_plan_id);
-
-    auto close_locks = [&]() {
-        if (fd_plan_rec >= 0) { ::close(fd_plan_rec); fd_plan_rec = -1; }
-        if (fd_mount_lock >= 0) { ::close(fd_mount_lock); fd_mount_lock = -1; }
-        if (!mount_lockp.empty()) {
-            (void)std::filesystem::remove(mount_lockp); // lease
+        if (msg == "already_running") {
+            reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "already_running"},
+                {"message", "this plan_id already has a running execution record; refusing replay"},
+                {"plan_id", expected_plan_id},
+                {"record_path", raid_exec_record_path(expected_plan_id)}
+            }.dump());
+            return;
         }
-    };
 
-    // Ensure state dir exists
-    if (!ensure_dir_fail_closed("/run/pqnas/raid", &raid_dir_err)) {
+        if (msg.rfind("raid_state_dir_failed:", 0) == 0) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "raid_state_dir_failed"},
+                {"message", "cannot create/verify /run/pqnas/raid; refusing to execute"},
+                {"detail", msg}
+            }.dump());
+            return;
+        }
+
         reply_json(res, 500, json{
             {"ok", false},
-            {"error", "raid_state_dir_failed"},
-            {"message", "cannot create/verify /run/pqnas/raid; refusing to execute"},
-            {"detail", raid_dir_err}
+            {"error", "enqueue_failed"},
+            {"detail", msg}
         }.dump());
         return;
     }
-
-    // Acquire per-mount lock first
-    mount_lockp = raid_mount_lock_path(resolved_mount);
-    {
-        std::string mount_lock_err;
-        fd_mount_lock = open_excl_lockfile(mount_lockp, &mount_lock_err);
-        if (fd_mount_lock < 0) {
-            reply_json(res, 409, json{
-                {"ok", false},
-                {"error", "raid_busy"},
-                {"message", "another raid operation is in progress for this mount"},
-                {"mount", resolved_mount},
-                {"path", mount_lockp},
-                {"detail", mount_lock_err}
-            }.dump());
-            return;
-        }
-    }
-
-    // Acquire per-plan execution record lock (replay protection, but allow re-run after completion)
-    // NOTE: recp may change to an attempt-suffixed path if an old (done/failed) record exists.
-    auto read_exec_state_best_effort = [&](const std::string& path) -> std::string {
-        std::string txt;
-        if (!read_text_file(path, &txt)) return "";
-        if (txt.size() > (512 * 1024)) txt.resize(512 * 1024);
-        try {
-            json j = json::parse(txt);
-            if (j.contains("state") && j["state"].is_string()) return j["state"].get<std::string>();
-        } catch (...) {}
-        return "";
-    };
-
-    auto make_attempt_path = [&]() -> std::string {
-        std::string ts = pqnas::now_iso_utc(); // "2026-02-22T02:15:30Z"
-        for (char& c : ts) {
-            if (c == ':' || c == '-') c = '_';
-        }
-        return raid_exec_record_path(expected_plan_id + "." + ts);
-    };
-
-    {
-        std::string rec_err;
-        fd_plan_rec = open_excl_lockfile(recp, &rec_err);
-
-        if (fd_plan_rec < 0) {
-            const std::string state = read_exec_state_best_effort(recp);
-
-            if (state == "running") {
-                close_locks();
-                reply_json(res, 200, json{
-                    {"ok", false},
-                    {"error", "already_executed"},
-                    {"message", "this plan_id already has a running execution record; refusing replay"},
-                    {"plan_id", expected_plan_id},
-                    {"path", recp},
-                    {"detail", rec_err}
-                }.dump());
-                return;
-            }
-
-            // Not running (done/failed/unknown): allow a new attempt using a unique record path.
-            recp = make_attempt_path();
-            rec_err.clear();
-            fd_plan_rec = open_excl_lockfile(recp, &rec_err);
-
-            if (fd_plan_rec < 0) {
-                close_locks();
-                reply_json(res, 500, json{
-                    {"ok", false},
-                    {"error", "exec_record_lock_failed"},
-                    {"message", "failed to create execution record for new attempt"},
-                    {"plan_id", expected_plan_id},
-                    {"path", recp},
-                    {"detail", rec_err}
-                }.dump());
-                return;
-            }
-        }
-    }
-
-    // Initial record (fail-closed), then live-update via write_text_file_atomic(recp,...)
-    const std::string ts0 = pqnas::now_iso_utc();
-    json record = {
-        {"ts_start", ts0},
-        {"ts_last",  ts0},
-        {"ts_end",   nullptr},
-
-        {"plan_id", expected_plan_id},
-        {"record_path", recp},
-        {"state", "running"},
-        {"busy", true},
-
-        {"mount", resolved_mount},
-        {"input_mount", mount},
-        {"resolved_source", resolved_source},
-        {"resolved_disk", resolved_disk},
-
-        {"new_disk", new_disk},
-        {"new_partition", new_part},
-        {"mode", mode},
-        {"force", force},
-        {"dry_run", false},
-
-        {"plan", plan},
-
-        {"commands", commands},
-        {"step_index", 0},
-        {"step_total", (int)commands.size()},
-        {"results", json::array()}
-    };
-
-    {
-        const std::string txt = record.dump(2) + "\n";
-        if (!write_fd_all(fd_plan_rec, txt)) {
-            const std::string err = std::string("write record failed: ") + std::strerror(errno);
-            close_locks();
-            reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "exec_record_write_failed"},
-                {"message", "failed to write execution record; refusing to execute"},
-                {"detail", err}
-            }.dump());
-            return;
-        }
-
-        // Close fd: existence of record file is the replay lock.
-        ::close(fd_plan_rec);
-        fd_plan_rec = -1;
-    }
-
-    // -------- Execute commands (stop on first failure) --------
-    json results = json::array();
-    bool all_ok = true;
-
-    const int total = (int)commands.size();
-
-    for (int i = 0; i < total; i++) {
-        const auto& c = commands[i];
-        if (!c.is_string()) continue;
-        const std::string cmd = c.get<std::string>();
-
-        std::string out;
-        int ec = 0;
-        bool step_ok = false;
-
-        if (cmd.rfind("WAIT_BLOCK ", 0) == 0) {
-            std::istringstream iss(cmd);
-            std::string tag, path;
-            int timeout_ms = 2000;
-            iss >> tag >> path >> timeout_ms;
-
-            auto is_block = [](const std::string& p) -> bool {
-                struct stat st;
-                if (::stat(p.c_str(), &st) != 0) return false;
-                return S_ISBLK(st.st_mode);
-            };
-
-            const int step_ms = 100;
-            int waited = 0;
-
-            while (waited < timeout_ms) {
-                if (is_block(path)) {
-                    out = "ok: block device present: " + path + "\n";
-                    ec = 0;
-                    step_ok = true;
-                    break;
-                }
-                ::usleep(step_ms * 1000);
-                waited += step_ms;
-            }
-
-            if (!step_ok) {
-                out = "timeout waiting for block device: " + path + "\n";
-                ec = 1;
-            }
-        } else {
-            const bool ran = run_cmd_capture(cmd, &out, &ec);
-            step_ok = ran && (ec == 0);
-        }
-
-        json one = {
-            {"i", i},
-            {"cmd", cmd},
-            {"rc", ec},
-            {"ok", step_ok},
-            {"out", out}
-        };
-        results.push_back(one);
-
-        raid_exec_record_append_step(&record, i + 1, total, cmd, step_ok, ec, out);
-        (void)raid_exec_record_write_atomic(expected_plan_id, record);
-
-
-
-        if (!step_ok) { all_ok = false; break; }
-    }
-
-    json outj;
-    outj["ok"] = all_ok;
-    outj["dry_run"] = false;
-    outj["plan"] = plan;
-    outj["record_path"] = recp;
-    outj["results"] = results;
-
-    // Finalize record (+ post_status if ok)
-    const std::string ts_end = pqnas::now_iso_utc();
-    record["ts_end"]  = ts_end;
-    record["ts_last"] = ts_end;
-    record["busy"]    = false;
-    record["state"]   = all_ok ? "done" : "failed";
-    record["results"] = results;
-
-    if (all_ok) {
-        json status = storage_btrfs_status_json(resolved_mount);
-        status["input_mount"] = mount;
-        status["resolved_mount"] = resolved_mount;
-        status["resolved_source"] = resolved_source;
-        status["resolved_disk"] = resolved_disk;
-        status["fstype"] = fstype_out;
-
-        record["post_status"] = status;
-        outj["post_status"] = status;
-    }
-
-    (void)write_text_file_atomic(recp, record.dump(2) + "\n");
-
-    close_locks();
-    reply_json(res, 200, outj.dump());
 });
 
 
@@ -7068,7 +7283,17 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     }
 
     BtrfsShowParsed parsed = parse_btrfs_filesystem_show(show_raw);
-    json btrfs_j = btrfs_show_parsed_to_json(parsed, by_path, disks_j.value("by_name", json::object()));
+	json btrfs_j = btrfs_show_parsed_to_json(parsed, by_path, disks_j.value("by_name", json::object()));
+
+	const std::string membership_fp = btrfs_membership_fingerprint(btrfs_j);
+	if (membership_fp.empty()) {
+    	reply_json(res, 500, json{
+    	    {"ok", false},
+	        {"error", "membership_fp_failed"},
+        	{"message", "failed to compute btrfs membership fingerprint"}
+    	}.dump());
+    	return;
+	}
 
     // Find member device in filesystem corresponding to remove_device
     std::string member_path;
@@ -7166,7 +7391,7 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     // don't collide with old execution records (MUST match plan/remove-device).
     const std::string salt =
         std::string("mount=") + resolved_mount + "\n" +
-        std::string("btrfs_membership_fp=") + btrfs_membership_fingerprint(btrfs_j) + "\n";
+        std::string("btrfs_membership_fp=") + membership_fp + "\n";
 
     const std::string expected_plan_id = sha256_hex_lower_evp(joined + "\n" + salt);
 
@@ -7188,6 +7413,7 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     // Prepare response plan payload (for caller/UI)
     json plan;
     plan["plan_id"] = expected_plan_id;
+    plan["btrfs_membership_fp"] = membership_fp;
     plan["mount"] = resolved_mount;
     plan["input_mount"] = mount;
     plan["resolved_mount"] = resolved_mount;
@@ -7210,256 +7436,71 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
         return;
     }
 
-    // Locks + execution record (fail-closed)
-    int fd_mount_lock = -1;
-    std::string mount_lockp;
-    std::string raid_dir_err;
-
-    std::string recp = raid_exec_record_path(expected_plan_id);
-
-	auto close_locks = [&]() {
-    	if (fd_mount_lock >= 0) { ::close(fd_mount_lock); fd_mount_lock = -1; }
-    	if (!mount_lockp.empty()) {
-        	(void)std::filesystem::remove(mount_lockp); // lease
-    	}
-	};
-
-    // Ensure state dir exists
-    if (!ensure_dir_fail_closed("/run/pqnas/raid", &raid_dir_err)) {
-        reply_json(res, 500, json{
-            {"ok", false},
-            {"error", "raid_state_dir_failed"},
-            {"message", "cannot create/verify /run/pqnas/raid; refusing to execute"},
-            {"detail", raid_dir_err}
-        }.dump());
-        return;
-    }
-
-    // Acquire per-mount lock first
-    mount_lockp = raid_mount_lock_path(resolved_mount);
-    {
-        std::string mount_lock_err;
-        fd_mount_lock = open_excl_lockfile(mount_lockp, &mount_lock_err);
-        if (fd_mount_lock < 0) {
-            reply_json(res, 409, json{
-                {"ok", false},
-                {"error", "raid_busy"},
-                {"message", "another raid operation is in progress for this mount"},
-                {"mount", resolved_mount},
-                {"path", mount_lockp},
-                {"detail", mount_lock_err}
-            }.dump());
-            return;
-        }
-    }
-
-// Acquire per-plan execution record lock
-// - If an existing record is "running", refuse replay.
-// - If an existing record is "done"/"failed"/unknown, allow a new attempt by using a unique record path.
-auto read_exec_state_best_effort = [&](const std::string& path) -> std::string {
-    std::string txt;
-    if (!read_text_file(path, &txt)) return "";
-    if (txt.size() > (512 * 1024)) txt.resize(512 * 1024);
+    // Async enqueue (fail-closed): create canonical queued record + return immediately.
     try {
-        json j = json::parse(txt);
-        if (j.contains("state") && j["state"].is_string()) return j["state"].get<std::string>();
-    } catch (...) {}
-    return "";
-};
+        json q = raid_enqueue_job_fail_closed(expected_plan_id, resolved_mount, plan, commands);
+        q["dry_run"] = false;
+        q["plan"] = plan;
+        reply_json(res, 200, q.dump());
+        return;
+    } catch (const std::exception& e) {
+        const std::string msg = e.what();
 
-auto make_attempt_path = [&]() -> std::string {
-    std::string ts = pqnas::now_iso_utc(); // e.g. 2026-02-22T02:15:30Z
-    for (char& c : ts) {
-        if (c == ':' || c == '-') c = '_';
-    }
-    return raid_exec_record_path(expected_plan_id + "." + ts);
-};
-
-
-    if (std::filesystem::exists(recp)) {
-        const std::string state = read_exec_state_best_effort(recp);
-        if (state == "running") {
-            close_locks();
+        if (msg == "already_running") {
             reply_json(res, 409, json{
                 {"ok", false},
                 {"error", "already_running"},
                 {"message", "this plan_id already has a running execution record; refusing replay"},
                 {"plan_id", expected_plan_id},
-                {"path", recp}
+                {"record_path", raid_exec_record_path(expected_plan_id)}
             }.dump());
             return;
         }
 
-        // Archive old canonical record (best-effort)
-        const std::string archive_path = make_attempt_path();
-        try { std::filesystem::rename(recp, archive_path); }
-        catch (...) {
-            // ignore: we'll overwrite canonical via atomic write below
-        }
-    }
-
-    // Initial record (fail-closed)
-    const std::string ts0 = pqnas::now_iso_utc();
-    json record = {
-        {"ts_start", ts0},
-        {"ts_last",  ts0},
-        {"ts_end",   nullptr},
-
-        {"plan_id", expected_plan_id},
-        {"state", "running"},
-        {"busy", true},
-
-        {"mount", resolved_mount},
-        {"input_mount", mount},
-        {"resolved_source", resolved_source},
-        {"resolved_disk", resolved_disk},
-
-        {"remove_device", remove_device},
-        {"remove_member_path", member_path},
-        {"force", force},
-        {"dry_run", false},
-
-        {"plan", plan},
-
-        {"commands", commands},
-        {"step_index", 0},
-        {"step_total", (int)commands.size()},
-        {"results", json::array()}
-    };
-
-	{
-	    const std::string txt = record.dump(2) + "\n";
-	    if (!write_text_file_atomic(recp, txt)) {
-    	    const std::string err = std::string("write record failed: ") + std::strerror(errno);
-	        close_locks();
-        	reply_json(res, 500, json{
-        	    {"ok", false},
-    	        {"error", "exec_record_write_failed"},
-	            {"message", "failed to write execution record; refusing to execute"},
-        	    {"detail", err},
-    	        {"path", recp}
-	        }.dump());
-        	return;
-    	}
-	}
-    // -------- Execute commands (stop on first failure) --------
-    json results = json::array();
-    bool all_ok = true;
-
-    const int total = (int)commands.size();
-
-    for (int i = 0; i < total; i++) {
-        const auto& c = commands[i];
-        if (!c.is_string()) continue;
-        const std::string cmd = c.get<std::string>();
-
-        std::string out;
-        int ec = 0;
-
-        // Pseudo-command: WAIT_BLOCK <path> <timeout_ms>
-    if (cmd.rfind("WAIT_BLOCK ", 0) == 0) {
-        // Format: "WAIT_BLOCK /dev/sda1 2000"
-        std::istringstream iss(cmd);
-        std::string tag, path;
-        int timeout_ms = 0;
-        iss >> tag >> path >> timeout_ms;
-
-        if (path.empty() || timeout_ms <= 0) {
-            out = "err: WAIT_BLOCK format is: WAIT_BLOCK <path> <timeout_ms>\n";
-            ec = 2;
-        } else {
-            const int sleep_step_ms = 50;
-            int waited = 0;
-            bool ok = false;
-
-            for (;;) {
-                if (std::filesystem::exists(path)) { ok = true; break; }
-                if (waited >= timeout_ms) break;
-                std::this_thread::sleep_for(std::chrono::milliseconds(sleep_step_ms));
-                waited += sleep_step_ms;
-            }
-
-            if (ok) {
-                out = "ok: block device present: " + path + "\n";
-                ec = 0;
-            } else {
-                out = "err: timed out waiting for block device: " + path + "\n";
-                ec = 1;
-            }
+        if (msg.rfind("raid_state_dir_failed:", 0) == 0) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "raid_state_dir_failed"},
+                {"message", "cannot create/verify /run/pqnas/raid; refusing to execute"},
+                {"detail", msg}
+            }.dump());
+            return;
         }
 
-        const bool step_ok = (ec == 0);
-
-        cap_string(out, 128 * 1024);
-
-        json one = {
-            {"i", i},
-            {"cmd", cmd},
-            {"rc", ec},
-            {"ok", step_ok},
-            {"out", out}
-        };
-        results.push_back(one);
-
-        raid_exec_record_append_step(&record, i + 1, total, cmd, step_ok, ec, out);
-        (void)raid_exec_record_write_atomic(expected_plan_id, record);
-
-        if (!step_ok) { all_ok = false; break; }
-        continue; // IMPORTANT: do not fall through to run_cmd_capture
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "enqueue_failed"},
+            {"detail", msg}
+        }.dump());
+        return;
     }
-
-        const bool ran = run_cmd_capture(cmd, &out, &ec);
-        const bool step_ok = ran && (ec == 0);
-
-        cap_string(out, 128 * 1024);
-
-        json one = {
-            {"i", i},
-            {"cmd", cmd},
-            {"rc", ec},
-            {"ok", step_ok},
-            {"out", out}
-        };
-        results.push_back(one);
-
-        raid_exec_record_append_step(&record, i + 1, total, cmd, step_ok, ec, out);
-        (void)raid_exec_record_write_atomic(expected_plan_id, record);
-
-        if (!step_ok) { all_ok = false; break; }
-    }
-
-    json outj;
-    outj["ok"] = all_ok;
-    outj["dry_run"] = false;
-    outj["plan"] = plan;
-    outj["results"] = results;
-
-    // Finalize record (+ post_status if ok)
-    const std::string ts_end = pqnas::now_iso_utc();
-    record["ts_end"]  = ts_end;
-    record["ts_last"] = ts_end;
-    record["busy"]    = false;
-    record["state"]   = all_ok ? "done" : "failed";
-    record["results"] = results;
-
-    if (all_ok) {
-        json status = storage_btrfs_status_json(resolved_mount);
-        status["input_mount"] = mount;
-        status["resolved_mount"] = resolved_mount;
-        status["resolved_source"] = resolved_source;
-        status["resolved_disk"] = resolved_disk;
-        status["fstype"] = fstype_out;
-
-        record["post_status"] = status;
-        outj["post_status"] = status;
-    }
-
-    (void)write_text_file_atomic(recp, record.dump(2) + "\n");
-
-    close_locks();
-    reply_json(res, 200, outj.dump());
 });
 
+// ----- GET /api/v4/raid/job?job_id=... (admin-only) ---------------------------
+srv.Get("/api/v4/raid/job", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
+        return;
+    }
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+	std::string job_id;
+	if (req.has_param("job_id")) job_id = req.get_param_value("job_id");
+	if (job_id.empty()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing job_id"}}.dump());
+        return;
+    }
+
+    std::lock_guard<std::mutex> lk(g_raid_jobs_mu);
+    auto it = g_raid_job_meta.find(job_id);
+    if (it == g_raid_job_meta.end()) {
+        reply_json(res, 404, json{{"ok", false}, {"error", "not_found"}, {"job_id", job_id}}.dump());
+        return;
+    }
+
+    reply_json(res, 200, it->second.dump());
+});
 
 // ----- GET /api/v4/raid/exec-record?plan_id=<sha256hex> (admin-only, read-only) -----
 // Reads /run/pqnas/raid/<plan_id>.json and returns it as JSON.
@@ -17527,6 +17568,9 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
 
     std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
     srv.listen("0.0.0.0", LISTEN_PORT);
+
+	// Stop RAID async worker (best-effort clean shutdown)
+	raid_worker_stop_and_join();
 
     snapshots_stop.store(true);
     if (snapshots_thread.joinable()) snapshots_thread.join();
