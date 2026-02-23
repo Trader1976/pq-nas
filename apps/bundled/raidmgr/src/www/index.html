@@ -148,13 +148,15 @@
             line-height: 1.35;
         }
         :root{
-            --raid-accent: rgba(0, 140, 255, 0.35);
-            --raid-arrow: rgba(0, 140, 255, 0.65);
-            --raid-arrow-soft: rgba(0, 140, 255, 0.35);
+            /* Use global theme "info" hue so it stays visible in ALL themes */
+            --raid-accent: rgba(var(--info-rgb, 0,140,255), 0.65);
+            --raid-arrow: rgba(var(--info-rgb, 0,140,255), 0.85);
+            --raid-arrow-soft: rgba(var(--info-rgb, 0,140,255), 0.45);
 
-            --raid-bg: rgba(0,0,0,0.05);
-            --raid-mid: rgba(0,0,0,0.06);
-            --raid-border: rgba(0,0,0,0.14);
+            /* Use theme surfaces instead of hardcoded black */
+            --raid-bg: var(--panel);
+            --raid-mid: rgba(var(--fg-rgb), 0.06);
+            --raid-border: var(--border);
         }
         /* --- Exec progress bar (async jobs) --- */
         .pbarWrap{
@@ -234,6 +236,11 @@
         }
         html[data-theme="win_classic"] .btn.danger{
             border-color: rgba(0,0,0,0.35) !important;
+            /* Toasts should match classic light surfaces */
+            --toast-bg: rgba(246,246,246,0.96);
+            --toast-border: rgba(0,0,0,0.22);
+            --toast-fg: rgba(0,0,0,0.92);
+            --toast-shadow: 0 10px 26px rgba(0,0,0,0.18);
         }
         /* Always red in every theme (beats theme.css per-theme button overrides) */
         /* Always red in every theme */
@@ -245,6 +252,14 @@
         .btn.danger:hover{ filter: brightness(1.08); }
         .btn.danger:active{ filter: brightness(0.98); }
         .btn.danger:hover{ filter: brightness(1.08); }
+        html[data-theme="win_classic"],
+        body.theme-win_classic,
+        body.win_classic{
+            --toast-bg: rgba(246,246,246,0.96);
+            --toast-border: rgba(0,0,0,0.22);
+            --toast-fg: rgba(0,0,0,0.92);
+            --toast-shadow: 0 10px 26px rgba(0,0,0,0.18);
+        }
     </style>
 </head>
 
@@ -264,18 +279,43 @@
         </div>
 
         <div class="main">
-            <div class="card">
+            <!-- User-friendly status (always visible) -->
+            <div class="card" id="statusCard">
+                <h3>Status</h3>
+                <pre id="userStatus">(loading)</pre>
+            </div>
+            <!-- Actions (always visible) -->
+            <div class="card" id="actionsCard">
+                <h3>Manage storage pool</h3>
+                <div id="actionsOut"></div>
+            </div>
+            <!-- Developer-only: probe -->
+            <div class="card" id="probeCard">
                 <h3>Probe</h3>
                 <div id="probeOut"></div>
             </div>
-            <div class="card">
+
+            <!-- Developer-only: topology -->
+            <div class="card" id="topologyCard">
                 <h3>Topology</h3>
                 <div id="topology"></div>
             </div>
 
-            <div class="card">
+            <!-- Developer-only: raw -->
+            <div class="card" id="rawCard">
                 <h3>Discovery / Status (raw)</h3>
                 <pre id="rawOut">(loading)</pre>
+            </div>
+
+            <!-- Developer mode toggle (bottom) -->
+            <div class="card" id="devModeCard">
+                <label style="display:flex; gap:10px; align-items:center;">
+                    <input id="devModeChk" type="checkbox" style="transform:scale(1.1);">
+                    <span class="v" style="opacity:.9;">Developer mode</span>
+                </label>
+                <div class="v" style="opacity:.7; margin-top:6px;">
+                    Shows raw outputs and advanced controls.
+                </div>
             </div>
         </div>
     </div>

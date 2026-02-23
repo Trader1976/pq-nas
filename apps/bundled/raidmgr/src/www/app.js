@@ -30,7 +30,40 @@
     const probeOut = el("probeOut");
     const rawOut = el("rawOut");
     const topologyOut = el("topology");
+    const actionsOut = el("actionsOut");
+    const userStatusEl = el("userStatus");
+    const devModeChk   = el("devModeChk");
 
+    const probeCard    = el("probeCard");
+    const topologyCard = el("topologyCard");
+    const rawCard      = el("rawCard");
+
+    const DEV_MODE_KEY = "pqnas_raidmgr_dev_mode";
+
+    function isDevMode() {
+        try { return window.localStorage.getItem(DEV_MODE_KEY) === "1"; }
+        catch (_) { return false; }
+    }
+
+    function setDevMode(on) {
+        try { window.localStorage.setItem(DEV_MODE_KEY, on ? "1" : "0"); } catch (_) {}
+        applyDevModeToUi();
+    }
+
+    function applyDevModeToUi() {
+        const on = isDevMode();
+
+        if (devModeChk) devModeChk.checked = on;
+
+        // Dev-only cards:
+        if (probeCard)    probeCard.style.display    = on ? "" : "none";
+        if (topologyCard) topologyCard.style.display = on ? "" : "none";
+        if (rawCard)      rawCard.style.display      = on ? "" : "none";
+
+        // Dev-only details inside dynamic Actions UI:
+        const adv = document.getElementById("advancedDetails");
+        if (adv) adv.style.display = on ? "" : "none";
+    }
     function setBadge(kind, text) {
         if (!badge) return;
         badge.className = `badge ${kind}`;
@@ -126,19 +159,20 @@
         t.style.maxWidth = "min(820px, 92vw)";
         t.style.padding = "10px 14px";
         t.style.borderRadius = "14px";
-        t.style.border = "1px solid rgba(255,255,255,0.18)";
-        t.style.background = "rgba(0,0,0,0.78)";
-        t.style.backdropFilter = "blur(6px)";
-        t.style.boxShadow = "0 10px 30px rgba(0,0,0,0.35)";
+        t.style.border = "1px solid var(--toast-border, rgba(255,255,255,0.18))";
+        t.style.background = "var(--toast-bg, rgba(0,0,0,0.78))";
+        t.style.boxShadow = "var(--toast-shadow, 0 10px 30px rgba(0,0,0,0.35))";
+        t.style.color = "var(--toast-fg, var(--fg))";
+
         t.style.fontSize = "13px";
         t.style.lineHeight = "1.35";
         t.style.whiteSpace = "pre-line";
 
         const color =
-            (kind === "ok")   ? "var(--ok, #2aa198)" :
-                (kind === "warn") ? "var(--warn, #b58900)" :
-                    (kind === "err")  ? "var(--bad, #dc322f)" :
-                        "var(--fg)";
+            (kind === "ok")   ? "var(--ok)" :
+                (kind === "warn") ? "var(--warn)" :
+                    (kind === "err")  ? "var(--fail)" :
+                        "var(--toast-fg, var(--fg))";
 
         t.style.color = color;
         t.textContent = text || "";
@@ -188,6 +222,12 @@
         return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
     }
 
+    function setUserStatusLines(lines) {
+        if (!userStatusEl) return;
+        userStatusEl.textContent = (Array.isArray(lines) ? lines : [String(lines || "")]).join("\n");
+    }
+
+    function yn(b) { return b ? "Yes" : "No"; }
     function fmtBytes(b) {
         if (!Number.isFinite(b)) return "?";
         const u = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -200,7 +240,41 @@
     }
     function esc(s){ return String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
+    function renderUserStatusFrom(statusJ, mountRequested, mountResolved, discoveryObj) {
+        const lines = [];
 
+        // High-level
+        const fs = String(statusJ?.fstype || "").toLowerCase();
+        const isBtrfs = (fs === "btrfs");
+
+        lines.push(`Mount: ${mountResolved || mountRequested || "-"}`);
+        lines.push(`Filesystem: ${statusJ?.fstype || "(unknown)"}`);
+        lines.push(`RAID features: ${isBtrfs ? "Enabled" : "Disabled"}`);
+
+        // If server provides parsed topology via /status
+        const sum = statusJ?.parsed?.summary || null;
+        const usage = statusJ?.parsed?.usage || null;
+
+        if (sum && typeof sum === "object") {
+            if (sum.label) lines.push(`Pool label: ${sum.label}`);
+            if (sum.uuid) lines.push(`UUID: ${sum.uuid}`);
+            if (sum.total_devices != null) lines.push(`Devices: ${sum.total_devices}`);
+        }
+
+        if (usage && typeof usage === "object") {
+            if (Number.isFinite(usage.used_bytes) && Number.isFinite(usage.size_bytes)) {
+                const pct = (usage.used_percent_1dp != null) ? `${usage.used_percent_1dp}%` : "";
+                lines.push(`Used: ${fmtBytes(usage.used_bytes)} / ${fmtBytes(usage.size_bytes)} ${pct ? `(${pct})` : ""}`.trim());
+            }
+        }
+
+        // Optional: discovery hints (safe, user-friendly)
+        // Show how many member devices we see (if present)
+        const bdevs = Array.isArray(discoveryObj?.btrfs?.devices) ? discoveryObj.btrfs.devices : null;
+        if (bdevs) lines.push(`Member drives: ${bdevs.length}`);
+
+        setUserStatusLines(lines);
+    }
     function isLoopDisk(d) {
         const name = String(d?.name || "");
         const path = String(d?.path || "");
@@ -269,7 +343,7 @@
     }
 
     function renderActions(parsed, mount) {
-        if (!topologyOut) return;
+        if (!actionsOut) return;
 
         const cands = candidateDisks(parsed, { showInternal: false, usbOnly: false });
         const disabled = !(parsed && parsed.ok === true && String(parsed.fstype || "").toLowerCase() === "btrfs");
@@ -414,13 +488,15 @@
 
         if (disabled) {
             html += `<div class="v" style="opacity:.8;">Storage pool actions are disabled (filesystem is not Btrfs or probe failed).</div>`;
-            topologyOut.innerHTML = html;
+            actionsOut.innerHTML = html;
+            applyDevModeToUi(); // important: renderActions rebuilds advancedDetails
             return;
         }
 
         if (!cands.length) {
             html += `<div class="v" style="opacity:.8;">No available drives found. (All disks are already members, or only loop devices exist.)</div>`;
-            topologyOut.innerHTML = html;
+            actionsOut.innerHTML = html;
+            applyDevModeToUi(); // important: renderActions rebuilds advancedDetails
             return;
         }
 
@@ -488,7 +564,7 @@
   <div style="font-weight:900; margin: 6px 0 8px;">Remove drive</div>
   <div id="rmBlock"></div>
 
-  <details class="card" style="margin-top:12px;">
+  <details class="card" id="advancedDetails" style="margin-top:12px;">
     <summary style="cursor:pointer; font-weight:900;">Preview / Apply output (advanced)</summary>
     <pre id="actionOut" style="margin-top:10px;">(no actions yet)</pre>
   </details>
@@ -510,7 +586,8 @@
   </details>
 `;
 
-        topologyOut.innerHTML = html;
+        actionsOut.innerHTML = html;
+        applyDevModeToUi(); // hide advancedDetails when dev mode is off
 
         const addSel = document.getElementById("addDiskSel");
         const planBtn = document.getElementById("planAddBtn");
@@ -767,8 +844,9 @@
   --raid-paper-hi: ${dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.04)"};
   --raid-paper-lo: ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.02)"};
 
-  --raid-arrow: var(--accent, rgba(0,140,255,0.80));
-  --raid-arrow-soft: rgba(0,140,255,0.35);
+  --raid-accent: rgba(var(--info-rgb, 0,140,255), 0.65);
+  --raid-arrow: rgba(var(--info-rgb, 0,140,255), 0.85);
+  --raid-arrow-soft: rgba(var(--info-rgb, 0,140,255), 0.45);
 ">${svg}</div>`;
 
                         } else if (typeof svgAddPreview === "function") {
@@ -794,8 +872,9 @@
   --raid-paper-hi: ${dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.04)"};
   --raid-paper-lo: ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.02)"};
 
-  --raid-arrow: var(--accent, rgba(0,140,255,0.80));
-  --raid-arrow-soft: rgba(0,140,255,0.35);
+  --raid-accent: rgba(var(--info-rgb, 0,140,255), 0.65);
+  --raid-arrow: rgba(var(--info-rgb, 0,140,255), 0.85);
+  --raid-arrow-soft: rgba(var(--info-rgb, 0,140,255), 0.45);
 ">${svg}</div>`;
 
                         } else {
@@ -890,9 +969,6 @@
                 lines.push("Health: (unknown)");
             }
 
-            lines.push("");
-            lines.push("---- raw ----");
-            try { lines.push(JSON.stringify(o, null, 2)); } catch (_) { lines.push(String(o)); }
 
             const txt = lines.join("\n");
             g_lastProgress = txt;
@@ -985,10 +1061,11 @@
             if (!rec || rec.ok !== true) {
                 lines.push(`State: error`);
                 if (errTxt) lines.push(`Error: ${errTxt}`);
-                lines.push("");
-                lines.push("---- raw ----");
-                try { lines.push(JSON.stringify(rec, null, 2)); } catch (_) {}
+
+                // Keep the pill/bar sensible even on error
                 setExecUi("error", -1, -1, execPlanId);
+
+                // No JSON here (ever)
                 setProgressText(lines);
                 return;
             }
@@ -1042,10 +1119,6 @@
                     }
                 }
             } catch (_) {}
-
-            lines.push("");
-            lines.push("---- raw ----");
-            try { lines.push(JSON.stringify(rec, null, 2)); } catch (_) {}
 
             setProgressText(lines);
 
@@ -1597,6 +1670,8 @@
         setBadge("warn", "loading…");
         if (subLine) subLine.textContent = "Detecting RAID capabilities…";
         if (rawOut) rawOut.textContent = "(loading)";
+        if (actionsOut) actionsOut.textContent = "(loading…)";
+        setUserStatusLines(["(loading)"]);
         clearNode(probeOut);
         clearNode(topologyOut);
 
@@ -1608,11 +1683,22 @@
             if (r.status === 401 || r.status === 403) {
                 setBadge("warn", "admin required");
                 if (subLine) subLine.textContent = "Requires admin session.";
+
+                // User-friendly status (always)
+                setUserStatusLines([
+                    `Mount: ${m}`,
+                    `Access: Denied (admin required)`,
+                    `RAID features: Unknown`
+                ]);
+
+                // Dev-only details
                 if (probeOut) {
                     probeOut.appendChild(kvRow("Access", "Denied (not signed in / not admin)"));
                     probeOut.appendChild(kvRow("Endpoint", url));
                 }
                 if (rawOut) rawOut.textContent = JSON.stringify({ http: r.status, body: j ?? txt }, null, 2);
+
+                applyDevModeToUi();
                 return;
             }
 
@@ -1658,6 +1744,10 @@
                     discObj = { error: String(e && e.message ? e.message : e) };
                 }
 
+                // User-facing status summary (always)
+                renderUserStatusFrom(j, m, resolved, discObj);
+
+                // Dev-only raw JSON
                 if (rawOut) {
                     rawOut.textContent = JSON.stringify(
                         {
@@ -1670,6 +1760,7 @@
                     );
                 }
 
+                applyDevModeToUi();
                 return;
             }
         }
@@ -1683,11 +1774,22 @@
             if (r.status === 401 || r.status === 403) {
                 setBadge("warn", "admin required");
                 if (subLine) subLine.textContent = "Requires admin session.";
+
+                // User-friendly status (always)
+                setUserStatusLines([
+                    `Mount: ${m}`,
+                    `Access: Denied (admin required)`,
+                    `RAID features: Unknown`
+                ]);
+
+                // Dev-only details
                 if (probeOut) {
                     probeOut.appendChild(kvRow("Access", "Denied (not signed in / not admin)"));
                     probeOut.appendChild(kvRow("Endpoint", url));
                 }
                 if (rawOut) rawOut.textContent = JSON.stringify({ http: r.status, body: j ?? txt }, null, 2);
+
+                applyDevModeToUi();
                 return;
             }
 
@@ -1753,6 +1855,10 @@
     }
 
     refreshBtn?.addEventListener("click", probe);
+
+    // Dev mode init
+    applyDevModeToUi();
+    devModeChk?.addEventListener("change", () => setDevMode(!!devModeChk.checked));
 
     // Initial
     probe();
