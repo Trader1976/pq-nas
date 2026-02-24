@@ -3832,6 +3832,174 @@ static bool raid_exec_record_read(const std::string& plan_id, json* out_rec, std
     if (out_rec) *out_rec = j;
     return true;
 }
+// ------------------------- storage/pools helpers -------------------------
+
+static inline std::vector<std::string> split_lines(const std::string& s) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : s) {
+        if (c == '\n') {
+            out.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(c);
+        }
+    }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
+static inline bool starts_with(const std::string& s, const std::string& pfx) {
+    return s.rfind(pfx, 0) == 0;
+}
+
+static inline std::string to_lower_ascii_copy(std::string s) {
+    for (char& c : s) {
+        if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+    }
+    return s;
+}
+
+// Parse btrfs filesystem show output for label/uuid/devices.
+// Works with lines like: "Label: 'PQNAS_DATA'  uuid: 26a5..."
+// and "Total devices 2 FS bytes used ..."
+static inline void parse_btrfs_filesystem_show(const std::string& out,
+                                               std::string* label,
+                                               std::string* uuid,
+                                               int* devices) {
+    if (label) label->clear();
+    if (uuid) uuid->clear();
+    if (devices) *devices = -1;
+
+    for (const std::string& raw : split_lines(out)) {
+        const std::string line = trim_copy(raw);
+
+        // Label + uuid on same line
+        // Label: 'PQNAS_DATA'  uuid: 26a57d77-...
+        if (starts_with(line, "Label:")) {
+            // label between single quotes if present
+            auto q1 = line.find('\'');
+            if (q1 != std::string::npos) {
+                auto q2 = line.find('\'', q1 + 1);
+                if (q2 != std::string::npos && label) {
+                    *label = line.substr(q1 + 1, q2 - (q1 + 1));
+                }
+            }
+            // uuid: token
+            auto up = line.find("uuid:");
+            if (up != std::string::npos && uuid) {
+                std::string u = trim_copy(line.substr(up + 5));
+                // uuid may be followed by more text; take first token
+                auto sp = u.find_first_of(" \t\r\n");
+                if (sp != std::string::npos) u = u.substr(0, sp);
+                *uuid = u;
+            }
+            continue;
+        }
+
+        if (starts_with(line, "Total devices")) {
+            // "Total devices N ..."
+            std::string rest = trim_copy(line.substr(std::string("Total devices").size()));
+            // first token
+            auto sp = rest.find_first_of(" \t\r\n");
+            std::string n = (sp == std::string::npos) ? rest : rest.substr(0, sp);
+            if (devices) {
+                try { *devices = std::stoi(n); } catch (...) { /* ignore */ }
+            }
+            continue;
+        }
+
+        // fallback: if a line contains "uuid:" alone
+        if (uuid && uuid->empty()) {
+            auto up = line.find("uuid:");
+            if (up != std::string::npos) {
+                std::string u = trim_copy(line.substr(up + 5));
+                auto sp = u.find_first_of(" \t\r\n");
+                if (sp != std::string::npos) u = u.substr(0, sp);
+                *uuid = u;
+            }
+        }
+    }
+}
+
+// Parse "btrfs filesystem df -b <mount>" output.
+// We just want profile names for Data and Metadata.
+// Example lines:
+//   Data, RAID1: total=..., used=...
+//   Metadata, RAID1: total=..., used=...
+static inline void parse_btrfs_df_profiles(const std::string& out,
+                                           std::string* profile_data,
+                                           std::string* profile_metadata) {
+    if (profile_data) profile_data->clear();
+    if (profile_metadata) profile_metadata->clear();
+
+    for (const std::string& raw : split_lines(out)) {
+        const std::string line = trim_copy(raw);
+
+        auto parse_line = [&](const std::string& prefix, std::string* dst) {
+            if (!dst || !dst->empty()) return;
+            if (!starts_with(line, prefix)) return;
+
+            // Strip "Data," or "Metadata,"
+            std::string rest = trim_copy(line.substr(prefix.size()));
+            // rest starts with profile, then ":".
+            auto colon = rest.find(':');
+            if (colon == std::string::npos) return;
+            std::string prof = trim_copy(rest.substr(0, colon));
+            // Normalize to lower
+            prof = to_lower_ascii_copy(prof);
+            // Some outputs may have "raid1" already or "RAID1"
+            *dst = prof;
+        };
+
+        parse_line("Data,", profile_data);
+        parse_line("Metadata,", profile_metadata);
+    }
+}
+
+// Parse "btrfs filesystem usage -b <mount>" output for size/used.
+// Typical:
+//   Device size:           296.00GiB
+//   Used:                  21.50MiB
+// With -b, it should be bytes on those lines (integers).
+static inline void parse_btrfs_usage_bytes(const std::string& out,
+                                          int64_t* size_bytes,
+                                          int64_t* used_bytes) {
+    if (size_bytes) *size_bytes = -1;
+    if (used_bytes) *used_bytes = -1;
+
+    auto parse_int_after_key = [&](const std::string& line, const std::string& key, int64_t* dst) {
+        if (!dst || *dst >= 0) return;
+        auto pos = line.find(key);
+        if (pos == std::string::npos) return;
+
+        // Expect "key:" then number
+        auto colon = line.find(':', pos + key.size());
+        if (colon == std::string::npos) return;
+
+        std::string rest = line.substr(colon + 1);
+        // trim both sides (do not rely on external helpers)
+        // ltrim
+        size_t i = 0;
+        while (i < rest.size() && (rest[i] == ' ' || rest[i] == '\t' || rest[i] == '\r' || rest[i] == '\n')) i++;
+        if (i) rest.erase(0, i);
+        // first token
+        auto sp = rest.find_first_of(" \t\r\n");
+        std::string tok = (sp == std::string::npos) ? rest : rest.substr(0, sp);
+
+        try { *dst = std::stoll(tok); } catch (...) { /* ignore */ }
+    };
+
+    for (const std::string& raw : split_lines(out)) {
+        // Keep original line; just skip empties
+        if (raw.empty()) continue;
+
+        parse_int_after_key(raw, "Device size", size_bytes);
+        parse_int_after_key(raw, "Used", used_bytes);
+
+        if (size_bytes && used_bytes && *size_bytes >= 0 && *used_bytes >= 0) break;
+    }
+}
 // -----------------------------------------------------------------------------
 // main
 // -----------------------------------------------------------------------------
@@ -4809,6 +4977,152 @@ srv.Get("/api/v4/storage/status", [&](const httplib::Request& req, httplib::Resp
     reply_json(res, 200, j.dump());
 
 
+});
+
+// ----- GET /api/v4/storage/pools (admin-only, read-only) -------------------
+srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
+        return;
+    }
+
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    // Allowed prefix (storage root)
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+	const char* BTRFS1 = "/usr/bin/btrfs";
+	const char* BTRFS2 = "/usr/sbin/btrfs";
+
+	auto exists_exec = [](const char* p) -> bool {
+    	std::error_code ec;
+	    auto st = std::filesystem::status(p, ec);
+    	if (ec) return false;
+	    if (!std::filesystem::is_regular_file(st)) return false;
+    	auto perms = st.permissions();
+	    using P = std::filesystem::perms;
+    	return (perms & P::owner_exec) != P::none ||
+        	   (perms & P::group_exec) != P::none ||
+    		   (perms & P::others_exec) != P::none;
+	};
+
+	const char* BTRFS = exists_exec(BTRFS1) ? BTRFS1 : (exists_exec(BTRFS2) ? BTRFS2 : BTRFS1);
+    // We'll reuse your test prefixes too.
+    const std::string test_prefix  = "/srv/pqnas-test";
+    const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
+
+    // List btrfs mounts: TARGET,SOURCE,FSTYPE (FSTYPE should be btrfs but we keep it for sanity)
+    std::string mounts_out;
+    int rc = run_capture("/usr/bin/findmnt -rn -t btrfs -o TARGET,SOURCE,FSTYPE", &mounts_out);
+    cap_string(mounts_out, 1024 * 1024);
+    rtrim_inplace(mounts_out);
+
+    if (rc != 0) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "findmnt_failed"}
+        }.dump());
+        return;
+    }
+
+    json arr = json::array();
+
+    for (const std::string& raw : split_lines(mounts_out)) {
+        std::string line = trim_copy(raw);
+        if (line.empty()) continue;
+
+        // findmnt output is space-separated columns; SOURCE can contain odd chars but usually no spaces.
+        // We'll do a conservative split on whitespace into 3 tokens.
+		std::vector<std::string> toks;
+		{
+    		std::string cur;
+	    	for (char c : line) {
+    		    if (c == ' ' || c == '\t') {
+	    	        if (!cur.empty()) {
+            		    toks.push_back(cur);
+        	    	    cur.clear();
+	    	        }
+		        } else {
+        		    cur.push_back(c);
+    	    	}
+		    }
+    		if (!cur.empty()) toks.push_back(cur);
+		}
+
+        if (toks.size() < 3) continue;
+        const std::string target = toks[0];
+        const std::string source = toks[1];
+        const std::string fstype = toks[2];
+
+        if (fstype != "btrfs") continue;
+        if (target.empty() || source.empty()) continue;
+        // target comes from findmnt; just require absolute path (no need for strict user-input safety here)
+		if (target.empty() || target[0] != '/') continue;
+
+        // Allowlist enforcement on resolved mountpoint (target)
+        const bool allowed =
+            starts_with(target, allowed_prefix) ||
+            starts_with(target, test_prefix) ||
+            starts_with(target, test_prefix2);
+
+        if (!allowed) continue;
+
+        // Collect details via btrfs.
+        // Use the mountpoint (target) for commands.
+        std::string show_out, df_out, usage_out;
+
+        int rc_show  = run_capture(std::string("/usr/bin/sudo -n ") + BTRFS + " filesystem show " + sh_quote(target) + " 2>&1", &show_out);
+		int rc_df    = run_capture(std::string("/usr/bin/sudo -n ") + BTRFS + " filesystem df -b " + sh_quote(target) + " 2>&1", &df_out);
+		int rc_usage = run_capture(std::string("/usr/bin/sudo -n ") + BTRFS + " filesystem usage -b " + sh_quote(target) + " 2>&1", &usage_out);
+
+        cap_string(show_out,  256 * 1024); rtrim_inplace(show_out);
+        cap_string(df_out,    256 * 1024); rtrim_inplace(df_out);
+        cap_string(usage_out, 512 * 1024); rtrim_inplace(usage_out);
+
+        // If we cannot query btrfs for this mount, skip it (read-only endpoint should be resilient).
+        if (rc_show != 0) continue;
+
+        std::string label, uuid;
+        int devices = -1;
+        parse_btrfs_filesystem_show(show_out, &label, &uuid, &devices);
+
+        std::string prof_data, prof_meta;
+        if (rc_df == 0) {
+            parse_btrfs_df_profiles(df_out, &prof_data, &prof_meta);
+        }
+
+        int64_t size_bytes = -1;
+        int64_t used_bytes = -1;
+        if (rc_usage == 0) {
+            parse_btrfs_usage_bytes(usage_out, &size_bytes, &used_bytes);
+        }
+
+        json j;
+        j["mount"] = target;
+        j["uuid"] = uuid.empty() ? "" : uuid;
+        j["label"] = label.empty() ? "" : label;
+        j["devices"] = (devices >= 0) ? devices : 0;
+        j["profile_data"] = prof_data.empty() ? "" : prof_data;
+        j["profile_metadata"] = prof_meta.empty() ? "" : prof_meta;
+        j["size_bytes"] = (size_bytes >= 0) ? size_bytes : 0;
+        j["used_bytes"] = (used_bytes >= 0) ? used_bytes : 0;
+
+        // Optional, but handy for UI + debugging
+        j["resolved_source"] = source;
+        {
+            const std::string d = parent_disk_from_dev(source);
+            if (!d.empty()) j["resolved_disk"] = d;
+        }
+
+        arr.push_back(j);
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"pools", arr}
+    }.dump());
 });
 
 // ----- GET /api/v4/storage/overview?mount=/path (admin-only) -----------------

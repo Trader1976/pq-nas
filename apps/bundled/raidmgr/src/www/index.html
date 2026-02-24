@@ -83,7 +83,26 @@
         }
         .btn:hover{ border-color: rgba(255,255,255,0.22); background: rgba(255,255,255,0.06); }
         .btn.secondary{ opacity: 0.9; }
+        .poolBar {
+            display:flex;
+            align-items:center;
+            gap:10px;
+            flex-wrap:wrap;
+        }
 
+        .poolSel {
+            min-width: min(420px, 52vw);
+            max-width: 62vw;
+            padding:10px 12px;
+            border-radius:14px;
+            border:1px solid rgba(255,255,255,0.14);
+            background: rgba(0,0,0,0.18);
+            color: var(--fg);
+            font-family: var(--mono);
+            font-size: 12px;
+        }
+        .poolSel:focus { outline: none; border-color: rgba(255,255,255,0.26); }
+        .poolLabel { opacity: .75; font-weight: 850; font-size: 12px; }
         .badge{
             display:inline-flex;
             align-items:center;
@@ -273,6 +292,13 @@
             </div>
 
             <div class="actions">
+                <div class="poolBar">
+                    <span class="poolLabel">Pool:</span>
+                    <select id="poolSelTop" class="poolSel" aria-label="Storage pool selector">
+                        <option value="">(loading pools…)</option>
+                    </select>
+                </div>
+
                 <span class="badge warn" id="badge">loading…</span>
                 <button class="btn secondary" id="refreshBtn" type="button">Refresh</button>
             </div>
