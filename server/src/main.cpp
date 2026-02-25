@@ -1960,6 +1960,68 @@ static bool write_text_file_atomic(const std::string& path, const std::string& c
     return true;
 }
 
+// ----------------------------------------------------------------------------
+// Pools display-name config (raidmgr / storage UI metadata)
+// Stored as JSON next to users.json so it ships with config and survives upgrades.
+// Path: <dir_of_users.json>/pools.json
+// ----------------------------------------------------------------------------
+
+static std::filesystem::path pools_cfg_path_from_users_path(const std::string& users_path) {
+    // Mutable config should live under PQNAS_STORAGE_ROOT/config (default /srv/pqnas/config)
+    std::string root = getenv_str("PQNAS_STORAGE_ROOT");
+    if (root.empty()) root = "/srv/pqnas";
+
+    std::filesystem::path p = std::filesystem::path(root) / "config" / "pools.json";
+
+    // If that doesn't exist yet, still return it (so load_or_init can create it).
+    // Fall back to sibling of users.json only if root looks unusable.
+    std::error_code ec;
+    auto st = std::filesystem::status(std::filesystem::path(root) / "config", ec);
+    if (!ec && std::filesystem::is_directory(st)) return p;
+
+    return std::filesystem::path(users_path).parent_path() / "pools.json";
+}
+
+static json load_or_init_pools_cfg(const std::string& users_path) {
+    const auto cfg_path = pools_cfg_path_from_users_path(users_path);
+
+    // Try load
+    std::string txt;
+    if (read_text_file(cfg_path.string(), &txt)) {
+        try {
+            json j = json::parse(txt);
+            if (!j.is_object()) j = json::object();
+            if (!j.contains("version")) j["version"] = 1;
+            if (!j.contains("names_by_mount") || !j["names_by_mount"].is_object()) {
+                j["names_by_mount"] = json::object();
+            }
+            return j;
+        } catch (...) {
+            // fall through to init
+        }
+    }
+
+    // Init (and best-effort write so it “comes with it” even on first run)
+    json j = json::object();
+    j["version"] = 1;
+    j["names_by_mount"] = json::object();
+
+    std::error_code ec;
+    std::filesystem::create_directories(cfg_path.parent_path(), ec);
+    (void)write_text_file_atomic(cfg_path.string(), j.dump(2) + "\n");
+
+    return j;
+}
+
+static std::string pools_display_name_for_mount(const json& pools_cfg, const std::string& mount) {
+    if (!pools_cfg.is_object()) return "";
+    auto it = pools_cfg.find("names_by_mount");
+    if (it == pools_cfg.end() || !it->is_object()) return "";
+    auto it2 = it->find(mount);
+    if (it2 == it->end()) return "";
+    if (!it2->is_string()) return "";
+    return httplib::detail::trim_copy(it2->get<std::string>());
+}
 // returns true if "btrfs filesystem show <mount>" mentions the given device path
 static bool btrfs_filesystem_has_device(const std::string& mount, const std::string& device_path) {
     std::string show;
@@ -4990,6 +5052,9 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
 
     if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
 
+    // Load (and if missing, initialize) pools.json for display names
+    const json pools_cfg = load_or_init_pools_cfg(users_path);
+
     // Allowed prefix (storage root)
     std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
     if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
@@ -5101,6 +5166,11 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
 
         json j;
         j["mount"] = target;
+
+        // PQ-NAS UI display name (server metadata, not btrfs label)
+        const std::string disp = pools_display_name_for_mount(pools_cfg, target);
+        if (!disp.empty()) j["display_name"] = disp;
+
         j["uuid"] = uuid.empty() ? "" : uuid;
         j["label"] = label.empty() ? "" : label;
         j["devices"] = (devices >= 0) ? devices : 0;
@@ -5122,6 +5192,259 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
     reply_json(res, 200, json{
         {"ok", true},
         {"pools", arr}
+    }.dump());
+});
+
+// ----- POST /api/v4/storage/pools/set-name (admin-only) ---------------------
+// Body: { "mount": "/srv/pqnas", "display_name": "Home pool" }
+srv.Post("/api/v4/storage/pools/set-name", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
+        return;
+    }
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    json body;
+    try {
+        body = json::parse(req.body);
+    } catch (...) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_json"}}.dump());
+        return;
+    }
+
+    const std::string mount = body.value("mount", "");
+    std::string name = body.value("display_name", "");
+
+    if (mount.empty() || mount[0] != '/') {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_mount"}, {"mount", mount}}.dump());
+        return;
+    }
+
+    // Basic name hygiene (avoid absurd sizes / control chars)
+    if (name.size() > 64) name.resize(64);
+    for (char& c : name) {
+        unsigned char uc = (unsigned char)c;
+        if (uc < 32) c = ' ';
+    }
+    // trim-ish
+    while (!name.empty() && (name.front() == ' ' || name.front() == '\t')) name.erase(name.begin());
+    while (!name.empty() && (name.back()  == ' ' || name.back()  == '\t')) name.pop_back();
+
+    // Only allow setting name for allowed mounts (same allowlist as GET pools)
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+    const std::string test_prefix  = "/srv/pqnas-test";
+    const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
+
+    const bool allowed =
+        starts_with(mount, allowed_prefix) ||
+        starts_with(mount, test_prefix) ||
+        starts_with(mount, test_prefix2);
+
+    if (!allowed) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "mount_not_allowed"},
+            {"mount", mount},
+            {"allowed_prefix", allowed_prefix}
+        }.dump());
+        return;
+    }
+
+    // Load + update + write
+    json cfg = load_or_init_pools_cfg(users_path);
+    if (!cfg.is_object()) cfg = json::object();
+    if (!cfg.contains("version")) cfg["version"] = 1;
+    if (!cfg.contains("names_by_mount") || !cfg["names_by_mount"].is_object())
+        cfg["names_by_mount"] = json::object();
+
+    if (name.empty()) {
+        // empty name => delete key (reverts to btrfs label fallback)
+        cfg["names_by_mount"].erase(mount);
+    } else {
+        cfg["names_by_mount"][mount] = name;
+    }
+
+    const auto cfg_path = pools_cfg_path_from_users_path(users_path);
+    std::error_code ec;
+    std::filesystem::create_directories(cfg_path.parent_path(), ec);
+
+    if (!write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n")) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "write_failed"},
+            {"path", cfg_path.string()}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"mount", mount},
+        {"display_name", name},
+        {"path", cfg_path.string()}
+    }.dump());
+});
+
+// ----- POST /api/v4/storage/pools/rename (admin-only; updates PQ-NAS display name) ----
+// Body: { "mount": "/srv/pqnas/data", "display_name": "My Pool", "expect_uuid": "..." }
+// Safety: verifies mount is allowlisted AND (if expect_uuid provided) matches current btrfs UUID.
+srv.Post("/api/v4/storage/pools/rename", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
+        return;
+    }
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    json body;
+    try {
+        body = json::parse(req.body.empty() ? "{}" : req.body);
+    } catch (...) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_json"}}.dump());
+        return;
+    }
+
+    const std::string mount = trim_copy(body.value("mount", ""));
+    std::string display_name = body.value("display_name", "");
+    const std::string expect_uuid = trim_copy(body.value("expect_uuid", ""));
+
+    if (mount.empty() || mount[0] != '/') {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_mount"}, {"mount", mount}}.dump());
+        return;
+    }
+
+    // Normalize display name (server-side)
+    display_name = trim_copy(display_name);
+    if (display_name.size() > 64) display_name.resize(64);
+
+    // Allowed prefix (storage root)
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+    const std::string test_prefix  = "/srv/pqnas-test";
+    const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
+
+    const bool allowed =
+        starts_with(mount, allowed_prefix) ||
+        starts_with(mount, test_prefix) ||
+        starts_with(mount, test_prefix2);
+
+    if (!allowed) {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "mount_not_allowed"},
+            {"mount", mount},
+            {"allowed_prefix", allowed_prefix}
+        }.dump());
+        return;
+    }
+
+    // Resolve: ensure mount is actually a btrfs mount we can see (prevents typo mounts)
+    std::string mounts_out;
+    int rc = run_capture("/usr/bin/findmnt -rn -t btrfs -o TARGET", &mounts_out);
+    cap_string(mounts_out, 1024 * 1024);
+    rtrim_inplace(mounts_out);
+
+    if (rc != 0) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "findmnt_failed"}}.dump());
+        return;
+    }
+
+    bool found = false;
+    for (const std::string& raw : split_lines(mounts_out)) {
+        const std::string t = trim_copy(raw);
+        if (t == mount) { found = true; break; }
+    }
+    if (!found) {
+        reply_json(res, 404, json{{"ok", false}, {"error", "mount_not_found"}, {"mount", mount}}.dump());
+        return;
+    }
+
+    // If client provided expect_uuid, verify it matches current UUID (hard safety guard)
+    if (!expect_uuid.empty()) {
+        // pick btrfs binary (same helper you used above in /storage/pools)
+        const char* BTRFS1 = "/usr/bin/btrfs";
+        const char* BTRFS2 = "/usr/sbin/btrfs";
+
+        auto exists_exec = [](const char* p) -> bool {
+            std::error_code ec;
+            auto st = std::filesystem::status(p, ec);
+            if (ec) return false;
+            if (!std::filesystem::is_regular_file(st)) return false;
+            auto perms = st.permissions();
+            using P = std::filesystem::perms;
+            return (perms & P::owner_exec) != P::none ||
+                   (perms & P::group_exec) != P::none ||
+                   (perms & P::others_exec) != P::none;
+        };
+        const char* BTRFS = exists_exec(BTRFS1) ? BTRFS1 : (exists_exec(BTRFS2) ? BTRFS2 : BTRFS1);
+
+        std::string show_out;
+        int rc_show = run_capture(std::string("/usr/bin/sudo -n ") + BTRFS + " filesystem show " + sh_quote(mount) + " 2>&1", &show_out);
+        cap_string(show_out, 256 * 1024);
+        rtrim_inplace(show_out);
+
+        if (rc_show != 0) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "btrfs_show_failed"},
+                {"mount", mount}
+            }.dump());
+            return;
+        }
+
+        std::string label, uuid;
+        int devices = -1;
+        parse_btrfs_filesystem_show(show_out, &label, &uuid, &devices);
+
+        if (uuid.empty() || uuid != expect_uuid) {
+            reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "uuid_mismatch"},
+                {"mount", mount},
+                {"expect_uuid", expect_uuid},
+                {"actual_uuid", uuid}
+            }.dump());
+            return;
+        }
+    }
+
+    // Load + update pools.json (display names) and write atomically
+    const json cfg0 = load_or_init_pools_cfg(users_path);
+    json cfg = cfg0;
+
+    if (!cfg.is_object()) cfg = json::object();
+    if (!cfg.contains("version")) cfg["version"] = 1;
+    if (!cfg.contains("names_by_mount") || !cfg["names_by_mount"].is_object()) cfg["names_by_mount"] = json::object();
+
+    if (display_name.empty()) {
+        // empty => remove override
+        cfg["names_by_mount"].erase(mount);
+    } else {
+        cfg["names_by_mount"][mount] = display_name;
+    }
+
+    const auto cfg_path = pools_cfg_path_from_users_path(users_path);
+    std::error_code ec;
+    std::filesystem::create_directories(cfg_path.parent_path(), ec);
+
+    const bool ok_write = write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n");
+    if (!ok_write) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "write_failed"},
+            {"path", cfg_path.string()}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"mount", mount},
+        {"display_name", display_name},
+        {"removed", display_name.empty()}
     }.dump());
 });
 

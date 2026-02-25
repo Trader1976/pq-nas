@@ -307,48 +307,68 @@
 
                 <span class="badge warn" id="badge">loading…</span>
                 <button class="btn secondary" id="refreshBtn" type="button">Refresh</button>
+                <div class="row" style="gap:10px; align-items:center;">
+                    <button class="btn secondary" id="tabRaidBtn" type="button" aria-pressed="true">RAID</button>
+                    <button class="btn secondary" id="tabPoolsBtn" type="button" aria-pressed="false">Pools</button>
+                </div>
             </div>
         </div>
 
         <div class="main">
-            <!-- User-friendly status (always visible) -->
-            <div class="card" id="statusCard">
-                <h3>Status</h3>
-                <pre id="userStatus">(loading)</pre>
-            </div>
-            <!-- Actions (always visible) -->
-            <div class="card" id="actionsCard">
-                <h3>Manage storage pool</h3>
-                <div id="actionsOut"></div>
-            </div>
-            <!-- Developer-only: probe -->
-            <div class="card" id="probeCard">
-                <h3>Probe</h3>
-                <div id="probeOut"></div>
-            </div>
 
-            <!-- Developer-only: topology -->
-            <div class="card" id="topologyCard">
-                <h3>Topology</h3>
-                <div id="topology"></div>
-            </div>
+            <!-- TAB: RAID -->
+            <div id="raidTab">
+                <!-- User-friendly status (always visible) -->
+                <div class="card" id="statusCard">
+                    <h3>Status</h3>
+                    <pre id="userStatus">(loading)</pre>
+                </div>
 
-            <!-- Developer-only: raw -->
-            <div class="card" id="rawCard">
-                <h3>Discovery / Status (raw)</h3>
-                <pre id="rawOut">(loading)</pre>
-            </div>
+                <!-- Actions (always visible) -->
+                <div class="card" id="actionsCard">
+                    <h3>Manage storage pool</h3>
+                    <div id="actionsOut"></div>
+                </div>
 
-            <!-- Developer mode toggle (bottom) -->
-            <div class="card" id="devModeCard">
-                <label style="display:flex; gap:10px; align-items:center;">
-                    <input id="devModeChk" type="checkbox" style="transform:scale(1.1);">
-                    <span class="v" style="opacity:.9;">Developer mode</span>
-                </label>
-                <div class="v" style="opacity:.7; margin-top:6px;">
-                    Shows raw outputs and advanced controls.
+                <!-- Developer-only: probe -->
+                <div class="card" id="probeCard">
+                    <h3>Probe</h3>
+                    <div id="probeOut"></div>
+                </div>
+
+                <!-- Developer-only: topology -->
+                <div class="card" id="topologyCard">
+                    <h3>Topology</h3>
+                    <div id="topology"></div>
+                </div>
+
+                <!-- Developer-only: raw -->
+                <div class="card" id="rawCard">
+                    <h3>Discovery / Status (raw)</h3>
+                    <pre id="rawOut">(loading)</pre>
+                </div>
+
+                <!-- Developer mode toggle (bottom) -->
+                <div class="card" id="devModeCard">
+                    <label style="display:flex; gap:10px; align-items:center;">
+                        <input id="devModeChk" type="checkbox" style="transform:scale(1.1);">
+                        <span class="v" style="opacity:.9;">Developer mode</span>
+                    </label>
+                    <div class="v" style="opacity:.7; margin-top:6px;">
+                        Shows raw outputs and advanced controls.
+                    </div>
                 </div>
             </div>
+
+            <!-- TAB: POOLS -->
+            <div id="poolsTab" style="display:none;">
+                <div class="card">
+                    <h3>Pools</h3>
+                    <div class="v" style="opacity:.8;">(coming next) List pools + Create / Rename / Convert / Destroy</div>
+                    <div id="poolsOut" class="v" style="margin-top:10px; white-space:pre-wrap;"></div>
+                </div>
+            </div>
+
         </div>
     </div>
 </div>

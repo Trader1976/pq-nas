@@ -25,9 +25,47 @@
     const topologyCard = el("topologyCard");
     const rawCard = el("rawCard");
     const poolSelTop = el("poolSelTop");
+    // Tabs
+    const tabRaidBtn = el("tabRaidBtn");
+    const tabPoolsBtn = el("tabPoolsBtn");
+    const raidTab = el("raidTab");
+    const poolsTab = el("poolsTab");
+    const poolsOut = el("poolsOut");
 
+    const TAB_KEY = "pqnas_raidmgr_tab";
+    let g_tab = "raid"; // "raid" | "pools"
     const DEV_MODE_KEY = "pqnas_raidmgr_dev_mode";
+    function loadTab() {
+        try {
+            const t = String(localStorage.getItem(TAB_KEY) || "");
+            return (t === "pools" || t === "raid") ? t : "raid";
+        } catch (_) {
+            return "raid";
+        }
+    }
 
+    function saveTab(t) {
+        try { localStorage.setItem(TAB_KEY, t); } catch (_) {}
+    }
+
+    function applyTabToUi() {
+        const isPools = (g_tab === "pools");
+
+        if (raidTab) raidTab.style.display = isPools ? "none" : "";
+        if (poolsTab) poolsTab.style.display = isPools ? "" : "none";
+
+        if (tabRaidBtn) tabRaidBtn.setAttribute("aria-pressed", isPools ? "false" : "true");
+        if (tabPoolsBtn) tabPoolsBtn.setAttribute("aria-pressed", isPools ? "true" : "false");
+
+        // In Pools tab, dev-mode cards (probe/raw/topology) are hidden anyway because raidTab is hidden.
+    }
+
+    function setTab(t) {
+        g_tab = (t === "pools") ? "pools" : "raid";
+        saveTab(g_tab);
+        applyTabToUi();
+        probe(); // reload data appropriate for tab
+    }
     // Multi-pool selection
     const POOL_SEL_KEY = "pqnas_raidmgr_pool_mount";
     let g_pools = [];
@@ -104,9 +142,12 @@
     }
 
     function poolDisplayName(p) {
-        const label = String(p?.label || "").trim();
+        const disp  = String(p?.display_name || "").trim();
+        const label = String(p?.label || "").trim();     // btrfs label
         const mount = String(p?.mount || "").trim();
-        if (label) return label;
+
+        if (disp) return disp;   // PQ-NAS display name (user-friendly)
+        if (label) return label; // fallback to btrfs label
         if (mount) {
             const parts = mount.replace(/\/+$/, "").split("/");
             return parts[parts.length - 1] || mount;
@@ -162,7 +203,19 @@
         // Non-JSON (plain text / html)
         return { r, j: null, txt };
     }
-
+    async function postJson(url, body) {
+        const r = await fetch(url, {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body || {}),
+        });
+        const txt = await r.text();
+        let j = null;
+        try { j = JSON.parse(txt); } catch (_) {}
+        return { r, j, txt };
+    }
     async function loadPools() {
         // Returns [] on any failure (don’t break RAID tab)
         try {
@@ -543,34 +596,6 @@
 
         let html = "";
 
-        // Pool selector (multi-pool)
-        const pools = Array.isArray(g_pools) ? g_pools : [];
-        const selMount = String(mount || "");
-        const poolOptions = pools.length
-            ? pools
-                .map((p) => {
-                    const m = String(p?.mount || "");
-                    const name = poolDisplayName(p);
-                    const extra = m ? ` — ${m}` : "";
-                    const sel = m === selMount ? "selected" : "";
-                    return `<option value="${esc(m)}" ${sel}>${esc(name)}${esc(extra)}</option>`;
-                })
-                .join("")
-            : `<option value="${esc(selMount)}" selected>${esc(selMount || "(none)")}</option>`;
-
-        html += `<div class="row" style="margin-bottom:10px; align-items:center; gap:10px;">
-      <div class="k" style="min-width:110px;">Storage pool</div>
-      <div class="v" style="flex:1 1 auto;">
-        <select id="poolSel" style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);">
-          ${poolOptions}
-        </select>
-        <div class="v" style="opacity:.75; margin-top:6px;">
-          Changing pool reloads RAID status and actions.
-        </div>
-      </div>
-    </div>`;
-
-        html += `<hr style="opacity:.15;">`;
         html += `<div style="font-weight:900; margin: 6px 0 8px;">Add drive</div>`;
 
         if (disabled) {
@@ -677,20 +702,6 @@
 
         actionsOut.innerHTML = html;
 
-        // IMPORTANT: stop old timers when switching pool from inside Actions block
-        const poolSel = document.getElementById("poolSel");
-        poolSel?.addEventListener("change", () => {
-            const m = String(poolSel.value || "");
-            if (!m) return;
-
-            stopAllPolling();
-
-            saveSelectedMount(m);
-            g_selectedMount = m;
-
-            probe();
-        });
-
         applyDevModeToUi(); // hide advancedDetails when dev mode is off
 
         const addSel = document.getElementById("addDiskSel");
@@ -772,23 +783,7 @@
             st.execLastStep = -1;
             stopExecPollingUiOnly();
         }
-
-        async function postJson(url, body) {
-            const r = await fetch(url, {
-                method: "POST",
-                credentials: "include",
-                cache: "no-store",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body || {}),
-            });
-            const txt = await r.text();
-            let j = null;
-            try {
-                j = JSON.parse(txt);
-            } catch (_) {}
-            return { r, j, txt };
-        }
-
+        
         function looksLikePlanMismatch(r, j, txt) {
             const st = Number(r?.status || 0);
             if (st === 409 || st === 412) return true;
@@ -1463,6 +1458,13 @@
                         const remove_device = String(rmSel?.value || "").trim();
                         if (!remove_device) return;
 
+                        // 🔒 HARD SAFETY GUARD
+                        if (mount !== g_selectedMount) {
+                            showToast("err", "Storage pool changed. Please Preview again.", 4000);
+                            rmExecBtn.disabled = true;
+                            return;
+                        }
+
                         if (!lastRmPlan || !lastRmPlanId) {
                             setActionOut({ error: "no valid remove preview loaded — click Preview first" });
                             return;
@@ -1627,74 +1629,86 @@
         });
 
         execBtn?.addEventListener("click", async () => {
-            const device = String(addSel?.value || "").trim();
-            if (!device) return;
+            try {
+                const device = String(addSel?.value || "").trim();
+                if (!device) return;
 
-            if (!device.startsWith("/dev/")) {
-                setActionOut({ error: "invalid drive (expected /dev/...)", device });
-                return;
-            }
+                // 🔒 HARD SAFETY GUARD
+                if (mount !== g_selectedMount) {
+                    showToast("err", "Storage pool changed. Please Preview again.", 4000);
+                    execBtn.disabled = true;
+                    return;
+                }
 
-            if (!lastPlan || !lastPlanId || !lastPlanNonce) {
-                setActionOut({
-                    error: "no valid preview loaded — click Preview first",
-                    have_plan: !!lastPlan,
+                if (!device.startsWith("/dev/")) {
+                    setActionOut({ error: "invalid drive (expected /dev/...)", device });
+                    return;
+                }
+
+                if (!lastPlan || !lastPlanId || !lastPlanNonce) {
+                    setActionOut({
+                        error: "no valid preview loaded — click Preview first",
+                        have_plan: !!lastPlan,
+                        plan_id: lastPlanId,
+                        plan_nonce: lastPlanNonce,
+                    });
+                    return;
+                }
+
+                const ok = await confirmExecute(lastPlan, {
+                    kind: "add",
+                    mount,
+                    new_disk: device,
+                    mode: String(modeSel?.value || "single"),
+                });
+                if (!ok) {
+                    showToast("info", "Apply cancelled.", 1800);
+                    return;
+                }
+
+                const body = {
+                    mount,
+                    new_disk: device,
+                    mode: String(modeSel?.value || "single"),
+                    force: !!forceChk?.checked,
                     plan_id: lastPlanId,
                     plan_nonce: lastPlanNonce,
+                    dry_run: false,
+                    confirm: true,
+                };
+
+                showToast("info", "Applying…", 2000);
+                setActionOut({ note: "Applying add…", ts: new Date().toISOString(), request: body });
+
+                const { r, j, txt } = await postJson("/api/v4/raid/execute/add-device", body);
+
+                if (!r.ok && looksLikePlanMismatch(r, j, txt)) {
+                    showPlanMismatchHint("add", { http: r.status, response: j ?? txt });
+                    showToast("warn", "Plan changed. Refreshing preview…", 3200);
+                    await runAddPreviewSilently();
+                    return;
+                }
+
+                setActionOut({
+                    note: "EXEC add returned",
+                    endpoint: "execute/add-device",
+                    http: r.status,
+                    request: body,
+                    response: j ?? txt,
                 });
-                return;
+
+                if (r.ok) showToast("ok", "Applied ✓ Watching exec record…", 2400);
+                else showToast("err", "Apply failed. See advanced output.", 4500);
+
+                const pid = j && (j.plan_id || (j.plan && j.plan.plan_id)) ? (j.plan_id || j.plan.plan_id) : "";
+                if (pid) startExecPolling(pid);
+
+                startPolling();
+                setTimeout(() => probe(), 900);
+            } catch (e) {
+                setActionOut({ error: `Apply add error: ${String(e && e.stack ? e.stack : e)}` });
+                showToast("err", "Apply crashed. See advanced output.", 5000);
             }
-
-            const ok = await confirmExecute(lastPlan, {
-                kind: "add",
-                mount,
-                new_disk: device,
-                mode: String(modeSel?.value || "single"),
-            });
-            if (!ok) {
-                showToast("info", "Apply cancelled.", 1800);
-                return;
-            }
-
-            const body = {
-                mount,
-                new_disk: device,
-                mode: String(modeSel?.value || "single"),
-                force: !!forceChk?.checked,
-                plan_id: lastPlanId,
-                plan_nonce: lastPlanNonce,
-                dry_run: false,
-                confirm: true,
-            };
-
-            showToast("info", "Applying…", 2000);
-            setActionOut({ note: "Applying add…", ts: new Date().toISOString(), request: body });
-
-            const { r, j, txt } = await postJson("/api/v4/raid/execute/add-device", body);
-
-            if (!r.ok && looksLikePlanMismatch(r, j, txt)) {
-                showPlanMismatchHint("add", { http: r.status, response: j ?? txt });
-                showToast("warn", "Plan changed. Refreshing preview…", 3200);
-                await runAddPreviewSilently();
-                return;
-            }
-
-            setActionOut({
-                note: "EXEC add returned",
-                endpoint: "execute/add-device",
-                http: r.status,
-                request: body,
-                response: j ?? txt,
-            });
-
-            if (r.ok) showToast("ok", "Applied ✓ Watching exec record…", 2400);
-            else showToast("err", "Apply failed. See advanced output.", 4500);
-
-            const pid = j && (j.plan_id || (j.plan && j.plan.plan_id)) ? (j.plan_id || j.plan.plan_id) : "";
-            if (pid) startExecPolling(pid);
-
-            startPolling();
-            setTimeout(() => probe(), 900);
         });
     }
 
@@ -1770,7 +1784,128 @@
         poolSelTop.innerHTML = opts;
         poolSelTop.disabled = false;
     }
+    function renderPoolsTab() {
+        if (!poolsOut) return;
 
+        const pools = Array.isArray(g_pools) ? g_pools : [];
+        if (!pools.length) {
+            poolsOut.innerHTML = `<div class="v" style="opacity:.8;">No pools found.</div>`;
+            return;
+        }
+
+        function pill(text) {
+            return `<span style="
+          display:inline-block; padding:3px 8px; border-radius:999px;
+          border:1px solid rgba(255,255,255,0.14);
+          background:rgba(0,0,0,0.10);
+          font-size:12px; opacity:.9;
+        ">${esc(text)}</span>`;
+        }
+
+        const rows = pools.map((p) => {
+            const mount = String(p?.mount || "");
+            const label = poolDisplayName(p);
+            const fstype = String(p?.fstype || p?.fs || "").trim();
+            const uuid = String(p?.uuid || "").trim();
+            const raid = String(p?.raid || p?.mode || "").trim();
+
+            return `
+<div class="card" style="margin-top:10px;">
+  <div class="row" style="align-items:flex-start; gap:12px;">
+    <div style="flex:1 1 auto; min-width:260px;">
+      <div style="font-weight:950; font-size:15px;">${esc(label)}</div>
+      <div class="v" style="opacity:.8; margin-top:2px;">${esc(mount)}</div>
+      <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+        ${fstype ? pill(`fs: ${fstype}`) : ""}
+        ${raid ? pill(`raid: ${raid}`) : ""}
+        ${uuid ? pill(`uuid: ${uuid.slice(0, 12)}…`) : ""}
+      </div>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:8px; flex:0 0 auto;">
+      <button class="btn secondary" type="button" data-pool-action="rename" data-mount="${esc(mount)}">Rename</button>
+      <button class="btn secondary" type="button" data-pool-action="convert" data-mount="${esc(mount)}">Convert RAID</button>
+      <button class="btn danger" type="button" data-pool-action="destroy" data-mount="${esc(mount)}">Destroy</button>
+    </div>
+  </div>
+</div>`;
+        }).join("");
+
+        poolsOut.innerHTML = `
+<div class="row" style="align-items:center; justify-content:space-between; gap:10px;">
+  <div style="font-weight:950;">Storage pools</div>
+  <button class="btn" id="poolCreateBtn" type="button">Create new pool</button>
+</div>
+
+${rows}
+
+<details class="card" style="margin-top:12px;">
+  <summary style="cursor:pointer; font-weight:900;">Raw pools JSON (debug)</summary>
+  <pre style="margin-top:10px; max-height:45vh; overflow:auto;">${esc(JSON.stringify(pools, null, 2))}</pre>
+</details>
+`;
+
+        // Wire actions (scaffold for now)
+        const createBtn = document.getElementById("poolCreateBtn");
+        createBtn?.addEventListener("click", () => {
+            showToast("info", "Create pool: UI coming next (needs backend endpoints).", 2600);
+        });
+
+        poolsOut.querySelectorAll("button[data-pool-action]").forEach((btn) => {
+            btn.addEventListener("click", async () => {
+                const action = btn.getAttribute("data-pool-action");
+                const mount = btn.getAttribute("data-mount") || "";
+                if (!mount) return;
+
+                if (action !== "rename") {
+                    showToast("info", `${action} pool (${mount}): UI coming next.`, 2600);
+                    return;
+                }
+
+                // Current display name (if any)
+                const p = pools.find((x) => String(x?.mount || "") === String(mount));
+                const current = String(p?.display_name || "").trim();
+
+                const name = window.prompt(
+                    `Rename pool:\n${mount}\n\nEnter a display name (empty = reset to label):`,
+                    current
+                );
+
+                // User cancelled
+                if (name === null) return;
+
+                const newName = String(name).trim(); // empty => delete key on server
+
+                try {
+                    showToast("info", "Saving…", 1200);
+
+                    const { r, j, txt } = await postJson("/api/v4/storage/pools/set-name", {
+                        mount,
+                        display_name: newName,
+                    });
+
+                    if (!r.ok || !j || j.ok !== true) {
+                        showToast("err", `Rename failed: ${prettyError(j, r, txt)}`, 5200);
+                        return;
+                    }
+
+                    showToast("ok", "Renamed ✓", 2000);
+
+                    // Refresh pools list + re-render Pools tab + top selector
+                    g_pools = await loadPools();
+
+                    // Keep selection if it still exists
+                    const exists = g_pools.some((pp) => String(pp?.mount || "") === String(g_selectedMount || ""));
+                    if (!exists && g_pools.length) g_selectedMount = String(g_pools[0]?.mount || "");
+
+                    renderPoolSelectorTop();
+                    renderPoolsTab();
+                } catch (e) {
+                    showToast("err", `Rename crashed: ${String(e && e.message ? e.message : e)}`, 5200);
+                }
+            });
+        });
+    }
     async function probe() {
         setBadge("warn", "loading…");
 
@@ -1789,9 +1924,17 @@
 
         // 2) Choose selected mount
         const saved = loadSelectedMount();
+
         if (g_pools.length) {
-            const exists = g_pools.some((p) => String(p?.mount || "") === saved);
-            g_selectedMount = exists ? saved : String(g_pools[0]?.mount || "");
+            const existsCurrent = g_pools.some((p) => String(p?.mount || "") === String(g_selectedMount || ""));
+            const existsSaved   = g_pools.some((p) => String(p?.mount || "") === String(saved || ""));
+
+            g_selectedMount = existsCurrent
+                ? String(g_selectedMount || "")
+                : existsSaved
+                    ? String(saved || "")
+                    : String(g_pools[0]?.mount || "");
+
             if (g_selectedMount) saveSelectedMount(g_selectedMount);
         } else {
             g_selectedMount = "";
@@ -1799,7 +1942,16 @@
 
         // 3) Render top selector
         renderPoolSelectorTop();
+        // If Pools tab is active, show pool list and stop here (for now)
+        if (g_tab === "pools") {
+            setBadge("info", "pools");
+            if (subLine) subLine.textContent = "Manage storage pools (create/rename/convert/destroy).";
 
+            renderPoolsTab();
+
+            applyDevModeToUi();
+            return;
+        }
         // 4) Decide mounts to try
         const mountsTry = g_selectedMount ? [g_selectedMount] : mountsToTry;
 
@@ -1843,7 +1995,9 @@
                     if (j.mode) probeOut.appendChild(kvRow("Mode", j.mode));
                     if (j.message) probeOut.appendChild(kvRow("Message", j.message));
                 }
-
+                if (subLine) {
+                    subLine.textContent = `Managing storage pool: ${resolved}`;
+                }
                 if (isBtrfs && j.parsed) {
                     renderTopology(j.parsed);
                 } else if (topologyOut) {
@@ -1964,12 +2118,23 @@
     poolSelTop?.addEventListener("change", () => {
         const m = String(poolSelTop.value || "").trim();
         if (!m) return;
+
         stopAllPolling();
+
+        // clear cached output so Apply cannot accidentally carry across pools
+        g_lastAction = null;
+        g_lastProgress = null;
+
         saveSelectedMount(m);
         g_selectedMount = m;
         probe();
     });
+    // Tabs init + handlers
+    g_tab = loadTab();
+    applyTabToUi();
 
+    tabRaidBtn?.addEventListener("click", () => setTab("raid"));
+    tabPoolsBtn?.addEventListener("click", () => setTab("pools"));
     // Dev mode init
     applyDevModeToUi();
     devModeChk?.addEventListener("change", () => setDevMode(!!devModeChk.checked));
