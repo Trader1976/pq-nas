@@ -43,7 +43,11 @@
             return "raid";
         }
     }
-
+    function setBadge(kind, text) {
+        if (!badge) return;
+        badge.className = `badge ${kind || ""}`.trim();
+        badge.textContent = text || "";
+    }
     function saveTab(t) {
         try { localStorage.setItem(TAB_KEY, t); } catch (_) {}
     }
@@ -96,12 +100,78 @@
         return window[GSTATE_KEY];
     }
 
-    function stopAllPolling() {
+    function stopMountPolling() {
         const st = gstate();
         if (st.pollTimer) {
             clearInterval(st.pollTimer);
             st.pollTimer = null;
         }
+    }
+
+    function stopAllPolling() {
+        stopMountPolling();
+        stopExecPolling(); // keep this as the “full reset”
+    }
+// ---------------------------------------------------------------------------
+// Exec-record polling (GLOBAL, plan_id-based)
+// Allows Pools tab and RAID tab to reuse exec polling.
+// UI updates are "best effort" (only if the elements exist on the page).
+// ---------------------------------------------------------------------------
+
+    function fmtExecState(s) {
+        s = String(s || "");
+        return s || "(unknown)";
+    }
+
+    function setExecUiGlobal(state, stepIndex, stepTotal, planId) {
+        // Best-effort: these exist in RAID tab action UI. In Pools tab they may not exist.
+        const execPill = document.getElementById("execPill");
+        const execMeta = document.getElementById("execMeta");
+        const execPbarFill = document.getElementById("execPbarFill");
+
+        const st = String(state || "idle");
+        const si = Number.isFinite(stepIndex) ? stepIndex : -1;
+        const tot = Number.isFinite(stepTotal) ? stepTotal : -1;
+
+        if (execPill) {
+            let cls = "pill warn";
+            if (st === "done") cls = "pill ok";
+            else if (st === "failed") cls = "pill err";
+            else if (st === "error") cls = "pill err";
+            execPill.className = cls;
+            execPill.textContent = st;
+        }
+
+        if (execMeta) {
+            if (planId) {
+                if (si >= 0 && tot > 0) execMeta.textContent = `plan_id=${planId.slice(0, 12)}…  ${si}/${tot}`;
+                else execMeta.textContent = `plan_id=${planId.slice(0, 12)}…`;
+            } else {
+                execMeta.textContent = "(no job)";
+            }
+        }
+
+        if (execPbarFill) {
+            let pct = 0;
+            if (si >= 0 && tot > 0) pct = Math.max(0, Math.min(100, Math.round((si / tot) * 100)));
+            execPbarFill.style.width = `${pct}%`;
+        }
+    }
+
+    function setProgressTextGlobal(lines) {
+        const progressOut = document.getElementById("progressOut");
+        const txt = Array.isArray(lines) ? lines.join("\n") : String(lines || "");
+
+        // ✅ persist for rebuilds
+        g_lastProgress = txt;
+
+        if (progressOut) progressOut.textContent = txt;
+
+        try { window.__pqnas_last_progress_text = txt; } catch (_) {}
+    }
+
+    function stopExecPolling() {
+        const st = gstate();
         if (st.execTimer) {
             clearInterval(st.execTimer);
             st.execTimer = null;
@@ -109,8 +179,125 @@
         st.execPlanId = "";
         st.execLastState = "";
         st.execLastStep = -1;
+
+        setExecUiGlobal("idle", -1, -1, "");
     }
 
+    async function pollExecOnce() {
+        const st = gstate();
+        if (!st.execPlanId) return;
+
+        let rec = null;
+        let http = 0;
+        let errTxt = "";
+
+        try {
+            const q = await fetchJson(`/api/v4/raid/exec-record?plan_id=${encodeURIComponent(st.execPlanId)}`);
+            http = q.r ? q.r.status : 0;
+            rec = q.j;
+            if (!rec || rec.ok !== true) errTxt = prettyError(q.j, q.r, q.txt);
+        } catch (e) {
+            errTxt = String(e && e.message ? e.message : e);
+        }
+
+        const lines = [];
+        lines.push(`Exec record: plan_id=${st.execPlanId}`);
+        if (http) lines.push(`HTTP: ${http}`);
+
+        if (!rec || rec.ok !== true) {
+            lines.push(`State: error`);
+            if (errTxt) lines.push(`Error: ${errTxt}`);
+            setExecUiGlobal("error", -1, -1, st.execPlanId);
+            setProgressTextGlobal(lines);
+            return;
+        }
+
+        const state = fmtExecState(rec.state);
+        const busy = !!rec.busy;
+        const si = Number.isFinite(rec.step_index) ? rec.step_index : -1;
+        const tot = Number.isFinite(rec.step_total) ? rec.step_total : -1;
+
+        setExecUiGlobal(state, si, tot, st.execPlanId);
+
+        lines.push(`State: ${state} (busy=${busy})`);
+        if (si >= 0 && tot > 0) {
+            const pct = Math.max(0, Math.min(100, Math.round((si / tot) * 100)));
+            lines.push(`Progress: ${si}/${tot} (${pct}%)`);
+        } else {
+            lines.push(`Progress: (unknown)`);
+        }
+
+        if (rec.ts_start) lines.push(`Started: ${rec.ts_start}`);
+        if (rec.ts_last) lines.push(`Last:    ${rec.ts_last}`);
+        if (rec.ts_end)  lines.push(`Ended:   ${rec.ts_end}`);
+
+        if (rec.message) lines.push(`Message: ${String(rec.message)}`);
+        if (rec.error)   lines.push(`Error: ${String(rec.error)}`);
+
+        try {
+            const stepsArr = Array.isArray(rec.steps) ? rec.steps : (Array.isArray(rec.results) ? rec.results : []);
+            if (stepsArr.length) {
+                const last = stepsArr[stepsArr.length - 1];
+                if (last && typeof last === "object") {
+                    if (last.cmd) lines.push(`Last cmd: ${String(last.cmd)}`);
+                    if (last.ok != null) lines.push(`Last ok: ${String(last.ok)}`);
+                    if (last.rc != null) lines.push(`Last rc: ${String(last.rc)}`);
+                    if (last.out) {
+                        lines.push("Last out:");
+                        lines.push(String(last.out).slice(0, 4000));
+                    }
+                }
+            }
+        } catch (_) {}
+
+        setProgressTextGlobal(lines);
+
+        const done = state === "done" || state === "failed";
+        if (done) {
+            stopExecPolling();
+            if (done) {
+                stopExecPolling();
+
+                // Refresh pools list (best effort)
+                try {
+                    setTimeout(async () => {
+                        g_pools = await loadPools();
+                        renderPoolSelectorTop();
+                        if (g_tab === "pools") renderPoolsTab();
+                        probe(); // keep this too; it refreshes RAID tab if that’s active
+                    }, 350);
+                } catch (_) {}
+
+                return;
+            }// stop first (avoids progress UI lockout)
+            try { setTimeout(() => probe(), 350); } catch (_) {}
+            return;
+        }
+
+        st.execLastState = state;
+        st.execLastStep = si;
+    }
+
+    function startExecPolling(plan_id) {
+        const pid = String(plan_id || "").trim();
+        if (!/^[0-9a-f]{64}$/.test(pid)) {
+            setProgressTextGlobal([`Exec record: invalid plan_id: ${pid}`]);
+            return;
+        }
+
+        const st = gstate();
+        st.execPlanId = pid;
+        st.execLastState = "";
+        st.execLastStep = -1;
+
+        if (st.execTimer) {
+            clearInterval(st.execTimer);
+            st.execTimer = null;
+        }
+
+        pollExecOnce();
+        st.execTimer = setInterval(pollExecOnce, 700);
+    }
     function isDevMode() {
         try {
             return window.localStorage.getItem(DEV_MODE_KEY) === "1";
@@ -118,7 +305,83 @@
             return false;
         }
     }
+    async function apiGetJson(url) {
+        const r = await fetch(url, { credentials: "same-origin" });
+        const t = await r.text();
+        let j;
+        try { j = JSON.parse(t); } catch { throw new Error(`Bad JSON from ${url}: ${t.slice(0,200)}`); }
+        if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+        return j;
+    }
 
+    async function loadAllDisks() {
+        return await apiGetJson("/api/v4/storage/disks");
+    }
+
+    async function loadDiscovery(mount) {
+        const qs = new URLSearchParams({ mount });
+        return await apiGetJson(`/api/v4/raid/discovery?${qs.toString()}`);
+    }
+
+
+    function isEligibleDisk(d) {
+        const path = String(d?.path || "");
+        const name = String(d?.name || "");
+
+        // Must look like a block device path
+        if (!path.startsWith("/dev/")) return false;
+
+        // Exclude mounted devices (snap loops, system disks in use, etc.)
+        const mps = Array.isArray(d?.mountpoints) ? d.mountpoints.filter(Boolean) : [];
+        if (mps.length) return false;
+
+        // Exclude obvious non-target fs types (snap squashfs, etc.)
+        const fstype = String(d?.fstype || "").toLowerCase();
+        if (fstype === "squashfs") return false;
+
+        // Default safety: hide snap loop devices unless in dev mode
+        const isLoop = name.startsWith("loop") || path.startsWith("/dev/loop");
+        if (isLoop && !isDevMode()) return false;
+
+        // If device has children/partitions, allow only if Force is enabled at execute time.
+        // For dropdown eligibility we still allow it, but you may choose to disable unless force.
+        // We'll keep it allowed so testing works.
+        return true;
+    }
+    function fillSelect(selectEl, disks, { allowMultiple=false, filterFn=isEligibleDisk, preselect=[] } = {}) {
+        selectEl.innerHTML = "";
+        selectEl.multiple = !!allowMultiple;
+
+        const eligible = disks.filter(filterFn);
+
+        for (const d of eligible) {
+            const opt = document.createElement("option");
+            opt.value = d.path || d.dev;
+            opt.textContent = diskLabel(d);
+            if (preselect.includes(opt.value)) opt.selected = true;
+            selectEl.appendChild(opt);
+        }
+
+        // If nothing eligible, show a disabled placeholder
+        if (!eligible.length) {
+            const opt = document.createElement("option");
+            opt.value = "";
+            opt.textContent = "(No eligible disks found)";
+            opt.disabled = true;
+            opt.selected = true;
+            selectEl.appendChild(opt);
+        }
+    }
+    function poolDevicePaths(discoveryJson) {
+        const devs = discoveryJson?.btrfs?.devices;
+        if (!Array.isArray(devs)) return [];
+        return devs.map(x => x?.path).filter(Boolean);
+    }
+
+    function filterAddDevice(poolPaths) {
+        const set = new Set(poolPaths);
+        return (d) => isEligibleDisk(d) && !set.has(d.path || d.dev);
+    }
     function setDevMode(on) {
         try {
             window.localStorage.setItem(DEV_MODE_KEY, on ? "1" : "0");
@@ -169,12 +432,6 @@
         } catch (_) {}
     }
 
-    function setBadge(kind, text) {
-        if (!badge) return;
-        badge.className = `badge ${kind}`;
-        badge.textContent = text || "";
-    }
-
     function detectVersionFromUrl() {
         const p = String(location.pathname || "");
         const m = p.match(/\/apps\/[^/]+\/([^/]+)\/www\//);
@@ -202,6 +459,19 @@
 
         // Non-JSON (plain text / html)
         return { r, j: null, txt };
+    }
+    function randHex(bytes) {
+        const a = new Uint8Array(bytes);
+        crypto.getRandomValues(a);
+        return Array.from(a).map((b) => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    function parseDevicesInput(s) {
+        return String(s || "")
+            .split(/[\s,]+/g)
+            .map((x) => x.trim())
+            .filter(Boolean)
+            .filter((x) => x.startsWith("/dev/"));
     }
     async function postJson(url, body) {
         const r = await fetch(url, {
@@ -728,61 +998,6 @@
             if (!actionOut) return;
             actionOut.textContent = JSON.stringify(obj, null, 2);
         }
-
-        function setExecUi(state, stepIndex, stepTotal, planId) {
-            const st = String(state || "idle");
-            const si = Number.isFinite(stepIndex) ? stepIndex : -1;
-            const tot = Number.isFinite(stepTotal) ? stepTotal : -1;
-
-            if (execPill) {
-                let cls = "pill warn";
-                if (st === "done") cls = "pill ok";
-                else if (st === "failed") cls = "pill err";
-                else if (st === "running") cls = "pill warn";
-                else if (st === "queued") cls = "pill warn";
-                else if (st === "error") cls = "pill err";
-                execPill.className = cls;
-                execPill.textContent = st;
-            }
-
-            if (execMeta) {
-                if (planId) {
-                    if (si >= 0 && tot > 0) execMeta.textContent = `plan_id=${planId.slice(0, 12)}…  ${si}/${tot}`;
-                    else execMeta.textContent = `plan_id=${planId.slice(0, 12)}…`;
-                } else {
-                    execMeta.textContent = "(no job)";
-                }
-            }
-
-            if (execPbarFill) {
-                let pct = 0;
-                if (si >= 0 && tot > 0) pct = Math.max(0, Math.min(100, Math.round((si / tot) * 100)));
-                execPbarFill.style.width = `${pct}%`;
-            }
-        }
-
-        function setProgressText(lines) {
-            const txt = lines.join("\n");
-            g_lastProgress = txt;
-            if (progressOut) progressOut.textContent = txt;
-        }
-
-        function stopExecPollingUiOnly() {
-            // UI reset only; actual interval is stopped by stopAllPolling() / stopExecPolling()
-            setExecUi("idle", -1, -1, "");
-        }
-
-        function stopExecPolling() {
-            const st = gstate();
-            if (st.execTimer) {
-                clearInterval(st.execTimer);
-                st.execTimer = null;
-            }
-            st.execPlanId = "";
-            st.execLastState = "";
-            st.execLastStep = -1;
-            stopExecPollingUiOnly();
-        }
         
         function looksLikePlanMismatch(r, j, txt) {
             const st = Number(r?.status || 0);
@@ -1152,122 +1367,6 @@
             st.pollTimer = setInterval(pollOnce, 2000);
         }
 
-        // --- Exec-record polling (plan_id-based) ---
-        function fmtExecState(s) {
-            s = String(s || "");
-            return s || "(unknown)";
-        }
-
-        async function pollExecOnce() {
-            const st = gstate();
-            if (!st.execPlanId) return;
-
-            let rec = null;
-            let http = 0;
-            let errTxt = "";
-
-            try {
-                const q = await fetchJson(`/api/v4/raid/exec-record?plan_id=${encodeURIComponent(st.execPlanId)}`);
-                http = q.r ? q.r.status : 0;
-                rec = q.j;
-                if (!rec || rec.ok !== true) errTxt = prettyError(q.j, q.r, q.txt);
-            } catch (e) {
-                errTxt = String(e && e.message ? e.message : e);
-            }
-
-            const lines = [];
-            lines.push(`Exec record: plan_id=${st.execPlanId}`);
-            if (http) lines.push(`HTTP: ${http}`);
-
-            if (!rec || rec.ok !== true) {
-                lines.push(`State: error`);
-                if (errTxt) lines.push(`Error: ${errTxt}`);
-                setExecUi("error", -1, -1, st.execPlanId);
-                setProgressText(lines);
-                return;
-            }
-
-            const state = fmtExecState(rec.state);
-            const busy = !!rec.busy;
-            const si = Number.isFinite(rec.step_index) ? rec.step_index : -1;
-            const tot = Number.isFinite(rec.step_total) ? rec.step_total : -1;
-
-            setExecUi(state, si, tot, st.execPlanId);
-
-            lines.push(`State: ${state} (busy=${busy})`);
-            if (si >= 0 && tot > 0) {
-                const pct = Math.max(0, Math.min(100, Math.round((si / tot) * 100)));
-                lines.push(`Progress: ${si}/${tot} (${pct}%)`);
-            } else {
-                lines.push(`Progress: (unknown)`);
-            }
-
-            if (rec.ts_start) lines.push(`Started: ${rec.ts_start}`);
-            if (rec.ts_last) lines.push(`Last:    ${rec.ts_last}`);
-            if (rec.ts_end) lines.push(`Ended:   ${rec.ts_end}`);
-
-            if (rec.message) lines.push(`Message: ${String(rec.message)}`);
-            if (rec.error) lines.push(`Error: ${String(rec.error)}`);
-
-            try {
-                if (Array.isArray(rec.steps) && rec.steps.length) {
-                    const last = rec.steps[rec.steps.length - 1];
-                    if (last && typeof last === "object") {
-                        if (last.cmd) lines.push(`Last cmd: ${String(last.cmd)}`);
-                        if (last.ok != null) lines.push(`Last ok: ${String(last.ok)}`);
-                        if (last.rc != null) lines.push(`Last rc: ${String(last.rc)}`);
-                        if (last.out) {
-                            lines.push("Last out:");
-                            lines.push(String(last.out).slice(0, 4000));
-                        }
-                    }
-                } else if (Array.isArray(rec.results) && rec.results.length) {
-                    const last = rec.results[rec.results.length - 1];
-                    if (last && typeof last === "object") {
-                        if (last.cmd) lines.push(`Last cmd: ${String(last.cmd)}`);
-                        if (last.ok != null) lines.push(`Last ok: ${String(last.ok)}`);
-                        if (last.rc != null) lines.push(`Last rc: ${String(last.rc)}`);
-                        if (last.out) {
-                            lines.push("Last out:");
-                            lines.push(String(last.out).slice(0, 4000));
-                        }
-                    }
-                }
-            } catch (_) {}
-
-            setProgressText(lines);
-
-            const done = state === "done" || state === "failed";
-            if (done) {
-                setTimeout(() => probe(), 800);
-                stopExecPolling();
-                return;
-            }
-
-            st.execLastState = state;
-            st.execLastStep = si;
-        }
-
-        function startExecPolling(plan_id) {
-            const pid = String(plan_id || "").trim();
-            if (!/^[0-9a-f]{64}$/.test(pid)) {
-                setProgressText([`Exec record: invalid plan_id: ${pid}`]);
-                return;
-            }
-
-            const st = gstate();
-            st.execPlanId = pid;
-            st.execLastState = "";
-            st.execLastStep = -1;
-
-            if (st.execTimer) {
-                clearInterval(st.execTimer);
-                st.execTimer = null;
-            }
-
-            pollExecOnce();
-            st.execTimer = setInterval(pollExecOnce, 700);
-        }
 
         // Initial progress snapshot (before any apply)
         (async () => {
@@ -1847,8 +1946,371 @@ ${rows}
 
         // Wire actions (scaffold for now)
         const createBtn = document.getElementById("poolCreateBtn");
+        function ensureCreatePoolOverlay() {
+            let ov = document.getElementById("poolCreateOverlay");
+            if (ov) return ov;
+
+            ov = document.createElement("div");
+            ov.id = "poolCreateOverlay";
+            ov.style.position = "fixed";
+            ov.style.inset = "0";
+            ov.style.display = "none";
+            ov.style.alignItems = "center";
+            ov.style.justifyContent = "center";
+            ov.style.background = isDarkThemeNow() ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.25)";
+            ov.style.zIndex = "9999";
+
+            ov.innerHTML = `
+<div style="
+  width:min(860px, 94vw);
+  max-height:90vh;
+  overflow:auto;
+  border-radius:18px;
+  border:1px solid rgba(255,255,255,0.14);
+  background: var(--panel, rgba(0,0,0,0.35));
+  color: var(--fg);
+  padding:14px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
+    <div style="font-weight:950;">Create storage pool</div>
+    <button id="poolCreateCloseBtn" class="btn secondary" type="button">Close</button>
+  </div>
+
+  <div class="card" style="margin-top:10px;">
+    <div class="row" style="gap:10px; align-items:flex-end;">
+      <div style="flex:1 1 240px; min-width:220px;">
+        <div class="k" style="margin-bottom:6px;">pool_id</div>
+        <input id="poolIdInp" type="text" placeholder="raidtest" style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);">
+        <div class="v" style="opacity:.75; margin-top:6px;">Allowed: a-z 0-9 _ - (max 32)</div>
+      </div>
+
+      <div style="flex:0 0 220px;">
+        <div class="k" style="margin-bottom:6px;">Mode</div>
+        <select id="poolModeSel" style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);">
+          <option value="single">single</option>
+          <option value="raid1">raid1</option>
+        </select>
+      </div>
+
+      <div style="flex:1 1 320px; min-width:260px;">
+        <div class="k" style="margin-bottom:6px;">Devices</div>
+        <select id="poolDevsSel" style="width:100%; min-height:44px; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);"></select>
+        <div class="v" id="poolDevHint" style="opacity:.75; margin-top:6px;"></div>
+      </div>
+    </div>
+
+    <div class="row" style="gap:10px; margin-top:12px; align-items:center;">
+      <label style="display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18);">
+        <input id="poolForceChk" type="checkbox" style="transform:scale(1.1);">
+        <span class="v" style="opacity:.9;">Force wipe (destructive)</span>
+      </label>
+
+      <button id="poolDevsRefreshBtn" class="btn secondary" type="button">Refresh devices</button>
+
+      <div style="flex:1 1 auto;"></div>
+
+      <button id="poolCreateDoBtn" class="btn danger" type="button">Create</button>
+    </div>
+
+    <details class="card" style="margin-top:12px;">
+      <summary style="cursor:pointer; font-weight:900;">Advanced</summary>
+      <pre id="poolCreateDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
+    </details>
+  </div>
+</div>
+`;
+            document.body.appendChild(ov);
+            return ov;
+        }
+        // ------------------------------------------------------------
+        // Destroy Pool UI
+        // ------------------------------------------------------------
+
+        // ---- Destroy pool modal + execute ----
+        function ensureDestroyPoolOverlay() {
+            let ov = document.getElementById("poolDestroyOverlay");
+            if (ov) return ov;
+
+            ov = document.createElement("div");
+            ov.id = "poolDestroyOverlay";
+            ov.style.position = "fixed";
+            ov.style.inset = "0";
+            ov.style.display = "none";
+            ov.style.alignItems = "center";
+            ov.style.justifyContent = "center";
+            ov.style.background = isDarkThemeNow() ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.25)";
+            ov.style.zIndex = "9999";
+
+            ov.innerHTML = `
+<div style="
+  width:min(860px, 94vw);
+  max-height:90vh;
+  overflow:auto;
+  border-radius:18px;
+  border:1px solid rgba(255,255,255,0.14);
+  background: var(--panel, rgba(0,0,0,0.35));
+  color: var(--fg);
+  padding:14px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
+    <div style="font-weight:950;">Destroy storage pool</div>
+    <button id="poolDestroyCloseBtn" class="btn secondary" type="button">Close</button>
+  </div>
+
+  <div class="card" style="margin-top:10px;">
+    <div class="v" style="opacity:.9; white-space:pre-line;">
+This will unmount the pool and remove it from PQ-NAS pools config.
+Optionally it can wipe member disks (VERY destructive).
+    </div>
+
+    <div style="margin-top:12px;">
+      <div class="k" style="margin-bottom:6px;">Mount</div>
+      <input id="poolDestroyMountInp" type="text" readonly
+             style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14);
+                    background:rgba(0,0,0,0.18); color:var(--fg); font-family:var(--mono);">
+    </div>
+
+    <div style="margin-top:12px;">
+      <label style="display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:14px;
+                    border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18);">
+        <input id="poolDestroyWipeChk" type="checkbox" style="transform:scale(1.1);">
+        <span class="v" style="opacity:.95;">Wipe member disks (destructive)</span>
+      </label>
+      <div class="v" style="opacity:.75; margin-top:6px;">
+        When ON, PQ-NAS will wipefs/sgdisk each member device after unmount.
+      </div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <div class="k" style="margin-bottom:6px;">Type DESTROY to confirm</div>
+      <input id="poolDestroyTypeInp" type="text" placeholder="DESTROY"
+             style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14);
+                    background:rgba(0,0,0,0.18); color:var(--fg); font-family:var(--mono);">
+    </div>
+
+    <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px;">
+      <button id="poolDestroyCancelBtn" class="btn secondary" type="button">Cancel</button>
+      <button id="poolDestroyDoBtn" class="btn danger" type="button" disabled>Destroy</button>
+    </div>
+
+    <details class="card" style="margin-top:12px;">
+      <summary style="cursor:pointer; font-weight:900;">Advanced</summary>
+      <pre id="poolDestroyDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
+    </details>
+  </div>
+</div>
+`;
+            document.body.appendChild(ov);
+            return ov;
+        }
+
+        async function openDestroyPoolModal(mount) {
+            const ov = ensureDestroyPoolOverlay();
+
+            const closeBtn = ov.querySelector("#poolDestroyCloseBtn");
+            const cancelBtn = ov.querySelector("#poolDestroyCancelBtn");
+            const doBtn = ov.querySelector("#poolDestroyDoBtn");
+            const mountInp = ov.querySelector("#poolDestroyMountInp");
+            const wipeChk = ov.querySelector("#poolDestroyWipeChk");
+            const typeInp = ov.querySelector("#poolDestroyTypeInp");
+            const dbg = ov.querySelector("#poolDestroyDebug");
+
+            mountInp.value = String(mount || "");
+            wipeChk.checked = false;
+            typeInp.value = "";
+            dbg.textContent = "(idle)";
+
+            const refreshDoEnabled = () => {
+                const okType = String(typeInp.value || "").trim().toUpperCase() === "DESTROY";
+                doBtn.disabled = !okType;
+            };
+            typeInp.oninput = refreshDoEnabled;
+            refreshDoEnabled();
+
+            const close = () => { ov.style.display = "none"; };
+
+            closeBtn.onclick = close;
+            cancelBtn.onclick = close;
+
+            doBtn.onclick = async () => {
+                // 🔒 Hard guard: only allow pools under /srv/pqnas/pools
+                const mnt = String(mountInp.value || "").trim();
+                if (!mnt.startsWith("/srv/pqnas/pools/")) {
+                    showToast("err", "Refusing: mount is not under /srv/pqnas/pools/", 6500);
+                    return;
+                }
+
+                const okType = String(typeInp.value || "").trim().toUpperCase() === "DESTROY";
+                if (!okType) {
+                    showToast("warn", "Type DESTROY to confirm.", 4200);
+                    return;
+                }
+
+                const plan_id = randHex(32);
+                const plan_nonce = randHex(16);
+                const force_wipe = !!wipeChk.checked;
+
+                const body = { mount: mnt, plan_id, plan_nonce, confirm: true, force_wipe };
+
+                dbg.textContent = JSON.stringify({ note: "POST destroy-pool", request: body }, null, 2);
+                showToast("info", "Destroy started…", 2200);
+
+                const { r, j, txt } = await postJson("/api/v4/raid/execute/destroy-pool", body);
+
+                dbg.textContent = JSON.stringify({ http: r.status, response: j ?? txt, request: body }, null, 2);
+
+                if (!r.ok || !j || j.ok !== true) {
+                    showToast("err", `Destroy failed: ${prettyError(j, r, txt)}`, 6500);
+                    return;
+                }
+
+                // Start exec polling using server-returned plan_id (preferred)
+                const pid = (j && j.plan_id) ? String(j.plan_id) : String(plan_id);
+                startExecPolling(pid);
+
+                close();
+
+                // Best-effort: refresh pools list soon (exec polling will also refresh on done)
+                setTimeout(async () => {
+                    g_pools = await loadPools();
+                    renderPoolSelectorTop();
+                    if (g_tab === "pools") renderPoolsTab();
+                }, 800);
+            };
+
+            ov.style.display = "flex";
+        }
+            async function openCreatePoolModal() {
+            const ov = ensureCreatePoolOverlay();
+
+            const closeBtn = ov.querySelector("#poolCreateCloseBtn");
+            const poolIdInp = ov.querySelector("#poolIdInp");
+            const modeSel = ov.querySelector("#poolModeSel");
+            const devSel = ov.querySelector("#poolDevsSel");
+            const forceChk = ov.querySelector("#poolForceChk");
+            const refreshBtn = ov.querySelector("#poolDevsRefreshBtn");
+            const doBtn = ov.querySelector("#poolCreateDoBtn");
+            const hint = ov.querySelector("#poolDevHint");
+            const dbg = ov.querySelector("#poolCreateDebug");
+
+            let disks = [];
+
+            function selectedDevices() {
+                const mode = String(modeSel.value || "single");
+                if (mode === "raid1") {
+                    return Array.from(devSel.selectedOptions).map(o => String(o.value)).filter(Boolean);
+                }
+                const v = String(devSel.value || "").trim();
+                return v ? [v] : [];
+            }
+
+            function applyModeToDeviceSelect() {
+                const mode = String(modeSel.value || "single");
+                const allowMultiple = (mode === "raid1");
+                fillSelect(devSel, disks, { allowMultiple, filterFn: isEligibleDisk });
+
+                if (hint) {
+                    hint.textContent = allowMultiple
+                        ? "Select 2 or more disks for RAID1 (multi-select)."
+                        : "Select 1 disk for SINGLE.";
+                }
+            }
+
+            async function refreshDisks() {
+                try {
+                    dbg.textContent = "(loading /api/v4/storage/disks …)";
+                    const j = await loadAllDisks();
+
+                    let arr = Array.isArray(j?.disks) ? j.disks : [];
+
+                    // dev mode: sort loop devices first so loop32/33/34 are easy to find
+                    if (isDevMode()) {
+                        arr = arr.slice().sort((a,b) => (isLoopDisk(a) ? 0 : 1) - (isLoopDisk(b) ? 0 : 1));
+                    } else {
+                        // non-dev: keep only non-loop by default (isEligibleDisk already hides loops)
+                        arr = arr.slice();
+                    }
+
+                    disks = arr;
+                    dbg.textContent = JSON.stringify({ ok:true, disks_total: disks.length }, null, 2);
+                    applyModeToDeviceSelect();
+                } catch (e) {
+                    dbg.textContent = JSON.stringify({ ok:false, error: String(e && e.message ? e.message : e) }, null, 2);
+                    showToast("err", "Failed to load disks (see Advanced).", 5200);
+                }
+            }
+
+            async function doCreate() {
+                const pool_id = String(poolIdInp.value || "").trim();
+                const mode = String(modeSel.value || "single");
+                const force = !!forceChk.checked;
+                const devices = selectedDevices();
+
+                if (!/^[a-z0-9_-]{1,32}$/.test(pool_id)) {
+                    showToast("err", "bad pool_id (allowed: a-z 0-9 _ - , max 32)", 5200);
+                    return;
+                }
+                if (mode !== "single" && mode !== "raid1") {
+                    showToast("err", "mode must be single or raid1", 5200);
+                    return;
+                }
+                if (!devices.length) {
+                    showToast("err", "Pick at least one device.", 4200);
+                    return;
+                }
+                if (mode === "raid1" && devices.length < 2) {
+                    showToast("err", "raid1 requires at least 2 devices.", 5200);
+                    return;
+                }
+
+                const plan_id = randHex(32);
+                const plan_nonce = randHex(16);
+
+                const body = { plan_id, plan_nonce, confirm: true, pool_id, mode, force, devices };
+
+                dbg.textContent = JSON.stringify({ request: body }, null, 2);
+                showToast("info", "Creating pool…", 2200);
+
+                const { r, j, txt } = await postJson("/api/v4/raid/execute/create-pool", body);
+
+                dbg.textContent = JSON.stringify({ http: r.status, response: j ?? txt, request: body }, null, 2);
+
+                if (!r.ok || !j || j.ok !== true) {
+                    showToast("err", `Create pool failed: ${prettyError(j, r, txt)}`, 6500);
+                    return;
+                }
+
+                showToast("ok", "Create started ✓ Watching exec record…", 2600);
+                const pid = (j && j.plan_id) ? String(j.plan_id) : String(plan_id);
+                startExecPolling(pid);
+
+                ov.style.display = "none";
+
+                setTimeout(async () => {
+                    g_pools = await loadPools();
+                    renderPoolSelectorTop();
+                    renderPoolsTab();
+                }, 1200);
+            }
+
+            // wire (overwrite handlers so repeated opens don't stack listeners)
+            closeBtn.onclick = () => (ov.style.display = "none");
+            refreshBtn.onclick = refreshDisks;
+            modeSel.onchange = applyModeToDeviceSelect;
+            doBtn.onclick = doCreate;
+
+            if (!poolIdInp.value) poolIdInp.value = "raidtest";
+            forceChk.checked = false;
+
+            ov.style.display = "flex";
+            await refreshDisks();
+        }
         createBtn?.addEventListener("click", () => {
-            showToast("info", "Create pool: UI coming next (needs backend endpoints).", 2600);
+            openCreatePoolModal().catch(e => {
+                showToast("err", `Create pool UI crashed: ${String(e && e.stack ? e.stack : e)}`, 6500);
+            });
         });
 
         poolsOut.querySelectorAll("button[data-pool-action]").forEach((btn) => {
@@ -1856,6 +2318,21 @@ ${rows}
                 const action = btn.getAttribute("data-pool-action");
                 const mount = btn.getAttribute("data-mount") || "";
                 if (!mount) return;
+
+                if (action === "destroy") {
+                    try {
+                        await openDestroyPoolModal(mount);
+                    } catch (e) {
+                        showToast("err", `Destroy UI crashed: ${String(e && (e.stack || e.message) ? (e.stack || e.message) : e)}`, 6500);
+                    }
+                    return;
+                }
+
+
+                if (action === "convert") {
+                    showToast("info", `convert pool (${mount}): UI coming next.`, 2600);
+                    return;
+                }
 
                 if (action !== "rename") {
                     showToast("info", `${action} pool (${mount}): UI coming next.`, 2600);
@@ -1910,7 +2387,7 @@ ${rows}
         setBadge("warn", "loading…");
 
         // kill any old intervals from the previous view of actions/progress
-        stopAllPolling();
+        stopMountPolling(); // <-- don't kill exec-record polling
 
         if (subLine) subLine.textContent = "Detecting RAID capabilities…";
         if (rawOut) rawOut.textContent = "(loading)";

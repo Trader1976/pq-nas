@@ -1906,6 +1906,20 @@ static std::string join_commands_for_hash(const json& commands_arr) {
     }
     return s;
 }
+
+static std::string iso8601_now() {
+    using namespace std::chrono;
+    auto now = system_clock::now();
+    std::time_t tt = system_clock::to_time_t(now);
+
+    std::tm tm{};
+    gmtime_r(&tt, &tm); // UTC
+
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    return std::string(buf);
+}
+
 static bool read_text_file(const std::string& path, std::string* out) {
     if (out) out->clear();
 
@@ -1982,37 +1996,193 @@ static std::filesystem::path pools_cfg_path_from_users_path(const std::string& u
     return std::filesystem::path(users_path).parent_path() / "pools.json";
 }
 
-static json load_or_init_pools_cfg(const std::string& users_path) {
+static json pools_cfg_upgrade_to_v2_if_needed(json j) {
+    if (!j.is_object()) j = json::object();
+    int ver = 1;
+    try { if (j.contains("version")) ver = j["version"].get<int>(); } catch (...) { ver = 1; }
+
+    if (ver >= 2) {
+        // ensure shape
+        if (!j.contains("pools") || !j["pools"].is_object()) j["pools"] = json::object();
+        j["version"] = 2;
+        return j;
+    }
+
+    // v1 -> v2
+    json out = json::object();
+    out["version"] = 2;
+    out["pools"] = json::object();
+
+    const std::string ts = iso8601_now();
+
+    if (j.contains("names_by_mount") && j["names_by_mount"].is_object()) {
+        for (auto it = j["names_by_mount"].begin(); it != j["names_by_mount"].end(); ++it) {
+            const std::string mount = it.key();
+            std::string name;
+            try { name = it.value().is_string() ? it.value().get<std::string>() : ""; } catch (...) { name = ""; }
+
+            json one = json::object();
+            if (!name.empty()) one["display_name"] = name;
+            one["created_ts"] = ts;
+            one["managed"] = false; // existing entries are not “wizard-created”
+            out["pools"][mount] = one;
+        }
+    }
+
+    return out;
+}
+
+static std::filesystem::path pools_cfg_path_from_users_path(const std::string& users_path); // you already have
+static bool write_text_file_atomic(const std::string&, const std::string&);                // you already have
+static bool read_text_file(const std::string&, std::string*);                              // you already have
+
+static json load_or_init_pools_cfg_v2(const std::string& users_path) {
     const auto cfg_path = pools_cfg_path_from_users_path(users_path);
 
-    // Try load
     std::string txt;
     if (read_text_file(cfg_path.string(), &txt)) {
         try {
             json j = json::parse(txt);
-            if (!j.is_object()) j = json::object();
-            if (!j.contains("version")) j["version"] = 1;
-            if (!j.contains("names_by_mount") || !j["names_by_mount"].is_object()) {
-                j["names_by_mount"] = json::object();
-            }
+            j = pools_cfg_upgrade_to_v2_if_needed(j);
+
+            std::error_code ec;
+            std::filesystem::create_directories(cfg_path.parent_path(), ec);
+            (void)write_text_file_atomic(cfg_path.string(), j.dump(2) + "\n");
             return j;
         } catch (...) {
             // fall through to init
         }
     }
 
-    // Init (and best-effort write so it “comes with it” even on first run)
+    // init v2
     json j = json::object();
-    j["version"] = 1;
-    j["names_by_mount"] = json::object();
+    j["version"] = 2;
+    j["pools"] = json::object();
 
     std::error_code ec;
     std::filesystem::create_directories(cfg_path.parent_path(), ec);
     (void)write_text_file_atomic(cfg_path.string(), j.dump(2) + "\n");
-
     return j;
 }
 
+[[maybe_unused]]static std::string pools_display_name_for_mount_v2(const json& cfg, const std::string& mount) {
+    if (!cfg.is_object()) return "";
+    if (!cfg.contains("pools") || !cfg["pools"].is_object()) return "";
+    auto it = cfg["pools"].find(mount);
+    if (it == cfg["pools"].end() || !it->is_object()) return "";
+    auto it2 = it->find("display_name");
+    if (it2 == it->end() || !it2->is_string()) return "";
+    try {
+        std::string s = it2->get<std::string>();
+        // avoid trim_copy dependency: simple trim
+        while (!s.empty() && (s.back()==' '||s.back()=='\n'||s.back()=='\r'||s.back()=='\t')) s.pop_back();
+        size_t i = 0;
+        while (i < s.size() && (s[i]==' '||s[i]=='\n'||s[i]=='\r'||s[i]=='\t')) i++;
+        if (i) s.erase(0, i);
+        return s;
+    } catch (...) {
+        return "";
+    }
+}
+static bool is_pool_id_safe(const std::string& s) {
+    if (s.size() < 2 || s.size() > 24) return false;
+    for (char c : s) {
+        const bool ok =
+            (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') ||
+            (c == '_');
+        if (!ok) return false;
+    }
+    return true;
+}
+
+static std::string upper_ascii_copy(std::string s) {
+    for (char& c : s) {
+        if (c >= 'a' && c <= 'z') c = char(c - 'a' + 'A');
+    }
+    return s;
+}
+
+static std::string random_hex_64() {
+    std::array<unsigned char, 32> b{};
+    std::random_device rd;
+    for (auto& x : b) x = (unsigned char)(rd() & 0xFF);
+
+    static const char* H = "0123456789abcdef";
+    std::string out;
+    out.reserve(64);
+    for (unsigned char v : b) {
+        out.push_back(H[(v >> 4) & 0xF]);
+        out.push_back(H[(v >> 0) & 0xF]);
+    }
+    return out;
+}
+
+static std::string mount_for_pool_id(const std::string& allowed_prefix, const std::string& pool_id) {
+    return allowed_prefix + "/" + pool_id;
+}
+
+static std::string btrfs_label_for_pool_id(const std::string& pool_id) {
+    return "PQNAS_" + upper_ascii_copy(pool_id);
+}
+static json load_or_init_pools_cfg(const std::string& users_path) {
+    const auto cfg_path = pools_cfg_path_from_users_path(users_path);
+
+    std::string txt;
+    json j;
+
+    if (read_text_file(cfg_path.string(), &txt)) {
+        try {
+            j = json::parse(txt);
+        } catch (...) {
+            j = json::object();
+        }
+    }
+
+    if (!j.is_object())
+        j = json::object();
+
+    int version = j.value("version", 0);
+
+    // ---------- INIT ----------
+    if (version == 0) {
+        j["version"] = 2;
+        j["pools"] = json::object();
+    }
+
+    // ---------- MIGRATE v1 → v2 ----------
+    if (version == 1) {
+        json pools = json::object();
+        const auto& names = j.value("names_by_mount", json::object());
+
+        for (auto it = names.begin(); it != names.end(); ++it) {
+            const std::string mount = it.key();
+            const std::string display = it.value().get<std::string>();
+
+            pools[mount] = {
+                {"display_name", display},
+                {"created_ts", iso8601_now()},
+                {"managed", false}
+            };
+        }
+
+        j.clear();
+        j["version"] = 2;
+        j["pools"] = pools;
+
+        write_text_file_atomic(cfg_path.string(), j.dump(2) + "\n");
+        return j;
+    }
+
+    // ---------- Ensure structure ----------
+    if (j.value("version", 0) != 2)
+        j["version"] = 2;
+
+    if (!j.contains("pools") || !j["pools"].is_object())
+        j["pools"] = json::object();
+
+    return j;
+}
 static std::string pools_display_name_for_mount(const json& pools_cfg, const std::string& mount) {
     if (!pools_cfg.is_object()) return "";
     auto it = pools_cfg.find("names_by_mount");
@@ -3109,11 +3279,22 @@ static bool write_fd_all(int fd, const std::string& s) {
 static std::string raid_exec_record_path(const std::string& plan_id) {
     return std::string("/run/pqnas/raid/") + plan_id + ".json";
 }
-
+static void ensure_dir_best_effort(const std::string& p) {
+    std::error_code ec;
+    std::filesystem::create_directories(p, ec);
+}
 static std::string raid_mount_lock_path(const std::string& resolved_mount) {
     const std::string h = sha256_hex_lower_evp(resolved_mount);
     // Keep filename deterministic and safe even if hashing fails (shouldn't).
     return std::string("/run/pqnas/raid/lock-mount-") + (h.empty() ? "bad" : h) + ".lock";
+}
+
+static bool is_hex_64_lower_or_upper(const std::string& s) {
+    if (s.size() != 64) return false;
+    for (char c : s) {
+        if (!is_hex_lower_or_upper(c)) return false;  // uses your char helper at line ~313
+    }
+    return true;
 }
 
 // Strict validator: 64 lowercase hex characters.
@@ -3460,6 +3641,7 @@ struct RaidJob {
 };
 
 static std::mutex g_raid_jobs_mu;
+static std::string g_users_path_for_raid;
 static std::condition_variable g_raid_jobs_cv;
 static std::deque<RaidJob> g_raid_jobs_q;
 
@@ -3576,7 +3758,10 @@ static void raid_finalize_record(const std::string& plan_id, json* rec,
     (void)raid_exec_record_write_atomic(plan_id, *rec);
 }
 
-static bool raid_run_one_step(const std::string& cmd, std::string* out, int* ec) {
+static bool raid_run_one_step(const std::string& cmd,
+                              const std::string& users_path,
+                              std::string* out,
+                              int* ec) {
     if (!out || !ec) return false;
     out->clear();
     *ec = 0;
@@ -3616,13 +3801,47 @@ static bool raid_run_one_step(const std::string& cmd, std::string* out, int* ec)
         *ec = 1;
         return true;
     }
+    // Pseudo-command: POOLS_CFG_REMOVE <mount>
+    // Removes mount entry from pools.json so /api/v4/storage/pools stops listing it.
+    if (cmd.rfind("POOLS_CFG_REMOVE ", 0) == 0) {
+        const std::string mount = trim_copy(cmd.substr(std::string("POOLS_CFG_REMOVE ").size()));
+        if (mount.empty()) {
+            *out = "err: POOLS_CFG_REMOVE format is: POOLS_CFG_REMOVE <mount>\n";
+            *ec = 2;
+            return true;
+        }
 
+        try {
+            json cfg = load_or_init_pools_cfg(users_path);
+            if (!cfg.contains("names_by_mount") || !cfg["names_by_mount"].is_object())
+                cfg["names_by_mount"] = json::object();
+
+            const bool had = cfg["names_by_mount"].contains(mount);
+            cfg["names_by_mount"].erase(mount);
+
+            const auto cfg_path = pools_cfg_path_from_users_path(users_path);
+            if (!write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n")) {
+                *out = "err: failed to write pools.json\n";
+                *ec = 1;
+                return true;
+            }
+
+            *out = std::string("ok: pools.json updated (removed mount=") + mount +
+                   (had ? ")\n" : ", was not present)\n");
+            *ec = 0;
+            return true;
+        } catch (const std::exception& e) {
+            *out = std::string("err: POOLS_CFG_REMOVE exception: ") + e.what() + "\n";
+            *ec = 1;
+            return true;
+        }
+    }
     // normal command
     const bool ran = run_cmd_capture(cmd, out, ec);
     return ran;
 }
 
-static void raid_worker_main() {
+static void raid_worker_main(std::string users_path) {
     for (;;) {
         RaidJob job;
 
@@ -3680,7 +3899,7 @@ static void raid_worker_main() {
 
             std::string out;
             int ec = 0;
-            const bool ran = raid_run_one_step(cmd, &out, &ec);
+            const bool ran = raid_run_one_step(cmd, users_path, &out, &ec);
             const bool step_ok = ran && (ec == 0);
 
             cap_string(out, 128 * 1024);
@@ -3700,11 +3919,21 @@ static void raid_worker_main() {
             if (!step_ok) { all_ok = false; break; }
         }
 
-        // finalize (+ post_status if ok)
+        // finalize (+ post_status if ok and mount still exists)
         if (all_ok) {
-            json status = storage_btrfs_status_json(job.resolved_mount);
-            status["resolved_mount"] = job.resolved_mount;
-            raid_finalize_record(job.plan_id, &job.record, true, "", &status);
+            json* pst = nullptr;
+            json status;
+
+            // Only attach post_status if the mountpoint still exists.
+            // For destroy-pool, the mount should be gone.
+            std::error_code ec;
+            if (std::filesystem::exists(job.resolved_mount, ec) && !ec) {
+                status = storage_btrfs_status_json(job.resolved_mount);
+                status["resolved_mount"] = job.resolved_mount;
+                pst = &status;
+            }
+
+            raid_finalize_record(job.plan_id, &job.record, true, "", pst);
         } else {
             std::string emsg = "command failed";
 			try {
@@ -3731,7 +3960,7 @@ static void raid_worker_start_once() {
     bool expected = false;
     if (!started.compare_exchange_strong(expected, true)) return;
     g_raid_worker_stop.store(false);
-    g_raid_worker_thr = std::thread(raid_worker_main);
+    g_raid_worker_thr = std::thread(raid_worker_main, g_users_path_for_raid);
 }
 
 static void raid_worker_stop_and_join() {
@@ -3918,6 +4147,14 @@ static inline bool starts_with(const std::string& s, const std::string& pfx) {
 static inline std::string to_lower_ascii_copy(std::string s) {
     for (char& c : s) {
         if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+    }
+    return s;
+}
+
+static std::string upper_ascii(std::string s) {
+    for (char& c : s) {
+        if (c >= 'a' && c <= 'z')
+            c = (char)(c - ('a' - 'A'));
     }
     return s;
 }
@@ -4366,7 +4603,7 @@ auto maybe_auto_rotate_before_append = [&]() {
     	std::cerr << "[users] FATAL: failed to load users registry: " << users_path << std::endl;
     	return 4;
 	}
-
+    g_users_path_for_raid = users_path;
 
 	RoutesV5Context v5;
 	v5.origin = &ORIGIN;
@@ -5192,6 +5429,219 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
     reply_json(res, 200, json{
         {"ok", true},
         {"pools", arr}
+    }.dump());
+});
+
+srv.Post("/api/v4/storage/pools/plan-create", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
+        return;
+    }
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    json body;
+    try { body = json::parse(req.body); }
+    catch (...) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_json"}}.dump());
+        return;
+    }
+
+    const std::string pool_id = body.value("pool_id", "");
+    const std::string disk    = body.value("disk", "");
+    const std::string mode    = body.value("mode", "single"); // for now: "single" only in wizard step 1
+    const bool force          = body.value("force", false);
+
+    // Allowed prefix
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+
+    if (!is_pool_id_safe(pool_id)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_pool_id"}, {"pool_id", pool_id}}.dump());
+        return;
+    }
+    if (disk.rfind("/dev/", 0) != 0) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_disk"}, {"disk", disk}}.dump());
+        return;
+    }
+    if (mode != "single") {
+        reply_json(res, 400, json{{"ok", false}, {"error", "unsupported_mode"}, {"mode", mode}}.dump());
+        return;
+    }
+
+    const std::string mount = mount_for_pool_id(allowed_prefix, pool_id);
+    const std::string label = btrfs_label_for_pool_id(pool_id);
+
+    // sanity: mount must be under prefix
+    if (mount.rfind(allowed_prefix, 0) != 0) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "mount_not_allowed"}, {"mount", mount}}.dump());
+        return;
+    }
+
+    // Prevent collisions with existing btrfs mounts under prefix
+    {
+        std::string mounts_out;
+        int rc = run_capture("/usr/bin/findmnt -rn -t btrfs -o TARGET", &mounts_out);
+        cap_string(mounts_out, 1024 * 1024);
+        rtrim_inplace(mounts_out);
+
+        if (rc == 0) {
+            for (const std::string& raw : split_lines(mounts_out)) {
+                const std::string t = trim_copy(raw); // you already use trim_copy elsewhere in this file
+                if (!t.empty() && t == mount) {
+                    reply_json(res, 409, json{
+                        {"ok", false},
+                        {"error", "mount_already_exists"},
+                        {"mount", mount}
+                    }.dump());
+                    return;
+                }
+            }
+        }
+    }
+
+    // Plan
+    json plan;
+    plan["plan_id"] = random_hex_64();
+    plan["kind"] = "create_pool";
+    plan["pool_id"] = pool_id;
+    plan["mount"] = mount;
+    plan["disk"] = disk;
+    plan["mode"] = mode;
+    plan["label"] = label;
+    plan["force"] = force;
+    plan["ts"] = iso8601_now();
+
+    json warnings = json::array();
+    if (!force) warnings.push_back("This will erase the selected disk. Set force=true to allow destructive operations.");
+    plan["warnings"] = warnings;
+
+    json commands = json::array();
+
+    // We partition disk -> /dev/XXX1 (same style as add-device)
+    // (If you later want “use whole disk”, we’ll do a separate explicit mode.)
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk --zap-all " + sh_quote(disk));
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(disk));
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk -n 1:0:0 -t 1:8300 -c 1:PQNAS_BTRFS " + sh_quote(disk));
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/partprobe " + sh_quote(disk));
+    commands.push_back("/usr/bin/sudo -n /usr/bin/udevadm settle");
+
+    // partition path (simple “p1” handling like nvme vs sdX)
+    const std::string part =
+        (disk.find("/dev/nvme") == 0 || disk.find("/dev/mmcblk") == 0) ? (disk + "p1") : (disk + "1");
+
+    // Explicit profiles (you confirmed)
+    commands.push_back("/usr/bin/sudo -n /usr/bin/mkfs.btrfs -f -L " + sh_quote(label) + " -m single -d single " + sh_quote(part));
+
+    // mountpoint
+    commands.push_back("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(mount));
+    commands.push_back("/usr/bin/sudo -n /bin/mount " + sh_quote(part) + " " + sh_quote(mount));
+
+    plan["commands"] = commands;
+
+    reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
+});
+
+    srv.Post("/api/v4/storage/pools/execute-create", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
+        return;
+    }
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    json body;
+    try { body = json::parse(req.body); }
+    catch (...) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_json"}}.dump());
+        return;
+    }
+
+    if (!body.contains("plan") || !body["plan"].is_object()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "missing_plan"}}.dump());
+        return;
+    }
+
+    const json plan = body["plan"];
+    const bool confirm = body.value("confirm", false);
+
+    if (!confirm) {
+        reply_json(res, 412, json{{"ok", false}, {"error", "confirm_required"}}.dump());
+        return;
+    }
+
+    const std::string pool_id = plan.value("pool_id", "");
+    const std::string mount   = plan.value("mount", "");
+    const std::string disk    = plan.value("disk", "");
+    const std::string label   = plan.value("label", "");
+    const bool force          = plan.value("force", false);
+
+    if (!is_pool_id_safe(pool_id) || mount.empty() || disk.rfind("/dev/",0)!=0 || label.empty()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_plan_fields"}}.dump());
+        return;
+    }
+    if (!force) {
+        reply_json(res, 412, json{{"ok", false}, {"error", "force_required"}}.dump());
+        return;
+    }
+
+    if (!plan.contains("commands") || !plan["commands"].is_array()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "missing_commands"}}.dump());
+        return;
+    }
+
+    const json commands = plan["commands"];
+    json results = json::array();
+
+    bool all_ok = true;
+    for (int i = 0; i < (int)commands.size(); i++) {
+        if (!commands[i].is_string()) continue;
+        const std::string cmd = commands[i].get<std::string>();
+
+        std::string out;
+        int ec = 0;
+        const bool okc = run_cmd_capture(cmd, &out, &ec);
+        cap_string(out, 256 * 1024);
+
+        results.push_back(json{
+            {"i", i},
+            {"cmd", cmd},
+            {"ok", okc},
+            {"rc", ec},
+            {"out", out}
+        });
+
+        if (!okc || ec != 0) { all_ok = false; break; }
+    }
+
+    // If succeeded, persist “managed pool” metadata (v2)
+    std::string cfg_path_str;
+    if (all_ok) {
+        json cfg = load_or_init_pools_cfg_v2(users_path);
+        const auto cfg_path = pools_cfg_path_from_users_path(users_path);
+        cfg_path_str = cfg_path.string();
+
+        if (!cfg.contains("pools") || !cfg["pools"].is_object()) cfg["pools"] = json::object();
+
+        json one = json::object();
+        one["display_name"] = plan.value("display_name", ""); // optional
+        if (one["display_name"].get<std::string>().empty()) one["display_name"] = label; // fallback
+        one["created_ts"] = iso8601_now();
+        one["managed"] = true;
+        one["pool_id"] = pool_id;
+        one["label"] = label;
+        one["disk"] = disk;
+
+        cfg["pools"][mount] = one;
+
+        (void)write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n");
+    }
+
+    reply_json(res, 200, json{
+        {"ok", all_ok},
+        {"plan", plan},
+        {"results", results},
+        {"pools_cfg_path", cfg_path_str}
     }.dump());
 });
 
@@ -7392,6 +7842,113 @@ srv.Post("/api/v4/raid/plan/remove-device", [&](const httplib::Request& req, htt
     reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
 });
 
+    // ----- POST /api/v4/raid/plan/create-pool (admin-only, plan-only) -------------
+srv.Post("/api/v4/raid/plan/create-pool", [&](const httplib::Request& req, httplib::Response& res) {
+
+    pqnas::UsersRegistry users;
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}}.dump());
+        return;
+    }
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    json in;
+    try { in = json::parse(req.body.empty() ? "{}" : req.body); }
+    catch (...) {
+        reply_json(res, 400, json({{"ok",false},{"error","invalid_json"}}).dump());
+        return;
+    }
+
+    std::string pool_id = in.value("pool_id", "");
+    std::vector<std::string> devices;
+    if (in.contains("devices") && in["devices"].is_array()) {
+        for (auto& d : in["devices"]) {
+            if (d.is_string()) devices.push_back(d.get<std::string>());
+        }
+    }
+
+    std::string mode = in.value("mode", "single");
+    bool force = in.value("force", false);
+
+    // Validate pool_id
+    if (!std::regex_match(pool_id, std::regex("^[a-z0-9_-]{1,32}$"))) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_pool_id"}}.dump());
+        return;
+    }
+
+    if (devices.empty()) {
+        reply_json(res, 400, json{{"ok",false},{"error","no_devices"}}.dump());
+        return;
+    }
+
+    if (mode == "raid1" && devices.size() < 2) {
+        reply_json(res, 400, json{{"ok",false},{"error","raid1_requires_2_devices"}}.dump());
+        return;
+    }
+
+    const std::string mount =
+        "/srv/pqnas/pools/" + pool_id;
+
+    if (std::filesystem::exists(mount)) {
+        reply_json(res, 400, json{{"ok",false},{"error","mount_exists"},{"mount",mount}}.dump());
+        return;
+    }
+
+    json plan;
+    plan["pool_id"] = pool_id;
+    plan["mount"] = mount;
+    plan["devices"] = devices;
+    plan["mode"] = mode;
+    plan["force"] = force;
+
+    json commands = json::array();
+    json steps = json::array();
+    json warnings = json::array();
+
+    std::string label = "PQNAS_" + upper_ascii(pool_id);
+    plan["label"] = label;
+
+    // wipe devices if force
+    if (force) {
+        for (const auto& d : devices) {
+            commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk --zap-all " + sh_quote(d));
+            commands.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(d));
+        }
+        warnings.push_back("DESTRUCTIVE: devices will be wiped.");
+    }
+
+    // mkfs
+    std::string mkfs = "/usr/bin/sudo -n /usr/sbin/mkfs.btrfs -f ";
+    if (mode == "raid1") mkfs += "-d raid1 -m raid1 ";
+    mkfs += "-L " + sh_quote(label);
+    for (const auto& d : devices) mkfs += " " + sh_quote(d);
+    commands.push_back(mkfs);
+
+    // mkdir
+    commands.push_back("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(mount));
+
+    // mount (device[0] enough)
+    commands.push_back("/usr/bin/sudo -n /bin/mount " + sh_quote(devices[0]) + " " + sh_quote(mount));
+
+    steps.push_back("Create Btrfs filesystem.");
+    steps.push_back("Create mount directory.");
+    steps.push_back("Mount new pool.");
+
+    plan["commands"] = commands;
+    plan["steps"] = steps;
+    plan["warnings"] = warnings;
+
+    const std::string plan_nonce = rand_hex_16();
+    plan["plan_nonce"] = plan_nonce;
+
+    const std::string joined = join_commands_for_hash(commands);
+    const std::string plan_id =
+        sha256_hex_lower_evp(joined + "\nplan_nonce=" + plan_nonce + "\n");
+    plan["plan_id"] = plan_id;
+
+    reply_json(res, 200, json{{"ok",true},{"plan",plan}}.dump());
+});
+
 // ----- POST /api/v4/raid/execute/add-device (admin-only) ---------------------
 // Body: { mount, new_disk, mode:"single|raid1", force:bool, plan_id:string, dry_run?:bool, confirm?:bool }
 srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, httplib::Response& res) {
@@ -7775,8 +8332,241 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         return;
     }
 });
+// ----- POST /api/v4/raid/execute/destroy-pool (admin-only) --------------------
+// Body: { mount, plan_id, plan_nonce, confirm:true, force_wipe?:bool }
+srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}}.dump());
+        return;
+    }
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
 
+    json in;
+    try { in = json::parse(req.body.empty() ? "{}" : req.body); }
+    catch (...) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "invalid_json"}}.dump());
+        return;
+    }
 
+    std::string mount = in.value("mount", "");
+    const std::string plan_id    = in.value("plan_id", "");
+    const std::string plan_nonce = in.value("plan_nonce", "");
+    const bool confirm           = in.value("confirm", false);
+    const bool force_wipe        = in.value("force_wipe", false);
+
+    if (!confirm || plan_id.empty() || plan_nonce.empty() || mount.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "requires confirm=true, plan_id, plan_nonce, mount"}
+        }.dump());
+        return;
+    }
+
+    // plan_id must be 64 hex
+    if (!is_hex_64_lower_or_upper(plan_id)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "plan_id must be 64 hex chars"},
+            {"plan_id", plan_id}
+        }.dump());
+        return;
+    }
+
+    // Basic mount validation
+    if (!is_abs_path_safe(mount)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_mount"}}.dump());
+        return;
+    }
+
+    // Allow only destroying pools under PQNAS_STORAGE_ROOT/pools
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+
+    const std::string pools_root = allowed_prefix + "/pools/";
+    if (mount.rfind(pools_root, 0) != 0) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "mount_not_allowed"},
+            {"message", "destroy is only allowed under PQNAS_STORAGE_ROOT/pools"},
+            {"mount", mount},
+            {"pools_root", pools_root}
+        }.dump());
+        return;
+    }
+
+    // Must be a mounted btrfs target (we want stable membership list before umount)
+    std::string target_out, fstype_out, source_out;
+    int ec_target = 0, ec_fs = 0, ec_src = 0;
+
+    const bool ok_target = run_cmd_capture(
+        "/usr/bin/findmnt -no TARGET --target " + sh_quote(mount), &target_out, &ec_target);
+    cap_string(target_out, 16 * 1024);
+    rtrim_inplace(target_out);
+
+    const bool ok_fs = run_cmd_capture(
+        "/usr/bin/findmnt -no FSTYPE --target " + sh_quote(mount), &fstype_out, &ec_fs);
+    cap_string(fstype_out, 16 * 1024);
+    rtrim_inplace(fstype_out);
+
+    const bool ok_src = run_cmd_capture(
+        "/usr/bin/findmnt -no SOURCE --target " + sh_quote(mount), &source_out, &ec_src);
+    cap_string(source_out, 16 * 1024);
+    rtrim_inplace(source_out);
+
+    if (!ok_target || ec_target != 0 || target_out.empty() ||
+        !ok_fs     || ec_fs     != 0 || fstype_out.empty() ||
+        !ok_src    || ec_src    != 0 || source_out.empty()) {
+
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "mount_not_found"},
+            {"mount", mount}
+        }.dump());
+        return;
+    }
+
+    const std::string resolved_mount  = target_out;
+    const std::string resolved_source = source_out;
+
+    if (fstype_out != "btrfs") {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "not_btrfs"},
+            {"resolved_mount", resolved_mount},
+            {"fstype", fstype_out}
+        }.dump());
+        return;
+    }
+
+    // Lock check only (worker owns lock lifecycle)
+    {
+        std::string raid_dir_err;
+        if (!ensure_dir_fail_closed("/run/pqnas/raid", &raid_dir_err)) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "raid_state_dir_failed"},
+                {"detail", raid_dir_err}
+            }.dump());
+            return;
+        }
+
+        const std::string lockp = raid_mount_lock_path(resolved_mount);
+        std::error_code ec;
+        if (std::filesystem::exists(lockp, ec)) {
+            reply_json(res, 409, json{{"ok", false}, {"error", "raid_busy"}, {"lock_path", lockp}}.dump());
+            return;
+        }
+    }
+
+    // Read membership BEFORE umount so we can optionally wipe member disks
+    const std::string cmd_show =
+        "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(resolved_mount) + " 2>&1";
+
+    std::string show_raw;
+    int ec_show = 0;
+    const bool ok_show = run_cmd_capture(cmd_show, &show_raw, &ec_show);
+    cap_string(show_raw, 256 * 1024);
+    rtrim_inplace(show_raw);
+
+    if (!ok_show || ec_show != 0 || show_raw.empty()) {
+        // Remove the lock we created above (best effort)
+        try { std::filesystem::remove(raid_mount_lock_path(resolved_mount)); } catch (...) {}
+
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "btrfs_show_failed"},
+            {"resolved_mount", resolved_mount},
+            {"btrfs_show_rc", ec_show}
+        }.dump());
+        return;
+    }
+
+    // Parse show -> get member device paths
+    // (Re-use the same machinery you already use elsewhere)
+    std::string raw_lsblk;
+    json disks_j = storage_list_disks_json(&raw_lsblk);
+    json by_path = disks_j.value("by_path", json::object());
+
+    BtrfsShowParsed parsed = parse_btrfs_filesystem_show(show_raw);
+    json btrfs_j = btrfs_show_parsed_to_json(parsed, by_path, disks_j.value("by_name", json::object()));
+
+    std::vector<std::string> member_devs;
+    if (btrfs_j.contains("devices") && btrfs_j["devices"].is_array()) {
+        for (auto& d : btrfs_j["devices"]) {
+            const std::string p = d.value("path", "");
+            if (!p.empty() && p.rfind("/dev/", 0) == 0) member_devs.push_back(p);
+        }
+    }
+
+    // Build plan + commands for worker
+    json plan;
+    plan["plan_id"]        = plan_id;
+    plan["plan_nonce"]     = plan_nonce;
+    plan["operation"]      = "destroy-pool";
+    plan["mount"]          = resolved_mount;
+    plan["input_mount"]    = mount;
+    plan["resolved_mount"] = resolved_mount;
+    plan["resolved_source"]= resolved_source;
+    plan["force_wipe"]     = force_wipe;
+    plan["member_devices"] = member_devs;
+
+    json commands = json::array();
+
+    commands.push_back("/usr/bin/sudo -n /usr/bin/udevadm settle");
+
+    // Unmount (worker should treat non-zero as failure; that’s fine because it means “still mounted/busy”)
+    commands.push_back("/usr/bin/sudo -n /bin/umount " + sh_quote(resolved_mount));
+
+    // Help btrfs forget old mappings quickly (helps later list stability)
+    commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs device scan");
+
+    // Optional destructive wipe of member disks
+    if (force_wipe) {
+        for (const auto& dev : member_devs) {
+            commands.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(dev));
+            commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk --zap-all " + sh_quote(dev));
+        }
+        commands.push_back("/usr/bin/sudo -n /usr/bin/udevadm settle");
+    }
+
+    // Remove metadata mapping (handled INSIDE worker, not via shell)
+    commands.push_back(std::string("POOLS_CFG_REMOVE ") + resolved_mount);
+
+    // Remove mount directory (will fail if not empty)
+    commands.push_back("/usr/bin/sudo -n /bin/rmdir " + sh_quote(resolved_mount));
+
+    // Enqueue (fail-closed)
+    try {
+        json q = raid_enqueue_job_fail_closed(plan_id, resolved_mount, plan, commands);
+        q["plan"] = plan;
+        reply_json(res, 200, q.dump());
+        return;
+    } catch (const std::exception& e) {
+        // Best-effort cleanup of the lock we created
+        try { std::filesystem::remove(raid_mount_lock_path(resolved_mount)); } catch (...) {}
+
+        const std::string msg = e.what();
+        if (msg == "already_running") {
+            reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "already_running"},
+                {"message", "this plan_id already has a running execution record; refusing replay"},
+                {"plan_id", plan_id},
+                {"record_path", raid_exec_record_path(plan_id)}
+            }.dump());
+            return;
+        }
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "enqueue_failed"},
+            {"detail", msg}
+        }.dump());
+        return;
+    }
+});
     // ----- POST /api/v4/raid/execute/remove-device (admin-only) ------------------
 // Body: { mount, remove_device, force:bool, plan_id:string, dry_run?:bool, confirm?:bool }
 srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, httplib::Response& res) {
@@ -8112,6 +8902,237 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
         return;
     }
 });
+// ----- POST /api/v4/raid/execute/create-pool (admin-only) --------------------
+srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}}.dump());
+        return;
+    }
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    json in;
+    try { in = json::parse(req.body.empty() ? "{}" : req.body); }
+    catch (...) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "invalid_json"}}.dump());
+        return;
+    }
+
+    const std::string plan_id    = in.value("plan_id", "");
+    const std::string plan_nonce = in.value("plan_nonce", "");
+    const bool confirm           = in.value("confirm", false);
+
+    if (!confirm || plan_id.empty() || plan_nonce.empty()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "missing_plan_id_or_confirm"}}.dump());
+        return;
+    }
+
+    const std::string pool_id = in.value("pool_id", "");
+    const std::string mode    = in.value("mode", "single"); // single|raid1
+    const bool force          = in.value("force", false);
+
+    std::vector<std::string> devices;
+    if (in.contains("devices") && in["devices"].is_array()) {
+        for (auto& d : in["devices"]) {
+            if (d.is_string()) devices.push_back(d.get<std::string>());
+        }
+    }
+
+    if (!std::regex_match(pool_id, std::regex("^[a-z0-9_-]{1,32}$"))) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_pool_id"}}.dump());
+        return;
+    }
+
+    if (devices.empty()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "no_devices"}}.dump());
+        return;
+    }
+
+    if (mode == "raid1" && devices.size() < 2) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "raid1_requires_2_devices"}}.dump());
+        return;
+    }
+
+    const std::string mount = "/srv/pqnas/pools/" + pool_id;
+
+    // Exec-record dir + replay protection (refuse if this plan_id already executed)
+    ensure_dir_best_effort("/run/pqnas/raid");
+
+    const std::string recp = raid_exec_record_path(plan_id);
+    {
+        std::error_code ec;
+        if (std::filesystem::exists(recp, ec)) {
+            reply_json(res, 200, json{
+                {"ok", false},
+                {"error", "already_executed"},
+                {"plan_id", plan_id}
+            }.dump());
+            return;
+        }
+    }
+
+    if (std::filesystem::exists(mount)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "mount_exists"}}.dump());
+        return;
+    }
+
+    const std::string label = "PQNAS_" + upper_ascii(pool_id);
+
+    // Lock path (prevent concurrent ops)
+    const std::string lockp = raid_mount_lock_path(mount);
+    {
+        std::error_code ec;
+        if (std::filesystem::exists(lockp, ec)) {
+            reply_json(res, 200, json{{"ok", false}, {"error", "raid_busy"}}.dump());
+            return;
+        }
+    }
+
+    std::ofstream lock(lockp);
+    lock << "create-pool\n";
+    lock.close();
+
+    // ---- exec-record init (must be before try/catch) ----
+    json record;
+    record["ok"]         = true;
+    record["plan_id"]    = plan_id;
+    record["plan_nonce"] = plan_nonce;
+    record["operation"]  = "create-pool";
+    record["state"]      = "running";
+    record["busy"]       = true;
+    record["ts_start"]   = iso8601_now();
+    record["ts_last"]    = record["ts_start"];
+    record["results"]    = json::array();
+
+    write_text_file_atomic(recp, record.dump(2) + "\n");
+
+    json results = json::array();
+    bool all_ok = true;
+    size_t step_i = 0;
+
+    // Helper: run one command, append to both results + record, update ts_last, persist record.
+    auto run_step = [&](const std::string& cmd) -> bool {
+        const size_t i = step_i++;
+
+        std::string out;
+        int ec = 0;
+        const bool ok = run_cmd_capture(cmd, &out, &ec);
+        cap_string(out, 128 * 1024);
+
+        json one = {
+            {"i", i},
+            {"cmd", cmd},
+            {"rc", ec},
+            {"ok", ok},
+            {"out", out}
+        };
+
+        results.push_back(one);
+        record["results"].push_back(one);
+        record["ts_last"] = iso8601_now();
+
+        if (!write_text_file_atomic(recp, record.dump(2) + "\n")) {
+            all_ok = false;
+            return false;
+        }
+
+        if (!ok || ec != 0) {
+            all_ok = false;
+            record["ok"]     = false;
+            record["state"]  = "failed";
+            record["busy"]   = false;
+            record["ts_end"] = iso8601_now();
+            write_text_file_atomic(recp, record.dump(2) + "\n");
+            return false;
+        }
+
+        return true;
+    };
+
+    try {
+        // wipe (only if force)
+        if (force) {
+            for (const auto& d : devices) {
+                if (!run_step("/usr/bin/sudo -n /usr/sbin/sgdisk --zap-all " + sh_quote(d))) break;
+                if (!run_step("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(d))) break;
+            }
+        }
+
+        // mkfs
+        if (all_ok) {
+            std::string mkfs = "/usr/bin/sudo -n /usr/sbin/mkfs.btrfs -f ";
+            if (mode == "raid1") mkfs += "-d raid1 -m raid1 ";
+            mkfs += "-L " + sh_quote(label);
+            for (const auto& d : devices) mkfs += " " + sh_quote(d);
+            run_step(mkfs);
+        }
+
+        // mkdir mountpoint
+        if (all_ok) {
+            run_step("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(mount));
+        }
+
+        // mount by LABEL (safer than "devices[0]")
+        if (all_ok) {
+            run_step("/usr/bin/sudo -n /bin/mount -t btrfs " +
+                     sh_quote(std::string("LABEL=") + label) + " " +
+                     sh_quote(mount));
+        }
+        // --- stabilize: udev + btrfs scan + warm-up show (prevents pools list race) ---
+        if (all_ok) {
+            // ensure udev has created/updated device nodes / symlinks
+            run_step("/usr/bin/sudo -n /usr/bin/udevadm settle");
+        }
+        if (all_ok) {
+            // make btrfs aware of the just-created multi-device FS
+            run_step("/usr/bin/sudo -n /usr/bin/btrfs device scan");
+        }
+        if (all_ok) {
+            // warm up: ensures /api/v4/storage/pools won't skip this mount on first refresh
+            run_step("/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(mount));
+        }
+        // update pools.json
+        if (all_ok) {
+            json cfg = load_or_init_pools_cfg(users_path);
+            if (!cfg.contains("names_by_mount") || !cfg["names_by_mount"].is_object())
+                cfg["names_by_mount"] = json::object();
+
+            cfg["names_by_mount"][mount] = pool_id;
+
+            const auto cfg_path = pools_cfg_path_from_users_path(users_path);
+            write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n");
+        }
+
+        // finalize exec record
+        record["ok"]     = all_ok;
+        record["state"]  = all_ok ? "done" : "failed";
+        record["busy"]   = false;
+        record["ts_end"] = iso8601_now();
+        write_text_file_atomic(recp, record.dump(2) + "\n");
+
+        // remove lock
+        std::filesystem::remove(lockp);
+
+        reply_json(res, 200, json{
+            {"ok", all_ok},
+            {"results", results}
+        }.dump());
+        return;
+
+    } catch (...) {
+        all_ok = false;
+        record["ok"]     = false;
+        record["state"]  = "failed";
+        record["busy"]   = false;
+        record["ts_end"] = iso8601_now();
+        write_text_file_atomic(recp, record.dump(2) + "\n");
+
+        std::filesystem::remove(lockp);
+
+        reply_json(res, 500, json{{"ok", false}, {"error", "exception"}}.dump());
+        return;
+    }
+});
 
 // ----- GET /api/v4/raid/job?job_id=... (admin-only) ---------------------------
 srv.Get("/api/v4/raid/job", [&](const httplib::Request& req, httplib::Response& res) {
@@ -8128,6 +9149,8 @@ srv.Get("/api/v4/raid/job", [&](const httplib::Request& req, httplib::Response& 
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing job_id"}}.dump());
         return;
     }
+
+    static std::string g_users_path_for_raid;
 
     std::lock_guard<std::mutex> lk(g_raid_jobs_mu);
     auto it = g_raid_job_meta.find(job_id);
