@@ -44,6 +44,7 @@
     ]
   },
   "ui_theme": "win_classic",
+  "transport_max_upload_bytes": 1073741824,
   "user_defaults": {
     "auto_allocate_on_enable": false,
     "default_quota_gb": 10,

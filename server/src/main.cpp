@@ -183,7 +183,6 @@ static std::string apps_root_dir() {
 }
 
 
-
 static std::string static_path(const char* rel) {
     return (std::filesystem::path(static_root_dir()) / rel).string();
 }
@@ -4586,12 +4585,36 @@ int main()
         }
     };
 
+static std::uint64_t g_transport_max_upload_bytes = 0; // 0 => use payload max
+static constexpr std::uint64_t k_payload_max_upload_bytes = 1024ull * 1024ull * 1024ull; // 1 GiB (must match set_payload_max_length)
 
 // the actual policy check: call this before audit.append(ev)
 // Uses admin_settings.json schema from /api/v4/admin/settings:
 //   audit_rotation: { mode: manual|daily|size_mb|daily_or_size_mb, max_active_mb: int, rotate_utc_day: string }
 auto maybe_auto_rotate_before_append = [&]() {
     json settings = load_admin_settings_cached(admin_settings_path);
+
+	// Transport upload limit (server-controlled). 0 or missing => payload max.
+	// Clamp to payload max so httplib does not reject before we can JSON it.
+	try {
+    	std::uint64_t v = 0;
+	    if (settings.contains("transport_max_upload_bytes")) {
+    	    const auto& t = settings["transport_max_upload_bytes"];
+        	if (t.is_number_integer()) {
+            	long long vv = t.get<long long>();
+	            if (vv > 0) v = (std::uint64_t)vv;
+    	    } else if (t.is_string()) {
+        	    // allow string numbers too (optional)
+            	long long vv = std::stoll(t.get<std::string>());
+	            if (vv > 0) v = (std::uint64_t)vv;
+    	    }
+    	}
+	    if (v == 0) v = k_payload_max_upload_bytes;
+    	if (v > k_payload_max_upload_bytes) v = k_payload_max_upload_bytes;
+	    g_transport_max_upload_bytes = v;
+	} catch (...) {
+    	g_transport_max_upload_bytes = k_payload_max_upload_bytes;
+	}
 
     json rot = json::object();
     if (settings.contains("audit_rotation") && settings["audit_rotation"].is_object()) {
@@ -4646,7 +4669,36 @@ auto maybe_auto_rotate_before_append = [&]() {
 
 
     httplib::Server srv;
-	srv.set_payload_max_length(1024ull * 1024ull * 1024ull); // 1 GiB
+	srv.set_payload_max_length(k_payload_max_upload_bytes);
+	srv.set_error_handler([&](const httplib::Request& req, httplib::Response& res) {
+    	// Only force JSON for API endpoints
+	    const std::string& p = req.path;
+    	const bool is_api = (p.size() >= 5 && p.compare(0, 5, "/api/") == 0);
+	    if (!is_api) return;
+
+	    // If someone already set a JSON body, don't override it
+    	if (!res.body.empty()) return;
+
+    	if (res.status == 413) {
+        	// Note: body may already be rejected by httplib payload max.
+	        reply_json(res, 413, json{
+    	        {"ok", false},
+        	    {"error", "transport_limit_exceeded"},
+            	{"message", "Upload rejected before reaching handler (payload limit)"},
+	            {"max_bytes", (g_transport_max_upload_bytes ? g_transport_max_upload_bytes : k_payload_max_upload_bytes)}
+    	    }.dump());
+        	return;
+	    }
+
+	    if (res.status == 400) {
+    	    reply_json(res, 400, json{
+        	    {"ok", false},
+	            {"error", "bad_request"},
+    	        {"message", "Request rejected before reaching handler"}
+        	}.dump());
+        	return;
+    	}
+	});
 	// RAID async engine startup repair (Option A restart policy)
 	raid_startup_fail_running_records_best_effort();
 
@@ -9879,6 +9931,18 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
         // Defaults
         json persisted = load_settings_json();
 
+        // ---- transport max upload (soft cap; clamped to payload cap) ----
+        std::uint64_t tmax = k_payload_max_upload_bytes; // default = payload max
+        if (persisted.contains("transport_max_upload_bytes")) {
+            try {
+                if (persisted["transport_max_upload_bytes"].is_number_integer()) {
+                    long long v = persisted["transport_max_upload_bytes"].get<long long>();
+                    if (v > 0) tmax = (std::uint64_t)v;
+                }
+            } catch (...) {}
+        }
+        if (tmax > k_payload_max_upload_bytes) tmax = k_payload_max_upload_bytes;
+
         // Persisted min level (file), runtime min level (AuditLog)
         std::string persisted_lvl = audit.min_level_str();
         auto it = persisted.find("audit_min_level");
@@ -9893,9 +9957,6 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 		}
 		if (!(ui_theme == "dark" || ui_theme == "bright" || ui_theme == "cpunk_orange" || ui_theme == "win_classic"))
 		    ui_theme = "dark";
-
-
-
 
         // Retention defaults (if absent)
         json retention = json::object();
@@ -9954,8 +10015,12 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 
     		{"ui_theme", ui_theme},
 
+
 			{"snapshots", snapshots},
 			{"storage_roots", storage_roots},
+
+		    {"transport_max_upload_bytes", tmax},
+            {"payload_max_upload_bytes", k_payload_max_upload_bytes}
 		}.dump());
 
     });
@@ -10047,7 +10112,20 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
         if (it2 != j.end() && it2->is_string()) return it2->get<std::string>();
         return fallback;
     };
-
+    // transport max upload helper (soft cap; clamped to payload cap)
+    auto compute_transport_max = [&](const json& persisted_settings) -> std::uint64_t {
+        std::uint64_t tmax = k_payload_max_upload_bytes; // default = payload max
+        if (persisted_settings.contains("transport_max_upload_bytes")) {
+            try {
+                if (persisted_settings["transport_max_upload_bytes"].is_number_integer()) {
+                    long long v = persisted_settings["transport_max_upload_bytes"].get<long long>();
+                    if (v > 0) tmax = (std::uint64_t)v;
+                }
+            } catch (...) {}
+        }
+        if (tmax > k_payload_max_upload_bytes) tmax = k_payload_max_upload_bytes;
+        return tmax;
+    };
     // Normalize rotation safely (never throws; returns null json on error + sets err)
     auto normalize_rotation = [&](const json& in_rot, std::string& err) -> json {
         err.clear();
@@ -10353,6 +10431,7 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
         bool changed_rotation = false;
         bool changed_theme    = false;
         bool changed_snapshots = false;
+        bool changed_transport = false;
 
         json patch = json::object();
 
@@ -10536,11 +10615,69 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             } catch (...) {}
         }
 
-        if (!changed_level && !changed_ret && !changed_rotation && !changed_theme && !changed_snapshots) {
+       // ---- transport_max_upload_bytes (optional) ----
+        if (in.contains("transport_max_upload_bytes")) {
+            // Accept: integer only (safe-by-default)
+            if (!in["transport_max_upload_bytes"].is_number_integer()) {
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "transport_max_upload_bytes must be integer bytes"}
+                }.dump());
+                return;
+            }
+
+            long long v = 0;
+            try {
+                v = in["transport_max_upload_bytes"].get<long long>();
+            } catch (...) {
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "transport_max_upload_bytes invalid"}
+                }.dump());
+                return;
+            }
+
+            if (v <= 0) {
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "transport_max_upload_bytes must be > 0"}
+                }.dump());
+                return;
+            }
+
+            std::uint64_t tmax_new = (std::uint64_t)v;
+            if (tmax_new > k_payload_max_upload_bytes) tmax_new = k_payload_max_upload_bytes;
+
+            std::uint64_t before_tmax = compute_transport_max(persisted);
+
+            patch["transport_max_upload_bytes"] = tmax_new;
+            persisted["transport_max_upload_bytes"] = tmax_new; // for response shaping
+            changed_transport = true;
+
+            // Audit (best-effort)
+            try {
+                pqnas::AuditEvent ev;
+                ev.event = "admin.settings_changed";
+                ev.outcome = "ok";
+                ev.f["transport_max_upload_bytes_before"] = std::to_string((unsigned long long)before_tmax);
+                ev.f["transport_max_upload_bytes_after"]  = std::to_string((unsigned long long)tmax_new);
+                ev.f["payload_max_upload_bytes"] = std::to_string((unsigned long long)k_payload_max_upload_bytes);
+                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                auto it_ua = req.headers.find("User-Agent");
+                ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
+                maybe_auto_rotate_before_append();
+                audit_append(ev);
+            } catch (...) {}
+        }
+
+        if (!changed_level && !changed_ret && !changed_rotation && !changed_theme && !changed_snapshots && !changed_transport) {
             reply_json(res, 400, json{
                 {"ok", false},
                 {"error", "bad_request"},
-                {"message", "nothing to update (provide audit_min_level and/or audit_retention and/or audit_rotation and/or ui_theme and/or snapshots)"}
+                {"message", "nothing to update (provide audit_min_level and/or audit_retention and/or audit_rotation and/or ui_theme and/or snapshots and/or transport_max_upload_bytes)"}
             }.dump());
             return;
         }
@@ -10607,6 +10744,7 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
         if (!is_allowed_theme(ui_theme_value)) ui_theme_value = "dark";
 
         const long long active_bytes = file_size_bytes_safe(audit_jsonl_path);
+        const std::uint64_t tmax = compute_transport_max(persisted);
 
         reply_json(res, 200, json{
             {"ok", true},
@@ -10622,7 +10760,10 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             {"audit_active_bytes", active_bytes},
 
             {"ui_theme", ui_theme_value},
-            {"snapshots", snapshots}
+            {"snapshots", snapshots},
+
+            {"transport_max_upload_bytes", tmax},
+            {"payload_max_upload_bytes", k_payload_max_upload_bytes}
         }.dump());
 
         return;
@@ -16982,27 +17123,67 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
         }.dump());
         return;
     }
+// incoming bytes: prefer Content-Length if present, but sanity-check vs req.body.size()
+std::uint64_t incoming_bytes = (std::uint64_t)req.body.size();
+std::uint64_t cl = 0;
 
-    // incoming bytes: prefer Content-Length if present, but sanity-check vs req.body.size()
-    std::uint64_t incoming_bytes = (std::uint64_t)req.body.size();
-    std::uint64_t cl = 0;
-    if (header_u64("Content-Length", &cl)) {
-        // Fail-closed if mismatch (proxy/client bug)
-        if (cl != (std::uint64_t)req.body.size()) {
-            audit_fail("content_length_mismatch", 400,
-                       "Content-Length=" + std::to_string((unsigned long long)cl) +
-                       " body=" + std::to_string((unsigned long long)req.body.size()));
-            reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "bad_request"},
-                {"message", "Content-Length mismatch"},
-                {"content_length", cl},
-                {"body_bytes", (std::uint64_t)req.body.size()}
-            }.dump());
-            return;
-        }
-        incoming_bytes = cl;
+// transport max (server-controlled, distinct from quota)
+// Prefer runtime value if you have it, otherwise payload cap.
+const std::uint64_t transport_max =
+    (g_transport_max_upload_bytes ? g_transport_max_upload_bytes : k_payload_max_upload_bytes);
+
+if (header_u64("Content-Length", &cl)) {
+
+    // EARLY: reject too-large uploads based on header (prevents 400 mismatch on truncation)
+    if (cl > transport_max) {
+        audit_fail("transport_limit_exceeded", 413,
+                   "Content-Length=" + std::to_string((unsigned long long)cl) +
+                   " max=" + std::to_string((unsigned long long)transport_max));
+        reply_json(res, 413, json{
+            {"ok", false},
+            {"error", "transport_limit_exceeded"},
+            {"message", "Upload exceeds maximum allowed size"},
+            {"content_length", cl},
+            {"max_bytes", transport_max},
+            {"payload_max_upload_bytes", k_payload_max_upload_bytes}
+        }.dump());
+        return;
     }
+
+    // Fail-closed if mismatch (proxy/client bug OR server truncated due to payload cap)
+    if (cl != (std::uint64_t)req.body.size()) {
+        audit_fail("content_length_mismatch", 400,
+                   "Content-Length=" + std::to_string((unsigned long long)cl) +
+                   " body=" + std::to_string((unsigned long long)req.body.size()));
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "Content-Length mismatch"},
+            {"content_length", cl},
+            {"body_bytes", (std::uint64_t)req.body.size()}
+        }.dump());
+        return;
+    }
+
+    incoming_bytes = cl;
+}
+
+// Also enforce transport limit when Content-Length is missing
+if (incoming_bytes > transport_max) {
+    audit_fail("transport_limit_exceeded", 413,
+               "incoming_bytes=" + std::to_string((unsigned long long)incoming_bytes) +
+               " max=" + std::to_string((unsigned long long)transport_max));
+    reply_json(res, 413, json{
+        {"ok", false},
+        {"error", "transport_limit_exceeded"},
+        {"message", "Upload exceeds maximum allowed size"},
+        {"max_bytes", transport_max},
+        {"incoming_bytes", incoming_bytes},
+        {"payload_max_upload_bytes", k_payload_max_upload_bytes}
+    }.dump());
+    return;
+}
+
 
     // quota + path resolve
     const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);

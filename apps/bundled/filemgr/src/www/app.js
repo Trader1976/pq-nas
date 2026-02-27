@@ -102,6 +102,35 @@
   let quotaInfoAtMs = 0;
   const QUOTA_TTL_MS = 15 * 1000;
 
+// ---- Transport/payload upload limits (UI hint + precheck) -------------------
+  let uploadLimits = null;            // { transport_max_upload_bytes, payload_max_upload_bytes, ... }
+  let uploadLimitsAtMs = 0;
+  const UPLOAD_LIMITS_TTL_MS = 15 * 1000;
+
+  function pickUploadLimitsFromMeStorage(j) {
+    if (!j || typeof j !== "object") return null;
+
+    // Prefer "transport" limit if present
+    const t = Number(j.transport_max_upload_bytes);
+    const p = Number(j.payload_max_upload_bytes);
+
+    const out = {};
+    if (Number.isFinite(t) && t > 0) out.transport_max_upload_bytes = t;
+    if (Number.isFinite(p) && p > 0) out.payload_max_upload_bytes = p;
+
+    return Object.keys(out).length ? out : null;
+  }
+
+  function getEffectiveUploadLimitBytes() {
+    // Transport limit is what typically triggers 413 upstream; payload is server-side cap.
+    if (uploadLimits && Number.isFinite(uploadLimits.transport_max_upload_bytes) && uploadLimits.transport_max_upload_bytes > 0) {
+      return uploadLimits.transport_max_upload_bytes;
+    }
+    if (uploadLimits && Number.isFinite(uploadLimits.payload_max_upload_bytes) && uploadLimits.payload_max_upload_bytes > 0) {
+      return uploadLimits.payload_max_upload_bytes;
+    }
+    return 0;
+  }
   function showQuotaLine(kind, text) {
     if (!quotaLine) return;
     quotaLine.classList.remove("hidden");
@@ -138,6 +167,14 @@
       });
       const j = await r.json().catch(() => null);
       if (!j) return null;
+
+      // Cache upload limits if present
+      const lim = pickUploadLimitsFromMeStorage(j);
+      if (lim) {
+        uploadLimits = lim;
+        uploadLimitsAtMs = Date.now();
+      }
+
       return j;
 
     } catch (_) {
@@ -145,6 +182,16 @@
     } finally {
       clearTimeout(t);
     }
+  }
+  async function refreshUploadLimitsIfNeeded(force = false) {
+    if (storageBlocked) return null;
+
+    const now = Date.now();
+    if (!force && uploadLimits && (now - uploadLimitsAtMs) < UPLOAD_LIMITS_TTL_MS) return uploadLimits;
+
+    // This will update uploadLimits as a side effect if the response contains it
+    await fetchMeStorageFast(1200);
+    return uploadLimits;
   }
   function fmtPct01(p) {
     if (!Number.isFinite(p)) return "";
@@ -174,7 +221,17 @@
       return null;
     }
   }
+  async function ensureUploadAllowedOrThrow(file) {
+    if (!file) return;
 
+    // best-effort refresh (don’t block too long)
+    await refreshUploadLimitsIfNeeded(false);
+
+    const limit = getEffectiveUploadLimitBytes();
+    if (limit > 0 && file.size > limit) {
+      throw new Error(`Upload too large: ${fmtSize(file.size)}. Limit is ${fmtSize(limit)}.`);
+    }
+  }
   function applyQuotaUi(q) {
     if (!q || typeof q !== "object") { hideQuotaLine(); return; }
 
@@ -1203,10 +1260,9 @@
       else created.add(full);
     }
   }
-
-  // Upload a file with progress reporting.
-  // XMLHttpRequest is used because fetch() upload progress isn't widely supported.
-  // Server returns JSON {ok:true} on success, and may return quota details.
+// Upload a file with progress reporting.
+// XMLHttpRequest is used because fetch() upload progress isn't widely supported.
+// Server returns JSON {ok:true} on success, and may return quota details.
   function xhrPutFileTo(relPath, file, onProgress) {
     return new Promise((resolve, reject) => {
       const full = curPath ? `${curPath}/${relPath}` : relPath;
@@ -1215,6 +1271,10 @@
       const xhr = new XMLHttpRequest();
       xhr.open("PUT", url, true);
       xhr.withCredentials = true;
+
+      // Optional but useful: avoid hanging forever on proxy stalls
+      xhr.timeout = 10 * 60 * 1000; // 10 min
+      xhr.ontimeout = () => reject(new Error("upload failed (timeout)"));
 
       xhr.upload.onprogress = (e) => {
         if (!onProgress) return;
@@ -1226,10 +1286,22 @@
       xhr.onabort = () => reject(new Error("upload aborted"));
 
       xhr.onload = () => {
-        let j = null;
-        try { j = JSON.parse(xhr.responseText || ""); } catch (_) {}
+        const status = xhr.status || 0;
+        const ct = (xhr.getResponseHeader("Content-Type") || "").toLowerCase();
+        const raw = String(xhr.responseText || "").trim();
 
-        if (xhr.status >= 200 && xhr.status < 300 && j && j.ok) {
+        // Parse JSON only when it looks like JSON (avoid throwing on HTML / CF pages)
+        let j = null;
+        const looksJson =
+            ct.includes("application/json") ||
+            raw.startsWith("{") ||
+            raw.startsWith("[");
+        if (looksJson && raw) {
+          try { j = JSON.parse(raw); } catch (_) { j = null; }
+        }
+
+        // Success: 2xx + {ok:true}
+        if (status >= 200 && status < 300 && j && j.ok) {
           resolve(j);
           return;
         }
@@ -1244,23 +1316,43 @@
           return;
         }
 
-        const ct = (xhr.getResponseHeader("Content-Type") || "").toLowerCase();
-        const raw = (xhr.responseText || "").trim();
-
-        let msg = "";
-        if (j && (j.message || j.error)) {
-          msg = `${j.error || ""} ${j.message || ""}`.trim();
-        } else if (raw) {
-          // show first part of raw response (HTML/CF errors etc.)
-          msg = `${ct ? ct + " " : ""}${shorten(raw.replace(/\s+/g, " "), 140)}`.trim();
-        } else {
-          msg = `HTTP ${xhr.status}`;
+        // Common cases with better UX
+        if (status === 0) {
+          // XHR status 0: request blocked/aborted by network/proxy/CORS/etc.
+          reject(new Error("upload failed (network/proxy blocked)"));
+          return;
         }
 
-        reject(new Error(msg || "upload failed"));
+        if (status === 413) {
+          const size = fmtSize(file && file.size != null ? file.size : 0);
+          const limit = getEffectiveUploadLimitBytes();
+          const limTxt = (limit > 0) ? ` Limit is ${fmtSize(limit)}.` : "";
+          reject(new Error(`Upload too large (HTTP 413). File size ${size}.${limTxt}`));
+          return;
+        }
+
+        // If we have JSON message/error, use it
+        if (j && (j.message || j.error)) {
+          const msg = `${j.error || ""} ${j.message || ""}`.trim();
+          reject(new Error(msg || `HTTP ${status}`));
+          return;
+        }
+
+        // Otherwise show first part of raw response (HTML/CF errors etc.)
+        if (raw) {
+          const oneLine = shorten(raw.replace(/\s+/g, " "), 160);
+          const prefix = ct ? `${ct} ` : "";
+          reject(new Error(`${prefix}${oneLine}`.trim()));
+          return;
+        }
+
+        reject(new Error(`HTTP ${status}`));
       };
 
-      xhr.send(file);
+      Promise.resolve()
+          .then(() => ensureUploadAllowedOrThrow(file))
+          .then(() => xhr.send(file))
+          .catch(reject);
     });
   }
   function shorten(s, n) {
