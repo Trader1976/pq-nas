@@ -68,7 +68,14 @@
     const snapPerVolume = $("snapPerVolume");
     const snapVolTbody = $("snapVolTbody");
 
-
+    // --- uploads ---
+    const uploadPill = $("uploadPill");
+    const uploadSoftMax = $("uploadSoftMax");
+    const btnUploadSave = $("btnUploadSave");
+    const btnUploadReload = $("btnUploadReload");
+    const uploadSoftPill = $("uploadSoftPill");
+    const uploadHardPill = $("uploadHardPill");
+    const uploadEffectivePill = $("uploadEffectivePill");
 
     const ALLOWED_THEMES = new Set(["dark", "bright", "cpunk_orange", "win_classic"]);
     const ALLOWED_ROT_MODES = new Set(["manual", "daily", "size_mb", "daily_or_size_mb"]);
@@ -649,7 +656,40 @@
         const label = bytes == null || bytes < 0 ? "—" : `${fmtBytes(bytes)}${path ? " • " + path : ""}`;
         setSimplePill(activeSizePill, "info", "Active log", label);
     }
+    // ---------------------------
+    // Upload limits UI helpers
+    // ---------------------------
+    function clampU64(n) {
+        const x = Number(n);
+        if (!Number.isFinite(x)) return null;
+        if (x <= 0) return null;
+        // JS can represent up to 2^53-1 safely; your caps are well below that
+        return Math.floor(x);
+    }
 
+    function applyUploadLimitsToUi(j) {
+        const hard = (j && typeof j.payload_max_upload_bytes === "number") ? j.payload_max_upload_bytes : null;
+        const soft = (j && typeof j.transport_max_upload_bytes === "number") ? j.transport_max_upload_bytes : null;
+
+        const eff = (hard != null && soft != null) ? Math.min(hard, soft)
+            : (hard != null) ? hard
+                : (soft != null) ? soft
+                    : null;
+
+        if (uploadSoftMax && soft != null) uploadSoftMax.value = String(Math.floor(soft));
+
+        // Pills
+        if (uploadSoftPill) setSimplePill(uploadSoftPill, "info", "Soft cap", soft != null ? fmtBytes(soft) : "—");
+        if (uploadHardPill) setSimplePill(uploadHardPill, "info", "Hard cap", hard != null ? fmtBytes(hard) : "—");
+        if (uploadEffectivePill) setSimplePill(uploadEffectivePill, "info", "Effective", eff != null ? fmtBytes(eff) : "—");
+
+        // Header pill shows effective
+        if (uploadPill) {
+            const kind = (eff != null) ? "info" : "warn";
+            uploadPill.className = "pill " + kind;
+            uploadPill.innerHTML = `<span class="k">Effective:</span> <span class="v">${escapeHtml(eff != null ? fmtBytes(eff) : "—")}</span>`;
+        }
+    }
     // ---------------------------
     // Main refresh: load all settings
     // ---------------------------
@@ -685,7 +725,11 @@
 
             // active audit file info
             updateActiveSizePill(j);
+            // active audit file info
+            updateActiveSizePill(j);
 
+            // upload limits
+            applyUploadLimitsToUi(j);
             clearPreview();
             setStatusPill("ok", "ready");
         } catch (e) {
@@ -751,7 +795,37 @@
         renderSnapshotVolumesTable(gSnapshotsLast || currentSnapshotsFromUi());
         syncSnapshotsEnabledUi();
     });
+    // ---------------------------
+    // Wire upload limits
+    // ---------------------------
+    btnUploadReload?.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        refreshAll();
+    });
 
+    btnUploadSave?.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+
+        const v = clampU64(uploadSoftMax?.value);
+        if (v == null) {
+            showToast("fail", "Invalid value", "transport_max_upload_bytes must be a positive integer (bytes).");
+            return;
+        }
+
+        btnUploadSave.disabled = true;
+        setStatusPill("warn", "saving…");
+        try {
+            await apiSettingsPost({ transport_max_upload_bytes: v });
+            showToast("ok", "Saved", `Max upload = ${fmtBytes(v)} (${v} bytes)`);
+            await refreshAll();
+        } catch (e) {
+            console.error(e);
+            showToast("fail", "Save failed", String(e.message || e));
+            setStatusPill("error", "error");
+        } finally {
+            btnUploadSave.disabled = false;
+        }
+    });
     btnRetentionSave?.addEventListener("click", async (ev) => {
         ev.preventDefault();
         const pol = currentRetentionPolicyFromUi();

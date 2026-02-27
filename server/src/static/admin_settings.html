@@ -455,6 +455,7 @@
             filter: grayscale(0.2);
         }
         .hidden { display:none !important; }
+        #uploadSoftMax { max-width: 360px; }
     </style>
 
     <link rel="stylesheet" href="/static/theme.css">
@@ -721,6 +722,42 @@
                 </div>
             </div>
 
+            <!-- Upload limits -->
+            <div class="card accordion" data-acc="settings">
+                <div class="hd" role="button" tabindex="0" aria-expanded="false">
+                    <div class="h">Uploads</div>
+                    <div class="pill info" id="uploadPill"><span class="k">Effective:</span> <span class="v">—</span></div>
+                    <span class="chev" aria-hidden="true">▸</span>
+                </div>
+
+                <div class="bd">
+                    <div class="row">
+                        <input id="uploadSoftMax"
+                               class="input mono"
+                               style="min-width:260px"
+                               type="number"
+                               min="1"
+                               step="1"
+                               placeholder="transport_max_upload_bytes (bytes)" />
+
+                        <button id="btnUploadSave" class="btn primary" type="button">Save upload limit</button>
+                        <button id="btnUploadReload" class="btn" type="button">Reload</button>
+                    </div>
+
+                    <div class="row">
+                        <span class="pill info" id="uploadSoftPill"><span class="k">Soft cap:</span> <span class="v mono">—</span></span>
+                        <span class="pill info" id="uploadHardPill"><span class="k">Hard cap:</span> <span class="v mono">—</span></span>
+                        <span class="pill info" id="uploadEffectivePill"><span class="k">Effective:</span> <span class="v mono">—</span></span>
+                    </div>
+
+                    <div class="note">
+                        <b>Soft cap</b> is admin-controlled (saved in <span class="mono">admin_settings.json</span>).
+                        <b>Hard cap</b> is compiled into the server (<span class="mono">set_payload_max_length</span>) and uploads above it never reach PQ-NAS handlers.
+                        <br/>
+                        Effective cap = min(soft, hard).
+                    </div>
+                </div>
+            </div>
             <!-- Theme -->
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
