@@ -59,7 +59,7 @@ if [[ ! -d "$CLEAN_CONFIG_DIR" ]]; then
   exit 2
 fi
 
-required=(admin_settings.json policy.json users.json shares.json)
+required=(admin_settings.json policy.json users.json shares.json pools.json)
 for f in "${required[@]}"; do
   if [[ ! -f "$CLEAN_CONFIG_DIR/$f" ]]; then
     echo "ERROR: Missing required config template: $CLEAN_CONFIG_DIR/$f"

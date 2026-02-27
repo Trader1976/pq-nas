@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "names_by_mount": {
+    "/srv/pqnas": "PQNAS_DATA",
+    "/srv/pqnas/data": "Home pool"
+  }
+}

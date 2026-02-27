@@ -582,7 +582,7 @@ def ensure_config_files(root: str, asset_root: str) -> None:
 
     force = os.environ.get("PQNAS_FORCE_CONFIG", "").strip().lower() in ("1", "true", "yes", "y", "on")
 
-    for name in ("admin_settings.json", "policy.json", "users.json", "shares.json"):
+    for name in ("admin_settings.json", "policy.json", "users.json", "shares.json", "pools.json"):
         s = os.path.join(src, name)
         d = os.path.join(etc_dir, name)
 
@@ -631,6 +631,7 @@ def write_env_file(
         "PQNAS_POLICY_PATH=/etc/pqnas/policy.json",
         "PQNAS_USERS_PATH=/etc/pqnas/users.json",
         "PQNAS_SHARES_PATH=/etc/pqnas/shares.json",
+        "PQNAS_POOLS_PATH=/etc/pqnas/pools.json",
         "",
         f"PQNAS_AUDIT_DIR={root}/audit",
         f"PQNAS_LOG_DIR={root}/logs",
@@ -1669,8 +1670,12 @@ class ConfirmScreen(Screen):
                 self.start_btn = Button("Start", id="start", variant="error", disabled=True)
                 yield self.start_btn
 
-            self.err = Static("", classes="warn")
-            yield self.err
+                self.err = Static("", classes="warn")
+        yield self.err
+
+        # Small log area for immediate feedback (prevents "stuck" feeling)
+        self.logw = Log()
+        yield self.logw
         yield Footer()
 
     def on_mount(self) -> None:
@@ -1733,6 +1738,8 @@ class ConfirmScreen(Screen):
         self.app.push_screen(ExecuteScreen())
 
 
+
+
 class RollbackScreen(Screen):
     BINDINGS = [("q", "quit", "Quit"), ("b", "back", "Back")]
 
@@ -1740,6 +1747,13 @@ class RollbackScreen(Screen):
         super().__init__()
         self.error_text = error_text
         self.was_upgrade = was_upgrade
+
+        # Ensure attributes exist even if something calls methods early
+        self.err_box: Optional[Static] = None
+        self.btn_status: Optional[Button] = None
+        self.btn_keep: Optional[Button] = None
+        self.btn_rollback: Optional[Button] = None
+        self.out: Optional[Log] = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1766,19 +1780,24 @@ class RollbackScreen(Screen):
             with Horizontal():
                 self.btn_status = Button("Show systemd status", id="status", variant="default")
                 yield self.btn_status
+
                 self.btn_keep = Button("Keep new binaries (no rollback)", id="keep", variant="default")
                 yield self.btn_keep
+
                 self.btn_rollback = Button("Rollback binaries + restart service", id="rollback", variant="error")
                 yield self.btn_rollback
 
             self.out = Log()
             yield self.out
+
         yield Footer()
 
     def on_mount(self) -> None:
         if not self.was_upgrade or not have_bak_binaries("/usr/local/bin"):
-            self.btn_rollback.disabled = True
-            self.out.write("[!] Rollback not available (no upgrade detected or no .bak binaries).")
+            if hasattr(self, "btn_rollback") and self.btn_rollback is not None:
+                self.btn_rollback.disabled = True
+            if hasattr(self, "out") and self.out is not None:
+                self.out.write("[!] Rollback not available (no upgrade detected or no .bak binaries).")
 
     def action_back(self) -> None:
         self.app.pop_screen()
