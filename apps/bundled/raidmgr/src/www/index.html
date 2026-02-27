@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>PQ-NAS • RAID Manager</title>
+    <title>PQ-NAS • Storage Manager</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
 
     <!-- Use PQ-NAS global themes -->
@@ -277,6 +277,13 @@
         .btn.danger:hover{ filter: brightness(1.08); }
         .btn.danger:active{ filter: brightness(0.98); }
         .btn.danger:hover{ filter: brightness(1.08); }
+        /* Tab buttons: show which one is active */
+        #tabRaidBtn[aria-pressed="true"],
+        #tabPoolsBtn[aria-pressed="true"]{
+            border-color: rgba(var(--info-rgb, 0,140,255), 0.55);
+            background: rgba(var(--info-rgb, 0,140,255), 0.14);
+            box-shadow: 0 0 0 1px rgba(var(--info-rgb, 0,140,255), 0.10) inset;
+        }
         html[data-theme="win_classic"],
         body.theme-win_classic,
         body.win_classic{
@@ -294,7 +301,7 @@
     <div class="panel">
         <div class="bar">
             <div class="left">
-                <div class="title" id="titleLine">RAID Manager</div>
+                <div class="title" id="titleLine">Storage Manager</div>
                 <div class="sub" id="subLine">Detecting RAID capabilities…</div>
             </div>
 
@@ -309,8 +316,9 @@
                 <span class="badge warn" id="badge">loading…</span>
                 <button class="btn secondary" id="refreshBtn" type="button">Refresh</button>
                 <div class="row" style="gap:10px; align-items:center;">
-                    <button class="btn secondary" id="tabRaidBtn" type="button" aria-pressed="true">RAID</button>
-                    <button class="btn secondary" id="tabPoolsBtn" type="button" aria-pressed="false">Pools</button>
+                    <button class="btn secondary" id="tabRaidBtn" type="button" aria-pressed="false">Drives</button>
+                    <button class="btn secondary" id="tabPoolsBtn" type="button" aria-pressed="true">Pools</button>
+
                 </div>
             </div>
         </div>
@@ -327,7 +335,7 @@
 
                 <!-- Actions (always visible) -->
                 <div class="card" id="actionsCard">
-                    <h3>Manage storage pool</h3>
+                    <h3>Manage drives in this pool</h3>
                     <div id="actionsOut"></div>
                 </div>
 

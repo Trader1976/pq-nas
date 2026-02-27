@@ -32,15 +32,15 @@
     const poolsTab = el("poolsTab");
     const poolsOut = el("poolsOut");
 
-    const TAB_KEY = "pqnas_raidmgr_tab";
-    let g_tab = "raid"; // "raid" | "pools"
-    const DEV_MODE_KEY = "pqnas_raidmgr_dev_mode";
+    const TAB_KEY = "pqnas_storagemgr_tab";
+    let g_tab = "pools"; // "drives" | "pools"  (we keep variable name g_tab but change values below)
+    const DEV_MODE_KEY = "pqnas_storagemgr_dev_mode";
     function loadTab() {
         try {
             const t = String(localStorage.getItem(TAB_KEY) || "");
-            return (t === "pools" || t === "raid") ? t : "raid";
+            return (t === "pools" || t === "raid") ? t : "pools";
         } catch (_) {
-            return "raid";
+            return "pools";
         }
     }
     function setBadge(kind, text) {
@@ -58,20 +58,19 @@
         if (raidTab) raidTab.style.display = isPools ? "none" : "";
         if (poolsTab) poolsTab.style.display = isPools ? "" : "none";
 
-        if (tabRaidBtn) tabRaidBtn.setAttribute("aria-pressed", isPools ? "false" : "true");
         if (tabPoolsBtn) tabPoolsBtn.setAttribute("aria-pressed", isPools ? "true" : "false");
-
+        if (tabRaidBtn)  tabRaidBtn.setAttribute("aria-pressed", isPools ? "false" : "true");
         // In Pools tab, dev-mode cards (probe/raw/topology) are hidden anyway because raidTab is hidden.
     }
 
     function setTab(t) {
-        g_tab = (t === "pools") ? "pools" : "raid";
+        g_tab = (t === "pools") ? "pools" : "drives";
         saveTab(g_tab);
         applyTabToUi();
         probe(); // reload data appropriate for tab
     }
     // Multi-pool selection
-    const POOL_SEL_KEY = "pqnas_raidmgr_pool_mount";
+    const POOL_SEL_KEY = "pqnas_storagemgr_pool_mount";
     let g_pools = [];
     let g_selectedMount = "";
 
@@ -86,7 +85,7 @@
     // Global timer/poller state (so probe() can stop old intervals created by
     // previous renderActions() closures)
     // ----------------------------------------------------------------------------
-    const GSTATE_KEY = "__pqnas_raidmgr_state_v1__";
+    const GSTATE_KEY = "__pqnas_storagemgr_state_v1__";
     function gstate() {
         if (!window[GSTATE_KEY]) {
             window[GSTATE_KEY] = {
@@ -439,7 +438,7 @@
     }
 
     const appVer = detectVersionFromUrl();
-    if (titleLine && appVer) titleLine.textContent = `RAID Manager • ${appVer}`;
+    if (titleLine && appVer) titleLine.textContent = `Storage Manager • ${appVer}`;
 
     async function fetchJson(url) {
         const r = await fetch(url, { credentials: "include", cache: "no-store" });
@@ -644,7 +643,7 @@
 
         lines.push(`Mount: ${mountResolved || mountRequested || "-"}`);
         lines.push(`Filesystem: ${statusJ?.fstype || "(unknown)"}`);
-        lines.push(`RAID features: ${isBtrfs ? "Enabled" : "Disabled"}`);
+        lines.push(`Btrfs features: ${isBtrfs ? "Enabled" : "Disabled"}`);
 
         // If server provides parsed topology via /status
         const sum = statusJ?.parsed?.summary || null;
@@ -2610,8 +2609,9 @@ Optionally it can wipe member disks (VERY destructive).
     g_tab = loadTab();
     applyTabToUi();
 
-    tabRaidBtn?.addEventListener("click", () => setTab("raid"));
     tabPoolsBtn?.addEventListener("click", () => setTab("pools"));
+    tabRaidBtn?.addEventListener("click", () => setTab("drives"));
+
     // Dev mode init
     applyDevModeToUi();
     devModeChk?.addEventListener("change", () => setDevMode(!!devModeChk.checked));

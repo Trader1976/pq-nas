@@ -407,14 +407,36 @@ static bool ensure_dir_exists(const std::filesystem::path& p, std::string* err =
     }
 }
 
-// Computes absolute user directory path for a fingerprint.
-static std::filesystem::path user_dir_for_fp(const std::string& fp_hex) {
-    // Canonical-ish layout: <data_root>/users/<fingerprint_hex>
-    return std::filesystem::path(data_root_dir()) / "users" / fp_hex;
+
+
+
+static void pool_mounts_init_default_only();
+
+static std::mutex& pool_mu() {
+    static std::mutex mu;
+    return mu;
 }
 
+static std::unordered_map<std::string, std::string>& pool_mount_by_id() {
+    static std::unordered_map<std::string, std::string> m;
+    return m;
+}
 
-
+static std::string& default_pool_id() {
+    static std::string id = "default";
+    return id;
+}
+// Computes absolute user directory path for a fingerprint.
+static std::filesystem::path user_dir_for_fp(const std::string& fp_hex) {
+    std::string mount = data_root_dir();
+    {
+        std::lock_guard<std::mutex> lk(pool_mu());
+        auto& m = pool_mount_by_id();
+        auto it = m.find(default_pool_id());
+        if (it != m.end()) mount = it->second;
+    }
+    return std::filesystem::path(mount) / "users" / fp_hex;
+}
 
 namespace {
 
@@ -528,7 +550,53 @@ static std::vector<ArchivePair> list_rotated_archives_local(const std::string& a
     return out;
 }
 
+    static bool reply_quota_error_v1(httplib::Response& res,
+                                    const std::string& fp_hex,
+                                    const pqnas::QuotaCheckResult& qc) {
+    if (qc.ok) return false;
 
+    if (qc.error == "storage_unallocated") {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"},
+            {"fingerprint_hex", fp_hex},
+            {"quota_bytes", qc.quota_bytes},
+            {"incoming_bytes", qc.incoming_bytes}
+        }.dump());
+        return true;
+    }
+    if (qc.error == "invalid_path") {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return true;
+    }
+    if (qc.error == "quota_exceeded") {
+        reply_json(res, 413, json{
+            {"ok", false},
+            {"error", "quota_exceeded"},
+            {"message", "User quota exceeded"},
+            {"fingerprint_hex", fp_hex},
+            {"used_bytes", qc.used_bytes},
+            {"quota_bytes", qc.quota_bytes},
+            {"incoming_bytes", qc.incoming_bytes},
+            {"existing_bytes", qc.existing_bytes},
+            {"would_used_bytes", qc.would_used_bytes},
+            {"free_bytes", (qc.quota_bytes > qc.used_bytes ? (qc.quota_bytes - qc.used_bytes) : 0)}
+        }.dump());
+        return true;
+    }
+
+    reply_json(res, 403, json{
+        {"ok", false},
+        {"error", "forbidden"},
+        {"message", "policy denied"}
+    }.dump());
+    return true;
+}
 
 static nlohmann::json normalize_retention_or_default_local(const nlohmann::json& in_ret) {
     nlohmann::json ret = nlohmann::json::object();
@@ -1996,6 +2064,40 @@ static std::filesystem::path pools_cfg_path_from_users_path(const std::string& u
     return std::filesystem::path(users_path).parent_path() / "pools.json";
 }
 
+static void pool_mounts_init_default_only() {
+    std::lock_guard<std::mutex> lk(pool_mu());
+    auto& m = pool_mount_by_id();
+    m.clear();
+    m[default_pool_id()] = data_root_dir();
+}
+
+static std::string pool_id_from_mount_best_effort(const std::string& mount) {
+    // Preferred: /srv/pqnas/pools/<pool_id>
+    // Return basename for anything else (sanitized).
+    std::string m = mount;
+    while (!m.empty() && m.back() == '/') m.pop_back();
+
+    auto base = [&]() -> std::string {
+        auto pos = m.find_last_of('/');
+        if (pos == std::string::npos) return m;
+        return m.substr(pos + 1);
+    }();
+
+    // If it matches /pools/<id>, return <id> (same as basename anyway)
+    std::string id = base;
+
+    // sanitize to [a-z0-9_-], max 32 (server-side)
+    std::string out;
+    out.reserve(id.size());
+    for (char c : id) {
+        char lc = (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+        if ((lc >= 'a' && lc <= 'z') || (lc >= '0' && lc <= '9') || lc == '_' || lc == '-') out.push_back(lc);
+    }
+    if (out.empty()) out = "pool";
+    if (out.size() > 32) out.resize(32);
+    return out;
+}
+
 static json pools_cfg_upgrade_to_v2_if_needed(json j) {
     if (!j.is_object()) j = json::object();
     int ver = 1;
@@ -2032,9 +2134,9 @@ static json pools_cfg_upgrade_to_v2_if_needed(json j) {
     return out;
 }
 
-static std::filesystem::path pools_cfg_path_from_users_path(const std::string& users_path); // you already have
-static bool write_text_file_atomic(const std::string&, const std::string&);                // you already have
-static bool read_text_file(const std::string&, std::string*);                              // you already have
+static std::filesystem::path pools_cfg_path_from_users_path(const std::string& users_path);
+static bool write_text_file_atomic(const std::string&, const std::string&);
+static bool read_text_file(const std::string&, std::string*);
 
 static json load_or_init_pools_cfg_v2(const std::string& users_path) {
     const auto cfg_path = pools_cfg_path_from_users_path(users_path);
@@ -4544,7 +4646,7 @@ auto maybe_auto_rotate_before_append = [&]() {
 
 
     httplib::Server srv;
-
+	srv.set_payload_max_length(1024ull * 1024ull * 1024ull); // 1 GiB
 	// RAID async engine startup repair (Option A restart policy)
 	raid_startup_fail_running_records_best_effort();
 
@@ -4579,11 +4681,20 @@ auto maybe_auto_rotate_before_append = [&]() {
 
 
 
-    // Option A: fixed policy location in repo, with optional env override
-    std::string allowlist_path =
-        (std::filesystem::path(REPO_ROOT) / "config" / "policy.json").string();
+    // Policy (allowlist) path resolution:
+    //  1) PQNAS_POLICY_PATH (explicit override)
+    //  2) PQNAS_CONFIG_ROOT/policy.json (installed default)
+    //  3) REPO_ROOT/config/policy.json (dev fallback)
+    std::string allowlist_path;
     if (const char* p = std::getenv("PQNAS_POLICY_PATH")) {
         allowlist_path = p;
+    } else {
+        const std::string config_root = getenv_str("PQNAS_CONFIG_ROOT");
+        if (!config_root.empty()) {
+            allowlist_path = (std::filesystem::path(config_root) / "policy.json").string();
+        } else {
+            allowlist_path = (std::filesystem::path(REPO_ROOT) / "config" / "policy.json").string();
+        }
     }
 
     pqnas::Allowlist allowlist;
@@ -4592,18 +4703,41 @@ auto maybe_auto_rotate_before_append = [&]() {
         return 3;
     }
 
-	std::string users_path =
-    	(std::filesystem::path(REPO_ROOT) / "config" / "users.json").string();
-	if (const char* p = std::getenv("PQNAS_USERS_PATH")) {
-	    users_path = p;
-	}
+    // Users registry path resolution:
+    //  1) PQNAS_USERS_PATH (explicit override)
+    //  2) PQNAS_CONFIG_ROOT/users.json (installed default)
+    //  3) REPO_ROOT/config/users.json (dev fallback)
+    std::string users_path;
+    if (const char* p = std::getenv("PQNAS_USERS_PATH")) {
+        users_path = p;
+    } else {
+        const std::string config_root = getenv_str("PQNAS_CONFIG_ROOT");
+        if (!config_root.empty()) {
+            users_path = (std::filesystem::path(config_root) / "users.json").string();
+        } else {
+            users_path = (std::filesystem::path(REPO_ROOT) / "config" / "users.json").string();
+        }
+    }
 
-	pqnas::UsersRegistry users;
-	if (!users.load(users_path)) {
-    	std::cerr << "[users] FATAL: failed to load users registry: " << users_path << std::endl;
-    	return 4;
-	}
+    std::cerr << "[cfg] allowlist_path=" << allowlist_path << std::endl;
+    std::cerr << "[cfg] users_path=" << users_path << std::endl;
+
+    pqnas::UsersRegistry users;
+    if (!users.load(users_path)) {
+        std::cerr << "[users] FATAL: failed to load users registry: " << users_path << std::endl;
+        return 4;
+    }
     g_users_path_for_raid = users_path;
+    pool_mounts_init_default_only();
+
+    {
+        std::lock_guard<std::mutex> lk(pool_mu());
+        auto& m = pool_mount_by_id();
+        auto it = m.find(default_pool_id());
+        std::cerr << "[cfg] default_pool_id=" << default_pool_id()
+                  << " mount=" << (it == m.end() ? "(missing)" : it->second)
+                  << std::endl;
+    }
 
 	RoutesV5Context v5;
 	v5.origin = &ORIGIN;
@@ -5403,6 +5537,7 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
 
         json j;
         j["mount"] = target;
+        j["pool_id"] = pool_id_from_mount_best_effort(target);
 
         // PQ-NAS UI display name (server metadata, not btrfs label)
         const std::string disp = pools_display_name_for_mount(pools_cfg, target);
@@ -10982,6 +11117,7 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
 		        {"root_rel", u.root_rel},
 		        {"storage_set_at", u.storage_set_at},
 		        {"storage_set_by", u.storage_set_by},
+                {"pool_id", nullptr},
 
 		        // NEW: storage usage
         		{"storage_used_bytes", used_bytes}
@@ -11164,262 +11300,347 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
     	reply_json(res, 200, json({{"ok",true}}).dump());
 	});
 
-	// POST /api/v4/admin/users/storage
-	// Body: {"fingerprint":"...","quota_gb":10}
-	// Action (metadata-only for now):
-	//   - storage_state="allocated"
-	//   - quota_bytes = quota_gb * 1024^3
-	//   - root_rel = "users/<full fingerprint>"
-	//   - storage_set_at = now ISO
-	//   - storage_set_by = actor_fp
-	srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib::Response& res) {
-    	std::string actor_fp;
-    	if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+// POST /api/v4/admin/users/storage
+// Body: {"fingerprint":"...","quota_gb":10,"force":false}
+//
+// v1 (still directory-based, not btrfs-qgroup yet):
+//   - REQUIRE user.status == "enabled" (approved) BEFORE doing anything
+//   - Ensure <data_root>/users exists
+//   - Ensure <data_root>/users/<fp> exists
+//   - storage_state="allocated"
+//   - quota_bytes = quota_gb * 1024^3 (GiB)
+//   - root_rel = RELATIVE path that matches the ensured directory
+//   - storage_set_at/by set
+srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
-    	json j;
-	    try { j = json::parse(req.body); }
-    	catch (...) {
-	        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
-        	return;
-    	}
+    res.set_header("Cache-Control", "no-store");
 
-    	const std::string fp = j.value("fingerprint", "");
-	    if (fp.empty()) {
-        	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
-    	    return;
-	    }
+    json j;
+    try { j = json::parse(req.body); }
+    catch (...) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+        return;
+    }
 
-    	// NEW: sanity check fingerprint format (hex-ish + reasonable length)
-    	if (!is_valid_fingerprint_hex(fp)) {
-	        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid fingerprint format"}}).dump());
-        	return;
-    	}
+    const std::string fp = j.value("fingerprint", "");
+    if (fp.empty()) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+        return;
+    }
 
-    	if (!users.exists(fp)) {
-        	reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
-        	return;
-    	}
+    if (!is_valid_fingerprint_hex(fp)) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid fingerprint format"}}).dump());
+        return;
+    }
 
-    	const bool force = j.value("force", false);
+    if (!users.exists(fp)) {
+        reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
+        return;
+    }
 
-    	// quota_gb: accept integer or float; require >= 0
-    	double quota_gb_d = 0.0;
-    	try {
-    	    if (j.contains("quota_gb")) {
-	            const auto& v = j["quota_gb"];
-            	if (v.is_number_integer()) quota_gb_d = (double)v.get<long long>();
-        	    else if (v.is_number_unsigned()) quota_gb_d = (double)v.get<unsigned long long>();
-    	        else if (v.is_number_float()) quota_gb_d = v.get<double>();
-	            else {
-                	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","quota_gb must be a number"}}).dump());
-            	    return;
-        	    }
-    	    } else {
-	            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing quota_gb"}}).dump());
-            	return;
-        	}
-    	} catch (...) {
-        	reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid quota_gb"}}).dump());
-    	    return;
-	    }
+    const bool force = j.value("force", false);
 
-    	if (quota_gb_d < 0.0) {
-	        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","quota_gb must be >= 0"}}).dump());
-        	return;
-    	}
+    // quota_gb: accept integer or float; require >= 0
+    double quota_gb_d = 0.0;
+    try {
+        if (!j.contains("quota_gb")) {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing quota_gb"}}).dump());
+            return;
+        }
+        const auto& v = j["quota_gb"];
+        if (v.is_number_integer()) quota_gb_d = (double)v.get<long long>();
+        else if (v.is_number_unsigned()) quota_gb_d = (double)v.get<unsigned long long>();
+        else if (v.is_number_float()) quota_gb_d = v.get<double>();
+        else {
+            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","quota_gb must be a number"}}).dump());
+            return;
+        }
+    } catch (...) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid quota_gb"}}).dump());
+        return;
+    }
 
-    	// Convert GB -> bytes using GiB (1024^3). Round to nearest byte.
-	    // Also guard overflow into uint64_t.
-    	const long double bytes_ld =
-    	    (long double)quota_gb_d *
-	        (long double)1024.0L * (long double)1024.0L * (long double)1024.0L;
+    if (quota_gb_d < 0.0) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","quota_gb must be >= 0"}}).dump());
+        return;
+    }
 
-    	if (bytes_ld > (long double)std::numeric_limits<std::uint64_t>::max()) {
-    	    reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","quota_gb too large"}}).dump());
-	        return;
-    	}
-    	const std::uint64_t quota_bytes = (std::uint64_t)(bytes_ld + 0.5L);
+    // Convert GB -> bytes using GiB (1024^3). Round to nearest byte and guard overflow.
+    const long double bytes_ld =
+        (long double)quota_gb_d *
+        (long double)1024.0L * (long double)1024.0L * (long double)1024.0L;
 
-    	const std::string now_iso = now_iso_utc();
+    if (bytes_ld > (long double)std::numeric_limits<std::uint64_t>::max()) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","quota_gb too large"}}).dump());
+        return;
+    }
+    const std::uint64_t quota_bytes = (std::uint64_t)(bytes_ld + 0.5L);
 
-    	// Load, modify, upsert (registry has no dedicated setters for these fields yet)
-    	auto cur = users.get(fp);
-    	if (!cur.has_value()) {
-    	    // Should not happen because exists(fp) checked, but fail closed.
-	        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","user lookup failed"}}).dump());
-        	return;
-    	}
+    const std::string now_iso = now_iso_utc();
 
-    	pqnas::UserRec u = *cur;
+    // Load user
+    auto cur = users.get(fp);
+    if (!cur.has_value()) {
+        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","user lookup failed"}}).dump());
+        return;
+    }
+    pqnas::UserRec u = *cur;
 
-    	const std::string prev_state = u.storage_state;
-    	const std::uint64_t prev_quota = u.quota_bytes;
-	    const std::string prev_root = u.root_rel;
+    // ✅ MUST be approved before allocating/changing storage
+    if (u.status != "enabled") {
+        // Audit (best-effort)
+        try {
+            pqnas::AuditEvent ev;
+            ev.event = "admin.user_storage_allocate_refused";
+            ev.outcome = "fail";
+            ev.f["fingerprint"] = fp;
+            ev.f["reason"] = "user_not_approved";
+            ev.f["status"] = pqnas::shorten(u.status, 40);
+            ev.f["ts"] = now_iso;
+            ev.f["actor_fp"] = actor_fp;
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
+        } catch (...) {}
 
-    	const bool already_allocated = (u.storage_state == "allocated");
+        reply_json(res, 403, json({
+            {"ok", false},
+            {"error", "user_not_approved"},
+            {"message", "refusing to allocate storage: user is not enabled/approved"},
+            {"status", u.status}
+        }).dump());
+        return;
+    }
 
-    	if (already_allocated && !force) {
-	        {
-        	    pqnas::AuditEvent ev;
-    	        ev.event = "admin.user_storage_allocate_refused";
-	            ev.outcome = "fail";
-            	ev.f["fingerprint"] = fp;
-        	    ev.f["reason"] = "already_allocated";
-    	        ev.f["ts"] = now_iso;
-	            ev.f["actor_fp"] = actor_fp;
-            	ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        	    maybe_auto_rotate_before_append();
-    	        audit_append(ev);
-	        }
+    const std::string prev_state = u.storage_state;
+    const std::uint64_t prev_quota = u.quota_bytes;
+    const std::string prev_root = u.root_rel;
 
-        	reply_json(res, 409, json({
-    	        {"ok", false},
-	            {"error", "already_allocated"},
-            	{"message", "storage is already allocated; use force=true to change quota"},
-        	    {"storage_state", u.storage_state},
-    	        {"quota_bytes", u.quota_bytes},
-	            {"root_rel", u.root_rel}
-        	}).dump());
-    	    return;
-	    }
+    const bool already_allocated = (u.storage_state == "allocated");
 
-    	// NEW: create/verify real filesystem directory BEFORE marking allocated
-	    const std::filesystem::path udir = user_dir_for_fp(fp);
+    if (already_allocated && !force) {
+        // Audit (best-effort)
+        try {
+            pqnas::AuditEvent ev;
+            ev.event = "admin.user_storage_allocate_refused";
+            ev.outcome = "fail";
+            ev.f["fingerprint"] = fp;
+            ev.f["reason"] = "already_allocated";
+            ev.f["ts"] = now_iso;
+            ev.f["actor_fp"] = actor_fp;
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            maybe_auto_rotate_before_append();
+            audit_append(ev);
+        } catch (...) {}
 
-    	// Ensure <data_root>/users exists
-	    {
-        	std::string fs_err;
-    	    const std::filesystem::path parent = udir.parent_path();
-	        if (!ensure_dir_exists(parent, &fs_err)) {
-	            // Audit (best-effort)
-                try {
-                    pqnas::AuditEvent ev;
-                    ev.event = "admin.user_storage_mkdir_failed";
-                    ev.outcome = "fail";
-                    ev.f["fingerprint"] = fp;
-                    ev.f["path"] = parent.string();
-                    ev.f["detail"] = pqnas::shorten(fs_err, 180);
-                    ev.f["ts"] = now_iso;
-                    ev.f["actor_fp"] = actor_fp;
-                    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-                    maybe_auto_rotate_before_append();
-                    audit_append(ev);
-                } catch (...) {}
+        reply_json(res, 409, json({
+            {"ok", false},
+            {"error", "already_allocated"},
+            {"message", "storage is already allocated; use force=true to change quota"},
+            {"storage_state", u.storage_state},
+            {"quota_bytes", u.quota_bytes},
+            {"root_rel", u.root_rel}
+        }).dump());
+        return;
+    }
 
-            	reply_json(res, 500, json({
-        	        {"ok", false},
-    	            {"error", "server_error"},
-	                {"message", "failed to create storage root"},
-                	{"detail", fs_err}
-            	}).dump());
-        	    return;
-    	    }
-	    }
+    // Ensure/verify real filesystem directory BEFORE marking allocated
+    const std::filesystem::path data_root = std::filesystem::path(data_root_dir());
+    const std::filesystem::path udir = user_dir_for_fp(fp); // expected to be under data_root
+    const std::filesystem::path parent = udir.parent_path();
 
-    	// Ensure <data_root>/users/<fp> exists
-    	{
-    	    std::string fs_err;
-	        if (!ensure_dir_exists(udir, &fs_err)) {
-            	// Audit (best-effort)
-        	    try {
-    	            pqnas::AuditEvent ev;
-	                ev.event = "admin.user_storage_mkdir_failed";
-                	ev.outcome = "fail";
-            	    ev.f["fingerprint"] = fp;
-        	        ev.f["path"] = udir.string();
-    	            ev.f["detail"] = pqnas::shorten(fs_err, 180);
-	                ev.f["ts"] = now_iso;
-                	ev.f["actor_fp"] = actor_fp;
-            	    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        	        maybe_auto_rotate_before_append();
-	                audit_append(ev);
-    	        } catch (...) {}
+    // Safety: udir must be under data_root
+    {
+        std::error_code ec;
+        const auto dr = std::filesystem::weakly_canonical(data_root, ec);
+        const auto ud = std::filesystem::weakly_canonical(udir, ec);
+        const std::string drs = dr.string();
+        const std::string uds = ud.string();
 
-	            reply_json(res, 500, json({
-                	{"ok", false},
-            	    {"error", "server_error"},
-        	        {"message", "failed to create user directory"},
-    	            {"detail", fs_err}
-	            }).dump());
-            	return;
-        	}
-    	}
+        if (drs.empty() || uds.empty() || uds.rfind(drs, 0) != 0) {
+            // Audit (best-effort)
+            try {
+                pqnas::AuditEvent ev;
+                ev.event = "admin.user_storage_bad_path";
+                ev.outcome = "fail";
+                ev.f["fingerprint"] = fp;
+                ev.f["data_root"] = pqnas::shorten(data_root.string(), 200);
+                ev.f["user_dir"] = pqnas::shorten(udir.string(), 200);
+                ev.f["ts"] = now_iso;
+                ev.f["actor_fp"] = actor_fp;
+                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                maybe_auto_rotate_before_append();
+                audit_append(ev);
+            } catch (...) {}
 
-    	// Audit mkdir success (best-effort)
-    	try {
-    	    pqnas::AuditEvent ev;
-	        ev.event = already_allocated ? "admin.user_storage_dir_verified" : "admin.user_storage_dir_created";
-        	ev.outcome = "ok";
-    	    ev.f["fingerprint"] = fp;
-	        ev.f["path"] = udir.string();
-        	ev.f["ts"] = now_iso;
-    	    ev.f["actor_fp"] = actor_fp;
-	        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        	maybe_auto_rotate_before_append();
-    	    audit_append(ev);
-	    } catch (...) {}
+            reply_json(res, 500, json({
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "refusing to allocate: user_dir is not under data_root"},
+                {"data_root", data_root.string()},
+                {"user_dir", udir.string()}
+            }).dump());
+            return;
+        }
+    }
 
-    	u.storage_state = "allocated";
-    	u.quota_bytes = quota_bytes;
-	    u.root_rel = std::string("users/") + fp; // Option A: full fingerprint
-    	// NOTE: root_rel is relative to PQNAS_DATA_ROOT. Do not accept from client.
-    	u.storage_set_at = now_iso;
-	    u.storage_set_by = actor_fp;
+    // Ensure <data_root>/users exists (or whatever udir.parent is)
+    {
+        std::string fs_err;
+        if (!ensure_dir_exists(parent, &fs_err)) {
+            try {
+                pqnas::AuditEvent ev;
+                ev.event = "admin.user_storage_mkdir_failed";
+                ev.outcome = "fail";
+                ev.f["fingerprint"] = fp;
+                ev.f["path"] = parent.string();
+                ev.f["detail"] = pqnas::shorten(fs_err, 180);
+                ev.f["ts"] = now_iso;
+                ev.f["actor_fp"] = actor_fp;
+                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                maybe_auto_rotate_before_append();
+                audit_append(ev);
+            } catch (...) {}
 
-    	const bool ok_upsert = users.upsert(u);
-	    const bool ok_save   = ok_upsert ? users.save(users_path) : false;
+            reply_json(res, 500, json({
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to create storage root"},
+                {"detail", fs_err}
+            }).dump());
+            return;
+        }
+    }
 
-	    {
-        	pqnas::AuditEvent ev;
-    	    ev.event = already_allocated ? "admin.user_storage_updated" : "admin.user_storage_allocated";
-	        ev.outcome = (ok_upsert && ok_save) ? "ok" : "fail";
-        	ev.f["fingerprint"] = fp;
-        	ev.f["ts"] = now_iso;
-    	    ev.f["actor_fp"] = actor_fp;
-	        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+    // Ensure <data_root>/users/<fp> exists
+    {
+        std::string fs_err;
+        if (!ensure_dir_exists(udir, &fs_err)) {
+            try {
+                pqnas::AuditEvent ev;
+                ev.event = "admin.user_storage_mkdir_failed";
+                ev.outcome = "fail";
+                ev.f["fingerprint"] = fp;
+                ev.f["path"] = udir.string();
+                ev.f["detail"] = pqnas::shorten(fs_err, 180);
+                ev.f["ts"] = now_iso;
+                ev.f["actor_fp"] = actor_fp;
+                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                maybe_auto_rotate_before_append();
+                audit_append(ev);
+            } catch (...) {}
 
-        	// Details (all metadata)
-        	ev.f["quota_gb"] = pqnas::shorten(std::to_string(quota_gb_d), 32);
-    	    ev.f["quota_bytes"] = pqnas::shorten(std::to_string((unsigned long long)quota_bytes), 32);
-	        ev.f["root_rel"] = pqnas::shorten(u.root_rel, 160);
-	        if (force) ev.f["force"] = "true";
+            reply_json(res, 500, json({
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to create user directory"},
+                {"detail", fs_err}
+            }).dump());
+            return;
+        }
+    }
 
-    	    // New: what directory was ensured
-	        ev.f["user_dir"] = pqnas::shorten(udir.string(), 200);
+    // Compute root_rel from the ensured directory (prevents layout drift)
+    std::string root_rel;
+    {
+        std::error_code ec;
+        std::filesystem::path rel = std::filesystem::relative(udir, data_root, ec);
+        if (ec) {
+            reply_json(res, 500, json({
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to compute root_rel"},
+                {"detail", ec.message()},
+                {"user_dir", udir.string()},
+                {"data_root", data_root.string()}
+            }).dump());
+            return;
+        }
+        root_rel = rel.generic_string();
 
-	        // previous values (useful for audits)
-        	if (!prev_state.empty()) ev.f["prev_storage_state"] = pqnas::shorten(prev_state, 40);
-    	    if (prev_quota != 0) ev.f["prev_quota_bytes"] = pqnas::shorten(std::to_string((unsigned long long)prev_quota), 32);
-	        if (!prev_root.empty()) ev.f["prev_root_rel"] = pqnas::shorten(prev_root, 160);
+        // Safety: must be safe relative path (your existing helper)
+        if (root_rel.empty() || !is_safe_rel_path(root_rel)) {
+            reply_json(res, 500, json({
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "computed root_rel is unsafe"},
+                {"root_rel", root_rel}
+            }).dump());
+            return;
+        }
+    }
 
-        	maybe_auto_rotate_before_append();
-        	audit_append(ev);
-    	}
+    // Audit mkdir success (best-effort)
+    try {
+        pqnas::AuditEvent ev;
+        ev.event = already_allocated ? "admin.user_storage_dir_verified" : "admin.user_storage_dir_created";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp;
+        ev.f["path"] = udir.string();
+        ev.f["ts"] = now_iso;
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    } catch (...) {}
 
-    	if (!ok_upsert) {
-	        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","upsert failed"}}).dump());
-        	return;
-    	}
-	    if (!ok_save) {
-        	reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
-    	    return;
-	    }
+    // ✅ Only now mutate + persist users.json
+    u.storage_state  = "allocated";
+    u.quota_bytes    = quota_bytes;
+    u.root_rel       = root_rel; // derived from ensured dir
+    u.storage_set_at = now_iso;
+    u.storage_set_by = actor_fp;
 
-    	reply_json(res, 200, json({
-	        {"ok", true},
-        	{"fingerprint", fp},
-    	    {"storage_state", u.storage_state},
-	        {"quota_bytes", u.quota_bytes},
-        	{"root_rel", u.root_rel},
-    	    {"storage_set_at", u.storage_set_at},
-	        {"storage_set_by", u.storage_set_by},
+    const bool ok_upsert = users.upsert(u);
+    const bool ok_save   = ok_upsert ? users.save(users_path) : false;
 
-    	    // New: resolved absolute path for convenience (admin UI can show it)
-	        {"user_dir", udir.string()},
-        	{"data_root", data_root_dir()}
-    	}).dump());
-	});
+    // Audit allocation/update (best-effort)
+    try {
+        pqnas::AuditEvent ev;
+        ev.event = already_allocated ? "admin.user_storage_updated" : "admin.user_storage_allocated";
+        ev.outcome = (ok_upsert && ok_save) ? "ok" : "fail";
+        ev.f["fingerprint"] = fp;
+        ev.f["ts"] = now_iso;
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
+        ev.f["quota_gb"] = pqnas::shorten(std::to_string(quota_gb_d), 32);
+        ev.f["quota_bytes"] = pqnas::shorten(std::to_string((unsigned long long)quota_bytes), 32);
+        ev.f["root_rel"] = pqnas::shorten(u.root_rel, 160);
+        if (force) ev.f["force"] = "true";
+        ev.f["user_dir"] = pqnas::shorten(udir.string(), 200);
+
+        if (!prev_state.empty()) ev.f["prev_storage_state"] = pqnas::shorten(prev_state, 40);
+        if (prev_quota != 0) ev.f["prev_quota_bytes"] = pqnas::shorten(std::to_string((unsigned long long)prev_quota), 32);
+        if (!prev_root.empty()) ev.f["prev_root_rel"] = pqnas::shorten(prev_root, 160);
+
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    } catch (...) {}
+
+    if (!ok_upsert) {
+        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","upsert failed"}}).dump());
+        return;
+    }
+    if (!ok_save) {
+        reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","users save failed"}}).dump());
+        return;
+    }
+
+    reply_json(res, 200, json({
+        {"ok", true},
+        {"fingerprint", fp},
+        {"storage_state", u.storage_state},
+        {"quota_bytes", u.quota_bytes},
+        {"root_rel", u.root_rel},
+        {"storage_set_at", u.storage_set_at},
+        {"storage_set_by", u.storage_set_by},
+        {"user_dir", udir.string()},
+        {"data_root", data_root_dir()}
+    }).dump());
+});
 
 
     // GET /system (static UI) - visible to user + admin (cookie required)
@@ -11562,70 +11783,117 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
 
-    std::filesystem::path from_abs, to_abs;
-    std::string err1, err2;
-    if (!pqnas::resolve_user_path_strict(user_dir, from_rel, &from_abs, &err1)) {
-        audit_fail("invalid_from_path", 400, err1, from_rel, to_rel);
-        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid from path"}}.dump());
+const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+std::filesystem::path from_abs, to_abs;
+std::string err1, err2;
+if (!pqnas::resolve_user_path_strict(user_dir, from_rel, &from_abs, &err1)) {
+    audit_fail("invalid_from_path", 400, err1, from_rel, to_rel);
+    reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid from path"}}.dump());
+    return;
+}
+if (!pqnas::resolve_user_path_strict(user_dir, to_rel, &to_abs, &err2)) {
+    audit_fail("invalid_to_path", 400, err2, from_rel, to_rel);
+    reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid to path"}}.dump());
+    return;
+}
+
+if (from_abs == to_abs) {
+    audit_fail("same_path", 400, "", from_rel, to_rel);
+    reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","from and to are the same"}}.dump());
+    return;
+}
+
+// source must exist
+std::error_code ec;
+auto st = std::filesystem::status(from_abs, ec);
+if (ec || !std::filesystem::exists(st)) {
+    audit_fail("not_found", 404, "", from_rel, to_rel);
+    reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","source not found"}}.dump());
+    return;
+}
+
+const bool is_dir  = std::filesystem::is_directory(st);
+const bool is_file = std::filesystem::is_regular_file(st);
+
+// Optional hardening: refuse moving symlinks (depends on your policy)
+{
+    std::error_code ec2;
+    auto lst = std::filesystem::symlink_status(from_abs, ec2);
+    if (!ec2 && std::filesystem::is_symlink(lst)) {
+        audit_fail("symlink_refused", 400, "source is symlink", from_rel, to_rel);
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","refusing to move symlink"}}.dump());
         return;
     }
-    if (!pqnas::resolve_user_path_strict(user_dir, to_rel, &to_abs, &err2)) {
-        audit_fail("invalid_to_path", 400, err2, from_rel, to_rel);
-        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid to path"}}.dump());
-        return;
-    }
+}
 
-    // refuse no-op (helps avoid weird audits)
-    if (from_abs == to_abs) {
-        audit_fail("same_path", 400, "", from_rel, to_rel);
+// Refuse moving a directory into itself/subtree: to_abs must not be inside from_abs
+if (is_dir) {
+    // Normalize lexical (doesn't touch FS); enough to prevent obvious subtree moves.
+    const auto from_norm = from_abs.lexically_normal();
+    const auto to_norm   = to_abs.lexically_normal();
+
+    // If destination begins with source path components → it's inside
+    auto it_from = from_norm.begin();
+    auto it_to   = to_norm.begin();
+    bool prefix = true;
+    for (; it_from != from_norm.end(); ++it_from, ++it_to) {
+        if (it_to == to_norm.end() || *it_from != *it_to) { prefix = false; break; }
+    }
+    if (prefix) {
+        audit_fail("dir_into_self", 400, "", from_rel, to_rel);
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "bad_request"},
-            {"message", "from and to are the same"}
+            {"message", "cannot move a directory into itself"}
         }.dump());
         return;
     }
+}
 
-    // source must exist
-    std::error_code ec;
-    auto st = std::filesystem::status(from_abs, ec);
-    if (ec || !std::filesystem::exists(st)) {
-        audit_fail("not_found", 404, "", from_rel, to_rel);
-        reply_json(res, 404, json{
-            {"ok", false},
-            {"error", "not_found"},
-            {"message", "source not found"}
-        }.dump());
-        return;
-    }
+// Refuse overwrite (destination already exists)
+ec.clear();
+auto dst_st = std::filesystem::status(to_abs, ec);
+if (!ec && std::filesystem::exists(dst_st)) {
+    audit_fail("dest_exists", 409, "", from_rel, to_rel);
+    reply_json(res, 409, json{
+        {"ok", false},
+        {"error", "dest_exists"},
+        {"message", "destination already exists"}
+    }.dump());
+    return;
+}
 
-    const bool is_dir  = std::filesystem::is_directory(st);
-    const bool is_file = std::filesystem::is_regular_file(st);
+// ensure destination parent exists
+ec.clear();
+std::filesystem::create_directories(to_abs.parent_path(), ec);
+if (ec) {
+    audit_fail("mkdir_failed", 500, ec.message(), from_rel, to_rel);
+    reply_json(res, 500, json{
+        {"ok", false},
+        {"error", "server_error"},
+        {"message", "failed to create destination directories"},
+        {"detail", pqnas::shorten(ec.message(), 180)}
+    }.dump());
+    return;
+}
 
-    // ensure destination parent exists
-    ec.clear();
-    std::filesystem::create_directories(to_abs.parent_path(), ec);
-    if (ec) {
-        audit_fail("mkdir_failed", 500, ec.message());
-        reply_json(res, 500, json{
-            {"ok", false},
-            {"error", "server_error"},
-            {"message", "failed to create destination directories"},
-            {"detail", pqnas::shorten(ec.message(), 180)}
-        }.dump());
-        return;
-    }
-    const std::string type = is_dir ? "dir" : (is_file ? "file" : "other");
-    std::uint64_t bytes = 0;
-    if (is_file) bytes = pqnas::file_size_u64_safe(from_abs);
+const std::string type = is_dir ? "dir" : (is_file ? "file" : "other");
+std::uint64_t bytes = 0;
+if (is_file) bytes = pqnas::file_size_u64_safe(from_abs);
 
-    // rename/move
-    ec.clear();
-    std::filesystem::rename(from_abs, to_abs, ec);
-    if (ec) {
-        audit_fail("rename_failed", 500, ec.message());
+// rename/move (with EXDEV fallback)
+ec.clear();
+std::filesystem::rename(from_abs, to_abs, ec);
+if (ec) {
+    // Cross-device / cross-mount move: fallback copy + remove
+    // Linux: EXDEV. Some libstdc++s expose it via errc::cross_device_link.
+    const bool is_exdev =
+        (ec == std::make_error_code(std::errc::cross_device_link));
+
+    if (!is_exdev) {
+        audit_fail("rename_failed", 500, ec.message(), from_rel, to_rel);
         reply_json(res, 500, json{
             {"ok", false},
             {"error", "server_error"},
@@ -11635,16 +11903,54 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         return;
     }
 
-    audit_ok(from_rel, to_rel, type, bytes);
+    // Fallback copy
+    std::error_code ec_copy;
+    if (is_dir) {
+        std::filesystem::copy(from_abs, to_abs,
+            std::filesystem::copy_options::recursive,
+            ec_copy);
+    } else {
+        std::filesystem::copy_file(from_abs, to_abs,
+            std::filesystem::copy_options::none,
+            ec_copy);
+    }
+    if (ec_copy) {
+        audit_fail("copy_failed", 500, ec_copy.message(), from_rel, to_rel);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "move failed (copy fallback failed)"},
+            {"detail", pqnas::shorten(ec_copy.message(), 180)}
+        }.dump());
+        return;
+    }
 
-    reply_json(res, 200, json{
-        {"ok", true},
-        {"from", from_rel},
-        {"to", to_rel},
-        {"type", type},
-        {"bytes", bytes}
-    }.dump());
+    // Remove original
+    std::error_code ec_rm;
+    if (is_dir) std::filesystem::remove_all(from_abs, ec_rm);
+    else        std::filesystem::remove(from_abs, ec_rm);
 
+    if (ec_rm) {
+        audit_fail("cleanup_failed", 500, ec_rm.message(), from_rel, to_rel);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "move partially succeeded (cleanup failed)"},
+            {"detail", pqnas::shorten(ec_rm.message(), 180)}
+        }.dump());
+        return;
+    }
+}
+
+audit_ok(from_rel, to_rel, type, bytes);
+
+reply_json(res, 200, json{
+    {"ok", true},
+    {"from", from_rel},
+    {"to", to_rel},
+    {"type", type},
+    {"bytes", bytes}
+}.dump());
 });
 
 // ---- Files API (user storage) ----
@@ -12810,27 +13116,67 @@ srv.Post("/api/v4/files/save_text", [&](const httplib::Request& req, httplib::Re
     std::uint64_t delta_bytes = 0;
     if (new_bytes > old_bytes) delta_bytes = (new_bytes - old_bytes);
 
-    if (delta_bytes > 0) {
-        pqnas::QuotaCheckResult qc = pqnas::quota_check_for_upload_v1(
-            users, fp_hex, user_dir, path_rel, delta_bytes
-        );
+if (delta_bytes > 0) {
+    pqnas::QuotaCheckResult qc = pqnas::quota_check_for_upload_v1(
+        users, fp_hex, user_dir, path_rel, delta_bytes
+    );
 
-        // Adjust field name if needed (you used qc.ok earlier)
-        if (!qc.ok) {
-            int http = 403;
-            std::string detail;
+    if (!qc.ok) {
+        // storage not allocated
+        if (qc.error == "storage_unallocated") {
+            audit_fail("storage_unallocated", 403, "", path_rel);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"},
+                {"fingerprint_hex", fp_hex},
+                {"quota_bytes", qc.quota_bytes},
+                {"incoming_bytes", qc.incoming_bytes}
+            }.dump());
+            return;
+        }
 
-            audit_quota(http, detail, path_rel, new_bytes, old_bytes, delta_bytes);
+        // invalid path (should be rare here because we already resolved it, but keep fail-closed)
+        if (qc.error == "invalid_path") {
+            audit_fail("invalid_path", 400, "", path_rel);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            }.dump());
+            return;
+        }
+
+        // quota exceeded
+        if (qc.error == "quota_exceeded") {
+            const int http = 413; // or 413 if you want, but keep consistent across endpoints
+            audit_quota(http, "", path_rel, new_bytes, old_bytes, delta_bytes);
 
             reply_json(res, http, json{
                 {"ok", false},
                 {"error", "quota_exceeded"},
                 {"message", "Quota exceeded"},
-                {"detail", pqnas::shorten(detail, 180)}
+                {"fingerprint_hex", fp_hex},
+                {"used_bytes", qc.used_bytes},
+                {"quota_bytes", qc.quota_bytes},
+                {"free_bytes", (qc.quota_bytes > qc.used_bytes ? (qc.quota_bytes - qc.used_bytes) : 0)},
+                {"incoming_bytes", qc.incoming_bytes},
+                {"existing_bytes", qc.existing_bytes},
+                {"would_used_bytes", qc.would_used_bytes}
             }.dump());
             return;
         }
+
+        // other deny
+        audit_fail("quota_check_failed", 403, qc.error, path_rel);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "policy denied"}
+        }.dump());
+        return;
     }
+}
 
     // Atomic write: temp file in same directory + rename
     const std::filesystem::path tmp =
@@ -15463,6 +15809,196 @@ srv.Get("/api/v4/files/list", [&](const httplib::Request& req, httplib::Response
     reply_json(res, 200, out.dump());
 });
 
+
+    // GET /api/v4/me/storage   (user/admin)
+// Purpose: UI-friendly storage/quota summary for the *current* user.
+// - Soft UI: filemgr can poll this and show warnings at 80%/90%
+// - Does NOT expose mountpoints; only user dir usage.
+//
+// Response example:
+// {
+//   "ok": true,
+//   "fingerprint_hex": "...",
+//   "role": "user",
+//   "storage_state": "allocated",
+//   "quota_bytes": 10737418240,
+//   "used_bytes": 123456789,
+//   "used_percent": 1.149,
+//   "warn_level": "ok"|"warn"|"crit",
+//   "scanned_entries": 1234,
+//   "partial": false,
+//   "ts": "..."
+// }
+srv.Get("/api/v4/me/storage", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_ok = [&](const json& extra) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.me_storage_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["role"] = role;
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+
+        // Optional small extras
+        try {
+            if (extra.contains("storage_state")) ev.f["storage_state"] = pqnas::shorten(extra["storage_state"].get<std::string>(), 40);
+            if (extra.contains("warn_level"))    ev.f["warn_level"]    = pqnas::shorten(extra["warn_level"].get<std::string>(), 16);
+            if (extra.contains("partial"))       ev.f["partial"]       = extra["partial"].get<bool>() ? "true" : "false";
+        } catch (...) {}
+
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.me_storage_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["role"] = role;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        maybe_auto_rotate_before_append();
+        audit_append(ev);
+    };
+
+    // UsersRegistry lookup (fail-closed)
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value()) {
+        audit_fail("user_missing", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "policy denied"}
+        }.dump());
+        return;
+    }
+    const auto& u = *uopt;
+
+    const std::string now_iso = now_iso_utc();
+    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+
+    json out;
+    out["ok"] = true;
+    out["fingerprint_hex"] = fp_hex;
+    out["role"] = role;
+    out["storage_state"] = u.storage_state.empty() ? "" : u.storage_state;
+    out["quota_bytes"] = (std::uint64_t)u.quota_bytes;
+    out["used_bytes"] = (std::uint64_t)0;
+    out["used_percent"] = 0.0;
+    out["warn_level"] = "ok";
+    out["partial"] = false;
+    out["scanned_entries"] = 0;
+    out["ts"] = now_iso;
+
+    // If not allocated, return ok:true (UI uses this to show friendly state).
+    if (u.storage_state != "allocated") {
+        audit_ok(out);
+        reply_json(res, 200, out.dump());
+        return;
+    }
+
+    // Best-effort: scan user_dir recursively for used_bytes.
+    // Caps keep it safe for huge trees.
+    const std::uint64_t ENTRY_CAP = 250000;  // max files/dirs visited
+    const long long TIME_CAP_MS   = 250;     // soft time cap
+
+    std::uint64_t used = 0;
+    std::uint64_t entries = 0;
+    bool partial = false;
+
+    std::error_code ec;
+    auto st = std::filesystem::status(user_dir, ec);
+    if (ec || !std::filesystem::exists(st) || !std::filesystem::is_directory(st)) {
+        // allocated but directory missing => treat as 0 used, but mark partial + warn
+        out["used_bytes"] = (std::uint64_t)0;
+        out["partial"] = true;
+        out["warn_level"] = "warn";
+        out["note"] = "user_dir_missing_or_not_dir";
+        audit_ok(out);
+        reply_json(res, 200, out.dump());
+        return;
+    }
+
+    const auto t0 = std::chrono::steady_clock::now();
+
+    std::filesystem::recursive_directory_iterator it(
+        user_dir,
+        std::filesystem::directory_options::skip_permission_denied,
+        ec
+    );
+    std::filesystem::recursive_directory_iterator end;
+
+    for (; it != end && !ec; it.increment(ec)) {
+        entries++;
+        if (entries >= ENTRY_CAP) { partial = true; break; }
+
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0
+        ).count();
+        if (elapsed >= TIME_CAP_MS) { partial = true; break; }
+
+        std::error_code ec2;
+        if (it->is_regular_file(ec2) && !ec2) {
+            ec2.clear();
+            auto sz = it->file_size(ec2);
+            if (!ec2) used += (std::uint64_t)sz;
+        }
+    }
+    if (ec) partial = true;
+
+    out["used_bytes"] = (std::uint64_t)used;
+    out["scanned_entries"] = (std::uint64_t)entries;
+    out["partial"] = partial;
+
+    // used_percent (quota==0 => define as 0, but warn if used>0)
+    double pct = 0.0;
+    if (u.quota_bytes > 0) {
+        pct = (double)used * 100.0 / (double)u.quota_bytes;
+    } else {
+        pct = (used > 0) ? 100.0 : 0.0;
+    }
+    out["used_percent"] = pct;
+
+    // Soft warning levels (tune as you like)
+    // - warn >= 80%
+    // - crit >= 90%
+    std::string lvl = "ok";
+    if (pct >= 90.0) lvl = "crit";
+    else if (pct >= 80.0) lvl = "warn";
+    if (partial && lvl == "ok") lvl = "warn"; // partial scan => at least warn
+    out["warn_level"] = lvl;
+
+    audit_ok(out);
+    reply_json(res, 200, out.dump());
+});
+
     // POST /api/v4/files/exists?path=rel/path
 srv.Post("/api/v4/files/exists", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
@@ -15797,34 +16333,68 @@ srv.Post("/api/v4/files/copy", [&](const httplib::Request& req, httplib::Respons
     std::uint64_t delta_bytes = 0;
     if (src_bytes > dst_old_bytes) delta_bytes = (src_bytes - dst_old_bytes);
 
-    if (delta_bytes > 0) {
-        // IMPORTANT: use destination rel path for quota attribution
-        pqnas::QuotaCheckResult qc = pqnas::quota_check_for_upload_v1(
-            users, fp_hex, user_dir, to_rel, delta_bytes
-        );
+if (delta_bytes > 0) {
+    // IMPORTANT: use destination rel path for quota attribution
+    pqnas::QuotaCheckResult qc = pqnas::quota_check_for_upload_v1(
+        users, fp_hex, user_dir, to_rel, delta_bytes
+    );
 
-        // ---- Adjust these field names if your QuotaCheckResult differs ----
-        // Expected: qc.ok (bool). If you have qc.allowed, rename accordingly.
-        if (!qc.ok) {
-            // Choose http + detail if your struct carries them, otherwise fall back.
-            int http = 403;
-            std::string detail;
+    if (!qc.ok) {
+        // storage not allocated
+        if (qc.error == "storage_unallocated") {
+            audit_fail("storage_unallocated", 403, "", from_rel, to_rel);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"},
+                {"fingerprint_hex", fp_hex},
+                {"quota_bytes", qc.quota_bytes},
+                {"incoming_bytes", qc.incoming_bytes}
+            }.dump());
+            return;
+        }
 
-            // If your struct has these, uncomment/adjust:
-            // if (qc.http > 0) http = qc.http;
-            // detail = qc.detail.empty() ? qc.message : qc.detail;
+        // invalid path (should be rare here because we already resolved to_abs, but keep fail-closed)
+        if (qc.error == "invalid_path") {
+            audit_fail("invalid_to_path", 400, "", from_rel, to_rel);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid to path"}
+            }.dump());
+            return;
+        }
 
-            audit_quota(http, detail, from_rel, to_rel, src_bytes, dst_old_bytes, delta_bytes);
+        // quota exceeded
+        if (qc.error == "quota_exceeded") {
+            const int http = 403; // or 413 if you want; keep consistent everywhere
+            audit_quota(http, "", from_rel, to_rel, src_bytes, dst_old_bytes, delta_bytes);
 
             reply_json(res, http, json{
                 {"ok", false},
                 {"error", "quota_exceeded"},
                 {"message", "Quota exceeded"},
-                {"detail", pqnas::shorten(detail, 180)}
+                {"fingerprint_hex", fp_hex},
+                {"used_bytes", qc.used_bytes},
+                {"quota_bytes", qc.quota_bytes},
+                {"free_bytes", (qc.quota_bytes > qc.used_bytes ? (qc.quota_bytes - qc.used_bytes) : 0)},
+                {"incoming_bytes", qc.incoming_bytes},
+                {"existing_bytes", qc.existing_bytes},
+                {"would_used_bytes", qc.would_used_bytes}
             }.dump());
             return;
         }
+
+        // other deny
+        audit_fail("quota_check_failed", 403, qc.error, from_rel, to_rel);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "policy denied"}
+        }.dump());
+        return;
     }
+}
 
     // copy using temp file + rename (atomic within same directory)
     const std::filesystem::path tmp =
@@ -16441,49 +17011,13 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
     );
 
     if (!qc.ok) {
-        if (qc.error == "storage_unallocated") {
-            reply_json(res, 403, json{
-                {"ok", false},
-                {"error", "storage_unallocated"},
-                {"message", "Storage not allocated"},
-                {"fingerprint_hex", fp_hex},
-                {"quota_bytes", qc.quota_bytes},
-                {"incoming_bytes", qc.incoming_bytes}
-            }.dump());
-            return;
-        }
-        if (qc.error == "invalid_path") {
-            audit_fail("invalid_path", 400);
-            reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "bad_request"},
-                {"message", "invalid path"}
-            }.dump());
-            return;
-        }
-        if (qc.error == "quota_exceeded") {
-            audit_quota_deny(rel_path, qc);
-            reply_json(res, 413, json{
-                {"ok", false},
-                {"error", "quota_exceeded"},
-                {"message", "User quota exceeded"},
-                {"fingerprint_hex", fp_hex},
-                {"used_bytes", qc.used_bytes},
-                {"quota_bytes", qc.quota_bytes},
-                {"incoming_bytes", qc.incoming_bytes},
-                {"existing_bytes", qc.existing_bytes},
-                {"would_used_bytes", qc.would_used_bytes}
-            }.dump());
-            return;
-        }
+    if (qc.error == "quota_exceeded") audit_quota_deny(rel_path, qc);
+    if (qc.error == "invalid_path") audit_fail("invalid_path", 400);
+    if (qc.error != "storage_unallocated" && qc.error != "invalid_path" && qc.error != "quota_exceeded")
         audit_fail("quota_check_failed", 403, qc.error);
-        reply_json(res, 403, json{
-            {"ok", false},
-            {"error", "forbidden"},
-            {"message", "policy denied"}
-        }.dump());
-        return;
-    }
+
+    if (reply_quota_error_v1(res, fp_hex, qc)) return;
+}
 
     const std::filesystem::path out_abs = qc.abs_path;
 

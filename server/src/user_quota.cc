@@ -24,33 +24,65 @@ static bool is_safe_rel_path(const std::string& rel_in) {
     }
     return true;
 }
-
-bool resolve_user_path_strict(const std::filesystem::path& user_dir,
-                              const std::string& rel_path,
-                              std::filesystem::path* out_abs,
-                              std::string* err) {
+    bool resolve_user_path_strict(const std::filesystem::path& user_dir,
+                                  const std::string& rel_path,
+                                  std::filesystem::path* out_abs,
+                                  std::string* err) {
     if (err) err->clear();
     if (!out_abs) {
         if (err) *err = "null out_abs";
         return false;
     }
-    if (!is_safe_rel_path(rel_path)) {
+
+    // basic input checks
+    if (rel_path.empty()) {
+        if (err) *err = "empty path";
+        return false;
+    }
+    if (!is_safe_rel_path(rel_path)) { // keep your existing policy gate
         if (err) *err = "invalid path";
         return false;
     }
 
     std::filesystem::path rel(rel_path);
+
+    // Reject absolute paths explicitly (defense in depth)
+    if (rel.is_absolute() || rel.has_root_path()) {
+        if (err) *err = "absolute path not allowed";
+        return false;
+    }
+
     rel = rel.lexically_normal();
 
+    // Validate normalized parts (no '.', '..', empty)
     for (const auto& part : rel) {
         const auto s = part.string();
-        if (s == "." || s == ".." || s.empty()) {
+        if (s.empty() || s == "." || s == "..") {
             if (err) *err = "invalid path";
             return false;
         }
     }
 
-    *out_abs = user_dir / rel;
+    // Compose
+    const std::filesystem::path abs = (user_dir / rel).lexically_normal();
+
+    // Containment check (purely lexical)
+    const std::filesystem::path root_norm = user_dir.lexically_normal();
+    const std::filesystem::path rel_to_root = abs.lexically_relative(root_norm);
+
+    if (rel_to_root.empty()) {
+        if (err) *err = "path escapes user root";
+        return false;
+    }
+
+    for (const auto& part : rel_to_root) {
+        if (part == "..") {
+            if (err) *err = "path escapes user root";
+            return false;
+        }
+    }
+
+    *out_abs = abs;
     return true;
 }
 

@@ -1,6 +1,6 @@
 {
   "id": "raidmgr",
-  "name": "RAID Manager",
+  "name": "Storage Manager",
   "version": "1.0.0",
   "entry": "www/index.html",
   "api_base": "/api/v4/raid",

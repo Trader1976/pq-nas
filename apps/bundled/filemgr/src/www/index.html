@@ -578,6 +578,16 @@
 
     .hidden{ display:none !important; }
 
+    .quotaLine {
+      opacity: .88;
+      margin-top: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .quotaLine.warn { opacity: .92; }
+    .quotaLine.err  { opacity: .98; }
+
     .modalTitle{
       font-weight: 950;
       letter-spacing: .2px;
@@ -707,6 +717,35 @@
       overflow-wrap: anywhere;
     }
 
+    /* Upload status pill (shows failure reason clearly) */
+    .upLeft{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      min-width:0;
+    }
+
+    .upPill{
+      display:inline-flex;
+      align-items:center;
+      padding:2px 10px;
+      border-radius:999px;
+      font-size:12px;
+      line-height:18px;
+      border:1px solid rgba(255,255,255,0.18);
+      background: rgba(220, 50, 47, 0.18); /* fallback "bad" */
+      color: var(--fg);
+      white-space:nowrap;
+      max-width: 46vw;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+
+    .upPill.err { background: var(--bad, rgba(220,50,47,0.22)); border-color: rgba(220,50,47,0.45); }
+    .upPill.warn{ background: var(--warn, rgba(181,137,0,0.22)); border-color: rgba(181,137,0,0.45); }
+    .upPill.ok  { background: var(--ok, rgba(42,161,152,0.18)); border-color: rgba(42,161,152,0.40); }
+
+    .hidden{ display:none !important; }
 
   </style>
 </head>
@@ -754,12 +793,17 @@
 
     <div class="footer">
       <div id="status" class="mono">Ready.</div>
+      <div id="quotaLine" class="mono quotaLine hidden" aria-live="polite"></div>
 
       <div id="uploadProg" style="display:none" aria-hidden="true">
         <div class="upRow">
-          <div id="uploadProgText" class="upText">Uploading…</div>
+          <div class="upLeft">
+            <div id="uploadProgText" class="upText">Uploading…</div>
+            <span id="uploadProgPill" class="upPill hidden"></span>
+          </div>
           <div id="uploadProgPct" class="upPct">0%</div>
         </div>
+        <div id="uploadProgPill" class="upPill hidden" aria-live="polite"></div>
         <div class="upBar">
           <div id="uploadProgFill" class="upFill" style="width:0%"></div>
         </div>

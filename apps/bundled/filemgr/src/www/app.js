@@ -1,5 +1,6 @@
 (() => {
   "use strict";
+  const el = (id) => document.getElementById(id);
     // ===========================================================================
   // PQ-NAS File Manager (example bundled app)
   //
@@ -47,6 +48,7 @@
   const pathLine = document.getElementById("pathLine");
   const badge = document.getElementById("badge");
   const status = document.getElementById("status");
+  const quotaLine = document.getElementById("quotaLine");
   const refreshBtn = document.getElementById("refreshBtn");
   const upBtn = document.getElementById("upBtn");
   const titleLine = document.getElementById("titleLine");
@@ -68,11 +70,12 @@
   // Context menu root element (built dynamically per click)
   const ctxEl = document.getElementById("ctxMenu");
 
-  // Upload progress UI (footer)
-  const uploadProg = document.getElementById("uploadProg");
-  const uploadProgText = document.getElementById("uploadProgText");
-  const uploadProgPct = document.getElementById("uploadProgPct");
-  const uploadProgFill = document.getElementById("uploadProgFill");
+// Upload progress UI (footer)
+  const uploadProg = el("uploadProg");
+  const uploadProgText = el("uploadProgText");
+  const uploadProgPill = el("uploadProgPill");
+  const uploadProgPct = el("uploadProgPct");
+  const uploadProgFill = el("uploadProgFill");
 
   // Properties modal UI
   const propsModal = document.getElementById("propsModal");
@@ -94,12 +97,126 @@
   const shareStatus = document.getElementById("shareStatus");
   const emptyState = document.getElementById("emptyState");
 
+// ---- Soft quota (UI-only) ---------------------------------------------------
+  let quotaInfo = null;
+  let quotaInfoAtMs = 0;
+  const QUOTA_TTL_MS = 15 * 1000;
 
+  function showQuotaLine(kind, text) {
+    if (!quotaLine) return;
+    quotaLine.classList.remove("hidden");
+    quotaLine.classList.toggle("warn", kind === "warn");
+    quotaLine.classList.toggle("err",  kind === "err");
+    quotaLine.textContent = text || "";
+  }
+
+  function hideQuotaLine() {
+    if (!quotaLine) return;
+    quotaLine.classList.add("hidden");
+    quotaLine.classList.remove("warn", "err");
+    quotaLine.textContent = "";
+  }
+
+  function quotaStateFromPct(pct) {
+    if (!Number.isFinite(pct)) return "unknown";
+    if (pct >= 1.0) return "over";
+    if (pct >= 0.90) return "danger";
+    if (pct >= 0.70) return "warn";
+    return "ok";
+  }
+  async function fetchMeStorageFast(timeoutMs = 1200) {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const r = await fetch("/api/v4/me/storage", {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "Accept": "application/json" },
+        signal: controller.signal,
+      });
+      const j = await r.json().catch(() => null);
+      if (!j) return null;
+      return j;
+
+    } catch (_) {
+      return null;
+    } finally {
+      clearTimeout(t);
+    }
+  }
+  function fmtPct01(p) {
+    if (!Number.isFinite(p)) return "";
+    return `${Math.round(p * 100)}%`;
+  }
+
+  async function refreshQuotaInfoIfNeeded(force = false) {
+    if (storageBlocked) return null;
+
+    const now = Date.now();
+    if (!force && quotaInfo && (now - quotaInfoAtMs) < QUOTA_TTL_MS) return quotaInfo;
+
+    try {
+      const r = await fetch("/api/v4/user/quota/status", {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "Accept": "application/json" }
+      });
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j || !j.ok) return null;
+
+      quotaInfo = j;
+      quotaInfoAtMs = now;
+      return quotaInfo;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function applyQuotaUi(q) {
+    if (!q || typeof q !== "object") { hideQuotaLine(); return; }
+
+    const quotaBytes = Number(q.quota_bytes || 0);
+    const usedBytes  = Number(q.used_bytes || 0);
+
+    // quota_bytes==0 => treat as unlimited / not set => hide line (or show if you want)
+    if (!quotaBytes) { hideQuotaLine(); return; }
+
+    const pct = quotaBytes > 0 ? (usedBytes / quotaBytes) : 0;
+    const state = String(q.quota_state || quotaStateFromPct(pct));
+
+    const text = `Storage: ${fmtSize(usedBytes)} / ${fmtSize(quotaBytes)} (${fmtPct01(pct)})`;
+
+    // Don’t fight upload progress UI
+    const uploadingNow = uploadProg && uploadProg.style.display !== "none";
+    if (uploadingNow) {
+      // Still show the line, but don't change badge/status
+      showQuotaLine(state === "over" ? "err" : (state === "danger" ? "warn" : ""), text);
+      return;
+    }
+
+    if (state === "over") {
+      setBadge("err", "storage");
+      showQuotaLine("err", `Over quota (soft): ${text}`);
+      return;
+    }
+    if (state === "danger") {
+      setBadge("warn", "storage");
+      showQuotaLine("warn", `Nearly full: ${text}`);
+      return;
+    }
+
+    // normal info (no badge change)
+    showQuotaLine("", text);
+  }
   // ---- State ----------------------------------------------------------------
   // Current folder path (server-relative, no leading "/"; "" means root).
   let curPath = "";
   // if storare is unallocated etc.
   let storageBlocked = false;
+
   // View mode: "grid" or "list" (persisted)
   const VIEW_KEY = "pqnas_filemgr_view_mode";
   let viewMode = "grid";
@@ -182,7 +299,9 @@
     badge.textContent = text;
   }
   function hideEmptyState() {
-    storageBlocked = false;
+    // keep quota line visible if we have info; don't force-hide here
+    // If you *want* it hidden until next refresh, call hideQuotaLine() here.
+
     if (emptyState) {
       emptyState.classList.add("hidden");
       emptyState.innerHTML = "";
@@ -211,7 +330,10 @@
     return false;
   }
   function showStorageUnallocatedState(j) {
-    storageBlocked = true;
+    hideQuotaLine();
+    quotaInfo = null;
+    quotaInfoAtMs = 0;
+
     setBadge("warn", "storage");
     status.textContent = "Storage not allocated for this user.";
 
@@ -966,16 +1088,94 @@
       setBadge("ok", "ready");
       status.textContent = `Deleted ${paths.length} item(s).`;
     }
-
+    await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
     await load();
   }
+  function ensureUploadPill() {
+    if (!uploadProgText) return null;
 
+    // Create once
+    let pill = document.getElementById("uploadProgPill");
+    if (pill) return pill;
+
+    pill = document.createElement("div");
+    pill.id = "uploadProgPill";
+    pill.style.display = "none";
+    pill.style.marginBottom = "6px";
+    pill.style.alignSelf = "center";
+    pill.style.maxWidth = "92%";
+    pill.style.padding = "6px 10px";
+    pill.style.borderRadius = "999px";
+    pill.style.border = "1px solid rgba(255,255,255,0.18)";
+    pill.style.background = "rgba(0,0,0,0.55)";
+    pill.style.color = "var(--fg)";
+    pill.style.fontSize = "12px";
+    pill.style.lineHeight = "1.2";
+    pill.style.whiteSpace = "nowrap";
+    pill.style.overflow = "hidden";
+    pill.style.textOverflow = "ellipsis";
+    pill.style.boxShadow = "0 8px 20px rgba(0,0,0,0.35)";
+    pill.style.pointerEvents = "none";
+
+    // Insert pill just above the existing progress text line (same container)
+    uploadProgText.parentElement?.insertBefore(pill, uploadProgText);
+
+    return pill;
+  }
+
+  function classifyUploadMsg(text) {
+    const t = String(text || "").toLowerCase();
+    if (!t) return "info";
+    if (t.includes("quota") || t.includes("failed") || t.includes("error") || t.includes("blocked") || t.includes("http 4")) return "err";
+    if (t.includes("uploading") || t.includes("upload…")) return "warn";
+    if (t.includes("uploaded") || t.includes("finished") || t.includes("ready") || t.includes("ok")) return "ok";
+    return "info";
+  }
+
+  function applyUploadPillStyle(pill, kind) {
+    // Use theme vars if present; fall back nicely.
+    const ok   = "var(--ok,   rgba(42,161,152,1))";
+    const warn = "var(--warn, rgba(181,137,0,1))";
+    const err  = "var(--bad,  rgba(220,50,47,1))";
+    const info = "var(--fg,   rgba(255,255,255,0.92))";
+
+    let accent = info;
+    if (kind === "ok") accent = ok;
+    else if (kind === "warn") accent = warn;
+    else if (kind === "err") accent = err;
+
+    pill.style.borderColor = `color-mix(in srgb, ${accent} 55%, rgba(255,255,255,0.18))`;
+    pill.style.color = accent;
+    pill.style.background = "rgba(0,0,0,0.60)";
+  }
   // Update upload progress bar (percent + line of text).
-  function setUploadProgress(pct, text) {
+  function classifyUploadMsg(text) {
+    const t = String(text || "").toLowerCase();
+    if (!t) return "info";
+    if (t.includes("quota") || t.includes("failed") || t.includes("error") || t.includes("blocked") || t.includes("http 4")) return "err";
+    if (t.includes("uploading") || t.includes("upload…")) return "warn";
+    if (t.includes("uploaded") || t.includes("finished") || t.includes("ready") || t.includes("ok")) return "ok";
+    return "info";
+  }
+
+
+// Update upload progress bar (percent + line of text) + optional pill.
+  function setUploadProgress(pct, text, pillText = "", pillKind = "") {
     pct = Math.max(0, Math.min(100, Number(pct || 0)));
     if (uploadProgFill) uploadProgFill.style.width = `${pct.toFixed(1)}%`;
     if (uploadProgPct) uploadProgPct.textContent = `${Math.round(pct)}%`;
-    if (uploadProgText && text) uploadProgText.textContent = text;
+    if (uploadProgText && text != null) uploadProgText.textContent = String(text);
+
+    if (uploadProgPill) {
+      const t = (pillText || "").trim();
+      if (!t) {
+        uploadProgPill.className = "upPill hidden";
+        uploadProgPill.textContent = "";
+      } else {
+        uploadProgPill.className = `upPill ${pillKind || "err"}`;
+        uploadProgPill.textContent = t;
+      }
+    }
   }
 
   // Ensure directory path exists before uploading nested files.
@@ -1044,9 +1244,18 @@
           return;
         }
 
-        const msg = (j && (j.message || j.error))
-            ? `${j.error || ""} ${j.message || ""}`.trim()
-            : `HTTP ${xhr.status}`;
+        const ct = (xhr.getResponseHeader("Content-Type") || "").toLowerCase();
+        const raw = (xhr.responseText || "").trim();
+
+        let msg = "";
+        if (j && (j.message || j.error)) {
+          msg = `${j.error || ""} ${j.message || ""}`.trim();
+        } else if (raw) {
+          // show first part of raw response (HTML/CF errors etc.)
+          msg = `${ct ? ct + " " : ""}${shorten(raw.replace(/\s+/g, " "), 140)}`.trim();
+        } else {
+          msg = `HTTP ${xhr.status}`;
+        }
 
         reject(new Error(msg || "upload failed"));
       };
@@ -1054,12 +1263,17 @@
       xhr.send(file);
     });
   }
-
+  function shorten(s, n) {
+    s = String(s || "");
+    if (s.length <= n) return s;
+    return s.slice(0, Math.max(0, n - 1)) + "…";
+  }
   // Upload many files (from picker or drag&drop).
   // - Normalizes & validates each relative path
   // - mkdir() for parent dirs as needed
   // - uploads sequentially to keep server load predictable
   // - progress is computed by total bytes across all files
+
   async function uploadRelFiles(relFiles) {
     if (!relFiles.length) return;
     // relFiles: Array<{ rel: string, file: File }>
@@ -1089,6 +1303,7 @@
     let failedFiles = 0;
     const failures = [];
     let lastErrMsg = "";
+    let lastErrFile = "";
 
     showUploadProgress(true);
     setBadge("warn", "upload…");
@@ -1128,26 +1343,58 @@
 
       } catch (e) {
         failedFiles++;
+        lastErrFile = rel;
         lastErrMsg = String(e && e.message ? e.message : e);
         failures.push({ rel, message: lastErrMsg });
 
         setBadge("err", "error");
         status.textContent = `Upload failed: ${rel} — ${lastErrMsg}`;
 
-        // Keep progress based only on committed bytes (failed file doesn't count)
-        const pct = (uploadedBytesCommitted / totalBytes) * 100;
-        setUploadProgress(pct, `Failed ${failedFiles} • Uploaded ${doneFiles}/${totalFiles} • ${rel}`);
+        const isQuota = /quota exceeded/i.test(lastErrMsg);
+
+        const pct = isQuota ? 100 : (uploadedBytesCommitted / totalBytes) * 100;
+
+        const pillKind = isQuota ? "err" : "warn";
+
+// show filename always on failure; keep it short
+        const pillText = `File: ${rel}`;
+
+        setUploadProgress(
+            pct,
+            isQuota
+                ? `Upload blocked by quota`
+                : `Failed ${failedFiles} • Uploaded ${doneFiles}/${totalFiles}`,
+            pillText,
+            pillKind
+        );
       }
     }
 
     // End state: keep progress visible on errors; auto-hide on clean success.
     if (failedFiles > 0) {
       setBadge("err", "partial");
-      const pct = (uploadedBytesCommitted / totalBytes) * 100;
-      setUploadProgress(pct, `Upload finished • OK ${doneFiles}/${totalFiles} • Failed ${failedFiles}`);
+
+      const pct = (uploadedBytesCommitted > 0) ? (uploadedBytesCommitted / totalBytes) * 100 : 100;
+
+      // Show the real reason in the visible progress line (most important UX fix).
+      // Keep it short so it fits.
+      const reason = (lastErrMsg || "Upload failed").trim();
+      const reasonShort = reason.length > 140 ? (reason.slice(0, 140) + "…") : reason;
+
+      const filePart = lastErrFile ? `${lastErrFile}: ` : "";
+// If we know what file failed last, show it
+      const pillText = failures.length ? `Last: ${failures[failures.length - 1].rel}` : "";
+      setUploadProgress(
+          pct,
+          `Upload finished • OK ${doneFiles}/${totalFiles} • Failed ${failedFiles} • ${reasonShort}`,
+          pillText,
+          "err"
+      );
+
       status.textContent =
           `Upload finished with errors. OK ${doneFiles}/${totalFiles}, failed ${failedFiles}. ` +
-          `Last error: ${lastErrMsg}`;
+          `Last error: ${reason}`;
+
       console.warn("Upload failures:", failures);
     } else {
       setBadge("ok", "ready");
@@ -1155,7 +1402,7 @@
       status.textContent = `Upload finished. Files: ${doneFiles}/${totalFiles}`;
       setTimeout(() => showUploadProgress(false), 900);
     }
-
+    await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
     await load();
   }
 
@@ -1714,6 +1961,7 @@
     status.textContent = "Renamed.";
     setBadge("ok", "ready");
     clearSelection();
+    await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
     await load();
   }
 
@@ -1743,6 +1991,7 @@
     status.textContent = "Deleted.";
     setBadge("ok", "ready");
     clearSelection();
+    await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
     await load();
   }
 
@@ -1778,6 +2027,7 @@
     setBadge("ok", "ready");
     status.textContent = "Folder created.";
     clearSelection();
+    await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
     await load();
   }
   function expiresSecFromPreset(v) {
@@ -1919,12 +2169,6 @@
 
     // Selection menu mode (multi-select where clicked item is part of selection).
     const selectionMode = (selectedKeys && selectedKeys.size > 1 && selectedKeys.has(key));
-    if (selectionMode) {
-      buildSelectionMenuOnly();
-      ctxEl.setAttribute("aria-hidden", "false");
-      placeMenu(x, y);
-      return;
-    }
 
     // If multiple are selected and this item is in the selection, offer selection actions.
     if (selectedKeys && selectedKeys.size > 1 && selectedKeys.has(key)) {
@@ -2836,19 +3080,38 @@
 // ===========================================================================
 // Directory listing / render
 // ===========================================================================
+
+// Assumes these functions already exist in your file:
+// - refreshSharesCache()
+// - refreshQuotaInfoIfNeeded(force)
+// - applyQuotaUi(q)
+// - showStorageUnallocatedState(j)
+// - hideEmptyState()
+// - renderBreadcrumb()
+// - tile(item)
+// - decorateTilesWithShareBadges(items)
+// - applySelectionToDom()
+// - applyViewModeToDom()
+// - clear(), closeMenu(), setBadge(), parentPath(), etc.
+// Also assumes you added fetchMeStorageFast(timeoutMs) helper above.
+
   async function load() {
     closeMenu();
     setBadge("warn", "loading…");
     status.textContent = "Loading…";
     clear();
-    hideEmptyState();
-    if (gridEl) gridEl.classList.remove("hidden");
-    applyViewModeToDom();
-    // Snapshot path for this load (prevents stale decorate after navigation)
+
+    if (!storageBlocked) hideEmptyState();
+
+    // Snapshot path for this load (prevents stale async updates after navigation)
     const loadPath = curPath;
 
-    // Start shares refresh but DO NOT await yet.
+    if (gridEl) gridEl.classList.remove("hidden");
+    applyViewModeToDom();
+
+    // Kick off async side fetches (do not block listing)
     const sharesPromise = refreshSharesCache();
+    const quotaPromise  = refreshQuotaInfoIfNeeded(false);
 
     try {
       const url = curPath
@@ -2866,24 +3129,22 @@
         }
 
         setBadge("err", "error");
-        status.textContent = `List failed: HTTP ${r.status}`;
         const msg = j && (j.message || j.error)
             ? `${j.error || ""} ${j.message || ""}`.trim()
-            : "bad response";
+            : `List failed: HTTP ${r.status}`;
+        status.textContent = msg || `List failed: HTTP ${r.status}`;
 
         const err = document.createElement("div");
         err.className = "tile mono";
         err.style.cursor = "default";
-        err.textContent = msg;
+        err.textContent = msg || "bad response";
         gridEl.appendChild(err);
         return;
       }
 
-
-      curPath = typeof j.path === "string" ? j.path : curPath;
+      // Update path from server (if provided) and breadcrumb
+      curPath = (typeof j.path === "string") ? j.path : curPath;
       renderBreadcrumb();
-
-      setBadge("ok", "ready");
 
       const items = Array.isArray(j.items) ? j.items.slice() : [];
       items.sort((a, b) => {
@@ -2891,6 +3152,7 @@
         return String(a.name || "").localeCompare(String(b.name || ""));
       });
 
+      setBadge("ok", "ready");
       status.textContent = `Items: ${items.length}`;
 
       if (!items.length) {
@@ -2899,21 +3161,53 @@
         empty.style.cursor = "default";
         empty.textContent = "(empty)\n\nTip: drag & drop files/folders here to upload.";
         gridEl.appendChild(empty);
+
+        // Still apply quota line (non-blocking)
+        quotaPromise
+            .then((q) => { if (curPath === loadPath && q) applyQuotaUi(q); })
+            .catch(() => {});
         return;
       }
 
-      // Render tiles immediately (no shares needed)
+      // Render tiles immediately (fast path)
       for (const it of items) gridEl.appendChild(tile(it));
       applySelectionToDom();
 
-      // When shares arrive, decorate (only if still same folder)
+      // ---------------------------------------------------------------------
+      // Fast storage status check (no flicker):
+      // only updates if it returns quickly, and ignores stale navigation.
+      // ---------------------------------------------------------------------
+      fetchMeStorageFast(1200)
+          .then((ms) => {
+            if (curPath !== loadPath) return;
+            if (!ms) return;
+
+            // If endpoint says unallocated, swap to the friendly panel
+            if (ms.ok === false && ms.error === "storage_unallocated") {
+              showStorageUnallocatedState(ms);
+              return;
+            }
+
+            // Otherwise: do nothing (avoid stomping badge/status/upload/quota UI)
+          })
+          .catch(() => {});
+      // ---------------------------------------------------------------------
+
+      // Apply quota UI (soft quota line + badge warning if needed)
+      quotaPromise
+          .then((q) => {
+            if (curPath !== loadPath) return;
+            if (q) applyQuotaUi(q);
+          })
+          .catch(() => {});
+
+      // When shares arrive, decorate tiles (only if still same folder)
       sharesPromise
           .then(() => {
-            console.log("[filemgr] shares loaded");
-            if (curPath !== loadPath) return; // user navigated; ignore stale results
+            if (curPath !== loadPath) return;
             decorateTilesWithShareBadges(items);
           })
-          .catch(() => { /* ignore */ });
+          .catch(() => {});
 
     } catch (e) {
       setBadge("err", "network");
