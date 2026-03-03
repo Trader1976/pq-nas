@@ -1977,27 +1977,28 @@ ${rows}
   </div>
 
   <div class="card" style="margin-top:10px;">
-    <div class="row" style="gap:10px; align-items:flex-end;">
-      <div style="flex:1 1 240px; min-width:220px;">
-        <div class="k" style="margin-bottom:6px;">pool_id</div>
-        <input id="poolIdInp" type="text" placeholder="raidtest" style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);">
-        <div class="v" style="opacity:.75; margin-top:6px;">Allowed: a-z 0-9 _ - (max 32)</div>
-      </div>
+<div class="formGrid3">
+  <div class="formField">
+    <div class="k">pool_id</div>
+    <input id="poolIdInp" type="text" placeholder="raidtest">
+    <div class="formHelp">Allowed: a-z 0-9 _ - (max 32)</div>
+  </div>
 
-      <div style="flex:0 0 220px;">
-        <div class="k" style="margin-bottom:6px;">Mode</div>
-        <select id="poolModeSel" style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);">
-          <option value="single">single</option>
-          <option value="raid1">raid1</option>
-        </select>
-      </div>
+  <div class="formField">
+    <div class="k">Mode</div>
+    <select id="poolModeSel">
+      <option value="single">single</option>
+      <option value="raid1">raid1</option>
+    </select>
+    <div class="formHelp"></div>
+  </div>
 
-      <div style="flex:1 1 320px; min-width:260px;">
-        <div class="k" style="margin-bottom:6px;">Devices</div>
-        <select id="poolDevsSel" style="width:100%; min-height:44px; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);"></select>
-        <div class="v" id="poolDevHint" style="opacity:.75; margin-top:6px;"></div>
-      </div>
-    </div>
+  <div class="formField">
+    <div class="k">Devices</div>
+    <select id="poolDevsSel"></select>
+    <div class="formHelp" id="poolDevHint"></div>
+  </div>
+</div>
 
     <div class="row" style="gap:10px; margin-top:12px; align-items:center;">
       <label style="display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18);">

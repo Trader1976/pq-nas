@@ -725,8 +725,6 @@
 
             // active audit file info
             updateActiveSizePill(j);
-            // active audit file info
-            updateActiveSizePill(j);
 
             // upload limits
             applyUploadLimitsToUi(j);

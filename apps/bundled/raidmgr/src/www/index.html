@@ -148,7 +148,37 @@
             align-items:center;
             flex-wrap: wrap;
         }
+        /* --- Modal form grid: keeps inputs perfectly aligned --- */
+        .formGrid3{
+            display:grid;
+            grid-template-columns: 1fr 220px 1.2fr;
+            gap: 10px;
+            align-items: start;
+        }
 
+        .formField .k{ margin-bottom: 6px; }
+        .formField input,
+        .formField select{
+            width:100%;
+            min-height:44px;          /* makes all controls same height */
+            padding:10px 12px;
+            border-radius:14px;
+            border:1px solid rgba(255,255,255,0.14);
+            background:rgba(0,0,0,0.18);
+            color:var(--fg);
+        }
+
+        .formHelp{
+            margin-top:6px;
+            font-size:12px;
+            opacity:.75;
+            min-height: 16px;         /* reserve space so rows don’t “jump” */
+        }
+
+        /* Small screens: stack nicely */
+        @media (max-width: 860px){
+            .formGrid3{ grid-template-columns: 1fr; }
+        }
         .k{ opacity: 0.70; font-weight: 850; min-width: 130px; }
         .v{ font-family: var(--sans); opacity: 0.92; overflow-wrap: anywhere; }
 

@@ -1234,7 +1234,71 @@
       }
     }
   }
+// ---- Upload error details (for "Last: ..." pill click) ----------------------
+  let lastUploadError = null; // { file, summary, message, http, kind, source, atMs }
 
+  function extractHttpStatusFromMsg(msg) {
+    const m = String(msg || "").match(/\bHTTP\s+(\d{3})\b/i);
+    return m ? Number(m[1]) : 0;
+  }
+
+  function classifyUploadSummary(errLike) {
+    const msg = String(errLike && errLike.message ? errLike.message : errLike || "").trim();
+    const http = (errLike && Number.isFinite(errLike.http)) ? errLike.http : extractHttpStatusFromMsg(msg);
+    const low = msg.toLowerCase();
+
+    if (low.includes("quota exceeded") || low.includes("quota_exceeded")) return "Quota exceeded";
+    if (http === 400 || low.includes("cloudflare") || low.includes("before pq-nas")) return "Cloudflare rejected before PQ-NAS";
+    if (http === 413 || low.includes("too large")) return "Upload too large (server limit)";
+    if (http >= 400) return `Upload failed (HTTP ${http})`;
+    return "Upload failed";
+  }
+
+  function showUploadErrorDetailsModal() {
+    if (!lastUploadError) return;
+    if (!propsTitle || !propsPath || !propsBody) return;
+
+    propsTitle.textContent = "Upload error details";
+    propsPath.textContent = lastUploadError.file ? `/${lastUploadError.file}` : "(unknown file)";
+    propsBody.innerHTML = "";
+
+    const rows = [];
+    rows.push(["File", lastUploadError.file || ""]);
+    rows.push(["Summary", lastUploadError.summary || "Upload failed"]);
+    if (lastUploadError.kind) rows.push(["Kind", lastUploadError.kind]);
+    if (lastUploadError.source) rows.push(["Source", lastUploadError.source]);
+    if (lastUploadError.http) rows.push(["HTTP", String(lastUploadError.http)]);
+    rows.push(["Message", lastUploadError.message || ""]);
+
+    for (const [k, v] of rows) {
+      const [kEl, vEl] = kvRow(k, v);
+      propsBody.appendChild(kEl);
+      propsBody.appendChild(vEl);
+    }
+
+    openPropsModal();
+  }
+
+  function setUploadPillClickable(on) {
+    if (!uploadProgPill) return;
+
+    // reset any previous handler safely
+    uploadProgPill.onclick = null;
+
+    if (!on) {
+      uploadProgPill.style.cursor = "";
+      uploadProgPill.title = "";
+      return;
+    }
+
+    uploadProgPill.style.cursor = "pointer";
+    uploadProgPill.title = "Click for details";
+    uploadProgPill.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showUploadErrorDetailsModal();
+    };
+  }
   // Ensure directory path exists before uploading nested files.
   // We create progressively: a/b/c -> mkdir a, mkdir a/b, mkdir a/b/c
   // created is a Set of already attempted dirs (avoid spamming server).
@@ -1272,9 +1336,8 @@
       xhr.open("PUT", url, true);
       xhr.withCredentials = true;
 
-      // Optional but useful: avoid hanging forever on proxy stalls
       xhr.timeout = 10 * 60 * 1000; // 10 min
-      xhr.ontimeout = () => reject(new Error("upload failed (timeout)"));
+      xhr.ontimeout = () => reject(Object.assign(new Error("upload failed (timeout)"), { kind: "network", source: "client" }));
 
       xhr.upload.onprogress = (e) => {
         if (!onProgress) return;
@@ -1282,8 +1345,8 @@
         else onProgress(e.loaded, file.size || 0);
       };
 
-      xhr.onerror = () => reject(new Error("upload failed (network)"));
-      xhr.onabort = () => reject(new Error("upload aborted"));
+      xhr.onerror = () => reject(Object.assign(new Error("upload failed (network)"), { kind: "network", source: "client" }));
+      xhr.onabort = () => reject(Object.assign(new Error("upload aborted"), { kind: "network", source: "client" }));
 
       xhr.onload = () => {
         const status = xhr.status || 0;
@@ -1312,41 +1375,81 @@
           const quota = (j.quota_bytes != null) ? fmtSize(j.quota_bytes) : "?";
           const incoming = (j.incoming_bytes != null) ? fmtSize(j.incoming_bytes) : "?";
           const existing = (j.existing_bytes != null) ? fmtSize(j.existing_bytes) : "?";
-          reject(new Error(`Quota exceeded: used ${used} / ${quota}. Upload ${incoming} (replacing ${existing}).`));
+
+          const err = new Error(`Quota exceeded: used ${used} / ${quota}. Upload ${incoming} (replacing ${existing}).`);
+          err.http = status;
+          err.kind = "quota";
+          err.source = "pqnas";
+          err.details = j;
+          reject(err);
           return;
         }
 
         // Common cases with better UX
         if (status === 0) {
-          // XHR status 0: request blocked/aborted by network/proxy/CORS/etc.
-          reject(new Error("upload failed (network/proxy blocked)"));
+          const err = new Error("upload failed (network/proxy blocked)");
+          err.http = 0;
+          err.kind = "network";
+          err.source = "gateway";
+          reject(err);
           return;
         }
 
+        // Your rule: 413 is PQ-NAS (server-side limit/quota system)
         if (status === 413) {
           const size = fmtSize(file && file.size != null ? file.size : 0);
           const limit = getEffectiveUploadLimitBytes();
           const limTxt = (limit > 0) ? ` Limit is ${fmtSize(limit)}.` : "";
-          reject(new Error(`Upload too large (HTTP 413). File size ${size}.${limTxt}`));
+          const err = new Error(`Upload too large (HTTP 413). File size ${size}.${limTxt}`);
+          err.http = 413;
+          err.kind = "pqnas_limit";
+          err.source = "pqnas";
+          reject(err);
           return;
         }
 
-        // If we have JSON message/error, use it
+        // Your rule: 400 is Cloudflare rejecting before PQ-NAS (free plan limit)
+        if (status === 400) {
+          const size = fmtSize(file && file.size != null ? file.size : 0);
+          const snippet = raw ? shorten(raw.replace(/\s+/g, " "), 200) : "";
+          const err = new Error(`Cloudflare rejected upload before PQ-NAS (HTTP 400). File size ${size}.`);
+          err.http = 400;
+          err.kind = "gateway_reject";
+          err.source = "cloudflare";
+          if (snippet) err.details = snippet;
+          reject(err);
+          return;
+        }
+
+        // If we have JSON message/error, use it (keep it reasonably short)
         if (j && (j.message || j.error)) {
           const msg = `${j.error || ""} ${j.message || ""}`.trim();
-          reject(new Error(msg || `HTTP ${status}`));
+          const err = new Error(msg || `HTTP ${status}`);
+          err.http = status;
+          err.kind = "pqnas_error";
+          err.source = "pqnas";
+          err.details = j;
+          reject(err);
           return;
         }
 
-        // Otherwise show first part of raw response (HTML/CF errors etc.)
+        // Otherwise show first part of raw response (HTML/other gateway errors)
         if (raw) {
           const oneLine = shorten(raw.replace(/\s+/g, " "), 160);
           const prefix = ct ? `${ct} ` : "";
-          reject(new Error(`${prefix}${oneLine}`.trim()));
+          const err = new Error(`${prefix}${oneLine}`.trim() || `HTTP ${status}`);
+          err.http = status;
+          err.kind = "gateway_error";
+          err.source = "gateway";
+          reject(err);
           return;
         }
 
-        reject(new Error(`HTTP ${status}`));
+        const err = new Error(`HTTP ${status}`);
+        err.http = status;
+        err.kind = "unknown";
+        err.source = "unknown";
+        reject(err);
       };
 
       Promise.resolve()
@@ -1365,10 +1468,8 @@
   // - mkdir() for parent dirs as needed
   // - uploads sequentially to keep server load predictable
   // - progress is computed by total bytes across all files
-
   async function uploadRelFiles(relFiles) {
     if (!relFiles.length) return;
-    // relFiles: Array<{ rel: string, file: File }>
     if (!relFiles.length) return;
 
     const created = new Set();
@@ -1394,8 +1495,10 @@
     let uploadedBytesCommitted = 0; // bytes from fully finished files
     let failedFiles = 0;
     const failures = [];
-    let lastErrMsg = "";
-    let lastErrFile = "";
+
+    // Reset last error + pill clickability for this batch
+    lastUploadError = null;
+    setUploadPillClickable(false);
 
     showUploadProgress(true);
     setBadge("warn", "upload…");
@@ -1404,7 +1507,6 @@
     for (let idx = 0; idx < items.length; idx++) {
       const { rel, file } = items[idx];
 
-      // Ensure folder exists (for nested uploads)
       const dir = parentPath(rel);
       if (dir) await mkdirIfNeeded(dir, created);
 
@@ -1414,7 +1516,6 @@
         status.textContent = `Uploading: ${rel} (${fmtSize(file.size)})`;
 
         await xhrPutFileTo(rel, file, (loaded) => {
-          // overall = committed bytes + current file loaded bytes
           lastLoaded = Math.max(lastLoaded, loaded || 0);
           const overall = uploadedBytesCommitted + lastLoaded;
           const pct = (overall / totalBytes) * 100;
@@ -1426,7 +1527,6 @@
           );
         });
 
-        // File finished => commit full size
         uploadedBytesCommitted += (Number(file.size) || lastLoaded || 0);
         doneFiles++;
 
@@ -1435,65 +1535,84 @@
 
       } catch (e) {
         failedFiles++;
-        lastErrFile = rel;
-        lastErrMsg = String(e && e.message ? e.message : e);
-        failures.push({ rel, message: lastErrMsg });
+
+        const msg = String(e && e.message ? e.message : e);
+        const http = (e && Number.isFinite(e.http)) ? e.http : extractHttpStatusFromMsg(msg);
+        const source = e && e.source ? String(e.source) : "";
+        const kind = e && e.kind ? String(e.kind) : "";
+
+        const summary = classifyUploadSummary(e);
+
+        failures.push({ rel, message: msg, http, kind, source });
+
+        // Store last error for "Details" modal
+        lastUploadError = {
+          file: rel,
+          summary,
+          message: msg,
+          http,
+          kind,
+          source,
+          atMs: Date.now()
+        };
 
         setBadge("err", "error");
-        status.textContent = `Upload failed: ${rel} — ${lastErrMsg}`;
+        status.textContent = `Upload failed: ${rel} — ${msg}`;
 
-        const isQuota = /quota exceeded/i.test(lastErrMsg);
+        // If quota/limit blocks, we can pin bar at 100 to make it obvious it won't continue
+        const isHardStop = (summary === "Quota exceeded") || (summary === "Upload too large (server limit)") || (summary === "Cloudflare rejected before PQ-NAS");
+        const pct = isHardStop ? 100 : (uploadedBytesCommitted / totalBytes) * 100;
 
-        const pct = isQuota ? 100 : (uploadedBytesCommitted / totalBytes) * 100;
-
-        const pillKind = isQuota ? "err" : "warn";
-
-// show filename always on failure; keep it short
-        const pillText = `File: ${rel}`;
-
+        // Keep pill short: only filename
+        const pillText = `Last: ${rel}`;
         setUploadProgress(
             pct,
-            isQuota
-                ? `Upload blocked by quota`
-                : `Failed ${failedFiles} • Uploaded ${doneFiles}/${totalFiles}`,
+            summary,          // <-- short line that fits
             pillText,
-            pillKind
+            "err"
         );
+
+        // Make pill clickable for details (now that we have lastUploadError)
+        setUploadPillClickable(true);
       }
     }
 
-    // End state: keep progress visible on errors; auto-hide on clean success.
+    // End state
     if (failedFiles > 0) {
       setBadge("err", "partial");
 
       const pct = (uploadedBytesCommitted > 0) ? (uploadedBytesCommitted / totalBytes) * 100 : 100;
 
-      // Show the real reason in the visible progress line (most important UX fix).
-      // Keep it short so it fits.
-      const reason = (lastErrMsg || "Upload failed").trim();
-      const reasonShort = reason.length > 140 ? (reason.slice(0, 140) + "…") : reason;
+      const lastSummary = lastUploadError ? lastUploadError.summary : "Upload failed";
+      const pillText = lastUploadError && lastUploadError.file ? `Last: ${lastUploadError.file}` : "";
 
-      const filePart = lastErrFile ? `${lastErrFile}: ` : "";
-// If we know what file failed last, show it
-      const pillText = failures.length ? `Last: ${failures[failures.length - 1].rel}` : "";
       setUploadProgress(
           pct,
-          `Upload finished • OK ${doneFiles}/${totalFiles} • Failed ${failedFiles} • ${reasonShort}`,
+          `Upload finished • OK ${doneFiles}/${totalFiles} • Failed ${failedFiles} • ${lastSummary}`,
           pillText,
           "err"
       );
 
+      // Keep full details in the big status area (not the progress line)
+      const full = lastUploadError ? lastUploadError.message : (failures.length ? failures[failures.length - 1].message : "Upload failed");
       status.textContent =
           `Upload finished with errors. OK ${doneFiles}/${totalFiles}, failed ${failedFiles}. ` +
-          `Last error: ${reason}`;
+          `Last error: ${String(full || "").trim()}`;
 
       console.warn("Upload failures:", failures);
+
+      // Ensure pill remains clickable
+      setUploadPillClickable(!!lastUploadError);
+
     } else {
       setBadge("ok", "ready");
       setUploadProgress(100, `Upload finished • ${doneFiles}/${totalFiles} files`);
       status.textContent = `Upload finished. Files: ${doneFiles}/${totalFiles}`;
+      lastUploadError = null;
+      setUploadPillClickable(false);
       setTimeout(() => showUploadProgress(false), 900);
     }
+
     await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
     await load();
   }

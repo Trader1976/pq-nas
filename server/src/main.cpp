@@ -1904,7 +1904,18 @@ static std::string lower_ascii(std::string s) {
     for (char& c : s) c = (char)std::tolower((unsigned char)c);
     return s;
 }
+namespace pqnas { struct AuditEvent; }
+static void audit_append(const pqnas::AuditEvent& ev);
 
+#include <functional>
+
+// Global audit bridge: endpoints can call audit_append(ev) anywhere in main.cpp.
+// It becomes active once we bind it after AuditLog audit(...) is constructed.
+static std::function<void(const pqnas::AuditEvent&)> g_audit_append;
+
+static void audit_append(const pqnas::AuditEvent& ev) {
+    if (g_audit_append) g_audit_append(ev);
+}
 
 // ============================================================================
 // Storage Manager v1 (read-only): disk + btrfs status helpers
@@ -3773,22 +3784,26 @@ static json raid_exec_record_read_best_effort_obj(const std::string& plan_id,
     // fallback minimal (but UI-consistent)
     const std::string ts0 = pqnas::now_iso_utc();
 
-    rec["plan_id"] = plan_id;
-    rec["record_path"] = raid_exec_record_path(plan_id); // canonical
-    rec["state"] = "queued";
-    rec["busy"] = true;
+    const std::string op = plan.is_object() ? plan.value("operation", "") : "";
 
-    rec["mount"] = resolved_mount;
-    rec["plan"] = plan;
-    rec["commands"] = commands;
+    rec["plan_id"]      = plan_id;
+    rec["record_path"]  = raid_exec_record_path(plan_id); // canonical
+    rec["operation"]    = op;            // <-- IMPORTANT: no more null
+    rec["ok"]           = true;          // <-- IMPORTANT: boolean, not null
+    rec["state"]        = "queued";
+    rec["busy"]         = true;
 
-    rec["step_index"] = 0;
-    rec["step_total"] = commands.is_array() ? (int)commands.size() : 0;
-    rec["results"] = json::array();
+    rec["mount"]        = resolved_mount;
+    rec["plan"]         = plan;
+    rec["commands"]     = commands;
 
-    rec["ts_start"] = ts0;
-    rec["ts_last"]  = ts0;
-    rec["ts_end"]   = nullptr;
+    rec["step_index"]   = 0;
+    rec["step_total"]   = commands.is_array() ? (int)commands.size() : 0;
+    rec["results"]      = json::array();
+
+    rec["ts_start"]     = ts0;
+    rec["ts_last"]      = ts0;
+    rec["ts_end"]       = nullptr;
     return rec;
 }
 
@@ -3817,8 +3832,8 @@ static bool raid_write_queued_record_fail_closed(const std::string& plan_id,
                                                  const json& plan,
                                                  const json& commands,
                                                  std::string* err_out) {
-    // Must always write canonical record path: /run/pqnas/raid/<plan_id>.json
     const std::string ts0 = pqnas::now_iso_utc();
+    const std::string op = plan.is_object() ? plan.value("operation", "") : "";
 
     json rec = {
         {"ts_start", ts0},
@@ -3827,6 +3842,8 @@ static bool raid_write_queued_record_fail_closed(const std::string& plan_id,
 
         {"plan_id", plan_id},
         {"record_path", raid_exec_record_path(plan_id)}, // canonical
+        {"operation", op},        // <-- IMPORTANT
+        {"ok", true},             // <-- IMPORTANT (queued == “so far ok”)
         {"state", "queued"},
         {"busy", true},
 
@@ -3847,15 +3864,50 @@ static bool raid_write_queued_record_fail_closed(const std::string& plan_id,
 }
 
 static void raid_finalize_record(const std::string& plan_id, json* rec,
-                                bool ok, const std::string& err_msg,
-                                const json* post_status_or_null) {
+                                 bool ok, const std::string& err_msg,
+                                 const json* post_status_or_null) {
+    if (!rec) return;
+
     const std::string ts_end = pqnas::now_iso_utc();
+
+    // Always fill the lifecycle fields
     (*rec)["ts_end"]  = ts_end;
     (*rec)["ts_last"] = ts_end;
     (*rec)["busy"]    = false;
     (*rec)["state"]   = ok ? "done" : "failed";
-    if (!ok && !err_msg.empty()) (*rec)["error"] = err_msg;
-    if (ok && post_status_or_null) (*rec)["post_status"] = *post_status_or_null;
+
+    // FIX: ok must never be null
+    (*rec)["ok"] = ok;
+
+    // Keep operation stable (best-effort)
+    try {
+        if (!rec->contains("operation") || (*rec)["operation"].is_null()) {
+            std::string op;
+            if (rec->contains("plan") && (*rec)["plan"].is_object()) {
+                op = (*rec)["plan"].value("operation", "");
+            }
+            (*rec)["operation"] = op;
+        }
+    } catch (...) {
+        // ignore
+    }
+
+    // Error/post_status hygiene
+    if (!ok) {
+        // prefer provided error message; otherwise leave any existing error (if present)
+        if (!err_msg.empty()) (*rec)["error"] = err_msg;
+        else if (!rec->contains("error")) (*rec)["error"] = "failed";
+
+        // On failure, post_status is misleading
+        if (rec->contains("post_status")) rec->erase("post_status");
+    } else {
+        // On success, error is misleading
+        if (rec->contains("error")) rec->erase("error");
+
+        if (post_status_or_null) (*rec)["post_status"] = *post_status_or_null;
+        else if (rec->contains("post_status")) rec->erase("post_status");
+    }
+
     (void)raid_exec_record_write_atomic(plan_id, *rec);
 }
 
@@ -3941,8 +3993,58 @@ static bool raid_run_one_step(const std::string& cmd,
     const bool ran = run_cmd_capture(cmd, out, ec);
     return ran;
 }
-
 static void raid_worker_main(std::string users_path) {
+    // ---- worker audit helper (best-effort; no HTTP request context) ----
+    auto raid_worker_audit = [&](const std::string& event,
+                                 const std::string& outcome,
+                                 const RaidJob& job,
+                                 const json& extra = json::object()) {
+        try {
+            pqnas::AuditEvent ev;
+            ev.event = event;
+            ev.outcome = outcome;
+
+            // actor fingerprint comes from the queued plan (set by execute endpoints)
+            try {
+                if (job.plan.is_object()) {
+                    const std::string actor_fp = job.plan.value("actor_fp", "");
+                    if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+                }
+            } catch (...) {}
+
+            ev.f["ip"] = "local"; // worker thread
+            ev.f["job_id"] = job.job_id;
+            ev.f["plan_id"] = job.plan_id;
+            ev.f["mount"] = job.resolved_mount;
+
+            // optional: operation name
+            try {
+                if (job.plan.is_object()) {
+                    const std::string op = job.plan.value("operation", "");
+                    if (!op.empty()) ev.f["op"] = pqnas::shorten(op, 64);
+                }
+            } catch (...) {}
+
+            // merge extra fields as x_*
+            if (extra.is_object()) {
+                for (auto it = extra.begin(); it != extra.end(); ++it) {
+                    const std::string k  = pqnas::shorten(it.key(), 64);
+                    const std::string kk = "x_" + k;
+
+                    if (it.value().is_string()) ev.f[kk] = pqnas::shorten(it.value().get<std::string>(), 220);
+                    else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f[kk] = it.value().dump();
+                    else if (it.value().is_boolean()) ev.f[kk] = (it.value().get<bool>() ? "true" : "false");
+                    else ev.f[kk] = pqnas::shorten(it.value().dump(), 220);
+                }
+            }
+
+            // IMPORTANT: audit_append wrapper already calls maybe_auto_rotate_before_append()
+            audit_append(ev);
+        } catch (...) {
+            // never let audit failures break the worker
+        }
+    };
+
     for (;;) {
         RaidJob job;
 
@@ -3959,11 +4061,36 @@ static void raid_worker_main(std::string users_path) {
             g_raid_job_meta[job.job_id]["ts_started"] = pqnas::now_iso_utc();
         }
 
+        // ---------------- FIX: normalize record fields so they never end up null ----------------
+        {
+            // plan_id / mount are useful invariants
+            job.record["plan_id"] = job.plan_id;
+            job.record["mount"]   = job.resolved_mount;
+
+            // operation should be a string (not null)
+            if (!job.record.contains("operation") || job.record["operation"].is_null()) {
+                const std::string op = job.plan.is_object() ? job.plan.value("operation", "") : "";
+                job.record["operation"] = op;
+            }
+
+            // ok should be a boolean, never null
+            if (!job.record.contains("ok") || job.record["ok"].is_null()) {
+                job.record["ok"] = true; // "so far ok" while running/queued
+            }
+        }
+        // --------------------------------------------------------------------------------------
+
         // Move record to running (without adding a fake step)
-		job.record["state"] = "running";
-		job.record["busy"]  = true;
-		job.record["ts_last"] = pqnas::now_iso_utc();
-		(void)raid_exec_record_write_atomic(job.plan_id, job.record);
+        job.record["state"]   = "running";
+        job.record["busy"]    = true;
+        job.record["ts_last"] = pqnas::now_iso_utc();
+        (void)raid_exec_record_write_atomic(job.plan_id, job.record);
+
+        // Audit: job start (best-effort)
+        raid_worker_audit("v4.raid_job_start_ok", "ok", job, json{
+            {"state", "running"},
+            {"commands_total", (job.commands.is_array() ? (int)job.commands.size() : 0)}
+        });
 
         // Acquire per-mount lock inside worker (so HTTP returns immediately)
         int fd_mount_lock = -1;
@@ -3972,9 +4099,18 @@ static void raid_worker_main(std::string users_path) {
             std::string mount_lock_err;
             fd_mount_lock = open_excl_lockfile(mount_lockp, &mount_lock_err);
             if (fd_mount_lock < 0) {
+                // FIX: ensure record shows failure even if raid_finalize_record forgets to set ok
+                job.record["ok"] = false;
+
                 raid_finalize_record(job.plan_id, &job.record, false,
-                                    "raid_busy: another raid operation is in progress for this mount",
-                                    nullptr);
+                                     "raid_busy: another raid operation is in progress for this mount",
+                                     nullptr);
+
+                // Audit: failed to start due to lock contention
+                raid_worker_audit("v4.raid_job_start_fail", "fail", job, json{
+                    {"reason", "raid_busy"},
+                    {"detail", pqnas::shorten(mount_lock_err, 220)}
+                });
 
                 std::lock_guard<std::mutex> lk(g_raid_jobs_mu);
                 g_raid_job_meta[job.job_id]["state"] = "failed";
@@ -4025,8 +4161,6 @@ static void raid_worker_main(std::string users_path) {
             json* pst = nullptr;
             json status;
 
-            // Only attach post_status if the mountpoint still exists.
-            // For destroy-pool, the mount should be gone.
             std::error_code ec;
             if (std::filesystem::exists(job.resolved_mount, ec) && !ec) {
                 status = storage_btrfs_status_json(job.resolved_mount);
@@ -4034,16 +4168,46 @@ static void raid_worker_main(std::string users_path) {
                 pst = &status;
             }
 
+            // FIX: ensure ok becomes true at least here
+            job.record["ok"] = true;
+
             raid_finalize_record(job.plan_id, &job.record, true, "", pst);
         } else {
             std::string emsg = "command failed";
-			try {
-    			if (!results.empty() && results.back().is_object()) {
-        			emsg = std::string("step failed: ") + results.back().value("cmd","") +
-            			   " rc=" + std::to_string(results.back().value("rc", -1));
-    			}
-			} catch (...) {}
-			raid_finalize_record(job.plan_id, &job.record, false, emsg, nullptr);
+            try {
+                if (!results.empty() && results.back().is_object()) {
+                    emsg = std::string("step failed: ") + results.back().value("cmd","") +
+                           " rc=" + std::to_string(results.back().value("rc", -1));
+                }
+            } catch (...) {}
+
+            // FIX: ensure ok becomes false at least here
+            job.record["ok"] = false;
+
+            raid_finalize_record(job.plan_id, &job.record, false, emsg, nullptr);
+        }
+
+        // Audit: job completion (best-effort)
+        if (all_ok) {
+            raid_worker_audit("v4.raid_job_finish_ok", "ok", job, json{
+                {"commands_total", total}
+            });
+        } else {
+            std::string last_cmd = "";
+            int last_rc = -1;
+            try {
+                if (!results.empty() && results.back().is_object()) {
+                    last_cmd = results.back().value("cmd", "");
+                    last_rc  = results.back().value("rc", -1);
+                }
+            } catch (...) {}
+
+            raid_worker_audit("v4.raid_job_finish_fail", "fail", job, json{
+                {"reason", "command_failed"},
+                {"commands_total", total},
+                {"last_cmd", pqnas::shorten(last_cmd, 160)},
+                {"last_rc", last_rc}
+            });
         }
 
         close_mount_lock();
@@ -4458,7 +4622,7 @@ int main()
     const std::string audit_state_path = audit_dir + "/pqnas_audit.state";
     pqnas::AuditLog audit(audit_jsonl_path, audit_state_path);
     // declare early so routes can call it
-    std::function<void(const pqnas::AuditEvent&)> audit_append;
+
     // ---- Admin settings path (must exist before any helpers use it) ----
     auto getenv_str = [](const char* k) -> std::string {
         const char* v = std::getenv(k);
@@ -4651,9 +4815,13 @@ auto maybe_auto_rotate_before_append = [&]() {
 };
 
 
-    // OPTIONAL: use this wrapper everywhere instead of calling audit.append(ev) directly
-    audit_append = [&](const pqnas::AuditEvent& ev) {
+
+    // ---- audit bridge: bind global audit_append() to this AuditLog instance ----
+    g_audit_append = [&](const pqnas::AuditEvent& ev) {
+        // Centralized rotation policy: endpoints should NOT call maybe_auto_rotate_before_append().
         maybe_auto_rotate_before_append();
+
+        // Append to hash-chained JSONL audit log
         audit.append(ev);
     };
 
@@ -4905,7 +5073,6 @@ auto maybe_auto_rotate_before_append = [&]() {
 	v5.client_ip = [&](const httplib::Request& r) { return client_ip(r); };
 	v5.shorten   = [&](const std::string& s, size_t n) { return pqnas::shorten(s, n); };
 
-	// audit bridge: keep it simple (you already have audit_append(ev) etc.)
 	v5.audit_emit = [&](const std::string& event,
                     const std::string& outcome,
                     const std::function<void(std::map<std::string,std::string>&)>& fill) {
@@ -4915,7 +5082,6 @@ auto maybe_auto_rotate_before_append = [&]() {
 	    std::map<std::string,std::string> f;
     	fill(f);
 	    for (auto& kv : f) ev.f[kv.first] = kv.second;
-    	maybe_auto_rotate_before_append();
 	    audit_append(ev);
 	};
 
@@ -5729,22 +5895,98 @@ srv.Post("/api/v4/storage/pools/plan-create", [&](const httplib::Request& req, h
     reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
 });
 
-    srv.Post("/api/v4/storage/pools/execute-create", [&](const httplib::Request& req, httplib::Response& res) {
+srv.Post("/api/v4/storage/pools/execute-create", [&](const httplib::Request& req, httplib::Response& res) {
     pqnas::UsersRegistry users;
     if (!users.load(users_path)) {
         reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
         return;
     }
-    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    // ---- audit helpers (match Files API style) ----
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& actor_fp,
+                          const std::string& reason,
+                          int http,
+                          const std::string& detail = "",
+                          const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.storage_pools_execute_create_fail";
+        ev.outcome = "fail";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 220);
+
+        // Optional structured context
+        if (extra.is_object()) {
+            for (auto it = extra.begin(); it != extra.end(); ++it) {
+                const std::string k = pqnas::shorten(it.key(), 64);
+                if (it.value().is_string()) ev.f["x_" + k] = pqnas::shorten(it.value().get<std::string>(), 220);
+                else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f["x_" + k] = it.value().dump();
+                else if (it.value().is_boolean()) ev.f["x_" + k] = (it.value().get<bool>() ? "true" : "false");
+                else ev.f["x_" + k] = pqnas::shorten(it.value().dump(), 220);
+            }
+        }
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        audit_append(ev); // rotates inside audit_append()
+    };
+
+    auto audit_ok = [&](const std::string& actor_fp,
+                        const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.storage_pools_execute_create_ok";
+        ev.outcome = "ok";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+
+        if (extra.is_object()) {
+            for (auto it = extra.begin(); it != extra.end(); ++it) {
+                const std::string k = pqnas::shorten(it.key(), 64);
+                if (it.value().is_string()) ev.f["x_" + k] = pqnas::shorten(it.value().get<std::string>(), 220);
+                else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f["x_" + k] = it.value().dump();
+                else if (it.value().is_boolean()) ev.f["x_" + k] = (it.value().get<bool>() ? "true" : "false");
+                else ev.f["x_" + k] = pqnas::shorten(it.value().dump(), 220);
+            }
+        }
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        audit_append(ev); // rotates inside audit_append()
+    };
+
+    // ---- auth (need actor fingerprint for audit) ----
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
     json body;
     try { body = json::parse(req.body); }
     catch (...) {
+        audit_fail(actor_fp, "bad_json", 400);
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_json"}}.dump());
         return;
     }
 
     if (!body.contains("plan") || !body["plan"].is_object()) {
+        audit_fail(actor_fp, "missing_plan", 400);
         reply_json(res, 400, json{{"ok", false}, {"error", "missing_plan"}}.dump());
         return;
     }
@@ -5753,6 +5995,7 @@ srv.Post("/api/v4/storage/pools/plan-create", [&](const httplib::Request& req, h
     const bool confirm = body.value("confirm", false);
 
     if (!confirm) {
+        audit_fail(actor_fp, "confirm_required", 412);
         reply_json(res, 412, json{{"ok", false}, {"error", "confirm_required"}}.dump());
         return;
     }
@@ -5764,15 +6007,21 @@ srv.Post("/api/v4/storage/pools/plan-create", [&](const httplib::Request& req, h
     const bool force          = plan.value("force", false);
 
     if (!is_pool_id_safe(pool_id) || mount.empty() || disk.rfind("/dev/",0)!=0 || label.empty()) {
+        audit_fail(actor_fp, "bad_plan_fields", 400, "",
+                   json{{"pool_id", pool_id}, {"mount", mount}, {"disk", disk}, {"label", label}});
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_plan_fields"}}.dump());
         return;
     }
     if (!force) {
+        audit_fail(actor_fp, "force_required", 412,
+                   "", json{{"pool_id", pool_id}, {"mount", mount}, {"disk", disk}, {"label", label}});
         reply_json(res, 412, json{{"ok", false}, {"error", "force_required"}}.dump());
         return;
     }
 
     if (!plan.contains("commands") || !plan["commands"].is_array()) {
+        audit_fail(actor_fp, "missing_commands", 400,
+                   "", json{{"pool_id", pool_id}, {"mount", mount}, {"disk", disk}, {"label", label}});
         reply_json(res, 400, json{{"ok", false}, {"error", "missing_commands"}}.dump());
         return;
     }
@@ -5781,6 +6030,9 @@ srv.Post("/api/v4/storage/pools/plan-create", [&](const httplib::Request& req, h
     json results = json::array();
 
     bool all_ok = true;
+    int fail_i = -1;
+    int fail_rc = 0;
+
     for (int i = 0; i < (int)commands.size(); i++) {
         if (!commands[i].is_string()) continue;
         const std::string cmd = commands[i].get<std::string>();
@@ -5798,7 +6050,7 @@ srv.Post("/api/v4/storage/pools/plan-create", [&](const httplib::Request& req, h
             {"out", out}
         });
 
-        if (!okc || ec != 0) { all_ok = false; break; }
+        if (!okc || ec != 0) { all_ok = false; fail_i = i; fail_rc = ec; break; }
     }
 
     // If succeeded, persist “managed pool” metadata (v2)
@@ -5824,6 +6076,29 @@ srv.Post("/api/v4/storage/pools/plan-create", [&](const httplib::Request& req, h
         (void)write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n");
     }
 
+    // ---- audit outcome ----
+    if (all_ok) {
+        audit_ok(actor_fp, json{
+            {"pool_id", pool_id},
+            {"mount", mount},
+            {"disk", disk},
+            {"label", label},
+            {"commands", (int)commands.size()},
+            {"pools_cfg_path", cfg_path_str}
+        });
+    } else {
+        audit_fail(actor_fp, "command_failed", 200, "",
+                   json{
+                       {"pool_id", pool_id},
+                       {"mount", mount},
+                       {"disk", disk},
+                       {"label", label},
+                       {"commands", (int)commands.size()},
+                       {"failed_i", fail_i},
+                       {"failed_rc", fail_rc}
+                   });
+    }
+
     reply_json(res, 200, json{
         {"ok", all_ok},
         {"plan", plan},
@@ -5831,7 +6106,6 @@ srv.Post("/api/v4/storage/pools/plan-create", [&](const httplib::Request& req, h
         {"pools_cfg_path", cfg_path_str}
     }.dump());
 });
-
 // ----- POST /api/v4/storage/pools/set-name (admin-only) ---------------------
 // Body: { "mount": "/srv/pqnas", "display_name": "Home pool" }
 srv.Post("/api/v4/storage/pools/set-name", [&](const httplib::Request& req, httplib::Response& res) {
@@ -5840,12 +6114,86 @@ srv.Post("/api/v4/storage/pools/set-name", [&](const httplib::Request& req, http
         reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
         return;
     }
-    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    // ---- audit helpers ----
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& actor_fp,
+                          const std::string& reason,
+                          int http,
+                          const std::string& detail = "",
+                          const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.storage_pools_set_name_fail";
+        ev.outcome = "fail";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 220);
+
+        if (extra.is_object()) {
+            for (auto it = extra.begin(); it != extra.end(); ++it) {
+                const std::string k = pqnas::shorten(it.key(), 64);
+                if (it.value().is_string()) ev.f["x_" + k] = pqnas::shorten(it.value().get<std::string>(), 220);
+                else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f["x_" + k] = it.value().dump();
+                else if (it.value().is_boolean()) ev.f["x_" + k] = (it.value().get<bool>() ? "true" : "false");
+                else ev.f["x_" + k] = pqnas::shorten(it.value().dump(), 220);
+            }
+        }
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& actor_fp,
+                        const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.storage_pools_set_name_ok";
+        ev.outcome = "ok";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+
+        if (extra.is_object()) {
+            for (auto it = extra.begin(); it != extra.end(); ++it) {
+                const std::string k = pqnas::shorten(it.key(), 64);
+                if (it.value().is_string()) ev.f["x_" + k] = pqnas::shorten(it.value().get<std::string>(), 220);
+                else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f["x_" + k] = it.value().dump();
+                else if (it.value().is_boolean()) ev.f["x_" + k] = (it.value().get<bool>() ? "true" : "false");
+                else ev.f["x_" + k] = pqnas::shorten(it.value().dump(), 220);
+            }
+        }
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        audit_append(ev);
+    };
+
+    // ---- auth (need actor fingerprint for audit) ----
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
     json body;
     try {
         body = json::parse(req.body);
     } catch (...) {
+        audit_fail(actor_fp, "bad_json", 400);
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_json"}}.dump());
         return;
     }
@@ -5854,6 +6202,7 @@ srv.Post("/api/v4/storage/pools/set-name", [&](const httplib::Request& req, http
     std::string name = body.value("display_name", "");
 
     if (mount.empty() || mount[0] != '/') {
+        audit_fail(actor_fp, "bad_mount", 400, "", json{{"mount", mount}});
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_mount"}, {"mount", mount}}.dump());
         return;
     }
@@ -5880,6 +6229,8 @@ srv.Post("/api/v4/storage/pools/set-name", [&](const httplib::Request& req, http
         starts_with(mount, test_prefix2);
 
     if (!allowed) {
+        audit_fail(actor_fp, "mount_not_allowed", 400, "",
+                   json{{"mount", mount}, {"allowed_prefix", allowed_prefix}});
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "mount_not_allowed"},
@@ -5896,7 +6247,9 @@ srv.Post("/api/v4/storage/pools/set-name", [&](const httplib::Request& req, http
     if (!cfg.contains("names_by_mount") || !cfg["names_by_mount"].is_object())
         cfg["names_by_mount"] = json::object();
 
-    if (name.empty()) {
+    const bool was_delete = name.empty();
+
+    if (was_delete) {
         // empty name => delete key (reverts to btrfs label fallback)
         cfg["names_by_mount"].erase(mount);
     } else {
@@ -5908,6 +6261,8 @@ srv.Post("/api/v4/storage/pools/set-name", [&](const httplib::Request& req, http
     std::filesystem::create_directories(cfg_path.parent_path(), ec);
 
     if (!write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n")) {
+        audit_fail(actor_fp, "write_failed", 500, "",
+                   json{{"mount", mount}, {"display_name", name}, {"path", cfg_path.string()}});
         reply_json(res, 500, json{
             {"ok", false},
             {"error", "write_failed"},
@@ -5915,6 +6270,13 @@ srv.Post("/api/v4/storage/pools/set-name", [&](const httplib::Request& req, http
         }.dump());
         return;
     }
+
+    audit_ok(actor_fp, json{
+        {"mount", mount},
+        {"display_name", name},
+        {"op", (was_delete ? "delete" : "set")},
+        {"path", cfg_path.string()}
+    });
 
     reply_json(res, 200, json{
         {"ok", true},
@@ -5934,12 +6296,86 @@ srv.Post("/api/v4/storage/pools/rename", [&](const httplib::Request& req, httpli
         reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
         return;
     }
-    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    // ---- audit helpers ----
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& actor_fp,
+                          const std::string& reason,
+                          int http,
+                          const std::string& detail = "",
+                          const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.storage_pools_rename_fail";
+        ev.outcome = "fail";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 220);
+
+        if (extra.is_object()) {
+            for (auto it = extra.begin(); it != extra.end(); ++it) {
+                const std::string k = pqnas::shorten(it.key(), 64);
+                if (it.value().is_string()) ev.f["x_" + k] = pqnas::shorten(it.value().get<std::string>(), 220);
+                else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f["x_" + k] = it.value().dump();
+                else if (it.value().is_boolean()) ev.f["x_" + k] = (it.value().get<bool>() ? "true" : "false");
+                else ev.f["x_" + k] = pqnas::shorten(it.value().dump(), 220);
+            }
+        }
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& actor_fp,
+                        const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.storage_pools_rename_ok";
+        ev.outcome = "ok";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+
+        if (extra.is_object()) {
+            for (auto it = extra.begin(); it != extra.end(); ++it) {
+                const std::string k = pqnas::shorten(it.key(), 64);
+                if (it.value().is_string()) ev.f["x_" + k] = pqnas::shorten(it.value().get<std::string>(), 220);
+                else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f["x_" + k] = it.value().dump();
+                else if (it.value().is_boolean()) ev.f["x_" + k] = (it.value().get<bool>() ? "true" : "false");
+                else ev.f["x_" + k] = pqnas::shorten(it.value().dump(), 220);
+            }
+        }
+
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        audit_append(ev);
+    };
+
+    // ---- auth (need actor fingerprint for audit) ----
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
     json body;
     try {
         body = json::parse(req.body.empty() ? "{}" : req.body);
     } catch (...) {
+        audit_fail(actor_fp, "bad_json", 400);
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_json"}}.dump());
         return;
     }
@@ -5949,6 +6385,7 @@ srv.Post("/api/v4/storage/pools/rename", [&](const httplib::Request& req, httpli
     const std::string expect_uuid = trim_copy(body.value("expect_uuid", ""));
 
     if (mount.empty() || mount[0] != '/') {
+        audit_fail(actor_fp, "bad_mount", 400, "", json{{"mount", mount}});
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_mount"}, {"mount", mount}}.dump());
         return;
     }
@@ -5969,6 +6406,8 @@ srv.Post("/api/v4/storage/pools/rename", [&](const httplib::Request& req, httpli
         starts_with(mount, test_prefix2);
 
     if (!allowed) {
+        audit_fail(actor_fp, "mount_not_allowed", 403, "",
+                   json{{"mount", mount}, {"allowed_prefix", allowed_prefix}});
         reply_json(res, 403, json{
             {"ok", false},
             {"error", "mount_not_allowed"},
@@ -5985,6 +6424,7 @@ srv.Post("/api/v4/storage/pools/rename", [&](const httplib::Request& req, httpli
     rtrim_inplace(mounts_out);
 
     if (rc != 0) {
+        audit_fail(actor_fp, "findmnt_failed", 500);
         reply_json(res, 500, json{{"ok", false}, {"error", "findmnt_failed"}}.dump());
         return;
     }
@@ -5995,6 +6435,7 @@ srv.Post("/api/v4/storage/pools/rename", [&](const httplib::Request& req, httpli
         if (t == mount) { found = true; break; }
     }
     if (!found) {
+        audit_fail(actor_fp, "mount_not_found", 404, "", json{{"mount", mount}});
         reply_json(res, 404, json{{"ok", false}, {"error", "mount_not_found"}, {"mount", mount}}.dump());
         return;
     }
@@ -6024,6 +6465,8 @@ srv.Post("/api/v4/storage/pools/rename", [&](const httplib::Request& req, httpli
         rtrim_inplace(show_out);
 
         if (rc_show != 0) {
+            audit_fail(actor_fp, "btrfs_show_failed", 500, "",
+                       json{{"mount", mount}});
             reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "btrfs_show_failed"},
@@ -6037,6 +6480,8 @@ srv.Post("/api/v4/storage/pools/rename", [&](const httplib::Request& req, httpli
         parse_btrfs_filesystem_show(show_out, &label, &uuid, &devices);
 
         if (uuid.empty() || uuid != expect_uuid) {
+            audit_fail(actor_fp, "uuid_mismatch", 409, "",
+                       json{{"mount", mount}, {"expect_uuid", expect_uuid}, {"actual_uuid", uuid}});
             reply_json(res, 409, json{
                 {"ok", false},
                 {"error", "uuid_mismatch"},
@@ -6056,7 +6501,9 @@ srv.Post("/api/v4/storage/pools/rename", [&](const httplib::Request& req, httpli
     if (!cfg.contains("version")) cfg["version"] = 1;
     if (!cfg.contains("names_by_mount") || !cfg["names_by_mount"].is_object()) cfg["names_by_mount"] = json::object();
 
-    if (display_name.empty()) {
+    const bool removed = display_name.empty();
+
+    if (removed) {
         // empty => remove override
         cfg["names_by_mount"].erase(mount);
     } else {
@@ -6069,6 +6516,8 @@ srv.Post("/api/v4/storage/pools/rename", [&](const httplib::Request& req, httpli
 
     const bool ok_write = write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n");
     if (!ok_write) {
+        audit_fail(actor_fp, "write_failed", 500, "",
+                   json{{"path", cfg_path.string()}, {"mount", mount}, {"display_name", display_name}});
         reply_json(res, 500, json{
             {"ok", false},
             {"error", "write_failed"},
@@ -6077,11 +6526,18 @@ srv.Post("/api/v4/storage/pools/rename", [&](const httplib::Request& req, httpli
         return;
     }
 
+    audit_ok(actor_fp, json{
+        {"mount", mount},
+        {"display_name", display_name},
+        {"removed", removed},
+        {"expect_uuid", expect_uuid} // may be ""
+    });
+
     reply_json(res, 200, json{
         {"ok", true},
         {"mount", mount},
         {"display_name", display_name},
-        {"removed", display_name.empty()}
+        {"removed", removed}
     }.dump());
 });
 
@@ -6907,11 +7363,75 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
         reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
         return;
     }
-    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    // ---- auth (need actor fingerprint for audit) ----
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    // ---- audit helpers (match Files API style) ----
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_kv_merge = [&](pqnas::AuditEvent& ev, const json& extra) {
+        if (!extra.is_object()) return;
+        for (auto it = extra.begin(); it != extra.end(); ++it) {
+            const std::string k  = pqnas::shorten(it.key(), 64);
+            const std::string kk = "x_" + k;
+
+            if (it.value().is_string()) ev.f[kk] = pqnas::shorten(it.value().get<std::string>(), 220);
+            else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f[kk] = it.value().dump();
+            else if (it.value().is_boolean()) ev.f[kk] = (it.value().get<bool>() ? "true" : "false");
+            else ev.f[kk] = pqnas::shorten(it.value().dump(), 220);
+        }
+    };
+
+    auto audit_common = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason,
+                          int http,
+                          const std::string& detail = "",
+                          const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.raid_execute_scrub_fail";
+        ev.outcome = "fail";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 220);
+
+        audit_kv_merge(ev, extra);
+        audit_common(ev);
+        // IMPORTANT: do NOT call maybe_auto_rotate_before_append() here; audit_append wrapper does it.
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.raid_execute_scrub_ok";
+        ev.outcome = "ok";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+
+        audit_kv_merge(ev, extra);
+        audit_common(ev);
+        audit_append(ev);
+    };
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
     catch (...) {
+        audit_fail("bad_json", 400);
         reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
         return;
     }
@@ -6926,11 +7446,13 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
     const bool confirm = in.value("confirm", false);
 
     if (client_plan_id.empty()) {
+        audit_fail("missing_plan_id", 400);
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message","missing plan_id"}}.dump());
         return;
     }
 
     if (!dry_run && !confirm) {
+        audit_fail("confirm_required", 400, "", json{{"dry_run", dry_run}, {"confirm", confirm}});
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "confirm_required"},
@@ -6945,6 +7467,7 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
     if (mount.empty()) mount = allowed_prefix + "/data";
 
     if (!is_abs_path_safe(mount)) {
+        audit_fail("bad_mount", 400, "", json{{"mount", mount}});
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_mount"}}.dump());
         return;
     }
@@ -6971,6 +7494,8 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
     if (!ok_target || ec_target != 0 || target_out.empty() ||
         !ok_fs     || ec_fs     != 0 || fstype_out.empty() ||
         !ok_src    || ec_src    != 0 || source_out.empty()) {
+
+        audit_fail("mount_not_found", 200, "", json{{"mount", mount}});
         reply_json(res, 200, json{{"ok", false}, {"error", "mount_not_found"}, {"mount", mount}}.dump());
         return;
     }
@@ -6985,6 +7510,13 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
         const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
         if (resolved_mount.rfind(test_prefix, 0) != 0 &&
             resolved_mount.rfind(test_prefix2, 0) != 0) {
+
+            audit_fail("mount_not_allowed", 200, "", json{
+                {"mount", mount},
+                {"resolved_mount", resolved_mount},
+                {"allowed_prefix", allowed_prefix}
+            });
+
             reply_json(res, 200, json{
                 {"ok", false},
                 {"error", "mount_not_allowed"},
@@ -6996,7 +7528,13 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
     }
 
     if (fstype_out != "btrfs") {
-        reply_json(res, 200, json{{"ok", false}, {"error", "not_btrfs"}, {"resolved_mount", resolved_mount}, {"fstype", fstype_out}}.dump());
+        audit_fail("not_btrfs", 200, "", json{{"resolved_mount", resolved_mount}, {"fstype", fstype_out}});
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "not_btrfs"},
+            {"resolved_mount", resolved_mount},
+            {"fstype", fstype_out}
+        }.dump());
         return;
     }
 
@@ -7009,10 +7547,18 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
     const std::string joined = join_commands_for_hash(commands);
     const std::string expected_plan_id = sha256_hex_lower_evp(joined);
     if (expected_plan_id.empty()) {
+        audit_fail("plan_id_compute_failed", 500, "", json{{"resolved_mount", resolved_mount}});
         reply_json(res, 500, json{{"ok", false}, {"error", "plan_id_compute_failed"}}.dump());
         return;
     }
     if (client_plan_id != expected_plan_id) {
+        audit_fail("plan_mismatch", 400, "", json{
+            {"mount", mount},
+            {"resolved_mount", resolved_mount},
+            {"expected_plan_id", expected_plan_id},
+            {"provided_plan_id", client_plan_id}
+        });
+
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "plan_mismatch"},
@@ -7037,6 +7583,15 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
     plan["commands"] = commands;
 
     if (dry_run) {
+        audit_ok(json{
+            {"dry_run", true},
+            {"mount", mount},
+            {"resolved_mount", resolved_mount},
+            {"plan_id", expected_plan_id},
+            {"readonly", readonly},
+            {"commands", (int)commands.size()}
+        });
+
         reply_json(res, 200, json{{"ok", true}, {"dry_run", true}, {"plan", plan}}.dump());
         return;
     }
@@ -7059,6 +7614,12 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
     // Ensure state dir exists
     std::string raid_dir_err;
     if (!ensure_dir_fail_closed("/run/pqnas/raid", &raid_dir_err)) {
+        audit_fail("raid_state_dir_failed", 500, raid_dir_err, json{
+            {"mount", mount},
+            {"resolved_mount", resolved_mount},
+            {"plan_id", expected_plan_id}
+        });
+
         reply_json(res, 500, json{
             {"ok", false},
             {"error", "raid_state_dir_failed"},
@@ -7074,6 +7635,13 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
         std::string mount_lock_err;
         fd_mount_lock = open_excl_lockfile(mount_lockp, &mount_lock_err);
         if (fd_mount_lock < 0) {
+            audit_fail("raid_busy", 409, mount_lock_err, json{
+                {"mount", mount},
+                {"resolved_mount", resolved_mount},
+                {"path", mount_lockp},
+                {"plan_id", expected_plan_id}
+            });
+
             reply_json(res, 409, json{
                 {"ok", false},
                 {"error", "raid_busy"},
@@ -7092,6 +7660,14 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
         fd_plan_rec = open_excl_lockfile(recp, &rec_err);
         if (fd_plan_rec < 0) {
             close_locks();
+
+            audit_fail("already_executed", 200, rec_err, json{
+                {"mount", mount},
+                {"resolved_mount", resolved_mount},
+                {"plan_id", expected_plan_id},
+                {"path", recp}
+            });
+
             reply_json(res, 200, json{
                 {"ok", false},
                 {"error", "already_executed"},
@@ -7136,6 +7712,13 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
         if (!write_fd_all(fd_plan_rec, txt)) {
             const std::string err = std::string("write record failed: ") + std::strerror(errno);
             close_locks();
+
+            audit_fail("exec_record_write_failed", 500, err, json{
+                {"mount", mount},
+                {"resolved_mount", resolved_mount},
+                {"plan_id", expected_plan_id}
+            });
+
             reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "exec_record_write_failed"},
@@ -7153,6 +7736,8 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
     bool all_ok = true;
 
     const int total = (int)commands.size();
+    int fail_i = -1;
+    int fail_rc = 0;
 
     for (int i = 0; i < total; i++) {
         const auto& c = commands[i];
@@ -7170,7 +7755,7 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
         raid_exec_record_append_step(&record, i + 1, total, cmd, okc, ec, out);
         (void)raid_exec_record_write_atomic(expected_plan_id, record);
 
-        if (!okc || ec != 0) { all_ok = false; break; }
+        if (!okc || ec != 0) { all_ok = false; fail_i = i; fail_rc = ec; break; }
     }
 
     // Finalize record
@@ -7200,10 +7785,32 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
     };
     if (record.contains("post_scrub_status")) outj["post_scrub_status"] = record["post_scrub_status"];
 
+    // ---- audit outcome ----
+    if (all_ok) {
+        audit_ok(json{
+            {"dry_run", false},
+            {"mount", mount},
+            {"resolved_mount", resolved_mount},
+            {"plan_id", expected_plan_id},
+            {"readonly", readonly},
+            {"commands", (int)commands.size()}
+        });
+    } else {
+        audit_fail("command_failed", 200, "", json{
+            {"dry_run", false},
+            {"mount", mount},
+            {"resolved_mount", resolved_mount},
+            {"plan_id", expected_plan_id},
+            {"readonly", readonly},
+            {"commands", (int)commands.size()},
+            {"failed_i", fail_i},
+            {"failed_rc", fail_rc}
+        });
+    }
+
     close_locks();
     reply_json(res, 200, outj.dump());
 });
-
 // ----- GET /api/v4/raid/status?mount=/path (admin-only, read-only) -----------
 // Combines: filesystem show/df/device stats + balance status + scrub status
 srv.Get("/api/v4/raid/status", [&](const httplib::Request& req, httplib::Response& res) {
@@ -8145,11 +8752,73 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
         return;
     }
-    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    // ---- audit helpers ----
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_kv_merge = [&](pqnas::AuditEvent& ev, const json& extra) {
+        if (!extra.is_object()) return;
+        for (auto it = extra.begin(); it != extra.end(); ++it) {
+            const std::string k = pqnas::shorten(it.key(), 64);
+            const std::string kk = "x_" + k;
+            if (it.value().is_string()) ev.f[kk] = pqnas::shorten(it.value().get<std::string>(), 220);
+            else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f[kk] = it.value().dump();
+            else if (it.value().is_boolean()) ev.f[kk] = (it.value().get<bool>() ? "true" : "false");
+            else ev.f[kk] = pqnas::shorten(it.value().dump(), 220);
+        }
+    };
+
+    auto audit_common = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& actor_fp,
+                          const std::string& reason,
+                          int http,
+                          const std::string& detail = "",
+                          const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.raid_execute_add_device_fail";
+        ev.outcome = "fail";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 220);
+        audit_kv_merge(ev, extra);
+        audit_common(ev);
+        audit_append(ev); // <-- no maybe_auto_rotate_before_append() here
+    };
+
+    auto audit_ok = [&](const std::string& actor_fp,
+                        const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.raid_execute_add_device_ok";
+        ev.outcome = "ok";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        audit_kv_merge(ev, extra);
+        audit_common(ev);
+        audit_append(ev); // <-- no maybe_auto_rotate_before_append() here
+    };
+
+    // ---- auth (need actor fingerprint for audit) ----
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
     catch (...) {
+        audit_fail(actor_fp, "bad_json", 400);
         reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
         return;
     }
@@ -8169,6 +8838,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     // Per-attempt nonce (must be provided by plan/add-device and echoed back by UI)
     const std::string client_plan_nonce = in.value("plan_nonce", "");
     if (client_plan_nonce.empty()) {
+        audit_fail(actor_fp, "missing_plan_nonce", 400,
+                   "", json{{"mount", mount}, {"new_disk", new_disk}, {"mode", mode}, {"dry_run", dry_run}});
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "bad_request"},
@@ -8177,6 +8848,17 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         return;
     }
 
+    if (!is_hex_64_lower_or_upper(client_plan_id)) {
+        audit_fail(actor_fp, "bad_plan_id_format", 400, "",
+                   json{{"plan_id", client_plan_id}});
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "plan_id must be 64 hex chars"},
+            {"plan_id", client_plan_id}
+        }.dump());
+        return;
+    }
     // Allowed_prefix + default mount
     std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
     if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
@@ -8184,24 +8866,29 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
 
     // Validate inputs
     if (!is_abs_path_safe(mount)) {
+        audit_fail(actor_fp, "bad_mount", 400, "", json{{"mount", mount}});
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_mount"}}.dump());
         return;
     }
     if (!is_dev_path_basic_safe(new_disk)) {
+        audit_fail(actor_fp, "bad_device", 400, "", json{{"new_disk", new_disk}});
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_device"}, {"message","expected /dev/..."} }.dump());
         return;
     }
     if (mode != "single" && mode != "raid1") {
+        audit_fail(actor_fp, "bad_mode", 400, "", json{{"mode", mode}});
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message","mode must be single|raid1"} }.dump());
         return;
     }
     if (client_plan_id.empty()) {
+        audit_fail(actor_fp, "missing_plan_id", 400);
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message","missing plan_id"} }.dump());
         return;
     }
 
     // If not dry-run, require explicit confirm=true
     if (!dry_run && !confirm) {
+        audit_fail(actor_fp, "confirm_required", 400, "", json{{"dry_run", dry_run}});
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "confirm_required"},
@@ -8233,6 +8920,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         !ok_fs     || ec_fs     != 0 || fstype_out.empty() ||
         !ok_src    || ec_src    != 0 || source_out.empty()) {
 
+        audit_fail(actor_fp, "mount_not_found", 200, "",
+                   json{{"mount", mount}, {"ec_target", ec_target}, {"ec_fs", ec_fs}, {"ec_src", ec_src}});
         reply_json(res, 200, json{
             {"ok", false},
             {"error", "mount_not_found"},
@@ -8250,6 +8939,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         const std::string test_prefix  = "/srv/pqnas-test";
         const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
         if (resolved_mount.rfind(test_prefix, 0) != 0 && resolved_mount.rfind(test_prefix2, 0) != 0) {
+            audit_fail(actor_fp, "mount_not_allowed", 200, "",
+                       json{{"allowed_prefix", allowed_prefix}, {"resolved_mount", resolved_mount}});
             reply_json(res, 200, json{
                 {"ok", false},
                 {"error", "mount_not_allowed"},
@@ -8261,6 +8952,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     }
 
     if (fstype_out != "btrfs") {
+        audit_fail(actor_fp, "not_btrfs", 200, "",
+                   json{{"resolved_mount", resolved_mount}, {"fstype", fstype_out}});
         reply_json(res, 200, json{
             {"ok", false},
             {"error", "not_btrfs"},
@@ -8269,6 +8962,7 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         }.dump());
         return;
     }
+
     // Read btrfs filesystem show (used to salt plan_id so add->remove->add works)
     const std::string cmd_show =
         "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(resolved_mount);
@@ -8279,6 +8973,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     cap_string(show_raw, 256 * 1024);
 
     if (!ok_show || ec_show != 0 || show_raw.empty()) {
+        audit_fail(actor_fp, "btrfs_show_failed", 200, "",
+                   json{{"resolved_mount", resolved_mount}, {"btrfs_show_rc", ec_show}});
         reply_json(res, 200, json{
             {"ok", false},
             {"error", "btrfs_show_failed"},
@@ -8287,7 +8983,6 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         }.dump());
         return;
     }
-
 
     // Load disks allowlist (inherits PQNAS_STORAGE_ALLOW_LOOP policy)
     std::string raw_lsblk;
@@ -8301,6 +8996,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     const std::string membership_fp = btrfs_membership_fingerprint(btrfs2);
 
     if (!by_path.is_object() || !by_path.contains(new_disk)) {
+        audit_fail(actor_fp, "device_not_allowed", 400, "",
+                   json{{"new_disk", new_disk}, {"resolved_mount", resolved_mount}});
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "device_not_allowed"},
@@ -8313,6 +9010,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     try { disk_index = by_path[new_disk].get<int>(); } catch (...) { disk_index = -1; }
 
     if (disk_index < 0 || !disks.is_array() || disk_index >= (int)disks.size()) {
+        audit_fail(actor_fp, "lsblk_index_error", 500, "",
+                   json{{"new_disk", new_disk}, {"disk_index", disk_index}});
         reply_json(res, 500, json{{"ok", false}, {"error", "lsblk_index_error"}}.dump());
         return;
     }
@@ -8324,6 +9023,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         json mpcheck = lsblk_disk_mountpoints_json(new_disk);
         if (mpcheck.value("ok", false) && mpcheck.contains("mountpoints") && mpcheck["mountpoints"].is_array()) {
             if (!mpcheck["mountpoints"].empty()) {
+                audit_fail(actor_fp, "disk_in_use", 400, "",
+                           json{{"new_disk", new_disk}, {"disk_index", disk_index}});
                 reply_json(res, 400, json{
                     {"ok", false},
                     {"error", "disk_in_use"},
@@ -8336,6 +9037,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
                 return;
             }
         } else {
+            audit_fail(actor_fp, "disk_in_use_check_failed", 500, "",
+                       json{{"new_disk", new_disk}});
             reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "disk_in_use_check_failed"},
@@ -8348,6 +9051,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
 
     // Refuse adding the same disk the FS is already on (safety)
     if (!resolved_disk.empty() && new_disk == resolved_disk) {
+        audit_fail(actor_fp, "device_is_current_disk", 400, "",
+                   json{{"resolved_disk", resolved_disk}, {"new_disk", new_disk}});
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "device_is_current_disk"},
@@ -8372,12 +9077,15 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         plan_tmp["requires_downtime"] = false;
         plan_tmp["children"] = children;
         plan_tmp["warnings"] = json::array({"new_disk_has_partitions", "refusing_to_execute_destructive_partitioning_without_force=true"});
+        audit_fail(actor_fp, "disk_not_empty", 200, "",
+                   json{{"mount", resolved_mount}, {"new_disk", new_disk}, {"children", children}, {"force", force}});
         reply_json(res, 200, json{{"ok", false}, {"error", "disk_not_empty"}, {"plan", plan_tmp}}.dump());
         return;
     }
 
     const std::string new_part = part1_path_from_disk(new_disk);
     if (new_part.empty()) {
+        audit_fail(actor_fp, "bad_device_partition", 400, "", json{{"new_disk", new_disk}});
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_device"}}.dump());
         return;
     }
@@ -8388,12 +9096,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     commands.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(new_disk));
     commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk -n 1:0:0 -t 1:8300 -c 1:PQNAS_BTRFS " + sh_quote(new_disk));
     commands.push_back("/usr/bin/sudo -n /usr/sbin/partprobe " + sh_quote(new_disk));
-
-    // NEW: wait for udev + device node to appear (fixes /dev/sda1 race)
     commands.push_back("/usr/bin/sudo -n /usr/bin/udevadm settle");
-
     commands.push_back("WAIT_BLOCK " + new_part + " 2000");
-
     commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs device add " + sh_quote(new_part) + " " + sh_quote(resolved_mount));
     if (mode == "raid1") {
         commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs balance start -dconvert=raid1 -mconvert=raid1 " + sh_quote(resolved_mount));
@@ -8407,15 +9111,19 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         std::string("mount=") + resolved_mount + "\n" +
         std::string("btrfs_membership_fp=") + membership_fp + "\n";
 
-    // NEW: include the per-attempt nonce so add->remove->add can never reuse the same plan_id
+    // include per-attempt nonce
     const std::string expected_plan_id =
         sha256_hex_lower_evp(joined + "\n" + salt + "plan_nonce=" + client_plan_nonce + "\n");
 
     if (expected_plan_id.empty()) {
+        audit_fail(actor_fp, "plan_id_compute_failed", 500,
+                   "", json{{"mount", resolved_mount}, {"new_disk", new_disk}});
         reply_json(res, 500, json{{"ok", false}, {"error", "plan_id_compute_failed"}}.dump());
         return;
     }
     if (client_plan_id != expected_plan_id) {
+        audit_fail(actor_fp, "plan_mismatch", 400, "",
+                   json{{"expected_plan_id", expected_plan_id}, {"provided_plan_id", client_plan_id}});
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "plan_mismatch"},
@@ -8435,7 +9143,7 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     plan["input_mount"] = mount;
     plan["resolved_mount"] = resolved_mount;
     plan["resolved_source"] = resolved_source;
-    plan["resolved_disk"] = resolved_disk;
+    if (!resolved_disk.empty()) plan["resolved_disk"] = resolved_disk;
     plan["fstype"] = fstype_out;
     plan["new_disk"] = new_disk;
     plan["new_partition"] = new_part;
@@ -8445,7 +9153,7 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     plan["force"] = force;
     plan["requires_downtime"] = false;
     plan["commands"] = commands;
-
+	plan["actor_fp"] = actor_fp;
 
     // Preflight AFTER plan-id verification: if device already present, return idempotent success
     if (btrfs_filesystem_has_device(resolved_mount, new_part)) {
@@ -8455,6 +9163,18 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         status["resolved_source"] = resolved_source;
         status["resolved_disk"] = resolved_disk;
         status["fstype"] = fstype_out;
+
+        audit_ok(actor_fp, json{
+            {"dry_run", dry_run},
+            {"skipped", true},
+            {"skip_reason", "already_in_filesystem"},
+            {"mount", resolved_mount},
+            {"new_disk", new_disk},
+            {"new_partition", new_part},
+            {"mode", mode},
+            {"force", force},
+            {"plan_id", expected_plan_id}
+        });
 
         reply_json(res, 200, json{
             {"ok", true},
@@ -8471,6 +9191,17 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     }
 
     if (dry_run) {
+        audit_ok(actor_fp, json{
+            {"dry_run", true},
+            {"mount", resolved_mount},
+            {"new_disk", new_disk},
+            {"new_partition", new_part},
+            {"mode", mode},
+            {"force", force},
+            {"plan_id", expected_plan_id},
+            {"commands", (int)commands.size()}
+        });
+
         reply_json(res, 200, json{
             {"ok", true},
             {"dry_run", true},
@@ -8482,6 +9213,24 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     // Async enqueue (fail-closed): create canonical queued record + return immediately.
     try {
         json q = raid_enqueue_job_fail_closed(expected_plan_id, resolved_mount, plan, commands);
+			json extra = {
+  			{"dry_run", false},
+  			{"enqueued", true},
+  			{"mount", resolved_mount},
+  			{"new_disk", new_disk},
+  			{"new_partition", new_part},
+  			{"mode", mode},
+  			{"force", force},
+  			{"plan_id", expected_plan_id},
+  			{"plan_nonce", client_plan_nonce}
+			};
+
+			try {
+	    		if (q.contains("job_id")) extra["job_id"] = q["job_id"];
+			} catch (...) {}
+
+		audit_ok(actor_fp, extra);
+
         // Keep UX fields consistent with old response shape
         q["dry_run"] = false;
         q["plan"] = plan;
@@ -8491,6 +9240,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         const std::string msg = e.what();
 
         if (msg == "already_running") {
+            audit_fail(actor_fp, "already_running", 409, "",
+                       json{{"plan_id", expected_plan_id}, {"mount", resolved_mount}});
             reply_json(res, 409, json{
                 {"ok", false},
                 {"error", "already_running"},
@@ -8502,6 +9253,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         }
 
         if (msg.rfind("raid_state_dir_failed:", 0) == 0) {
+            audit_fail(actor_fp, "raid_state_dir_failed", 500, msg,
+                       json{{"plan_id", expected_plan_id}, {"mount", resolved_mount}});
             reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "raid_state_dir_failed"},
@@ -8511,6 +9264,8 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
             return;
         }
 
+        audit_fail(actor_fp, "enqueue_failed", 500, msg,
+                   json{{"plan_id", expected_plan_id}, {"mount", resolved_mount}});
         reply_json(res, 500, json{
             {"ok", false},
             {"error", "enqueue_failed"},
@@ -8527,11 +9282,73 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
         reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}}.dump());
         return;
     }
-    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    // ---- audit helpers ----
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_kv_merge = [&](pqnas::AuditEvent& ev, const json& extra) {
+        if (!extra.is_object()) return;
+        for (auto it = extra.begin(); it != extra.end(); ++it) {
+            const std::string k  = pqnas::shorten(it.key(), 64);
+            const std::string kk = "x_" + k;
+            if (it.value().is_string()) ev.f[kk] = pqnas::shorten(it.value().get<std::string>(), 220);
+            else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f[kk] = it.value().dump();
+            else if (it.value().is_boolean()) ev.f[kk] = (it.value().get<bool>() ? "true" : "false");
+            else ev.f[kk] = pqnas::shorten(it.value().dump(), 220);
+        }
+    };
+
+    auto audit_common = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& actor_fp,
+                          const std::string& reason,
+                          int http,
+                          const std::string& detail = "",
+                          const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event   = "v4.raid_execute_destroy_pool_fail";
+        ev.outcome = "fail";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        ev.f["reason"] = reason;
+        ev.f["http"]   = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 220);
+        audit_kv_merge(ev, extra);
+        audit_common(ev);
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& actor_fp,
+                        const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event   = "v4.raid_execute_destroy_pool_ok";
+        ev.outcome = "ok";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        audit_kv_merge(ev, extra);
+        audit_common(ev);
+        audit_append(ev);
+    };
+
+    // ---- auth (need actor fingerprint for audit) ----
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
     catch (...) {
+        audit_fail(actor_fp, "invalid_json", 400);
         reply_json(res, 400, json{{"ok", false}, {"error", "invalid_json"}}.dump());
         return;
     }
@@ -8542,7 +9359,36 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
     const bool confirm           = in.value("confirm", false);
     const bool force_wipe        = in.value("force_wipe", false);
 
+    // Will be filled after findmnt succeeds; used by audit_ctx().
+    std::string resolved_mount;
+    std::string resolved_source;
+
+    // Consistent audit context keys across create-pool / worker.
+    auto audit_ctx = [&](const json& extra = json::object()) -> json {
+        json j = {
+            {"plan_id", plan_id},
+            {"plan_nonce", plan_nonce},
+            {"job_id", plan_id},
+            {"op", "destroy-pool"},
+
+            {"mount", mount},
+            {"resolved_mount", resolved_mount.empty() ? mount : resolved_mount},
+            {"resolved_source", resolved_source},
+
+            {"confirm", confirm},
+            {"force_wipe", force_wipe},
+
+            {"recp", raid_exec_record_path(plan_id)}
+        };
+        if (extra.is_object()) {
+            for (auto it = extra.begin(); it != extra.end(); ++it) j[it.key()] = it.value();
+        }
+        return j;
+    };
+
     if (!confirm || plan_id.empty() || plan_nonce.empty() || mount.empty()) {
+        audit_fail(actor_fp, "bad_request_missing_fields", 400, "",
+                   audit_ctx(json{{"message", "requires confirm=true, plan_id, plan_nonce, mount"}}));
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "bad_request"},
@@ -8551,12 +9397,14 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
         return;
     }
 
-    // plan_id must be 64 hex
-    if (!is_hex_64_lower_or_upper(plan_id)) {
+    // Plan id format: allow safe printable ids (align with create-pool usage like "usbclean1-plan-1")
+    if (!std::regex_match(plan_id, std::regex("^[a-zA-Z0-9_.:-]{1,96}$"))) {
+        audit_fail(actor_fp, "bad_plan_id_format", 400, "",
+                   audit_ctx(json{{"plan_id", plan_id}}));
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "bad_request"},
-            {"message", "plan_id must be 64 hex chars"},
+            {"message", "plan_id contains invalid characters"},
             {"plan_id", plan_id}
         }.dump());
         return;
@@ -8564,6 +9412,7 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
 
     // Basic mount validation
     if (!is_abs_path_safe(mount)) {
+        audit_fail(actor_fp, "bad_mount", 400, "", audit_ctx());
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_mount"}}.dump());
         return;
     }
@@ -8574,6 +9423,8 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
 
     const std::string pools_root = allowed_prefix + "/pools/";
     if (mount.rfind(pools_root, 0) != 0) {
+        audit_fail(actor_fp, "mount_not_allowed", 400, "",
+                   audit_ctx(json{{"pools_root", pools_root}}));
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "mount_not_allowed"},
@@ -8607,6 +9458,12 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
         !ok_fs     || ec_fs     != 0 || fstype_out.empty() ||
         !ok_src    || ec_src    != 0 || source_out.empty()) {
 
+        audit_fail(actor_fp, "mount_not_found", 400, "",
+                   audit_ctx(json{
+                       {"findmnt_rc_target", ec_target},
+                       {"findmnt_rc_fs", ec_fs},
+                       {"findmnt_rc_src", ec_src}
+                   }));
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "mount_not_found"},
@@ -8615,10 +9472,12 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
         return;
     }
 
-    const std::string resolved_mount  = target_out;
-    const std::string resolved_source = source_out;
+    resolved_mount  = target_out;
+    resolved_source = source_out;
 
     if (fstype_out != "btrfs") {
+        audit_fail(actor_fp, "not_btrfs", 400, "",
+                   audit_ctx(json{{"fstype", fstype_out}}));
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "not_btrfs"},
@@ -8632,6 +9491,8 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
     {
         std::string raid_dir_err;
         if (!ensure_dir_fail_closed("/run/pqnas/raid", &raid_dir_err)) {
+            audit_fail(actor_fp, "raid_state_dir_failed", 500, raid_dir_err,
+                       audit_ctx(json{{"resolved_mount", resolved_mount}}));
             reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "raid_state_dir_failed"},
@@ -8643,6 +9504,8 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
         const std::string lockp = raid_mount_lock_path(resolved_mount);
         std::error_code ec;
         if (std::filesystem::exists(lockp, ec)) {
+            audit_fail(actor_fp, "raid_busy", 409, "",
+                       audit_ctx(json{{"state","blocked"}, {"lock_path", lockp}}));
             reply_json(res, 409, json{{"ok", false}, {"error", "raid_busy"}, {"lock_path", lockp}}.dump());
             return;
         }
@@ -8659,9 +9522,8 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
     rtrim_inplace(show_raw);
 
     if (!ok_show || ec_show != 0 || show_raw.empty()) {
-        // Remove the lock we created above (best effort)
-        try { std::filesystem::remove(raid_mount_lock_path(resolved_mount)); } catch (...) {}
-
+        audit_fail(actor_fp, "btrfs_show_failed", 500, "",
+                   audit_ctx(json{{"btrfs_show_rc", ec_show}}));
         reply_json(res, 500, json{
             {"ok", false},
             {"error", "btrfs_show_failed"},
@@ -8672,7 +9534,6 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
     }
 
     // Parse show -> get member device paths
-    // (Re-use the same machinery you already use elsewhere)
     std::string raw_lsblk;
     json disks_j = storage_list_disks_json(&raw_lsblk);
     json by_path = disks_j.value("by_path", json::object());
@@ -8690,27 +9551,23 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
 
     // Build plan + commands for worker
     json plan;
-    plan["plan_id"]        = plan_id;
-    plan["plan_nonce"]     = plan_nonce;
-    plan["operation"]      = "destroy-pool";
-    plan["mount"]          = resolved_mount;
-    plan["input_mount"]    = mount;
-    plan["resolved_mount"] = resolved_mount;
-    plan["resolved_source"]= resolved_source;
-    plan["force_wipe"]     = force_wipe;
-    plan["member_devices"] = member_devs;
+    plan["plan_id"]         = plan_id;
+    plan["plan_nonce"]      = plan_nonce;
+    plan["operation"]       = "destroy-pool";
+    plan["mount"]           = resolved_mount;
+    plan["input_mount"]     = mount;
+    plan["resolved_mount"]  = resolved_mount;
+    plan["resolved_source"] = resolved_source;
+    plan["force_wipe"]      = force_wipe;
+    plan["member_devices"]  = member_devs;
+    plan["actor_fp"]        = actor_fp;
 
     json commands = json::array();
 
     commands.push_back("/usr/bin/sudo -n /usr/bin/udevadm settle");
-
-    // Unmount (worker should treat non-zero as failure; that’s fine because it means “still mounted/busy”)
     commands.push_back("/usr/bin/sudo -n /bin/umount " + sh_quote(resolved_mount));
-
-    // Help btrfs forget old mappings quickly (helps later list stability)
     commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs device scan");
 
-    // Optional destructive wipe of member disks
     if (force_wipe) {
         for (const auto& dev : member_devs) {
             commands.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(dev));
@@ -8719,24 +9576,30 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
         commands.push_back("/usr/bin/sudo -n /usr/bin/udevadm settle");
     }
 
-    // Remove metadata mapping (handled INSIDE worker, not via shell)
     commands.push_back(std::string("POOLS_CFG_REMOVE ") + resolved_mount);
-
-    // Remove mount directory (will fail if not empty)
     commands.push_back("/usr/bin/sudo -n /bin/rmdir " + sh_quote(resolved_mount));
 
     // Enqueue (fail-closed)
     try {
         json q = raid_enqueue_job_fail_closed(plan_id, resolved_mount, plan, commands);
         q["plan"] = plan;
+
+        // IMPORTANT: this is "enqueue accepted", NOT "job started" (worker emits job lifecycle)
+        audit_ok(actor_fp, audit_ctx(json{
+            {"state", "queued"},
+            {"member_devices_n", (int)member_devs.size()},
+            {"commands_total", (int)commands.size()}
+        }));
+
         reply_json(res, 200, q.dump());
         return;
-    } catch (const std::exception& e) {
-        // Best-effort cleanup of the lock we created
-        try { std::filesystem::remove(raid_mount_lock_path(resolved_mount)); } catch (...) {}
 
+    } catch (const std::exception& e) {
         const std::string msg = e.what();
+
         if (msg == "already_running") {
+            audit_fail(actor_fp, "already_running", 409, "",
+                       audit_ctx(json{{"state","blocked"}}));
             reply_json(res, 409, json{
                 {"ok", false},
                 {"error", "already_running"},
@@ -8746,6 +9609,10 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
             }.dump());
             return;
         }
+
+        audit_fail(actor_fp, "enqueue_failed", 500, msg,
+                   audit_ctx(json{{"state","enqueue_failed"}}));
+
         reply_json(res, 500, json{
             {"ok", false},
             {"error", "enqueue_failed"},
@@ -8754,7 +9621,7 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
         return;
     }
 });
-    // ----- POST /api/v4/raid/execute/remove-device (admin-only) ------------------
+// ----- POST /api/v4/raid/execute/remove-device (admin-only) ------------------
 // Body: { mount, remove_device, force:bool, plan_id:string, dry_run?:bool, confirm?:bool }
 srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, httplib::Response& res) {
     pqnas::UsersRegistry users;
@@ -8763,11 +9630,73 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
         reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
         return;
     }
-    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    // ---- audit helpers ----
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_kv_merge = [&](pqnas::AuditEvent& ev, const json& extra) {
+        if (!extra.is_object()) return;
+        for (auto it = extra.begin(); it != extra.end(); ++it) {
+            const std::string k = pqnas::shorten(it.key(), 64);
+            const std::string kk = "x_" + k;
+            if (it.value().is_string()) ev.f[kk] = pqnas::shorten(it.value().get<std::string>(), 220);
+            else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f[kk] = it.value().dump();
+            else if (it.value().is_boolean()) ev.f[kk] = (it.value().get<bool>() ? "true" : "false");
+            else ev.f[kk] = pqnas::shorten(it.value().dump(), 220);
+        }
+    };
+
+    auto audit_common = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& actor_fp,
+                          const std::string& reason,
+                          int http,
+                          const std::string& detail = "",
+                          const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.raid_execute_remove_device_fail";
+        ev.outcome = "fail";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 220);
+        audit_kv_merge(ev, extra);
+        audit_common(ev);
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& actor_fp,
+                        const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.raid_execute_remove_device_ok";
+        ev.outcome = "ok";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        audit_kv_merge(ev, extra);
+        audit_common(ev);
+        audit_append(ev);
+    };
+
+    // ---- auth (need actor fingerprint for audit) ----
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
     catch (...) {
+        audit_fail(actor_fp, "bad_json", 400);
         reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
         return;
     }
@@ -8790,20 +9719,24 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
 
     // Validate inputs
     if (!is_abs_path_safe(mount)) {
+        audit_fail(actor_fp, "bad_mount", 400, "", json{{"mount", mount}});
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_mount"}}.dump());
         return;
     }
     if (!is_dev_path_basic_safe(remove_device)) {
+        audit_fail(actor_fp, "bad_device", 400, "", json{{"remove_device", remove_device}});
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_device"}, {"message","expected /dev/..."} }.dump());
         return;
     }
     if (client_plan_id.empty()) {
+        audit_fail(actor_fp, "missing_plan_id", 400);
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message","missing plan_id"} }.dump());
         return;
     }
 
     // If not dry-run, require explicit confirm=true
     if (!dry_run && !confirm) {
+        audit_fail(actor_fp, "confirm_required", 400, "", json{{"dry_run", dry_run}});
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "confirm_required"},
@@ -8835,6 +9768,8 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
         !ok_fs     || ec_fs     != 0 || fstype_out.empty() ||
         !ok_src    || ec_src    != 0 || source_out.empty()) {
 
+        audit_fail(actor_fp, "mount_not_found", 200, "",
+                   json{{"mount", mount}, {"ec_target", ec_target}, {"ec_fs", ec_fs}, {"ec_src", ec_src}});
         reply_json(res, 200, json{
             {"ok", false},
             {"error", "mount_not_found"},
@@ -8852,6 +9787,8 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
         const std::string test_prefix  = "/srv/pqnas-test";
         const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
         if (resolved_mount.rfind(test_prefix, 0) != 0 && resolved_mount.rfind(test_prefix2, 0) != 0) {
+            audit_fail(actor_fp, "mount_not_allowed", 200, "",
+                       json{{"allowed_prefix", allowed_prefix}, {"resolved_mount", resolved_mount}});
             reply_json(res, 200, json{
                 {"ok", false},
                 {"error", "mount_not_allowed"},
@@ -8863,6 +9800,8 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     }
 
     if (fstype_out != "btrfs") {
+        audit_fail(actor_fp, "not_btrfs", 200, "",
+                   json{{"resolved_mount", resolved_mount}, {"fstype", fstype_out}});
         reply_json(res, 200, json{
             {"ok", false},
             {"error", "not_btrfs"},
@@ -8887,6 +9826,8 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     cap_string(show_raw, 256 * 1024);
 
     if (!ok_show || ec_show != 0 || show_raw.empty()) {
+        audit_fail(actor_fp, "btrfs_show_failed", 200, "",
+                   json{{"resolved_mount", resolved_mount}, {"btrfs_show_rc", ec_show}});
         reply_json(res, 200, json{
             {"ok", false},
             {"error", "btrfs_show_failed"},
@@ -8897,17 +9838,20 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     }
 
     BtrfsShowParsed parsed = parse_btrfs_filesystem_show(show_raw);
-	json btrfs_j = btrfs_show_parsed_to_json(parsed, by_path, disks_j.value("by_name", json::object()));
+    json btrfs_j = btrfs_show_parsed_to_json(parsed, by_path, disks_j.value("by_name", json::object()));
 
-	const std::string membership_fp = btrfs_membership_fingerprint(btrfs_j);
-	if (membership_fp.empty()) {
-    	reply_json(res, 500, json{
-    	    {"ok", false},
-	        {"error", "membership_fp_failed"},
-        	{"message", "failed to compute btrfs membership fingerprint"}
-    	}.dump());
-    	return;
-	}
+    const std::string membership_fp = btrfs_membership_fingerprint(btrfs_j);
+    if (membership_fp.empty()) {
+        audit_fail(actor_fp, "membership_fp_failed", 500,
+                   "failed to compute btrfs membership fingerprint",
+                   json{{"resolved_mount", resolved_mount}});
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "membership_fp_failed"},
+            {"message", "failed to compute btrfs membership fingerprint"}
+        }.dump());
+        return;
+    }
 
     // Find member device in filesystem corresponding to remove_device
     std::string member_path;
@@ -8929,8 +9873,16 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     }
 
     if (member_path.empty()) {
-        // If it is already not present, treat as idempotent "skipped"
-        // (safer UX than error during execute).
+        // idempotent "skipped"
+        audit_ok(actor_fp, json{
+            {"dry_run", dry_run},
+            {"skipped", true},
+            {"skip_reason", "already_not_in_filesystem"},
+            {"mount", resolved_mount},
+            {"remove_device", remove_device},
+            {"plan_id", client_plan_id}
+        });
+
         reply_json(res, 200, json{
             {"ok", true},
             {"dry_run", dry_run},
@@ -8947,6 +9899,8 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     if (!by_path.is_object() ||
         ((!parent_disk.empty() && !by_path.contains(parent_disk)) &&
          (parent_disk.empty() && !by_path.contains(remove_device)))) {
+        audit_fail(actor_fp, "device_not_allowed", 400, "",
+                   json{{"remove_device", remove_device}, {"member_path", member_path}, {"parent_disk", parent_disk}});
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "device_not_allowed"},
@@ -8959,6 +9913,8 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
 
     // Refuse removing current filesystem disk unless force=true
     if (!resolved_disk.empty() && !parent_disk.empty() && parent_disk == resolved_disk && !force) {
+        audit_fail(actor_fp, "device_is_current_disk", 400, "",
+                   json{{"resolved_disk", resolved_disk}, {"parent_disk", parent_disk}, {"remove_device", remove_device}});
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "device_is_current_disk"},
@@ -8972,6 +9928,8 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     // Refuse removing if it's the last remaining device
     const int total_devices = btrfs_j.value("total_devices", 0);
     if (total_devices <= 1) {
+        audit_fail(actor_fp, "cannot_remove_last_device", 400, "",
+                   json{{"total_devices", total_devices}, {"member_path", member_path}, {"mount", resolved_mount}});
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "cannot_remove_last_device"},
@@ -8994,9 +9952,7 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
         );
     }
 
-
     commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs device remove " + sh_quote(member_path) + " " + sh_quote(resolved_mount));
-
 
     // plan_id check (must match exactly plan endpoint)
     const std::string joined = join_commands_for_hash(commands);
@@ -9010,10 +9966,14 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     const std::string expected_plan_id = sha256_hex_lower_evp(joined + "\n" + salt);
 
     if (expected_plan_id.empty()) {
+        audit_fail(actor_fp, "plan_id_compute_failed", 500, "",
+                   json{{"mount", resolved_mount}, {"remove_device", remove_device}});
         reply_json(res, 500, json{{"ok", false}, {"error", "plan_id_compute_failed"}}.dump());
         return;
     }
     if (client_plan_id != expected_plan_id) {
+        audit_fail(actor_fp, "plan_mismatch", 400, "",
+                   json{{"expected_plan_id", expected_plan_id}, {"provided_plan_id", client_plan_id}});
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "plan_mismatch"},
@@ -9032,7 +9992,7 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     plan["input_mount"] = mount;
     plan["resolved_mount"] = resolved_mount;
     plan["resolved_source"] = resolved_source;
-    plan["resolved_disk"] = resolved_disk;
+    if (!resolved_disk.empty()) plan["resolved_disk"] = resolved_disk;
     plan["fstype"] = fstype_out;
     plan["remove_device"] = remove_device;
     plan["remove_member_path"] = member_path;
@@ -9040,8 +10000,21 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     plan["force"] = force;
     plan["requires_downtime"] = false;
     plan["commands"] = commands;
+	plan["actor_fp"] = actor_fp;
 
     if (dry_run) {
+        audit_ok(actor_fp, json{
+            {"dry_run", true},
+            {"mount", resolved_mount},
+            {"remove_device", remove_device},
+            {"member_path", member_path},
+            {"parent_disk", parent_disk},
+            {"force", force},
+            {"plan_id", expected_plan_id},
+            {"total_devices", total_devices},
+            {"commands", (int)commands.size()}
+        });
+
         reply_json(res, 200, json{
             {"ok", true},
             {"dry_run", true},
@@ -9053,6 +10026,20 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     // Async enqueue (fail-closed): create canonical queued record + return immediately.
     try {
         json q = raid_enqueue_job_fail_closed(expected_plan_id, resolved_mount, plan, commands);
+		try { if (q.contains("job_id")) plan["job_id"] = q["job_id"]; } catch (...) {}
+        audit_ok(actor_fp, json{
+            {"dry_run", false},
+            {"enqueued", true},
+            {"mount", resolved_mount},
+            {"remove_device", remove_device},
+            {"member_path", member_path},
+            {"parent_disk", parent_disk},
+            {"force", force},
+            {"plan_id", expected_plan_id},
+            {"total_devices", total_devices}
+            // optional: if q has "job_id" you can log it explicitly if you want
+        });
+
         q["dry_run"] = false;
         q["plan"] = plan;
         reply_json(res, 200, q.dump());
@@ -9061,6 +10048,8 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
         const std::string msg = e.what();
 
         if (msg == "already_running") {
+            audit_fail(actor_fp, "already_running", 409, "",
+                       json{{"plan_id", expected_plan_id}, {"mount", resolved_mount}});
             reply_json(res, 409, json{
                 {"ok", false},
                 {"error", "already_running"},
@@ -9072,6 +10061,8 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
         }
 
         if (msg.rfind("raid_state_dir_failed:", 0) == 0) {
+            audit_fail(actor_fp, "raid_state_dir_failed", 500, msg,
+                       json{{"plan_id", expected_plan_id}, {"mount", resolved_mount}});
             reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "raid_state_dir_failed"},
@@ -9081,6 +10072,8 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
             return;
         }
 
+        audit_fail(actor_fp, "enqueue_failed", 500, msg,
+                   json{{"plan_id", expected_plan_id}, {"mount", resolved_mount}});
         reply_json(res, 500, json{
             {"ok", false},
             {"error", "enqueue_failed"},
@@ -9096,11 +10089,99 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
         reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}}.dump());
         return;
     }
-    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    // ---- audit helpers ----
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_kv_merge = [&](pqnas::AuditEvent& ev, const json& extra) {
+        if (!extra.is_object()) return;
+        for (auto it = extra.begin(); it != extra.end(); ++it) {
+            const std::string k  = pqnas::shorten(it.key(), 64);
+            const std::string kk = "x_" + k;
+            if (it.value().is_string()) ev.f[kk] = pqnas::shorten(it.value().get<std::string>(), 220);
+            else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f[kk] = it.value().dump();
+            else if (it.value().is_boolean()) ev.f[kk] = (it.value().get<bool>() ? "true" : "false");
+            else ev.f[kk] = pqnas::shorten(it.value().dump(), 220);
+        }
+    };
+
+    auto audit_common = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& actor_fp,
+                          const std::string& reason,
+                          int http,
+                          const std::string& detail = "",
+                          const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event   = "v4.raid_execute_create_pool_fail";
+        ev.outcome = "fail";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        ev.f["reason"] = reason;
+        ev.f["http"]   = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 220);
+        audit_kv_merge(ev, extra);
+        audit_common(ev);
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& actor_fp,
+                        const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event   = "v4.raid_execute_create_pool_ok";
+        ev.outcome = "ok";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        audit_kv_merge(ev, extra);
+        audit_common(ev);
+        audit_append(ev);
+    };
+
+    // job lifecycle audits
+    auto audit_job_start_ok = [&](const std::string& actor_fp,
+                                  const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event   = "v4.raid_job_start_ok";
+        ev.outcome = "ok";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        audit_kv_merge(ev, extra);
+        audit_common(ev);
+        audit_append(ev);
+    };
+
+    auto audit_job_finish = [&](const std::string& actor_fp,
+                                bool ok,
+                                const std::string& detail = "",
+                                const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event   = ok ? "v4.raid_job_finish_ok" : "v4.raid_job_finish_fail";
+        ev.outcome = ok ? "ok" : "fail";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 220);
+        audit_kv_merge(ev, extra);
+        audit_common(ev);
+        audit_append(ev);
+    };
+
+    // ---- auth (need actor fingerprint for audit) ----
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
     catch (...) {
+        audit_fail(actor_fp, "invalid_json", 400);
         reply_json(res, 400, json{{"ok", false}, {"error", "invalid_json"}}.dump());
         return;
     }
@@ -9108,11 +10189,6 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
     const std::string plan_id    = in.value("plan_id", "");
     const std::string plan_nonce = in.value("plan_nonce", "");
     const bool confirm           = in.value("confirm", false);
-
-    if (!confirm || plan_id.empty() || plan_nonce.empty()) {
-        reply_json(res, 400, json{{"ok", false}, {"error", "missing_plan_id_or_confirm"}}.dump());
-        return;
-    }
 
     const std::string pool_id = in.value("pool_id", "");
     const std::string mode    = in.value("mode", "single"); // single|raid1
@@ -9125,30 +10201,78 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
         }
     }
 
+    std::string root = getenv_str("PQNAS_STORAGE_ROOT");
+    if (root.empty()) root = "/srv/pqnas";
+    const std::string mount = root + "/pools/" + pool_id;
+    const std::string label = "PQNAS_" + upper_ascii(pool_id);
+
+    // We know recp only after plan_id is validated, but include placeholder now.
+    auto audit_ctx = [&](const json& extra = json::object()) -> json {
+        json j = {
+            {"op", "create-pool"},
+            {"confirm", confirm},
+            {"plan_id", plan_id},
+            {"plan_nonce", plan_nonce},
+
+            {"pool_id", pool_id},
+            {"mode", mode},
+            {"force", force},
+            {"devices_n", (int)devices.size()},
+            {"mount", mount},
+            {"label", label}
+        };
+        if (extra.is_object()) {
+            for (auto it = extra.begin(); it != extra.end(); ++it) j[it.key()] = it.value();
+        }
+        return j;
+    };
+
+    if (!confirm || plan_id.empty() || plan_nonce.empty()) {
+        audit_fail(actor_fp, "missing_plan_id_or_confirm", 400, "",
+                   audit_ctx());
+        reply_json(res, 400, json{{"ok", false}, {"error", "missing_plan_id_or_confirm"}}.dump());
+        return;
+    }
+
+    // plan_id must be 64 hex (canonical exec-record key)
+    if (!is_hex_64_lower_or_upper(plan_id)) {
+        audit_fail(actor_fp, "bad_plan_id_format", 400, "", audit_ctx());
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "plan_id must be 64 hex chars"},
+            {"plan_id", plan_id}
+        }.dump());
+        return;
+    }
+
     if (!std::regex_match(pool_id, std::regex("^[a-z0-9_-]{1,32}$"))) {
+        audit_fail(actor_fp, "bad_pool_id", 400, "", audit_ctx());
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_pool_id"}}.dump());
         return;
     }
 
     if (devices.empty()) {
+        audit_fail(actor_fp, "no_devices", 400, "", audit_ctx());
         reply_json(res, 400, json{{"ok", false}, {"error", "no_devices"}}.dump());
         return;
     }
 
     if (mode == "raid1" && devices.size() < 2) {
+        audit_fail(actor_fp, "raid1_requires_2_devices", 400, "", audit_ctx());
         reply_json(res, 400, json{{"ok", false}, {"error", "raid1_requires_2_devices"}}.dump());
         return;
     }
 
-    const std::string mount = "/srv/pqnas/pools/" + pool_id;
-
     // Exec-record dir + replay protection (refuse if this plan_id already executed)
     ensure_dir_best_effort("/run/pqnas/raid");
-
     const std::string recp = raid_exec_record_path(plan_id);
+
     {
         std::error_code ec;
         if (std::filesystem::exists(recp, ec)) {
+            audit_fail(actor_fp, "already_executed", 200, "",
+                       audit_ctx(json{{"recp", recp}}));
             reply_json(res, 200, json{
                 {"ok", false},
                 {"error", "already_executed"},
@@ -9159,25 +10283,34 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
     }
 
     if (std::filesystem::exists(mount)) {
+        audit_fail(actor_fp, "mount_exists", 400, "", audit_ctx());
         reply_json(res, 400, json{{"ok", false}, {"error", "mount_exists"}}.dump());
         return;
     }
-
-    const std::string label = "PQNAS_" + upper_ascii(pool_id);
 
     // Lock path (prevent concurrent ops)
     const std::string lockp = raid_mount_lock_path(mount);
     {
         std::error_code ec;
         if (std::filesystem::exists(lockp, ec)) {
+            audit_fail(actor_fp, "raid_busy", 200, "",
+                       audit_ctx(json{{"lockp", lockp}}));
             reply_json(res, 200, json{{"ok", false}, {"error", "raid_busy"}}.dump());
             return;
         }
     }
 
-    std::ofstream lock(lockp);
-    lock << "create-pool\n";
-    lock.close();
+    // Ensure lock removed on all exits
+    struct LockGuard {
+        std::string p;
+        ~LockGuard() { if (!p.empty()) { std::error_code ec; std::filesystem::remove(p, ec); } }
+    } lock_guard{lockp};
+
+    {
+        std::ofstream lock(lockp);
+        lock << "create-pool\n";
+        lock.close();
+    }
 
     // ---- exec-record init (must be before try/catch) ----
     json record;
@@ -9191,26 +10324,38 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
     record["ts_last"]    = record["ts_start"];
     record["results"]    = json::array();
 
-    write_text_file_atomic(recp, record.dump(2) + "\n");
+    (void)write_text_file_atomic(recp, record.dump(2) + "\n");
 
     json results = json::array();
     bool all_ok = true;
     size_t step_i = 0;
 
+    // Emit job_start once, right before the first command actually runs.
+    bool job_start_emitted = false;
+    auto emit_job_start_once = [&]() {
+        if (job_start_emitted) return;
+        job_start_emitted = true;
+        audit_job_start_ok(actor_fp, audit_ctx(json{{"job_id", plan_id}, {"recp", recp}}));
+    };
+
     // Helper: run one command, append to both results + record, update ts_last, persist record.
     auto run_step = [&](const std::string& cmd) -> bool {
+        emit_job_start_once();
+
         const size_t i = step_i++;
 
         std::string out;
         int ec = 0;
-        const bool ok = run_cmd_capture(cmd, &out, &ec);
+        const bool ran = run_cmd_capture(cmd, &out, &ec);
+        const bool step_ok = ran && (ec == 0);
+
         cap_string(out, 128 * 1024);
 
         json one = {
-            {"i", i},
+            {"i", (int)i},
             {"cmd", cmd},
             {"rc", ec},
-            {"ok", ok},
+            {"ok", step_ok},
             {"out", out}
         };
 
@@ -9223,13 +10368,13 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
             return false;
         }
 
-        if (!ok || ec != 0) {
+        if (!step_ok) {
             all_ok = false;
             record["ok"]     = false;
             record["state"]  = "failed";
             record["busy"]   = false;
             record["ts_end"] = iso8601_now();
-            write_text_file_atomic(recp, record.dump(2) + "\n");
+            (void)write_text_file_atomic(recp, record.dump(2) + "\n");
             return false;
         }
 
@@ -9241,6 +10386,10 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
         if (force) {
             for (const auto& d : devices) {
                 if (!run_step("/usr/bin/sudo -n /usr/sbin/sgdisk --zap-all " + sh_quote(d))) break;
+
+                // Best-effort: make kernel re-read partition table (reduces wipefs "busy" races)
+                if (all_ok) (void)run_step("/usr/bin/sudo -n /usr/sbin/partprobe " + sh_quote(d));
+
                 if (!run_step("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(d))) break;
             }
         }
@@ -9251,33 +10400,26 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
             if (mode == "raid1") mkfs += "-d raid1 -m raid1 ";
             mkfs += "-L " + sh_quote(label);
             for (const auto& d : devices) mkfs += " " + sh_quote(d);
-            run_step(mkfs);
+            (void)run_step(mkfs);
         }
 
         // mkdir mountpoint
         if (all_ok) {
-            run_step("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(mount));
+            (void)run_step("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(mount));
         }
 
-        // mount by LABEL (safer than "devices[0]")
+        // mount by LABEL
         if (all_ok) {
-            run_step("/usr/bin/sudo -n /bin/mount -t btrfs " +
-                     sh_quote(std::string("LABEL=") + label) + " " +
-                     sh_quote(mount));
+            (void)run_step("/usr/bin/sudo -n /bin/mount -t btrfs " +
+                           sh_quote(std::string("LABEL=") + label) + " " +
+                           sh_quote(mount));
         }
-        // --- stabilize: udev + btrfs scan + warm-up show (prevents pools list race) ---
-        if (all_ok) {
-            // ensure udev has created/updated device nodes / symlinks
-            run_step("/usr/bin/sudo -n /usr/bin/udevadm settle");
-        }
-        if (all_ok) {
-            // make btrfs aware of the just-created multi-device FS
-            run_step("/usr/bin/sudo -n /usr/bin/btrfs device scan");
-        }
-        if (all_ok) {
-            // warm up: ensures /api/v4/storage/pools won't skip this mount on first refresh
-            run_step("/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(mount));
-        }
+
+        // stabilize
+        if (all_ok) (void)run_step("/usr/bin/sudo -n /usr/bin/udevadm settle");
+        if (all_ok) (void)run_step("/usr/bin/sudo -n /usr/bin/btrfs device scan");
+        if (all_ok) (void)run_step("/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(mount));
+
         // update pools.json
         if (all_ok) {
             json cfg = load_or_init_pools_cfg(users_path);
@@ -9287,7 +10429,9 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
             cfg["names_by_mount"][mount] = pool_id;
 
             const auto cfg_path = pools_cfg_path_from_users_path(users_path);
-            write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n");
+            if (!write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n")) {
+                all_ok = false;
+            }
         }
 
         // finalize exec record
@@ -9295,10 +10439,17 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
         record["state"]  = all_ok ? "done" : "failed";
         record["busy"]   = false;
         record["ts_end"] = iso8601_now();
-        write_text_file_atomic(recp, record.dump(2) + "\n");
+        (void)write_text_file_atomic(recp, record.dump(2) + "\n");
 
-        // remove lock
-        std::filesystem::remove(lockp);
+        // lock_guard will remove lockp on return
+
+        if (all_ok) {
+            audit_ok(actor_fp, audit_ctx(json{{"job_id", plan_id}, {"recp", recp}}));
+            audit_job_finish(actor_fp, true, "", audit_ctx(json{{"job_id", plan_id}, {"recp", recp}}));
+        } else {
+            audit_fail(actor_fp, "command_failed", 200, "", audit_ctx(json{{"job_id", plan_id}, {"recp", recp}}));
+            audit_job_finish(actor_fp, false, "command_failed", audit_ctx(json{{"job_id", plan_id}, {"recp", recp}}));
+        }
 
         reply_json(res, 200, json{
             {"ok", all_ok},
@@ -9312,15 +10463,15 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
         record["state"]  = "failed";
         record["busy"]   = false;
         record["ts_end"] = iso8601_now();
-        write_text_file_atomic(recp, record.dump(2) + "\n");
+        (void)write_text_file_atomic(recp, record.dump(2) + "\n");
 
-        std::filesystem::remove(lockp);
+        audit_fail(actor_fp, "exception", 500, "", audit_ctx(json{{"job_id", plan_id}, {"recp", recp}}));
+        audit_job_finish(actor_fp, false, "exception", audit_ctx(json{{"job_id", plan_id}, {"recp", recp}}));
 
         reply_json(res, 500, json{{"ok", false}, {"error", "exception"}}.dump());
         return;
     }
 });
-
 // ----- GET /api/v4/raid/job?job_id=... (admin-only) ---------------------------
 srv.Get("/api/v4/raid/job", [&](const httplib::Request& req, httplib::Response& res) {
     pqnas::UsersRegistry users;
@@ -9602,7 +10753,6 @@ srv.Get("/api/v4/raid/health", [&](const httplib::Request& req, httplib::Respons
             ev.f["http"] = std::to_string(http_code);
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
             ev.f["ua"] = audit_ua();
-            maybe_auto_rotate_before_append();
             audit_append(ev);
         };
 
@@ -9640,7 +10790,6 @@ srv.Get("/api/v4/raid/health", [&](const httplib::Request& req, httplib::Respons
                 if (!e.fingerprint.empty()) ev.f["fingerprint"] = e.fingerprint;
                 ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
                 ev.f["ua"] = audit_ua();
-                maybe_auto_rotate_before_append();
                 audit_append(ev);
             }
 
@@ -9668,7 +10817,6 @@ srv.Get("/api/v4/raid/health", [&](const httplib::Request& req, httplib::Respons
                 if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
                 ev.f["ua"] = audit_ua();
-                maybe_auto_rotate_before_append();
                 audit_append(ev);
             }
 
@@ -9868,7 +11016,6 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
             auto it_ua = req.headers.find("User-Agent");
             ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-            maybe_auto_rotate_before_append();
             audit_append(ev);
         } catch (...) {}
 
@@ -10471,7 +11618,6 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
                 ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
                 auto it_ua = req.headers.find("User-Agent");
                 ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-                maybe_auto_rotate_before_append();
                 audit_append(ev);
             } catch (...) {}
         }
@@ -10503,7 +11649,6 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
                 ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
                 auto it_ua = req.headers.find("User-Agent");
                 ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-                maybe_auto_rotate_before_append();
                 audit_append(ev);
             } catch (...) {}
         }
@@ -10536,7 +11681,6 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
                 ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
                 auto it_ua = req.headers.find("User-Agent");
                 ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-                maybe_auto_rotate_before_append();
                 audit_append(ev);
             } catch (...) {}
 
@@ -10577,7 +11721,6 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
         		ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
         		auto it_ua = req.headers.find("User-Agent");
         		ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-        		maybe_auto_rotate_before_append();
         		audit_append(ev);
     		} catch (...) {}
 		}
@@ -10610,7 +11753,6 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
                 ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
                 auto it_ua = req.headers.find("User-Agent");
                 ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-                maybe_auto_rotate_before_append();
                 audit_append(ev);
             } catch (...) {}
         }
@@ -10668,7 +11810,6 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
                 ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
                 auto it_ua = req.headers.find("User-Agent");
                 ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-                maybe_auto_rotate_before_append();
                 audit_append(ev);
             } catch (...) {}
         }
@@ -10699,7 +11840,6 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
                 ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
                 auto it_ua = req.headers.find("User-Agent");
                 ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
-                maybe_auto_rotate_before_append();
                 audit_append(ev);
             } catch (...) {}
 
@@ -10801,7 +11941,6 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
 
     	    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 	        ev.f["ua"] = audit_ua();
-        	maybe_auto_rotate_before_append();
     	    audit_append(ev);
 	    };
 
@@ -10822,7 +11961,6 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
     	    if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
 	        ev.f["ua"] = audit_ua();
-        	maybe_auto_rotate_before_append();
     	    audit_append(ev);
 	    };
 
@@ -10950,7 +12088,6 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
             auto it = req.headers.find("User-Agent");
             ev.f["ua"] = pqnas::shorten(it == req.headers.end() ? "" : it->second);
-            maybe_auto_rotate_before_append();
             audit_append(ev);
         }
 
@@ -11080,7 +12217,6 @@ c.audit_emit = [&](const std::string& event,
     fill(f);
     for (auto& kv : f) ev.f[kv.first] = kv.second;
 
-    maybe_auto_rotate_before_append();
     audit_append(ev);
 };
 
@@ -11396,7 +12532,6 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
     	        ev.f["ts"] = now_iso_utc();
 	            ev.f["actor_fp"] = actor_fp;
             	ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        	    maybe_auto_rotate_before_append();
     	        audit_append(ev);
 	        }
 
@@ -11425,7 +12560,6 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
     	    ev.f["ts"] = now_iso_utc();
 	        ev.f["actor_fp"] = actor_fp;
         	ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-    	    maybe_auto_rotate_before_append();
 	        audit_append(ev);
     	}
 
@@ -11542,7 +12676,6 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
             ev.f["ts"] = now_iso;
             ev.f["actor_fp"] = actor_fp;
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            maybe_auto_rotate_before_append();
             audit_append(ev);
         } catch (...) {}
 
@@ -11572,7 +12705,6 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
             ev.f["ts"] = now_iso;
             ev.f["actor_fp"] = actor_fp;
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            maybe_auto_rotate_before_append();
             audit_append(ev);
         } catch (...) {}
 
@@ -11612,7 +12744,6 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
                 ev.f["ts"] = now_iso;
                 ev.f["actor_fp"] = actor_fp;
                 ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-                maybe_auto_rotate_before_append();
                 audit_append(ev);
             } catch (...) {}
 
@@ -11641,7 +12772,6 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
                 ev.f["ts"] = now_iso;
                 ev.f["actor_fp"] = actor_fp;
                 ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-                maybe_auto_rotate_before_append();
                 audit_append(ev);
             } catch (...) {}
 
@@ -11669,7 +12799,6 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
                 ev.f["ts"] = now_iso;
                 ev.f["actor_fp"] = actor_fp;
                 ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-                maybe_auto_rotate_before_append();
                 audit_append(ev);
             } catch (...) {}
 
@@ -11723,7 +12852,6 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
         ev.f["ts"] = now_iso;
         ev.f["actor_fp"] = actor_fp;
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     } catch (...) {}
 
@@ -11757,7 +12885,6 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
         if (prev_quota != 0) ev.f["prev_quota_bytes"] = pqnas::shorten(std::to_string((unsigned long long)prev_quota), 32);
         if (!prev_root.empty()) ev.f["prev_root_rel"] = pqnas::shorten(prev_root, 160);
 
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     } catch (...) {}
 
@@ -11867,7 +12994,6 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -11894,7 +13020,6 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -12124,7 +13249,6 @@ srv.Post("/api/v4/files/mkdir", [&](const httplib::Request& req, httplib::Respon
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -12144,7 +13268,6 @@ srv.Post("/api/v4/files/mkdir", [&](const httplib::Request& req, httplib::Respon
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -12247,7 +13370,6 @@ srv.Post("/api/v4/files/hash", [&](const httplib::Request& req, httplib::Respons
         if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -12266,7 +13388,6 @@ srv.Post("/api/v4/files/hash", [&](const httplib::Request& req, httplib::Respons
         ev.f["digest"] = pqnas::shorten(digest_hex, 80);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -12404,7 +13525,6 @@ srv.Post("/api/v4/files/rmdir", [&](const httplib::Request& req, httplib::Respon
         if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -12416,7 +13536,6 @@ srv.Post("/api/v4/files/rmdir", [&](const httplib::Request& req, httplib::Respon
         ev.f["path"] = pqnas::shorten(path_rel, 200);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -12560,7 +13679,6 @@ srv.Post("/api/v4/files/tree", [&](const httplib::Request& req, httplib::Respons
         if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -12578,7 +13696,6 @@ srv.Post("/api/v4/files/tree", [&](const httplib::Request& req, httplib::Respons
         ev.f["truncated"] = truncated ? "1" : "0";
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -12805,7 +13922,6 @@ srv.Post("/api/v4/files/touch", [&](const httplib::Request& req, httplib::Respon
         if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -12818,7 +13934,6 @@ srv.Post("/api/v4/files/touch", [&](const httplib::Request& req, httplib::Respon
         ev.f["action"] = "created";
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -12947,7 +14062,6 @@ srv.Post("/api/v4/files/cat", [&](const httplib::Request& req, httplib::Response
         if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -12967,7 +14081,6 @@ srv.Post("/api/v4/files/cat", [&](const httplib::Request& req, httplib::Response
         ev.f["truncated"] = truncated ? "1" : "0";
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -13117,7 +14230,6 @@ srv.Post("/api/v4/files/save_text", [&](const httplib::Request& req, httplib::Re
         if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -13140,7 +14252,6 @@ srv.Post("/api/v4/files/save_text", [&](const httplib::Request& req, httplib::Re
         if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -13161,7 +14272,6 @@ srv.Post("/api/v4/files/save_text", [&](const httplib::Request& req, httplib::Re
         ev.f["overwrote"] = overwrote ? "1" : "0";
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -13435,7 +14545,6 @@ srv.Post("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response
         if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -13459,7 +14568,6 @@ srv.Post("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response
         ev.f["dirs"]  = std::to_string((unsigned long long)dirs);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -13777,7 +14885,6 @@ srv.Post("/api/v4/files/zip_sel", [&](const httplib::Request& req, httplib::Resp
         if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -13801,7 +14908,6 @@ srv.Post("/api/v4/files/zip_sel", [&](const httplib::Request& req, httplib::Resp
         if (!base_rel.empty()) ev.f["base"] = pqnas::shorten(base_rel, 200);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -14343,7 +15449,6 @@ srv.Post("/api/v4/files/rmrf", [&](const httplib::Request& req, httplib::Respons
         if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -14363,7 +15468,6 @@ srv.Post("/api/v4/files/rmrf", [&](const httplib::Request& req, httplib::Respons
         ev.f["removed_bytes"] = std::to_string((unsigned long long)removed_bytes);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -14593,7 +15697,6 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
         if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -14619,7 +15722,6 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
         }
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -14846,7 +15948,6 @@ auto files_stat_handler = [&](const httplib::Request& req, httplib::Response& re
         if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -15412,7 +16513,6 @@ srv.Post("/api/v4/files/du", [&](const httplib::Request& req, httplib::Response&
         if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -15432,7 +16532,6 @@ srv.Post("/api/v4/files/du", [&](const httplib::Request& req, httplib::Response&
         ev.f["dirs"]  = std::to_string((unsigned long long)dirs);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -15603,7 +16702,6 @@ srv.Delete("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Res
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -15626,7 +16724,6 @@ srv.Delete("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Res
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -15806,7 +16903,6 @@ srv.Get("/api/v4/files/list", [&](const httplib::Request& req, httplib::Response
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -15827,7 +16923,6 @@ srv.Get("/api/v4/files/list", [&](const httplib::Request& req, httplib::Response
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -16002,7 +17097,6 @@ srv.Get("/api/v4/me/storage", [&](const httplib::Request& req, httplib::Response
             if (extra.contains("partial"))       ev.f["partial"]       = extra["partial"].get<bool>() ? "true" : "false";
         } catch (...) {}
 
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -16025,7 +17119,6 @@ srv.Get("/api/v4/me/storage", [&](const httplib::Request& req, httplib::Response
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -16175,7 +17268,6 @@ srv.Post("/api/v4/files/exists", [&](const httplib::Request& req, httplib::Respo
         if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -16193,7 +17285,6 @@ srv.Post("/api/v4/files/exists", [&](const httplib::Request& req, httplib::Respo
         if (exists && type == "file") ev.f["bytes"] = std::to_string((unsigned long long)bytes);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -16306,7 +17397,6 @@ srv.Post("/api/v4/files/copy", [&](const httplib::Request& req, httplib::Respons
         if (!detail.empty())   ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -16331,7 +17421,6 @@ srv.Post("/api/v4/files/copy", [&](const httplib::Request& req, httplib::Respons
         if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -16354,7 +17443,6 @@ srv.Post("/api/v4/files/copy", [&](const httplib::Request& req, httplib::Respons
         ev.f["overwrote"] = overwrote ? "1" : "0";
 
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -16639,7 +17727,6 @@ srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response&
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -16660,7 +17747,6 @@ srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response&
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -16871,7 +17957,6 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -16892,7 +17977,6 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -17058,7 +18142,6 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -17084,7 +18167,6 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -17106,7 +18188,6 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -17298,7 +18379,6 @@ srv.Post("/api/v4/snapshots/create", [&](const httplib::Request& req, httplib::R
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -17319,7 +18399,6 @@ srv.Post("/api/v4/snapshots/create", [&](const httplib::Request& req, httplib::R
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -17559,7 +18638,6 @@ srv.Get("/api/v4/snapshots/volumes", [&](const httplib::Request& req, httplib::R
         auto it_xff = req.headers.find("X-Forwarded-For");
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -17623,7 +18701,6 @@ srv.Get("/api/v4/snapshots/list", [&](const httplib::Request& req, httplib::Resp
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -17643,7 +18720,6 @@ srv.Get("/api/v4/snapshots/list", [&](const httplib::Request& req, httplib::Resp
         if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -17921,7 +18997,6 @@ srv.Post("/api/v4/snapshots/restore/prepare", [&](const httplib::Request& req, h
         ev.f["mode"] = mode;
         ev.f["confirm_id"] = confirm_id;
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     }
 	auto has_systemd_unit = [&]() -> bool {
@@ -18148,7 +19223,6 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
         ev.f["id"] = plan.snapshot_id;
         ev.f["reason"] = "confirm_text_mismatch";
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        maybe_auto_rotate_before_append();
         audit_append(ev);
 
         reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","confirmation text mismatch"}}.dump());
@@ -18338,7 +19412,6 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
         ev.f["rc"] = std::to_string(rc_start);
         ev.f["out"] = pqnas::shorten(out_start, 300);
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        maybe_auto_rotate_before_append();
         audit_append(ev);
 
         reply_json(res, 500, json{
@@ -18365,7 +19438,6 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
         ev.f["id"] = plan.snapshot_id;
         ev.f["job_path"] = pqnas::shorten(job_path.string(), 220);
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     }
 
@@ -18461,7 +19533,6 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
             ev.f["ts"] = now_iso;
             ev.f["actor_fp"] = actor_fp;
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            maybe_auto_rotate_before_append();
             audit_append(ev);
         }
 
@@ -18526,7 +19597,6 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
             if (!name.empty()) ev.f["name"] = pqnas::shorten(name, 80);
             if (!notes.empty()) ev.f["notes"] = pqnas::shorten(notes, 120);
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            maybe_auto_rotate_before_append();
             audit_append(ev);
         }
 
@@ -18813,7 +19883,6 @@ srv.Post("/api/v4/admin/users/avatar_upload", [&](const httplib::Request& req, h
             ev.f["why"] = pqnas::shorten(why, 180);
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
             ev.f["ts"] = now_iso_utc();
-            maybe_auto_rotate_before_append();
             audit_append(ev);
         };
 
@@ -19011,7 +20080,6 @@ srv.Post("/api/v4/admin/users/avatar_upload", [&](const httplib::Request& req, h
             ev.f["bytes"] = std::to_string(req.body.size());
             ev.f["ip"] = client_ip(req);
             ev.f["ts"] = now_iso_utc();
-            maybe_auto_rotate_before_append();
             audit_append(ev);
         }
 
@@ -19034,7 +20102,6 @@ srv.Post("/api/v4/apps/install_bundled", [&](const httplib::Request& req, httpli
         ev.f["why"] = pqnas::shorten(why, 180);
         ev.f["ip"] = client_ip(req);
         ev.f["ts"] = now_iso_utc();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -19168,7 +20235,6 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
             ev.f["why"] = "invalid json";
             ev.f["ip"] = client_ip(req);
             ev.f["ts"] = now_iso_utc();
-            maybe_auto_rotate_before_append();
             audit_append(ev);
         }
         reply(400, {{"ok", false}, {"error", "bad_request"}, {"message", "invalid json"}});
@@ -19187,7 +20253,6 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         ev.f["why"] = pqnas::shorten(why, 180);
         ev.f["ip"] = client_ip(req);
         ev.f["ts"] = now_iso_utc();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -19199,7 +20264,6 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         ev.f["version"] = ver;
         ev.f["ip"] = client_ip(req);
         ev.f["ts"] = now_iso_utc();
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -19274,7 +20338,6 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
             ev.f["ts"] = now_iso_utc();
             ev.f["actor_fp"] = actor_fp;
             ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            maybe_auto_rotate_before_append();
             audit_append(ev);
         }
 
@@ -19344,7 +20407,6 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
     	        ev.f["ts"] = now_iso_utc();
 	            ev.f["actor_fp"] = actor_fp;
             	ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        	    maybe_auto_rotate_before_append();
     	        audit_append(ev);
 	        }
 
@@ -19378,7 +20440,6 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         	ev.f["ts"] = now_iso_utc();
     	    ev.f["actor_fp"] = actor_fp;
 	        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        	maybe_auto_rotate_before_append();
     	    audit_append(ev);
 	    }
 
@@ -19430,7 +20491,6 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         if (!path_rel.empty()) ev.f["path"] = pqnas::shorten(path_rel, 200);
         if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
     auto audit_ok = [&](const pqnas::ShareLink& s) {
@@ -19444,7 +20504,6 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         ev.f["type"] = s.type;
         if (!s.expires_at.empty()) ev.f["expires_at"] = s.expires_at;
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -19589,7 +20648,6 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         if (!token_short.empty()) ev.f["token"] = token_short;
         if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
     auto audit_ok = [&](const std::string& token_short) {
@@ -19599,7 +20657,6 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         ev.f["fingerprint"] = fp_hex;
         ev.f["token"] = token_short;
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
@@ -19717,7 +20774,6 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
             if (!s->expires_at.empty()) ev.f["expires_at"] = s->expires_at;
         }
         add_ip_headers(ev);
-        maybe_auto_rotate_before_append();
         audit_append(ev);
     };
 
