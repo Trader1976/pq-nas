@@ -216,6 +216,7 @@ bool UsersRegistry::load(const std::string& path) {
     u.storage_state  = norm_storage_state(it.value("storage_state", "unallocated"));
     u.quota_bytes    = safe_u64_from_json(it, "quota_bytes", 0);
     u.root_rel       = it.value("root_rel", "");
+    u.storage_pool_id = it.value("storage_pool_id", "");
     u.storage_set_at = it.value("storage_set_at", "");
     u.storage_set_by = it.value("storage_set_by", "");
 
@@ -276,6 +277,7 @@ bool UsersRegistry::save(const std::string& path) const {
       {"storage_state", norm_storage_state(u.storage_state)},
       {"quota_bytes", u.quota_bytes},
       {"root_rel", u.root_rel},
+      {"storage_pool_id", u.storage_pool_id},
       {"storage_set_at", u.storage_set_at},
       {"storage_set_by", u.storage_set_by}
     });
@@ -401,6 +403,7 @@ bool UsersRegistry::ensure_present_disabled_user(const std::string& fp_hex, cons
   u.storage_state = "unallocated";
   u.quota_bytes = 0;
   u.root_rel = "";
+  u.storage_pool_id = ""; // default
   u.storage_set_at = "";
   u.storage_set_by = "";
 

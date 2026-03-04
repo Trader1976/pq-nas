@@ -4564,6 +4564,78 @@ static inline void parse_btrfs_usage_bytes(const std::string& out,
         if (size_bytes && used_bytes && *size_bytes >= 0 && *used_bytes >= 0) break;
     }
 }
+
+static bool storage_pool_mount_by_id_adminonly(
+    const std::string& users_path,
+    const std::string& pool_id,
+    std::string* out_mount,
+    std::string* out_err)
+{
+    if (out_mount) out_mount->clear();
+    if (out_err) out_err->clear();
+
+    // Load pools.json for display names / stable IDs (same as endpoint)
+    const json pools_cfg = load_or_init_pools_cfg(users_path);
+
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+    const std::string test_prefix  = "/srv/pqnas-test";
+    const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
+
+    std::string mounts_out;
+    int rc = run_capture("/usr/bin/findmnt -rn -t btrfs -o TARGET,SOURCE,FSTYPE", &mounts_out);
+    cap_string(mounts_out, 1024 * 1024);
+    rtrim_inplace(mounts_out);
+
+    if (rc != 0) {
+        if (out_err) *out_err = "findmnt_failed";
+        return false;
+    }
+
+    for (const std::string& raw : split_lines(mounts_out)) {
+        std::string line = trim_copy(raw);
+        if (line.empty()) continue;
+
+        // split into 3 tokens
+        std::vector<std::string> toks;
+        {
+            std::string cur;
+            for (char c : line) {
+                if (c == ' ' || c == '\t') {
+                    if (!cur.empty()) { toks.push_back(cur); cur.clear(); }
+                } else {
+                    cur.push_back(c);
+                }
+            }
+            if (!cur.empty()) toks.push_back(cur);
+        }
+        if (toks.size() < 3) continue;
+
+        const std::string target = toks[0];
+        const std::string fstype = toks[2];
+
+        if (fstype != "btrfs") continue;
+        if (target.empty() || target[0] != '/') continue;
+
+        const bool allowed =
+            starts_with(target, allowed_prefix) ||
+            starts_with(target, test_prefix) ||
+            starts_with(target, test_prefix2);
+
+        if (!allowed) continue;
+
+        const std::string pid = pool_id_from_mount_best_effort(target);
+        if (pid == pool_id) {
+            if (out_mount) *out_mount = target;
+            return true;
+        }
+    }
+
+    if (out_err) *out_err = "pool_id_not_found";
+    return false;
+}
+
+
 // -----------------------------------------------------------------------------
 // main
 // -----------------------------------------------------------------------------
@@ -12610,6 +12682,11 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
         return;
     }
 
+    // pool_id: optional. "default" or empty => use server default data_root.
+    std::string pool_id = j.value("pool_id", "");
+    pool_id = trim_copy(pool_id);
+    if (pool_id.empty()) pool_id = "default";
+
     if (!users.exists(fp)) {
         reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
         return;
@@ -12719,9 +12796,31 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
         return;
     }
 
-    // Ensure/verify real filesystem directory BEFORE marking allocated
-    const std::filesystem::path data_root = std::filesystem::path(data_root_dir());
-    const std::filesystem::path udir = user_dir_for_fp(fp); // expected to be under data_root
+    std::filesystem::path data_root = std::filesystem::path(data_root_dir());
+    std::string pool_mount;
+
+    if (pool_id != "default") {
+        std::string err;
+        std::string mp;
+        if (!storage_pool_mount_by_id_adminonly(users_path, pool_id, &mp, &err)) {
+            reply_json(res, 404, json({
+                {"ok", false},
+                {"error", "pool_not_found"},
+                {"message", "pool_id not found"},
+                {"pool_id", pool_id},
+                {"detail", err}
+            }).dump());
+            return;
+        }
+        pool_mount = mp;
+
+        // Choose PQ-NAS data root inside this pool
+        // (adjust "data" folder name if your pool layout differs)
+        data_root = std::filesystem::path(mp) / "data";
+    }
+
+    // layout: <data_root>/users/<fp>
+    const std::filesystem::path udir = data_root / "users" / fp;
     const std::filesystem::path parent = udir.parent_path();
 
     // Safety: udir must be under data_root
@@ -12861,6 +12960,8 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
     u.root_rel       = root_rel; // derived from ensured dir
     u.storage_set_at = now_iso;
     u.storage_set_by = actor_fp;
+    // Persist selected pool (optional field in users.json)
+    u.storage_pool_id = (pool_id == "default") ? "" : pool_id;
 
     const bool ok_upsert = users.upsert(u);
     const bool ok_save   = ok_upsert ? users.save(users_path) : false;
@@ -12900,6 +13001,8 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
     reply_json(res, 200, json({
         {"ok", true},
         {"fingerprint", fp},
+        {"pool_id", pool_id},
+        {"pool_mount", pool_mount},
         {"storage_state", u.storage_state},
         {"quota_bytes", u.quota_bytes},
         {"root_rel", u.root_rel},

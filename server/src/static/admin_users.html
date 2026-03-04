@@ -709,7 +709,55 @@
             gap: 10px;
             align-items:center;
         }
+        /* ---------- Allocate modal ---------- */
+        .allocModal{
+            position: fixed;
+            inset: 0;
+            z-index: 99998;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 18px;
+            background: rgba(0,0,0,0.55);
+            backdrop-filter: blur(6px);
+        }
+        .allocModal.open{ display:flex; }
 
+        .allocCard{
+            width: min(820px, calc(100vw - 36px));
+            max-height: min(86vh, 960px);
+            border-radius: 18px;
+            border: 1px solid var(--border);
+            background: linear-gradient(180deg, var(--panel2), var(--panel));
+            box-shadow: var(--shadow);
+            overflow: hidden;
+        }
+        .allocTop{
+            display:flex; align-items:center; justify-content:space-between;
+            gap:10px; padding:12px 14px; border-bottom:1px solid var(--border);
+            background: rgba(0,0,0,0.10);
+        }
+        .allocTitle{ font-weight:900; font-size:14px; }
+        .allocActions{ display:flex; align-items:center; gap:10px; }
+        .allocBody{ padding:14px; }
+
+        .allocGrid{
+            display:grid;
+            grid-template-columns: 1fr 220px;
+            gap:12px;
+            align-items:end;
+        }
+        @media (max-width: 760px){
+            .allocGrid{ grid-template-columns: 1fr; }
+        }
+        .allocErr{
+            margin-top:10px; padding:10px 12px; border-radius:14px;
+            border:1px solid rgba(var(--fail-rgb),0.40);
+            background: rgba(var(--fail-rgb),0.10);
+            color: rgba(255,190,190,0.98);
+            display:none;
+        }
+        .allocErr.show{ display:block; }
 
     </style>
     <link rel="stylesheet" href="/static/theme.css">
@@ -841,6 +889,40 @@
 
         <div class="footerline">© CPUNK 2026</div>
     </main>
+</div>
+<!-- Allocate storage modal -->
+<div id="allocModal" class="allocModal" aria-hidden="true">
+    <div class="allocCard" role="dialog" aria-modal="true" aria-label="Allocate storage">
+        <div class="allocTop">
+            <div class="allocTitle">Allocate storage</div>
+            <div class="allocActions">
+                <button class="btn secondary" id="allocCancelBtn" type="button">Cancel</button>
+                <button class="btn" id="allocSaveBtn" type="button">Allocate</button>
+            </div>
+        </div>
+
+        <div class="allocBody">
+            <div class="hint" style="margin-bottom:12px;">
+                User: <span class="mono" id="allocFpLabel">—</span>
+            </div>
+
+            <div class="allocGrid">
+                <div>
+                    <div class="muted" style="font-size:12px; margin-bottom:6px;">Pool</div>
+                    <select id="allocPoolSel"></select>
+                    <div class="muted" id="allocPoolHint" style="font-size:12px; margin-top:6px;">—</div>
+                </div>
+
+                <div>
+                    <div class="muted" style="font-size:12px; margin-bottom:6px;">Amount (GB)</div>
+                    <input id="allocGb" type="number" min="0" step="1" placeholder="e.g. 10" />
+                    <div class="muted" style="font-size:12px; margin-top:6px;">0 disables quota / unlimited (server-defined)</div>
+                </div>
+            </div>
+
+            <div id="allocErr" class="allocErr"></div>
+        </div>
+    </div>
 </div>
 <!-- Avatar preview modal -->
 <div id="avatarModal" class="avatarModal" aria-hidden="true">

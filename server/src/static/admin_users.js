@@ -194,8 +194,283 @@ function showToast(msg, ms = 10000) {
     t._hideTimer = setTimeout(() => { t.style.display = "none"; }, ms);
 }
 
+function gbToBytes(gb) {
+    const x = Number(gb);
+    if (!isFinite(x) || x < 0) return null;
+    // allow 0
+    return Math.floor(x * 1024 * 1024 * 1024);
+}
+
+function setAllocError(msg) {
+    const el = $("allocErr");
+    if (!el) return;
+    if (!msg) {
+        el.textContent = "";
+        el.classList.remove("show");
+        return;
+    }
+    el.textContent = String(msg);
+    el.classList.add("show");
+}
+
+function normalizePoolsFromResponse(j) {
+    const arr = Array.isArray(j?.pools) ? j.pools : [];
+
+    const out = [];
+    for (const p of arr) {
+        if (!p || typeof p !== "object") continue;
+
+        const id = String(p.pool_id || "").trim();
+        if (!id) continue;
+
+        const mount = String(p.mount || "").trim();
+        const disp = String(p.display_name || "").trim();
+
+        const name = disp || mount || id;
+
+        const hintParts = [];
+        if (mount) hintParts.push(mount);
+        if (p.profile_data) hintParts.push(`data:${String(p.profile_data)}`);
+        if (p.profile_metadata) hintParts.push(`meta:${String(p.profile_metadata)}`);
+        const hint = hintParts.join(" • ");
+
+        out.push({ id, name, hint, mount });
+    }
+    return out;
+}
+async function apiGetPoolsBestEffort() {
+    // Prefer raidmgr pools endpoint (most likely already exists)
+    const candidates = [
+        "/api/v4/storage/pools",
+        "/api/v4/raid/pools",
+        "/api/v4/pools",
+        "/api/v4/admin/pools",
+    ];
+
+    let lastErr = null;
+    for (const url of candidates) {
+        try {
+            const j = await apiGet(url);
+            return normalizePoolsFromResponse(j);
+        } catch (e) {
+            lastErr = e;
+        }
+    }
+    console.warn("Pools load failed, falling back to default pool:", lastErr?.message || lastErr);
+    return [];
+}
+function openAllocModal(fp, curUser) {
+    gAllocFp = String(fp || "");
+
+    const m = $("allocModal");
+    const fpLabel = $("allocFpLabel");
+    const poolSel = $("allocPoolSel");
+    const poolHint = $("allocPoolHint");
+    const gbInp = $("allocGb");
+
+    if (!m || !fpLabel || !poolSel || !poolHint || !gbInp) return;
+
+    setAllocError("");
+    fpLabel.textContent = gAllocFp || "—";
+
+    // Prefill amount from current quota
+    const suggested = fmtGBFromBytes(curUser?.quota_bytes) || "10";
+    gbInp.value = suggested;
+
+    // Open immediately
+    m.classList.add("open");
+    m.setAttribute("aria-hidden", "false");
+
+    // Fill pools async
+    (async () => {
+        const pools = await ensurePoolsLoaded();
+
+        poolSel.innerHTML = "";
+        for (const p of pools) {
+            const opt = document.createElement("option");
+            opt.value = p.id;
+            opt.textContent = p.name;
+            poolSel.appendChild(opt);
+        }
+
+        // Try to select current user pool if present
+        const curPool =
+            (curUser?.storage_pool_id != null ? String(curUser.storage_pool_id) :
+                curUser?.pool_id != null ? String(curUser.pool_id) :
+                    curUser?.pool != null ? String(curUser.pool) :
+                        "");
+
+        if (curPool) {
+            const has = Array.from(poolSel.options).some(o => o.value === curPool);
+            if (has) poolSel.value = curPool;
+        }
+
+        const selected = pools.find(x => x.id === poolSel.value) || pools[0];
+        poolHint.textContent = selected?.hint ? selected.hint : "—";
+
+        poolSel.onchange = () => {
+            const s = (gPools || []).find(x => x.id === poolSel.value);
+            poolHint.textContent = s?.hint ? s.hint : "—";
+        };
+
+        gbInp.focus();
+        gbInp.select();
+    })().catch(e => {
+        setAllocError("Failed to load pools: " + (e?.message || e));
+    });
+}
+async function ensurePoolsLoaded() {
+    if (gPools !== null) return gPools;
+    const pools = await apiGetPoolsBestEffort();
+
+    // If none, fallback to default pool option
+    if (!pools || pools.length === 0) {
+        gPools = [{ id: "default", name: "Default pool", hint: "Used when no pools exist" }];
+        return gPools;
+    }
+
+    gPools = pools;
+    return gPools;
+}
+
+function openAllocModal(fp, curUser) {
+    gAllocFp = String(fp || "");
+    gAllocForce = false;
+
+    const m = $("allocModal");
+    const fpLabel = $("allocFpLabel");
+    const poolSel = $("allocPoolSel");
+    const poolHint = $("allocPoolHint");
+    const gbInp = $("allocGb");
+
+    if (!m || !fpLabel || !poolSel || !poolHint || !gbInp) return;
+
+    setAllocError("");
+
+    fpLabel.textContent = gAllocFp || "—";
+
+    // prefill GB from current quota
+    const suggested = fmtGBFromBytes(curUser?.quota_bytes) || "10";
+    gbInp.value = suggested;
+
+    // show modal immediately, then fill pools async
+    m.classList.add("open");
+    m.setAttribute("aria-hidden", "false");
+
+    // fill pools async
+    (async () => {
+        const pools = await ensurePoolsLoaded();
+
+        poolSel.innerHTML = "";
+        for (const p of pools) {
+            const opt = document.createElement("option");
+            opt.value = p.id;
+            opt.textContent = p.name;
+            poolSel.appendChild(opt);
+        }
+
+        // default selection:
+        // - if user has pool_id/pool assigned, try to select it
+        const curPool =
+            (curUser?.pool_id != null ? String(curUser.pool_id) :
+                (curUser?.pool != null ? String(curUser.pool) :
+                    (curUser?.storage_pool_id != null ? String(curUser.storage_pool_id) :
+                        "")));
+
+        if (curPool) {
+            const match = Array.from(poolSel.options).find(o => o.value === curPool);
+            if (match) poolSel.value = curPool;
+        }
+
+        const selected = pools.find(x => x.id === poolSel.value) || pools[0];
+        poolHint.textContent = selected?.hint ? selected.hint : "—";
+
+        poolSel.onchange = () => {
+            const s = (gPools || []).find(x => x.id === poolSel.value);
+            poolHint.textContent = s?.hint ? s.hint : "—";
+        };
+
+        // focus amount for quick entry
+        gbInp.focus();
+        gbInp.select();
+    })().catch(e => {
+        setAllocError("Failed to load pools: " + (e?.message || e));
+    });
+}
+
+
+function closeAllocModal() {
+    const m = $("allocModal");
+    if (!m) return;
+    m.classList.remove("open");
+    m.setAttribute("aria-hidden", "true");
+    setAllocError("");
+    gAllocFp = "";
+}
+async function submitAllocationFromModal() {
+    const fp = gAllocFp;
+    if (!fp) return;
+
+    const poolSel = $("allocPoolSel");
+    const gbInp = $("allocGb");
+
+    const pool_id = String(poolSel?.value || "default");
+    const quota_gb = Number(String(gbInp?.value || "").trim());
+
+    if (!isFinite(quota_gb) || quota_gb < 0) {
+        setAllocError("Invalid amount. Enter a number ≥ 0.");
+        return;
+    }
+
+    const cur = allUsers.find(x => String(x.fingerprint || "") === fp) || {};
+    const isAllocated = String(cur.storage_state || "").toLowerCase() === "allocated";
+    const force = isAllocated;
+
+    if (isAllocated) {
+        if (!confirm("Storage is already allocated for this user.\n\nChange pool/quota anyway?")) return;
+    }
+
+    try {
+        setAllocError("");
+        setMsg(isAllocated ? "Updating storage…" : "Allocating…");
+
+        // Reuse your existing endpoint; we add pool_id
+        const j = await apiPost("/api/v4/admin/users/storage", {
+            fingerprint: fp,
+            quota_gb,
+            force,
+            pool_id,
+        });
+
+        closeAllocModal();
+        await refresh();
+
+        const qb = Number(j.quota_bytes || 0);
+        const quotaText = qb ? fmtBytes(qb) : `${quota_gb} GB`;
+        const root = j.root_rel || "";
+        const at = j.storage_set_at || "";
+
+        showToast(
+            (isAllocated ? "Storage updated (click to copy)\n" : "Storage allocated\n") +
+            `Pool: ${pool_id}\n` +
+            (root ? `Path: ${root}\n` : "") +
+            `Quota: ${quotaText}\n` +
+            (at ? `Set at: ${at}` : "")
+        );
+
+        setMsg(isAllocated ? "Storage updated" : "Allocated");
+    } catch (e) {
+        setAllocError(String(e?.message || e));
+        setMsg("Error: " + (e?.message || e));
+    }
+}
+
 let allUsers = [];
 let actorFp = "";
+// ----- pools + allocation modal state -----
+let gPools = null; // array of { id, name, hint }
+let gAllocFp = "";
+
 
 function setMsg(text) {
     const el = $("msg");
@@ -508,45 +783,8 @@ ${detailRow}
             }
 
             if (act === "allocate") {
-                const cur = allUsers.find(x => x.fingerprint === fp) || {};
-
-                const isAllocated = String(cur.storage_state || "").toLowerCase() === "allocated";
-                if (isAllocated) {
-                    if (!confirm("Storage is already allocated for this user.\n\nChange quota anyway?")) return;
-                }
-
-                const suggested = fmtGBFromBytes(cur.quota_bytes) || "10";
-                const input = prompt("Allocate storage.\n\nQuota in GB:", suggested);
-                if (input === null) return;
-
-                const quota_gb = Number(String(input).trim());
-                if (!isFinite(quota_gb) || quota_gb < 0) {
-                    alert("Invalid quota. Enter a number >= 0.");
-                    return;
-                }
-
-                try {
-                    setMsg(isAllocated ? "Updating storage…" : "Allocating…");
-                    const j = await apiPost("/api/v4/admin/users/storage", { fingerprint: fp, quota_gb, force: isAllocated });
-                    await refresh();
-
-                    const path = j.root_rel || "(missing)";
-                    const qb = Number(j.quota_bytes || 0);
-                    const quotaText = qb ? fmtBytes(qb) : `${quota_gb} GB`;
-                    const at = j.storage_set_at || "";
-
-                    showToast(
-                        (isAllocated ? "Storage updated (click to copy)\n" : "Storage allocated\n") +
-                        `Path: ${path}\n` +
-                        `Quota: ${quotaText}\n` +
-                        (at ? `Set at: ${at}` : "")
-                    );
-
-                    setMsg(isAllocated ? "Storage updated" : "Allocated");
-                } catch (e) {
-                    alert("Failed: " + e.message);
-                    setMsg("Error: " + e.message);
-                }
+                const cur = allUsers.find(x => String(x.fingerprint || "") === String(fp)) || {};
+                openAllocModal(fp, cur);
                 return;
             }
 
@@ -630,6 +868,20 @@ window.addEventListener("load", async () => {
         if (ev.key === "Escape") closeAvatarModal();
     });
 
+    // ---------- Allocate modal wiring ----------
+    $("allocCancelBtn")?.addEventListener("click", closeAllocModal);
+    $("allocSaveBtn")?.addEventListener("click", submitAllocationFromModal);
+
+    $("allocModal")?.addEventListener("click", (ev) => {
+        if (ev.target && ev.target.id === "allocModal") closeAllocModal(); // backdrop
+    });
+
+    document.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape") {
+            const m = $("allocModal");
+            if (m && m.classList.contains("open")) closeAllocModal();
+        }
+    });
     $("avatarRemoveBtn")?.addEventListener("click", async () => {
         if (!avatarModalFp) return;
         if (!confirm("Remove this user's avatar?")) return;

@@ -31,6 +31,7 @@ struct UserRec {
     std::string root_rel;      // e.g. "users/<fingerprint>"
     std::string storage_set_at; // ISO-8601 UTC
     std::string storage_set_by; // actor fingerprint (hex)
+    std::string storage_pool_id; // "" = default pool
 };
 
 class UsersRegistry {
