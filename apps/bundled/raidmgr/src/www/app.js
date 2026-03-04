@@ -32,8 +32,29 @@
     const TAB_KEY = "pqnas_storagemgr_tab";
     let g_tab = "pools"; // "drives" | "pools"  (we keep variable name g_tab but change values below)
 
-    function loadTab() { return "pools"; }
-    function saveTab(_) {}
+    function loadTab() {
+        try {
+            const v = String(window.localStorage.getItem(TAB_KEY) || "pools");
+            const ok = (v === "drives" || v === "pools") ? v : "pools";
+
+            // Defensive fix: if RAID tab no longer exists, never allow "drives".
+            const hasRaidTab = !!document.getElementById("raidTab");
+            if (!hasRaidTab && ok === "drives") {
+                window.localStorage.setItem(TAB_KEY, "pools");
+                return "pools";
+            }
+
+            return ok;
+        } catch (_) {
+            return "pools";
+        }
+    }
+
+    function saveTab(v) {
+        try {
+            window.localStorage.setItem(TAB_KEY, String(v || "pools"));
+        } catch (_) {}
+    }
 
     function applyTabToUi() {
         if (poolsTab) poolsTab.style.display = "";
@@ -239,10 +260,10 @@
                 // Refresh pools list (best effort)
                 try {
                     setTimeout(async () => {
-                        g_pools = await loadPools();
+                        await refreshPoolsState();
                         renderPoolSelectorTop();
                         if (g_tab === "pools") renderPoolsTab();
-                        probe(); // keep this too; it refreshes RAID tab if that’s active
+                        probe();
                     }, 350);
                 } catch (_) {}
 
@@ -484,7 +505,15 @@
 
         return { ok: true, http, pools: q.j.pools };
     }
-
+    async function refreshPoolsState() {
+        const lp = await loadPools();
+        if (lp && lp.ok && Array.isArray(lp.pools)) {
+            g_pools = lp.pools;
+            return true;
+        }
+        g_pools = [];
+        return false;
+    }
     function prettyError(j, r, txt) {
         const msgFromJson =
             j && (j.message || j.error) ? `${j.error || ""} ${j.message || ""}`.trim() : "";
@@ -2102,6 +2131,7 @@ Tip: these are the Btrfs member devices that form this pool.
 
     <div style="display:flex; flex-direction:column; gap:8px; flex:0 0 auto;">
       <button class="btn secondary" type="button" data-pool-action="drives" data-mount="${esc(mount)}">Drives</button>
+      <button class="btn secondary" type="button" data-pool-action="remove" data-mount="${esc(mount)}">Remove drive</button>
       <button class="btn secondary" type="button" data-pool-action="rename" data-mount="${esc(mount)}">Rename</button>
       <button class="btn secondary" type="button" data-pool-action="convert" data-mount="${esc(mount)}">Convert RAID</button>
       <button class="btn danger" type="button" data-pool-action="destroy" data-mount="${esc(mount)}">Destroy</button>
@@ -2372,7 +2402,7 @@ ${rows}
             return ov;
         }
 
-        async function openPoolDrivesModal(mount) {
+        async function openPoolDrivesModal(mount, opts) {
             const mnt = String(mount || "").trim();
             if (!mnt) return;
 
@@ -2382,6 +2412,10 @@ ${rows}
             const body = ov.querySelector("#poolDrivesBody");
 
             if (title) title.textContent = `Drives • ${mnt}`;
+            const o = (opts && typeof opts === "object") ? opts : {};
+            const focus = String(o.focus || "drives"); // "drives" | "remove"
+
+            if (title) title.textContent = (focus === "remove") ? `Remove drive • ${mnt}` : `Drives • ${mnt}`;
             if (body) body.innerHTML = `<div class="v" style="opacity:.8;">Loading…</div>`;
 
             closeBtn.onclick = () => { ov.style.display = "none"; };
@@ -2402,6 +2436,20 @@ ${rows}
 
             // render add/remove UI into modal body
             renderActions(disc, mnt, body);
+            // If opened from "Remove drive" button, jump to the Remove section.
+            if (focus === "remove") {
+                // renderActions uses fixed ids like rmBlock, rmDevSel; wait one tick.
+                setTimeout(() => {
+                    const rm = document.getElementById("rmBlock");
+                    const sel = document.getElementById("rmDevSel");
+                    if (rm && rm.scrollIntoView) {
+                        rm.scrollIntoView({ block: "start", behavior: "smooth" });
+                    }
+                    if (sel && sel.focus) {
+                        try { sel.focus(); } catch (_) {}
+                    }
+                }, 0);
+            }
         }
 
 
@@ -2557,7 +2605,7 @@ Optionally it can wipe member disks (VERY destructive).
 
                 // Best-effort: refresh pools list soon (exec polling will also refresh on done)
                 setTimeout(async () => {
-                    g_pools = await loadPools();
+                    await refreshPoolsState();
                     renderPoolSelectorTop();
                     if (g_tab === "pools") renderPoolsTab();
                 }, 800);
@@ -2672,7 +2720,7 @@ Optionally it can wipe member disks (VERY destructive).
                 ov.style.display = "none";
 
                 setTimeout(async () => {
-                    g_pools = await loadPools();
+                    await refreshPoolsState();
                     renderPoolSelectorTop();
                     renderPoolsTab();
                 }, 1200);
@@ -2781,7 +2829,18 @@ Optionally it can wipe member disks (VERY destructive).
                     }
                     return;
                 }
-
+                if (action === "remove") {
+                    try {
+                        await openPoolDrivesModal(mount, { focus: "remove" });
+                    } catch (e) {
+                        showToast(
+                            "err",
+                            `Remove drive UI crashed: ${String(e && (e.stack || e.message) ? (e.stack || e.message) : e)}`,
+                            6500
+                        );
+                    }
+                    return;
+                }
                 if (action === "convert") {
                     showToast("info", `convert pool (${mount}): UI coming next.`, 2600);
                     return;
@@ -2822,7 +2881,7 @@ Optionally it can wipe member disks (VERY destructive).
                     showToast("ok", "Renamed ✓", 2000);
 
                     // Refresh pools list + re-render Pools tab + top selector
-                    g_pools = await loadPools();
+                    await refreshPoolsState();
 
                     // Keep selection if it still exists
                     const exists = g_pools.some((pp) => String(pp?.mount || "") === String(g_selectedMount || ""));
