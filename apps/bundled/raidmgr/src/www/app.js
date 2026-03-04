@@ -14,61 +14,41 @@
     const subLine = el("subLine");
     const titleLine = el("titleLine");
     const refreshBtn = el("refreshBtn");
-    const probeOut = el("probeOut");
     const rawOut = el("rawOut");
-    const topologyOut = el("topology");
     const actionsOut = el("actionsOut");
     const userStatusEl = el("userStatus");
     const devModeChk = el("devModeChk");
-
     const probeCard = el("probeCard");
     const topologyCard = el("topologyCard");
     const rawCard = el("rawCard");
     const poolSelTop = el("poolSelTop");
-    // Tabs
-    const tabRaidBtn = el("tabRaidBtn");
-    const tabPoolsBtn = el("tabPoolsBtn");
-    const raidTab = el("raidTab");
+
     const poolsTab = el("poolsTab");
     const poolsOut = el("poolsOut");
+    const raidTab = el("raidTab");
 
+    const tabRaidBtn  = el("tabRaidBtn");
+    const tabPoolsBtn = el("tabPoolsBtn");
     const TAB_KEY = "pqnas_storagemgr_tab";
     let g_tab = "pools"; // "drives" | "pools"  (we keep variable name g_tab but change values below)
-    const DEV_MODE_KEY = "pqnas_storagemgr_dev_mode";
-    function loadTab() {
-        try {
-            const t = String(localStorage.getItem(TAB_KEY) || "");
-            return (t === "pools" || t === "raid") ? t : "pools";
-        } catch (_) {
-            return "pools";
-        }
+
+    function loadTab() { return "pools"; }
+    function saveTab(_) {}
+
+    function applyTabToUi() {
+        if (poolsTab) poolsTab.style.display = "";
+        if (raidTab)  raidTab.style.display = "none";
+        if (tabRaidBtn)  tabRaidBtn.style.display = "none";
+        if (tabPoolsBtn) tabPoolsBtn.style.display = "none";
     }
+    const DEV_MODE_KEY = "pqnas_storagemgr_dev_mode";
+
     function setBadge(kind, text) {
         if (!badge) return;
         badge.className = `badge ${kind || ""}`.trim();
         badge.textContent = text || "";
     }
-    function saveTab(t) {
-        try { localStorage.setItem(TAB_KEY, t); } catch (_) {}
-    }
 
-    function applyTabToUi() {
-        const isPools = (g_tab === "pools");
-
-        if (raidTab) raidTab.style.display = isPools ? "none" : "";
-        if (poolsTab) poolsTab.style.display = isPools ? "" : "none";
-
-        if (tabPoolsBtn) tabPoolsBtn.setAttribute("aria-pressed", isPools ? "true" : "false");
-        if (tabRaidBtn)  tabRaidBtn.setAttribute("aria-pressed", isPools ? "false" : "true");
-        // In Pools tab, dev-mode cards (probe/raw/topology) are hidden anyway because raidTab is hidden.
-    }
-
-    function setTab(t) {
-        g_tab = (t === "pools") ? "pools" : "drives";
-        saveTab(g_tab);
-        applyTabToUi();
-        probe(); // reload data appropriate for tab
-    }
     // Multi-pool selection
     const POOL_SEL_KEY = "pqnas_storagemgr_pool_mount";
     let g_pools = [];
@@ -78,8 +58,7 @@
     let g_lastAction = null;
     let g_lastProgress = null;
 
-    // Legacy fallback mounts (used only if /api/v4/storage/pools returns empty)
-    const mountsToTry = ["/srv/pqnas-test", "/srv/pqnas/data", "/srv/pqnas"];
+
 
     // ----------------------------------------------------------------------------
     // Global timer/poller state (so probe() can stop old intervals created by
@@ -391,9 +370,13 @@
     function applyDevModeToUi() {
         const on = isDevMode();
 
+        const devModeChk = document.getElementById("devModeChk");
         if (devModeChk) devModeChk.checked = on;
 
         // Dev-only cards:
+        const probeCard = document.getElementById("probeCard");
+        const topologyCard = document.getElementById("topologyCard");
+        const rawCard = document.getElementById("rawCard");
         if (probeCard) probeCard.style.display = on ? "" : "none";
         if (topologyCard) topologyCard.style.display = on ? "" : "none";
         if (rawCard) rawCard.style.display = on ? "" : "none";
@@ -486,14 +469,20 @@
         return { r, j, txt };
     }
     async function loadPools() {
-        // Returns [] on any failure (don’t break RAID tab)
-        try {
-            const q = await fetchJson("/api/v4/storage/pools");
-            if (!q.r || q.r.status !== 200 || !q.j || q.j.ok !== true || !Array.isArray(q.j.pools)) return [];
-            return q.j.pools;
-        } catch (_) {
-            return [];
+        const q = await fetchJson("/api/v4/storage/pools");
+
+        const http = q?.r?.status || 0;
+        if (!q.r) return { ok: false, http: 0, error: "no_response", txt: q?.txt || "" };
+
+        if (http !== 200) {
+            return { ok: false, http, error: "http_error", txt: q.txt || "", j: q.j || null };
         }
+
+        if (!q.j || q.j.ok !== true || !Array.isArray(q.j.pools)) {
+            return { ok: false, http, error: "bad_payload", txt: q.txt || "", j: q.j || null };
+        }
+
+        return { ok: true, http, pools: q.j.pools };
     }
 
     function prettyError(j, r, txt) {
@@ -735,8 +724,9 @@
             });
     }
 
-    function renderActions(parsed, mount) {
-        if (!actionsOut) return;
+    function renderActions(parsed, mount, targetEl) {
+        const out = targetEl || actionsOut;
+        if (!out) return;
 
         const cands = candidateDisks(parsed, { showInternal: false, usbOnly: false });
         const disabled = !(
@@ -869,14 +859,14 @@
 
         if (disabled) {
             html += `<div class="v" style="opacity:.8;">Storage pool actions are disabled (filesystem is not Btrfs or probe failed).</div>`;
-            actionsOut.innerHTML = html;
+            out.innerHTML = html;
             applyDevModeToUi();
             return;
         }
 
         if (!cands.length) {
             html += `<div class="v" style="opacity:.8;">No available drives found. (All disks are already members, or only loop devices exist.)</div>`;
-            actionsOut.innerHTML = html;
+            out.innerHTML = html;
             applyDevModeToUi();
             return;
         }
@@ -969,7 +959,7 @@
   </details>
 `;
 
-        actionsOut.innerHTML = html;
+        out.innerHTML = html;
 
         applyDevModeToUi(); // hide advancedDetails when dev mode is off
 
@@ -2111,6 +2101,7 @@ Tip: these are the Btrfs member devices that form this pool.
     </div>
 
     <div style="display:flex; flex-direction:column; gap:8px; flex:0 0 auto;">
+      <button class="btn secondary" type="button" data-pool-action="drives" data-mount="${esc(mount)}">Drives</button>
       <button class="btn secondary" type="button" data-pool-action="rename" data-mount="${esc(mount)}">Rename</button>
       <button class="btn secondary" type="button" data-pool-action="convert" data-mount="${esc(mount)}">Convert RAID</button>
       <button class="btn danger" type="button" data-pool-action="destroy" data-mount="${esc(mount)}">Destroy</button>
@@ -2188,13 +2179,9 @@ Tip: these are the Btrfs member devices that form this pool.
 .pqDriveSvgTile{
   width:210px;
   padding:8px 10px;
-  background: transparent;
-  border:1px solid rgba(255,255,255,0.10);
-}
-.pqDriveSvgTile{
   background: var(--panel);
   border:1px solid var(--border2);
-  border-radius: 16px;
+  border-radius:16px;
 }
 .pqDriveSvgTile:hover{ filter: brightness(1.06); }
 .pqDriveSvgTile:active{ transform: translateY(1px); }
@@ -2348,6 +2335,77 @@ ${rows}
             document.body.appendChild(ov);
             return ov;
         }
+        function ensurePoolDrivesOverlay() {
+            let ov = document.getElementById("poolDrivesOverlay");
+            if (ov) return ov;
+
+            ov = document.createElement("div");
+            ov.id = "poolDrivesOverlay";
+            ov.style.position = "fixed";
+            ov.style.inset = "0";
+            ov.style.display = "none";
+            ov.style.alignItems = "center";
+            ov.style.justifyContent = "center";
+            ov.style.background = isDarkThemeNow() ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.25)";
+            ov.style.zIndex = "9999";
+
+            ov.innerHTML = `
+<div style="
+  width:min(980px, 96vw);
+  max-height:90vh;
+  overflow:auto;
+  border-radius:18px;
+  border:1px solid rgba(255,255,255,0.14);
+  background: var(--panel, rgba(0,0,0,0.35));
+  color: var(--fg);
+  padding:14px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
+    <div id="poolDrivesTitle" style="font-weight:950;">Pool drives</div>
+    <button id="poolDrivesCloseBtn" class="btn secondary" type="button">Close</button>
+  </div>
+
+  <div id="poolDrivesBody"></div>
+</div>`;
+            document.body.appendChild(ov);
+            return ov;
+        }
+
+        async function openPoolDrivesModal(mount) {
+            const mnt = String(mount || "").trim();
+            if (!mnt) return;
+
+            const ov = ensurePoolDrivesOverlay();
+            const title = ov.querySelector("#poolDrivesTitle");
+            const closeBtn = ov.querySelector("#poolDrivesCloseBtn");
+            const body = ov.querySelector("#poolDrivesBody");
+
+            if (title) title.textContent = `Drives • ${mnt}`;
+            if (body) body.innerHTML = `<div class="v" style="opacity:.8;">Loading…</div>`;
+
+            closeBtn.onclick = () => { ov.style.display = "none"; };
+
+            ov.style.display = "flex";
+
+            // load discovery once and reuse your existing UI
+            const disc = await loadPoolDiscoveryOnce(mnt);
+            if (!disc) {
+                body.innerHTML = `<div class="v" style="opacity:.85;">Discovery failed.</div>`;
+                return;
+            }
+
+            // IMPORTANT: set the current selection so your hard guard matches
+            g_selectedMount = mnt;
+            saveSelectedMount(mnt);
+            renderPoolSelectorTop();
+
+            // render add/remove UI into modal body
+            renderActions(disc, mnt, body);
+        }
+
+
+
         // ------------------------------------------------------------
         // Destroy Pool UI
         // ------------------------------------------------------------
@@ -2657,16 +2715,36 @@ Optionally it can wipe member disks (VERY destructive).
                         return;
                     }
 
-                    host.innerHTML = `<div class="pqDriveSvgGrid">${bdevs.map(driveTileSvgHtml).join("")}</div>`;
+                    host.innerHTML = `<div class="pqDriveSvgGrid" data-mount="${esc(mount)}">
+                        ${bdevs.map(driveTileSvgHtml).join("")}
+                    </div>`;
 
-                    host.querySelectorAll(".pqDriveSvgTile").forEach((tile) => {
-                        tile.addEventListener("click", async () => {
-                            const dev = tile.getAttribute("data-dev") || "";
-                            if (!dev) return;
-                            try { await navigator.clipboard.writeText(dev); showToast("ok", `Copied: ${dev}`, 1400); }
-                            catch { showToast("info", dev, 1600); }
+                    const grid = host.querySelector(".pqDriveSvgGrid");
+                    if (grid) {
+                        // Click anywhere on drives area → open Drives modal for that pool
+                        grid.addEventListener("click", async (e) => {
+                            const mnt = grid.getAttribute("data-mount") || "";
+                            if (!mnt) return;
+
+                            // If user clicked a tile, still open modal (primary action)
+                            try {
+                                await openPoolDrivesModal(mnt);
+                            } catch (err) {
+                                showToast("err", `Drives UI crashed: ${String(err && (err.stack || err.message) ? (err.stack || err.message) : err)}`, 6500);
+                            }
                         });
-                    });
+
+                        // Optional: right-click on a tile copies /dev/... (secondary action)
+                        grid.querySelectorAll(".pqDriveSvgTile").forEach((tile) => {
+                            tile.addEventListener("contextmenu", async (ev) => {
+                                ev.preventDefault();
+                                const dev = tile.getAttribute("data-dev") || "";
+                                if (!dev) return;
+                                try { await navigator.clipboard.writeText(dev); showToast("ok", `Copied: ${dev}`, 1400); }
+                                catch { showToast("info", dev, 1600); }
+                            });
+                        });
+                    }
 
                 } catch (_) {
                     host.innerHTML = `<span class="v" style="opacity:.75;">(discovery failed)</span>`;
@@ -2691,6 +2769,18 @@ Optionally it can wipe member disks (VERY destructive).
                     return;
                 }
 
+                if (action === "drives") {
+                    try {
+                        await openPoolDrivesModal(mount);
+                    } catch (e) {
+                        showToast(
+                            "err",
+                            `Drives UI crashed: ${String(e && (e.stack || e.message) ? (e.stack || e.message) : e)}`,
+                            6500
+                        );
+                    }
+                    return;
+                }
 
                 if (action === "convert") {
                     showToast("info", `convert pool (${mount}): UI coming next.`, 2600);
@@ -2747,210 +2837,50 @@ Optionally it can wipe member disks (VERY destructive).
         });
     }
     async function probe() {
-        setBadge("warn", "loading…");
+        if (!raidTab) {
+            g_tab = "pools";
+            saveTab(g_tab);
+            applyTabToUi();
+        }
+        setBadge("info", "pools");
+        stopMountPolling();
 
-        // kill any old intervals from the previous view of actions/progress
-        stopMountPolling(); // <-- don't kill exec-record polling
+        if (subLine) subLine.textContent = "Manage storage pools (create/rename/convert/destroy).";
+        if (rawOut) rawOut.textContent = "";
+        if (actionsOut) actionsOut.textContent = "";
 
-        if (subLine) subLine.textContent = "Detecting RAID capabilities…";
-        if (rawOut) rawOut.textContent = "(loading)";
-        if (actionsOut) actionsOut.textContent = "(loading…)";
-        setUserStatusLines(["(loading)"]);
-        clearNode(probeOut);
-        clearNode(topologyOut);
+        const lp = await loadPools();
 
-        // 1) Load pools once
-        g_pools = await loadPools();
+        if (!lp.ok) {
+            g_pools = [];
+            g_selectedMount = "";
+            renderPoolSelectorTop();
 
-        // 2) Choose selected mount
+            // show WHY in UI (so you immediately see 401/403 etc.)
+            if (poolsOut) {
+                poolsOut.innerHTML = `
+        <div class="v" style="opacity:.9;">Failed to load pools.</div>
+        <pre style="margin-top:10px; max-height:45vh; overflow:auto;">
+${esc(JSON.stringify({ http: lp.http, error: lp.error, json: lp.j || null, txt: (lp.txt || "").slice(0, 2000) }, null, 2))}
+        </pre>`;
+            }
+            return;
+        }
+
+        g_pools = lp.pools || [];
+
         const saved = loadSelectedMount();
-
         if (g_pools.length) {
-            const existsCurrent = g_pools.some((p) => String(p?.mount || "") === String(g_selectedMount || ""));
-            const existsSaved   = g_pools.some((p) => String(p?.mount || "") === String(saved || ""));
-
-            g_selectedMount = existsCurrent
-                ? String(g_selectedMount || "")
-                : existsSaved
-                    ? String(saved || "")
-                    : String(g_pools[0]?.mount || "");
-
-            if (g_selectedMount) saveSelectedMount(g_selectedMount);
+            const existsSaved = g_pools.some(p => String(p?.mount||"") === String(saved||""));
+            g_selectedMount = existsSaved ? String(saved||"") : String(g_pools[0]?.mount||"");
+            saveSelectedMount(g_selectedMount);
         } else {
             g_selectedMount = "";
         }
 
-        // 3) Render top selector
         renderPoolSelectorTop();
-        // If Pools tab is active, show pool list and stop here (for now)
-        if (g_tab === "pools") {
-            setBadge("info", "pools");
-            if (subLine) subLine.textContent = "Manage storage pools (create/rename/convert/destroy).";
-
-            renderPoolsTab();
-
-            applyDevModeToUi();
-            return;
-        }
-        // 4) Decide mounts to try
-        const mountsTry = g_selectedMount ? [g_selectedMount] : mountsToTry;
-
-        for (const m of mountsTry) {
-            const url = `/api/v4/raid/status?mount=${encodeURIComponent(m)}`;
-            const { r, j, txt } = await fetchJson(url);
-
-            if (r.status === 401 || r.status === 403) {
-                setBadge("warn", "admin required");
-                if (subLine) subLine.textContent = "Requires admin session.";
-
-                setUserStatusLines([`Mount: ${m}`, `Access: Denied (admin required)`, `RAID features: Unknown`]);
-
-                if (probeOut) {
-                    probeOut.appendChild(kvRow("Access", "Denied (not signed in / not admin)"));
-                    probeOut.appendChild(kvRow("Endpoint", url));
-                }
-                if (rawOut) rawOut.textContent = JSON.stringify({ http: r.status, body: j ?? txt }, null, 2);
-
-                applyDevModeToUi();
-                return;
-            }
-
-            if (j && j.ok === true) {
-                const fs = String(j.fstype || "");
-                const resolved = String(j.resolved_mount || m);
-                const isBtrfs = fs.toLowerCase() === "btrfs";
-
-                if (isBtrfs) {
-                    setBadge("ok", "enabled");
-                    if (subLine) subLine.textContent = "RAID endpoints available (Btrfs detected).";
-                } else {
-                    setBadge("warn", "disabled");
-                    if (subLine) subLine.textContent = "Filesystem is not Btrfs (RAID disabled).";
-                }
-
-                if (probeOut) {
-                    probeOut.appendChild(kvRow("Mount (requested)", m));
-                    probeOut.appendChild(kvRow("Mount (resolved)", resolved));
-                    probeOut.appendChild(kvRow("Filesystem", fs || "(unknown)"));
-                    if (j.mode) probeOut.appendChild(kvRow("Mode", j.mode));
-                    if (j.message) probeOut.appendChild(kvRow("Message", j.message));
-                }
-                if (subLine) {
-                    subLine.textContent = `Managing storage pool: ${resolved}`;
-                }
-                if (isBtrfs && j.parsed) {
-                    renderTopology(j.parsed);
-                } else if (topologyOut) {
-                    topologyOut.textContent = isBtrfs ? "No parsed topology from server." : "Topology not available (non-btrfs).";
-                }
-
-                // Single discovery fetch: use it for actions + raw output
-                let discObj = null;
-                try {
-                    const discUrl = `/api/v4/raid/discovery?mount=${encodeURIComponent(m)}`;
-                    const d = await fetchJson(discUrl);
-                    if (d && d.j && d.j.ok === true) {
-                        discObj = d.j;
-                        renderActions(d.j, resolved);
-                    } else {
-                        discObj = d?.j ?? d?.txt ?? { http: d?.r?.status };
-                    }
-                } catch (e) {
-                    discObj = { error: String(e && e.message ? e.message : e) };
-                }
-
-                renderUserStatusFrom(j, m, resolved, discObj);
-
-                if (rawOut) {
-                    rawOut.textContent = JSON.stringify(
-                        {
-                            chosen_mount: m,
-                            status: { endpoint: "status", mount: m, response: j },
-                            discovery: discObj,
-                        },
-                        null,
-                        2
-                    );
-                }
-
-                applyDevModeToUi();
-                return;
-            }
-        }
-
-        // Fallback: /discovery across mounts
-        let last = null;
-        for (const m of mountsTry) {
-            const url = `/api/v4/raid/discovery?mount=${encodeURIComponent(m)}`;
-            const { r, j, txt } = await fetchJson(url);
-
-            if (r.status === 401 || r.status === 403) {
-                setBadge("warn", "admin required");
-                if (subLine) subLine.textContent = "Requires admin session.";
-
-                setUserStatusLines([`Mount: ${m}`, `Access: Denied (admin required)`, `RAID features: Unknown`]);
-
-                if (probeOut) {
-                    probeOut.appendChild(kvRow("Access", "Denied (not signed in / not admin)"));
-                    probeOut.appendChild(kvRow("Endpoint", url));
-                }
-                if (rawOut) rawOut.textContent = JSON.stringify({ http: r.status, body: j ?? txt }, null, 2);
-
-                applyDevModeToUi();
-                return;
-            }
-
-            if (j && j.ok === true) {
-                const fs = String(j.fstype || "");
-                const resolved = String(j.resolved_mount || m);
-
-                if (fs.toLowerCase() === "btrfs") {
-                    setBadge("ok", "enabled");
-                    if (subLine) subLine.textContent = "Discovery succeeded (Btrfs detected).";
-                } else {
-                    setBadge("warn", "disabled");
-                    if (subLine) subLine.textContent = "Discovery succeeded, but filesystem is not Btrfs.";
-                }
-
-                if (probeOut) {
-                    probeOut.appendChild(kvRow("Mount (requested)", m));
-                    probeOut.appendChild(kvRow("Mount (resolved)", resolved));
-                    probeOut.appendChild(kvRow("Filesystem", fs || "(unknown)"));
-                    if (j.devices_count != null) probeOut.appendChild(kvRow("Devices", String(j.devices_count)));
-                    if (j.arrays_count != null) probeOut.appendChild(kvRow("Arrays", String(j.arrays_count)));
-                }
-
-                if (rawOut) rawOut.textContent = JSON.stringify({ endpoint: "discovery", mount: m, response: j }, null, 2);
-
-                try {
-                    if (j && j.ok === true && j.btrfs) {
-                        if (j.btrfs.summary) renderTopology({ summary: j.btrfs.summary, usage: j.btrfs.usage || {} });
-                        else if (topologyOut) topologyOut.textContent = "Topology available but schema differs (no btrfs.summary). See raw output.";
-                    }
-                } catch (_) {}
-
-                renderActions(j, resolved);
-                return;
-            }
-
-            last = { r, j, txt, mount: m, url };
-        }
-
-        setBadge("warn", "disabled");
-
-        const errText = last ? prettyError(last.j, last.r, last.txt) : "RAID not available";
-        if (subLine) subLine.textContent = `RAID Manager is disabled: ${errText}`;
-
-        if (probeOut) {
-            probeOut.appendChild(kvRow("Result", "Disabled"));
-            if (last) {
-                probeOut.appendChild(kvRow("Mount (last tried)", last.mount));
-                probeOut.appendChild(kvRow("Endpoint", last.url));
-                probeOut.appendChild(kvRow("Reason", errText));
-            }
-        }
-
-        if (rawOut) rawOut.textContent = JSON.stringify(last ? { http: last.r.status, body: last.j ?? last.txt } : {}, null, 2);
+        renderPoolsTab();
+        applyDevModeToUi();
     }
 
     refreshBtn?.addEventListener("click", probe);
@@ -2969,17 +2899,23 @@ Optionally it can wipe member disks (VERY destructive).
         g_selectedMount = m;
         probe();
     });
-    // Tabs init + handlers
-    g_tab = loadTab();
-    applyTabToUi();
 
-    tabPoolsBtn?.addEventListener("click", () => setTab("pools"));
-    tabRaidBtn?.addEventListener("click", () => setTab("drives"));
 
-    // Dev mode init
-    applyDevModeToUi();
-    devModeChk?.addEventListener("change", () => setDevMode(!!devModeChk.checked));
 
-    // Initial
-    probe();
+    function initStoragemgr() {
+        // Dev mode init
+        applyDevModeToUi();
+        devModeChk?.addEventListener("change", () => setDevMode(!!devModeChk.checked));
+
+        // Initial
+        g_tab = loadTab();
+        applyTabToUi();
+        probe();
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", initStoragemgr);
+    } else {
+        initStoragemgr();
+    }
 })();
