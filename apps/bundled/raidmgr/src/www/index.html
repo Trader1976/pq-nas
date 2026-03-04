@@ -322,6 +322,18 @@
             --toast-fg: rgba(0,0,0,0.92);
             --toast-shadow: 0 10px 26px rgba(0,0,0,0.18);
         }
+        /* Pools tab: don't wrap everything in a giant "card" */
+        #poolsTab > .card{
+            background: transparent !important;
+            border: 0 !important;
+            padding: 0 !important;
+        }
+        #poolsTab > .card > h3{
+            margin: 0 0 10px 0 !important;
+        }
+        #poolsOut{
+            margin-top: 0 !important;
+        }
         .badge.info { border-color: rgba(0,140,255,0.22); background: rgba(0,140,255,0.10); }
     </style>
 </head>
@@ -401,11 +413,7 @@
 
             <!-- TAB: POOLS -->
             <div id="poolsTab" style="display:none;">
-                <div class="card">
-                    <h3>Pools</h3>
-
-                    <div id="poolsOut" class="v" style="margin-top:10px; white-space:pre-wrap;"></div>
-                </div>
+                <div id="poolsOut"></div>
             </div>
 
         </div>

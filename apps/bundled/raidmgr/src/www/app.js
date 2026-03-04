@@ -1890,7 +1890,41 @@
             poolsOut.innerHTML = `<div class="v" style="opacity:.8;">No pools found.</div>`;
             return;
         }
+        function svgSingleDrive({ label = "" } = {}) {
+            const L = esc(label);
 
+            return `
+<svg viewBox="0 0 220 92" width="100%" height="92" role="img" aria-label="Drive ${L}" style="display:block;">
+  <defs>
+    <linearGradient id="pqDrvG" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="rgba(var(--info-rgb, 0,140,255), 0.45)"/>
+      <stop offset="1" stop-color="rgba(var(--info-rgb, 0,140,255), 0.14)"/>
+    </linearGradient>
+  </defs>
+
+  <!-- chassis -->
+  <rect x="10" y="14" width="200" height="56" rx="14"
+        fill="var(--panel2)"
+        stroke="var(--border)" stroke-width="2"/>
+
+  <!-- accent top strip -->
+  <rect x="10" y="14" width="200" height="10" rx="14"
+        fill="rgba(var(--info-rgb, 0,140,255), 0.28)"/>
+
+  <!-- tray -->
+  <rect x="20" y="28" width="180" height="34" rx="10"
+        fill="url(#pqDrvG)"
+        stroke="var(--border2)" stroke-width="2"/>
+
+  <!-- leds -->
+  <rect x="32" y="41" width="10" height="8" rx="2" fill="rgba(var(--fg-rgb),0.72)"/>
+  <rect x="46" y="41" width="10" height="8" rx="2" fill="rgba(var(--fg-rgb),0.42)"/>
+
+  <!-- label -->
+  <text x="64" y="49" font-size="12" font-family="var(--mono)"
+        fill="var(--fg)" opacity="0.92">${L}</text>
+</svg>`;
+        }
         function pill(text) {
             return `<span style="
           display:inline-block; padding:3px 8px; border-radius:999px;
@@ -1899,13 +1933,161 @@
           font-size:12px; opacity:.9;
         ">${esc(text)}</span>`;
         }
+        function svgDiskIcon() {
+            // Theme-aware icon (no hard-coded colors)
+            // Uses --fg and --info-rgb if available
+            return `
+<svg viewBox="0 0 48 48" width="42" height="42" aria-hidden="true" style="display:block">
+  <defs>
+    <linearGradient id="pqDiskG" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="rgba(var(--info-rgb, 0,140,255), 0.40)"/>
+      <stop offset="1" stop-color="rgba(var(--info-rgb, 0,140,255), 0.14)"/>
+    </linearGradient>
+  </defs>
 
+  <rect x="6" y="6" width="36" height="14" rx="3"
+        fill="url(#pqDiskG)" stroke="rgba(0,0,0,0.22)" stroke-width="1"/>
+  <rect x="6" y="28" width="36" height="14" rx="3"
+        fill="url(#pqDiskG)" stroke="rgba(0,0,0,0.22)" stroke-width="1"/>
+
+  <rect x="11" y="11" width="4" height="4" rx="1" fill="rgba(255,255,255,0.75)"/>
+  <rect x="18" y="11" width="4" height="4" rx="1" fill="rgba(255,255,255,0.75)"/>
+
+  <rect x="11" y="33" width="4" height="4" rx="1" fill="rgba(255,255,255,0.75)"/>
+  <rect x="18" y="33" width="4" height="4" rx="1" fill="rgba(255,255,255,0.75)"/>
+</svg>`;
+        }
+
+        function driveTileHtml(d) {
+            const dev = String(d?.path || "");
+            const parent = String(d?.parent_disk || "");
+            const size = Number(d?.size_bytes || 0);
+            const used = Number(d?.used_bytes || 0);
+
+            const sub =
+                parent && parent !== dev
+                    ? parent
+                    : "";
+
+            const metaBits = [];
+            if (Number.isFinite(size) && size > 0) metaBits.push(`size ${fmtBytes(size)}`);
+            if (Number.isFinite(used) && used > 0) metaBits.push(`used ${fmtBytes(used)}`);
+
+            const meta = metaBits.join(" • ");
+
+            return `
+<div class="pqDriveTile" data-dev="${esc(dev)}" title="${esc(dev)}">
+  <div class="pqDriveIcon">${svgDiskIcon()}</div>
+  <div style="min-width:0;">
+    <div class="pqDriveDev">${esc(dev || "(device)")}</div>
+    ${sub ? `<div class="pqDriveSub">${esc(sub)}</div>` : ``}
+    ${meta ? `<div class="pqDriveMeta">${esc(meta)}</div>` : ``}
+  </div>
+</div>`;
+        }
+
+        async function loadPoolDiscoveryOnce(mount) {
+            const m = String(mount || "").trim();
+            if (!m) return null;
+            try {
+                const q = await fetchJson(`/api/v4/raid/discovery?mount=${encodeURIComponent(m)}`);
+                if (!q.r || q.r.status !== 200) return null;
+                if (!q.j || q.j.ok !== true) return null;
+                return q.j;
+            } catch (_) {
+                return null;
+            }
+        }
+
+        async function renderSelectedPoolGraphics() {
+            const host = document.getElementById("poolGraphics");
+            if (!host) return;
+
+            const mnt = String(g_selectedMount || "").trim();
+            const p = pools.find(x => String(x?.mount || "") === mnt);
+
+            if (!p || !mnt) {
+                host.innerHTML = `<div class="v" style="opacity:.8;">Select a pool to see its member drives.</div>`;
+                return;
+            }
+
+            host.innerHTML = `<div class="v" style="opacity:.8;">Loading member drives…</div>`;
+
+            const disc = await loadPoolDiscoveryOnce(mnt);
+            const bdevs = Array.isArray(disc?.btrfs?.devices) ? disc.btrfs.devices : [];
+
+            if (!bdevs.length) {
+                host.innerHTML = `
+<div class="v" style="opacity:.85;">No member devices found from discovery.</div>
+<div class="v" style="opacity:.7; margin-top:6px;">(Pool may be non-btrfs or discovery schema differs.)</div>`;
+                return;
+            }
+
+            // Optional: show pool “mount points” as the mount itself + member /dev paths (what user expects visually)
+            host.innerHTML = `
+<div class="row" style="align-items:center; justify-content:space-between; gap:10px;">
+  <div style="min-width:0;">
+    <div style="font-weight:950;">${esc(poolDisplayName(p))}</div>
+    <div class="v" style="opacity:.8; margin-top:2px;">${esc(mnt)}</div>
+  </div>
+  <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
+    <span class="pqPill">${esc(`drives: ${bdevs.length}`)}</span>
+    ${p?.fstype ? `<span class="pqPill">${esc(`fs: ${String(p.fstype)}`)}</span>` : ``}
+  </div>
+</div>
+
+<div class="pqDriveGrid" style="margin-top:12px;">
+  ${bdevs.map(driveTileHtml).join("")}
+</div>
+
+<div class="v" style="opacity:.70; margin-top:10px;">
+Tip: these are the Btrfs member devices that form this pool.
+</div>
+`;
+
+            // (Optional) click-to-copy /dev/… to clipboard
+            host.querySelectorAll(".pqDriveTile").forEach((tile) => {
+                tile.addEventListener("click", async () => {
+                    const dev = tile.getAttribute("data-dev") || "";
+                    if (!dev) return;
+                    try {
+                        await navigator.clipboard.writeText(dev);
+                        showToast("ok", `Copied: ${dev}`, 1400);
+                    } catch (_) {
+                        showToast("info", dev, 1600);
+                    }
+                });
+            });
+        }
+        function driveTileSvgHtml(d) {
+            const dev  = String(d?.path || "");
+            const size = Number(d?.size_bytes || 0);
+            const used = Number(d?.used_bytes || 0);
+
+            const metaBits = [];
+            if (size > 0) metaBits.push(`size ${fmtBytes(size)}`);
+            if (used > 0) metaBits.push(`used ${fmtBytes(used)}`);
+
+            // short label inside SVG so it stays tidy
+            const short = dev.replace("/dev/", "");
+
+            return `
+<div class="pqDriveSvgTile" data-dev="${esc(dev)}" title="${esc(dev)}">
+  <div class="pqDriveSvgWrap">
+    ${svgSingleDrive({ label: short })}
+  </div>
+  <div class="pqDriveSvgDev">${esc(dev)}</div>
+  ${metaBits.length ? `<div class="pqDriveSvgMeta">${esc(metaBits.join(" • "))}</div>` : ``}
+</div>`;
+        }
         const rows = pools.map((p) => {
             const mount = String(p?.mount || "");
             const label = poolDisplayName(p);
             const fstype = String(p?.fstype || p?.fs || "").trim();
             const uuid = String(p?.uuid || "").trim();
             const raid = String(p?.raid || p?.mode || "").trim();
+
+            const hostId = "poolMembers__" + btoa(unescape(encodeURIComponent(mount))).replace(/[^a-z0-9]/gi, "_");
 
             return `
 <div class="card" style="margin-top:10px;">
@@ -1917,6 +2099,14 @@
         ${fstype ? pill(`fs: ${fstype}`) : ""}
         ${raid ? pill(`raid: ${raid}`) : ""}
         ${uuid ? pill(`uuid: ${uuid.slice(0, 12)}…`) : ""}
+      </div>
+
+      <!-- ✅ NEW: member drives render here -->
+      <div style="margin-top:12px;">
+        <div class="k" style="margin-bottom:6px;">Member drives</div>
+        <div id="${hostId}" class="pqPoolMembersHost">
+          <span class="v" style="opacity:.75;">(loading…)</span>
+        </div>
       </div>
     </div>
 
@@ -1930,6 +2120,141 @@
         }).join("");
 
         poolsOut.innerHTML = `
+<style>
+.pqPill{
+  border:1px solid var(--border2);
+  background: var(--panel);
+}
+  .pqDriveGrid{
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap:10px;
+  }
+  .pqDriveTile{
+    display:flex;
+    gap:10px;
+    align-items:center;
+    padding:10px 12px;
+    border-radius:16px;
+    border:1px solid rgba(255,255,255,0.14);
+    background: rgba(0,0,0,0.10);
+    cursor:pointer;
+    user-select:none;
+    transition: transform .06s ease, filter .06s ease;
+  }
+  .pqDriveTile:hover{ filter: brightness(1.06); }
+  .pqDriveTile:active{ transform: translateY(1px); }
+
+  .pqDriveIcon{
+    flex:0 0 auto;
+    width:46px; height:46px;
+    display:flex; align-items:center; justify-content:center;
+    border-radius:14px;
+    border:1px solid rgba(0,0,0,0.10);
+    background: rgba(255,255,255,0.06);
+  }
+  .pqDriveDev{
+    font-family: var(--mono);
+    font-weight:900;
+    font-size:13px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .pqDriveSub{
+    font-family: var(--mono);
+    font-size:12px;
+    opacity:.72;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    margin-top:2px;
+  }
+  .pqDriveMeta{
+    font-size:12px;
+    opacity:.78;
+    margin-top:4px;
+  }
+.pqDriveSvgGrid{
+  display:grid;
+  grid-template-columns: repeat(auto-fill, 210px);
+  gap:10px;
+  justify-content:flex-start;
+  align-items:start;              /* important */
+}
+.pqDriveSvgTile{ height: auto; }
+.pqPoolMembersHost{ min-height: 0 !important; }
+/* Compact tile */
+.pqDriveSvgTile{
+  width:210px;
+  padding:8px 10px;
+  background: transparent;
+  border:1px solid rgba(255,255,255,0.10);
+}
+.pqDriveSvgTile{
+  background: var(--panel);
+  border:1px solid var(--border2);
+  border-radius: 16px;
+}
+.pqDriveSvgTile:hover{ filter: brightness(1.06); }
+.pqDriveSvgTile:active{ transform: translateY(1px); }
+/* Keep the SVG small so it doesn't create vertical bulk */
+.pqDriveSvgWrap{
+  width:150px;
+  height:58px;                    /* important */
+  border-radius: 14px;
+  background: var(--panel2);
+  border: 1px solid var(--border2);
+  padding: 6px;
+}
+.pqDriveSvgWrap svg{
+  width:150px;
+  height:58px;                    /* important */
+  display:block;
+}
+
+/* Text tighter */
+.pqDriveSvgDev{
+  margin-top:6px;
+  font-family: var(--mono);
+  font-weight:900;
+  font-size:12px;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.pqDriveSvgMeta{
+  margin-top:2px;
+  font-size:12px;
+  opacity:.78;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+/* Member drives section should not create a tall empty area */
+.pqPoolMembersHost{
+  display:block;
+  margin:0;
+  min-height:0 !important;
+  height:auto !important;
+  padding: 8px;
+  border-radius: 16px;
+  background: var(--panel2);
+  border: 1px solid var(--border2);
+}
+
+
+/* Make grid compact (no vertical expansion) */
+.pqDriveSvgGrid{
+  align-content:start;
+}
+/* If your global .card has min-height, kill it for pool cards in Pools tab */
+#poolsOut .card{
+  min-height:0 !important;
+  height:auto !important;
+}
+</style>
+
 <div class="row" style="align-items:center; justify-content:space-between; gap:10px;">
   <div style="font-weight:950;">Storage pools</div>
   <button class="btn" id="poolCreateBtn" type="button">Create new pool</button>
@@ -2312,6 +2637,44 @@ Optionally it can wipe member disks (VERY destructive).
                 showToast("err", `Create pool UI crashed: ${String(e && e.stack ? e.stack : e)}`, 6500);
             });
         });
+
+        (async () => {
+            // render member drives into each pool card
+            const tasks = pools.map(async (p) => {
+                const mount = String(p?.mount || "");
+                if (!mount) return;
+
+                const hostId = "poolMembers__" + btoa(unescape(encodeURIComponent(mount))).replace(/[^a-z0-9]/gi, "_");
+                const host = document.getElementById(hostId);
+                if (!host) return;
+
+                try {
+                    const disc = await loadPoolDiscoveryOnce(mount);
+                    const bdevs = Array.isArray(disc?.btrfs?.devices) ? disc.btrfs.devices : [];
+
+                    if (!bdevs.length) {
+                        host.innerHTML = `<span class="v" style="opacity:.75;">(no devices found)</span>`;
+                        return;
+                    }
+
+                    host.innerHTML = `<div class="pqDriveSvgGrid">${bdevs.map(driveTileSvgHtml).join("")}</div>`;
+
+                    host.querySelectorAll(".pqDriveSvgTile").forEach((tile) => {
+                        tile.addEventListener("click", async () => {
+                            const dev = tile.getAttribute("data-dev") || "";
+                            if (!dev) return;
+                            try { await navigator.clipboard.writeText(dev); showToast("ok", `Copied: ${dev}`, 1400); }
+                            catch { showToast("info", dev, 1600); }
+                        });
+                    });
+
+                } catch (_) {
+                    host.innerHTML = `<span class="v" style="opacity:.75;">(discovery failed)</span>`;
+                }
+            });
+
+            await Promise.all(tasks);
+        })();
 
         poolsOut.querySelectorAll("button[data-pool-action]").forEach((btn) => {
             btn.addEventListener("click", async () => {
