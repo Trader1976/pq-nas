@@ -295,7 +295,6 @@ static long long file_size_bytes_safe(const std::string& path) {
 }
 
 // ===================== User storage filesystem (Phase 1A) =====================
-
 // Root where PQ-NAS stores user data on disk (real filesystem).
 // Default: <exe_dir()>/data  (self-contained next to binary).
 static std::string data_root_dir() {
@@ -425,8 +424,12 @@ static std::string& default_pool_id() {
     static std::string id = "default";
     return id;
 }
-// Computes absolute user directory path for a fingerprint.
-static std::filesystem::path user_dir_for_fp(const std::string& fp_hex) {
+static std::string mount_for_pool_id(const std::string& allowed_prefix, const std::string& pool_id);
+static std::filesystem::path user_dir_for_fp(pqnas::UsersRegistry& users, const std::string& fp_hex)
+{
+    auto uopt = users.get(fp_hex);
+
+    // default "pool mount" for default pool id (map may contain /srv/pqnas/data)
     std::string mount = data_root_dir();
     {
         std::lock_guard<std::mutex> lk(pool_mu());
@@ -434,9 +437,38 @@ static std::filesystem::path user_dir_for_fp(const std::string& fp_hex) {
         auto it = m.find(default_pool_id());
         if (it != m.end()) mount = it->second;
     }
-    return std::filesystem::path(mount) / "users" / fp_hex;
-}
 
+    bool is_pool_mount = false;
+
+    if (uopt.has_value()) {
+        const auto& u = *uopt;
+        if (!u.storage_pool_id.empty()) {
+            std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+            if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+            const std::string pools_prefix = allowed_prefix + "/pools";
+            mount = mount_for_pool_id(pools_prefix, u.storage_pool_id); // /srv/pqnas/pools/<id>
+            is_pool_mount = true;
+        }
+    }
+
+    const std::filesystem::path data_root =
+        is_pool_mount ? (std::filesystem::path(mount) / "data")
+                      : std::filesystem::path(mount); // default already points to /srv/pqnas/data
+
+    // Prefer allocated + root_rel (root_rel is relative to data_root)
+    if (uopt.has_value()) {
+        const auto& u = *uopt;
+        if (u.storage_state == "allocated" &&
+            !u.root_rel.empty() &&
+            is_safe_rel_path(u.root_rel))
+        {
+            return data_root / u.root_rel; // e.g. .../data/users/<fp>
+        }
+    }
+
+    // Fallback legacy layout
+    return data_root / "users" / fp_hex;
+}
 namespace {
 
 
@@ -12439,11 +12471,11 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
    			auto& u = kv.second;
 
    			// storage usage (best-effort)
-   			unsigned long long used_bytes = 0;
-		    if (u.storage_state == "allocated" && !u.root_rel.empty() && is_safe_rel_path(u.root_rel)) {
-		        std::filesystem::path abs = std::filesystem::path(data_root_dir()) / std::filesystem::path(u.root_rel);
-       			used_bytes = dir_size_bytes_best_effort(abs);
-   			}
+			unsigned long long used_bytes = 0;
+			if (u.storage_state == "allocated") {
+    			const std::filesystem::path abs = user_dir_for_fp(users, u.fingerprint);
+    			used_bytes = dir_size_bytes_best_effort(abs);
+			}
 
 		    out["users"].push_back({
 		        {"fingerprint", u.fingerprint},
@@ -13153,7 +13185,7 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
     }
 
 
-const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
 std::filesystem::path from_abs, to_abs;
 std::string err1, err2;
@@ -13389,7 +13421,7 @@ srv.Post("/api/v4/files/mkdir", [&](const httplib::Request& req, httplib::Respon
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     // reuse strict resolver
     std::filesystem::path abs;
@@ -13532,7 +13564,7 @@ srv.Post("/api/v4/files/hash", [&](const httplib::Request& req, httplib::Respons
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     std::filesystem::path path_abs;
     std::string err;
@@ -13666,7 +13698,7 @@ srv.Post("/api/v4/files/rmdir", [&](const httplib::Request& req, httplib::Respon
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     std::filesystem::path path_abs;
     std::string err;
@@ -13824,7 +13856,7 @@ srv.Post("/api/v4/files/tree", [&](const httplib::Request& req, httplib::Respons
     }
     max_entries = std::max(1, std::min(5000, max_entries));
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     std::filesystem::path path_abs;
     std::string err;
@@ -14065,7 +14097,7 @@ srv.Post("/api/v4/files/touch", [&](const httplib::Request& req, httplib::Respon
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     std::filesystem::path path_abs;
     std::string err;
@@ -14217,7 +14249,7 @@ srv.Post("/api/v4/files/cat", [&](const httplib::Request& req, httplib::Response
     }
     max_bytes = std::max(1, std::min(1024 * 1024, max_bytes)); // 1..1MiB
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     std::filesystem::path path_abs;
     std::string err;
@@ -14416,7 +14448,7 @@ srv.Post("/api/v4/files/save_text", [&](const httplib::Request& req, httplib::Re
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     std::filesystem::path path_abs;
     std::string err;
@@ -14722,7 +14754,7 @@ srv.Post("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response
     if (max_bytes < MINB) max_bytes = MINB;
     if (max_bytes > MAXB) max_bytes = MAXB;
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     std::filesystem::path path_abs;
     std::string err;
@@ -15226,7 +15258,7 @@ srv.Post("/api/v4/files/zip_sel", [&](const httplib::Request& req, httplib::Resp
         if (!covered) paths_rel.push_back(p);
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     // If base is provided, ensure it's a real directory under user_dir (fail-closed).
     std::filesystem::path base_abs;
@@ -15616,7 +15648,7 @@ srv.Post("/api/v4/files/rmrf", [&](const httplib::Request& req, httplib::Respons
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     std::filesystem::path path_abs;
     std::string err;
@@ -15874,7 +15906,7 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
     }
     max = std::max(1, std::min(2000, max));
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     std::filesystem::path base_abs;
     std::string err;
@@ -16072,7 +16104,7 @@ auto files_stat_handler = [&](const httplib::Request& req, httplib::Response& re
     // allow "." as user root for convenience
     if (path_rel == "." || path_rel == "./" || path_rel == "/") path_rel.clear();
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     std::filesystem::path path_abs;
     std::string err;
@@ -16376,7 +16408,7 @@ srv.Post("/api/v4/files/stat_sel", [&](const httplib::Request& req, httplib::Res
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     // Helpers (copied from /stat for consistency)
     auto mode_octal_from_perms = [&](std::filesystem::perms pr) -> std::string {
@@ -16662,7 +16694,7 @@ srv.Post("/api/v4/files/du", [&](const httplib::Request& req, httplib::Response&
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     std::filesystem::path path_abs;
     std::string err;
@@ -16865,7 +16897,7 @@ srv.Delete("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Res
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     std::filesystem::path abs_path;
     std::string perr;
@@ -16987,7 +17019,20 @@ srv.Get("/api/v4/files/list", [&](const httplib::Request& req, httplib::Response
         auto it = req.headers.find("User-Agent");
         return pqnas::shorten(it == req.headers.end() ? "" : it->second);
     };
+// DEBUG: show active users_path + resolved user root
+{
+    auto uopt_dbg = users.get(fp_hex);
+    std::filesystem::path dbg_user_dir = user_dir_for_fp(users, fp_hex);
 
+    std::cerr << "[dbg/files_list] users_path=" << users_path
+              << " fp=" << fp_hex
+              << " status=" << (uopt_dbg ? uopt_dbg->status : "?")
+              << " storage_state=" << (uopt_dbg ? uopt_dbg->storage_state : "?")
+              << " storage_pool_id=" << (uopt_dbg ? uopt_dbg->storage_pool_id : "?")
+              << " root_rel=" << (uopt_dbg ? uopt_dbg->root_rel : "?")
+              << " user_dir=" << dbg_user_dir.string()
+              << std::endl;
+}
     auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "") {
         pqnas::AuditEvent ev;
         ev.event = "v4.files_list_fail";
@@ -17058,7 +17103,7 @@ srv.Get("/api/v4/files/list", [&](const httplib::Request& req, httplib::Response
     // but still reject NUL and backslashes / drive letters etc if provided
     // We'll validate via resolve_user_path_strict only when non-empty.
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
     std::filesystem::path abs_dir = user_dir;
 
     if (!rel_dir.empty()) {
@@ -17239,7 +17284,7 @@ srv.Get("/api/v4/me/storage", [&](const httplib::Request& req, httplib::Response
     const auto& u = *uopt;
 
     const std::string now_iso = now_iso_utc();
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     json out;
     out["ok"] = true;
@@ -17416,7 +17461,7 @@ srv.Post("/api/v4/files/exists", [&](const httplib::Request& req, httplib::Respo
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     std::filesystem::path path_abs;
     std::string err;
@@ -17575,7 +17620,7 @@ srv.Post("/api/v4/files/copy", [&](const httplib::Request& req, httplib::Respons
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     std::filesystem::path from_abs, to_abs;
     std::string err1, err2;
@@ -17889,7 +17934,7 @@ srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response&
     }
 
     // Resolve directory path strictly under user dir
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
     std::filesystem::path abs_dir;
     std::string perr;
     if (!pqnas::resolve_user_path_strict(user_dir, rel_path, &abs_dir, &perr)) {
@@ -18119,7 +18164,7 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
     }
 
     // Resolve file path strictly under user dir
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
     std::filesystem::path abs;
     std::string perr;
     if (!pqnas::resolve_user_path_strict(user_dir, rel_path, &abs, &perr)) {
@@ -18370,7 +18415,7 @@ if (incoming_bytes > transport_max) {
 
 
     // quota + path resolve
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
     pqnas::QuotaCheckResult qc = pqnas::quota_check_for_upload_v1(
         users, fp_hex, user_dir, rel_path, incoming_bytes
     );
@@ -20665,7 +20710,7 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     // Resolve path strictly using your existing safe resolver
     std::filesystem::path abs;
@@ -20904,7 +20949,7 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
     }
 
     // Resolve to disk
-    const std::filesystem::path user_dir = user_dir_for_fp(s.owner_fp);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, s.owner_fp);
 
     std::filesystem::path abs;
     std::string rerr;
