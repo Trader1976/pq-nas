@@ -17019,20 +17019,7 @@ srv.Get("/api/v4/files/list", [&](const httplib::Request& req, httplib::Response
         auto it = req.headers.find("User-Agent");
         return pqnas::shorten(it == req.headers.end() ? "" : it->second);
     };
-// DEBUG: show active users_path + resolved user root
-{
-    auto uopt_dbg = users.get(fp_hex);
-    std::filesystem::path dbg_user_dir = user_dir_for_fp(users, fp_hex);
 
-    std::cerr << "[dbg/files_list] users_path=" << users_path
-              << " fp=" << fp_hex
-              << " status=" << (uopt_dbg ? uopt_dbg->status : "?")
-              << " storage_state=" << (uopt_dbg ? uopt_dbg->storage_state : "?")
-              << " storage_pool_id=" << (uopt_dbg ? uopt_dbg->storage_pool_id : "?")
-              << " root_rel=" << (uopt_dbg ? uopt_dbg->root_rel : "?")
-              << " user_dir=" << dbg_user_dir.string()
-              << std::endl;
-}
     auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "") {
         pqnas::AuditEvent ev;
         ev.event = "v4.files_list_fail";
