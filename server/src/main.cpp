@@ -424,6 +424,9 @@ static std::string& default_pool_id() {
     static std::string id = "default";
     return id;
 }
+
+
+
 static std::string mount_for_pool_id(const std::string& allowed_prefix, const std::string& pool_id);
 static std::filesystem::path user_dir_for_fp(pqnas::UsersRegistry& users, const std::string& fp_hex)
 {
@@ -4518,6 +4521,168 @@ static inline void parse_btrfs_filesystem_show(const std::string& out,
     }
 }
 
+struct ManagedPoolRef {
+    std::string mount;
+    std::string pool_id;
+    std::string fs_label;   // optional, may be empty
+    bool managed{false};
+};
+
+static std::vector<ManagedPoolRef> managed_pools_from_cfg(const json& cfg) {
+    std::vector<ManagedPoolRef> out;
+    std::set<std::string> seen_mounts;
+
+    // Prefer v2 pools object
+    if (cfg.contains("pools") && cfg["pools"].is_object()) {
+        for (auto it = cfg["pools"].begin(); it != cfg["pools"].end(); ++it) {
+            const std::string mount = it.key();
+            if (!it.value().is_object()) continue;
+
+            const json& one = it.value();
+            const bool managed = one.value("managed", false);
+            if (!managed) continue;
+
+            std::string pool_id = one.value("pool_id", "");
+            if (pool_id.empty()) pool_id = pool_id_from_mount_best_effort(mount);
+
+            if (!is_pool_id_safe(pool_id)) continue;
+
+            ManagedPoolRef r;
+            r.mount = mount;
+            r.pool_id = pool_id;
+            r.fs_label = one.value("fs_label", "");
+            r.managed = true;
+
+            out.push_back(r);
+            seen_mounts.insert(mount);
+        }
+    }
+
+    // Backward-compatible fallback to names_by_mount
+    if (cfg.contains("names_by_mount") && cfg["names_by_mount"].is_object()) {
+        for (auto it = cfg["names_by_mount"].begin(); it != cfg["names_by_mount"].end(); ++it) {
+            const std::string mount = it.key();
+            if (seen_mounts.count(mount)) continue;
+
+            std::string pool_id;
+            try {
+                pool_id = it.value().is_string() ? it.value().get<std::string>() : "";
+            } catch (...) {
+                pool_id.clear();
+            }
+
+            if (!is_pool_id_safe(pool_id)) continue;
+
+            ManagedPoolRef r;
+            r.mount = mount;
+            r.pool_id = pool_id;
+            r.fs_label = btrfs_label_for_pool_id(pool_id); // fallback
+            r.managed = true;
+
+            out.push_back(r);
+            seen_mounts.insert(mount);
+        }
+    }
+
+    return out;
+}
+
+static bool is_btrfs_mount_active_at(const std::string& mount) {
+    std::string mounts_out;
+    int rc = run_capture("/usr/bin/findmnt -rn -t btrfs -o TARGET", &mounts_out);
+    if (rc != 0) return false;
+
+    rtrim_inplace(mounts_out);
+    for (const std::string& raw : split_lines(mounts_out)) {
+        const std::string line = trim_copy(raw);
+        if (line == mount) return true;
+    }
+    return false;
+}
+
+static void pool_mounts_restore_managed(const std::string& users_path) {
+	json cfg = load_or_init_pools_cfg(users_path);
+	const auto managed = managed_pools_from_cfg(cfg);
+
+	if (managed.empty()) {
+    	std::cerr << "[pools] restore: no managed pools configured" << std::endl;
+    	return;
+	}
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+    const std::string pools_prefix = allowed_prefix + "/pools";
+
+	for (const auto& mp : managed) {
+    	const std::string& mount = mp.mount;
+    	const std::string& pool_id = mp.pool_id;
+
+        if (!is_pool_id_safe(pool_id)) {
+            std::cerr << "[pools] restore: skip invalid pool_id for mount=" << mount << std::endl;
+            continue;
+        }
+
+        if (mount.rfind(pools_prefix + "/", 0) != 0) {
+            std::cerr << "[pools] restore: skip mount outside pools prefix: " << mount << std::endl;
+            continue;
+        }
+
+        if (is_btrfs_mount_active_at(mount)) {
+            std::lock_guard<std::mutex> lk(pool_mu());
+            pool_mount_by_id()[pool_id] = mount;
+            std::cerr << "[pools] restore: already mounted pool_id=" << pool_id
+                      << " mount=" << mount << std::endl;
+            continue;
+        }
+
+        const std::string label = !mp.fs_label.empty()
+    		? mp.fs_label
+    		: btrfs_label_for_pool_id(pool_id);
+
+        std::string out;
+        int rc = 0;
+
+        rc = run_capture("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(mount) + " 2>&1", &out);
+        if (rc != 0) {
+            std::cerr << "[pools] restore: mkdir failed pool_id=" << pool_id
+                      << " mount=" << mount
+                      << " out=" << pqnas::shorten(out, 300)
+                      << std::endl;
+            continue;
+        }
+
+        out.clear();
+        rc = run_capture("/usr/bin/sudo -n /bin/mount -t btrfs "
+                         + sh_quote(std::string("LABEL=") + label) + " "
+                         + sh_quote(mount) + " 2>&1", &out);
+        if (rc != 0) {
+            std::cerr << "[pools] restore: mount failed pool_id=" << pool_id
+                      << " label=" << label
+                      << " mount=" << mount
+                      << " out=" << pqnas::shorten(out, 300)
+                      << std::endl;
+            continue;
+        }
+
+        (void)run_capture("/usr/bin/sudo -n /usr/bin/udevadm settle 2>&1", &out);
+        (void)run_capture("/usr/bin/sudo -n /usr/bin/btrfs device scan 2>&1", &out);
+
+        if (is_btrfs_mount_active_at(mount)) {
+            std::lock_guard<std::mutex> lk(pool_mu());
+            pool_mount_by_id()[pool_id] = mount;
+            std::cerr << "[pools] restore: mounted pool_id=" << pool_id
+                      << " mount=" << mount
+                      << " label=" << label
+                      << std::endl;
+        } else {
+            std::cerr << "[pools] restore: mount command returned ok but mount not active"
+                      << " pool_id=" << pool_id
+                      << " mount=" << mount
+                      << std::endl;
+        }
+    }
+}
+
+
 // Parse "btrfs filesystem df -b <mount>" output.
 // We just want profile names for Data and Metadata.
 // Example lines:
@@ -5051,17 +5216,25 @@ auto maybe_auto_rotate_before_append = [&]() {
         std::cerr << "[users] FATAL: failed to load users registry: " << users_path << std::endl;
         return 4;
     }
-    g_users_path_for_raid = users_path;
-    pool_mounts_init_default_only();
+	g_users_path_for_raid = users_path;
+	pool_mounts_init_default_only();
+	pool_mounts_restore_managed(users_path);
 
-    {
-        std::lock_guard<std::mutex> lk(pool_mu());
-        auto& m = pool_mount_by_id();
-        auto it = m.find(default_pool_id());
-        std::cerr << "[cfg] default_pool_id=" << default_pool_id()
-                  << " mount=" << (it == m.end() ? "(missing)" : it->second)
-                  << std::endl;
-    }
+	{
+    	std::lock_guard<std::mutex> lk(pool_mu());
+    	auto& m = pool_mount_by_id();
+    	auto it = m.find(default_pool_id());
+	    std::cerr << "[cfg] default_pool_id=" << default_pool_id()
+    	          << " mount=" << (it == m.end() ? "(missing)" : it->second)
+        	      << std::endl;
+
+	    for (const auto& kv : m) {
+    	    if (kv.first == default_pool_id()) continue;
+        	std::cerr << "[cfg] managed_pool_id=" << kv.first
+            	      << " mount=" << kv.second
+                	  << std::endl;
+    	}
+	}
 
 	RoutesV5Context v5;
 	v5.origin = &ORIGIN;
@@ -10525,16 +10698,29 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
         if (all_ok) (void)run_step("/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(mount));
 
         // update pools.json
-        if (all_ok) {
-            json cfg = load_or_init_pools_cfg(users_path);
-            if (!cfg.contains("names_by_mount") || !cfg["names_by_mount"].is_object())
-                cfg["names_by_mount"] = json::object();
+	if (all_ok) {
+    	json cfg = load_or_init_pools_cfg(users_path);
 
-            cfg["names_by_mount"][mount] = pool_id;
+    	if (!cfg.contains("names_by_mount") || !cfg["names_by_mount"].is_object())
+        	cfg["names_by_mount"] = json::object();
+	    cfg["names_by_mount"][mount] = pool_id; // keep legacy compatibility
 
-            const auto cfg_path = pools_cfg_path_from_users_path(users_path);
-            if (!write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n")) {
-                all_ok = false;
+	    if (!cfg.contains("pools") || !cfg["pools"].is_object())
+    	    cfg["pools"] = json::object();
+
+    	cfg["pools"][mount] = json{
+        	{"pool_id", pool_id},
+	        {"display_name", pool_id},
+    	    {"created_ts", iso8601_now()},
+        	{"managed", true},
+	        {"fs_label", label}
+    	};
+
+    	cfg["version"] = 2;
+
+    	const auto cfg_path = pools_cfg_path_from_users_path(users_path);
+    	if (!write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n")) {
+        	all_ok = false;
             }
         }
 
