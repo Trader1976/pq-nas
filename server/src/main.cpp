@@ -4001,11 +4001,16 @@ static bool raid_run_one_step(const std::string& cmd,
 
         try {
             json cfg = load_or_init_pools_cfg(users_path);
+
             if (!cfg.contains("names_by_mount") || !cfg["names_by_mount"].is_object())
                 cfg["names_by_mount"] = json::object();
-
-            const bool had = cfg["names_by_mount"].contains(mount);
+            const bool had_legacy = cfg["names_by_mount"].contains(mount);
             cfg["names_by_mount"].erase(mount);
+
+            if (!cfg.contains("pools") || !cfg["pools"].is_object())
+                cfg["pools"] = json::object();
+            const bool had_v2 = cfg["pools"].contains(mount);
+            cfg["pools"].erase(mount);
 
             const auto cfg_path = pools_cfg_path_from_users_path(users_path);
             if (!write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n")) {
@@ -4015,7 +4020,8 @@ static bool raid_run_one_step(const std::string& cmd,
             }
 
             *out = std::string("ok: pools.json updated (removed mount=") + mount +
-                   (had ? ")\n" : ", was not present)\n");
+                   ", legacy=" + (had_legacy ? "yes" : "no") +
+                   ", v2=" + (had_v2 ? "yes" : "no") + ")\n";
             *ec = 0;
             return true;
         } catch (const std::exception& e) {
@@ -4524,7 +4530,8 @@ static inline void parse_btrfs_filesystem_show(const std::string& out,
 struct ManagedPoolRef {
     std::string mount;
     std::string pool_id;
-    std::string fs_label;   // optional, may be empty
+    std::string fs_label;
+    std::string fs_uuid;
     bool managed{false};
 };
 
@@ -4551,6 +4558,7 @@ static std::vector<ManagedPoolRef> managed_pools_from_cfg(const json& cfg) {
             r.mount = mount;
             r.pool_id = pool_id;
             r.fs_label = one.value("fs_label", "");
+            r.fs_uuid = one.value("fs_uuid", "");
             r.managed = true;
 
             out.push_back(r);
@@ -4576,7 +4584,8 @@ static std::vector<ManagedPoolRef> managed_pools_from_cfg(const json& cfg) {
             ManagedPoolRef r;
             r.mount = mount;
             r.pool_id = pool_id;
-            r.fs_label = btrfs_label_for_pool_id(pool_id); // fallback
+            r.fs_label = btrfs_label_for_pool_id(pool_id);
+            r.fs_uuid.clear();
             r.managed = true;
 
             out.push_back(r);
@@ -4634,9 +4643,19 @@ static void pool_mounts_restore_managed(const std::string& users_path) {
             continue;
         }
 
-        const std::string label = !mp.fs_label.empty()
-    		? mp.fs_label
-    		: btrfs_label_for_pool_id(pool_id);
+		std::string mount_spec;
+		std::string log_spec;
+
+		if (!mp.fs_uuid.empty()) {
+    		mount_spec = "UUID=" + mp.fs_uuid;
+		    log_spec = mount_spec;
+		} else {
+	    	const std::string label = !mp.fs_label.empty()
+        		? mp.fs_label
+	        	: btrfs_label_for_pool_id(pool_id);
+    		mount_spec = "LABEL=" + label;
+    		log_spec = mount_spec;
+		}
 
         std::string out;
         int rc = 0;
@@ -4651,15 +4670,15 @@ static void pool_mounts_restore_managed(const std::string& users_path) {
         }
 
         out.clear();
-        rc = run_capture("/usr/bin/sudo -n /bin/mount -t btrfs "
-                         + sh_quote(std::string("LABEL=") + label) + " "
-                         + sh_quote(mount) + " 2>&1", &out);
+		rc = run_capture("/usr/bin/sudo -n /bin/mount -t btrfs "
+		                 + sh_quote(mount_spec) + " "
+                 		+ sh_quote(mount) + " 2>&1", &out);
         if (rc != 0) {
-            std::cerr << "[pools] restore: mount failed pool_id=" << pool_id
-                      << " label=" << label
-                      << " mount=" << mount
-                      << " out=" << pqnas::shorten(out, 300)
-                      << std::endl;
+		std::cerr << "[pools] restore: mount failed pool_id=" << pool_id
+		          << " via=" << log_spec
+        		  << " mount=" << mount
+		          << " out=" << pqnas::shorten(out, 300)
+          		<< std::endl;
             continue;
         }
 
@@ -4669,10 +4688,10 @@ static void pool_mounts_restore_managed(const std::string& users_path) {
         if (is_btrfs_mount_active_at(mount)) {
             std::lock_guard<std::mutex> lk(pool_mu());
             pool_mount_by_id()[pool_id] = mount;
-            std::cerr << "[pools] restore: mounted pool_id=" << pool_id
-                      << " mount=" << mount
-                      << " label=" << label
-                      << std::endl;
+		std::cerr << "[pools] restore: mounted pool_id=" << pool_id
+        		  << " mount=" << mount
+		          << " via=" << log_spec
+        		  << std::endl;
         } else {
             std::cerr << "[pools] restore: mount command returned ok but mount not active"
                       << " pool_id=" << pool_id
@@ -10697,30 +10716,57 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
         if (all_ok) (void)run_step("/usr/bin/sudo -n /usr/bin/btrfs device scan");
         if (all_ok) (void)run_step("/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(mount));
 
-        // update pools.json
-	if (all_ok) {
-    	json cfg = load_or_init_pools_cfg(users_path);
+         // update pools.json
+        if (all_ok) {
+            json cfg = load_or_init_pools_cfg(users_path);
 
-    	if (!cfg.contains("names_by_mount") || !cfg["names_by_mount"].is_object())
-        	cfg["names_by_mount"] = json::object();
-	    cfg["names_by_mount"][mount] = pool_id; // keep legacy compatibility
+            if (!cfg.contains("names_by_mount") || !cfg["names_by_mount"].is_object())
+                cfg["names_by_mount"] = json::object();
+            cfg["names_by_mount"][mount] = pool_id; // keep legacy compatibility
 
-	    if (!cfg.contains("pools") || !cfg["pools"].is_object())
-    	    cfg["pools"] = json::object();
+            if (!cfg.contains("pools") || !cfg["pools"].is_object())
+                cfg["pools"] = json::object();
 
-    	cfg["pools"][mount] = json{
-        	{"pool_id", pool_id},
-	        {"display_name", pool_id},
-    	    {"created_ts", iso8601_now()},
-        	{"managed", true},
-	        {"fs_label", label}
-    	};
+            std::string fs_label_detected;
+            std::string fs_uuid_detected;
+            int fs_devices_detected = -1;
 
-    	cfg["version"] = 2;
 
-    	const auto cfg_path = pools_cfg_path_from_users_path(users_path);
-    	if (!write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n")) {
-        	all_ok = false;
+std::cerr << "[pools] create-pool detect: mount=" << mount
+          << " fs_label_detected=" << fs_label_detected
+          << " fs_uuid_detected=" << fs_uuid_detected
+          << " fs_devices_detected=" << fs_devices_detected
+          << std::endl;
+
+
+            {
+                std::string show_out;
+                int rc_show = run_capture(
+                    "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(mount) + " 2>&1",
+                    &show_out
+                );
+                if (rc_show == 0) {
+                    parse_btrfs_filesystem_show(show_out,
+                                                &fs_label_detected,
+                                                &fs_uuid_detected,
+                                                &fs_devices_detected);
+                }
+            }
+
+            cfg["pools"][mount] = json{
+                {"pool_id", pool_id},
+                {"display_name", pool_id},
+                {"created_ts", iso8601_now()},
+                {"managed", true},
+                {"fs_label", fs_label_detected.empty() ? label : fs_label_detected},
+                {"fs_uuid", fs_uuid_detected}
+            };
+
+            cfg["version"] = 2;
+
+            const auto cfg_path = pools_cfg_path_from_users_path(users_path);
+            if (!write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n")) {
+                all_ok = false;
             }
         }
 
