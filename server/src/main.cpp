@@ -10732,13 +10732,6 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
             int fs_devices_detected = -1;
 
 
-std::cerr << "[pools] create-pool detect: mount=" << mount
-          << " fs_label_detected=" << fs_label_detected
-          << " fs_uuid_detected=" << fs_uuid_detected
-          << " fs_devices_detected=" << fs_devices_detected
-          << std::endl;
-
-
             {
                 std::string show_out;
                 int rc_show = run_capture(
