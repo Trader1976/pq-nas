@@ -425,6 +425,56 @@ static std::string& default_pool_id() {
     return id;
 }
 
+static std::filesystem::path data_root_for_pool_id(const std::string& pool_id) {
+    // default / legacy pool
+    if (pool_id.empty() || pool_id == "default") {
+        return std::filesystem::path(data_root_dir());
+    }
+
+    std::string pool_mount;
+    {
+        std::lock_guard<std::mutex> lk(pool_mu());
+        auto& m = pool_mount_by_id();
+        auto it = m.find(pool_id);
+        if (it != m.end()) pool_mount = it->second;
+    }
+
+    // named pool missing from runtime map -> safest compatibility fallback
+    if (pool_mount.empty()) {
+        return std::filesystem::path(data_root_dir());
+    }
+
+    // canonical PQ-NAS data root inside pool
+    return std::filesystem::path(pool_mount) / "data";
+}
+
+static std::string default_root_rel_for_fp(const std::string& fp_hex) {
+    return std::string("users/") + fp_hex;
+}
+
+static std::string effective_root_rel_for_user(const pqnas::UserRec& u,
+                                               const std::string& fp_hex) {
+    if (!u.root_rel.empty() && is_safe_rel_path(u.root_rel)) {
+        return u.root_rel;
+    }
+    return default_root_rel_for_fp(fp_hex);
+}
+
+static std::filesystem::path user_dir_for_fp(const pqnas::UsersRegistry& users,
+                                             const std::string& fp_hex) {
+    auto uopt = users.get(fp_hex);
+
+    if (!uopt.has_value()) {
+        return std::filesystem::path(data_root_dir()) / default_root_rel_for_fp(fp_hex);
+    }
+
+    const auto& u = *uopt;
+    const std::string pool_id = u.storage_pool_id.empty() ? "default" : u.storage_pool_id;
+    const std::filesystem::path data_root = data_root_for_pool_id(pool_id);
+    const std::string root_rel = effective_root_rel_for_user(u, fp_hex);
+
+    return data_root / root_rel;
+}
 
 
 static std::string mount_for_pool_id(const std::string& allowed_prefix, const std::string& pool_id);
@@ -13077,42 +13127,60 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
     }
 
     // layout: <data_root>/users/<fp>
-    const std::filesystem::path udir = data_root / "users" / fp;
-    const std::filesystem::path parent = udir.parent_path();
+	const std::string canonical_root_rel = default_root_rel_for_fp(fp);
+	if (canonical_root_rel.empty() || !is_safe_rel_path(canonical_root_rel)) {
+    	reply_json(res, 500, json({
+        	{"ok", false},
+	        {"error", "server_error"},
+    	    {"message", "computed root_rel is unsafe"},
+        	{"root_rel", canonical_root_rel}
+	    }).dump());
+    	return;
+	}
+
+	const std::filesystem::path udir = data_root / canonical_root_rel;
+	const std::filesystem::path parent = udir.parent_path();
 
     // Safety: udir must be under data_root
     {
-        std::error_code ec;
-        const auto dr = std::filesystem::weakly_canonical(data_root, ec);
-        const auto ud = std::filesystem::weakly_canonical(udir, ec);
-        const std::string drs = dr.string();
-        const std::string uds = ud.string();
+    const auto dr = data_root.lexically_normal();
+    const auto ud = udir.lexically_normal();
+    const auto rel_to_root = ud.lexically_relative(dr);
 
-        if (drs.empty() || uds.empty() || uds.rfind(drs, 0) != 0) {
-            // Audit (best-effort)
-            try {
-                pqnas::AuditEvent ev;
-                ev.event = "admin.user_storage_bad_path";
-                ev.outcome = "fail";
-                ev.f["fingerprint"] = fp;
-                ev.f["data_root"] = pqnas::shorten(data_root.string(), 200);
-                ev.f["user_dir"] = pqnas::shorten(udir.string(), 200);
-                ev.f["ts"] = now_iso;
-                ev.f["actor_fp"] = actor_fp;
-                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-                audit_append(ev);
-            } catch (...) {}
-
-            reply_json(res, 500, json({
-                {"ok", false},
-                {"error", "server_error"},
-                {"message", "refusing to allocate: user_dir is not under data_root"},
-                {"data_root", data_root.string()},
-                {"user_dir", udir.string()}
-            }).dump());
-            return;
+    bool ok = !rel_to_root.empty();
+    if (ok) {
+        for (const auto& part : rel_to_root) {
+            if (part == "..") {
+                ok = false;
+                break;
+            }
         }
     }
+
+    if (!ok) {
+        try {
+            pqnas::AuditEvent ev;
+            ev.event = "admin.user_storage_bad_path";
+            ev.outcome = "fail";
+            ev.f["fingerprint"] = fp;
+            ev.f["data_root"] = pqnas::shorten(data_root.string(), 200);
+            ev.f["user_dir"] = pqnas::shorten(udir.string(), 200);
+            ev.f["ts"] = now_iso;
+            ev.f["actor_fp"] = actor_fp;
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            audit_append(ev);
+        } catch (...) {}
+
+        reply_json(res, 500, json({
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "refusing to allocate: user_dir is not under data_root"},
+            {"data_root", data_root.string()},
+            {"user_dir", udir.string()}
+        }).dump());
+        return;
+    }
+}
 
     // Ensure <data_root>/users exists (or whatever udir.parent is)
     {
@@ -13168,35 +13236,7 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
         }
     }
 
-    // Compute root_rel from the ensured directory (prevents layout drift)
-    std::string root_rel;
-    {
-        std::error_code ec;
-        std::filesystem::path rel = std::filesystem::relative(udir, data_root, ec);
-        if (ec) {
-            reply_json(res, 500, json({
-                {"ok", false},
-                {"error", "server_error"},
-                {"message", "failed to compute root_rel"},
-                {"detail", ec.message()},
-                {"user_dir", udir.string()},
-                {"data_root", data_root.string()}
-            }).dump());
-            return;
-        }
-        root_rel = rel.generic_string();
-
-        // Safety: must be safe relative path (your existing helper)
-        if (root_rel.empty() || !is_safe_rel_path(root_rel)) {
-            reply_json(res, 500, json({
-                {"ok", false},
-                {"error", "server_error"},
-                {"message", "computed root_rel is unsafe"},
-                {"root_rel", root_rel}
-            }).dump());
-            return;
-        }
-    }
+    const std::string root_rel = canonical_root_rel;
 
     // Audit mkdir success (best-effort)
     try {
