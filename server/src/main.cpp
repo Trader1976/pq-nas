@@ -432,44 +432,44 @@ static std::filesystem::path user_dir_for_fp(pqnas::UsersRegistry& users, const 
 {
     auto uopt = users.get(fp_hex);
 
-    // default "pool mount" for default pool id (map may contain /srv/pqnas/data)
-    std::string mount = data_root_dir();
-    {
-        std::lock_guard<std::mutex> lk(pool_mu());
-        auto& m = pool_mount_by_id();
-        auto it = m.find(default_pool_id());
-        if (it != m.end()) mount = it->second;
-    }
-
-    bool is_pool_mount = false;
+    // Base/root for simple installs (ext4 / single-disk / default storage mode).
+    // data_root_dir() is already the effective PQ-NAS data root, e.g. /srv/pqnas/data
+    std::filesystem::path data_root = std::filesystem::path(data_root_dir());
 
     if (uopt.has_value()) {
         const auto& u = *uopt;
+
+        // Pool-backed storage:
+        // Resolve the REAL mount from the runtime pool map, then use <mount>/data
+        // because allocation stores user dirs under:
+        //   <pool_mount>/data/users/<fp>
         if (!u.storage_pool_id.empty()) {
-            std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
-            if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
-            const std::string pools_prefix = allowed_prefix + "/pools";
-            mount = mount_for_pool_id(pools_prefix, u.storage_pool_id); // /srv/pqnas/pools/<id>
-            is_pool_mount = true;
+            std::string pool_mount;
+            {
+                std::lock_guard<std::mutex> lk(pool_mu());
+                auto& m = pool_mount_by_id();
+                auto it = m.find(u.storage_pool_id);
+                if (it != m.end()) {
+                    pool_mount = it->second;
+                }
+            }
+
+            if (!pool_mount.empty()) {
+                data_root = std::filesystem::path(pool_mount) / "data";
+            }
         }
-    }
 
-    const std::filesystem::path data_root =
-        is_pool_mount ? (std::filesystem::path(mount) / "data")
-                      : std::filesystem::path(mount); // default already points to /srv/pqnas/data
-
-    // Prefer allocated + root_rel (root_rel is relative to data_root)
-    if (uopt.has_value()) {
-        const auto& u = *uopt;
+        // Preferred modern layout:
+        // root_rel is stored relative to effective data_root
         if (u.storage_state == "allocated" &&
             !u.root_rel.empty() &&
             is_safe_rel_path(u.root_rel))
         {
-            return data_root / u.root_rel; // e.g. .../data/users/<fp>
+            return data_root / u.root_rel;
         }
     }
 
-    // Fallback legacy layout
+    // Legacy / fallback layout
     return data_root / "users" / fp_hex;
 }
 namespace {

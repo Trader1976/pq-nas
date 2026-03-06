@@ -259,66 +259,7 @@ async function apiGetPoolsBestEffort() {
     console.warn("Pools load failed, falling back to default pool:", lastErr?.message || lastErr);
     return [];
 }
-function openAllocModal(fp, curUser) {
-    gAllocFp = String(fp || "");
 
-    const m = $("allocModal");
-    const fpLabel = $("allocFpLabel");
-    const poolSel = $("allocPoolSel");
-    const poolHint = $("allocPoolHint");
-    const gbInp = $("allocGb");
-
-    if (!m || !fpLabel || !poolSel || !poolHint || !gbInp) return;
-
-    setAllocError("");
-    fpLabel.textContent = gAllocFp || "—";
-
-    // Prefill amount from current quota
-    const suggested = fmtGBFromBytes(curUser?.quota_bytes) || "10";
-    gbInp.value = suggested;
-
-    // Open immediately
-    m.classList.add("open");
-    m.setAttribute("aria-hidden", "false");
-
-    // Fill pools async
-    (async () => {
-        const pools = await ensurePoolsLoaded();
-
-        poolSel.innerHTML = "";
-        for (const p of pools) {
-            const opt = document.createElement("option");
-            opt.value = p.id;
-            opt.textContent = p.name;
-            poolSel.appendChild(opt);
-        }
-
-        // Try to select current user pool if present
-        const curPool =
-            (curUser?.storage_pool_id != null ? String(curUser.storage_pool_id) :
-                curUser?.pool_id != null ? String(curUser.pool_id) :
-                    curUser?.pool != null ? String(curUser.pool) :
-                        "");
-
-        if (curPool) {
-            const has = Array.from(poolSel.options).some(o => o.value === curPool);
-            if (has) poolSel.value = curPool;
-        }
-
-        const selected = pools.find(x => x.id === poolSel.value) || pools[0];
-        poolHint.textContent = selected?.hint ? selected.hint : "—";
-
-        poolSel.onchange = () => {
-            const s = (gPools || []).find(x => x.id === poolSel.value);
-            poolHint.textContent = s?.hint ? s.hint : "—";
-        };
-
-        gbInp.focus();
-        gbInp.select();
-    })().catch(e => {
-        setAllocError("Failed to load pools: " + (e?.message || e));
-    });
-}
 async function ensurePoolsLoaded() {
     if (gPools !== null) return gPools;
     const pools = await apiGetPoolsBestEffort();

@@ -203,10 +203,18 @@ void handle_verify_login_common(const httplib::Request& req,
             static std::mutex bootstrap_mu;
             std::lock_guard<std::mutex> lk(bootstrap_mu);
 
-            const bool no_users = (ctx.users && ctx.users->snapshot().empty());
-            const bool no_policy_users = (ctx.allowlist && ctx.allowlist->empty());
+            bool has_enabled_admin = false;
+            if (ctx.users) {
+                for (const auto& kv : ctx.users->snapshot()) {
+                    const auto& u = kv.second;
+                    if (u.role == "admin" && u.status == "enabled") {
+                        has_enabled_admin = true;
+                        break;
+                    }
+                }
+            }
 
-            if (no_users && no_policy_users && ctx.users && ctx.allowlist && ctx.users_path && ctx.allowlist_path) {
+            if (!has_enabled_admin && ctx.users && ctx.users_path) {
                 const std::string now_iso = ctx.now_iso_utc ? ctx.now_iso_utc() : "";
 
                 ctx.users->ensure_present_disabled_user(computed_fp, now_iso);
@@ -214,13 +222,17 @@ void handle_verify_login_common(const httplib::Request& req,
                 ctx.users->set_status(computed_fp, "enabled");
                 ctx.users->save(*ctx.users_path);
 
-                ctx.allowlist->add_admin(computed_fp);
-                ctx.allowlist->save(*ctx.allowlist_path);
+                // Best-effort: keep policy in sync if available
+                if (ctx.allowlist && ctx.allowlist_path) {
+                    ctx.allowlist->add_admin(computed_fp);
+                    ctx.allowlist->save(*ctx.allowlist_path);
+                }
 
-                audit_info((api_version == 5 ? "v5.bootstrap_first_admin" : "v4.bootstrap_first_admin"), "ok");
+                audit_info((api_version == 5 ? "v5.bootstrap_first_admin"
+                                             : "v4.bootstrap_first_admin"),
+                           "ok");
             }
         }
-
         // ---- Users registry policy (fail-closed) ----
         const std::string now_iso = ctx.now_iso_utc ? ctx.now_iso_utc() : "";
 
