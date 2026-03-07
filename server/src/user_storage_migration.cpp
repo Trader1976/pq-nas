@@ -1,4 +1,5 @@
 #include "user_storage_migration.h"
+#include "pqnas_util.h"
 
 #include <nlohmann/json.hpp>
 
@@ -7,6 +8,8 @@
 #include <fstream>
 #include <sstream>
 #include <system_error>
+
+
 
 using json = nlohmann::json;
 
@@ -282,6 +285,7 @@ bool migrate_user_storage_sync(UsersRegistry& users,
     u.storage_pool_id = (r.plan.to_pool_id == "default") ? "" : r.plan.to_pool_id;
     u.root_rel = r.plan.root_rel;
     u.storage_set_by = actor_fp;
+    u.storage_set_at = pqnas::now_iso_utc();
 
     if (!users.upsert(u)) {
         r.ok = false;

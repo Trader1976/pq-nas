@@ -21178,17 +21178,23 @@ srv.Get("/api/v4/shares/list", [&](const httplib::Request& req, httplib::Respons
     res.set_header("Cache-Control", "no-store");
     res.set_content(out.dump(2), "application/json; charset=utf-8");
 });
-
 // POST /api/v4/admin/users/migrate_storage
 // Body: {"fingerprint":"...","pool_id":"raidtest"}
 srv.Post("/api/v4/admin/users/migrate_storage", [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
+    res.set_header("Cache-Control", "no-store");
+
     json j;
-    try { j = json::parse(req.body); }
-    catch (...) {
-        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid json"}}.dump());
+    try {
+        j = json::parse(req.body);
+    } catch (...) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
         return;
     }
 
@@ -21196,12 +21202,48 @@ srv.Post("/api/v4/admin/users/migrate_storage", [&](const httplib::Request& req,
     const std::string pool_id = trim_copy(j.value("pool_id", ""));
 
     if (fp.empty() || pool_id.empty()) {
-        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","missing fingerprint or pool_id"}}.dump());
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing fingerprint or pool_id"}
+        }.dump());
         return;
+    }
+
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "admin.user_storage_migration_started";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp;
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["to_pool_id"] = pool_id;
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit_append(ev);
     }
 
     pqnas::UserStorageMigrationResult mr;
     if (!pqnas::migrate_user_storage_sync(users, users_path, actor_fp, fp, pool_id, &mr)) {
+        {
+            pqnas::AuditEvent ev;
+            ev.event = "admin.user_storage_migration_failed";
+            ev.outcome = "fail";
+            ev.f["fingerprint"] = fp;
+            ev.f["actor_fp"] = actor_fp;
+            ev.f["to_pool_id"] = pool_id;
+            if (!mr.plan.from_pool_id.empty()) ev.f["from_pool_id"] = mr.plan.from_pool_id;
+            if (!mr.plan.to_pool_id.empty()) ev.f["to_pool_id"] = mr.plan.to_pool_id;
+            if (!mr.plan.root_rel.empty()) ev.f["root_rel"] = pqnas::shorten(mr.plan.root_rel, 160);
+            if (!mr.plan.src_user_dir.empty()) ev.f["src_user_dir"] = pqnas::shorten(mr.plan.src_user_dir.string(), 200);
+            if (!mr.plan.dst_user_dir.empty()) ev.f["dst_user_dir"] = pqnas::shorten(mr.plan.dst_user_dir.string(), 200);
+            if (!mr.error.empty()) ev.f["reason"] = pqnas::shorten(mr.error, 80);
+            if (!mr.detail.empty()) ev.f["detail"] = pqnas::shorten(mr.detail, 180);
+            ev.f["copied"] = mr.copied ? "1" : "0";
+            ev.f["verified"] = mr.verified ? "1" : "0";
+            ev.f["metadata_updated"] = mr.metadata_updated ? "1" : "0";
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            audit_append(ev);
+        }
+
         reply_json(res, 500, json{
             {"ok", false},
             {"error", mr.error.empty() ? "migration_failed" : mr.error},
@@ -21213,6 +21255,24 @@ srv.Post("/api/v4/admin/users/migrate_storage", [&](const httplib::Request& req,
             {"dst_user_dir", mr.plan.dst_user_dir.string()}
         }.dump());
         return;
+    }
+
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "admin.user_storage_migration_succeeded";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp;
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["from_pool_id"] = mr.plan.from_pool_id;
+        ev.f["to_pool_id"] = mr.plan.to_pool_id;
+        ev.f["root_rel"] = pqnas::shorten(mr.plan.root_rel, 160);
+        ev.f["src_user_dir"] = pqnas::shorten(mr.plan.src_user_dir.string(), 200);
+        ev.f["dst_user_dir"] = pqnas::shorten(mr.plan.dst_user_dir.string(), 200);
+        ev.f["copied"] = mr.copied ? "1" : "0";
+        ev.f["verified"] = mr.verified ? "1" : "0";
+        ev.f["metadata_updated"] = mr.metadata_updated ? "1" : "0";
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit_append(ev);
     }
 
     reply_json(res, 200, json{
