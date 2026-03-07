@@ -291,6 +291,18 @@ bool migrate_user_storage_sync(UsersRegistry& users,
     }
     r.copied = true;
 
+    {
+        std::error_code ec;
+        auto st = std::filesystem::status(r.plan.dst_user_dir, ec);
+        if (ec || !std::filesystem::exists(st) || !std::filesystem::is_directory(st)) {
+            r.ok = false;
+            r.error = "verify_failed";
+            r.detail = "destination user dir missing after copy: " + r.plan.dst_user_dir.string();
+            if (out) *out = r;
+            return false;
+        }
+    }
+    
     const auto src_bytes = compute_tree_bytes(r.plan.src_user_dir);
     const auto dst_bytes = compute_tree_bytes(r.plan.dst_user_dir);
     if (src_bytes != dst_bytes) {
