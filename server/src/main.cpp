@@ -21210,52 +21210,73 @@ srv.Post("/api/v4/admin/users/migrate_storage", [&](const httplib::Request& req,
         return;
     }
 
-    {
-        pqnas::AuditEvent ev;
-        ev.event = "admin.user_storage_migration_started";
-        ev.outcome = "ok";
-        ev.f["fingerprint"] = fp;
-        ev.f["actor_fp"] = actor_fp;
-        ev.f["to_pool_id"] = pool_id;
-        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-        audit_append(ev);
-    }
+	std::string from_pool_id_for_audit = "";
+	if (auto uopt = users.get(fp); uopt.has_value()) {
+    	from_pool_id_for_audit = uopt->storage_pool_id.empty() ? "default" : uopt->storage_pool_id;
+	}
 
-    pqnas::UserStorageMigrationResult mr;
-    if (!pqnas::migrate_user_storage_sync(users, users_path, actor_fp, fp, pool_id, &mr)) {
-        {
-            pqnas::AuditEvent ev;
-            ev.event = "admin.user_storage_migration_failed";
-            ev.outcome = "fail";
-            ev.f["fingerprint"] = fp;
-            ev.f["actor_fp"] = actor_fp;
-            ev.f["to_pool_id"] = pool_id;
-            if (!mr.plan.from_pool_id.empty()) ev.f["from_pool_id"] = mr.plan.from_pool_id;
-            if (!mr.plan.to_pool_id.empty()) ev.f["to_pool_id"] = mr.plan.to_pool_id;
-            if (!mr.plan.root_rel.empty()) ev.f["root_rel"] = pqnas::shorten(mr.plan.root_rel, 160);
-            if (!mr.plan.src_user_dir.empty()) ev.f["src_user_dir"] = pqnas::shorten(mr.plan.src_user_dir.string(), 200);
-            if (!mr.plan.dst_user_dir.empty()) ev.f["dst_user_dir"] = pqnas::shorten(mr.plan.dst_user_dir.string(), 200);
-            if (!mr.error.empty()) ev.f["reason"] = pqnas::shorten(mr.error, 80);
-            if (!mr.detail.empty()) ev.f["detail"] = pqnas::shorten(mr.detail, 180);
-            ev.f["copied"] = mr.copied ? "1" : "0";
-            ev.f["verified"] = mr.verified ? "1" : "0";
-            ev.f["metadata_updated"] = mr.metadata_updated ? "1" : "0";
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            audit_append(ev);
-        }
+	{
+	    pqnas::AuditEvent ev;
+	    ev.event = "admin.user_storage_migration_started";
+    	ev.outcome = "ok";
+	    ev.f["fingerprint"] = fp;
+    	ev.f["actor_fp"] = actor_fp;
+	    if (!from_pool_id_for_audit.empty()) ev.f["from_pool_id"] = from_pool_id_for_audit;
+    	ev.f["to_pool_id"] = pool_id;
+	    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+    	audit_append(ev);
+	}
 
-        reply_json(res, 500, json{
-            {"ok", false},
-            {"error", mr.error.empty() ? "migration_failed" : mr.error},
-            {"message", "user storage migration failed"},
-            {"detail", mr.detail},
-            {"from_pool_id", mr.plan.from_pool_id},
-            {"to_pool_id", mr.plan.to_pool_id},
-            {"src_user_dir", mr.plan.src_user_dir.string()},
-            {"dst_user_dir", mr.plan.dst_user_dir.string()}
-        }.dump());
-        return;
-    }
+	pqnas::UserStorageMigrationResult mr;
+	if (!pqnas::migrate_user_storage_sync(users, users_path, actor_fp, fp, pool_id, &mr)) {
+    	{
+        	pqnas::AuditEvent ev;
+	        ev.event = "admin.user_storage_migration_failed";
+    	    ev.outcome = "fail";
+        	ev.f["fingerprint"] = fp;
+	        ev.f["actor_fp"] = actor_fp;
+    	    ev.f["to_pool_id"] = pool_id;
+        	if (!mr.plan.from_pool_id.empty()) ev.f["from_pool_id"] = mr.plan.from_pool_id;
+	        if (!mr.plan.to_pool_id.empty()) ev.f["to_pool_id"] = mr.plan.to_pool_id;
+    	    if (!mr.plan.root_rel.empty()) ev.f["root_rel"] = pqnas::shorten(mr.plan.root_rel, 160);
+        	if (!mr.plan.src_user_dir.empty()) ev.f["src_user_dir"] = pqnas::shorten(mr.plan.src_user_dir.string(), 200);
+	        if (!mr.plan.dst_user_dir.empty()) ev.f["dst_user_dir"] = pqnas::shorten(mr.plan.dst_user_dir.string(), 200);
+    	    if (!mr.error.empty()) ev.f["reason"] = pqnas::shorten(mr.error, 80);
+        	if (!mr.detail.empty()) ev.f["detail"] = pqnas::shorten(mr.detail, 180);
+	        ev.f["copied"] = mr.copied ? "1" : "0";
+    	    ev.f["verified"] = mr.verified ? "1" : "0";
+        	ev.f["metadata_updated"] = mr.metadata_updated ? "1" : "0";
+	        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+    	    audit_append(ev);
+    	}
+
+	    int http = 500;
+    	std::string message = "user storage migration failed";
+
+	    if (mr.error == "same_pool") {
+    	    http = 409;
+        	message = "source and destination pool are the same";
+	    } else if (mr.error == "user_missing" || mr.error == "storage_unallocated") {
+    	    http = 404;
+	    } else if (mr.error == "resolve_failed") {
+    	    http = 400;
+    	}
+
+	    reply_json(res, http, json{
+    	    {"ok", false},
+        	{"error", mr.error.empty() ? "migration_failed" : mr.error},
+	        {"message", message},
+    	    {"detail", mr.detail},
+        	{"from_pool_id", mr.plan.from_pool_id},
+	        {"to_pool_id", mr.plan.to_pool_id},
+    	    {"src_user_dir", mr.plan.src_user_dir.string()},
+        	{"dst_user_dir", mr.plan.dst_user_dir.string()},
+	        {"copied", mr.copied},
+    	    {"verified", mr.verified},
+        	{"metadata_updated", mr.metadata_updated}
+	    }.dump());
+    	return;
+	}
 
     {
         pqnas::AuditEvent ev;
