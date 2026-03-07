@@ -527,6 +527,52 @@
             background: rgba(var(--info-rgb),0.085);
         }
 
+        tbody tr.ev-storage-migrate td.col-idx{
+            border-left-color: rgba(var(--info-rgb),1.0);
+            box-shadow: inset 14px 0 28px rgba(var(--info-rgb),0.18);
+        }
+        tbody tr.ev-storage-migrate{
+            background: rgba(var(--info-rgb),0.060);
+        }
+
+        tbody tr.ev-storage-migrate-ok td.col-idx{
+            border-left-color: rgba(var(--ok-rgb),1.0);
+            box-shadow: inset 14px 0 28px rgba(var(--ok-rgb),0.22);
+        }
+        tbody tr.ev-storage-migrate-ok{
+            background: rgba(var(--ok-rgb),0.095);
+        }
+
+        tbody tr.ev-storage-migrate-fail td.col-idx{
+            border-left-color: rgba(var(--fail-rgb),1.0);
+            box-shadow: inset 14px 0 28px rgba(var(--fail-rgb),0.22);
+        }
+        tbody tr.ev-storage-migrate-fail{
+            background: rgba(var(--fail-rgb),0.095);
+        }
+
+        tbody tr.ev-storage-migrate td.col-event{
+            color: rgba(var(--info-rgb),0.95);
+            font-weight: 900;
+        }
+        tbody tr.ev-storage-migrate-ok td.col-event{
+            color: rgba(var(--ok-rgb),0.95);
+            font-weight: 900;
+        }
+        tbody tr.ev-storage-migrate-fail td.col-event{
+            color: var(--fail);
+            font-weight: 900;
+        }
+
+        tbody tr.ev-storage-migrate:hover{
+            background: rgba(var(--info-rgb),0.10);
+        }
+        tbody tr.ev-storage-migrate-ok:hover{
+            background: rgba(var(--ok-rgb),0.12);
+        }
+        tbody tr.ev-storage-migrate-fail:hover{
+            background: rgba(var(--fail-rgb),0.12);
+        }
 
         /* Hover: brighten but keep tint */
         tbody tr:hover{
@@ -852,6 +898,6 @@
 </div>
 
 <script src="/static/admin_badges.js"></script>
-<script src="/static/admin_audit.js?v=6"></script>
+<script src="/static/admin_audit.js?v=7"></script>
 </body>
 </html>

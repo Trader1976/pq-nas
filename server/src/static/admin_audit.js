@@ -143,10 +143,14 @@ function eventClasses(e) {
     if (st === "warn") cls.push("ev-warnline");
     if (st === "fail") cls.push("ev-errorline");
 
-    // Exact “make these pop” lines (your examples)
+// Exact “make these pop” lines
     if (ev === "admin.user_storage_allocated" || ev.endsWith(".user_storage_allocated")) cls.push("ev-storage-alloc");
     if (ev === "admin.user_storage_dir_created" || ev.endsWith(".user_storage_dir_created")) cls.push("ev-storage-dir");
     if (ev === "admin.user_enabled" || ev.endsWith(".user_enabled")) cls.push("ev-admin-enabled");
+
+    if (ev === "admin.user_storage_migration_started") cls.push("ev-storage-migrate");
+    if (ev === "admin.user_storage_migration_succeeded") cls.push("ev-storage-migrate-ok");
+    if (ev === "admin.user_storage_migration_failed") cls.push("ev-storage-migrate-fail");
 
     return cls.join(" ");
 }
@@ -225,6 +229,9 @@ function renderTable() {
         if (evLower === "admin.user_storage_allocated") tr.classList.add("ev-storage-alloc");
         if (evLower === "admin.user_storage_dir_created") tr.classList.add("ev-storage-dir");
         if (evLower === "admin.user_enabled" || evLower === "admin.user_status_set") tr.classList.add("ev-admin-enabled");
+        if (evLower === "admin.user_storage_migration_started") tr.classList.add("ev-storage-migrate");
+        if (evLower === "admin.user_storage_migration_succeeded") tr.classList.add("ev-storage-migrate-ok");
+        if (evLower === "admin.user_storage_migration_failed") tr.classList.add("ev-storage-migrate-fail");
 
 
         const idxText = String(i + 1);
