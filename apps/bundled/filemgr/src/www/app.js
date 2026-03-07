@@ -2248,21 +2248,25 @@
     return 0; // never
   }
 
-
-  async function createShareLinkFor(relPath, expiresSec) {
+  async function createShareLinkFor(relPath, type, expiresSec) {
     const r = await fetch("/api/v4/shares/create", {
       method: "POST",
       credentials: "include",
       cache: "no-store",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ path: relPath, expires_sec: expiresSec })
+      body: JSON.stringify({
+        path: relPath,
+        type,
+        expires_sec: expiresSec
+      })
     });
 
     const j = await r.json().catch(() => null);
     if (!r.ok || !j || !j.ok) {
-      const msg = j && (j.message || j.error)
-          ? `${j.error || ""} ${j.message || ""}`.trim()
-          : `HTTP ${r.status}`;
+      const msg =
+          j && (j.detail || j.message || j.error)
+              ? [j.error, j.message, j.detail].filter(Boolean).join(" ")
+              : `HTTP ${r.status}`;
       throw new Error(msg || "share create failed");
     }
 
@@ -2270,7 +2274,6 @@
     if (!url) throw new Error("server did not return url");
     return `${window.location.origin}${url}`;
   }
-
 
   async function copyText(s) {
     try {
@@ -2328,7 +2331,8 @@
             try { await revokeShareToken(existing.token); } catch (_) {}
           }
 
-          const link = await createShareLinkFor(rel, expiresSec);
+          const shareType = type === "folder" ? "dir" : type;
+          const link = await createShareLinkFor(rel, shareType, expiresSec);
 
           if (shareOut) shareOut.value = link;
           if (shareOutWrap) shareOutWrap.classList.remove("hidden");

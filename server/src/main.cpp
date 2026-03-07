@@ -460,7 +460,7 @@ static std::string effective_root_rel_for_user(const pqnas::UserRec& u,
     return default_root_rel_for_fp(fp_hex);
 }
 
-static std::filesystem::path user_dir_for_fp(const pqnas::UsersRegistry& users,
+[[maybe_unused]] static std::filesystem::path user_dir_for_fp(const pqnas::UsersRegistry& users,
                                              const std::string& fp_hex) {
     auto uopt = users.get(fp_hex);
 
@@ -482,19 +482,16 @@ static std::filesystem::path user_dir_for_fp(pqnas::UsersRegistry& users, const 
 {
     auto uopt = users.get(fp_hex);
 
-    // Base/root for simple installs (ext4 / single-disk / default storage mode).
-    // data_root_dir() is already the effective PQ-NAS data root, e.g. /srv/pqnas/data
+    // Default/simple install root.
     std::filesystem::path data_root = std::filesystem::path(data_root_dir());
 
     if (uopt.has_value()) {
         const auto& u = *uopt;
 
-        // Pool-backed storage:
-        // Resolve the REAL mount from the runtime pool map, then use <mount>/data
-        // because allocation stores user dirs under:
-        //   <pool_mount>/data/users/<fp>
         if (!u.storage_pool_id.empty()) {
             std::string pool_mount;
+
+            // 1) Prefer runtime pool map if present
             {
                 std::lock_guard<std::mutex> lk(pool_mu());
                 auto& m = pool_mount_by_id();
@@ -504,13 +501,41 @@ static std::filesystem::path user_dir_for_fp(pqnas::UsersRegistry& users, const 
                 }
             }
 
+            // 2) Fallback: resolve from persisted pools.json
+            if (pool_mount.empty()) {
+                try {
+                    const std::filesystem::path pools_path =
+                        std::filesystem::path(data_root_dir()).parent_path() / "config" / "pools.json";
+
+                    std::ifstream f(pools_path);
+                    if (f.good()) {
+                        nlohmann::json j;
+                        f >> j;
+
+                        if (j.is_object() && j.contains("pools") && j["pools"].is_object()) {
+                            for (auto it = j["pools"].begin(); it != j["pools"].end(); ++it) {
+                                const std::string mount = it.key();
+                                const auto& meta = it.value();
+                                if (!meta.is_object()) continue;
+
+                                const std::string pid = meta.value("pool_id", "");
+                                if (pid == u.storage_pool_id) {
+                                    pool_mount = mount;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } catch (...) {
+                    // fail closed to default root fallback below
+                }
+            }
+
             if (!pool_mount.empty()) {
                 data_root = std::filesystem::path(pool_mount) / "data";
             }
         }
 
-        // Preferred modern layout:
-        // root_rel is stored relative to effective data_root
         if (u.storage_state == "allocated" &&
             !u.root_rel.empty() &&
             is_safe_rel_path(u.root_rel))
@@ -13306,7 +13331,7 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
         {"storage_set_at", u.storage_set_at},
         {"storage_set_by", u.storage_set_by},
         {"user_dir", udir.string()},
-        {"data_root", data_root_dir()}
+        {"data_root", data_root.string()}
     }).dump());
 });
 
@@ -20995,11 +21020,26 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
 
     pqnas::ShareLink out;
     std::string err;
-    if (!shares.create(fp_hex, path_rel, type, expires_sec, &out, &err)) {
-        audit_fail("create_failed", 500, err, path_rel);
-        reply(500, json{{"ok", false}, {"error", "server_error"}, {"message", "share create failed"}});
-        return;
-    }
+{
+    pqnas::AuditEvent ev;
+    ev.event = "share_create_attempt";
+    ev.outcome = "ok";
+    ev.f["fingerprint"] = fp_hex;
+    ev.f["path"] = pqnas::shorten(path_rel, 200);
+    ev.f["type"] = pqnas::shorten(type, 32);
+    ev.f["expires_sec"] = std::to_string((long long)expires_sec);
+    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+    audit_append(ev);
+}
+if (!shares.create(fp_hex, path_rel, type, expires_sec, &out, &err)) {
+    reply(500, json{
+        {"ok", false},
+        {"error", "server_error"},
+        {"message", "share create failed"},
+        {"detail", err}
+    });
+    return;
+}
 
     audit_ok(out);
 
