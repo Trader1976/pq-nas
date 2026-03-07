@@ -924,6 +924,45 @@
         </div>
     </div>
 </div>
+<!-- Migrate storage modal -->
+<div id="migrateModal" class="allocModal" aria-hidden="true">
+    <div class="allocCard" role="dialog" aria-modal="true" aria-label="Migrate storage">
+        <div class="allocTop">
+            <div class="allocTitle">Migrate storage</div>
+            <div class="allocActions">
+                <button class="btn secondary" id="migrateCancelBtn" type="button">Cancel</button>
+                <button class="btn" id="migrateSaveBtn" type="button">Migrate</button>
+            </div>
+        </div>
+
+        <div class="allocBody">
+            <div class="hint" style="margin-bottom:12px;">
+                User: <span class="mono" id="migrateFpLabel">—</span>
+            </div>
+
+            <div class="allocGrid">
+                <div>
+                    <div class="muted" style="font-size:12px; margin-bottom:6px;">Current pool</div>
+                    <input id="migrateCurPool" readonly />
+                    <div class="muted" id="migrateCurHint" style="font-size:12px; margin-top:6px;">—</div>
+                </div>
+
+                <div>
+                    <div class="muted" style="font-size:12px; margin-bottom:6px;">Destination pool</div>
+                    <select id="migratePoolSel"></select>
+                    <div class="muted" id="migratePoolHint" style="font-size:12px; margin-top:6px;">—</div>
+                </div>
+            </div>
+
+            <div class="hint" style="margin-top:12px;">
+                Migration copies user data to the destination pool, verifies it, then switches the user’s storage mapping.
+                Source data is kept for safety.
+            </div>
+
+            <div id="migrateErr" class="allocErr"></div>
+        </div>
+    </div>
+</div>
 <!-- Avatar preview modal -->
 <div id="avatarModal" class="avatarModal" aria-hidden="true">
     <div class="avatarModalCard" role="dialog" aria-modal="true" aria-label="Avatar preview">

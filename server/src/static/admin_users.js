@@ -348,6 +348,153 @@ function closeAllocModal() {
     setAllocError("");
     gAllocFp = "";
 }
+
+function setMigrateError(msg) {
+    const el = $("migrateErr");
+    if (!el) return;
+    if (!msg) {
+        el.textContent = "";
+        el.classList.remove("show");
+        return;
+    }
+    el.textContent = String(msg);
+    el.classList.add("show");
+}
+
+function currentPoolIdForUser(u) {
+    const raw =
+        (u?.pool_id != null ? String(u.pool_id) :
+            (u?.pool != null ? String(u.pool) :
+                (u?.storage_pool_id != null ? String(u.storage_pool_id) : "")));
+    return raw || "default";
+}
+
+function currentPoolNameFromList(poolId, pools) {
+    const p = (pools || []).find(x => x.id === poolId);
+    return p?.name || poolId || "default";
+}
+
+function openMigrateModal(fp, curUser) {
+    gMigrateFp = String(fp || "");
+
+    const m = $("migrateModal");
+    const fpLabel = $("migrateFpLabel");
+    const curPoolInp = $("migrateCurPool");
+    const curHint = $("migrateCurHint");
+    const poolSel = $("migratePoolSel");
+    const poolHint = $("migratePoolHint");
+
+    if (!m || !fpLabel || !curPoolInp || !curHint || !poolSel || !poolHint) return;
+
+    setMigrateError("");
+    fpLabel.textContent = gMigrateFp || "—";
+
+    m.classList.add("open");
+    m.setAttribute("aria-hidden", "false");
+
+    (async () => {
+        const pools = await ensurePoolsLoaded();
+        const curPoolId = currentPoolIdForUser(curUser);
+
+        curPoolInp.value = currentPoolNameFromList(curPoolId, pools);
+        const curPoolObj = pools.find(x => x.id === curPoolId);
+        curHint.textContent = curPoolObj?.hint || "—";
+
+        const candidates = pools.filter(p => p.id !== curPoolId);
+
+        poolSel.innerHTML = "";
+        if (candidates.length === 0) {
+            const opt = document.createElement("option");
+            opt.value = "";
+            opt.textContent = "No other pools available";
+            poolSel.appendChild(opt);
+            poolSel.disabled = true;
+            poolHint.textContent = "Create another pool first.";
+            return;
+        }
+
+        poolSel.disabled = false;
+        for (const p of candidates) {
+            const opt = document.createElement("option");
+            opt.value = p.id;
+            opt.textContent = p.name;
+            poolSel.appendChild(opt);
+        }
+
+        const selected = candidates[0];
+        poolSel.value = selected.id;
+        poolHint.textContent = selected?.hint || "—";
+
+        poolSel.onchange = () => {
+            const s = candidates.find(x => x.id === poolSel.value);
+            poolHint.textContent = s?.hint || "—";
+        };
+    })().catch(e => {
+        setMigrateError("Failed to load pools: " + (e?.message || e));
+    });
+}
+
+function closeMigrateModal() {
+    const m = $("migrateModal");
+    if (!m) return;
+    m.classList.remove("open");
+    m.setAttribute("aria-hidden", "true");
+    setMigrateError("");
+    gMigrateFp = "";
+}
+
+async function submitMigrationFromModal() {
+    const fp = gMigrateFp;
+    if (!fp) return;
+
+    const poolSel = $("migratePoolSel");
+    const pool_id = String(poolSel?.value || "").trim();
+
+    if (!pool_id) {
+        setMigrateError("No destination pool selected.");
+        return;
+    }
+
+    const cur = allUsers.find(x => String(x.fingerprint || "") === fp) || {};
+    const curPoolId = currentPoolIdForUser(cur);
+
+    if (pool_id === curPoolId) {
+        setMigrateError("Destination pool must differ from current pool.");
+        return;
+    }
+
+    if (!confirm(`Migrate user storage to pool "${pool_id}"?\n\nThis copies data, verifies it, then switches the user's storage mapping.`)) {
+        return;
+    }
+
+    try {
+        setMigrateError("");
+        setMsg("Migrating storage…");
+
+        const j = await apiPost("/api/v4/admin/users/migrate_storage", {
+            fingerprint: fp,
+            pool_id,
+        });
+
+        closeMigrateModal();
+        await refresh();
+
+        showToast(
+            "Storage migrated\n" +
+            `From: ${j.from_pool_id}\n` +
+            `To: ${j.to_pool_id}\n` +
+            (j.root_rel ? `Path: ${j.root_rel}\n` : "") +
+            `Copied: ${j.copied ? "yes" : "no"}\n` +
+            `Verified: ${j.verified ? "yes" : "no"}`
+        );
+
+        setMsg("Migration completed");
+    } catch (e) {
+        setMigrateError(String(e?.message || e));
+        setMsg("Error: " + (e?.message || e));
+    }
+}
+
 async function submitAllocationFromModal() {
     const fp = gAllocFp;
     if (!fp) return;
@@ -411,7 +558,7 @@ let actorFp = "";
 // ----- pools + allocation modal state -----
 let gPools = null; // array of { id, name, hint }
 let gAllocFp = "";
-
+let gMigrateFp = "";
 
 function setMsg(text) {
     const el = $("msg");
@@ -558,7 +705,14 @@ function render() {
             data-act="allocate"
             data-fp="${esc(fp)}"
             type="button">Allocate</button>
-
+            
+    ${String(u.storage_state || "").toLowerCase() === "allocated" ? `
+        <button class="btn secondary"
+            data-act="migrate"
+            data-fp="${esc(fp)}"
+            type="button">Migrate</button>
+    ` : ``}
+    
     <button class="btn danger"
             data-act="delete"
             data-fp="${esc(fp)}"
@@ -728,7 +882,15 @@ ${detailRow}
                 openAllocModal(fp, cur);
                 return;
             }
-
+            if (act === "migrate") {
+                const cur = allUsers.find(x => String(x.fingerprint || "") === String(fp)) || {};
+                if (String(cur.storage_state || "").toLowerCase() !== "allocated") {
+                    alert("Storage must be allocated before migration.");
+                    return;
+                }
+                openMigrateModal(fp, cur);
+                return;
+            }
             const status =
                 (act === "disable") ? "disabled" :
                     (act === "revoke") ? "revoked" : "";
@@ -816,11 +978,19 @@ window.addEventListener("load", async () => {
     $("allocModal")?.addEventListener("click", (ev) => {
         if (ev.target && ev.target.id === "allocModal") closeAllocModal(); // backdrop
     });
+    $("migrateCancelBtn")?.addEventListener("click", closeMigrateModal);
+    $("migrateSaveBtn")?.addEventListener("click", submitMigrationFromModal);
 
+    $("migrateModal")?.addEventListener("click", (ev) => {
+        if (ev.target && ev.target.id === "migrateModal") closeMigrateModal();
+    });
     document.addEventListener("keydown", (ev) => {
         if (ev.key === "Escape") {
-            const m = $("allocModal");
-            if (m && m.classList.contains("open")) closeAllocModal();
+            const m1 = $("allocModal");
+            if (m1 && m1.classList.contains("open")) closeAllocModal();
+
+            const m2 = $("migrateModal");
+            if (m2 && m2.classList.contains("open")) closeMigrateModal();
         }
     });
     $("avatarRemoveBtn")?.addEventListener("click", async () => {
