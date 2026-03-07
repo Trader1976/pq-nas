@@ -8,6 +8,8 @@
 #include <fstream>
 #include <sstream>
 #include <system_error>
+#include <sys/wait.h>
+#include <unistd.h>
 
 
 
@@ -146,19 +148,48 @@ static std::uint64_t compute_tree_bytes(const std::filesystem::path& root) {
 
     static bool run_rsync_copy(const std::filesystem::path& src,
                                const std::filesystem::path& dst,
-                               std::string* err) {
+                               std::string* err)
+{
     if (err) err->clear();
 
-    const std::string cmd =
-        "rsync -aHAX -- " +
-        std::string("'") + src.string() + "/' " +
-        std::string("'") + dst.string() + "/'";
+    const std::string src_s = src.string() + "/";
+    const std::string dst_s = dst.string() + "/";
 
-    const int rc = std::system(cmd.c_str());
-    if (rc != 0) {
-        if (err) *err = "rsync failed rc=" + std::to_string(rc);
+    pid_t pid = fork();
+    if (pid < 0) {
+        if (err) *err = "fork failed";
         return false;
     }
+
+    if (pid == 0) {
+        // child
+        const char* argv[] = {
+            "rsync",
+            "-aHAX",
+            "--numeric-ids",
+            "--",
+            src_s.c_str(),
+            dst_s.c_str(),
+            nullptr
+        };
+
+        execvp("rsync", const_cast<char* const*>(argv));
+
+        // only reached if exec fails
+        _exit(127);
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        if (err) *err = "waitpid failed";
+        return false;
+    }
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        if (err) *err = "rsync failed rc=" + std::to_string(WEXITSTATUS(status));
+        return false;
+    }
+
     return true;
 }
 
