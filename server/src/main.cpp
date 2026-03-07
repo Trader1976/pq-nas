@@ -13269,22 +13269,24 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
 		        {"address", u.address},
 				{"avatar_url", u.avatar_url},
 
-		        // storage metadata
+        		// storage metadata
 		        {"storage_state", u.storage_state},
-		        {"quota_bytes", u.quota_bytes},
-		        {"root_rel", u.root_rel},
+    		    {"quota_bytes", u.quota_bytes},
+        		{"root_rel", u.root_rel},
 		        {"storage_set_at", u.storage_set_at},
-		        {"storage_set_by", u.storage_set_by},
-                {"pool_id", nullptr},
+    		    {"storage_set_by", u.storage_set_by},
+
+		        // raw metadata: empty string means logical default pool
+    		    {"storage_pool_id", u.storage_pool_id},
+
+	        	// UI-friendly resolved pool id
+    	    	{"pool_id", u.storage_pool_id.empty() ? "default" : u.storage_pool_id},
 
 		        // NEW: storage usage
-        		{"storage_used_bytes", used_bytes}
-		    });
-		}
-
-
-
-        reply_json(res, 200, out.dump());
+    		    {"storage_used_bytes", used_bytes}
+				    });
+				}
+	        reply_json(res, 200, out.dump());
     });
 
 	srv.Get("/admin/approvals", [&](const httplib::Request& req, httplib::Response& res) {
@@ -21673,8 +21675,9 @@ srv.Post("/api/v4/admin/users/migrate_storage", [&](const httplib::Request& req,
         return;
     }
 
-    const std::string fp = trim_copy(j.value("fingerprint", ""));
-    const std::string pool_id = trim_copy(j.value("pool_id", ""));
+	const std::string fp = trim_copy(j.value("fingerprint", ""));
+	std::string pool_id = trim_copy(j.value("pool_id", ""));
+	if (pool_id == "DEFAULT" || pool_id == "Default" || pool_id == "default") pool_id = "default";
 
     if (fp.empty() || pool_id.empty()) {
         reply_json(res, 400, json{

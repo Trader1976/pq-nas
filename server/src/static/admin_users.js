@@ -268,19 +268,20 @@ async function apiGetPoolsBestEffort() {
 }
 
 async function ensurePoolsLoaded() {
-    if (gPools !== null) return gPools;
     const pools = await apiGetPoolsBestEffort();
+    const out = Array.isArray(pools) ? [...pools] : [];
 
-    // If none, fallback to default pool option
-    if (!pools || pools.length === 0) {
-        gPools = [{ id: "default", name: "Default pool", hint: "Used when no pools exist" }];
-        return gPools;
+    if (!out.some(p => String(p.id) === "default")) {
+        out.unshift({
+            id: "default",
+            name: "Default pool",
+            hint: "/srv/pqnas/data"
+        });
     }
 
-    gPools = pools;
+    gPools = out;
     return gPools;
 }
-
 function openAllocModal(fp, curUser) {
     gAllocFp = String(fp || "");
     gAllocForce = false;
@@ -373,7 +374,9 @@ function currentPoolIdForUser(u) {
         (u?.pool_id != null ? String(u.pool_id) :
             (u?.pool != null ? String(u.pool) :
                 (u?.storage_pool_id != null ? String(u.storage_pool_id) : "")));
-    return raw || "default";
+
+    const v = raw.trim();
+    return v ? v : "default";
 }
 
 function currentPoolNameFromList(poolId, pools) {
@@ -383,7 +386,7 @@ function currentPoolNameFromList(poolId, pools) {
 
 function openMigrateModal(fp, curUser) {
     gMigrateFp = String(fp || "");
-
+    gPools = null;
     const m = $("migrateModal");
     const fpLabel = $("migrateFpLabel");
     const curPoolInp = $("migrateCurPool");
@@ -408,6 +411,7 @@ function openMigrateModal(fp, curUser) {
         curHint.textContent = curPoolObj?.hint || "—";
 
         const candidates = pools.filter(p => p.id !== curPoolId);
+
 
         poolSel.innerHTML = "";
         if (candidates.length === 0) {
@@ -465,8 +469,8 @@ function fmtMigText(job) {
     if (Number.isFinite(percent)) out += `\nProgress: ${percent}%`;
     if (msg) out += `\nMessage: ${msg}`;
 
-    const src = job?.resolved_source_pool_id;
-    const dst = job?.resolved_dest_pool_id || job?.requested_target_pool_id;
+    const src = job?.resolved_source_pool_id || "default";
+    const dst = job?.resolved_dest_pool_id || job?.requested_target_pool_id || "default";
 
     if (src) out += `\nFrom: ${src}`;
     if (dst) out += `\nTo: ${dst}`;
@@ -565,11 +569,14 @@ async function submitMigrationFromModal() {
             throw new Error("Migration job_id missing from server response");
         }
 
+        const dstPool = (gPools || []).find(x => x.id === pool_id);
+        const dstName = dstPool?.name || pool_id;
+
         showToast(
             "Storage migration queued\n" +
             `Job: ${jobId}\n` +
             `User: ${fp}\n` +
-            `To: ${pool_id}`
+            `To: ${dstName}`
         );
 
         setMsg("Migration queued");
