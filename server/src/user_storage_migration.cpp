@@ -144,13 +144,13 @@ static std::uint64_t compute_tree_bytes(const std::filesystem::path& root) {
     return total;
 }
 
-static bool run_rsync_copy(const std::filesystem::path& src,
-                           const std::filesystem::path& dst,
-                           std::string* err) {
+    static bool run_rsync_copy(const std::filesystem::path& src,
+                               const std::filesystem::path& dst,
+                               std::string* err) {
     if (err) err->clear();
 
     const std::string cmd =
-        "rsync -aHAX --delete -- " +
+        "rsync -aHAX -- " +
         std::string("'") + src.string() + "/' " +
         std::string("'") + dst.string() + "/'";
 

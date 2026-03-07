@@ -220,13 +220,19 @@ function normalizePoolsFromResponse(j) {
     for (const p of arr) {
         if (!p || typeof p !== "object") continue;
 
-        const id = String(p.pool_id || "").trim();
-        if (!id) continue;
+        const rawId = String(p.pool_id || "").trim();
+        if (!rawId) continue;
 
         const mount = String(p.mount || "").trim();
         const disp = String(p.display_name || "").trim();
 
-        const name = disp || mount || id;
+        const isDefault =
+            rawId === "default" ||
+            mount === "/srv/pqnas" ||
+            mount === "/srv/pqnas/data";
+
+        const id = isDefault ? "default" : rawId;
+        const name = isDefault ? "Default pool" : (disp || rawId);
 
         const hintParts = [];
         if (mount) hintParts.push(mount);
@@ -238,6 +244,7 @@ function normalizePoolsFromResponse(j) {
     }
     return out;
 }
+
 async function apiGetPoolsBestEffort() {
     // Prefer raidmgr pools endpoint (most likely already exists)
     const candidates = [
