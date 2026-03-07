@@ -449,7 +449,84 @@ function closeMigrateModal() {
     setMigrateError("");
     gMigrateFp = "";
 }
+async function apiGetMigrationStatus(jobId) {
+    const q = encodeURIComponent(String(jobId || "").trim());
+    return await apiGet(`/api/v4/admin/users/migrate_storage_status?job_id=${q}`);
+}
 
+function fmtMigText(job) {
+    const state = String(job?.state || "unknown");
+    const phase = String(job?.phase || "");
+    const percent = Number(job?.percent);
+    const msg = String(job?.message || "");
+
+    let out = `State: ${state}`;
+    if (phase) out += `\nPhase: ${phase}`;
+    if (Number.isFinite(percent)) out += `\nProgress: ${percent}%`;
+    if (msg) out += `\nMessage: ${msg}`;
+
+    const src = job?.resolved_source_pool_id;
+    const dst = job?.resolved_dest_pool_id || job?.requested_target_pool_id;
+
+    if (src) out += `\nFrom: ${src}`;
+    if (dst) out += `\nTo: ${dst}`;
+
+    if (job?.error) out += `\nError: ${job.error}`;
+
+    return out;
+}
+
+async function pollMigrationJob(jobId, fp) {
+    const startedAt = Date.now();
+    const timeoutMs = 10 * 60 * 1000; // 10 min safety cap for UI polling
+    let lastShownState = "";
+
+    for (;;) {
+        const j = await apiGetMigrationStatus(jobId);
+        const job = j?.job || {};
+
+        const state = String(job.state || "");
+        const phase = String(job.phase || "");
+        const percent = Number(job.percent);
+
+        const progressBits = [];
+        if (phase) progressBits.push(phase);
+        if (Number.isFinite(percent)) progressBits.push(`${percent}%`);
+        setMsg(progressBits.length ? `Migration ${progressBits.join(" · ")}` : `Migration ${state || "running"}…`);
+
+        // Optional small toast on first visible transition
+        const stateKey = `${state}:${phase}:${percent}`;
+        if (lastShownState !== stateKey && (state === "queued" || state === "running")) {
+            lastShownState = stateKey;
+        }
+
+        if (state === "done") {
+            closeMigrateModal();
+            await refresh();
+            showToast("Storage migration completed\n" + fmtMigText(job));
+            setMsg("Migration completed");
+            return;
+        }
+
+        if (state === "failed") {
+            await refresh();
+            const text = fmtMigText(job);
+            setMigrateError(job?.message || job?.error || "Migration failed");
+            showToast("Storage migration failed\n" + text, 15000);
+            setMsg("Migration failed");
+            return;
+        }
+
+        if ((Date.now() - startedAt) > timeoutMs) {
+            setMigrateError("Migration polling timed out. Job is still on server; reopen status later.");
+            showToast(`Migration still in progress\nJob: ${jobId}`, 15000);
+            setMsg("Migration polling timed out");
+            return;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 1200));
+    }
+}
 async function submitMigrationFromModal() {
     const fp = gMigrateFp;
     if (!fp) return;
@@ -470,32 +547,33 @@ async function submitMigrationFromModal() {
         return;
     }
 
-    if (!confirm(`Migrate user storage to pool "${pool_id}"?\n\nThis copies data, verifies it, then switches the user's storage mapping.`)) {
+    if (!confirm(`Migrate user storage to pool "${pool_id}"?\n\nThis will create an async job. The worker will copy data, verify it, then switch the user's storage mapping.`)) {
         return;
     }
 
     try {
         setMigrateError("");
-        setMsg("Migrating storage…");
+        setMsg("Queuing migration…");
 
         const j = await apiPost("/api/v4/admin/users/migrate_storage", {
             fingerprint: fp,
             pool_id,
         });
 
-        closeMigrateModal();
-        await refresh();
+        const jobId = String(j?.job_id || "").trim();
+        if (!jobId) {
+            throw new Error("Migration job_id missing from server response");
+        }
 
         showToast(
-            "Storage migrated\n" +
-            `From: ${j.from_pool_id}\n` +
-            `To: ${j.to_pool_id}\n` +
-            (j.root_rel ? `Path: ${j.root_rel}\n` : "") +
-            `Copied: ${j.copied ? "yes" : "no"}\n` +
-            `Verified: ${j.verified ? "yes" : "no"}`
+            "Storage migration queued\n" +
+            `Job: ${jobId}\n` +
+            `User: ${fp}\n` +
+            `To: ${pool_id}`
         );
 
-        setMsg("Migration completed");
+        setMsg("Migration queued");
+        await pollMigrationJob(jobId, fp);
     } catch (e) {
         setMigrateError(String(e?.message || e));
         setMsg("Error: " + (e?.message || e));

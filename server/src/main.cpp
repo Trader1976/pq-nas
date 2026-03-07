@@ -4507,6 +4507,480 @@ static bool raid_exec_record_read(const std::string& plan_id, json* out_rec, std
     if (out_rec) *out_rec = j;
     return true;
 }
+
+// ============================================================================
+// USER STORAGE MIGRATION ASYNC JOB ENGINE (v1 scaffold)
+// - submit route enqueues job + writes canonical record state=queued
+// - dedicated worker family, separate from RAID worker
+// - phase-based progress record, not command-step-based
+// - actual phase execution added in next patch
+// ============================================================================
+
+static std::string user_mig_record_path(const std::string& job_id);
+static bool user_mig_record_write_atomic(const std::string& job_id, const json& rec);
+static bool user_mig_record_read(const std::string& job_id, json* out, std::string* err);
+static void user_mig_finalize_record(const std::string& job_id, json* rec, bool ok, const std::string& err_msg);
+static void user_mig_record_set_phase(json* rec, const std::string& phase, int percent, const std::string& message);
+
+struct UserStorageMigrationJob {
+    std::string job_id;
+    std::string actor_fp;
+    std::string user_fp;
+    std::string requested_target_pool_id;
+    std::string remote_ip;
+
+    json record; // canonical durable record we mutate + write
+};
+
+static std::mutex g_user_mig_jobs_mu;
+static std::condition_variable g_user_mig_jobs_cv;
+static std::deque<UserStorageMigrationJob> g_user_mig_jobs_q;
+static std::unordered_map<std::string, json> g_user_mig_job_meta; // job_id -> small status/meta
+static std::atomic<bool> g_user_mig_worker_stop{false};
+static std::thread g_user_mig_worker;
+
+static std::string user_mig_new_job_id() {
+    std::string seed = pqnas::now_iso_utc();
+    seed += "|pid=" + std::to_string((int)getpid());
+    seed += "|rnd=" + std::to_string((uint64_t)std::rand());
+    seed += "|kind=user_storage_migration";
+    const std::string h = sha256_hex_lower_evp(seed);
+    return is_sha256_hex_lower(h) ? h : sha256_hex_lower_evp(seed + "|fallback");
+}
+
+static std::string user_mig_record_path(const std::string& job_id) {
+    return std::string("/run/pqnas/user-storage-migration/") + job_id + ".json";
+}
+
+static bool user_mig_record_write_atomic(const std::string& job_id, const json& rec) {
+    if (!is_sha256_hex_lower(job_id)) return false;
+    const std::string path = user_mig_record_path(job_id);
+    return write_text_file_atomic(path, rec.dump(2) + "\n");
+}
+
+static bool user_mig_record_read(const std::string& job_id, json* out, std::string* err) {
+    if (out) *out = json::object();
+    if (err) err->clear();
+
+    if (!is_sha256_hex_lower(job_id)) {
+        if (err) *err = "bad_job_id";
+        return false;
+    }
+
+    const std::string path = user_mig_record_path(job_id);
+
+    std::string text;
+    if (!read_text_file(path, &text)) {
+        if (err) *err = "record_not_found";
+        return false;
+    }
+
+    cap_string(text, 1024 * 1024);
+
+    json j;
+    try {
+        j = json::parse(text.empty() ? "{}" : text);
+    } catch (...) {
+        if (err) *err = "record_parse_failed";
+        return false;
+    }
+
+    if (!j.is_object()) j = json::object();
+    if (out) *out = j;
+    return true;
+}
+
+static void user_mig_record_set_phase(json* rec,
+                                      const std::string& phase,
+                                      int percent,
+                                      const std::string& message) {
+    if (!rec) return;
+    (*rec)["phase"] = phase;
+    (*rec)["percent"] = percent;
+    (*rec)["message"] = message;
+    (*rec)["ts_last"] = pqnas::now_iso_utc();
+
+    if (!rec->contains("events") || !(*rec)["events"].is_array()) {
+        (*rec)["events"] = json::array();
+    }
+
+    (*rec)["events"].push_back(json{
+        {"ts", pqnas::now_iso_utc()},
+        {"phase", phase},
+        {"percent", percent},
+        {"message", message}
+    });
+}
+
+static void user_mig_finalize_record(const std::string& job_id,
+                                     json* rec,
+                                     bool ok,
+                                     const std::string& err_msg) {
+    if (!rec) return;
+
+    const std::string ts_end = pqnas::now_iso_utc();
+
+    (*rec)["ts_end"] = ts_end;
+    (*rec)["ts_last"] = ts_end;
+    (*rec)["busy"] = false;
+    (*rec)["state"] = ok ? "done" : "failed";
+    (*rec)["ok"] = ok;
+
+    if (ok) {
+        (*rec)["phase"] = "done";
+        (*rec)["percent"] = 100;
+        (*rec)["message"] = "migration completed";
+        if (rec->contains("error")) rec->erase("error");
+    } else {
+        (*rec)["message"] = err_msg.empty() ? "migration failed" : err_msg;
+        (*rec)["error"] = err_msg.empty() ? "migration_failed" : err_msg;
+    }
+
+    (void)user_mig_record_write_atomic(job_id, *rec);
+}
+
+static std::string user_mig_lock_path(const std::string& user_fp) {
+    return std::string("/run/pqnas/locks/user-storage-migrate-") + user_fp + ".lock";
+}
+
+static void user_storage_migration_worker_main(std::string users_path) {
+    (void)users_path;
+
+    auto user_mig_worker_audit = [&](const std::string& event,
+                                     const std::string& outcome,
+                                     const UserStorageMigrationJob& job,
+                                     const json& extra = json::object()) {
+        try {
+            pqnas::AuditEvent ev;
+            ev.event = event;
+            ev.outcome = outcome;
+
+            if (!job.actor_fp.empty()) ev.f["actor_fp"] = job.actor_fp;
+            if (!job.user_fp.empty()) ev.f["fingerprint"] = job.user_fp;
+            if (!job.requested_target_pool_id.empty()) ev.f["to_pool_id"] = job.requested_target_pool_id;
+            ev.f["job_id"] = job.job_id;
+            ev.f["ip"] = "local";
+
+            if (extra.is_object()) {
+                for (auto it = extra.begin(); it != extra.end(); ++it) {
+                    const std::string k = "x_" + pqnas::shorten(it.key(), 64);
+                    if (it.value().is_string()) ev.f[k] = pqnas::shorten(it.value().get<std::string>(), 220);
+                    else if (it.value().is_boolean()) ev.f[k] = it.value().get<bool>() ? "true" : "false";
+                    else ev.f[k] = pqnas::shorten(it.value().dump(), 220);
+                }
+            }
+
+            audit_append(ev);
+        } catch (...) {
+        }
+    };
+
+    for (;;) {
+        UserStorageMigrationJob job;
+
+        {
+            std::unique_lock<std::mutex> lk(g_user_mig_jobs_mu);
+            g_user_mig_jobs_cv.wait(lk, [&] {
+                return g_user_mig_worker_stop.load() || !g_user_mig_jobs_q.empty();
+            });
+            if (g_user_mig_worker_stop.load()) return;
+
+            job = std::move(g_user_mig_jobs_q.front());
+            g_user_mig_jobs_q.pop_front();
+
+            g_user_mig_job_meta[job.job_id]["state"] = "running";
+            g_user_mig_job_meta[job.job_id]["ts_started"] = pqnas::now_iso_utc();
+        }
+
+        job.record["state"] = "running";
+        job.record["busy"] = true;
+        if (!job.record.contains("ts_started") || job.record["ts_started"].is_null()) {
+            job.record["ts_started"] = pqnas::now_iso_utc();
+        }
+        user_mig_record_set_phase(&job.record, "starting", 2, "worker started");
+        (void)user_mig_record_write_atomic(job.job_id, job.record);
+
+        int fd_user_lock = -1;
+        std::string user_lockp;
+
+        auto close_user_lock = [&]() {
+            if (fd_user_lock >= 0) {
+                ::close(fd_user_lock);
+                fd_user_lock = -1;
+            }
+            if (!user_lockp.empty()) {
+                (void)std::filesystem::remove(user_lockp);
+            }
+        };
+
+        bool ok = false;
+        std::string fail_phase = "starting";
+        std::string fail_reason;
+        pqnas::UserStorageMigrationPlan plan;
+        pqnas::UsersRegistry users_local;
+        std::string err;
+
+        do {
+            user_mig_worker_audit("admin.user_storage_migration_started", "ok", job, json{
+                {"phase", "starting"}
+            });
+
+            fail_phase = "acquiring_lock";
+            user_mig_record_set_phase(&job.record, "acquiring_lock", 5, "acquiring per-user lock");
+            (void)user_mig_record_write_atomic(job.job_id, job.record);
+
+            user_lockp = user_mig_lock_path(job.user_fp);
+            {
+                std::string lock_dir_err;
+                if (!ensure_dir_fail_closed("/run/pqnas/locks", &lock_dir_err)) {
+                    fail_reason = "lock_dir_failed: " + lock_dir_err;
+                    break;
+                }
+            }
+            {
+                std::string lock_err;
+                fd_user_lock = open_excl_lockfile(user_lockp, &lock_err);
+                if (fd_user_lock < 0) {
+                    if (lock_err.find("File exists") != std::string::npos) {
+                        fail_reason = "user_migration_busy: another migration is already in progress for this user";
+                    } else {
+                        fail_reason = "user_migration_lock_failed";
+                    }
+                    if (!lock_err.empty()) fail_reason += ": " + lock_err;
+                    break;
+                }
+            }
+
+            fail_phase = "resolving_paths";
+            user_mig_record_set_phase(&job.record, "resolving_paths", 10, "resolving source and destination paths");
+            (void)user_mig_record_write_atomic(job.job_id, job.record);
+
+            if (!users_local.load(users_path)) {
+                fail_reason = "users.load failed";
+                break;
+            }
+
+            if (!pqnas::resolve_user_storage_migration(users_local,
+                                                      users_path,
+                                                      job.user_fp,
+                                                      job.requested_target_pool_id,
+                                                      &plan,
+                                                      &err)) {
+                fail_reason = "resolve_failed: " + err;
+                break;
+            }
+
+            if (plan.from_pool_id == plan.to_pool_id) {
+                fail_reason = "same_pool";
+                break;
+            }
+
+            job.record["resolved_source_pool_id"] = plan.from_pool_id;
+            job.record["resolved_dest_pool_id"] = plan.to_pool_id;
+            job.record["resolved_source_root"] = plan.src_data_root.string();
+            job.record["resolved_dest_root"] = plan.dst_data_root.string();
+
+            fail_phase = "creating_destination";
+            user_mig_record_set_phase(&job.record, "creating_destination", 20, "creating destination directory");
+            (void)user_mig_record_write_atomic(job.job_id, job.record);
+
+            if (!pqnas::ensure_user_storage_migration_destination(plan, &err)) {
+                fail_reason = "mkdir_failed: " + err;
+                break;
+            }
+
+            fail_phase = "copying";
+            user_mig_record_set_phase(&job.record, "copying", 60, "copying data");
+            (void)user_mig_record_write_atomic(job.job_id, job.record);
+
+            if (!pqnas::run_user_storage_migration_copy(plan, &err)) {
+                fail_reason = "copy_failed: " + err;
+                break;
+            }
+
+            job.record["result"]["copied"] = true;
+
+            fail_phase = "verifying";
+            user_mig_record_set_phase(&job.record, "verifying", 80, "verifying copied data");
+            (void)user_mig_record_write_atomic(job.job_id, job.record);
+
+            if (!pqnas::verify_user_storage_migration_destination(plan, &err)) {
+                fail_reason = "verify_failed: " + err;
+                break;
+            }
+
+            job.record["result"]["verified"] = true;
+
+            fail_phase = "switching_metadata";
+            user_mig_record_set_phase(&job.record, "switching_metadata", 92, "switching user metadata");
+            (void)user_mig_record_write_atomic(job.job_id, job.record);
+
+            // Re-load users here so compare-before-commit sees latest registry state.
+            pqnas::UsersRegistry users_reload;
+            if (!users_reload.load(users_path)) {
+                fail_reason = "users.load failed before metadata switch";
+                break;
+            }
+
+            if (!pqnas::switch_user_storage_migration_metadata(users_reload,
+                                                               users_path,
+                                                               job.actor_fp,
+                                                               plan,
+                                                               &err)) {
+                fail_reason = "metadata_switch_failed: " + err;
+                break;
+            }
+
+            job.record["result"]["metadata_updated"] = true;
+            job.record["result"]["from_pool_id"] = plan.from_pool_id;
+            job.record["result"]["to_pool_id"] = plan.to_pool_id;
+            job.record["result"]["root_rel"] = plan.root_rel;
+            job.record["result"]["src_user_dir"] = plan.src_user_dir.string();
+            job.record["result"]["dst_user_dir"] = plan.dst_user_dir.string();
+
+            user_mig_record_set_phase(&job.record, "done", 100, "migration completed");
+            ok = true;
+        } while (false);
+
+        close_user_lock();
+
+        if (ok) {
+            user_mig_finalize_record(job.job_id, &job.record, true, "");
+            user_mig_worker_audit("admin.user_storage_migration_succeeded", "ok", job, json{
+                {"phase", "done"},
+                {"source_pool_id", plan.from_pool_id},
+                {"dest_pool_id", plan.to_pool_id}
+            });
+
+            std::lock_guard<std::mutex> lk(g_user_mig_jobs_mu);
+            g_user_mig_job_meta[job.job_id]["state"] = "done";
+            g_user_mig_job_meta[job.job_id]["ts_finished"] = pqnas::now_iso_utc();
+        } else {
+            job.record["result"]["copied"] = job.record["result"].value("copied", false);
+            job.record["result"]["verified"] = job.record["result"].value("verified", false);
+            job.record["result"]["metadata_updated"] = job.record["result"].value("metadata_updated", false);
+
+            if (!plan.from_pool_id.empty()) job.record["result"]["from_pool_id"] = plan.from_pool_id;
+            if (!plan.to_pool_id.empty()) job.record["result"]["to_pool_id"] = plan.to_pool_id;
+            if (!plan.root_rel.empty()) job.record["result"]["root_rel"] = plan.root_rel;
+            if (!plan.src_user_dir.empty()) job.record["result"]["src_user_dir"] = plan.src_user_dir.string();
+            if (!plan.dst_user_dir.empty()) job.record["result"]["dst_user_dir"] = plan.dst_user_dir.string();
+
+            user_mig_finalize_record(job.job_id, &job.record, false, fail_reason.empty() ? "migration_failed" : fail_reason);
+
+            user_mig_worker_audit("admin.user_storage_migration_failed", "fail", job, json{
+                {"phase", fail_phase},
+                {"reason", fail_reason.empty() ? "migration_failed" : fail_reason},
+                {"source_pool_id", plan.from_pool_id},
+                {"dest_pool_id", plan.to_pool_id}
+            });
+
+            std::lock_guard<std::mutex> lk(g_user_mig_jobs_mu);
+            g_user_mig_job_meta[job.job_id]["state"] = "failed";
+            g_user_mig_job_meta[job.job_id]["error"] = fail_reason.empty() ? "migration_failed" : fail_reason;
+            g_user_mig_job_meta[job.job_id]["ts_finished"] = pqnas::now_iso_utc();
+        }
+    }
+}
+
+static void user_mig_worker_start_once() {
+    static std::atomic<bool> started{false};
+    bool expected = false;
+    if (!started.compare_exchange_strong(expected, true)) return;
+    g_user_mig_worker_stop.store(false);
+    g_user_mig_worker = std::thread(user_storage_migration_worker_main, g_users_path_for_raid);
+}
+
+static void user_mig_worker_stop_and_join() {
+    g_user_mig_worker_stop.store(true);
+    g_user_mig_jobs_cv.notify_all();
+    if (g_user_mig_worker.joinable()) g_user_mig_worker.join();
+}
+
+static json user_mig_enqueue_job_fail_closed(const std::string& actor_fp,
+                                             const std::string& user_fp,
+                                             const std::string& target_pool_id,
+                                             const std::string& remote_ip) {
+    std::string state_dir_err;
+    if (!ensure_dir_fail_closed("/run/pqnas/user-storage-migration", &state_dir_err)) {
+        throw std::runtime_error("user_mig_state_dir_failed: " + state_dir_err);
+    }
+
+    const std::string job_id = user_mig_new_job_id();
+    if (!is_sha256_hex_lower(job_id)) {
+        throw std::runtime_error("job_id_generation_failed");
+    }
+
+    const std::string now = pqnas::now_iso_utc();
+
+    json rec = {
+        {"job_id", job_id},
+        {"type", "user_storage_migration"},
+        {"operation", "user_storage_migration"},
+        {"actor_fp", actor_fp},
+        {"user_fp", user_fp},
+        {"requested_target_pool_id", target_pool_id},
+        {"resolved_source_pool_id", nullptr},
+        {"resolved_dest_pool_id", nullptr},
+        {"resolved_source_root", nullptr},
+        {"resolved_dest_root", nullptr},
+        {"phase", "queued"},
+        {"percent", 0},
+        {"message", "queued"},
+        {"events", json::array()},
+        {"error", nullptr},
+        {"result", json::object()},
+        {"state", "queued"},
+        {"busy", true},
+        {"ok", true},
+        {"ts_created", now},
+        {"ts_started", nullptr},
+        {"ts_end", nullptr},
+        {"ts_last", now}
+    };
+
+    rec["events"].push_back(json{
+        {"ts", now},
+        {"phase", "queued"},
+        {"percent", 0},
+        {"message", "job created"}
+    });
+
+    if (!user_mig_record_write_atomic(job_id, rec)) {
+        throw std::runtime_error("user_mig_record_write_failed");
+    }
+
+    user_mig_worker_start_once();
+
+    UserStorageMigrationJob job;
+    job.job_id = job_id;
+    job.actor_fp = actor_fp;
+    job.user_fp = user_fp;
+    job.requested_target_pool_id = target_pool_id;
+    job.remote_ip = remote_ip;
+    job.record = rec;
+
+    {
+        std::lock_guard<std::mutex> lk(g_user_mig_jobs_mu);
+        g_user_mig_jobs_q.push_back(job);
+        g_user_mig_job_meta[job.job_id] = json{
+            {"job_id", job.job_id},
+            {"user_fp", user_fp},
+            {"requested_target_pool_id", target_pool_id},
+            {"record_path", user_mig_record_path(job.job_id)},
+            {"state", "queued"},
+            {"ts_created", now}
+        };
+    }
+    g_user_mig_jobs_cv.notify_one();
+
+    return json{
+        {"ok", true},
+        {"job_id", job_id},
+        {"state", "queued"}
+    };
+}
+
 // ------------------------- storage/pools helpers -------------------------
 
 static inline std::vector<std::string> split_lines(const std::string& s) {
@@ -21180,6 +21654,7 @@ srv.Get("/api/v4/shares/list", [&](const httplib::Request& req, httplib::Respons
 });
 // POST /api/v4/admin/users/migrate_storage
 // Body: {"fingerprint":"...","pool_id":"raidtest"}
+// Async v2: validates + enqueues job, does not run migration inline.
 srv.Post("/api/v4/admin/users/migrate_storage", [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
@@ -21210,103 +21685,122 @@ srv.Post("/api/v4/admin/users/migrate_storage", [&](const httplib::Request& req,
         return;
     }
 
-	std::string from_pool_id_for_audit = "";
-	if (auto uopt = users.get(fp); uopt.has_value()) {
-    	from_pool_id_for_audit = uopt->storage_pool_id.empty() ? "default" : uopt->storage_pool_id;
-	}
-
-	{
-	    pqnas::AuditEvent ev;
-	    ev.event = "admin.user_storage_migration_started";
-    	ev.outcome = "ok";
-	    ev.f["fingerprint"] = fp;
-    	ev.f["actor_fp"] = actor_fp;
-	    if (!from_pool_id_for_audit.empty()) ev.f["from_pool_id"] = from_pool_id_for_audit;
-    	ev.f["to_pool_id"] = pool_id;
-	    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-    	audit_append(ev);
-	}
-
-	pqnas::UserStorageMigrationResult mr;
-	if (!pqnas::migrate_user_storage_sync(users, users_path, actor_fp, fp, pool_id, &mr)) {
-    	{
-        	pqnas::AuditEvent ev;
-	        ev.event = "admin.user_storage_migration_failed";
-    	    ev.outcome = "fail";
-        	ev.f["fingerprint"] = fp;
-	        ev.f["actor_fp"] = actor_fp;
-    	    ev.f["to_pool_id"] = pool_id;
-        	if (!mr.plan.from_pool_id.empty()) ev.f["from_pool_id"] = mr.plan.from_pool_id;
-	        if (!mr.plan.to_pool_id.empty()) ev.f["to_pool_id"] = mr.plan.to_pool_id;
-    	    if (!mr.plan.root_rel.empty()) ev.f["root_rel"] = pqnas::shorten(mr.plan.root_rel, 160);
-        	if (!mr.plan.src_user_dir.empty()) ev.f["src_user_dir"] = pqnas::shorten(mr.plan.src_user_dir.string(), 200);
-	        if (!mr.plan.dst_user_dir.empty()) ev.f["dst_user_dir"] = pqnas::shorten(mr.plan.dst_user_dir.string(), 200);
-    	    if (!mr.error.empty()) ev.f["reason"] = pqnas::shorten(mr.error, 80);
-        	if (!mr.detail.empty()) ev.f["detail"] = pqnas::shorten(mr.detail, 180);
-	        ev.f["copied"] = mr.copied ? "1" : "0";
-    	    ev.f["verified"] = mr.verified ? "1" : "0";
-        	ev.f["metadata_updated"] = mr.metadata_updated ? "1" : "0";
-	        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-    	    audit_append(ev);
-    	}
-
-	    int http = 500;
-    	std::string message = "user storage migration failed";
-
-	    if (mr.error == "same_pool") {
-    	    http = 409;
-        	message = "source and destination pool are the same";
-	    } else if (mr.error == "user_missing" || mr.error == "storage_unallocated") {
-    	    http = 404;
-	    } else if (mr.error == "resolve_failed") {
-    	    http = 400;
-    	}
-
-	    reply_json(res, http, json{
-    	    {"ok", false},
-        	{"error", mr.error.empty() ? "migration_failed" : mr.error},
-	        {"message", message},
-    	    {"detail", mr.detail},
-        	{"from_pool_id", mr.plan.from_pool_id},
-	        {"to_pool_id", mr.plan.to_pool_id},
-    	    {"src_user_dir", mr.plan.src_user_dir.string()},
-        	{"dst_user_dir", mr.plan.dst_user_dir.string()},
-	        {"copied", mr.copied},
-    	    {"verified", mr.verified},
-        	{"metadata_updated", mr.metadata_updated}
-	    }.dump());
-    	return;
-	}
-
-    {
+    // Preserve current fast validation behavior at submit time.
+    // Full execution still happens in worker later.
+    pqnas::UserStorageMigrationPlan plan;
+    std::string resolve_err;
+    if (!pqnas::resolve_user_storage_migration(users, users_path, fp, pool_id, &plan, &resolve_err)) {
         pqnas::AuditEvent ev;
-        ev.event = "admin.user_storage_migration_succeeded";
+        ev.event = "admin.user_storage_migration_rejected";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp;
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["to_pool_id"] = pool_id;
+        ev.f["reason"] = "resolve_failed";
+        if (!resolve_err.empty()) ev.f["detail"] = pqnas::shorten(resolve_err, 180);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit_append(ev);
+
+        int http = 400;
+        if (resolve_err == "user_missing" || resolve_err == "storage_unallocated") http = 404;
+
+        reply_json(res, http, json{
+            {"ok", false},
+            {"error", "resolve_failed"},
+            {"message", "user storage migration rejected"},
+            {"detail", resolve_err}
+        }.dump());
+        return;
+    }
+
+    if (plan.from_pool_id == plan.to_pool_id) {
+        pqnas::AuditEvent ev;
+        ev.event = "admin.user_storage_migration_rejected";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp;
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["from_pool_id"] = plan.from_pool_id;
+        ev.f["to_pool_id"] = plan.to_pool_id;
+        ev.f["reason"] = "same_pool";
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit_append(ev);
+
+        reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "same_pool"},
+            {"message", "source and destination pool are the same"}
+        }.dump());
+        return;
+    }
+
+    try {
+        json out = user_mig_enqueue_job_fail_closed(actor_fp, fp, pool_id, req.remote_addr);
+
+        pqnas::AuditEvent ev;
+        ev.event = "admin.user_storage_migration_job_created";
         ev.outcome = "ok";
         ev.f["fingerprint"] = fp;
         ev.f["actor_fp"] = actor_fp;
-        ev.f["from_pool_id"] = mr.plan.from_pool_id;
-        ev.f["to_pool_id"] = mr.plan.to_pool_id;
-        ev.f["root_rel"] = pqnas::shorten(mr.plan.root_rel, 160);
-        ev.f["src_user_dir"] = pqnas::shorten(mr.plan.src_user_dir.string(), 200);
-        ev.f["dst_user_dir"] = pqnas::shorten(mr.plan.dst_user_dir.string(), 200);
-        ev.f["copied"] = mr.copied ? "1" : "0";
-        ev.f["verified"] = mr.verified ? "1" : "0";
-        ev.f["metadata_updated"] = mr.metadata_updated ? "1" : "0";
+        ev.f["from_pool_id"] = plan.from_pool_id;
+        ev.f["to_pool_id"] = plan.to_pool_id;
+        ev.f["job_id"] = out.value("job_id", "");
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
         audit_append(ev);
+
+        reply_json(res, 200, out.dump());
+        return;
+    } catch (const std::exception& e) {
+        pqnas::AuditEvent ev;
+        ev.event = "admin.user_storage_migration_rejected";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp;
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["to_pool_id"] = pool_id;
+        ev.f["reason"] = "enqueue_failed";
+        ev.f["detail"] = pqnas::shorten(e.what(), 180);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit_append(ev);
+
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "enqueue_failed"},
+            {"message", "failed to create migration job"}
+        }.dump());
+        return;
+    }
+});
+
+// GET /api/v4/admin/users/migrate_storage_status?job_id=<sha256>
+srv.Get("/api/v4/admin/users/migrate_storage_status", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    res.set_header("Cache-Control", "no-store");
+
+    const std::string job_id = trim_copy(req.get_param_value("job_id"));
+    if (!is_sha256_hex_lower(job_id)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_job_id"},
+            {"message", "invalid job_id"}
+        }.dump());
+        return;
+    }
+
+    json rec;
+    std::string err;
+    if (!user_mig_record_read(job_id, &rec, &err)) {
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", err.empty() ? "not_found" : err},
+            {"message", "migration job not found"}
+        }.dump());
+        return;
     }
 
     reply_json(res, 200, json{
         {"ok", true},
-        {"fingerprint", fp},
-        {"from_pool_id", mr.plan.from_pool_id},
-        {"to_pool_id", mr.plan.to_pool_id},
-        {"root_rel", mr.plan.root_rel},
-        {"src_user_dir", mr.plan.src_user_dir.string()},
-        {"dst_user_dir", mr.plan.dst_user_dir.string()},
-        {"copied", mr.copied},
-        {"verified", mr.verified},
-        {"metadata_updated", mr.metadata_updated}
+        {"job", rec}
     }.dump());
 });
 
@@ -21573,8 +22067,10 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
     std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
     srv.listen("0.0.0.0", LISTEN_PORT);
 
-	// Stop RAID async worker (best-effort clean shutdown)
+	// Stop RAID / migration async worker (best-effort clean shutdown)
+	user_mig_worker_stop_and_join();
 	raid_worker_stop_and_join();
+
 
     snapshots_stop.store(true);
     if (snapshots_thread.joinable()) snapshots_thread.join();

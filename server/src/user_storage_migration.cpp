@@ -11,8 +11,6 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-
-
 using json = nlohmann::json;
 
 namespace pqnas {
@@ -35,8 +33,6 @@ static std::string default_root_rel_for_fp(const std::string& fp_hex) {
 }
 
 static std::filesystem::path default_data_root_from_users_path(const std::string& users_path) {
-    // users_path is currently /srv/pqnas/config/users.json
-    // so default data root is /srv/pqnas/data
     const std::filesystem::path p(users_path);
     return p.parent_path().parent_path() / "data";
 }
@@ -146,10 +142,9 @@ static std::uint64_t compute_tree_bytes(const std::filesystem::path& root) {
     return total;
 }
 
-    static bool run_rsync_copy(const std::filesystem::path& src,
-                               const std::filesystem::path& dst,
-                               std::string* err)
-{
+static bool run_rsync_copy(const std::filesystem::path& src,
+                           const std::filesystem::path& dst,
+                           std::string* err) {
     if (err) err->clear();
 
     const std::string src_s = src.string() + "/";
@@ -162,7 +157,6 @@ static std::uint64_t compute_tree_bytes(const std::filesystem::path& root) {
     }
 
     if (pid == 0) {
-        // child
         const char* argv[] = {
             "rsync",
             "-aHAX",
@@ -174,8 +168,6 @@ static std::uint64_t compute_tree_bytes(const std::filesystem::path& root) {
         };
 
         execvp("rsync", const_cast<char* const*>(argv));
-
-        // only reached if exec fails
         _exit(127);
     }
 
@@ -195,12 +187,12 @@ static std::uint64_t compute_tree_bytes(const std::filesystem::path& root) {
 
 } // namespace
 
-bool resolve_user_storage_plan(const UsersRegistry& users,
-                               const std::string& users_path,
-                               const std::string& fp_hex,
-                               const std::string& target_pool_id,
-                               UserStorageMigrationPlan* out,
-                               std::string* err) {
+bool resolve_user_storage_migration(const UsersRegistry& users,
+                                    const std::string& users_path,
+                                    const std::string& fp_hex,
+                                    const std::string& target_pool_id,
+                                    UserStorageMigrationPlan* out,
+                                    std::string* err) {
     if (err) err->clear();
     if (!out) {
         if (err) *err = "null out";
@@ -241,6 +233,87 @@ bool resolve_user_storage_plan(const UsersRegistry& users,
     return true;
 }
 
+bool ensure_user_storage_migration_destination(const UserStorageMigrationPlan& plan,
+                                               std::string* err) {
+    if (!ensure_dir_exists_strict(plan.dst_user_dir.parent_path(), err)) return false;
+    if (!ensure_dir_exists_strict(plan.dst_user_dir, err)) return false;
+    return true;
+}
+
+bool run_user_storage_migration_copy(const UserStorageMigrationPlan& plan,
+                                     std::string* err) {
+    return run_rsync_copy(plan.src_user_dir, plan.dst_user_dir, err);
+}
+
+bool verify_user_storage_migration_destination(const UserStorageMigrationPlan& plan,
+                                               std::string* err) {
+    if (err) err->clear();
+
+    {
+        std::error_code ec;
+        auto st = std::filesystem::status(plan.dst_user_dir, ec);
+        if (ec || !std::filesystem::exists(st) || !std::filesystem::is_directory(st)) {
+            if (err) *err = "destination user dir missing after copy: " + plan.dst_user_dir.string();
+            return false;
+        }
+    }
+
+    const auto src_bytes = compute_tree_bytes(plan.src_user_dir);
+    const auto dst_bytes = compute_tree_bytes(plan.dst_user_dir);
+    if (src_bytes != dst_bytes) {
+        if (err) {
+            *err = "byte totals differ: src=" + std::to_string(src_bytes) +
+                   " dst=" + std::to_string(dst_bytes);
+        }
+        return false;
+    }
+
+    return true;
+}
+
+bool switch_user_storage_migration_metadata(UsersRegistry& users,
+                                           const std::string& users_path,
+                                           const std::string& actor_fp,
+                                           const UserStorageMigrationPlan& plan,
+                                           std::string* err) {
+    if (err) err->clear();
+
+    auto uopt = users.get(plan.fingerprint);
+    if (!uopt.has_value()) {
+        if (err) *err = "user_missing_after_copy";
+        return false;
+    }
+
+    auto u = *uopt;
+    const std::string current_pool_id = u.storage_pool_id.empty() ? "default" : u.storage_pool_id;
+
+    // Compare-before-commit guard:
+    // only switch if metadata still matches the source pool resolved when worker started.
+    if (current_pool_id != plan.from_pool_id) {
+        if (err) {
+            *err = "source pool changed before metadata switch: expected=" +
+                   plan.from_pool_id + " actual=" + current_pool_id;
+        }
+        return false;
+    }
+
+    u.storage_pool_id = (plan.to_pool_id == "default") ? "" : plan.to_pool_id;
+    u.root_rel = plan.root_rel;
+    u.storage_set_by = actor_fp;
+    u.storage_set_at = pqnas::now_iso_utc();
+
+    if (!users.upsert(u)) {
+        if (err) *err = "users.upsert failed";
+        return false;
+    }
+    if (!users.save(users_path)) {
+        if (err) *err = "users.save failed";
+        return false;
+    }
+
+    return true;
+}
+
 bool migrate_user_storage_sync(UsersRegistry& users,
                                const std::string& users_path,
                                const std::string& actor_fp,
@@ -250,7 +323,7 @@ bool migrate_user_storage_sync(UsersRegistry& users,
     UserStorageMigrationResult r;
 
     std::string err;
-    if (!resolve_user_storage_plan(users, users_path, fp_hex, target_pool_id, &r.plan, &err)) {
+    if (!resolve_user_storage_migration(users, users_path, fp_hex, target_pool_id, &r.plan, &err)) {
         r.ok = false;
         r.error = "resolve_failed";
         r.detail = err;
@@ -266,7 +339,7 @@ bool migrate_user_storage_sync(UsersRegistry& users,
         return false;
     }
 
-    if (!ensure_dir_exists_strict(r.plan.dst_user_dir.parent_path(), &err)) {
+    if (!ensure_user_storage_migration_destination(r.plan, &err)) {
         r.ok = false;
         r.error = "mkdir_failed";
         r.detail = err;
@@ -274,15 +347,7 @@ bool migrate_user_storage_sync(UsersRegistry& users,
         return false;
     }
 
-    if (!ensure_dir_exists_strict(r.plan.dst_user_dir, &err)) {
-        r.ok = false;
-        r.error = "mkdir_failed";
-        r.detail = err;
-        if (out) *out = r;
-        return false;
-    }
-
-    if (!run_rsync_copy(r.plan.src_user_dir, r.plan.dst_user_dir, &err)) {
+    if (!run_user_storage_migration_copy(r.plan, &err)) {
         r.ok = false;
         r.error = "copy_failed";
         r.detail = err;
@@ -291,56 +356,19 @@ bool migrate_user_storage_sync(UsersRegistry& users,
     }
     r.copied = true;
 
-    {
-        std::error_code ec;
-        auto st = std::filesystem::status(r.plan.dst_user_dir, ec);
-        if (ec || !std::filesystem::exists(st) || !std::filesystem::is_directory(st)) {
-            r.ok = false;
-            r.error = "verify_failed";
-            r.detail = "destination user dir missing after copy: " + r.plan.dst_user_dir.string();
-            if (out) *out = r;
-            return false;
-        }
-    }
-    
-    const auto src_bytes = compute_tree_bytes(r.plan.src_user_dir);
-    const auto dst_bytes = compute_tree_bytes(r.plan.dst_user_dir);
-    if (src_bytes != dst_bytes) {
+    if (!verify_user_storage_migration_destination(r.plan, &err)) {
         r.ok = false;
         r.error = "verify_failed";
-        r.detail = "byte totals differ: src=" + std::to_string(src_bytes) +
-                   " dst=" + std::to_string(dst_bytes);
+        r.detail = err;
         if (out) *out = r;
         return false;
     }
     r.verified = true;
 
-    auto uopt = users.get(fp_hex);
-    if (!uopt.has_value()) {
+    if (!switch_user_storage_migration_metadata(users, users_path, actor_fp, r.plan, &err)) {
         r.ok = false;
-        r.error = "user_missing_after_copy";
-        r.detail = "user disappeared before metadata update";
-        if (out) *out = r;
-        return false;
-    }
-
-    auto u = *uopt;
-    u.storage_pool_id = (r.plan.to_pool_id == "default") ? "" : r.plan.to_pool_id;
-    u.root_rel = r.plan.root_rel;
-    u.storage_set_by = actor_fp;
-    u.storage_set_at = pqnas::now_iso_utc();
-
-    if (!users.upsert(u)) {
-        r.ok = false;
-        r.error = "upsert_failed";
-        r.detail = "users.upsert failed";
-        if (out) *out = r;
-        return false;
-    }
-    if (!users.save(users_path)) {
-        r.ok = false;
-        r.error = "save_failed";
-        r.detail = "users.save failed";
+        r.error = "metadata_switch_failed";
+        r.detail = err;
         if (out) *out = r;
         return false;
     }
