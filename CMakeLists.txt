@@ -125,6 +125,8 @@ target_link_libraries(pqnas_verify_v4 PUBLIC
 # -----------------------------------------------------------------------------
 add_executable(pqnas_server
         server/src/main.cpp
+        server/src/user_storage_migration.h
+        server/src/user_storage_migration.cpp
 
         server/src/storage/snapshots/snapshot_provider_btrfs.cc
         server/src/storage/snapshots/snapshot_naming.cc

@@ -102,6 +102,9 @@ extern "C" {
 //sharing
 #include "share_links.h"
 
+//pool migration
+#include "user_storage_migration.h"
+
 // snapshots
 #include "storage/snapshots/snapshot_scheduler.h"
 
@@ -21176,6 +21179,55 @@ srv.Get("/api/v4/shares/list", [&](const httplib::Request& req, httplib::Respons
     res.set_content(out.dump(2), "application/json; charset=utf-8");
 });
 
+// POST /api/v4/admin/users/migrate_storage
+// Body: {"fingerprint":"...","pool_id":"raidtest"}
+srv.Post("/api/v4/admin/users/migrate_storage", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    json j;
+    try { j = json::parse(req.body); }
+    catch (...) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid json"}}.dump());
+        return;
+    }
+
+    const std::string fp = trim_copy(j.value("fingerprint", ""));
+    const std::string pool_id = trim_copy(j.value("pool_id", ""));
+
+    if (fp.empty() || pool_id.empty()) {
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","missing fingerprint or pool_id"}}.dump());
+        return;
+    }
+
+    pqnas::UserStorageMigrationResult mr;
+    if (!pqnas::migrate_user_storage_sync(users, users_path, actor_fp, fp, pool_id, &mr)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", mr.error.empty() ? "migration_failed" : mr.error},
+            {"message", "user storage migration failed"},
+            {"detail", mr.detail},
+            {"from_pool_id", mr.plan.from_pool_id},
+            {"to_pool_id", mr.plan.to_pool_id},
+            {"src_user_dir", mr.plan.src_user_dir.string()},
+            {"dst_user_dir", mr.plan.dst_user_dir.string()}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"fingerprint", fp},
+        {"from_pool_id", mr.plan.from_pool_id},
+        {"to_pool_id", mr.plan.to_pool_id},
+        {"root_rel", mr.plan.root_rel},
+        {"src_user_dir", mr.plan.src_user_dir.string()},
+        {"dst_user_dir", mr.plan.dst_user_dir.string()},
+        {"copied", mr.copied},
+        {"verified", mr.verified},
+        {"metadata_updated", mr.metadata_updated}
+    }.dump());
+});
 
     // Public share download: GET /s/<token>
 srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Response& res) {
