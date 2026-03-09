@@ -624,6 +624,136 @@ bool switch_user_storage_migration_metadata(UsersRegistry& users,
     return true;
 }
 
+// Cleanup helpers
+//
+// Cleanup is intentionally separate from migration.
+// Migration performs:
+//   copy -> verify -> metadata switch
+// and keeps the old source copy for safety.
+//
+// Cleanup removes the now-inactive old copy only after re-checking that:
+// - the user still points to the expected active pool
+// - the old pool differs from the active pool
+// - the old user dir is not the active user dir
+//
+// This keeps destructive behavior isolated from migration cutover.
+bool resolve_user_storage_cleanup(const UsersRegistry& users,
+                                  const std::string& users_path,
+                                  const std::string& fp_hex,
+                                  const std::string& expected_active_pool_id,
+                                  const std::string& old_pool_id,
+                                  UserStorageCleanupPlan* out,
+                                  std::string* err) {
+    if (err) err->clear();
+    if (!out) {
+        if (err) *err = "null out";
+        return false;
+    }
+
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value()) {
+        if (err) *err = "user_missing";
+        return false;
+    }
+    const auto& u = *uopt;
+
+    if (u.storage_state != "allocated") {
+        if (err) *err = "storage_unallocated";
+        return false;
+    }
+
+    const std::string current_pool_id = u.storage_pool_id.empty() ? "default" : u.storage_pool_id;
+    const std::string expected_pool = expected_active_pool_id.empty() ? "default" : expected_active_pool_id;
+    const std::string old_pool = old_pool_id.empty() ? "default" : old_pool_id;
+
+    if (current_pool_id != expected_pool) {
+        if (err) {
+            *err = "active pool mismatch: expected=" + expected_pool + " actual=" + current_pool_id;
+        }
+        return false;
+    }
+
+    if (expected_pool == old_pool) {
+        if (err) *err = "same_pool";
+        return false;
+    }
+
+    UserStorageCleanupPlan p;
+    p.fingerprint = fp_hex;
+    p.active_pool_id = expected_pool;
+    p.old_pool_id = old_pool;
+    p.root_rel = (!u.root_rel.empty() && is_safe_rel_path_local(u.root_rel))
+        ? u.root_rel
+        : default_root_rel_for_fp(fp_hex);
+
+    if (!resolve_data_root_for_pool_id(users_path, p.active_pool_id, &p.active_data_root, err)) {
+        return false;
+    }
+    if (!resolve_data_root_for_pool_id(users_path, p.old_pool_id, &p.old_data_root, err)) {
+        return false;
+    }
+
+    p.active_user_dir = p.active_data_root / p.root_rel;
+    p.old_user_dir = p.old_data_root / p.root_rel;
+
+    *out = p;
+    return true;
+}
+
+bool validate_user_storage_cleanup(const UserStorageCleanupPlan& plan,
+                                   std::string* err) {
+    if (err) err->clear();
+
+    const auto active_abs = std::filesystem::weakly_canonical(plan.active_user_dir);
+    const auto old_abs = std::filesystem::weakly_canonical(plan.old_user_dir);
+
+    if (active_abs == old_abs) {
+        if (err) *err = "old path resolves to active path";
+        return false;
+    }
+
+    std::error_code ec;
+    if (!std::filesystem::exists(plan.active_user_dir, ec) || ec) {
+        if (err) *err = "active user dir missing: " + plan.active_user_dir.string();
+        return false;
+    }
+
+    ec.clear();
+    if (!std::filesystem::exists(plan.old_user_dir, ec)) {
+        if (err) *err = "old user dir not found: " + plan.old_user_dir.string();
+        return false;
+    }
+    if (ec) {
+        if (err) *err = "failed to stat old user dir: " + ec.message();
+        return false;
+    }
+
+    ec.clear();
+    if (!std::filesystem::is_directory(plan.old_user_dir, ec) || ec) {
+        if (err) *err = "old user dir is not a directory: " + plan.old_user_dir.string();
+        return false;
+    }
+
+    return true;
+}
+
+bool delete_user_storage_old_copy(const UserStorageCleanupPlan& plan,
+                                  std::uint64_t* removed_entries,
+                                  std::string* err) {
+    if (err) err->clear();
+    if (removed_entries) *removed_entries = 0;
+
+    std::error_code ec;
+    const auto n = std::filesystem::remove_all(plan.old_user_dir, ec);
+    if (ec) {
+        if (err) *err = "remove_all failed: " + ec.message();
+        return false;
+    }
+
+    if (removed_entries) *removed_entries = static_cast<std::uint64_t>(n);
+    return true;
+}
+
 // Legacy synchronous wrapper around the phase-friendly migration helpers.
 //
 // Why this still exists

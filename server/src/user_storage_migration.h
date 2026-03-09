@@ -99,6 +99,18 @@ struct UserStorageMigrationResult {
     bool metadata_updated = false;
 };
 
+struct UserStorageCleanupPlan {
+    std::string fingerprint;
+    std::string active_pool_id;
+    std::string old_pool_id;
+    std::string root_rel;
+
+    std::filesystem::path active_data_root;
+    std::filesystem::path old_data_root;
+    std::filesystem::path active_user_dir;
+    std::filesystem::path old_user_dir;
+};
+
 // Resolve a migration plan from current users.json metadata and a requested
 // destination pool.
 //
@@ -169,6 +181,20 @@ bool switch_user_storage_migration_metadata(UsersRegistry& users,
                                             const UserStorageMigrationPlan& plan,
                                             std::string* err);
 
+bool resolve_user_storage_cleanup(const UsersRegistry& users,
+                                  const std::string& users_path,
+                                  const std::string& fp_hex,
+                                  const std::string& expected_active_pool_id,
+                                  const std::string& old_pool_id,
+                                  UserStorageCleanupPlan* out,
+                                  std::string* err);
+
+bool validate_user_storage_cleanup(const UserStorageCleanupPlan& plan,
+                                  std::string* err);
+
+bool delete_user_storage_old_copy(const UserStorageCleanupPlan& plan,
+                                  std::uint64_t* removed_entries,
+                                  std::string* err);
 // Legacy synchronous compatibility wrapper.
 //
 // Why it exists

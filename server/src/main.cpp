@@ -4521,6 +4521,12 @@ static bool user_mig_record_write_atomic(const std::string& job_id, const json& 
 static bool user_mig_record_read(const std::string& job_id, json* out, std::string* err);
 static void user_mig_finalize_record(const std::string& job_id, json* rec, bool ok, const std::string& err_msg);
 static void user_mig_record_set_phase(json* rec, const std::string& phase, int percent, const std::string& message);
+static std::string user_cleanup_record_path(const std::string& job_id);
+static bool user_cleanup_record_write_atomic(const std::string& job_id, const json& rec);
+static bool user_cleanup_record_read(const std::string& job_id, json* out_rec, std::string* err);
+static void user_cleanup_finalize_record(const std::string& job_id, json* rec, bool ok, const std::string& err_msg);
+static void user_cleanup_record_set_phase(json* rec, const std::string& phase, int percent, const std::string& message);
+static void user_storage_cleanup_worker_main(std::string users_path);
 
 struct UserStorageMigrationJob {
     std::string job_id;
@@ -4538,6 +4544,25 @@ static std::deque<UserStorageMigrationJob> g_user_mig_jobs_q;
 static std::unordered_map<std::string, json> g_user_mig_job_meta; // job_id -> small status/meta
 static std::atomic<bool> g_user_mig_worker_stop{false};
 static std::thread g_user_mig_worker;
+
+struct UserStorageCleanupJob {
+    std::string job_id;
+    std::string actor_fp;
+    std::string user_fp;
+
+    std::string expected_active_pool_id;
+    std::string old_pool_id;
+
+    json record;
+};
+
+static std::mutex g_user_cleanup_jobs_mu;
+static std::condition_variable g_user_cleanup_jobs_cv;
+static std::deque<UserStorageCleanupJob> g_user_cleanup_jobs_q;
+static std::unordered_map<std::string, json> g_user_cleanup_job_meta;
+
+static std::atomic<bool> g_user_cleanup_worker_stop{false};
+static std::thread g_user_cleanup_worker;
 
 static std::string user_mig_new_job_id() {
     std::string seed = pqnas::now_iso_utc();
@@ -4588,6 +4613,91 @@ static bool user_mig_record_read(const std::string& job_id, json* out, std::stri
     if (!j.is_object()) j = json::object();
     if (out) *out = j;
     return true;
+}
+
+static std::string user_cleanup_record_path(const std::string& job_id) {
+    return std::string("/run/pqnas/user-storage-cleanup/") + job_id + ".json";
+}
+
+static bool user_cleanup_record_write_atomic(const std::string& job_id, const json& rec) {
+    if (!is_sha256_hex_lower(job_id)) return false;
+    return write_text_file_atomic(user_cleanup_record_path(job_id), rec.dump(2) + "\n");
+}
+
+static bool user_cleanup_record_read(const std::string& job_id, json* out_rec, std::string* err) {
+    if (out_rec) *out_rec = json::object();
+    if (err) err->clear();
+
+    if (!is_sha256_hex_lower(job_id)) {
+        if (err) *err = "bad_job_id";
+        return false;
+    }
+
+    std::string text;
+    if (!read_text_file(user_cleanup_record_path(job_id), &text)) {
+        if (err) *err = "record_not_found";
+        return false;
+    }
+
+    cap_string(text, 1024 * 1024);
+
+    try {
+        json j = json::parse(text.empty() ? "{}" : text);
+        if (!j.is_object()) j = json::object();
+        if (out_rec) *out_rec = j;
+        return true;
+    } catch (...) {
+        if (err) *err = "record_parse_failed";
+        return false;
+    }
+}
+
+static void user_cleanup_record_set_phase(json* rec,
+                                          const std::string& phase,
+                                          int percent,
+                                          const std::string& message) {
+    if (!rec) return;
+
+    const std::string ts = pqnas::now_iso_utc();
+
+    (*rec)["phase"] = phase;
+    (*rec)["percent"] = percent;
+    (*rec)["message"] = message;
+    (*rec)["ts_last"] = ts;
+
+    if (!rec->contains("events") || !(*rec)["events"].is_array()) {
+        (*rec)["events"] = json::array();
+    }
+
+    (*rec)["events"].push_back(json{
+        {"ts", ts},
+        {"phase", phase},
+        {"percent", percent},
+        {"message", message}
+    });
+}
+
+static void user_cleanup_finalize_record(const std::string& job_id,
+                                         json* rec,
+                                         bool ok,
+                                         const std::string& err_msg) {
+    if (!rec) return;
+
+    const std::string ts_end = pqnas::now_iso_utc();
+    (*rec)["ts_end"] = ts_end;
+    (*rec)["ts_last"] = ts_end;
+    (*rec)["busy"] = false;
+    (*rec)["state"] = ok ? "done" : "failed";
+    (*rec)["ok"] = ok;
+
+    if (ok) {
+        if (rec->contains("error")) rec->erase("error");
+    } else {
+        (*rec)["error"] = err_msg.empty() ? "cleanup_failed" : err_msg;
+        (*rec)["message"] = err_msg.empty() ? "cleanup failed" : err_msg;
+    }
+
+    (void)user_cleanup_record_write_atomic(job_id, *rec);
 }
 
 static void user_mig_record_set_phase(json* rec,
@@ -4644,7 +4754,6 @@ static std::string user_mig_lock_path(const std::string& user_fp) {
 }
 
 static void user_storage_migration_worker_main(std::string users_path) {
-    (void)users_path;
 
     auto user_mig_worker_audit = [&](const std::string& event,
                                      const std::string& outcome,
@@ -4883,6 +4992,219 @@ static void user_storage_migration_worker_main(std::string users_path) {
     }
 }
 
+static void user_storage_cleanup_worker_main(std::string users_path) {
+	(void)users_path;
+    auto user_cleanup_worker_audit = [&](const std::string& event,
+                                         const std::string& outcome,
+                                         const UserStorageCleanupJob& job,
+                                         const json& extra = json::object()) {
+        try {
+            pqnas::AuditEvent ev;
+            ev.event = event;
+            ev.outcome = outcome;
+
+            if (!job.actor_fp.empty()) ev.f["actor_fp"] = job.actor_fp;
+            if (!job.user_fp.empty()) ev.f["fingerprint"] = job.user_fp;
+            if (!job.expected_active_pool_id.empty()) ev.f["expected_active_pool_id"] = job.expected_active_pool_id;
+            if (!job.old_pool_id.empty()) ev.f["old_pool_id"] = job.old_pool_id;
+            ev.f["job_id"] = job.job_id;
+            ev.f["ip"] = "local";
+
+            if (extra.is_object()) {
+                for (auto it = extra.begin(); it != extra.end(); ++it) {
+                    const std::string k = "x_" + pqnas::shorten(it.key(), 64);
+                    if (it.value().is_string()) ev.f[k] = pqnas::shorten(it.value().get<std::string>(), 220);
+                    else if (it.value().is_boolean()) ev.f[k] = it.value().get<bool>() ? "true" : "false";
+                    else ev.f[k] = pqnas::shorten(it.value().dump(), 220);
+                }
+            }
+
+            audit_append(ev);
+        } catch (...) {
+        }
+    };
+
+    for (;;) {
+        UserStorageCleanupJob job;
+
+        {
+            std::unique_lock<std::mutex> lk(g_user_cleanup_jobs_mu);
+            g_user_cleanup_jobs_cv.wait(lk, [&] {
+                return g_user_cleanup_worker_stop.load() || !g_user_cleanup_jobs_q.empty();
+            });
+            if (g_user_cleanup_worker_stop.load()) return;
+
+            job = std::move(g_user_cleanup_jobs_q.front());
+            g_user_cleanup_jobs_q.pop_front();
+
+            g_user_cleanup_job_meta[job.job_id]["state"] = "running";
+            g_user_cleanup_job_meta[job.job_id]["ts_started"] = pqnas::now_iso_utc();
+        }
+
+        job.record["state"] = "running";
+        job.record["busy"] = true;
+        if (!job.record.contains("ts_started") || job.record["ts_started"].is_null()) {
+            job.record["ts_started"] = pqnas::now_iso_utc();
+        }
+        user_cleanup_record_set_phase(&job.record, "starting", 2, "worker started");
+        (void)user_cleanup_record_write_atomic(job.job_id, job.record);
+
+        user_cleanup_worker_audit("admin.user_storage_cleanup_started", "ok", job, json{
+            {"phase", "starting"}
+        });
+
+        int fd_user_lock = -1;
+        std::string user_lockp;
+
+        auto close_user_lock = [&]() {
+            if (fd_user_lock >= 0) {
+                ::close(fd_user_lock);
+                fd_user_lock = -1;
+            }
+            if (!user_lockp.empty()) {
+                (void)std::filesystem::remove(user_lockp);
+            }
+        };
+
+        bool ok = false;
+        std::string fail_phase = "starting";
+        std::string fail_reason;
+        pqnas::UserStorageCleanupPlan plan;
+        pqnas::UsersRegistry users_local;
+        std::string err;
+        std::uint64_t removed_entries = 0;
+
+        do {
+            fail_phase = "acquiring_lock";
+            user_cleanup_record_set_phase(&job.record, "acquiring_lock", 5, "acquiring per-user lock");
+            (void)user_cleanup_record_write_atomic(job.job_id, job.record);
+
+            user_lockp = user_mig_lock_path(job.user_fp);
+            {
+                std::string lock_dir_err;
+                if (!ensure_dir_fail_closed("/run/pqnas/locks", &lock_dir_err)) {
+                    fail_reason = "lock_dir_failed: " + lock_dir_err;
+                    break;
+                }
+            }
+            {
+                std::string lock_err;
+                fd_user_lock = open_excl_lockfile(user_lockp, &lock_err);
+                if (fd_user_lock < 0) {
+                    if (lock_err.find("File exists") != std::string::npos) {
+                        fail_reason = "user_storage_cleanup_busy: another storage operation is already in progress for this user";
+                    } else {
+                        fail_reason = "user_storage_cleanup_lock_failed";
+                    }
+                    if (!lock_err.empty()) fail_reason += ": " + lock_err;
+                    break;
+                }
+            }
+
+            fail_phase = "reloading_metadata";
+            user_cleanup_record_set_phase(&job.record, "reloading_metadata", 10, "reloading latest user metadata");
+            (void)user_cleanup_record_write_atomic(job.job_id, job.record);
+
+            if (!users_local.load(users_path)) {
+                fail_reason = "users.load failed";
+                break;
+            }
+
+            fail_phase = "resolving_paths";
+            user_cleanup_record_set_phase(&job.record, "resolving_paths", 20, "resolving active and old storage paths");
+            (void)user_cleanup_record_write_atomic(job.job_id, job.record);
+
+            if (!pqnas::resolve_user_storage_cleanup(users_local,
+                                                     users_path,
+                                                     job.user_fp,
+                                                     job.expected_active_pool_id,
+                                                     job.old_pool_id,
+                                                     &plan,
+                                                     &err)) {
+                fail_reason = "resolve_failed: " + err;
+                break;
+            }
+
+            job.record["resolved_active_pool_id"] = plan.active_pool_id;
+            job.record["resolved_old_pool_id"] = plan.old_pool_id;
+            job.record["resolved_active_root"] = plan.active_data_root.string();
+            job.record["resolved_old_root"] = plan.old_data_root.string();
+            job.record["resolved_active_user_dir"] = plan.active_user_dir.string();
+            job.record["resolved_old_user_dir"] = plan.old_user_dir.string();
+            (void)user_cleanup_record_write_atomic(job.job_id, job.record);
+
+            fail_phase = "validating_active_mapping";
+            user_cleanup_record_set_phase(&job.record, "validating_active_mapping", 35, "validating active pool mapping");
+            (void)user_cleanup_record_write_atomic(job.job_id, job.record);
+
+            fail_phase = "validating_old_copy";
+            user_cleanup_record_set_phase(&job.record, "validating_old_copy", 50, "validating old inactive copy");
+            (void)user_cleanup_record_write_atomic(job.job_id, job.record);
+
+            if (!pqnas::validate_user_storage_cleanup(plan, &err)) {
+                fail_reason = "validation_failed: " + err;
+                break;
+            }
+
+            fail_phase = "deleting_old_copy";
+            user_cleanup_record_set_phase(&job.record, "deleting_old_copy", 80, "deleting old inactive copy");
+            (void)user_cleanup_record_write_atomic(job.job_id, job.record);
+
+            if (!pqnas::delete_user_storage_old_copy(plan, &removed_entries, &err)) {
+                fail_reason = "delete_failed: " + err;
+                break;
+            }
+
+            job.record["result"]["removed_entries"] = removed_entries;
+            job.record["result"]["old_pool_id"] = plan.old_pool_id;
+            job.record["result"]["active_pool_id"] = plan.active_pool_id;
+            job.record["result"]["root_rel"] = plan.root_rel;
+            job.record["result"]["old_user_dir"] = plan.old_user_dir.string();
+            job.record["result"]["active_user_dir"] = plan.active_user_dir.string();
+
+            user_cleanup_record_set_phase(&job.record, "done", 100, "old inactive copy deleted");
+            ok = true;
+        } while (false);
+
+        close_user_lock();
+
+        if (ok) {
+            user_cleanup_finalize_record(job.job_id, &job.record, true, "");
+
+            user_cleanup_worker_audit("admin.user_storage_cleanup_succeeded", "ok", job, json{
+                {"phase", "done"},
+                {"active_pool_id", plan.active_pool_id},
+                {"old_pool_id", plan.old_pool_id},
+                {"removed_entries", removed_entries}
+            });
+
+            std::lock_guard<std::mutex> lk(g_user_cleanup_jobs_mu);
+            g_user_cleanup_job_meta[job.job_id]["state"] = "done";
+            g_user_cleanup_job_meta[job.job_id]["ts_finished"] = pqnas::now_iso_utc();
+        } else {
+            if (!plan.active_pool_id.empty()) job.record["result"]["active_pool_id"] = plan.active_pool_id;
+            if (!plan.old_pool_id.empty()) job.record["result"]["old_pool_id"] = plan.old_pool_id;
+            if (!plan.root_rel.empty()) job.record["result"]["root_rel"] = plan.root_rel;
+            if (!plan.old_user_dir.empty()) job.record["result"]["old_user_dir"] = plan.old_user_dir.string();
+            if (!plan.active_user_dir.empty()) job.record["result"]["active_user_dir"] = plan.active_user_dir.string();
+
+            user_cleanup_finalize_record(job.job_id, &job.record, false, fail_reason.empty() ? "cleanup_failed" : fail_reason);
+
+            user_cleanup_worker_audit("admin.user_storage_cleanup_failed", "fail", job, json{
+                {"phase", fail_phase},
+                {"reason", fail_reason.empty() ? "cleanup_failed" : fail_reason},
+                {"active_pool_id", plan.active_pool_id},
+                {"old_pool_id", plan.old_pool_id}
+            });
+
+            std::lock_guard<std::mutex> lk(g_user_cleanup_jobs_mu);
+            g_user_cleanup_job_meta[job.job_id]["state"] = "failed";
+            g_user_cleanup_job_meta[job.job_id]["error"] = fail_reason.empty() ? "cleanup_failed" : fail_reason;
+            g_user_cleanup_job_meta[job.job_id]["ts_finished"] = pqnas::now_iso_utc();
+        }
+	}
+}
+
 static void user_mig_worker_start_once() {
     static std::atomic<bool> started{false};
     bool expected = false;
@@ -4981,6 +5303,97 @@ static json user_mig_enqueue_job_fail_closed(const std::string& actor_fp,
     };
 }
 
+static void user_cleanup_worker_start_once() {
+    static std::atomic<bool> started{false};
+    bool expected = false;
+    if (!started.compare_exchange_strong(expected, true)) return;
+    g_user_cleanup_worker_stop.store(false);
+    g_user_cleanup_worker = std::thread(user_storage_cleanup_worker_main, g_users_path_for_raid);
+}
+
+static void user_cleanup_worker_stop_and_join() {
+    g_user_cleanup_worker_stop.store(true);
+    g_user_cleanup_jobs_cv.notify_all();
+    if (g_user_cleanup_worker.joinable()) g_user_cleanup_worker.join();
+}
+
+static json user_cleanup_enqueue_job_fail_closed(const std::string& actor_fp,
+                                                 const std::string& user_fp,
+                                                 const std::string& expected_active_pool_id,
+                                                 const std::string& old_pool_id,
+                                                 const std::string& remote_ip) {
+	(void)remote_ip;
+    std::string dir_err;
+    if (!ensure_dir_fail_closed("/run/pqnas/user-storage-cleanup", &dir_err)) {
+        throw std::runtime_error("cleanup_state_dir_failed: " + dir_err);
+    }
+
+    user_cleanup_worker_start_once();
+
+    const std::string job_id = sha256_hex_lower_evp(
+        pqnas::now_iso_utc() + "|" +
+        actor_fp + "|" +
+        user_fp + "|" +
+        expected_active_pool_id + "|" +
+        old_pool_id + "|" +
+        std::to_string((int)getpid()) + "|" +
+        std::to_string((uint64_t)std::rand())
+    );
+
+    json rec = {
+        {"job_id", job_id},
+        {"type", "user_storage_cleanup"},
+        {"operation", "user_storage_cleanup"},
+        {"actor_fp", actor_fp},
+        {"user_fp", user_fp},
+        {"expected_active_pool_id", expected_active_pool_id},
+        {"old_pool_id", old_pool_id},
+        {"state", "queued"},
+        {"busy", true},
+        {"ok", true},
+        {"phase", "queued"},
+        {"percent", 0},
+        {"message", "job created"},
+        {"events", json::array()},
+        {"result", json::object()},
+        {"ts_created", pqnas::now_iso_utc()},
+        {"ts_started", nullptr},
+        {"ts_last", pqnas::now_iso_utc()},
+        {"ts_end", nullptr}
+    };
+
+    user_cleanup_record_set_phase(&rec, "queued", 0, "job created");
+
+    if (!user_cleanup_record_write_atomic(job_id, rec)) {
+        throw std::runtime_error("cleanup_record_write_failed");
+    }
+
+    UserStorageCleanupJob job;
+    job.job_id = job_id;
+    job.actor_fp = actor_fp;
+    job.user_fp = user_fp;
+    job.expected_active_pool_id = expected_active_pool_id;
+    job.old_pool_id = old_pool_id;
+    job.record = rec;
+
+    {
+        std::lock_guard<std::mutex> lk(g_user_cleanup_jobs_mu);
+        g_user_cleanup_jobs_q.push_back(job);
+        g_user_cleanup_job_meta[job.job_id] = json{
+            {"job_id", job.job_id},
+            {"state", "queued"},
+            {"ts_created", pqnas::now_iso_utc()}
+        };
+    }
+
+    g_user_cleanup_jobs_cv.notify_one();
+
+    return json{
+        {"ok", true},
+        {"job_id", job_id},
+        {"state", "queued"}
+    };
+}
 // ------------------------- storage/pools helpers -------------------------
 
 static inline std::vector<std::string> split_lines(const std::string& s) {
@@ -21816,6 +22229,133 @@ srv.Get("/api/v4/admin/users/migrate_storage_status", [&](const httplib::Request
     }.dump());
 });
 
+srv.Post("/api/v4/admin/users/cleanup_old_storage", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    res.set_header("Cache-Control", "no-store");
+
+    json j;
+    try {
+        j = json::parse(req.body);
+    } catch (...) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    const std::string fp = trim_copy(j.value("fingerprint", ""));
+    const std::string expected_active_pool_id = trim_copy(j.value("expected_active_pool_id", ""));
+    const std::string old_pool_id = trim_copy(j.value("old_pool_id", ""));
+
+    if (fp.empty() || expected_active_pool_id.empty() || old_pool_id.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing fingerprint, expected_active_pool_id or old_pool_id"}
+        }.dump());
+        return;
+    }
+
+    if (expected_active_pool_id == old_pool_id) {
+        pqnas::AuditEvent ev;
+        ev.event = "admin.user_storage_cleanup_rejected";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp;
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["expected_active_pool_id"] = expected_active_pool_id;
+        ev.f["old_pool_id"] = old_pool_id;
+        ev.f["reason"] = "same_pool";
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit_append(ev);
+
+        reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "same_pool"},
+            {"message", "expected active pool and old pool must differ"}
+        }.dump());
+        return;
+    }
+
+    try {
+        json out = user_cleanup_enqueue_job_fail_closed(
+            actor_fp,
+            fp,
+            expected_active_pool_id,
+            old_pool_id,
+            req.remote_addr
+        );
+
+        pqnas::AuditEvent ev;
+        ev.event = "admin.user_storage_cleanup_job_created";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp;
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["expected_active_pool_id"] = expected_active_pool_id;
+        ev.f["old_pool_id"] = old_pool_id;
+        ev.f["job_id"] = out.value("job_id", "");
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit_append(ev);
+
+        reply_json(res, 200, out.dump());
+    } catch (const std::exception& e) {
+        pqnas::AuditEvent ev;
+        ev.event = "admin.user_storage_cleanup_rejected";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp;
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["expected_active_pool_id"] = expected_active_pool_id;
+        ev.f["old_pool_id"] = old_pool_id;
+        ev.f["reason"] = "enqueue_failed";
+        ev.f["detail"] = pqnas::shorten(e.what(), 180);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit_append(ev);
+
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "enqueue_failed"},
+            {"message", e.what()}
+        }.dump());
+    }
+});
+
+srv.Get("/api/v4/admin/users/cleanup_old_storage_status", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    res.set_header("Cache-Control", "no-store");
+
+    const std::string job_id = trim_copy(req.get_param_value("job_id"));
+    if (!is_sha256_hex_lower(job_id)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_job_id"},
+            {"message", "invalid job_id"}
+        }.dump());
+        return;
+    }
+
+    json rec;
+    std::string err;
+    if (!user_cleanup_record_read(job_id, &rec, &err)) {
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", err.empty() ? "not_found" : err},
+            {"message", "cleanup job record not found"}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"job", rec}
+    }.dump());
+});
+
+
     // Public share download: GET /s/<token>
 srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Response& res) {
     const std::string token = req.matches[1].str();
@@ -22081,6 +22621,7 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
 
 	// Stop RAID / migration async worker (best-effort clean shutdown)
 	user_mig_worker_stop_and_join();
+	user_cleanup_worker_stop_and_join();
 	raid_worker_stop_and_join();
 
 
