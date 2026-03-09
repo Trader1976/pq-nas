@@ -138,7 +138,25 @@ function storagePill(state) {
     const cls = (s === "allocated") ? "enabled" : "disabled"; // reuse pill CSS classes
     return `<span class="pill ${cls}">${esc(s)}</span>`;
 }
+function storagePoolIdForUser(u) {
+    const raw =
+        (u?.pool_id != null ? String(u.pool_id) :
+            (u?.pool != null ? String(u.pool) :
+                (u?.storage_pool_id != null ? String(u.storage_pool_id) : "")));
 
+    const v = raw.trim();
+    return v ? v : "default";
+}
+
+function storageCellHtml(u) {
+    const state = String(u?.storage_state || "unallocated").toLowerCase();
+    const main = storagePill(state);
+
+    if (state !== "allocated") return main;
+
+    const poolId = storagePoolIdForUser(u);
+    return `${main} <span class="pill poolpill">${esc(poolId)}</span>`;
+}
 function fmtBytes(n) {
     n = Number(n || 0);
     const units = ["B","KiB","MiB","GiB","TiB"];
@@ -363,15 +381,7 @@ function setMigrateError(msg) {
     el.classList.add("show");
 }
 
-function currentPoolIdForUser(u) {
-    const raw =
-        (u?.pool_id != null ? String(u.pool_id) :
-            (u?.pool != null ? String(u.pool) :
-                (u?.storage_pool_id != null ? String(u.storage_pool_id) : "")));
 
-    const v = raw.trim();
-    return v ? v : "default";
-}
 
 function currentPoolNameFromList(poolId, pools) {
     const p = (pools || []).find(x => x.id === poolId);
@@ -398,7 +408,7 @@ function openMigrateModal(fp, curUser) {
 
     (async () => {
         const pools = await ensurePoolsLoaded();
-        const curPoolId = currentPoolIdForUser(curUser);
+        const curPoolId = storagePoolIdForUser(curUser);
 
         curPoolInp.value = currentPoolNameFromList(curPoolId, pools);
         const curPoolObj = pools.find(x => x.id === curPoolId);
@@ -538,7 +548,7 @@ async function submitMigrationFromModal() {
     }
 
     const cur = allUsers.find(x => String(x.fingerprint || "") === fp) || {};
-    const curPoolId = currentPoolIdForUser(cur);
+    const curPoolId = storagePoolIdForUser(cur);
 
     if (pool_id === curPoolId) {
         setMigrateError("Destination pool must differ from current pool.");
@@ -745,7 +755,7 @@ function render() {
         <div class="detailKV"><div class="k">Status</div><div class="v">${pill(u.status)}</div></div>
         <div class="detailKV"><div class="k">Group</div><div class="v">${esc(u.group || "—")}</div></div>
         <div class="detailKV"><div class="k">Email</div><div class="v">${esc(u.email || "—")}</div></div>
-        <div class="detailKV"><div class="k">Storage</div><div class="v">${storagePill(u.storage_state)}</div></div>
+        <div class="detailKV"><div class="k">Storage</div><div class="v">${storageCellHtml(u)}</div></div>
         <div class="detailKV"><div class="k">Quota</div><div class="v mono">${esc(quotaText)}</div></div>
         <div class="detailKV"><div class="k">Added</div><div class="v mono">${esc(u.added_at || "—")}</div></div>
         <div class="detailKV"><div class="k">Last seen</div><div class="v mono">${esc(u.last_seen || "—")}</div></div>
@@ -838,7 +848,7 @@ function render() {
   <td>${esc(u.role || "")}</td>
   <td>${pill(u.status)}</td>
   <td>${esc(u.group || "")}</td>
-  <td>${storagePill(u.storage_state)}</td>
+    <td>${storageCellHtml(u)}</td>
   <td class="mono">${fmtQuotaCell(u)}</td>
   <td class="mono">${esc(u.added_at || "")}</td>
 
