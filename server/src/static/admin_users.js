@@ -462,6 +462,11 @@ async function apiGetMigrationStatus(jobId) {
     return await apiGet(`/api/v4/admin/users/migrate_storage_status?job_id=${q}`);
 }
 
+async function apiGetCleanupStatus(jobId) {
+    const q = encodeURIComponent(String(jobId || "").trim());
+    return await apiGet(`/api/v4/admin/users/cleanup_old_storage_status?job_id=${q}`);
+}
+
 function fmtMigText(job) {
     const state = String(job?.state || "unknown");
     const phase = String(job?.phase || "");
@@ -535,6 +540,73 @@ async function pollMigrationJob(jobId, fp) {
         await new Promise(resolve => setTimeout(resolve, 1200));
     }
 }
+
+function fmtCleanupText(job) {
+    const state = String(job?.state || "unknown");
+    const phase = String(job?.phase || "");
+    const percent = Number(job?.percent);
+    const msg = String(job?.message || "");
+
+    let out = `State: ${state}`;
+    if (phase) out += `\nPhase: ${phase}`;
+    if (Number.isFinite(percent)) out += `\nProgress: ${percent}%`;
+    if (msg) out += `\nMessage: ${msg}`;
+
+    const activePool = job?.resolved_active_pool_id || job?.expected_active_pool_id || "default";
+    const oldPool = job?.resolved_old_pool_id || job?.old_pool_id || "?";
+
+    out += `\nActive pool: ${activePool}`;
+    out += `\nOld pool: ${oldPool}`;
+
+    if (job?.result?.removed_entries != null) {
+        out += `\nRemoved entries: ${job.result.removed_entries}`;
+    }
+
+    if (job?.error) out += `\nError: ${job.error}`;
+    return out;
+}
+
+async function pollCleanupJob(jobId, fp) {
+    const startedAt = Date.now();
+    const timeoutMs = 10 * 60 * 1000;
+
+    for (;;) {
+        const j = await apiGetCleanupStatus(jobId);
+        const job = j?.job || {};
+
+        const state = String(job.state || "");
+        const phase = String(job.phase || "");
+        const percent = Number(job.percent);
+
+        const progressBits = [];
+        if (phase) progressBits.push(phase);
+        if (Number.isFinite(percent)) progressBits.push(`${percent}%`);
+        setMsg(progressBits.length ? `Cleanup ${progressBits.join(" · ")}` : `Cleanup ${state || "running"}…`);
+
+        if (state === "done") {
+            await refresh();
+            showToast("Old storage cleanup completed\n" + fmtCleanupText(job));
+            setMsg("Cleanup completed");
+            return;
+        }
+
+        if (state === "failed") {
+            await refresh();
+            showToast("Old storage cleanup failed\n" + fmtCleanupText(job), 15000);
+            setMsg("Cleanup failed");
+            return;
+        }
+
+        if ((Date.now() - startedAt) > timeoutMs) {
+            showToast(`Cleanup still in progress\nJob: ${jobId}`, 15000);
+            setMsg("Cleanup polling timed out");
+            return;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 1200));
+    }
+}
+
 async function submitMigrationFromModal() {
     const fp = gMigrateFp;
     if (!fp) return;
@@ -587,6 +659,73 @@ async function submitMigrationFromModal() {
         await pollMigrationJob(jobId, fp);
     } catch (e) {
         setMigrateError(String(e?.message || e));
+        setMsg("Error: " + (e?.message || e));
+    }
+}
+
+async function submitCleanupOldCopy(fp) {
+    const cur = allUsers.find(x => String(x.fingerprint || "") === String(fp)) || {};
+    if (String(cur.storage_state || "").toLowerCase() !== "allocated") {
+        alert("Storage must be allocated before cleanup.");
+        return;
+    }
+
+    const activePoolId = currentPoolIdForUser(cur);
+
+    let oldPoolId = "";
+    if (activePoolId === "default") {
+        oldPoolId = prompt(
+            "Cleanup old copy from which pool?\n\nUser is currently active on default.\nEnter old pool id to delete, for example: raidtest",
+            "raidtest"
+        ) || "";
+    } else {
+        oldPoolId = prompt(
+            `Cleanup old copy from which pool?\n\nUser is currently active on ${activePoolId}.\nEnter old pool id to delete, or use "default" if the stale copy is there.`,
+            "default"
+        ) || "";
+    }
+
+    oldPoolId = String(oldPoolId).trim();
+    if (!oldPoolId) return;
+
+    if (oldPoolId === activePoolId) {
+        alert("Old pool must differ from the active pool.");
+        return;
+    }
+
+    const ok = confirm(
+        `Delete old inactive storage copy?\n\n` +
+        `User: ${fp}\n` +
+        `Active pool: ${activePoolId}\n` +
+        `Old pool to delete: ${oldPoolId}\n\n` +
+        `This deletes the old user subtree from the old pool.`
+    );
+    if (!ok) return;
+
+    try {
+        setMsg("Queuing cleanup…");
+
+        const j = await apiPost("/api/v4/admin/users/cleanup_old_storage", {
+            fingerprint: fp,
+            expected_active_pool_id: activePoolId,
+            old_pool_id: oldPoolId,
+        });
+
+        const jobId = String(j?.job_id || "").trim();
+        if (!jobId) throw new Error("Cleanup job_id missing from server response");
+
+        showToast(
+            "Old storage cleanup queued\n" +
+            `Job: ${jobId}\n` +
+            `User: ${fp}\n` +
+            `Active pool: ${activePoolId}\n` +
+            `Old pool: ${oldPoolId}`
+        );
+
+        setMsg("Cleanup queued");
+        await pollCleanupJob(jobId, fp);
+    } catch (e) {
+        alert("Cleanup failed: " + (e?.message || e));
         setMsg("Error: " + (e?.message || e));
     }
 }
@@ -807,6 +946,11 @@ function render() {
             data-act="migrate"
             data-fp="${esc(fp)}"
             type="button">Migrate</button>
+
+        <button class="btn secondary"
+            data-act="cleanup-old-copy"
+            data-fp="${esc(fp)}"
+            type="button">Cleanup old copy</button>
     ` : ``}
     
     <button class="btn danger"
@@ -985,6 +1129,10 @@ ${detailRow}
                     return;
                 }
                 openMigrateModal(fp, cur);
+                return;
+            }
+            if (act === "cleanup-old-copy") {
+                await submitCleanupOldCopy(fp);
                 return;
             }
             const status =
