@@ -279,11 +279,18 @@ static std::uint64_t compute_tree_bytes(const std::filesystem::path& root) {
 // - non-zero rsync exit code becomes copy failure
 static bool run_rsync_copy(const std::filesystem::path& src,
                            const std::filesystem::path& dst,
-                           std::string* err) {
+                           std::string* err)
+{
     if (err) err->clear();
 
     const std::string src_s = src.string() + "/";
     const std::string dst_s = dst.string() + "/";
+
+    int pipefd[2];
+    if (pipe(pipefd) < 0) {
+        if (err) *err = "pipe failed";
+        return false;
+    }
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -292,6 +299,10 @@ static bool run_rsync_copy(const std::filesystem::path& src,
     }
 
     if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDERR_FILENO);
+        dup2(pipefd[1], STDOUT_FILENO);
+
         const char* argv[] = {
             "rsync",
             "-aHAX",
@@ -306,14 +317,42 @@ static bool run_rsync_copy(const std::filesystem::path& src,
         _exit(127);
     }
 
-    int status = 0;
-    if (waitpid(pid, &status, 0) < 0) {
-        if (err) *err = "waitpid failed";
-        return false;
+    close(pipefd[1]);
+
+    std::string output;
+    char buf[4096];
+    ssize_t n;
+
+    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
+        output.append(buf, n);
+        if (output.size() > 8192) break; // cap output
     }
 
+    close(pipefd[0]);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        if (err) *err = "rsync failed rc=" + std::to_string(WEXITSTATUS(status));
+
+        std::string friendly;
+
+        if (output.find("Permission denied") != std::string::npos) {
+            friendly = "permission denied copying files (ownership mismatch?)";
+        }
+        else if (output.find("No such file or directory") != std::string::npos) {
+            friendly = "source file disappeared during copy";
+        }
+        else if (WEXITSTATUS(status) == 23) {
+            friendly = "rsync partial transfer (some files could not be copied)";
+        }
+
+        if (err) {
+            *err = friendly.empty()
+                   ? ("rsync failed rc=" + std::to_string(WEXITSTATUS(status)))
+                   : (friendly + " (rc=" + std::to_string(WEXITSTATUS(status)) + ")");
+        }
+
         return false;
     }
 

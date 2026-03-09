@@ -13233,13 +13233,22 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
 	    res.set_content(body, "application/javascript; charset=utf-8");
 	});
 
-    srv.Get("/api/v4/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
-        std::string actor_fp;
-        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+	srv.Get("/api/v4/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
+    	std::string actor_fp;
+    	if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
-        res.set_header("Cache-Control", "no-store");
+	    if (!users.load(users_path)) {
+    	    reply_json(res, 500, json{
+        	    {"ok", false},
+            	{"error", "users_reload_failed"},
+	            {"message", "failed to reload users"}
+    	    }.dump());
+        	return;
+	    }
 
-        json out;
+    	res.set_header("Cache-Control", "no-store");
+
+    	json out;
         out["ok"] = true;
 	    out["actor_fp"] = actor_fp;
         out["users"] = json::array();

@@ -298,15 +298,12 @@ function openAllocModal(fp, curUser) {
 
     fpLabel.textContent = gAllocFp || "—";
 
-    // prefill GB from current quota
     const suggested = fmtGBFromBytes(curUser?.quota_bytes) || "10";
     gbInp.value = suggested;
 
-    // show modal immediately, then fill pools async
     m.classList.add("open");
     m.setAttribute("aria-hidden", "false");
 
-    // fill pools async
     (async () => {
         const pools = await ensurePoolsLoaded();
 
@@ -318,8 +315,6 @@ function openAllocModal(fp, curUser) {
             poolSel.appendChild(opt);
         }
 
-        // default selection:
-        // - if user has pool_id/pool assigned, try to select it
         const curPool =
             (curUser?.pool_id != null ? String(curUser.pool_id) :
                 (curUser?.pool != null ? String(curUser.pool) :
@@ -339,7 +334,6 @@ function openAllocModal(fp, curUser) {
             poolHint.textContent = s?.hint ? s.hint : "—";
         };
 
-        // focus amount for quick entry
         gbInp.focus();
         gbInp.select();
     })().catch(e => {

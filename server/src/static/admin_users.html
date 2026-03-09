@@ -751,10 +751,16 @@
             .allocGrid{ grid-template-columns: 1fr; }
         }
         .allocErr{
-            margin-top:10px; padding:10px 12px; border-radius:14px;
+            margin-top:10px;
+            padding:10px 12px;
+            border-radius:14px;
             border:1px solid rgba(var(--fail-rgb),0.40);
             background: rgba(var(--fail-rgb),0.10);
-            color: rgba(255,190,190,0.98);
+            color: rgba(var(--fail-rgb),0.98);
+            box-shadow: 0 0 12px rgba(var(--fail-rgb),0.12);
+            font-weight: 700;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
             display:none;
         }
         .allocErr.show{ display:block; }
