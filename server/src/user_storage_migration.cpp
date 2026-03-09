@@ -65,6 +65,7 @@
 #include <system_error>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <cctype>
 
 using json = nlohmann::json;
 
@@ -279,29 +280,32 @@ static std::uint64_t compute_tree_bytes(const std::filesystem::path& root) {
 // - non-zero rsync exit code becomes copy failure
 static bool run_rsync_copy(const std::filesystem::path& src,
                            const std::filesystem::path& dst,
-                           std::string* err)
-{
+                           std::string* err) {
     if (err) err->clear();
 
     const std::string src_s = src.string() + "/";
     const std::string dst_s = dst.string() + "/";
 
     int pipefd[2];
-    if (pipe(pipefd) < 0) {
+    if (::pipe(pipefd) < 0) {
         if (err) *err = "pipe failed";
         return false;
     }
 
-    pid_t pid = fork();
+    pid_t pid = ::fork();
     if (pid < 0) {
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
         if (err) *err = "fork failed";
         return false;
     }
 
     if (pid == 0) {
-        close(pipefd[0]);
-        dup2(pipefd[1], STDERR_FILENO);
-        dup2(pipefd[1], STDOUT_FILENO);
+        // child: send both stdout and stderr to parent
+        ::close(pipefd[0]);
+        (void)::dup2(pipefd[1], STDOUT_FILENO);
+        (void)::dup2(pipefd[1], STDERR_FILENO);
+        ::close(pipefd[1]);
 
         const char* argv[] = {
             "rsync",
@@ -313,50 +317,119 @@ static bool run_rsync_copy(const std::filesystem::path& src,
             nullptr
         };
 
-        execvp("rsync", const_cast<char* const*>(argv));
+        ::execvp("rsync", const_cast<char* const*>(argv));
         _exit(127);
     }
 
-    close(pipefd[1]);
+    // parent
+    ::close(pipefd[1]);
 
     std::string output;
     char buf[4096];
-    ssize_t n;
-
-    while ((n = read(pipefd[0], buf, sizeof(buf))) > 0) {
-        output.append(buf, n);
-        if (output.size() > 8192) break; // cap output
+    for (;;) {
+        const ssize_t n = ::read(pipefd[0], buf, sizeof(buf));
+        if (n <= 0) break;
+        output.append(buf, static_cast<size_t>(n));
+        if (output.size() > 16384) { // bound stored output
+            output.resize(16384);
+            break;
+        }
     }
-
-    close(pipefd[0]);
+    ::close(pipefd[0]);
 
     int status = 0;
-    waitpid(pid, &status, 0);
-
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-
-        std::string friendly;
-
-        if (output.find("Permission denied") != std::string::npos) {
-            friendly = "permission denied copying files (ownership mismatch?)";
-        }
-        else if (output.find("No such file or directory") != std::string::npos) {
-            friendly = "source file disappeared during copy";
-        }
-        else if (WEXITSTATUS(status) == 23) {
-            friendly = "rsync partial transfer (some files could not be copied)";
-        }
-
-        if (err) {
-            *err = friendly.empty()
-                   ? ("rsync failed rc=" + std::to_string(WEXITSTATUS(status)))
-                   : (friendly + " (rc=" + std::to_string(WEXITSTATUS(status)) + ")");
-        }
-
+    if (::waitpid(pid, &status, 0) < 0) {
+        if (err) *err = "waitpid failed";
         return false;
     }
 
-    return true;
+    if (!WIFEXITED(status)) {
+        if (err) *err = "rsync terminated abnormally";
+        return false;
+    }
+
+    const int rc = WEXITSTATUS(status);
+    if (rc == 0) return true;
+
+    auto shorten_ws = [](std::string s) -> std::string {
+        for (char& c : s) {
+            if (c == '\r' || c == '\n' || c == '\t') c = ' ';
+        }
+        // collapse repeated spaces
+        std::string out;
+        out.reserve(s.size());
+        bool prev_space = false;
+        for (char c : s) {
+            const bool is_space = (c == ' ');
+            if (is_space) {
+                if (!prev_space) out.push_back(' ');
+            } else {
+                out.push_back(c);
+            }
+            prev_space = is_space;
+        }
+        // trim
+        while (!out.empty() && out.front() == ' ') out.erase(out.begin());
+        while (!out.empty() && out.back() == ' ') out.pop_back();
+        if (out.size() > 280) out.resize(280);
+        return out;
+    };
+
+    auto contains_ci = [](const std::string& hay, const std::string& needle) -> bool {
+        auto lower = [](unsigned char c) { return static_cast<char>(std::tolower(c)); };
+        std::string h, n;
+        h.reserve(hay.size());
+        n.reserve(needle.size());
+        for (unsigned char c : hay) h.push_back(lower(c));
+        for (unsigned char c : needle) n.push_back(lower(c));
+        return h.find(n) != std::string::npos;
+    };
+
+    std::string friendly;
+
+    const bool has_perm = contains_ci(output, "permission denied");
+    const bool sender_perm =
+        contains_ci(output, "[sender]") &&
+        (contains_ci(output, "failed to open") || contains_ci(output, "send_files failed"));
+    const bool receiver_perm =
+        contains_ci(output, "[receiver]") &&
+        (contains_ci(output, "failed to open") ||
+         contains_ci(output, "mkstemp") ||
+         contains_ci(output, "mkdir") ||
+         contains_ci(output, "rename"));
+
+    if (has_perm && sender_perm) {
+        friendly = "permission denied reading source files (check source ownership/permissions)";
+    } else if (has_perm && receiver_perm) {
+        friendly = "permission denied writing destination files (check destination ownership/permissions)";
+    } else if (has_perm) {
+        friendly = "permission denied while copying files (check source/destination ownership/permissions)";
+    } else if (contains_ci(output, "no such file or directory")) {
+        friendly = "source or destination path disappeared during copy";
+    } else if (contains_ci(output, "operation not permitted")) {
+        friendly = "operation not permitted while preserving file metadata";
+    } else if (contains_ci(output, "failed to set times")) {
+        friendly = "failed to preserve file timestamps at destination";
+    } else if (contains_ci(output, "failed to set permissions")) {
+        friendly = "failed to preserve file permissions at destination";
+    } else if (contains_ci(output, "some files/attrs were not transferred")) {
+        friendly = "partial transfer: some files or attributes could not be copied";
+    } else if (rc == 23) {
+        friendly = "partial transfer: some files or attributes could not be copied";
+    } else if (rc == 24) {
+        friendly = "partial transfer: some source files vanished during copy";
+    } else if (rc == 127) {
+        friendly = "rsync exec failed";
+    } else {
+        friendly = "rsync failed";
+    }
+
+    const std::string snippet = shorten_ws(output);
+    if (err) {
+        *err = friendly + " (rc=" + std::to_string(rc) + ")";
+        if (!snippet.empty()) *err += ": " + snippet;
+    }
+    return false;
 }
 
 } // namespace
