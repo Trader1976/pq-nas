@@ -19,13 +19,28 @@ STAGE="$OUTDIR/pqnas"
 TARBALL="$OUTDIR/pqnas-${VER}-linux-${ARCH}.tar.gz"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+VERSION_H="$REPO_ROOT/server/src/version.h"
+
+if [[ ! -f "$VERSION_H" ]]; then
+  echo "ERROR: Missing version header: $VERSION_H"
+  exit 1
+fi
+
+APP_VER="$(sed -n 's/^#define[[:space:]]\+PQNAS_VERSION[[:space:]]\+"\([^"]\+\)".*/\1/p' "$VERSION_H" | head -n1)"
+
+if [[ -z "$APP_VER" ]]; then
+  echo "ERROR: Failed to parse PQNAS_VERSION from $VERSION_H"
+  exit 1
+fi
+
 REL_ROOT="$REPO_ROOT/tools/release"
 CLEAN_CONFIG_DIR="$REL_ROOT/config"
 SYSTEMD_DIR="$REL_ROOT/systemd"
 RESTORE_JOB_SRC="$REPO_ROOT/server/src/storage/snapshots/pqnas_restore_job.sh"
 
 echo "[*] Repo root: $REPO_ROOT"
-echo "[*] Version:   $VER"
+echo "[*] Release:   $VER"
+echo "[*] App ver:   $APP_VER"
 echo "[*] Stage:     $STAGE"
 echo "[*] Output:    $TARBALL"
 
@@ -148,21 +163,20 @@ test -f "$STAGE/static/app.js" || {
   exit 90
 }
 
-# Inject version into static HTML to bust CDN/browser caches.
-# app.html should contain: __PQNAS_VERSION__
+# Inject app version from server/src/version.h into static assets.
+# app.html / app.js should contain: __PQNAS_VERSION__
 if [[ -f "$STAGE/static/app.html" ]]; then
-  # Use a temp file to be portable across sed variants.
   tmp="$(mktemp)"
-  sed "s/__PQNAS_VERSION__/${VER}/g" "$STAGE/static/app.html" > "$tmp"
+  sed "s/__PQNAS_VERSION__/${APP_VER}/g" "$STAGE/static/app.html" > "$tmp"
   install -m 0644 "$tmp" "$STAGE/static/app.html"
   rm -f "$tmp"
 else
   echo "[!] Missing staged static HTML: $STAGE/static/app.html"
 fi
-# Inject version into static JS too (desktop status line)
+
 if [[ -f "$STAGE/static/app.js" ]]; then
   tmp="$(mktemp)"
-  sed "s/__PQNAS_VERSION__/${VER}/g" "$STAGE/static/app.js" > "$tmp"
+  sed "s/__PQNAS_VERSION__/${APP_VER}/g" "$STAGE/static/app.js" > "$tmp"
   install -m 0644 "$tmp" "$STAGE/static/app.js"
   rm -f "$tmp"
 else
