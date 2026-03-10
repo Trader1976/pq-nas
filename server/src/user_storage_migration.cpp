@@ -720,7 +720,7 @@ bool validate_user_storage_cleanup(const UserStorageCleanupPlan& plan,
 
     ec.clear();
     if (!std::filesystem::exists(plan.old_user_dir, ec)) {
-        if (err) *err = "old user dir not found: " + plan.old_user_dir.string();
+        if (err) *err = "cleanup_not_needed: old inactive copy does not exist";
         return false;
     }
     if (ec) {

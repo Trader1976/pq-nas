@@ -592,6 +592,14 @@ async function pollCleanupJob(jobId, fp) {
 
         if (state === "failed") {
             await refresh();
+
+            const err = String(job?.error || "");
+            if (err.includes("cleanup_not_needed")) {
+                showToast("Old storage cleanup not needed\nNo old inactive copy was found.");
+                setMsg("Cleanup not needed");
+                return;
+            }
+
             showToast("Old storage cleanup failed\n" + fmtCleanupText(job), 15000);
             setMsg("Cleanup failed");
             return;
@@ -670,7 +678,7 @@ async function submitCleanupOldCopy(fp) {
         return;
     }
 
-    const activePoolId = currentPoolIdForUser(cur);
+    const activePoolId = storagePoolIdForUser(cur);
 
     let oldPoolId = "";
     if (activePoolId === "default") {
@@ -885,7 +893,7 @@ function render() {
         `}
 
         <div class="detailActions">
-            <button class="btn secondary" data-edit="${esc(fp)}" type="button" ${disEditAttr}${disEditClass}>Edit</button>
+            <button class="btn secondary" data-edit="${esc(fp)}" type="button" title="Load this user into the edit form" ${disEditAttr}${disEditClass}>Edit</button>
         </div>
 
         <div class="detailKV"><div class="k">Fingerprint</div><div class="v mono">${esc(fp)}</div></div>
@@ -922,41 +930,48 @@ function render() {
             data-act="enable"
             data-fp="${esc(fp)}"
             type="button"
+            title="Allow this fingerprint to log in again"
             ${disDangerAttr}${disDangerClass}>Enable</button>
 
     <button class="btn secondary"
             data-act="disable"
             data-fp="${esc(fp)}"
             type="button"
+            title="Disable login until an admin enables it again"
             ${disDangerAttr}${disDangerClass}>Disable</button>
 
     <button class="btn secondary"
             data-act="revoke"
             data-fp="${esc(fp)}"
             type="button"
+            title="Hard-block this fingerprint from logging in"
             ${disDangerAttr}${disDangerClass}>Revoke</button>
 
     <button class="btn secondary"
             data-act="allocate"
             data-fp="${esc(fp)}"
-            type="button">Allocate</button>
+            type="button"
+            title="Allocate storage and set quota for this user">Allocate</button>
             
     ${String(u.storage_state || "").toLowerCase() === "allocated" ? `
         <button class="btn secondary"
             data-act="migrate"
             data-fp="${esc(fp)}"
-            type="button">Migrate</button>
+            type="button"
+            title="Move user storage to another pool with async copy and verify">Migrate</button>
 
         <button class="btn secondary"
             data-act="cleanup-old-copy"
             data-fp="${esc(fp)}"
-            type="button">Cleanup old copy</button>
+            type="button"
+            title="Delete the old inactive storage copy left behind after migration">Cleanup old copy</button>
     ` : ``}
     
     <button class="btn danger"
             data-act="delete"
             data-fp="${esc(fp)}"
             type="button"
+            title="Remove this entry from users.json; the user can reappear if they scan again"
             ${disDangerAttr}${disDangerClass}>Delete</button>
   </div>
 
