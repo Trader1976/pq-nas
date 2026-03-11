@@ -18001,7 +18001,7 @@ srv.Post("/api/v4/files/du", [&](const httplib::Request& req, httplib::Response&
 
 // DELETE /api/v4/files/delete?path=relative/path
 // Deletes a file or directory (recursive). Refuses empty path (won't delete user root).
-srv.Delete("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Response& res) {
+srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
@@ -19421,11 +19421,13 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
 
     audit_ok(rel_path, sz);
 });
-
 // ---- Files API (user storage) ----
 // PUT /api/v4/files/put?path=relative/path.bin
-// Body: raw bytes (entire file)
-srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response& res) {
+// Body: raw bytes (streamed to temp file, then renamed atomically)
+srv.Put("/api/v4/files/put",
+[&](const httplib::Request& req,
+    httplib::Response& res,
+    const httplib::ContentReader& content_reader) {
     std::string fp_hex, role;
     if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
@@ -19496,7 +19498,6 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
         audit_append(ev);
     };
 
-
     auto audit_ok = [&](const std::string& rel_path, std::uint64_t bytes) {
         pqnas::AuditEvent ev;
         ev.event = "v4.files_put_ok";
@@ -19517,7 +19518,6 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
         audit_append(ev);
     };
 
-
     // path param
     std::string rel_path;
     if (req.has_param("path")) rel_path = req.get_param_value("path");
@@ -19530,67 +19530,39 @@ srv.Put("/api/v4/files/put", [&](const httplib::Request& req, httplib::Response&
         }.dump());
         return;
     }
-// incoming bytes: prefer Content-Length if present, but sanity-check vs req.body.size()
-std::uint64_t incoming_bytes = (std::uint64_t)req.body.size();
-std::uint64_t cl = 0;
 
-// transport max (server-controlled, distinct from quota)
-// Prefer runtime value if you have it, otherwise payload cap.
-const std::uint64_t transport_max =
-    (g_transport_max_upload_bytes ? g_transport_max_upload_bytes : k_payload_max_upload_bytes);
+    // Require Content-Length for v1 streamer so quota can be checked before write.
+    std::uint64_t cl = 0;
+    if (!header_u64("Content-Length", &cl)) {
+        audit_fail("missing_content_length", 411);
+        reply_json(res, 411, json{
+            {"ok", false},
+            {"error", "length_required"},
+            {"message", "Content-Length required"}
+        }.dump());
+        return;
+    }
 
-if (header_u64("Content-Length", &cl)) {
+    const std::uint64_t incoming_bytes = cl;
 
-    // EARLY: reject too-large uploads based on header (prevents 400 mismatch on truncation)
-    if (cl > transport_max) {
+    // transport max (server-controlled, distinct from quota)
+    const std::uint64_t transport_max =
+        (g_transport_max_upload_bytes ? g_transport_max_upload_bytes : k_payload_max_upload_bytes);
+
+    if (incoming_bytes > transport_max) {
         audit_fail("transport_limit_exceeded", 413,
-                   "Content-Length=" + std::to_string((unsigned long long)cl) +
+                   "Content-Length=" + std::to_string((unsigned long long)incoming_bytes) +
                    " max=" + std::to_string((unsigned long long)transport_max));
         reply_json(res, 413, json{
             {"ok", false},
             {"error", "transport_limit_exceeded"},
             {"message", "Upload exceeds maximum allowed size"},
-            {"content_length", cl},
+            {"content_length", incoming_bytes},
             {"max_bytes", transport_max},
             {"payload_max_upload_bytes", k_payload_max_upload_bytes}
         }.dump());
         return;
     }
-
-    // Fail-closed if mismatch (proxy/client bug OR server truncated due to payload cap)
-    if (cl != (std::uint64_t)req.body.size()) {
-        audit_fail("content_length_mismatch", 400,
-                   "Content-Length=" + std::to_string((unsigned long long)cl) +
-                   " body=" + std::to_string((unsigned long long)req.body.size()));
-        reply_json(res, 400, json{
-            {"ok", false},
-            {"error", "bad_request"},
-            {"message", "Content-Length mismatch"},
-            {"content_length", cl},
-            {"body_bytes", (std::uint64_t)req.body.size()}
-        }.dump());
-        return;
-    }
-
-    incoming_bytes = cl;
-}
-
-// Also enforce transport limit when Content-Length is missing
-if (incoming_bytes > transport_max) {
-    audit_fail("transport_limit_exceeded", 413,
-               "incoming_bytes=" + std::to_string((unsigned long long)incoming_bytes) +
-               " max=" + std::to_string((unsigned long long)transport_max));
-    reply_json(res, 413, json{
-        {"ok", false},
-        {"error", "transport_limit_exceeded"},
-        {"message", "Upload exceeds maximum allowed size"},
-        {"max_bytes", transport_max},
-        {"incoming_bytes", incoming_bytes},
-        {"payload_max_upload_bytes", k_payload_max_upload_bytes}
-    }.dump());
-    return;
-}
-
 
     // quota + path resolve
     const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
@@ -19599,13 +19571,13 @@ if (incoming_bytes > transport_max) {
     );
 
     if (!qc.ok) {
-    if (qc.error == "quota_exceeded") audit_quota_deny(rel_path, qc);
-    if (qc.error == "invalid_path") audit_fail("invalid_path", 400);
-    if (qc.error != "storage_unallocated" && qc.error != "invalid_path" && qc.error != "quota_exceeded")
-        audit_fail("quota_check_failed", 403, qc.error);
-
-    if (reply_quota_error_v1(res, fp_hex, qc)) return;
-}
+        if (qc.error == "quota_exceeded") audit_quota_deny(rel_path, qc);
+        if (qc.error == "invalid_path") audit_fail("invalid_path", 400);
+        if (qc.error != "storage_unallocated" && qc.error != "invalid_path" && qc.error != "quota_exceeded") {
+            audit_fail("quota_check_failed", 403, qc.error);
+        }
+        if (reply_quota_error_v1(res, fp_hex, qc)) return;
+    }
 
     const std::filesystem::path out_abs = qc.abs_path;
 
@@ -19630,14 +19602,91 @@ if (incoming_bytes > transport_max) {
         out_abs.parent_path() /
         (out_abs.filename().string() + ".upload." + random_b64url(8) + ".tmp");
 
+    std::uint64_t bytes_written = 0;
+    bool stream_ok = true;
+    std::string stream_err;
+
     try {
-        {
-            std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-            if (!f.good()) throw std::runtime_error("open tmp failed");
-            if (!req.body.empty())
-                f.write(req.body.data(), (std::streamsize)req.body.size());
-            f.flush();
-            if (!f.good()) throw std::runtime_error("write tmp failed");
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f.good()) {
+            throw std::runtime_error("open tmp failed");
+        }
+
+        content_reader([&](const char* data, size_t len) {
+            if (!stream_ok) return false;
+            if (len == 0) return true;
+
+            const std::uint64_t chunk = (std::uint64_t)len;
+            const std::uint64_t next = bytes_written + chunk;
+
+            if (next < bytes_written) {
+                stream_ok = false;
+                stream_err = "byte_count_overflow";
+                return false;
+            }
+
+            if (next > incoming_bytes) {
+                stream_ok = false;
+                stream_err = "content_length_exceeded";
+                return false;
+            }
+
+            if (next > transport_max) {
+                stream_ok = false;
+                stream_err = "transport_limit_exceeded";
+                return false;
+            }
+
+            f.write(data, (std::streamsize)len);
+            if (!f.good()) {
+                stream_ok = false;
+                stream_err = "write_tmp_failed";
+                return false;
+            }
+
+            bytes_written = next;
+            return true;
+        });
+
+        f.flush();
+        if (!f.good()) {
+            throw std::runtime_error("write tmp failed");
+        }
+        f.close();
+
+        if (!stream_ok) {
+            std::error_code ec;
+            std::filesystem::remove(tmp, ec);
+
+            const int http = (stream_err == "transport_limit_exceeded") ? 413 : 400;
+            audit_fail(stream_err, http);
+
+            reply_json(res, http, json{
+                {"ok", false},
+                {"error", (stream_err == "transport_limit_exceeded") ? "transport_limit_exceeded" : "bad_request"},
+                {"message", stream_err},
+                {"content_length", incoming_bytes},
+                {"bytes_written", bytes_written}
+            }.dump());
+            return;
+        }
+
+        if (bytes_written != incoming_bytes) {
+            std::error_code ec;
+            std::filesystem::remove(tmp, ec);
+
+            audit_fail("content_length_mismatch", 400,
+                       "Content-Length=" + std::to_string((unsigned long long)incoming_bytes) +
+                       " written=" + std::to_string((unsigned long long)bytes_written));
+
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "Content-Length mismatch"},
+                {"content_length", incoming_bytes},
+                {"bytes_written", bytes_written}
+            }.dump());
+            return;
         }
 
         std::error_code ec;
@@ -19647,13 +19696,13 @@ if (incoming_bytes > transport_max) {
             throw std::runtime_error(std::string("rename failed: ") + ec.message());
         }
 
-        audit_ok(rel_path, incoming_bytes);
+        audit_ok(rel_path, bytes_written);
 
         reply_json(res, 200, json{
             {"ok", true},
             {"fingerprint_hex", fp_hex},
             {"path", rel_path},
-            {"bytes", incoming_bytes}
+            {"bytes", bytes_written}
         }.dump());
         return;
 

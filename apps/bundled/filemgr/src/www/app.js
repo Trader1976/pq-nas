@@ -13,7 +13,7 @@
   //     GET    /api/v4/files/get?path=<rel>              (download file)
   //     POST   /api/v4/files/mkdir?path=<rel>            (create directory)
   //     POST   /api/v4/files/move?from=<rel>&to=<rel>    (rename/move)
-  //     DELETE /api/v4/files/delete?path=<rel>           (delete file/dir)
+  //     POST   /api/v4/files/delete?path=<rel>           (delete file/dir)
   //     PUT    /api/v4/files/put?path=<rel>              (upload/replace)
   //
   // Folder upload:
@@ -76,6 +76,7 @@
   const uploadProgPill = el("uploadProgPill");
   const uploadProgPct = el("uploadProgPct");
   const uploadProgFill = el("uploadProgFill");
+
 
   // Properties modal UI
   const propsModal = document.getElementById("propsModal");
@@ -830,7 +831,11 @@
     while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
     return i === 0 ? `${v | 0} ${u[i]}` : `${v.toFixed(1)} ${u[i]}`;
   }
-
+  function fmtSpeed(bytesPerSec) {
+    const v = Number(bytesPerSec || 0);
+    if (!Number.isFinite(v) || v <= 0) return "—";
+    return `${fmtSize(v)}/s`;
+  }
   // File list times come from server as epoch seconds (UTC). We show ISO-like.
   function fmtTime(unix) {
     if (!unix) return "";
@@ -1089,6 +1094,7 @@
       if (uploadProgFill) uploadProgFill.style.width = "0%";
       if (uploadProgPct) uploadProgPct.textContent = "0%";
       if (uploadProgText) uploadProgText.textContent = "";
+      setUploadCancelable(false);
     }
   }
 
@@ -1116,7 +1122,12 @@
     for (const rel of paths) {
       try {
         const url = `/api/v4/files/delete?path=${encodeURIComponent(rel)}`;
-        const r = await fetch(url, { method: "DELETE", credentials: "include", cache: "no-store" });
+        const r = await fetch(url, {
+          method: "POST",
+          credentials: "include",
+          cache: "no-store",
+          body: ""
+        });
         const j = await r.json().catch(() => null);
 
         if (!r.ok || !j || !j.ok) {
@@ -1206,14 +1217,6 @@
     pill.style.background = "rgba(0,0,0,0.60)";
   }
   // Update upload progress bar (percent + line of text).
-  function classifyUploadMsg(text) {
-    const t = String(text || "").toLowerCase();
-    if (!t) return "info";
-    if (t.includes("quota") || t.includes("failed") || t.includes("error") || t.includes("blocked") || t.includes("http 4")) return "err";
-    if (t.includes("uploading") || t.includes("upload…")) return "warn";
-    if (t.includes("uploaded") || t.includes("finished") || t.includes("ready") || t.includes("ok")) return "ok";
-    return "info";
-  }
 
 
 // Update upload progress bar (percent + line of text) + optional pill.
@@ -1236,6 +1239,8 @@
   }
 // ---- Upload error details (for "Last: ..." pill click) ----------------------
   let lastUploadError = null; // { file, summary, message, http, kind, source, atMs }
+  let activeUploadXhr = null;
+  let uploadCancelRequested = false;
 
   function extractHttpStatusFromMsg(msg) {
     const m = String(msg || "").match(/\bHTTP\s+(\d{3})\b/i);
@@ -1248,7 +1253,7 @@
     const low = msg.toLowerCase();
 
     if (low.includes("quota exceeded") || low.includes("quota_exceeded")) return "Quota exceeded";
-    if (http === 400 || low.includes("cloudflare") || low.includes("before pq-nas")) return "Cloudflare rejected before PQ-NAS";
+    if (http === 400 || low.includes("gateway") || low.includes("before pq-nas")) return "Gateway rejected before PQ-NAS";
     if (http === 413 || low.includes("too large")) return "Upload too large (server limit)";
     if (http >= 400) return `Upload failed (HTTP ${http})`;
     return "Upload failed";
@@ -1299,6 +1304,22 @@
       showUploadErrorDetailsModal();
     };
   }
+
+  function setUploadCancelable(on) {
+    if (!uploadCancelBtn) return;
+    uploadCancelBtn.classList.toggle("hidden", !on);
+    uploadCancelBtn.disabled = !on;
+  }
+
+  function cancelCurrentUpload() {
+    uploadCancelRequested = true;
+    if (activeUploadXhr) {
+      try { activeUploadXhr.abort(); } catch (_) {}
+    }
+  }
+  uploadCancelBtn?.addEventListener("click", () => {
+    cancelCurrentUpload();
+  });
   // Ensure directory path exists before uploading nested files.
   // We create progressively: a/b/c -> mkdir a, mkdir a/b, mkdir a/b/c
   // created is a Set of already attempted dirs (avoid spamming server).
@@ -1333,20 +1354,50 @@
       const url = `/api/v4/files/put?path=${encodeURIComponent(full)}`;
 
       const xhr = new XMLHttpRequest();
+      activeUploadXhr = xhr;
+
+      const clearActive = () => {
+        if (activeUploadXhr === xhr) activeUploadXhr = null;
+      };
+
       xhr.open("PUT", url, true);
       xhr.withCredentials = true;
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
 
-      xhr.timeout = 10 * 60 * 1000; // 10 min
-      xhr.ontimeout = () => reject(Object.assign(new Error("upload failed (timeout)"), { kind: "network", source: "client" }));
+      xhr.timeout = 60 * 60 * 1000; // 60 min
+      xhr.ontimeout = () => {
+        clearActive();
+        reject(Object.assign(new Error("upload failed (timeout)"), { kind: "network", source: "client" }));
+      };
+
+      let lastProgressTs = 0;
 
       xhr.upload.onprogress = (e) => {
         if (!onProgress) return;
-        if (e.lengthComputable) onProgress(e.loaded, e.total);
-        else onProgress(e.loaded, file.size || 0);
+
+        const now = performance.now();
+        if (now - lastProgressTs < 80) return; // throttle updates
+
+        lastProgressTs = now;
+
+        if (e.lengthComputable)
+          onProgress(e.loaded, e.total);
+        else
+          onProgress(e.loaded, file.size || 0);
       };
 
-      xhr.onerror = () => reject(Object.assign(new Error("upload failed (network)"), { kind: "network", source: "client" }));
-      xhr.onabort = () => reject(Object.assign(new Error("upload aborted"), { kind: "network", source: "client" }));
+      xhr.onerror = () => {
+        clearActive();
+        reject(Object.assign(new Error("upload failed (network)"), { kind: "network", source: "client" }));
+      };
+      xhr.onabort = () => {
+        clearActive();
+        if (uploadCancelRequested) {
+          reject(Object.assign(new Error("upload cancelled"), { kind: "cancelled", source: "client" }));
+        } else {
+          reject(Object.assign(new Error("upload aborted"), { kind: "network", source: "client" }));
+        }
+      };
 
       xhr.onload = () => {
         const status = xhr.status || 0;
@@ -1365,6 +1416,7 @@
 
         // Success: 2xx + {ok:true}
         if (status >= 200 && status < 300 && j && j.ok) {
+          clearActive();
           resolve(j);
           return;
         }
@@ -1381,6 +1433,7 @@
           err.kind = "quota";
           err.source = "pqnas";
           err.details = j;
+          clearActive();
           reject(err);
           return;
         }
@@ -1391,6 +1444,7 @@
           err.http = 0;
           err.kind = "network";
           err.source = "gateway";
+          clearActive();
           reject(err);
           return;
         }
@@ -1404,19 +1458,34 @@
           err.http = 413;
           err.kind = "pqnas_limit";
           err.source = "pqnas";
+          clearActive();
           reject(err);
           return;
         }
 
-        // Your rule: 400 is Cloudflare rejecting before PQ-NAS (free plan limit)
+        // 400 can now come from PQ-NAS too (invalid path, length mismatch, etc).
+        // Only treat it as gateway/cloudflare when response is clearly non-JSON.
         if (status === 400) {
+          if (j && (j.message || j.error)) {
+            const msg = `${j.error || ""} ${j.message || ""}`.trim();
+            const err = new Error(msg || "Bad request");
+            err.http = status;
+            err.kind = "pqnas_error";
+            err.source = "pqnas";
+            err.details = j;
+            clearActive();
+            reject(err);
+            return;
+          }
+
           const size = fmtSize(file && file.size != null ? file.size : 0);
           const snippet = raw ? shorten(raw.replace(/\s+/g, " "), 200) : "";
-          const err = new Error(`Cloudflare rejected upload before PQ-NAS (HTTP 400). File size ${size}.`);
+          const err = new Error(`Gateway rejected upload before PQ-NAS (HTTP 400). File size ${size}.`);
           err.http = 400;
           err.kind = "gateway_reject";
-          err.source = "cloudflare";
+          err.source = "gateway";
           if (snippet) err.details = snippet;
+          clearActive();
           reject(err);
           return;
         }
@@ -1429,6 +1498,7 @@
           err.kind = "pqnas_error";
           err.source = "pqnas";
           err.details = j;
+          clearActive();
           reject(err);
           return;
         }
@@ -1441,6 +1511,7 @@
           err.http = status;
           err.kind = "gateway_error";
           err.source = "gateway";
+          clearActive();
           reject(err);
           return;
         }
@@ -1449,6 +1520,7 @@
         err.http = status;
         err.kind = "unknown";
         err.source = "unknown";
+        clearActive();
         reject(err);
       };
 
@@ -1470,7 +1542,7 @@
   // - progress is computed by total bytes across all files
   async function uploadRelFiles(relFiles) {
     if (!relFiles.length) return;
-    if (!relFiles.length) return;
+
 
     const created = new Set();
 
@@ -1479,7 +1551,11 @@
     for (const it of relFiles) {
       const rel = normalizeRelPath(it.rel);
       if (!validateRelPath(rel)) continue; // skip unsafe paths (UX)
-      items.push({ rel, file: it.file });
+      items.push({
+        rel,
+        file: it.file,
+        source: it.source || ""
+      });
     }
 
     if (!items.length) {
@@ -1495,17 +1571,23 @@
     let uploadedBytesCommitted = 0; // bytes from fully finished files
     let failedFiles = 0;
     const failures = [];
+    const uploadBatchStartedAt = performance.now();
 
     // Reset last error + pill clickability for this batch
     lastUploadError = null;
     setUploadPillClickable(false);
+    uploadCancelRequested = false;
+    activeUploadXhr = null;
+    setUploadCancelable(true);
 
     showUploadProgress(true);
     setBadge("warn", "upload…");
     setUploadProgress(0, `Uploading 0/${totalFiles}…`);
 
     for (let idx = 0; idx < items.length; idx++) {
-      const { rel, file } = items[idx];
+      const { rel, file, source } = items[idx];
+
+      if (uploadCancelRequested) break;
 
       const dir = parentPath(rel);
       if (dir) await mkdirIfNeeded(dir, created);
@@ -1515,35 +1597,68 @@
       try {
         status.textContent = `Uploading: ${rel} (${fmtSize(file.size)})`;
 
-        await xhrPutFileTo(rel, file, (loaded) => {
-          lastLoaded = Math.max(lastLoaded, loaded || 0);
-          const overall = uploadedBytesCommitted + lastLoaded;
-          const pct = (overall / totalBytes) * 100;
+        const runUpload = async () => {
+          await xhrPutFileTo(rel, file, (loaded) => {
+            lastLoaded = Math.max(lastLoaded, loaded || 0);
+            const overall = uploadedBytesCommitted + lastLoaded;
+            const pct = (overall / totalBytes) * 100;
 
-          setBadge("warn", "upload…");
-          setUploadProgress(
-              pct,
-              `Uploading ${doneFiles}/${totalFiles} • ${rel} • ${fmtSize(overall)} / ${fmtSize(totalBytes)}`
-          );
-        });
+            const elapsedSec = Math.max(0.001, (performance.now() - uploadBatchStartedAt) / 1000);
+            const speedBps = overall / elapsedSec;
+
+            setBadge("warn", "upload…");
+            setUploadProgress(
+                pct,
+                `Uploading ${doneFiles}/${totalFiles} • ${rel} • ${fmtSize(overall)} / ${fmtSize(totalBytes)} • ${fmtSpeed(speedBps)}`
+            );
+          });
+        };
+
+        await runUpload();
 
         uploadedBytesCommitted += (Number(file.size) || lastLoaded || 0);
         doneFiles++;
 
         const pct = (uploadedBytesCommitted / totalBytes) * 100;
-        setUploadProgress(pct, `Uploaded ${doneFiles}/${totalFiles} • ${rel}`);
+        const elapsedSec = Math.max(0.001, (performance.now() - uploadBatchStartedAt) / 1000);
+        const speedBps = uploadedBytesCommitted / elapsedSec;
+
+        setUploadProgress(
+            pct,
+            `Uploaded ${doneFiles}/${totalFiles} • ${rel} • ${fmtSpeed(speedBps)}`
+        );
 
       } catch (e) {
+        if (e && e.kind === "cancelled") {
+          setBadge("warn", "cancelled");
+          status.textContent = `Upload cancelled. Completed ${doneFiles}/${totalFiles} files.`;
+
+          const pct = (uploadedBytesCommitted / totalBytes) * 100;
+          setUploadProgress(
+              pct,
+              `Upload cancelled • OK ${doneFiles}/${totalFiles}`,
+              "",
+              "warn"
+          );
+
+          // Let backend finish abort cleanup before reloading listing
+          setTimeout(() => {
+            refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
+            load().catch(() => {});
+          }, 500);
+
+          break;
+        }
         failedFiles++;
 
         const msg = String(e && e.message ? e.message : e);
         const http = (e && Number.isFinite(e.http)) ? e.http : extractHttpStatusFromMsg(msg);
-        const source = e && e.source ? String(e.source) : "";
+        const errSource = e && e.source ? String(e.source) : "";
         const kind = e && e.kind ? String(e.kind) : "";
 
         const summary = classifyUploadSummary(e);
 
-        failures.push({ rel, message: msg, http, kind, source });
+        failures.push({ rel, message: msg, http, kind, source: errSource });
 
         // Store last error for "Details" modal
         lastUploadError = {
@@ -1560,7 +1675,7 @@
         status.textContent = `Upload failed: ${rel} — ${msg}`;
 
         // If quota/limit blocks, we can pin bar at 100 to make it obvious it won't continue
-        const isHardStop = (summary === "Quota exceeded") || (summary === "Upload too large (server limit)") || (summary === "Cloudflare rejected before PQ-NAS");
+        const isHardStop = (summary === "Quota exceeded") || (summary === "Upload too large (server limit)") || (summary === "Gateway rejected before PQ-NAS");
         const pct = isHardStop ? 100 : (uploadedBytesCommitted / totalBytes) * 100;
 
         // Keep pill short: only filename
@@ -1613,6 +1728,9 @@
       setTimeout(() => showUploadProgress(false), 900);
     }
 
+    setUploadCancelable(false);
+    activeUploadXhr = null;
+    uploadCancelRequested = false;
     await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
     await load();
   }
@@ -1646,7 +1764,7 @@
   // File picker -> upload to current folder
   filePick?.addEventListener("change", async () => {
     const files = Array.from(filePick.files || []);
-    const relFiles = files.map(f => ({ rel: f.name, file: f }));
+    const relFiles = files.map(f => ({ rel: f.name, file: f, source: "picker" }));
     await uploadRelFiles(relFiles);
     filePick.value = "";
   });
@@ -1656,7 +1774,8 @@
     const files = Array.from(folderPick.files || []);
     const relFiles = files.map(f => ({
       rel: f.webkitRelativePath || f.name,
-      file: f
+      file: f,
+      source: "picker"
     }));
     await uploadRelFiles(relFiles);
     folderPick.value = "";
@@ -1692,7 +1811,9 @@
 
     if (entry.isFile) {
       const f = await readEntryAsFile(entry);
-      if (f) out.push({ rel: prefix + f.name, file: f });
+      if (f) {
+        out.push({ rel: prefix + f.name, file: f, source: "drop" });
+      }
       return;
     }
 
@@ -1734,7 +1855,9 @@
 
     // Fallback: plain files
     const files = Array.from(dt.files || []);
-    for (const f of files) out.push({ rel: f.name, file: f });
+    for (const f of files) {
+      out.push({ rel: f.name, file: f, source: "drop" });
+    }
     return out;
   }
 
@@ -1761,9 +1884,6 @@
   gridWrap?.addEventListener("dragleave", (e) => {
     if (e.target === gridWrap) showDropOverlay(false);
   });
-
-  // Browser hint (currently unused; keep if you later branch behavior)
-  const isFirefox = navigator.userAgent.includes("Firefox");
 
   // drop:
   // - Prevent browser navigation to dropped file (VERY IMPORTANT)
@@ -1799,8 +1919,17 @@
 
     } catch (err) {
       setBadge("err", "error");
-      status.textContent =
-          `Drop upload failed: ${String(err && err.message ? err.message : err)}`;
+
+      const msg = String(err && err.message ? err.message : err);
+      const low = msg.toLowerCase();
+
+      if (low.includes("aborted")) {
+        status.textContent =
+            "Firefox drag & drop failed while reading the dropped file. Use Upload files… instead.";
+      } else {
+        status.textContent = `Drop upload failed: ${msg}`;
+      }
+
       console.error("Drop failed:", err);
     }
   });
@@ -2189,7 +2318,12 @@
     status.textContent = "Deleting…";
 
     const url = `/api/v4/files/delete?path=${encodeURIComponent(rel)}`;
-    const r = await fetch(url, { method: "DELETE", credentials: "include", cache: "no-store" });
+    const r = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      body: ""
+    });
     const j = await r.json().catch(() => null);
 
     if (!r.ok || !j || !j.ok) {
