@@ -98,6 +98,8 @@ extern "C" {
 #include "users_registry.h"
 #include "storage_info.h"
 #include "user_quota.h"
+#include "storage_resolver.h"
+#include "file_location_index.h"
 
 //sharing
 #include "share_links.h"
@@ -550,6 +552,13 @@ static std::filesystem::path user_dir_for_fp(pqnas::UsersRegistry& users, const 
     // Legacy / fallback layout
     return data_root / "users" / fp_hex;
 }
+
+//bridge wrapper
+std::filesystem::path pqnas_user_dir_for_fp(pqnas::UsersRegistry& users,
+                                            const std::string& fp_hex) {
+    return user_dir_for_fp(users, fp_hex);
+}
+
 namespace {
 
 
@@ -5815,6 +5824,408 @@ static bool storage_pool_mount_by_id_adminonly(
     if (out_err) *out_err = "pool_id_not_found";
     return false;
 }
+struct UploadTieringConfig {
+    bool enabled = false;
+    std::string landing_pool_id;
+};
+
+static UploadTieringConfig upload_tiering_config() {
+    UploadTieringConfig cfg;
+
+    // Minimal phase-1 bootstrap:
+    // enable via env var so you can test without admin UI yet.
+    // Example:
+    //   export PQNAS_TIERING_ENABLE=1
+    //   export PQNAS_TIERING_LANDING_POOL=ssdpool
+    const char* en = std::getenv("PQNAS_TIERING_ENABLE");
+    if (en && std::string(en) == "1") {
+        cfg.enabled = true;
+    }
+
+    const char* lp = std::getenv("PQNAS_TIERING_LANDING_POOL");
+    if (lp && *lp) {
+        cfg.landing_pool_id = lp;
+    }
+
+    if (cfg.landing_pool_id.empty()) {
+        cfg.landing_pool_id = "default";
+    }
+
+    return cfg;
+}
+
+
+static bool landing_root_for_pool_id(const std::string& pool_id,
+                                     std::filesystem::path* out,
+                                     std::string* err) {
+    if (err) err->clear();
+    if (!out) {
+        if (err) *err = "null out";
+        return false;
+    }
+
+    // Default / non-pooled landing area is still allowed.
+    if (pool_id.empty() || pool_id == "default") {
+        *out = std::filesystem::path(data_root_dir()).parent_path() / "landing";
+        return true;
+    }
+
+    std::string pool_mount;
+    {
+        std::lock_guard<std::mutex> lk(pool_mu());
+        auto& m = pool_mount_by_id();
+        auto it = m.find(pool_id);
+        if (it != m.end()) pool_mount = it->second;
+    }
+
+    if (pool_mount.empty()) {
+        if (err) *err = "landing_pool_not_found";
+        return false;
+    }
+
+    *out = std::filesystem::path(pool_mount) / "landing";
+    return true;
+}
+
+static std::int64_t now_epoch_sec() {
+    using namespace std::chrono;
+    return duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
+}
+
+static bool build_landing_abs_path(const std::string& landing_pool_id,
+                                   const std::string& fp_hex,
+                                   const std::string& rel_norm,
+                                   std::filesystem::path* out,
+                                   std::string* err) {
+    if (err) err->clear();
+    if (!out) {
+        if (err) *err = "null out";
+        return false;
+    }
+
+    std::filesystem::path landing_root;
+    if (!landing_root_for_pool_id(landing_pool_id, &landing_root, err)) {
+        return false;
+    }
+
+    *out = landing_root / fp_hex / std::filesystem::path(rel_norm);
+    return true;
+}
+
+static bool build_capacity_abs_path(pqnas::UsersRegistry& users,
+                                    const std::string& fp_hex,
+                                    const std::string& rel_norm,
+                                    std::filesystem::path* out,
+                                    std::string* err) {
+    if (err) err->clear();
+    if (!out) {
+        if (err) *err = "null out";
+        return false;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+
+    std::filesystem::path abs;
+    if (!pqnas::resolve_user_path_strict(user_dir, rel_norm, &abs, err)) {
+        return false;
+    }
+
+    *out = std::move(abs);
+    return true;
+}
+
+static bool migrate_one_landing_file(pqnas::UsersRegistry& users,
+                                     const std::string& fp_hex,
+                                     const std::string& rel_norm,
+                                     std::string* err) {
+    if (err) err->clear();
+
+    auto* idx = pqnas::get_file_location_index();
+    if (!idx) {
+        if (err) *err = "file location index not initialized";
+        return false;
+    }
+
+    std::string gerr;
+    auto rec_opt = idx->get(fp_hex, rel_norm, &gerr);
+    if (!rec_opt.has_value()) {
+        if (err) *err = gerr.empty() ? "metadata_not_found" : gerr;
+        return false;
+    }
+
+    const auto& rec = *rec_opt;
+
+    if (rec.tier_state != "landing") {
+        if (err) *err = "not_in_landing_state";
+        return false;
+    }
+
+    const std::filesystem::path src = rec.physical_path;
+
+    std::error_code ec;
+    auto st = std::filesystem::status(src, ec);
+    if (ec || !std::filesystem::exists(st) || !std::filesystem::is_regular_file(st)) {
+        if (err) *err = "source_missing";
+        return false;
+    }
+
+    // Mark metadata as migrating before any copy work begins.
+    {
+        std::string merr;
+        if (!idx->mark_migrating(fp_hex, rel_norm, rec.physical_path, &merr)) {
+            if (err) *err = "mark_migrating_failed: " + merr;
+            return false;
+        }
+    }
+
+    auto revert_to_landing = [&]() {
+        std::string rerr;
+        (void)idx->mark_landing_again(fp_hex, rel_norm, rec.physical_path, &rerr);
+    };
+
+    std::filesystem::path dst_final;
+    if (!build_capacity_abs_path(users, fp_hex, rel_norm, &dst_final, err)) {
+        revert_to_landing();
+        return false;
+    }
+
+    std::filesystem::create_directories(dst_final.parent_path(), ec);
+    if (ec) {
+        revert_to_landing();
+        if (err) *err = "create_capacity_dirs_failed: " + ec.message();
+        return false;
+    }
+
+    const std::filesystem::path dst_tmp =
+        dst_final.parent_path() /
+        (dst_final.filename().string() + ".tiercopy." + random_b64url(8) + ".tmp");
+
+    // Copy source -> temp
+    {
+        std::ifstream in(src, std::ios::binary);
+        if (!in.good()) {
+            revert_to_landing();
+            if (err) *err = "open_source_failed";
+            return false;
+        }
+
+        std::ofstream out(dst_tmp, std::ios::binary | std::ios::trunc);
+        if (!out.good()) {
+            revert_to_landing();
+            if (err) *err = "open_dest_tmp_failed";
+            return false;
+        }
+
+        std::array<char, 256 * 1024> buf{};
+        while (in.good()) {
+            in.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+            const std::streamsize n = in.gcount();
+            if (n > 0) out.write(buf.data(), n);
+        }
+
+        out.flush();
+        if (!out.good()) {
+            std::filesystem::remove(dst_tmp, ec);
+            revert_to_landing();
+            if (err) *err = "write_dest_tmp_failed";
+            return false;
+        }
+    }
+
+    // Verify size
+    const std::uint64_t src_sz = pqnas::file_size_u64_safe(src);
+    const std::uint64_t dst_sz = pqnas::file_size_u64_safe(dst_tmp);
+    if (src_sz != dst_sz) {
+        std::filesystem::remove(dst_tmp, ec);
+        revert_to_landing();
+        if (err) *err = "verify_size_mismatch";
+        return false;
+    }
+
+    // Promote temp -> final
+    std::filesystem::rename(dst_tmp, dst_final, ec);
+    if (ec) {
+        std::filesystem::remove(dst_tmp, ec);
+        revert_to_landing();
+        if (err) *err = "rename_dest_tmp_failed: " + ec.message();
+        return false;
+    }
+
+    const std::int64_t now_ts = now_epoch_sec();
+
+    std::string serr;
+    if (!idx->switch_to_capacity(fp_hex,
+                                 rel_norm,
+                                 rec.physical_path,
+                                 rec.current_pool,
+                                 dst_final.string(),
+                                 now_ts,
+                                 &serr)) {
+        // Metadata switch failed; keep dst_final for inspection,
+        // but move row back to landing so the file remains logically recoverable.
+        revert_to_landing();
+        if (err) *err = "metadata_switch_failed: " + serr;
+        return false;
+    }
+
+    // Delete source only after metadata switch.
+    // If this fails, keep capacity as authoritative and report failure.
+    const bool removed = std::filesystem::remove(src, ec);
+    if (ec || !removed) {
+        if (err) *err = "source_delete_failed_after_switch";
+        return false;
+    }
+
+    return true;
+}
+
+struct TieringWorkerConfig {
+    bool enabled = false;
+    int interval_sec = 60;
+    int min_age_sec = 60;
+    std::size_t max_candidates_per_pass = 8;
+};
+
+static TieringWorkerConfig tiering_worker_config() {
+    TieringWorkerConfig cfg;
+
+    const char* en = std::getenv("PQNAS_TIERING_ENABLE");
+    if (en && std::string(en) == "1") {
+        cfg.enabled = true;
+    }
+
+    if (const char* p = std::getenv("PQNAS_TIERING_WORKER_INTERVAL_SEC")) {
+        try { cfg.interval_sec = std::max(5, std::stoi(p)); } catch (...) {}
+    }
+
+    if (const char* p = std::getenv("PQNAS_TIERING_MIN_AGE_SEC")) {
+        try { cfg.min_age_sec = std::max(0, std::stoi(p)); } catch (...) {}
+    }
+
+    if (const char* p = std::getenv("PQNAS_TIERING_MAX_CANDIDATES")) {
+        try {
+            const int v = std::max(1, std::stoi(p));
+            cfg.max_candidates_per_pass = static_cast<std::size_t>(v);
+        } catch (...) {}
+    }
+
+    return cfg;
+}
+
+static bool tiering_candidate_old_enough(const pqnas::FileLocationRecord& rec,
+                                         int min_age_sec,
+                                         std::int64_t now_ts) {
+    if (min_age_sec <= 0) return true;
+    if (rec.updated_epoch <= 0) return true;
+    return (now_ts - rec.updated_epoch) >= min_age_sec;
+}
+
+
+static void tiering_recover_stuck_migrating_files() {
+    auto* idx = pqnas::get_file_location_index();
+    if (!idx) return;
+
+    const std::int64_t now_ts = now_epoch_sec();
+    const std::int64_t cutoff = now_ts - 120; // phase-1 simple threshold
+
+    std::string lerr;
+    auto stuck = idx->list_stuck_migrating_candidates(cutoff, &lerr);
+    if (!lerr.empty()) {
+        std::cerr << "[tiering-worker] stuck-migrating query failed: " << lerr << "\n";
+        return;
+    }
+
+    for (const auto& rec : stuck) {
+        std::error_code ec;
+        auto st = std::filesystem::status(rec.physical_path, ec);
+        const bool src_exists =
+            !ec &&
+            std::filesystem::exists(st) &&
+            std::filesystem::is_regular_file(st);
+
+        if (!src_exists) {
+            // Do not blindly revert if source is gone.
+            continue;
+        }
+
+        std::string rerr;
+        if (idx->mark_landing_again(rec.fp, rec.logical_rel_path, rec.physical_path, &rerr)) {
+            pqnas::AuditEvent ev;
+            ev.event = "storage.tiering_recover_to_landing";
+            ev.outcome = "ok";
+            ev.f["fingerprint"] = rec.fp;
+            ev.f["path"] = pqnas::shorten(rec.logical_rel_path, 200);
+            audit_append(ev);
+        } else {
+            std::cerr << "[tiering-worker] recover_to_landing failed path="
+                      << rec.logical_rel_path << " err=" << rerr << "\n";
+        }
+    }
+}
+
+static void tiering_worker_loop(pqnas::UsersRegistry* users,
+                                std::atomic<bool>* stop_flag) {
+	std::cerr << "[tiering-worker] started\n";
+    if (!users || !stop_flag) return;
+
+    while (!stop_flag->load()) {
+        const TieringWorkerConfig cfg = tiering_worker_config();
+
+        if (!cfg.enabled) {
+            for (int i = 0; i < 5 && !stop_flag->load(); ++i) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+            continue;
+        }
+
+        auto* idx = pqnas::get_file_location_index();
+        if (!idx) {
+            std::cerr << "[tiering-worker] file location index not initialized\n";
+            for (int i = 0; i < cfg.interval_sec && !stop_flag->load(); ++i) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+            continue;
+        }
+
+		tiering_recover_stuck_migrating_files();
+
+        std::string lerr;
+        auto candidates = idx->list_landing_candidates(cfg.max_candidates_per_pass, &lerr);
+        if (!lerr.empty()) {
+            std::cerr << "[tiering-worker] list_landing_candidates failed: " << lerr << "\n";
+        } else {
+            const std::int64_t now_ts = now_epoch_sec();
+
+            for (const auto& rec : candidates) {
+                if (stop_flag->load()) break;
+                if (!tiering_candidate_old_enough(rec, cfg.min_age_sec, now_ts)) continue;
+
+                std::string merr;
+                const bool ok = migrate_one_landing_file(*users, rec.fp, rec.logical_rel_path, &merr);
+
+                pqnas::AuditEvent ev;
+                ev.event = ok ? "storage.tiering_auto_migrate_ok"
+                              : "storage.tiering_auto_migrate_fail";
+                ev.outcome = ok ? "ok" : "fail";
+                ev.f["fingerprint"] = rec.fp;
+                ev.f["path"] = pqnas::shorten(rec.logical_rel_path, 200);
+                ev.f["from_pool"] = rec.current_pool;
+                ev.f["tier_state"] = rec.tier_state;
+                if (!ok && !merr.empty()) ev.f["detail"] = pqnas::shorten(merr, 180);
+                audit_append(ev);
+
+                if (!ok) {
+                    std::cerr << "[tiering-worker] migrate failed path="
+                              << rec.logical_rel_path << " err=" << merr << "\n";
+                }
+            }
+        }
+
+        for (int i = 0; i < cfg.interval_sec && !stop_flag->load(); ++i) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    }
+}
 
 
 // -----------------------------------------------------------------------------
@@ -5855,7 +6266,18 @@ int main()
     	AUTH_MODE = "auto";
 	}
 
+    const std::filesystem::path storage_meta_db =
+        std::filesystem::path(data_root_dir()).parent_path() / "config" / "storage_meta.db";
 
+    pqnas::FileLocationIndex file_location_index(storage_meta_db);
+    {
+        std::string ferr;
+        if (!file_location_index.open(&ferr) || !file_location_index.init_schema(&ferr)) {
+            std::cerr << "storage metadata init failed: " << ferr << std::endl;
+            return 1;
+        }
+    }
+    pqnas::set_file_location_index(&file_location_index);
 
     // ---- Audit log (hash-chained JSONL) ----
     std::string audit_dir = exe_dir() + "/audit";
@@ -18088,11 +18510,11 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex); // keep for root-delete guard
 
-    std::filesystem::path abs_path;
+    pqnas::ResolvedExistingPath rp;
     std::string perr;
-    if (!pqnas::resolve_user_path_strict(user_dir, rel_path, &abs_path, &perr)) {
+    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, rel_path, &rp, &perr)) {
         audit_fail("invalid_path", 400, perr);
         reply_json(res, 400, json{
             {"ok", false},
@@ -18101,6 +18523,8 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
         }.dump());
         return;
     }
+
+    const std::filesystem::path abs_path = rp.abs_path;
 
     // Extra safety: refuse deleting the user root directly
     // (only possible if rel_path somehow resolves to user_dir, but keep it explicit)
@@ -18186,6 +18610,55 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
                 {"detail", pqnas::shorten(ec.message(), 180)}
             }.dump());
             return;
+        }
+    }
+
+    // Tiering metadata cleanup for file deletes.
+    // Directory metadata cleanup is not yet fully logical/metadata-aware in phase 1.
+    if (!is_dir) {
+        auto* idx = pqnas::get_file_location_index();
+        if (idx) {
+            std::string rel_norm;
+            std::string nerr;
+            if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
+                audit_fail("metadata_erase_invalid_path", 500, nerr);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "delete metadata cleanup failed"},
+                    {"detail", pqnas::shorten(nerr, 180)}
+                }.dump());
+                return;
+            }
+
+            std::string derr;
+            if (!idx->erase(fp_hex, rel_norm, &derr)) {
+                audit_fail("metadata_erase_failed", 500, derr);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "delete metadata cleanup failed"},
+                    {"detail", pqnas::shorten(derr, 180)}
+                }.dump());
+                return;
+            }
+
+            pqnas::AuditEvent mev;
+            mev.event = "storage.tiering_metadata_erased";
+            mev.outcome = "ok";
+            mev.f["fingerprint"] = fp_hex;
+            mev.f["path"] = pqnas::shorten(rel_path, 200);
+            mev.f["type"] = type;
+            mev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+            auto it_cf = req.headers.find("CF-Connecting-IP");
+            if (it_cf != req.headers.end()) mev.f["cf_ip"] = it_cf->second;
+
+            auto it_xff = req.headers.find("X-Forwarded-For");
+            if (it_xff != req.headers.end()) mev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+            mev.f["ua"] = audit_ua();
+            audit_append(mev);
         }
     }
 
@@ -19342,10 +19815,9 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
     }
 
     // Resolve file path strictly under user dir
-    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
-    std::filesystem::path abs;
+    pqnas::ResolvedExistingPath rp;
     std::string perr;
-    if (!pqnas::resolve_user_path_strict(user_dir, rel_path, &abs, &perr)) {
+    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, rel_path, &rp, &perr)) {
         audit_fail("invalid_path", 400, perr);
         reply_json(res, 400, json{
             {"ok", false},
@@ -19354,6 +19826,8 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
         }.dump());
         return;
     }
+
+    const std::filesystem::path abs = rp.abs_path;
 
     // Validate exists + regular + size
     std::error_code ec;
@@ -19531,6 +20005,20 @@ srv.Put("/api/v4/files/put",
         return;
     }
 
+    std::string rel_norm;
+    {
+        std::string nerr;
+        if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
+            audit_fail("invalid_path", 400, nerr);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            }.dump());
+            return;
+        }
+    }
+
     // Require Content-Length for v1 streamer so quota can be checked before write.
     std::uint64_t cl = 0;
     if (!header_u64("Content-Length", &cl)) {
@@ -19579,7 +20067,25 @@ srv.Put("/api/v4/files/put",
         if (reply_quota_error_v1(res, fp_hex, qc)) return;
     }
 
-    const std::filesystem::path out_abs = qc.abs_path;
+    const UploadTieringConfig tier_cfg = upload_tiering_config();
+
+    std::filesystem::path out_abs = qc.abs_path;
+    bool tiering_write = false;
+
+    if (tier_cfg.enabled) {
+        std::string terr;
+        if (!build_landing_abs_path(tier_cfg.landing_pool_id, fp_hex, rel_norm, &out_abs, &terr)) {
+            audit_fail("tiering_landing_pool_invalid", 500, terr);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "tiering landing pool not found"},
+                {"detail", pqnas::shorten(terr, 180)}
+            }.dump());
+            return;
+        }
+        tiering_write = true;
+    }
 
     // Ensure parent directory exists
     {
@@ -19694,6 +20200,60 @@ srv.Put("/api/v4/files/put",
         if (ec) {
             std::filesystem::remove(tmp, ec);
             throw std::runtime_error(std::string("rename failed: ") + ec.message());
+        }
+
+        if (tiering_write) {
+            auto* idx = pqnas::get_file_location_index();
+            if (!idx) {
+                std::error_code ec2;
+                std::filesystem::remove(out_abs, ec2);
+                throw std::runtime_error("file location index not initialized");
+            }
+
+            const std::int64_t now_ts = now_epoch_sec();
+
+            pqnas::FileLocationRecord rec;
+            rec.fp = fp_hex;
+            rec.logical_rel_path = rel_norm;
+            rec.current_pool = tier_cfg.landing_pool_id;
+            rec.physical_path = out_abs.string();
+            rec.tier_state = "landing";
+            rec.size_bytes = bytes_written;
+            rec.mtime_epoch = now_ts;
+            rec.created_epoch = now_ts;
+            rec.updated_epoch = now_ts;
+            rec.version = 1;
+
+            std::string merr;
+            if (!idx->upsert_landing_file(rec, &merr)) {
+                std::error_code ec2;
+                std::filesystem::remove(out_abs, ec2);
+                throw std::runtime_error(std::string("metadata upsert failed: ") + merr);
+            }
+
+            pqnas::AuditEvent tev;
+            tev.event = "storage.tiering_upload_landed";
+            tev.outcome = "ok";
+            tev.f["fingerprint"] = fp_hex;
+            tev.f["path"] = pqnas::shorten(rel_norm, 200);
+            tev.f["tier_state"] = "landing";
+            tev.f["pool_id"] = tier_cfg.landing_pool_id;
+            tev.f["physical_path"] = pqnas::shorten(out_abs.string(), 220);
+            tev.f["bytes"] = std::to_string((unsigned long long)bytes_written);
+
+            tev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+            auto it_cf = req.headers.find("CF-Connecting-IP");
+            if (it_cf != req.headers.end())
+                tev.f["cf_ip"] = it_cf->second;
+
+            auto it_xff = req.headers.find("X-Forwarded-For");
+            if (it_xff != req.headers.end())
+                tev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+            tev.f["ua"] = audit_ua();
+
+            audit_append(tev);
         }
 
         audit_ok(rel_path, bytes_written);
@@ -22404,6 +22964,129 @@ srv.Get("/api/v4/admin/users/cleanup_old_storage_status", [&](const httplib::Req
     }.dump());
 });
 
+srv.Post("/api/v4/admin/storage/tiering/migrate_one", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    json j;
+    try {
+        j = json::parse(req.body.empty() ? "{}" : req.body);
+    } catch (...) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    const std::string fp = trim_copy(j.value("fingerprint", ""));
+    const std::string rel_path = trim_copy(j.value("path", ""));
+
+    if (fp.empty() || rel_path.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing fingerprint or path"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm;
+    std::string nerr;
+    if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"},
+            {"detail", nerr}
+        }.dump());
+        return;
+    }
+
+    std::string merr;
+    if (!migrate_one_landing_file(users, fp, rel_norm, &merr)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "migration_failed"},
+            {"message", "tiering migration failed"},
+            {"detail", pqnas::shorten(merr, 180)}
+        }.dump());
+        return;
+    }
+
+    pqnas::AuditEvent ev;
+    ev.event = "admin.storage_tiering_migrate_one";
+    ev.outcome = "ok";
+    ev.f["actor_fp"] = actor_fp;
+    ev.f["fingerprint"] = fp;
+    ev.f["path"] = pqnas::shorten(rel_norm, 200);
+    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+    audit_append(ev);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"fingerprint", fp},
+        {"path", rel_norm}
+    }.dump());
+});
+
+srv.Get("/api/v4/admin/storage/tiering/status", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    auto* idx = pqnas::get_file_location_index();
+    if (!idx) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "file location index not initialized"}
+        }.dump());
+        return;
+    }
+
+    pqnas::FileLocationTierSummary summary;
+    std::string serr;
+    if (!idx->get_tier_summary(&summary, &serr)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to read tiering status"},
+            {"detail", pqnas::shorten(serr, 180)}
+        }.dump());
+        return;
+    }
+
+    const UploadTieringConfig upload_cfg = upload_tiering_config();
+    const TieringWorkerConfig worker_cfg = tiering_worker_config();
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"tiering_enabled", upload_cfg.enabled},
+        {"landing_pool_id", upload_cfg.landing_pool_id},
+
+        {"worker", {
+            {"enabled", worker_cfg.enabled},
+            {"interval_sec", worker_cfg.interval_sec},
+            {"min_age_sec", worker_cfg.min_age_sec},
+            {"max_candidates_per_pass", worker_cfg.max_candidates_per_pass}
+        }},
+
+        {"counts", {
+            {"landing_files", summary.landing_files},
+            {"migrating_files", summary.migrating_files},
+            {"capacity_files", summary.capacity_files},
+            {"total_files", summary.total_files}
+        }},
+
+        {"bytes", {
+            {"landing_bytes", summary.landing_bytes},
+            {"migrating_bytes", summary.migrating_bytes},
+            {"capacity_bytes", summary.capacity_bytes},
+            {"total_bytes", summary.total_bytes}
+        }}
+    }.dump());
+});
 
     // Public share download: GET /s/<token>
 srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Response& res) {
@@ -22469,17 +23152,19 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
     }
 
     // Resolve to disk
-    const std::filesystem::path user_dir = user_dir_for_fp(users, s.owner_fp);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, s.owner_fp); // still needed for legacy dir zip path below
 
-    std::filesystem::path abs;
+    pqnas::ResolvedExistingPath rp;
     std::string rerr;
-    if (!pqnas::resolve_user_path_strict(user_dir, s.path, &abs, &rerr)) {
+    if (!pqnas::resolve_existing_user_file_path(users, s.owner_fp, s.path, &rp, &rerr)) {
         audit_event("share_download", "fail", &s, "invalid_path", 400, rerr);
         res.status = 404; // safer: do not leak
         res.set_header("Cache-Control", "no-store");
         res.set_content("Not found\n", "text/plain; charset=utf-8");
         return;
     }
+
+    const std::filesystem::path abs = rp.abs_path;
 
     std::error_code ec;
     auto st = std::filesystem::symlink_status(abs, ec);
@@ -22665,18 +23350,30 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
     res.body = std::move(zip_data);
 });
 
-    std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
-    srv.listen("0.0.0.0", LISTEN_PORT);
+	// ---- Start background workers ----
+
+	std::atomic<bool> tiering_worker_stop{false};
+	std::thread tiering_worker([&]() {
+    	tiering_worker_loop(&users, &tiering_worker_stop);
+	});
+
+	// ---- Start HTTP server ----
+
+	std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
+	srv.listen("0.0.0.0", LISTEN_PORT);
+
+	// ---- Shutdown sequence ----
 
 	// Stop RAID / migration async worker (best-effort clean shutdown)
 	user_mig_worker_stop_and_join();
 	user_cleanup_worker_stop_and_join();
 	raid_worker_stop_and_join();
 
+	tiering_worker_stop.store(true);
+	if (tiering_worker.joinable()) tiering_worker.join();
 
-    snapshots_stop.store(true);
-    if (snapshots_thread.joinable()) snapshots_thread.join();
+	snapshots_stop.store(true);
+	if (snapshots_thread.joinable()) snapshots_thread.join();
 
-    return 0;
-
+	return 0;
 }

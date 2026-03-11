@@ -27,6 +27,7 @@ endif()
 find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
+find_package(SQLite3 REQUIRED)
 
 pkg_check_modules(SODIUM REQUIRED libsodium)
 pkg_check_modules(QRENCODE REQUIRED libqrencode)
@@ -143,6 +144,8 @@ add_executable(pqnas_server
         server/src/share_links.cc
         server/src/static_serve.cc
         server/src/verify_login_common.cc
+        server/src/storage_resolver.cpp
+        server/src/file_location_index.cpp
 )
 
 # Treat warnings as errors for the server (security-sensitive)
@@ -167,6 +170,7 @@ target_link_libraries(pqnas_server PRIVATE
         pqnas_verify_v4
         ${QRENCODE_LIBRARIES}
         OpenSSL::Crypto
+        SQLite::SQLite3
         Threads::Threads                   # <-- robust std::thread support (-pthread)
         dl
 )

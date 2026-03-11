@@ -79,8 +79,9 @@
     let g_lastAction = null;
     let g_lastProgress = null;
 
-
-
+    let g_tieringPrev = null;
+    let g_tieringTimer = null;
+    let g_tieringLastRate = 0;
     // ----------------------------------------------------------------------------
     // Global timer/poller state (so probe() can stop old intervals created by
     // previous renderActions() closures)
@@ -262,7 +263,7 @@
                     setTimeout(async () => {
                         await refreshPoolsState();
                         renderPoolSelectorTop();
-                        if (g_tab === "pools") renderPoolsTab();
+                        if (g_tab === "pools") await renderPoolsTab();
                         probe();
                     }, 350);
                 } catch (_) {}
@@ -505,6 +506,134 @@
 
         return { ok: true, http, pools: q.j.pools };
     }
+
+    async function refreshTieringCard() {
+        try {
+            const res = await loadTieringStatus();
+            if (!res.ok || !res.data) return;
+
+            const d = res.data;
+            const bytes = d.bytes || {};
+            const counts = d.counts || {};
+
+            const landingBytes = Number(bytes.landing_bytes || 0);
+            const migratingBytes = Number(bytes.migrating_bytes || 0);
+            const capacityBytes = Number(bytes.capacity_bytes || 0);
+            const totalBytes = Number(bytes.total_bytes || 0);
+
+            const landingFiles = Number(counts.landing_files || 0);
+            const migratingFiles = Number(counts.migrating_files || 0);
+            const capacityFiles = Number(counts.capacity_files || 0);
+            const totalFiles = Number(counts.total_files || 0);
+
+            const landingEl = document.getElementById("tierLandingBytes");
+            const migratingEl = document.getElementById("tierMigratingBytes");
+            const capacityEl = document.getElementById("tierCapacityBytes");
+            const totalBytesEl = document.getElementById("tierTotalBytes");
+            const totalFilesEl = document.getElementById("tierTotalFiles");
+            const landingFilesEl = document.querySelector("#tierLandingCard .pqTierStatValue");
+            const migratingFilesEl = document.getElementById("tierMigratingFiles");
+            const capacityFilesEl = document.querySelector("#tierCapacityCard .pqTierStatValue");
+            const rateEl = document.getElementById("tierMigratingRate");
+
+            if (landingEl) landingEl.textContent = fmtBytes(landingBytes);
+            if (migratingEl) migratingEl.textContent = fmtBytes(migratingBytes);
+            if (capacityEl) capacityEl.textContent = fmtBytes(capacityBytes);
+            if (totalBytesEl) totalBytesEl.textContent = fmtBytes(totalBytes);
+
+            if (landingFilesEl) landingFilesEl.textContent = `${landingFiles} files`;
+            if (migratingFilesEl) migratingFilesEl.textContent = `${migratingFiles} files`;
+            if (capacityFilesEl) capacityFilesEl.textContent = `${capacityFiles} files`;
+            if (totalFilesEl) totalFilesEl.textContent = `${totalFiles} files`;
+
+            let rate = 0;
+            if (g_tieringPrev) {
+                const dt = (Date.now() - g_tieringPrev.ts) / 1000;
+                const db = capacityBytes - (g_tieringPrev.capacity_bytes || 0);
+                if (dt > 0 && db > 0) rate = db / dt;
+            }
+
+            g_tieringPrev = {
+                ts: Date.now(),
+                capacity_bytes: capacityBytes
+            };
+            g_tieringLastRate = rate;
+
+            if (rateEl) {
+                rateEl.textContent = rate > 0 ? fmtBytes(rate) + "/s" : "";
+            }
+
+            const landingCard = document.getElementById("tierLandingCard");
+            const migratingCard = document.getElementById("tierMigratingCard");
+            const capacityCard = document.getElementById("tierCapacityCard");
+
+            if (landingCard) {
+                landingCard.classList.remove("pqTierNeutral", "pqTierInfo", "pqTierWarn", "pqTierOk");
+                landingCard.classList.add(tierToneClass("landing", landingFiles));
+            }
+            if (migratingCard) {
+                migratingCard.classList.remove("pqTierNeutral", "pqTierInfo", "pqTierWarn", "pqTierOk");
+                const migratingActive = migratingFiles > 0 || rate > 0;
+
+                migratingCard.classList.remove("pqTierNeutral","pqTierWarn","pqTierOk","pqTierInfo");
+
+                if (migratingActive) {
+                    migratingCard.classList.add("pqTierWarn");
+                } else {
+                    migratingCard.classList.add("pqTierNeutral");
+                }
+            }
+            if (capacityCard) {
+                capacityCard.classList.remove("pqTierNeutral", "pqTierInfo", "pqTierWarn", "pqTierOk");
+                capacityCard.classList.add(tierToneClass("capacity", capacityFiles));
+            }
+
+            const barEl = document.getElementById("tierFlowBar");
+            const landingBarEl = document.getElementById("tierFlowLanding");
+            const capacityBarEl = document.getElementById("tierFlowCapacity");
+            const flowLeftEl = document.getElementById("tierFlowLeft");
+            const flowRightEl = document.getElementById("tierFlowRight");
+            const flowStatusEl = document.getElementById("tierFlowStatus");
+
+            if (landingBarEl) landingBarEl.style.width = `${pctOf(landingBytes, totalBytes)}%`;
+            if (capacityBarEl) capacityBarEl.style.width = `${pctOf(capacityBytes, totalBytes)}%`;
+
+            if (flowLeftEl) flowLeftEl.textContent = `Landing ${fmtBytes(landingBytes)}`;
+            if (flowRightEl) flowRightEl.textContent = `Capacity ${fmtBytes(capacityBytes)}`;
+
+            if (barEl) barEl.classList.toggle("pqTierFlowActive", rate > 0);
+
+            if (flowStatusEl) {
+                if (rate > 0) {
+                    flowStatusEl.textContent =
+                        `Migrating ${migratingFiles} file${migratingFiles === 1 ? "" : "s"} at ${fmtBytes(rate)}/s`;
+                } else if (landingBytes > 0) {
+                    flowStatusEl.textContent = `Waiting in landing: ${fmtBytes(landingBytes)}`;
+                } else {
+                    flowStatusEl.textContent = "No landing backlog";
+                }
+            }
+        } catch (_) {}
+    }
+
+    async function loadTieringStatus() {
+        const q = await fetchJson("/api/v4/admin/storage/tiering/status");
+
+        const http = q?.r?.status || 0;
+        if (!q.r) return { ok: false, http: 0, error: "no_response", txt: q?.txt || "" };
+
+        if (http !== 200) {
+            return { ok: false, http, error: "http_error", txt: q.txt || "", j: q.j || null };
+        }
+
+        if (!q.j || q.j.ok !== true) {
+            return { ok: false, http, error: "bad_payload", txt: q.txt || "", j: q.j || null };
+        }
+
+        return { ok: true, http, data: q.j };
+    }
+
+    
     async function refreshPoolsState() {
         const lp = await loadPools();
         if (lp && lp.ok && Array.isArray(lp.pools)) {
@@ -641,7 +770,26 @@
         }
         return b.toFixed(2) + " " + u[i];
     }
+    function tierToneClass(kind, files) {
+        const n = Number(files || 0);
+        if (kind === "migrating") return g_tieringLastRate > 0 ? "pqTierWarn" : "pqTierNeutral";
+        if (kind === "landing") return n > 0 ? "pqTierInfo" : "pqTierNeutral";
+        if (kind === "capacity") return n > 0 ? "pqTierOk" : "pqTierNeutral";
+        return "pqTierNeutral";
+    }
 
+    function tierPill(text, cls) {
+        return `<span class="pqPill ${cls || ""}">${esc(text)}</span>`;
+    }
+    function yesNo(v) {
+        return v ? "Yes" : "No";
+    }
+    function pctOf(part, total) {
+        const p = Number(part || 0);
+        const t = Number(total || 0);
+        if (!Number.isFinite(p) || !Number.isFinite(t) || t <= 0) return 0;
+        return Math.max(0, Math.min(100, (p / t) * 100));
+    }
     function esc(s) {
         return String(s ?? "").replace(/[&<>"']/g, (m) => ({
             "&": "&amp;",
@@ -1901,10 +2049,11 @@
         poolSelTop.innerHTML = opts;
         poolSelTop.disabled = false;
     }
-    function renderPoolsTab() {
+    async function renderPoolsTab() {
         if (!poolsOut) return;
 
         const pools = Array.isArray(g_pools) ? g_pools : [];
+        const tier = await loadTieringStatus().catch(() => ({ ok: false, error: "fetch_failed" }));
         if (!pools.length) {
             poolsOut.innerHTML = `<div class="v" style="opacity:.8;">No pools found.</div>`;
             return;
@@ -2099,6 +2248,85 @@ Tip: these are the Btrfs member devices that form this pool.
   ${metaBits.length ? `<div class="pqDriveSvgMeta">${esc(metaBits.join(" • "))}</div>` : ``}
 </div>`;
         }
+        const tieringCardHtml = (() => {
+            if (!tier || !tier.ok || !tier.data) {
+                return `
+<div class="card" style="margin-top:12px;">
+  <div style="font-weight:950; margin-bottom:8px;">Tiering</div>
+  <div class="v" style="opacity:.8;">Tiering status unavailable.</div>
+</div>`;
+            }
+
+            const d = tier.data || {};
+            const counts = d.counts || {};
+            const bytes = d.bytes || {};
+            const worker = d.worker || {};
+
+            return `
+<div class="card" style="margin-top:12px;">
+  <div class="row" style="align-items:flex-start; justify-content:space-between; gap:12px;">
+    <div style="min-width:260px;">
+      <div style="font-weight:950;">Tiering</div>
+      <div class="v" style="opacity:.8; margin-top:2px;">
+        Landing pool: ${esc(String(d.landing_pool_id || "-"))}
+      </div>
+      <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+        ${tierPill(`enabled: ${yesNo(!!d.tiering_enabled)}`, !!d.tiering_enabled ? "pqTierOk" : "pqTierWarn")}
+        ${tierPill(`worker: ${yesNo(!!worker.enabled)}`, !!worker.enabled ? "pqTierOk" : "pqTierWarn")}
+        ${tierPill(`interval: ${Number(worker.interval_sec || 0)}s`, "pqTierNeutral")}
+        ${tierPill(`min age: ${Number(worker.min_age_sec || 0)}s`, "pqTierNeutral")}
+        ${tierPill(`max/pass: ${Number(worker.max_candidates_per_pass || 0)}`, "pqTierNeutral")}
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px; flex:1 1 auto;">
+      <div id="tierLandingCard" class="card pqTierStat ${tierToneClass("landing", counts.landing_files)}">
+        <div class="k">Landing</div>
+        <div class="pqTierStatValue">${Number(counts.landing_files || 0)} files</div>
+        <div id="tierLandingBytes" class="v pqTierStatSub">${fmtBytes(Number(bytes.landing_bytes || 0))}</div>
+      </div>
+
+      <div id="tierMigratingCard" class="card pqTierStat ${tierToneClass("migrating", counts.migrating_files)}">
+        <div class="k">Migrating</div>
+        <div id="tierMigratingFiles" class="pqTierStatValue">${Number(counts.migrating_files || 0)} files</div>
+        <div id="tierMigratingBytes" class="v pqTierStatSub">${fmtBytes(Number(bytes.migrating_bytes || 0))}</div>
+        <div id="tierMigratingRate" class="v pqTierRate"></div>
+      </div>
+
+      <div id="tierCapacityCard" class="card pqTierStat ${tierToneClass("capacity", counts.capacity_files)}">
+        <div class="k">Capacity</div>
+        <div class="pqTierStatValue">${Number(counts.capacity_files || 0)} files</div>
+        <div id="tierCapacityBytes" class="v pqTierStatSub">${fmtBytes(Number(bytes.capacity_bytes || 0))}</div>
+      </div>
+
+      <div class="card pqTierStat pqTierNeutral">
+        <div class="k">Total</div>
+        <div id="tierTotalFiles" class="pqTierStatValue">${Number(counts.total_files || 0)} files</div>
+        <div id="tierTotalBytes" class="v pqTierStatSub">${fmtBytes(Number(bytes.total_bytes || 0))}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pqTierFlowWrap">
+    <div id="tierFlowBar" class="pqTierFlowBar">
+      <div id="tierFlowLanding" class="pqTierFlowLanding" style="width:${pctOf(bytes.landing_bytes, bytes.total_bytes)}%;"></div>
+      <div id="tierFlowCapacity" class="pqTierFlowCapacity" style="width:${pctOf(bytes.capacity_bytes, bytes.total_bytes)}%;"></div>
+    </div>
+
+    <div class="pqTierFlowMeta">
+      <div id="tierFlowLeft">Landing ${fmtBytes(Number(bytes.landing_bytes || 0))}</div>
+      <div id="tierFlowRight">Capacity ${fmtBytes(Number(bytes.capacity_bytes || 0))}</div>
+    </div>
+
+    <div id="tierFlowStatus" class="pqTierFlowStatus">
+      ${Number(bytes.landing_bytes || 0) > 0
+                ? `Waiting in landing: ${fmtBytes(Number(bytes.landing_bytes || 0))}`
+                : `No landing backlog`}
+    </div>
+  </div>
+</div>`;
+        })();
+
         const rows = pools.map((p) => {
             const mount = String(p?.mount || "");
             const label = poolDisplayName(p);
@@ -2260,7 +2488,136 @@ Tip: these are the Btrfs member devices that form this pool.
   border: 1px solid var(--border2);
 }
 
+.pqTierRate{
+  font-size:12px;
+  opacity:.8;
+  margin-top:2px;
+}
+.pqTierFlowWrap{
+  margin-top:10px;
+}
 
+.pqTierFlowBar{
+  position:relative;
+  height:14px;
+  border-radius:999px;
+  overflow:hidden;
+  border:1px solid var(--border2);
+  background: var(--panel2);
+}
+
+.pqTierFlowLanding,
+.pqTierFlowCapacity{
+  position:absolute;
+  top:0;
+  bottom:0;
+}
+
+.pqTierFlowLanding{
+  left:0;
+  background: rgba(var(--info-rgb, 0,140,255), 0.40);
+}
+
+.pqTierFlowCapacity{
+  right:0;
+  background: rgba(var(--ok-rgb, 0,180,120), 0.35);
+}
+
+.pqTierFlowActive{
+  box-shadow: inset 0 0 0 1px rgba(255,180,0,0.28), 0 0 0 1px rgba(255,180,0,0.10);
+}
+
+.pqTierFlowActive::after{
+  content:"";
+  position:absolute;
+  inset:0;
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      rgba(255,180,0,0.18) 0 10px,
+      rgba(255,180,0,0.05) 10px 20px
+    );
+  animation: pqTierFlowStripe 1.1s linear infinite;
+  pointer-events:none;
+}
+
+@keyframes pqTierFlowStripe {
+  from { transform: translateX(0); }
+  to   { transform: translateX(20px); }
+}
+
+.pqTierFlowMeta{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  margin-top:6px;
+  font-size:12px;
+  opacity:.85;
+}
+
+.pqTierFlowStatus{
+  margin-top:4px;
+  font-size:12px;
+  opacity:.9;
+}
+.pqTierNeutral{
+  opacity:.95;
+}
+
+.pqTierInfo{
+  border:1px solid rgba(var(--info-rgb,0,140,255),0.55) !important;
+  background:rgba(var(--info-rgb,0,140,255),0.18) !important;
+}
+
+.pqTierWarn{
+  border:1px solid rgba(255,180,0,0.65) !important;
+  background:rgba(255,180,0,0.20) !important;
+}
+
+.pqTierOk{
+  border:1px solid rgba(0,180,120,0.65) !important;
+  background:rgba(0,180,120,0.20) !important;
+}
+
+.pqTierStat{
+  margin:0;
+}
+
+.pqTierStatValue{
+  font-weight:900;
+  margin-top:4px;
+}
+
+.pqTierStatSub{
+  opacity:.8;
+  margin-top:2px;
+}
+html[data-theme="win_classic"] .pqTierInfo{
+  border: 1px solid #2b579a !important;
+  background: #dbe9ff !important;
+}
+
+html[data-theme="win_classic"] .pqTierWarn{
+  border: 1px solid #a66b00 !important;
+  background: #fff1cc !important;
+}
+
+html[data-theme="win_classic"] .pqTierOk{
+  border: 1px solid #2f7d32 !important;
+  background: #dff3df !important;
+}
+
+html[data-theme="win_classic"] .pqTierInfo .pqTierStatValue{
+  color: #1f4f99 !important;
+}
+
+html[data-theme="win_classic"] .pqTierWarn .pqTierStatValue{
+  color: #8a5a00 !important;
+}
+
+html[data-theme="win_classic"] .pqTierOk .pqTierStatValue{
+  color: #256628 !important;
+}
 /* Make grid compact (no vertical expansion) */
 .pqDriveSvgGrid{
   align-content:start;
@@ -2277,6 +2634,8 @@ Tip: these are the Btrfs member devices that form this pool.
   <button class="btn" id="poolCreateBtn" type="button">Create new pool</button>
 </div>
 
+${tieringCardHtml}
+
 ${rows}
 
 <details class="card" style="margin-top:12px;">
@@ -2284,6 +2643,10 @@ ${rows}
   <pre style="margin-top:10px; max-height:45vh; overflow:auto;">${esc(JSON.stringify(pools, null, 2))}</pre>
 </details>
 `;
+
+        if (g_tieringTimer) clearInterval(g_tieringTimer);
+        g_tieringTimer = setInterval(refreshTieringCard, 2000);
+        refreshTieringCard().catch(() => {});
 
         // Wire actions (scaffold for now)
         const createBtn = document.getElementById("poolCreateBtn");
@@ -2607,7 +2970,7 @@ Optionally it can wipe member disks (VERY destructive).
                 setTimeout(async () => {
                     await refreshPoolsState();
                     renderPoolSelectorTop();
-                    if (g_tab === "pools") renderPoolsTab();
+                    if (g_tab === "pools") await renderPoolsTab();
                 }, 800);
             };
 
@@ -2722,7 +3085,7 @@ Optionally it can wipe member disks (VERY destructive).
                 setTimeout(async () => {
                     await refreshPoolsState();
                     renderPoolSelectorTop();
-                    renderPoolsTab();
+                    await renderPoolsTab();
                 }, 1200);
             }
 
@@ -2888,7 +3251,7 @@ Optionally it can wipe member disks (VERY destructive).
                     if (!exists && g_pools.length) g_selectedMount = String(g_pools[0]?.mount || "");
 
                     renderPoolSelectorTop();
-                    renderPoolsTab();
+                    await renderPoolsTab();
                 } catch (e) {
                     showToast("err", `Rename crashed: ${String(e && e.message ? e.message : e)}`, 5200);
                 }
@@ -2938,7 +3301,7 @@ ${esc(JSON.stringify({ http: lp.http, error: lp.error, json: lp.j || null, txt: 
         }
 
         renderPoolSelectorTop();
-        renderPoolsTab();
+        await renderPoolsTab();
         applyDevModeToUi();
     }
 
