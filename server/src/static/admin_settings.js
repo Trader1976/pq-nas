@@ -77,6 +77,13 @@
     const uploadHardPill = $("uploadHardPill");
     const uploadEffectivePill = $("uploadEffectivePill");
 
+    // --- upload tiering ---
+    const tieringPill = $("tieringPill");
+    const tieringEnabled = $("tieringEnabled");
+    const tieringLandingPool = $("tieringLandingPool");
+    const btnTieringSave = $("btnTieringSave");
+    const btnTieringReload = $("btnTieringReload");
+
     const ALLOWED_THEMES = new Set(["dark", "bright", "cpunk_orange", "win_classic"]);
     const ALLOWED_ROT_MODES = new Set(["manual", "daily", "size_mb", "daily_or_size_mb"]);
     let gStorageRoots = null; // populated from GET /api/v4/admin/settings
@@ -659,6 +666,64 @@
     // ---------------------------
     // Upload limits UI helpers
     // ---------------------------
+    function renderTieringPoolOptions(selectedPoolId) {
+        if (!tieringLandingPool) return;
+
+        const pools = Array.isArray(gStorageRoots?.pools) ? gStorageRoots.pools : [];
+        tieringLandingPool.innerHTML = "";
+
+        if (!pools.length) {
+            const opt = document.createElement("option");
+            opt.value = "";
+            opt.textContent = "(no pools available)";
+            tieringLandingPool.appendChild(opt);
+            tieringLandingPool.disabled = true;
+            return;
+        }
+
+        tieringLandingPool.disabled = false;
+
+        for (const p of pools) {
+            const poolId = String(p?.pool_id || "").trim();
+            const mount = String(p?.mount || "").trim();
+            if (!poolId) continue;
+
+            const opt = document.createElement("option");
+            opt.value = poolId;
+            opt.textContent = mount ? `${poolId} — ${mount}` : poolId;
+            if (poolId === String(selectedPoolId || "")) opt.selected = true;
+            tieringLandingPool.appendChild(opt);
+        }
+    }
+
+    function applyTieringToUi(j) {
+        const t = (j && typeof j.tiering === "object" && j.tiering) ? j.tiering : {};
+        const enabled = !!t.enabled;
+        const landingPoolId = String(t.landing_pool_id || "").trim();
+
+        if (tieringEnabled) tieringEnabled.checked = enabled;
+        renderTieringPoolOptions(landingPoolId);
+
+        if (tieringPill) {
+            let txt = "Disabled";
+            let kind = "warn";
+
+            if (enabled) {
+                txt = landingPoolId ? `Enabled • ${landingPoolId}` : "Enabled • no pool";
+                kind = landingPoolId ? "ok" : "warn";
+            }
+
+            tieringPill.className = "pill " + kind;
+            tieringPill.innerHTML = `<span class="k">Tiering:</span> <span class="v">${escapeHtml(txt)}</span>`;
+        }
+    }
+
+    function currentTieringFromUi() {
+        return {
+            enabled: !!tieringEnabled?.checked,
+            landing_pool_id: String(tieringLandingPool?.value || "").trim()
+        };
+    }
     function clampU64(n) {
         const x = Number(n);
         if (!Number.isFinite(x)) return null;
@@ -728,6 +793,10 @@
 
             // upload limits
             applyUploadLimitsToUi(j);
+
+            // tiering
+            applyTieringToUi(j);
+
             clearPreview();
             setStatusPill("ok", "ready");
         } catch (e) {
@@ -800,7 +869,36 @@
         ev.preventDefault();
         refreshAll();
     });
+    btnTieringReload?.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        refreshAll();
+    });
 
+    btnTieringSave?.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+
+        const t = currentTieringFromUi();
+        if (t.enabled && !t.landing_pool_id) {
+            showToast("fail", "Invalid tiering", "Please select a landing pool or disable tiering.");
+            return;
+        }
+
+        btnTieringSave.disabled = true;
+        setStatusPill("warn", "saving…");
+        try {
+            await apiSettingsPost({ tiering: t });
+            showToast("ok", "Saved", t.enabled
+                ? `Landing tier enabled • pool ${t.landing_pool_id}`
+                : "Landing tier disabled");
+            await refreshAll();
+        } catch (e) {
+            console.error(e);
+            showToast("fail", "Save failed", String(e.message || e));
+            setStatusPill("error", "error");
+        } finally {
+            btnTieringSave.disabled = false;
+        }
+    });
     btnUploadSave?.addEventListener("click", async (ev) => {
         ev.preventDefault();
 

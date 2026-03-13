@@ -5824,6 +5824,408 @@ static bool storage_pool_mount_by_id_adminonly(
     if (out_err) *out_err = "pool_id_not_found";
     return false;
 }
+
+struct LandingPoolCandidate {
+    std::string pool_id;
+    std::string mount_path;
+    std::uint64_t total_bytes = 0;
+    std::uint64_t free_bytes = 0;
+    bool mounted = false;
+    bool writable = false;
+    bool transport_usb = false;
+    bool removable = false;
+    bool eligible = false;
+    std::vector<std::string> warnings;
+};
+
+static constexpr std::uint64_t kMinLandingFreeBytes = 5ull * 1024ull * 1024ull * 1024ull; // 5 GiB
+
+static bool statvfs_path(const std::string& path, std::uint64_t* total_bytes, std::uint64_t* free_bytes) {
+    if (total_bytes) *total_bytes = 0;
+    if (free_bytes) *free_bytes = 0;
+
+    struct statvfs sv {};
+    if (::statvfs(path.c_str(), &sv) != 0) return false;
+
+    const std::uint64_t frsize = (std::uint64_t)sv.f_frsize;
+    if (total_bytes) *total_bytes = frsize * (std::uint64_t)sv.f_blocks;
+    if (free_bytes)  *free_bytes  = frsize * (std::uint64_t)sv.f_bavail;
+    return true;
+}
+
+static bool is_path_writable_dir(const std::string& path) {
+    if (path.empty()) return false;
+    if (::access(path.c_str(), W_OK) != 0) return false;
+
+    struct stat st {};
+    if (::stat(path.c_str(), &st) != 0) return false;
+    return S_ISDIR(st.st_mode);
+}
+
+static std::string mounted_device_for_path(const std::string& mount_path) {
+    try {
+        const std::string target = std::filesystem::weakly_canonical(mount_path).string();
+
+        std::ifstream f("/proc/mounts");
+        if (!f.good()) return "";
+
+        std::string best_dev;
+        std::string best_mnt;
+
+        std::string dev, mnt, fstype, opts;
+        while (f >> dev >> mnt >> fstype >> opts) {
+            std::string rest;
+            std::getline(f, rest);
+
+            std::string mnt_norm = mnt;
+            try {
+                mnt_norm = std::filesystem::weakly_canonical(mnt).string();
+            } catch (...) {}
+
+            const bool prefix_ok =
+                (target == mnt_norm) ||
+                (target.size() > mnt_norm.size() &&
+                 target.compare(0, mnt_norm.size(), mnt_norm) == 0 &&
+                 target[mnt_norm.size()] == '/');
+
+            if (!prefix_ok) continue;
+
+            if (mnt_norm.size() > best_mnt.size()) {
+                best_mnt = mnt_norm;
+                best_dev = dev;
+            }
+        }
+
+        return best_dev;
+    } catch (...) {}
+    return "";
+}
+
+static std::string canonical_block_base_name(const std::string& dev_path) {
+    if (dev_path.empty()) return "";
+    std::string b = std::filesystem::path(dev_path).filename().string();
+    if (b.empty()) return "";
+
+    // nvme0n1p1 -> nvme0n1
+    if (b.rfind("nvme", 0) == 0) {
+        auto p = b.rfind('p');
+        if (p != std::string::npos && p + 1 < b.size()) {
+            bool tail_digits = true;
+            for (size_t i = p + 1; i < b.size(); ++i) {
+                if (!std::isdigit((unsigned char)b[i])) { tail_digits = false; break; }
+            }
+            if (tail_digits) return b.substr(0, p);
+        }
+        return b;
+    }
+
+    // mmcblk0p1 -> mmcblk0
+    if (b.rfind("mmcblk", 0) == 0) {
+        auto p = b.rfind('p');
+        if (p != std::string::npos && p + 1 < b.size()) {
+            bool tail_digits = true;
+            for (size_t i = p + 1; i < b.size(); ++i) {
+                if (!std::isdigit((unsigned char)b[i])) { tail_digits = false; break; }
+            }
+            if (tail_digits) return b.substr(0, p);
+        }
+        return b;
+    }
+
+    // sda1 -> sda, vda2 -> vda
+    while (!b.empty() && std::isdigit((unsigned char)b.back())) b.pop_back();
+    return b;
+}
+
+static bool read_small_text_file_trimmed(const std::string& path, std::string* out) {
+    if (out) out->clear();
+    try {
+        std::ifstream f(path);
+        if (!f.good()) return false;
+        std::string s;
+        std::getline(f, s);
+        if (out) *out = trim_copy(s);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+static bool detect_block_usb_or_removable(const std::string& dev_path, bool* is_usb, bool* is_removable) {
+    if (is_usb) *is_usb = false;
+    if (is_removable) *is_removable = false;
+
+    if (dev_path.empty()) return false;
+    if (dev_path.rfind("/dev/", 0) != 0) return false;
+
+    const std::string base = canonical_block_base_name(dev_path);
+    if (base.empty()) return false;
+
+    try {
+        const std::filesystem::path sys_block = std::filesystem::path("/sys/class/block") / base;
+
+        // removable
+        {
+            std::string s;
+            if (read_small_text_file_trimmed((sys_block / "removable").string(), &s)) {
+                if (is_removable) *is_removable = (s == "1");
+            }
+        }
+
+        // USB heuristic from resolved sysfs path
+        std::error_code ec;
+        const auto canon = std::filesystem::weakly_canonical(sys_block, ec);
+        if (!ec) {
+            const std::string p = canon.string();
+            if (p.find("/usb") != std::string::npos || p.find("/usb/") != std::string::npos) {
+                if (is_usb) *is_usb = true;
+            }
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+static json landing_pool_candidate_to_json(const LandingPoolCandidate& c) {
+    return json{
+        {"pool_id", c.pool_id},
+        {"mount_path", c.mount_path},
+        {"total_bytes", c.total_bytes},
+        {"free_bytes", c.free_bytes},
+        {"mounted", c.mounted},
+        {"writable", c.writable},
+        {"transport_usb", c.transport_usb},
+        {"removable", c.removable},
+        {"eligible", c.eligible},
+        {"warnings", c.warnings}
+    };
+}
+
+static LandingPoolCandidate inspect_landing_pool_candidate(const std::string& pool_id,
+                                                           const std::string& mount_path) {
+    LandingPoolCandidate c;
+    c.pool_id = pool_id;
+    c.mount_path = mount_path;
+
+    if (pool_id.empty() || mount_path.empty()) {
+        c.warnings.push_back("missing_mount");
+        return c;
+    }
+
+    c.mounted = !mounted_device_for_path(mount_path).empty();
+    if (!c.mounted) c.warnings.push_back("not_mounted");
+
+    c.writable = is_path_writable_dir(mount_path);
+    if (!c.writable) c.warnings.push_back("not_writable");
+
+    if (!statvfs_path(mount_path, &c.total_bytes, &c.free_bytes)) {
+        c.warnings.push_back("statvfs_failed");
+    } else {
+        if (c.free_bytes < kMinLandingFreeBytes) c.warnings.push_back("low_free_space");
+    }
+
+    {
+        const std::string dev = mounted_device_for_path(mount_path);
+        std::cerr << "[tiering-admin] pool_id=" << pool_id
+          << " mount_path=" << mount_path
+          << " resolved_dev=" << dev << "\n";
+        bool is_usb = false, is_rem = false;
+        if (!dev.empty()) {
+            detect_block_usb_or_removable(dev, &is_usb, &is_rem);
+        }
+        c.transport_usb = is_usb;
+        c.removable = is_rem;
+
+        if (c.transport_usb) c.warnings.push_back("usb_blocked");
+        if (c.removable) c.warnings.push_back("removable_blocked");
+    }
+
+    c.eligible =
+        c.mounted &&
+        c.writable &&
+        c.total_bytes > 0 &&
+        c.free_bytes >= kMinLandingFreeBytes &&
+        !c.transport_usb &&
+        !c.removable;
+
+    return c;
+}
+
+static json build_upload_tiering_candidates_json() {
+    json arr = json::array();
+
+    // default pool first
+    {
+        auto c = inspect_landing_pool_candidate("default", data_root_dir());
+        arr.push_back(landing_pool_candidate_to_json(c));
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(pool_mu());
+        for (const auto& kv : pool_mount_by_id()) {
+            const std::string& pid = kv.first;
+            const std::string& mount = kv.second;
+            if (pid.empty() || pid == "default") continue;
+
+            auto c = inspect_landing_pool_candidate(pid, mount);
+            arr.push_back(landing_pool_candidate_to_json(c));
+        }
+    }
+
+    return arr;
+}
+
+static bool find_upload_tiering_candidate_by_pool_id(const std::string& pool_id, json* out) {
+    if (out) *out = json();
+    const json arr = build_upload_tiering_candidates_json();
+    if (!arr.is_array()) return false;
+
+    for (const auto& it : arr) {
+        if (!it.is_object()) continue;
+
+        std::string pid;
+        auto p = it.find("pool_id");
+        if (p != it.end() && p->is_string()) pid = p->get<std::string>();
+
+        if (pid == pool_id) {
+            if (out) *out = it;
+            return true;
+        }
+    }
+    return false;
+}
+static bool validate_upload_tiering_pool_id(const std::string& pool_id, std::string* reason, json* candidate_out) {
+    if (reason) reason->clear();
+    if (candidate_out) *candidate_out = json();
+
+    if (pool_id.empty()) {
+        if (reason) *reason = "empty_pool_id";
+        return false;
+    }
+
+    json c;
+    if (!find_upload_tiering_candidate_by_pool_id(pool_id, &c) || !c.is_object()) {
+        if (reason) *reason = "pool_not_found";
+        return false;
+    }
+
+    if (candidate_out) *candidate_out = c;
+
+    auto get_bool = [&](const char* key, bool defval) -> bool {
+        auto it = c.find(key);
+        if (it == c.end() || !it->is_boolean()) return defval;
+        return it->get<bool>();
+    };
+
+    auto get_u64 = [&](const char* key, std::uint64_t defval) -> std::uint64_t {
+        auto it = c.find(key);
+        if (it == c.end()) return defval;
+        try {
+            if (it->is_number_unsigned()) return it->get<std::uint64_t>();
+            if (it->is_number_integer()) {
+                long long v = it->get<long long>();
+                return v > 0 ? (std::uint64_t)v : defval;
+            }
+        } catch (...) {}
+        return defval;
+    };
+
+    if (get_bool("transport_usb", false)) {
+        if (reason) *reason = "usb_blocked";
+        return false;
+    }
+    if (get_bool("removable", false)) {
+        if (reason) *reason = "removable_blocked";
+        return false;
+    }
+    if (!get_bool("mounted", false)) {
+        if (reason) *reason = "not_mounted";
+        return false;
+    }
+    if (!get_bool("writable", false)) {
+        if (reason) *reason = "not_writable";
+        return false;
+    }
+    if (get_u64("free_bytes", 0) < kMinLandingFreeBytes) {
+        if (reason) *reason = "low_free_space";
+        return false;
+    }
+    if (!get_bool("eligible", false)) {
+        if (reason) *reason = "not_eligible";
+        return false;
+    }
+
+    return true;
+}
+
+static std::string admin_settings_path_for_helpers() {
+    if (const char* p_admin = std::getenv("PQNAS_ADMIN_SETTINGS_PATH")) {
+        if (*p_admin) return std::string(p_admin);
+    }
+
+    if (const char* p_cfg = std::getenv("PQNAS_CONFIG")) {
+        if (*p_cfg) {
+            return (std::filesystem::path(p_cfg) / "admin_settings.json").string();
+        }
+    }
+
+    return "/etc/pqnas/admin_settings.json";
+}
+
+static json load_admin_settings_json_safe() {
+    try {
+        const std::string path = admin_settings_path_for_helpers();
+        std::ifstream f(path);
+        if (!f.good()) return json::object();
+        json j;
+        f >> j;
+        if (!j.is_object()) return json::object();
+        return j;
+    } catch (...) {
+        return json::object();
+    }
+}
+
+static json load_tiering_settings_json_safe() {
+    try {
+        json s = load_admin_settings_json_safe();
+        if (s.contains("tiering") && s["tiering"].is_object()) {
+            return s["tiering"];
+        }
+    } catch (...) {}
+    return json::object();
+}
+
+static bool json_bool_or(const json& j, const char* key, bool def) {
+    try {
+        auto it = j.find(key);
+        if (it != j.end() && it->is_boolean()) return it->get<bool>();
+    } catch (...) {}
+    return def;
+}
+
+static std::string json_string_or(const json& j, const char* key, const std::string& def) {
+    try {
+        auto it = j.find(key);
+        if (it != j.end() && it->is_string()) return it->get<std::string>();
+    } catch (...) {}
+    return def;
+}
+
+static int json_int_or_clamped(const json& j, const char* key, int def, int lo, int hi) {
+    try {
+        auto it = j.find(key);
+        if (it != j.end() && it->is_number_integer()) {
+            int v = it->get<int>();
+            if (v < lo) v = lo;
+            if (v > hi) v = hi;
+            return v;
+        }
+    } catch (...) {}
+    return def;
+}
+
 struct UploadTieringConfig {
     bool enabled = false;
     std::string landing_pool_id;
@@ -5832,28 +6234,66 @@ struct UploadTieringConfig {
 static UploadTieringConfig upload_tiering_config() {
     UploadTieringConfig cfg;
 
-    // Minimal phase-1 bootstrap:
-    // enable via env var so you can test without admin UI yet.
-    // Example:
-    //   export PQNAS_TIERING_ENABLE=1
-    //   export PQNAS_TIERING_LANDING_POOL=ssdpool
-    const char* en = std::getenv("PQNAS_TIERING_ENABLE");
-    if (en && std::string(en) == "1") {
-        cfg.enabled = true;
+    // Safe defaults
+    cfg.enabled = false;
+    cfg.landing_pool_id.clear();
+
+    auto apply_and_validate = [&](bool enabled_in, const std::string& pool_in) -> bool {
+        cfg.enabled = enabled_in;
+        cfg.landing_pool_id = trim_copy(pool_in);
+
+        if (!cfg.enabled) {
+            cfg.landing_pool_id.clear();
+            return true;
+        }
+
+        if (cfg.landing_pool_id.empty()) {
+            std::cerr << "[tiering] enabled but landing_pool_id empty; disabling effective tiering\n";
+            cfg.enabled = false;
+            cfg.landing_pool_id.clear();
+            return false;
+        }
+
+        std::string reason;
+        json candidate;
+        if (!validate_upload_tiering_pool_id(cfg.landing_pool_id, &reason, &candidate)) {
+            std::cerr << "[tiering] landing pool invalid; disabling effective tiering"
+                      << " pool_id=" << cfg.landing_pool_id
+                      << " reason=" << reason << "\n";
+            cfg.enabled = false;
+            cfg.landing_pool_id.clear();
+            return false;
+        }
+
+        return true;
+    };
+
+    // 1) Admin settings are source of truth
+    {
+        const json t = load_tiering_settings_json_safe();
+        if (t.is_object() && !t.empty()) {
+            const bool enabled = json_bool_or(t, "enabled", false);
+            const std::string lp = json_string_or(t, "landing_pool_id", "");
+            apply_and_validate(enabled, lp);
+            return cfg;
+        }
     }
 
-    const char* lp = std::getenv("PQNAS_TIERING_LANDING_POOL");
-    if (lp && *lp) {
-        cfg.landing_pool_id = lp;
+    // 2) Fallback to env vars for bootstrap/testing
+    bool enabled = false;
+    std::string landing_pool_id;
+
+    if (const char* en = std::getenv("PQNAS_TIERING_ENABLE")) {
+        if (std::string(en) == "1") enabled = true;
     }
 
-    if (cfg.landing_pool_id.empty()) {
-        cfg.landing_pool_id = "default";
+    if (const char* lp = std::getenv("PQNAS_TIERING_LANDING_POOL")) {
+        if (*lp) landing_pool_id = lp;
     }
 
+    apply_and_validate(enabled, landing_pool_id);
     return cfg;
 }
-
 
 static bool landing_root_for_pool_id(const std::string& pool_id,
                                      std::filesystem::path* out,
@@ -6089,9 +6529,39 @@ struct TieringWorkerConfig {
 static TieringWorkerConfig tiering_worker_config() {
     TieringWorkerConfig cfg;
 
-    const char* en = std::getenv("PQNAS_TIERING_ENABLE");
-    if (en && std::string(en) == "1") {
-        cfg.enabled = true;
+    // Defaults
+    cfg.enabled = false;
+    cfg.interval_sec = 60;
+    cfg.min_age_sec = 60;
+    cfg.max_candidates_per_pass = 8;
+
+    // 1) Admin settings first
+    {
+        const json t = load_tiering_settings_json_safe();
+        if (t.is_object() && !t.empty()) {
+            cfg.enabled = json_bool_or(t, "enabled", false);
+
+            // Optional advanced keys; safe defaults if missing
+            cfg.interval_sec = json_int_or_clamped(t, "interval_sec", 60, 5, 86400);
+            cfg.min_age_sec = json_int_or_clamped(t, "min_age_sec", 60, 0, 86400);
+
+            {
+                const int v = json_int_or_clamped(t, "max_candidates_per_pass", 8, 1, 10000);
+                cfg.max_candidates_per_pass = static_cast<std::size_t>(v);
+            }
+
+            // Optional worker_enabled override later; for phase 1 enabled drives worker too.
+            if (t.contains("worker_enabled") && t["worker_enabled"].is_boolean()) {
+                cfg.enabled = t["worker_enabled"].get<bool>() && json_bool_or(t, "enabled", false);
+            }
+
+            return cfg;
+        }
+    }
+
+    // 2) Env fallback
+    if (const char* en = std::getenv("PQNAS_TIERING_ENABLE")) {
+        if (std::string(en) == "1") cfg.enabled = true;
     }
 
     if (const char* p = std::getenv("PQNAS_TIERING_WORKER_INTERVAL_SEC")) {
@@ -12860,8 +13330,46 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
     		};
 		}
 
-		json storage_roots = json::object();
-		storage_roots["data_root"] = data_root_dir();
+	json storage_roots = json::object();
+	storage_roots["data_root"] = data_root_dir();
+
+	// Expose pools for admin UI dropdown: [{pool_id,mount}, ...]
+	{
+    	json pools = json::array();
+
+	    // default pool
+    	pools.push_back(json{
+        	{"pool_id", "default"},
+	        {"mount", data_root_dir()}
+    	});
+
+	    // runtime-managed pools
+    	{
+        	std::lock_guard<std::mutex> lk(pool_mu());
+	        for (const auto& kv : pool_mount_by_id()) {
+    	        const std::string& pid = kv.first;
+        	    const std::string& mount = kv.second;
+            	if (pid.empty() || pid == "default") continue;
+	            pools.push_back(json{
+    	            {"pool_id", pid},
+        	        {"mount", mount}
+            	});
+	        }
+    	}
+
+    	storage_roots["pools"] = std::move(pools);
+	}
+
+	// Tiering defaults (if absent)
+	json tiering = json::object();
+	if (persisted.contains("tiering") && persisted["tiering"].is_object()) {
+	    tiering = persisted["tiering"];
+	} else {
+    	tiering = json{
+        	{"enabled", false},
+	        {"landing_pool_id", ""}
+    	};
+	}
 
 		reply_json(res, 200, json{
     		{"ok", true},
@@ -12878,12 +13386,13 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 
     		{"ui_theme", ui_theme},
 
-
 			{"snapshots", snapshots},
 			{"storage_roots", storage_roots},
+			{"tiering", tiering},
+    		{"upload_tiering_candidates", build_upload_tiering_candidates_json()},
 
-		    {"transport_max_upload_bytes", tmax},
-            {"payload_max_upload_bytes", k_payload_max_upload_bytes}
+			{"transport_max_upload_bytes", tmax},
+			{"payload_max_upload_bytes", k_payload_max_upload_bytes}
 		}.dump());
 
     });
@@ -12968,6 +13477,54 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
 	auto is_allowed_theme = [&](const std::string& t) -> bool {
     return (t == "dark" || t == "bright" || t == "cpunk_orange" || t == "win_classic");
 	};
+
+
+
+auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
+    err.clear();
+
+    if (!in_tier.is_object()) {
+        err = "tiering must be an object";
+        return json();
+    }
+
+    bool enabled = false;
+    if (in_tier.contains("enabled")) {
+        if (!in_tier["enabled"].is_boolean()) {
+            err = "tiering.enabled must be boolean";
+            return json();
+        }
+        enabled = in_tier["enabled"].get<bool>();
+    }
+
+    std::string landing_pool_id;
+    if (in_tier.contains("landing_pool_id")) {
+        if (!in_tier["landing_pool_id"].is_string()) {
+            err = "tiering.landing_pool_id must be string";
+            return json();
+        }
+        landing_pool_id = trim_copy(in_tier["landing_pool_id"].get<std::string>());
+    }
+
+    if (enabled) {
+        if (landing_pool_id.empty()) {
+            err = "tiering.landing_pool_id required when tiering is enabled";
+            return json();
+        }
+
+        std::string reason;
+        json candidate;
+        if (!validate_upload_tiering_pool_id(landing_pool_id, &reason, &candidate)) {
+            err = "tiering.landing_pool_id invalid: " + reason;
+            return json();
+        }
+    }
+
+    return json{
+        {"enabled", enabled},
+        {"landing_pool_id", landing_pool_id}
+    };
+};
 
     // SAFE accessor for audit_min_level (never throws)
     auto get_level_safe = [&](const json& j, const std::string& fallback) -> std::string {
@@ -13295,6 +13852,7 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
         bool changed_theme    = false;
         bool changed_snapshots = false;
         bool changed_transport = false;
+		bool changed_tiering   = false;
 
         json patch = json::object();
 
@@ -13472,7 +14030,43 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
                 audit_append(ev);
             } catch (...) {}
         }
+		// ---- tiering (optional) ----
+		if (in.contains("tiering")) {
+		    std::string err;
+		    json norm = normalize_tiering(in["tiering"], err);
+    		if (!err.empty()) {
+		        reply_json(res, 400, json{
+        		    {"ok", false},
+		            {"error", "bad_request"},
+        		    {"message", err}
+		        }.dump());
+        		return;
+		    }
 
+		    json before_tiering = json::object();
+    		if (persisted.contains("tiering") && persisted["tiering"].is_object()) {
+		        before_tiering = persisted["tiering"];
+    		}
+
+		    patch["tiering"] = norm;
+    		persisted["tiering"] = norm;
+    		changed_tiering = true;
+
+		    // Optional runtime mirror to environment-style globals, if you have such setters later.
+    		// For now this is persisted config only; worker/upload path can keep reading persisted/admin settings.
+
+    		try {
+        		pqnas::AuditEvent ev;
+		        ev.event = "admin.settings_changed";
+        		ev.outcome = "ok";
+		        ev.f["tiering_before"] = before_tiering.is_null() ? json::object() : before_tiering;
+        		ev.f["tiering_after"]  = norm;
+		        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        		auto it_ua = req.headers.find("User-Agent");
+		        ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
+        		audit_append(ev);
+		    } catch (...) {}
+		}
        // ---- transport_max_upload_bytes (optional) ----
         if (in.contains("transport_max_upload_bytes")) {
             // Accept: integer only (safe-by-default)
@@ -13530,11 +14124,12 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
             } catch (...) {}
         }
 
-        if (!changed_level && !changed_ret && !changed_rotation && !changed_theme && !changed_snapshots && !changed_transport) {
+        if (!changed_level && !changed_ret && !changed_rotation && !changed_theme &&
+    		!changed_snapshots && !changed_transport && !changed_tiering) {
             reply_json(res, 400, json{
                 {"ok", false},
                 {"error", "bad_request"},
-                {"message", "nothing to update (provide audit_min_level and/or audit_retention and/or audit_rotation and/or ui_theme and/or snapshots and/or transport_max_upload_bytes)"}
+                {"message", "nothing to update (provide audit_min_level and/or audit_retention and/or audit_rotation and/or ui_theme and/or snapshots and/or tiering and/or transport_max_upload_bytes)"}
             }.dump());
             return;
         }
@@ -13543,6 +14138,16 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
         if (persisted.contains("snapshots") && persisted["snapshots"].is_object()) {
             snapshots = persisted["snapshots"];
         }
+
+		json tiering = json::object();
+		if (persisted.contains("tiering") && persisted["tiering"].is_object()) {
+		    tiering = persisted["tiering"];
+		} else {
+		    tiering = json{
+        		{"enabled", false},
+		        {"landing_pool_id", ""}
+    		};
+		}
 
         std::string save_err;
         if (!save_settings_patch(patch, save_err)) {
@@ -13601,6 +14206,31 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
 
         const long long active_bytes = file_size_bytes_safe(audit_jsonl_path);
         const std::uint64_t tmax = compute_transport_max(persisted);
+		json storage_roots = json::object();
+		storage_roots["data_root"] = data_root_dir();
+
+		{
+		    json pools = json::array();
+		    pools.push_back(json{
+        		{"pool_id", "default"},
+		        {"mount", data_root_dir()}
+    		});
+
+		    {
+        		std::lock_guard<std::mutex> lk(pool_mu());
+		        for (const auto& kv : pool_mount_by_id()) {
+        		    const std::string& pid = kv.first;
+		            const std::string& mount = kv.second;
+        		    if (pid.empty() || pid == "default") continue;
+		            pools.push_back(json{
+        		        {"pool_id", pid},
+                		{"mount", mount}
+		            });
+        		}
+		    }
+
+    		storage_roots["pools"] = std::move(pools);
+		}
 
         reply_json(res, 200, json{
             {"ok", true},
@@ -13617,6 +14247,8 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
 
             {"ui_theme", ui_theme_value},
             {"snapshots", snapshots},
+			{"tiering", tiering},
+    		{"upload_tiering_candidates", build_upload_tiering_candidates_json()},
 
             {"transport_max_upload_bytes", tmax},
             {"payload_max_upload_bytes", k_payload_max_upload_bytes}
@@ -20068,6 +20700,9 @@ srv.Put("/api/v4/files/put",
     }
 
     const UploadTieringConfig tier_cfg = upload_tiering_config();
+
+	std::cerr << "[tiering] enabled=" << (tier_cfg.enabled ? 1 : 0)
+	          << " landing_pool_id=" << tier_cfg.landing_pool_id << "\n";
 
     std::filesystem::path out_abs = qc.abs_path;
     bool tiering_write = false;

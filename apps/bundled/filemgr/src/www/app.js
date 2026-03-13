@@ -1404,6 +1404,16 @@
         const ct = (xhr.getResponseHeader("Content-Type") || "").toLowerCase();
         const raw = String(xhr.responseText || "").trim();
 
+        if (status >= 400) {
+          console.warn("UPLOAD HTTP ERROR", {
+            status,
+            contentType: ct,
+            raw,
+            path: relPath,
+            size: file && file.size
+          });
+        }
+
         // Parse JSON only when it looks like JSON (avoid throwing on HTML / CF pages)
         let j = null;
         const looksJson =
@@ -1466,6 +1476,9 @@
         // 400 can now come from PQ-NAS too (invalid path, length mismatch, etc).
         // Only treat it as gateway/cloudflare when response is clearly non-JSON.
         if (status === 400) {
+          const size = fmtSize(file && file.size != null ? file.size : 0);
+
+          // If server returned JSON, trust it.
           if (j && (j.message || j.error)) {
             const msg = `${j.error || ""} ${j.message || ""}`.trim();
             const err = new Error(msg || "Bad request");
@@ -1478,12 +1491,16 @@
             return;
           }
 
-          const size = fmtSize(file && file.size != null ? file.size : 0);
+          // Plain-text 400 is ambiguous: could still be PQ-NAS.
           const snippet = raw ? shorten(raw.replace(/\s+/g, " "), 200) : "";
-          const err = new Error(`Gateway rejected upload before PQ-NAS (HTTP 400). File size ${size}.`);
+          const err = new Error(
+              snippet
+                  ? `Upload failed (HTTP 400). Server said: ${snippet}`
+                  : `Upload failed (HTTP 400). File size ${size}.`
+          );
           err.http = 400;
-          err.kind = "gateway_reject";
-          err.source = "gateway";
+          err.kind = "bad_request";
+          err.source = "unknown";
           if (snippet) err.details = snippet;
           clearActive();
           reject(err);

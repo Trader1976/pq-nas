@@ -776,6 +776,31 @@
                         <span class="pill info" id="uploadHardPill"><span class="k">Hard cap:</span> <span class="v mono">—</span></span>
                         <span class="pill info" id="uploadEffectivePill"><span class="k">Effective:</span> <span class="v mono">—</span></span>
                     </div>
+                    <hr style="border:none; border-top:1px solid rgba(var(--fg-rgb),0.12); margin:14px 0;">
+
+                    <div class="row">
+                        <div style="font-weight:950;">Upload tiering</div>
+                        <span class="pill info" id="tieringPill"><span class="k">Tiering:</span> <span class="v">—</span></span>
+                    </div>
+
+                    <div class="row">
+                        <label class="pill" style="gap:10px;">
+                            <span class="k">Enabled</span>
+                            <input id="tieringEnabled" type="checkbox" />
+                        </label>
+
+                        <select id="tieringLandingPool" aria-label="Landing pool" style="min-width:320px;">
+                            <option value="">(no pools)</option>
+                        </select>
+
+                        <button id="btnTieringSave" class="btn primary" type="button">Save tiering</button>
+                        <button id="btnTieringReload" class="btn" type="button">Reload</button>
+                    </div>
+
+                    <div class="note">
+                        New uploads can first land in a fast pool and later migrate to capacity storage.
+                        Select a <span class="mono">pool</span>, not a raw drive.
+                    </div>
 
                     <div class="note">
                         <b>Soft cap</b> is admin-controlled (saved in <span class="mono">admin_settings.json</span>).
