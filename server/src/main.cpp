@@ -6269,17 +6269,35 @@ static UploadTieringConfig upload_tiering_config() {
     };
 
     // 1) Admin settings are source of truth
-    {
-        const json t = load_tiering_settings_json_safe();
-        if (t.is_object() && !t.empty()) {
-            const bool enabled = json_bool_or(t, "enabled", false);
-            const std::string lp = json_string_or(t, "landing_pool_id", "");
-            apply_and_validate(enabled, lp);
+    // If settings file exists, but tiering key is absent/invalid, treat as disabled.
+    try {
+        json root = load_admin_settings_json_safe();
+        if (root.is_object() && !root.empty()) {
+            if (root.contains("tiering")) {
+                const json& t = root["tiering"];
+                if (t.is_object()) {
+                    const bool enabled = json_bool_or(t, "enabled", false);
+                    const std::string lp = json_string_or(t, "landing_pool_id", "");
+                    apply_and_validate(enabled, lp);
+                    return cfg;
+                } else {
+                    std::cerr << "[tiering] settings.tiering is not an object; treating tiering as disabled\n";
+                    cfg.enabled = false;
+                    cfg.landing_pool_id.clear();
+                    return cfg;
+                }
+            }
+
+            // Settings file exists, but no tiering block => disabled
+            cfg.enabled = false;
+            cfg.landing_pool_id.clear();
             return cfg;
         }
+    } catch (...) {
+        // fall through to env bootstrap fallback
     }
 
-    // 2) Fallback to env vars for bootstrap/testing
+    // 2) Fallback to env vars only when settings could not be loaded
     bool enabled = false;
     std::string landing_pool_id;
 
@@ -6541,16 +6559,14 @@ static TieringWorkerConfig tiering_worker_config() {
         if (t.is_object() && !t.empty()) {
             cfg.enabled = json_bool_or(t, "enabled", false);
 
-            // Optional advanced keys; safe defaults if missing
-            cfg.interval_sec = json_int_or_clamped(t, "interval_sec", 60, 5, 86400);
+            cfg.interval_sec = json_int_or_clamped(t, "worker_interval_sec", 60, 5, 3600);
             cfg.min_age_sec = json_int_or_clamped(t, "min_age_sec", 60, 0, 86400);
 
             {
-                const int v = json_int_or_clamped(t, "max_candidates_per_pass", 8, 1, 10000);
+                const int v = json_int_or_clamped(t, "max_candidates_per_pass", 8, 1, 1000);
                 cfg.max_candidates_per_pass = static_cast<std::size_t>(v);
             }
 
-            // Optional worker_enabled override later; for phase 1 enabled drives worker too.
             if (t.contains("worker_enabled") && t["worker_enabled"].is_boolean()) {
                 cfg.enabled = t["worker_enabled"].get<bool>() && json_bool_or(t, "enabled", false);
             }
@@ -13367,8 +13383,27 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 	} else {
     	tiering = json{
         	{"enabled", false},
-	        {"landing_pool_id", ""}
+	        {"landing_pool_id", ""},
+	        {"worker_interval_sec", 60},
+	        {"min_age_sec", 60},
+	        {"max_candidates_per_pass", 8}
     	};
+	}
+
+	if (!tiering.contains("enabled") || !tiering["enabled"].is_boolean()) {
+	    tiering["enabled"] = false;
+	}
+	if (!tiering.contains("landing_pool_id") || !tiering["landing_pool_id"].is_string()) {
+	    tiering["landing_pool_id"] = "";
+	}
+	if (!tiering.contains("worker_interval_sec") || !tiering["worker_interval_sec"].is_number_integer()) {
+	    tiering["worker_interval_sec"] = 60;
+	}
+	if (!tiering.contains("min_age_sec") || !tiering["min_age_sec"].is_number_integer()) {
+	    tiering["min_age_sec"] = 60;
+	}
+	if (!tiering.contains("max_candidates_per_pass") || !tiering["max_candidates_per_pass"].is_number_integer()) {
+	    tiering["max_candidates_per_pass"] = 8;
 	}
 
 		reply_json(res, 200, json{
@@ -13506,6 +13541,30 @@ auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
         landing_pool_id = trim_copy(in_tier["landing_pool_id"].get<std::string>());
     }
 
+    auto get_int = [&](const char* key, int def, int lo, int hi) -> int {
+        auto it = in_tier.find(key);
+        if (it == in_tier.end() || it->is_null()) return def;
+
+        if (!it->is_number_integer()) {
+            err = std::string("tiering.") + key + " must be integer";
+            return def;
+        }
+
+        int v = it->get<int>();
+        if (v < lo) v = lo;
+        if (v > hi) v = hi;
+        return v;
+    };
+
+    int worker_interval_sec      = get_int("worker_interval_sec", 60, 5, 3600);
+    if (!err.empty()) return json();
+
+    int min_age_sec              = get_int("min_age_sec", 60, 0, 86400);
+    if (!err.empty()) return json();
+
+    int max_candidates_per_pass  = get_int("max_candidates_per_pass", 8, 1, 1000);
+    if (!err.empty()) return json();
+
     if (enabled) {
         if (landing_pool_id.empty()) {
             err = "tiering.landing_pool_id required when tiering is enabled";
@@ -13522,7 +13581,10 @@ auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
 
     return json{
         {"enabled", enabled},
-        {"landing_pool_id", landing_pool_id}
+        {"landing_pool_id", landing_pool_id},
+        {"worker_interval_sec", worker_interval_sec},
+        {"min_age_sec", min_age_sec},
+        {"max_candidates_per_pass", max_candidates_per_pass}
     };
 };
 
@@ -14145,8 +14207,27 @@ auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
 		} else {
 		    tiering = json{
         		{"enabled", false},
-		        {"landing_pool_id", ""}
+		        {"landing_pool_id", ""},
+		        {"worker_interval_sec", 60},
+		        {"min_age_sec", 60},
+		        {"max_candidates_per_pass", 8}
     		};
+		}
+
+		if (!tiering.contains("enabled") || !tiering["enabled"].is_boolean()) {
+		    tiering["enabled"] = false;
+		}
+		if (!tiering.contains("landing_pool_id") || !tiering["landing_pool_id"].is_string()) {
+		    tiering["landing_pool_id"] = "";
+		}
+		if (!tiering.contains("worker_interval_sec") || !tiering["worker_interval_sec"].is_number_integer()) {
+		    tiering["worker_interval_sec"] = 60;
+		}
+		if (!tiering.contains("min_age_sec") || !tiering["min_age_sec"].is_number_integer()) {
+		    tiering["min_age_sec"] = 60;
+		}
+		if (!tiering.contains("max_candidates_per_pass") || !tiering["max_candidates_per_pass"].is_number_integer()) {
+		    tiering["max_candidates_per_pass"] = 8;
 		}
 
         std::string save_err;

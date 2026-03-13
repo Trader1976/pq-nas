@@ -17,20 +17,19 @@
                     radial-gradient(1000px 700px at 82% 12%, rgba(var(--fg-rgb),0.07), transparent 60%),
                     linear-gradient(180deg, #04050f, var(--bg));
             color:var(--fg);
-            overflow: hidden;
         }
 
         a{ color:var(--fg); text-decoration:none; }
         a:hover{ text-shadow: 0 0 10px rgba(var(--fg-rgb),0.25); }
 
         .desktop{
-            height: 100%;
+            min-height: 100%;
             display: grid;
             grid-template-columns: 280px 1fr;
             gap: 14px;
             padding: 14px;
+            align-items: start;
         }
-
         @media (max-width: 980px){
             body{ overflow:auto; }
             .desktop{ grid-template-columns: 1fr; overflow: visible; }
@@ -186,17 +185,17 @@
         }
 
         /* Workspace */
-        .workspace{
-            border: 1px solid var(--border);
-            border-radius: var(--radius2);
-            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
-            box-shadow: var(--shadow);
-            display:flex;
-            flex-direction: column;
-            min-width: 0;
-            min-height: 0;
-            overflow: hidden;
-        }
+            .workspace{
+                border: 1px solid var(--border);
+                border-radius: var(--radius2);
+                background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
+                box-shadow: var(--shadow);
+                display:flex;
+                flex-direction: column;
+                min-width: 0;
+                min-height: 0;
+                overflow: visible;
+            }
 
         .topbar{
             display:flex;
@@ -312,15 +311,13 @@
 
         .mono{ font-family: var(--mono); }
 
-        .content{
-            padding: 14px;
-            min-width: 0;
-            min-height: 0;
-            overflow: auto;
-            display:flex;
-            flex-direction:column;
-            gap: 14px;
-        }
+            .content{
+                padding: 14px;
+                min-width: 0;
+                display:flex;
+                flex-direction:column;
+                gap: 14px;
+            }
 
         .card{
             border:1px solid rgba(var(--fg-rgb),0.12);
@@ -481,8 +478,134 @@
             opacity: 0.55;
             filter: grayscale(0.2);
         }
+
+        .note {
+            white-space: normal;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+        /* Upload tiering selector when disabled */
+        #tieringLandingPool:disabled {
+            opacity: 0.6;
+        }
+        #tieringMountPill,
+        #tieringSpacePill,
+        #tieringEligibilityPill,
+        #tieringWarnPill {
+            margin-right: 6px;
+        }
+
+
         .hidden { display:none !important; }
         #uploadSoftMax { max-width: 360px; }
+            /* Help modal */
+        .modalBackdrop{
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.58);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 1200;
+            backdrop-filter: blur(2px);
+        }
+
+        .modalCard{
+            width: min(760px, 100%);
+            max-height: 85vh;
+            overflow: auto;
+            border: 1px solid var(--border);
+            border-radius: var(--radius2);
+            background: #0b1220;
+            color: var(--fg);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+        }
+
+        .modalHd{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            padding:12px 14px;
+            border-bottom:1px solid var(--border2);
+            position: sticky;
+            top: 0;
+            background: inherit;
+            z-index: 1;
+        }
+        /* Dark-ish themes: fully opaque modal */
+        html[data-theme="dark"] .modalCard,
+        html[data-theme="cpunk_orange"] .modalCard{
+            background: #0b1220;
+            color: rgba(255,255,255,0.94);
+        }
+
+        /* Bright / classic themes: light opaque modal */
+        html[data-theme="bright"] .modalCard,
+        html[data-theme="win_classic"] .modalCard{
+            background: rgba(255,255,255,0.98);
+            color: rgba(0,0,0,0.90);
+            border-color: rgba(0,0,0,0.18);
+            box-shadow: 0 18px 48px rgba(0,0,0,0.20);
+        }
+
+        html[data-theme="bright"] .modalBackdrop,
+        html[data-theme="win_classic"] .modalBackdrop{
+            background: rgba(0,0,0,0.28);
+        }
+
+        /* Keep note text readable inside modal */
+        .modalCard .note{
+            color: inherit;
+            opacity: 0.95;
+        }
+        .modalBd{
+            padding: 14px;
+        }
+        .uploadsCardBody{
+            position: relative;
+        }
+
+        .uploadsHelpBtn{
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            border-radius: 999px;
+            font-weight: 950;
+            z-index: 2;
+        }
+            .modalHd{
+                display:flex;
+                align-items:center;
+                justify-content:space-between;
+                gap:12px;
+                padding:12px 14px;
+                border-bottom:1px solid var(--border2);
+                position: sticky;
+                top: 0;
+                background: inherit;
+            }
+
+            .modalBd{
+                padding: 14px;
+            }
+        .tierField{
+            display:flex;
+            flex-direction:column;
+            gap:6px;
+            min-width:180px;
+        }
+
+        .tierFieldLabel{
+            font-size:12px;
+            font-weight:900;
+            color: rgba(var(--fg-rgb),0.72);
+            letter-spacing:0.02em;
+        }
     </style>
 
     <link rel="stylesheet" href="/static/theme.css">
@@ -753,11 +876,18 @@
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">Uploads</div>
-                    <div class="pill info" id="uploadPill"><span class="k">Effective:</span> <span class="v">—</span></div>
+
+                    <div class="pill info" id="uploadPill">
+                        <span class="k">Effective:</span>
+                        <span class="v">—</span>
+                    </div>
+
                     <span class="chev" aria-hidden="true">▸</span>
                 </div>
 
-                <div class="bd">
+                <div class="bd uploadsCardBody">
+                    <button id="btnUploadsHelp" class="btn uploadsHelpBtn" type="button">?</button>
+
                     <div class="row">
                         <input id="uploadSoftMax"
                                class="input mono"
@@ -776,6 +906,7 @@
                         <span class="pill info" id="uploadHardPill"><span class="k">Hard cap:</span> <span class="v mono">—</span></span>
                         <span class="pill info" id="uploadEffectivePill"><span class="k">Effective:</span> <span class="v mono">—</span></span>
                     </div>
+
                     <hr style="border:none; border-top:1px solid rgba(var(--fg-rgb),0.12); margin:14px 0;">
 
                     <div class="row">
@@ -797,15 +928,67 @@
                         <button id="btnTieringReload" class="btn" type="button">Reload</button>
                     </div>
 
+                    <div class="row">
+                        <label class="tierField">
+                            <span class="tierFieldLabel">Worker interval (sec)</span>
+                            <input id="tieringIntervalSec"
+                                   class="input mono"
+                                   type="number"
+                                   min="5"
+                                   max="3600"
+                                   step="1" />
+                        </label>
+
+                        <label class="tierField">
+                            <span class="tierFieldLabel">Minimum landing age (sec)</span>
+                            <input id="tieringMinAgeSec"
+                                   class="input mono"
+                                   type="number"
+                                   min="0"
+                                   max="86400"
+                                   step="1" />
+                        </label>
+
+                        <label class="tierField">
+                            <span class="tierFieldLabel">Max files per pass</span>
+                            <input id="tieringMaxPass"
+                                   class="input mono"
+                                   type="number"
+                                   min="1"
+                                   max="1000"
+                                   step="1" />
+                        </label>
+                    </div>
+
+                    <div class="row">
+                        <span class="pill info" id="tieringMountPill"><span class="k">Mount:</span> <span class="v mono">—</span></span>
+                        <span class="pill info" id="tieringSpacePill"><span class="k">Space:</span> <span class="v mono">—</span></span>
+                        <span class="pill info" id="tieringEligibilityPill"><span class="k">Eligibility:</span> <span class="v">—</span></span>
+                        <span class="pill warn" id="tieringWarnPill"><span class="k">Warnings:</span> <span class="v">—</span></span>
+                    </div>
                     <div class="note">
-                        New uploads can first land in a fast pool and later migrate to capacity storage.
-                        Select a <span class="mono">pool</span>, not a raw drive.
+                        These values control how often the migration worker runs and how aggressively it drains landing storage.
+                    </div>
+
+                    <div class="note">
+                        <b>Upload tiering</b> lets new uploads land in a fast pool first,
+                        then migrate to capacity storage.
+
+                        <br><br>
+
+                        Select an <span class="mono">internal pool</span> for landing.
+                        USB / removable pools are automatically blocked for safety.
+
+                        <br><br>
+
+                        The migration worker later moves files to capacity pools
+                        according to tiering policy.
                     </div>
 
                     <div class="note">
                         <b>Soft cap</b> is admin-controlled (saved in <span class="mono">admin_settings.json</span>).
                         <b>Hard cap</b> is compiled into the server (<span class="mono">set_payload_max_length</span>) and uploads above it never reach PQ-NAS handlers.
-                        <br/>
+                        <br>
                         Effective cap = min(soft, hard).
                     </div>
                 </div>
@@ -845,46 +1028,93 @@
                 <div class="m" id="toastMsg">—</div>
             </div>
         </div>
-
-        <script>
-            (function () {
-                function isInteractive(el) {
-                    if (!el) return false;
-                    return !!el.closest('a,button,input,select,textarea,label,summary');
-                }
-
-                const cards = Array.from(document.querySelectorAll('.card.accordion'));
-                for (const card of cards) {
-                    const hd = card.querySelector('.hd');
-                    if (!hd) continue;
-
-                    hd.setAttribute('role', 'button');
-                    hd.setAttribute('tabindex', '0');
-                    hd.setAttribute('aria-expanded', card.classList.contains('open') ? 'true' : 'false');
-
-                    const toggle = () => {
-                        const open = card.classList.toggle('open');
-                        hd.setAttribute('aria-expanded', open ? 'true' : 'false');
-                    };
-
-                    hd.addEventListener('click', (ev) => {
-                        if (isInteractive(ev.target)) return;
-                        toggle();
-                    });
-
-                    hd.addEventListener('keydown', (ev) => {
-                        if (ev.key === 'Enter' || ev.key === ' ') {
-                            ev.preventDefault();
-                            toggle();
-                        }
-                    });
-                }
-            })();
-        </script>
-
-        <script src="/static/admin_badges.js"></script>
-        <script src="/static/admin_settings.js?v=3"></script>
     </main>
 </div>
+
+<!-- Upload help modal -->
+<div id="helpModalBackdrop" class="modalBackdrop hidden">
+    <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
+        <div class="modalHd">
+            <div id="helpModalTitle" style="font-weight:950;">Uploads &amp; Tiering Help</div>
+            <button id="btnHelpModalClose" class="btn" type="button">Close</button>
+        </div>
+
+        <div class="modalBd">
+            <div class="note">
+                <b>Upload limits</b><br>
+                Soft cap is the admin-configured upload limit.<br>
+                Hard cap is compiled into the server.<br>
+                Effective cap = min(soft cap, hard cap).
+                <br><br>
+
+                <b>Upload tiering</b><br>
+                New uploads land in a fast internal pool first and later migrate to capacity storage.
+                <br><br>
+
+                USB / removable pools are automatically blocked for safety.
+                <br><br>
+
+                <b>Worker interval</b><br>
+                How often the migration worker wakes up and scans landing storage.
+                <br><br>
+
+                <b>Minimum landing age</b><br>
+                A file must remain in landing at least this long before migration is allowed.
+                <br><br>
+
+                <b>Max files per pass</b><br>
+                Maximum number of eligible files migrated during one worker scan.
+                <br><br>
+
+                Example:<br>
+                interval = 60<br>
+                min age = 60<br>
+                max/pass = 8<br><br>
+
+                Worker wakes every 60 seconds, migrates files older than 60 seconds,
+                and processes up to 8 files each cycle.
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    (function () {
+        function isInteractive(el) {
+            if (!el) return false;
+            return !!el.closest('a,button,input,select,textarea,label,summary');
+        }
+
+        const cards = Array.from(document.querySelectorAll('.card.accordion'));
+        for (const card of cards) {
+            const hd = card.querySelector('.hd');
+            if (!hd) continue;
+
+            hd.setAttribute('role', 'button');
+            hd.setAttribute('tabindex', '0');
+            hd.setAttribute('aria-expanded', card.classList.contains('open') ? 'true' : 'false');
+
+            const toggle = () => {
+                const open = card.classList.toggle('open');
+                hd.setAttribute('aria-expanded', open ? 'true' : 'false');
+            };
+
+            hd.addEventListener('click', (ev) => {
+                if (isInteractive(ev.target)) return;
+                toggle();
+            });
+
+            hd.addEventListener('keydown', (ev) => {
+                if (ev.key === 'Enter' || ev.key === ' ') {
+                    ev.preventDefault();
+                    toggle();
+                }
+            });
+        }
+    })();
+</script>
+
+<script src="/static/admin_badges.js"></script>
+<script src="/static/admin_settings.js?v=5"></script>
 </body>
 </html>

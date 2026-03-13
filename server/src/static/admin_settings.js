@@ -81,13 +81,25 @@
     const tieringPill = $("tieringPill");
     const tieringEnabled = $("tieringEnabled");
     const tieringLandingPool = $("tieringLandingPool");
+    const tieringIntervalSec = $("tieringIntervalSec");
+    const tieringMinAgeSec = $("tieringMinAgeSec");
+    const tieringMaxPass = $("tieringMaxPass");
     const btnTieringSave = $("btnTieringSave");
     const btnTieringReload = $("btnTieringReload");
+    const tieringMountPill = $("tieringMountPill");
+    const tieringSpacePill = $("tieringSpacePill");
+    const tieringEligibilityPill = $("tieringEligibilityPill");
+    const tieringWarnPill = $("tieringWarnPill");
+
+    const btnUploadsHelp = $("btnUploadsHelp");
+    const helpModalBackdrop = $("helpModalBackdrop");
+    const btnHelpModalClose = $("btnHelpModalClose");
 
     const ALLOWED_THEMES = new Set(["dark", "bright", "cpunk_orange", "win_classic"]);
     const ALLOWED_ROT_MODES = new Set(["manual", "daily", "size_mb", "daily_or_size_mb"]);
     let gStorageRoots = null; // populated from GET /api/v4/admin/settings
-    let gSnapshotsLast = null; // last snapshots object received from server (prevents wiping volumes)
+    let gTieringCandidates = []; // populated from GET /api/v4/admin/settings
+    let gSnapshotsLast = null;
 
     function serverDataRootOrFallback() {
         const dr = gStorageRoots && typeof gStorageRoots.data_root === "string" ? gStorageRoots.data_root.trim() : "";
@@ -666,10 +678,41 @@
     // ---------------------------
     // Upload limits UI helpers
     // ---------------------------
+    function tieringCandidateByPoolId(poolId) {
+        const want = String(poolId || "").trim();
+        if (!want) return null;
+        for (const c of gTieringCandidates) {
+            if (String(c?.pool_id || "").trim() === want) return c;
+        }
+        return null;
+    }
+
+    function fmtBytesGiB(n) {
+        const x = Number(n);
+        if (!Number.isFinite(x) || x < 0) return "—";
+        return `${(x / (1024 ** 3)).toFixed(1)} GiB`;
+    }
+
+    function tieringWarningsText(c) {
+        const ws = Array.isArray(c?.warnings) ? c.warnings : [];
+        if (!ws.length) return "None";
+
+        return ws.map(w => {
+            if (w === "usb_blocked") return "USB blocked";
+            if (w === "removable_blocked") return "Removable blocked";
+            if (w === "low_free_space") return "Low free space";
+            if (w === "not_mounted") return "Not mounted";
+            if (w === "not_writable") return "Not writable";
+            if (w === "statvfs_failed") return "Space unknown";
+            if (w === "missing_mount") return "Missing mount";
+            return String(w);
+        }).join(", ");
+    }
+
     function renderTieringPoolOptions(selectedPoolId) {
         if (!tieringLandingPool) return;
 
-        const pools = Array.isArray(gStorageRoots?.pools) ? gStorageRoots.pools : [];
+        const pools = Array.isArray(gTieringCandidates) ? [...gTieringCandidates] : [];
         tieringLandingPool.innerHTML = "";
 
         if (!pools.length) {
@@ -681,22 +724,87 @@
             return;
         }
 
+        // eligible first, then blocked
+        pools.sort((a, b) => {
+            const ae = !!a?.eligible;
+            const be = !!b?.eligible;
+            if (ae !== be) return ae ? -1 : 1;
+            return String(a?.pool_id || "").localeCompare(String(b?.pool_id || ""));
+        });
+
         tieringLandingPool.disabled = false;
+
+        let selectedFound = false;
 
         for (const p of pools) {
             const poolId = String(p?.pool_id || "").trim();
-            const mount = String(p?.mount || "").trim();
+            const mount = String(p?.mount_path || "").trim();
+            const eligible = !!p?.eligible;
             if (!poolId) continue;
+
+            const freeTxt = fmtBytesGiB(p?.free_bytes);
+            const warnTxt = tieringWarningsText(p);
 
             const opt = document.createElement("option");
             opt.value = poolId;
-            opt.textContent = mount ? `${poolId} — ${mount}` : poolId;
-            if (poolId === String(selectedPoolId || "")) opt.selected = true;
+            opt.disabled = !eligible;
+
+            if (eligible) {
+                opt.textContent = `${poolId} — ${mount} — ${freeTxt} free`;
+            } else {
+                opt.textContent = `${poolId} — ${mount} — BLOCKED (${warnTxt})`;
+            }
+
+            if (poolId === String(selectedPoolId || "")) {
+                opt.selected = true;
+                selectedFound = true;
+            }
+
             tieringLandingPool.appendChild(opt);
         }
-    }
 
+        // If current saved pool was blocked/unknown and no option got selected,
+        // select first eligible one if available.
+        if (!selectedFound) {
+            const firstEligible = pools.find(p => !!p?.eligible);
+            if (firstEligible) tieringLandingPool.value = String(firstEligible.pool_id || "");
+        }
+    }
+    function updateTieringDetailPills() {
+        const c = tieringCandidateByPoolId(tieringLandingPool?.value || "");
+
+        if (!c) {
+            setSimplePill(tieringMountPill, "info", "Mount", "—");
+            setSimplePill(tieringSpacePill, "info", "Space", "—");
+            setSimplePill(tieringEligibilityPill, "warn", "Eligibility", "No selection");
+            setSimplePill(tieringWarnPill, "warn", "Warnings", "—");
+            return;
+        }
+
+        const mount = String(c.mount_path || "—");
+        const freeTxt = fmtBytesGiB(c.free_bytes);
+        const totalTxt = fmtBytesGiB(c.total_bytes);
+        const eligible = !!c.eligible;
+        const warnTxt = tieringWarningsText(c);
+
+        setSimplePill(tieringMountPill, "info", "Mount", mount);
+        setSimplePill(tieringSpacePill, "info", "Space", `${freeTxt} free / ${totalTxt} total`);
+        setSimplePill(
+            tieringEligibilityPill,
+            eligible ? "ok" : "warn",
+            "Eligibility",
+            eligible ? "Eligible" : "Blocked"
+        );
+        setSimplePill(
+            tieringWarnPill,
+            warnTxt === "None" ? "info" : "warn",
+            "Warnings",
+            warnTxt
+        );
+    }
     function applyTieringToUi(j) {
+        gTieringCandidates = Array.isArray(j?.upload_tiering_candidates) ? j.upload_tiering_candidates : [];
+
         const t = (j && typeof j.tiering === "object" && j.tiering) ? j.tiering : {};
         const enabled = !!t.enabled;
         const landingPoolId = String(t.landing_pool_id || "").trim();
@@ -704,13 +812,28 @@
         if (tieringEnabled) tieringEnabled.checked = enabled;
         renderTieringPoolOptions(landingPoolId);
 
+        if (tieringIntervalSec) tieringIntervalSec.value = String(Number(t.worker_interval_sec ?? 60));
+        if (tieringMinAgeSec) tieringMinAgeSec.value = String(Number(t.min_age_sec ?? 60));
+        if (tieringMaxPass) tieringMaxPass.value = String(Number(t.max_candidates_per_pass ?? 8));
+
+        updateTieringDetailPills();
+
         if (tieringPill) {
             let txt = "Disabled";
             let kind = "warn";
 
             if (enabled) {
-                txt = landingPoolId ? `Enabled • ${landingPoolId}` : "Enabled • no pool";
-                kind = landingPoolId ? "ok" : "warn";
+                const c = tieringCandidateByPoolId(landingPoolId);
+                if (landingPoolId && c && c.eligible) {
+                    txt = `Enabled • ${landingPoolId}`;
+                    kind = "ok";
+                } else if (landingPoolId) {
+                    txt = `Enabled • ${landingPoolId} (blocked)`;
+                    kind = "warn";
+                } else {
+                    txt = "Enabled • no pool";
+                    kind = "warn";
+                }
             }
 
             tieringPill.className = "pill " + kind;
@@ -721,7 +844,10 @@
     function currentTieringFromUi() {
         return {
             enabled: !!tieringEnabled?.checked,
-            landing_pool_id: String(tieringLandingPool?.value || "").trim()
+            landing_pool_id: String(tieringLandingPool?.value || "").trim(),
+            worker_interval_sec: clampInt(tieringIntervalSec?.value, 60, 5, 3600),
+            min_age_sec: clampInt(tieringMinAgeSec?.value, 60, 0, 86400),
+            max_candidates_per_pass: clampInt(tieringMaxPass?.value, 8, 1, 1000)
         };
     }
     function clampU64(n) {
@@ -731,7 +857,13 @@
         // JS can represent up to 2^53-1 safely; your caps are well below that
         return Math.floor(x);
     }
-
+    function clampInt(v, def, lo, hi) {
+        const x = parseInt(String(v ?? ""), 10);
+        if (!Number.isFinite(x)) return def;
+        if (x < lo) return lo;
+        if (x > hi) return hi;
+        return x;
+    }
     function applyUploadLimitsToUi(j) {
         const hard = (j && typeof j.payload_max_upload_bytes === "number") ? j.payload_max_upload_bytes : null;
         const soft = (j && typeof j.transport_max_upload_bytes === "number") ? j.transport_max_upload_bytes : null;
@@ -764,6 +896,7 @@
             const j = await apiSettingsGet();
 
             gStorageRoots = (j && typeof j.storage_roots === "object" && j.storage_roots) ? j.storage_roots : null;
+            gTieringCandidates = Array.isArray(j?.upload_tiering_candidates) ? j.upload_tiering_candidates : [];
 
             const allowed = Array.isArray(j.allowed) ? j.allowed : ["SECURITY", "ADMIN", "INFO", "DEBUG"];
             const persisted = j.audit_min_level || "ADMIN";
@@ -837,6 +970,40 @@
         });
     }
 
+    function openHelpModal() {
+        document.getElementById("helpModalBackdrop")?.classList.remove("hidden");
+    }
+
+    function closeHelpModal() {
+        document.getElementById("helpModalBackdrop")?.classList.add("hidden");
+    }
+
+    document.addEventListener("click", (ev) => {
+        const openBtn = ev.target.closest("#btnUploadsHelp");
+        if (openBtn) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            openHelpModal();
+            return;
+        }
+
+        const closeBtn = ev.target.closest("#btnHelpModalClose");
+        if (closeBtn) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            closeHelpModal();
+            return;
+        }
+
+        const backdrop = document.getElementById("helpModalBackdrop");
+        if (backdrop && ev.target === backdrop) {
+            closeHelpModal();
+        }
+    });
+
+    document.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape") closeHelpModal();
+    });
     // ---------------------------
     // Wire retention
     // ---------------------------
@@ -873,7 +1040,12 @@
         ev.preventDefault();
         refreshAll();
     });
-
+    tieringLandingPool?.addEventListener("change", () => {
+        updateTieringDetailPills();
+    });
+    tieringEnabled?.addEventListener("change", () => {
+        updateTieringDetailPills();
+    });
     btnTieringSave?.addEventListener("click", async (ev) => {
         ev.preventDefault();
 
@@ -881,6 +1053,18 @@
         if (t.enabled && !t.landing_pool_id) {
             showToast("fail", "Invalid tiering", "Please select a landing pool or disable tiering.");
             return;
+        }
+
+        if (t.enabled) {
+            const c = tieringCandidateByPoolId(t.landing_pool_id);
+            if (!c) {
+                showToast("fail", "Invalid tiering", "Selected landing pool was not found.");
+                return;
+            }
+            if (!c.eligible) {
+                showToast("fail", "Invalid tiering", `Selected landing pool is blocked: ${tieringWarningsText(c)}`);
+                return;
+            }
         }
 
         btnTieringSave.disabled = true;
