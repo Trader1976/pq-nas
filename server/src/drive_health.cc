@@ -229,6 +229,11 @@ static void parse_nvme_smart_json(const json& j, const LsblkDisk& inv, DriveHeal
     d->media_errors              = j_i64(j, {"nvme_smart_health_information_log", "media_errors"}, -1);
     d->unsafe_shutdowns          = j_i64(j, {"nvme_smart_health_information_log", "unsafe_shutdowns"}, -1);
     d->num_err_log_entries       = j_i64(j, {"nvme_smart_health_information_log", "num_err_log_entries"}, -1);
+    d->data_units_read        = j_i64(j, {"nvme_smart_health_information_log", "data_units_read"}, -1);
+    d->data_units_written     = j_i64(j, {"nvme_smart_health_information_log", "data_units_written"}, -1);
+    d->host_reads             = j_i64(j, {"nvme_smart_health_information_log", "host_reads"}, -1);
+    d->host_writes            = j_i64(j, {"nvme_smart_health_information_log", "host_writes"}, -1);
+
 
     collect_smart_messages(j, d);
 
@@ -288,20 +293,31 @@ static void parse_nvme_smart_json(const json& j, const LsblkDisk& inv, DriveHeal
     } else if (d->media_errors > 0) {
         d->health_status = "fail";
         d->health_text = "Media errors reported";
-    } else if (d->temperature_c >= 60) {
+    } else if (d->temperature_c >= 65) {
         d->health_status = "fail";
         d->health_text = "Drive temperature too high";
-    } else if ((d->percentage_used >= 80) ||
-               (d->available_spare >= 0 && d->available_spare <= 15) ||
-               (d->temperature_c >= 50)) {
-        d->health_status = "warn";
-        d->health_text = "Warning";
+    } else if ((d->percentage_used >= 90) ||
+           (d->available_spare >= 0 && d->available_spare <= 10)) {
+        d->health_status = "fail";
+        d->health_text = "Drive health degraded";
+    } else if ((d->temperature_c >= 55) ||
+           (d->percentage_used >= 80) ||
+           (d->available_spare >= 0 && d->available_spare <= 15)) {
+       d->health_status = "warn";
+       d->health_text = "Warning";
     }
 
-    if (d->temperature_c >= 50) {
-        d->warning = "Elevated drive temperature";
+    d->warning.clear();
+    if (d->temperature_c >= 65) {
+        d->warning = "Drive temperature is critically high";
+    } else if (d->temperature_c >= 55) {
+        d->warning = "Drive temperature is elevated";
+    } else if (d->percentage_used >= 90) {
+        d->warning = "SSD wear is critically high";
     } else if (d->percentage_used >= 80) {
         d->warning = "SSD wear is high";
+    } else if (d->available_spare >= 0 && d->available_spare <= 10) {
+        d->warning = "Available spare is critically low";
     } else if (d->available_spare >= 0 && d->available_spare <= 15) {
         d->warning = "Available spare is low";
     } else if (d->media_errors > 0) {

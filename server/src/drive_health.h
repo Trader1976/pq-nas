@@ -33,6 +33,10 @@ namespace pqnas {
         long long media_errors = -1;
         long long unsafe_shutdowns = -1;
         long long num_err_log_entries = -1;
+        long long data_units_read = -1;
+        long long data_units_written = -1;
+        long long host_reads = -1;
+        long long host_writes = -1;
 
         bool selftest_supported = false;
         std::string selftest_status; // "unsupported" | "idle" | "running" | "completed" | "failed" | "unknown"

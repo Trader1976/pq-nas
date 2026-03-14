@@ -470,7 +470,20 @@
             font-family: var(--mono);
         }
 
-
+        .driveRow.warn{
+            border-color: rgba(var(--warn-rgb),0.30);
+            background: rgba(var(--warn-rgb),0.08);
+        }
+        .driveRow.fail{
+            border-color: rgba(var(--fail-rgb),0.34);
+            background: rgba(var(--fail-rgb),0.10);
+        }
+        .driveNote.warn{
+            color: rgba(var(--warn-rgb),0.95);
+        }
+        .driveNote.fail{
+            color: rgba(var(--fail-rgb),0.95);
+        }
         .statusCard > div > div{
             font-weight: 700;
         }
@@ -612,6 +625,7 @@
                         <span class="pill" id="driveHealthPill"><span class="k">Status:</span> <span class="v">loading…</span></span>
                     </div>
                     <div class="bd">
+                        <div class="note mono" id="driveHealthUpdated" style="margin-bottom:10px;">Updated: —</div>
                         <div id="driveHealthList"></div>
                         <div class="note">
                             Health data is shown for internal storage devices that expose SMART/NVMe diagnostics.
@@ -651,6 +665,6 @@
     </main>
 </div>
 <script src="/static/admin_badges.js"></script>
-<script src="/static/system.js?v=2"></script>
+<script src="/static/system.js?v=5"></script>
 </body>
 </html>

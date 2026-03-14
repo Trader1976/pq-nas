@@ -246,6 +246,10 @@
         ctx.fillText(txt, cx, cy);
     }
 
+    function nvmeDataUnitsToBytes(units) {
+        if (!Number.isFinite(units) || units < 0) return NaN;
+        return units * 512000; // NVMe data unit = 1000 * 512 bytes
+    }
 
     function renderCpuGauges(perCorePct) {
         const host = el("cpuGaugeGrid");
@@ -532,6 +536,16 @@
     }
 
     function renderDrives(j) {
+        const upd = el("driveHealthUpdated");
+        if (upd) {
+            if (j.updated_iso) {
+                const d = new Date(j.updated_iso);
+                upd.textContent = `Updated: ${d.toLocaleTimeString()} UTC`;
+            } else {
+                upd.textContent = "Updated: —";
+            }
+        }
+
         const host = el("driveHealthList");
         const pill = el("driveHealthPill");
         if (!host || !pill) return;
@@ -550,10 +564,15 @@
             else if (hs === "warn" && worst !== "fail") worst = "warn";
         }
 
+        const label =
+            worst === "fail" ? "attention" :
+                worst === "warn" ? "warning" :
+                    "healthy";
+
         setPill(
             pill,
             worst === "fail" ? "fail" : (worst === "warn" ? "warn" : "ok"),
-            worst === "fail" ? "attention" : (worst === "warn" ? "warning" : "healthy")
+            `${label} (${arr.length})`
         );
 
         host.innerHTML = arr.map(d => {
@@ -570,21 +589,32 @@
             const selfText = escapeHtml(d.selftest_text || "—");
             const warning = escapeHtml(d.warning || "");
 
+            const status = String(d.health_status || "unknown");
+            const rowCls = status === "fail" ? "fail" : (status === "warn" ? "warn" : "");
+            const noteCls = rowCls;
+
+            const dur = Number(d.data_units_read);
+            const duw = Number(d.data_units_written);
+            const readBytes = nvmeDataUnitsToBytes(dur);
+            const writtenBytes = nvmeDataUnitsToBytes(duw);
+
             const extras = [];
             if (Number.isFinite(pUsed) && pUsed >= 0) extras.push(`Wear: ${pUsed}%`);
             if (Number.isFinite(spare) && spare >= 0) extras.push(`Spare: ${spare}%`);
             if (Number.isFinite(media) && media >= 0) extras.push(`Media errors: ${media}`);
             if (Number.isFinite(poh) && poh >= 0) extras.push(`Power-on: ${poh} h`);
+            if (Number.isFinite(readBytes)) extras.push(`Read: ${fmtBytes(readBytes)}`);
+            if (Number.isFinite(writtenBytes)) extras.push(`Written: ${fmtBytes(writtenBytes)}`);
 
             return `
-            <div class="kv">
+            <div class="kv driveRow ${rowCls}">
                 <div class="k">
                     ${model}<br>
-                    <span class="mono">${dev} • ${bus} • ${escapeHtml(size)}</span>
+                    <span class="mono">${dev} • ${bus} • ${size}</span>
                 </div>
-                <div class="v">${healthText} • ${escapeHtml(temp)}</div>
+                <div class="v">${healthText} • 🌡 ${temp}</div>
             </div>
-            <div class="note mono" style="margin-top:6px; margin-bottom:12px;">
+            <div class="note mono driveNote ${noteCls}" style="margin-top:6px; margin-bottom:12px;">
                 ${escapeHtml(extras.join(" • ") || "No extra health counters")}
                 <br>
                 Self-test: ${selfText}
@@ -593,7 +623,6 @@
         `;
         }).join("");
     }
-
     let _driveTimer = null;
 
     async function refreshDrivesOnce() {

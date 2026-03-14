@@ -15504,6 +15504,10 @@ srv.Get("/api/v4/system/drives", [&](const httplib::Request& req, httplib::Respo
         if (d.media_errors >= 0) j["media_errors"] = d.media_errors;
         if (d.unsafe_shutdowns >= 0) j["unsafe_shutdowns"] = d.unsafe_shutdowns;
         if (d.num_err_log_entries >= 0) j["num_err_log_entries"] = d.num_err_log_entries;
+        if (d.data_units_read >= 0) j["data_units_read"] = d.data_units_read;
+        if (d.data_units_written >= 0) j["data_units_written"] = d.data_units_written;
+        if (d.host_reads >= 0) j["host_reads"] = d.host_reads;
+        if (d.host_writes >= 0) j["host_writes"] = d.host_writes;
 
         j["selftest_supported"] = d.selftest_supported;
         j["selftest_status"] = d.selftest_status;
