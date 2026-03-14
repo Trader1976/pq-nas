@@ -61,9 +61,9 @@ Limitations / tradeoffs:
     (Best-effort checks are common; enforce again at write time if possible.)
 
 Policy semantics
-----------------
+    ----------------
   - If user.storage_state != "allocated" -> fail with storage_unallocated
-  - If quota_bytes == 0 -> deny any positive upload (fail-closed)
+  - If quota_bytes == 0 -> treat as no usable quota and deny positive uploads (fail-closed)
   - If would_used_bytes > quota_bytes -> quota_exceeded
 
 Versioning note:
