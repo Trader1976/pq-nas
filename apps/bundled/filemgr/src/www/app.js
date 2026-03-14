@@ -2535,14 +2535,11 @@
 
     // Selection menu mode (multi-select where clicked item is part of selection).
     const selectionMode = (selectedKeys && selectedKeys.size > 1 && selectedKeys.has(key));
-
-    // If multiple are selected and this item is in the selection, offer selection actions.
-    if (selectedKeys && selectedKeys.size > 1 && selectedKeys.has(key)) {
-      ctxEl.appendChild(menuItem(`Properties (selection)…`, "", () => showSelectionProperties()));
-      ctxEl.appendChild(menuSep());
-      ctxEl.appendChild(menuItem(`Download selection (zip) (${selectedKeys.size})`, "", () => downloadSelectionZip()));
-      ctxEl.appendChild(menuItem(`Delete selection (${selectedKeys.size})…`, "", () => deleteSelection(), { danger: true }));
-      ctxEl.appendChild(menuSep());
+    if (selectionMode) {
+      buildSelectionMenuOnly();
+      ctxEl.setAttribute("aria-hidden", "false");
+      placeMenu(x, y);
+      return;
     }
 
     if (item.type === "dir") {
@@ -2748,9 +2745,9 @@
     });
   */
 
-  // Right-click on empty grid area opens background menu.
-  gridEl?.addEventListener("contextmenu", (e) => {
-    if (e.target && e.target.closest && e.target.closest(".tile")) return;
+// Right-click on empty working area opens background menu.
+  gridWrap?.addEventListener("contextmenu", (e) => {
+    if (e.target?.closest?.(".tile")) return;
     e.preventDefault();
     openBackgroundMenuAt(e.clientX, e.clientY);
   });
@@ -2987,10 +2984,19 @@
     // Right click: ensure item is selected, then show menu.
     t.addEventListener("contextmenu", (e) => {
       e.preventDefault();
-      ensureSelected(key);
+
+      if (selectedKeys.size > 1) {
+        if (!selectedKeys.has(key)) {
+          setSingleSelection(key);
+          selectionAnchorKey = key;
+        }
+      } else {
+        ensureSelected(key);
+        selectionAnchorKey = key;
+      }
+
       openMenuAt(e.clientX, e.clientY, item);
     });
-
     // Touch long-press: open menu.
     installLongPress(t, item);
 
