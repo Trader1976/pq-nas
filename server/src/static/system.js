@@ -61,6 +61,24 @@
         if (!j) throw new Error("bad JSON");
         return j;
     }
+    async function fetchDrives() {
+        const r = await fetch("/api/v4/system/drives", { cache: "no-store", credentials: "include" });
+        const txt = await r.text();
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        let j = null;
+        try { j = JSON.parse(txt); } catch {}
+        if (!j || !j.ok) throw new Error((j && (j.message || j.error)) || "bad JSON");
+        return j;
+    }
+    function healthKind(s) {
+        if (s === "fail") return "fail";
+        if (s === "warn") return "warn";
+        return "ok";
+    }
+
+    function fmtTempC(n) {
+        return Number.isFinite(n) ? `${n}°C` : "—";
+    }
     async function fetchStorage() {
         const r = await fetch("/api/v4/system/storage", { cache: "no-store", credentials: "include" });
         const txt = await r.text();
@@ -72,22 +90,16 @@
     }
 
     function renderStorage(s) {
-        const set = (id, v) => { const x = el(id); if (x) x.textContent = (v == null || v === "") ? "—" : String(v); };
+        const set = (id, v) => {
+            const x = el(id);
+            if (x) x.textContent = (v == null || v === "") ? "—" : String(v);
+        };
 
         set("fsType", s.fstype);
         set("fsRoot", s.root);
         set("fsMount", s.mountpoint);
         set("fsSource", s.source);
         set("fsOptions", s.options);
-
-        const on = !!s.prjquota_enabled;
-        set("fsQuota", on ? "ON" : "OFF");
-
-        const qp = el("fsQuotaPill");
-        if (qp) {
-            qp.classList.remove("ok", "warn", "fail");
-            qp.classList.add(on ? "ok" : "warn");
-        }
 
         const warn = el("fsWarn");
         if (warn) warn.textContent = s.warning ? ("Note: " + s.warning) : "";
@@ -519,7 +531,83 @@
         host.innerHTML = `<div class="grid">${cards.join("\n")}</div>`;
     }
 
+    function renderDrives(j) {
+        const host = el("driveHealthList");
+        const pill = el("driveHealthPill");
+        if (!host || !pill) return;
 
+        const arr = Array.isArray(j.drives) ? j.drives : [];
+        if (!arr.length) {
+            host.innerHTML = `<div class="note">No supported internal drives detected.</div>`;
+            setPill(pill, "warn", "none");
+            return;
+        }
+
+        let worst = "ok";
+        for (const d of arr) {
+            const hs = String(d.health_status || "unknown");
+            if (hs === "fail") worst = "fail";
+            else if (hs === "warn" && worst !== "fail") worst = "warn";
+        }
+
+        setPill(
+            pill,
+            worst === "fail" ? "fail" : (worst === "warn" ? "warn" : "ok"),
+            worst === "fail" ? "attention" : (worst === "warn" ? "warning" : "healthy")
+        );
+
+        host.innerHTML = arr.map(d => {
+            const model = escapeHtml(d.model || d.dev || "Drive");
+            const dev = escapeHtml(d.dev || "—");
+            const bus = escapeHtml((d.transport || d.kind || "unknown").toUpperCase());
+            const size = fmtBytes(Number(d.size_bytes));
+            const healthText = escapeHtml(d.health_text || "Unknown");
+            const temp = fmtTempC(Number(d.temperature_c));
+            const pUsed = Number(d.percentage_used);
+            const spare = Number(d.available_spare);
+            const media = Number(d.media_errors);
+            const poh = Number(d.power_on_hours);
+            const selfText = escapeHtml(d.selftest_text || "—");
+            const warning = escapeHtml(d.warning || "");
+
+            const extras = [];
+            if (Number.isFinite(pUsed) && pUsed >= 0) extras.push(`Wear: ${pUsed}%`);
+            if (Number.isFinite(spare) && spare >= 0) extras.push(`Spare: ${spare}%`);
+            if (Number.isFinite(media) && media >= 0) extras.push(`Media errors: ${media}`);
+            if (Number.isFinite(poh) && poh >= 0) extras.push(`Power-on: ${poh} h`);
+
+            return `
+            <div class="kv">
+                <div class="k">
+                    ${model}<br>
+                    <span class="mono">${dev} • ${bus} • ${escapeHtml(size)}</span>
+                </div>
+                <div class="v">${healthText} • ${escapeHtml(temp)}</div>
+            </div>
+            <div class="note mono" style="margin-top:6px; margin-bottom:12px;">
+                ${escapeHtml(extras.join(" • ") || "No extra health counters")}
+                <br>
+                Self-test: ${selfText}
+                ${warning ? `<br>${warning}` : ``}
+            </div>
+        `;
+        }).join("");
+    }
+
+    let _driveTimer = null;
+
+    async function refreshDrivesOnce() {
+        try {
+            const j = await fetchDrives();
+            renderDrives(j);
+        } catch (e) {
+            const host = el("driveHealthList");
+            if (host) {
+                host.innerHTML = `<div class="note">Failed to probe drive health: ${escapeHtml(String(e && e.message ? e.message : e))}</div>`;
+            }
+            setPill(el("driveHealthPill"), "fail", "error");
+        }
+    }
     // ---------------- Existing render ----------------
     function render(j) {
 
@@ -634,12 +722,6 @@
         } catch (e) {
             const warn = el("fsWarn");
             if (warn) warn.textContent = "Failed to probe storage: " + (e && e.message ? e.message : e);
-            const qp = el("fsQuotaPill");
-            if (qp) {
-                qp.classList.remove("ok");
-                qp.classList.add("fail");
-            }
-            el("fsQuota") && (el("fsQuota").textContent = "ERROR");
         }
     }
     refreshOnce();
@@ -648,5 +730,9 @@
 // Storage probe: slower cadence is enough
     refreshStorageOnce();
     _storageTimer = setInterval(refreshStorageOnce, 30000);
+
+// Drive health probe
+    refreshDrivesOnce();
+    _driveTimer = setInterval(refreshDrivesOnce, 30000);
 
 })();

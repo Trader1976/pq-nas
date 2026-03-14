@@ -101,6 +101,10 @@ extern "C" {
 #include "storage_resolver.h"
 #include "file_location_index.h"
 
+//storage health
+#include "drive_health.h"
+#include "drive_health_monitor.h"
+
 //sharing
 #include "share_links.h"
 
@@ -6996,6 +7000,44 @@ auto maybe_auto_rotate_before_append = [&]() {
 		pqnas::ShareRegistry shares(shares_path);
 		{ std::string err; if (!shares.load(&err)) std::cerr << "[shares] WARNING: " << err << "\n"; }
 
+	pqnas::drive_health_monitor_start(
+    	[&](const pqnas::DriveHealthInfo& d,
+        	const std::string& prev_status,
+	        const std::string& new_status) {
+
+    	    pqnas::AuditEvent ev;
+
+        	if (new_status == "fail") {
+            	ev.event = "system.drive_failure";
+	            ev.outcome = "fail";
+    	    } else if (new_status == "warn") {
+        	    ev.event = "system.drive_warning";
+            	ev.outcome = "fail";
+	        } else if (new_status == "ok") {
+    	        ev.event = "system.drive_recovered";
+        	    ev.outcome = "ok";
+	        } else {
+    	        ev.event = "system.drive_status_changed";
+        	    ev.outcome = "ok";
+        	}
+
+	        ev.f["device"] = d.dev;
+    	    ev.f["model"] = pqnas::shorten(d.model, 120);
+        	ev.f["prev_status"] = prev_status;
+	        ev.f["new_status"] = new_status;
+    	    ev.f["health_text"] = pqnas::shorten(d.health_text, 120);
+
+	        if (d.temperature_c >= 0) ev.f["temperature_c"] = std::to_string(d.temperature_c);
+    	    if (d.percentage_used >= 0) ev.f["percentage_used"] = std::to_string(d.percentage_used);
+        	if (d.available_spare >= 0) ev.f["available_spare"] = std::to_string(d.available_spare);
+	        if (d.media_errors >= 0) ev.f["media_errors"] = std::to_string(d.media_errors);
+    	    if (d.power_on_hours >= 0) ev.f["power_on_hours"] = std::to_string(d.power_on_hours);
+        	if (!d.warning.empty()) ev.f["warning"] = pqnas::shorten(d.warning, 160);
+	        if (!d.selftest_text.empty()) ev.f["selftest"] = pqnas::shorten(d.selftest_text, 160);
+
+    	    audit_append(ev);
+    	}
+	);
 
     httplib::Server srv;
 	srv.set_payload_max_length(k_payload_max_upload_bytes);
@@ -15405,7 +15447,7 @@ srv.Get("/api/v4/system/storage", [&](const httplib::Request& req, httplib::Resp
     json out;
     out["ok"] = true;
 
-    out["data_root"] = si.root;
+    out["root"] = si.root;
     out["fstype"] = si.fstype;
     out["mountpoint"] = si.mountpoint;
     out["source"] = si.source;
@@ -15418,6 +15460,69 @@ srv.Get("/api/v4/system/storage", [&](const httplib::Request& req, httplib::Resp
 
     if (!err.empty())
         out["warning"] = err;
+
+    reply_json(res, 200, out.dump());
+});
+
+srv.Get("/api/v4/system/drives", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &role)) return;
+
+    auto snap = pqnas::drive_health_monitor_snapshot();
+    if (!snap.ready) {
+        std::string err;
+        pqnas::drive_health_monitor_refresh_now(&err);
+        snap = pqnas::drive_health_monitor_snapshot();
+    }
+
+    json arr = json::array();
+    for (const auto& d : snap.drives) {
+        json j;
+        j["name"] = d.name;
+        j["dev"] = d.dev;
+        j["kind"] = d.kind;
+        j["transport"] = d.transport;
+        j["rota"] = d.rota;
+
+        j["model"] = d.model;
+        j["serial"] = d.serial;
+        j["firmware"] = d.firmware;
+        j["size_bytes"] = d.size_bytes;
+
+        j["smart_available"] = d.smart_available;
+        j["smart_enabled"] = d.smart_enabled;
+
+        j["health_status"] = d.health_status;
+        j["health_text"] = d.health_text;
+
+        if (d.temperature_c >= 0) j["temperature_c"] = d.temperature_c;
+        if (d.power_on_hours >= 0) j["power_on_hours"] = d.power_on_hours;
+
+        if (d.percentage_used >= 0) j["percentage_used"] = d.percentage_used;
+        if (d.available_spare >= 0) j["available_spare"] = d.available_spare;
+        if (d.available_spare_threshold >= 0) j["available_spare_threshold"] = d.available_spare_threshold;
+        if (d.media_errors >= 0) j["media_errors"] = d.media_errors;
+        if (d.unsafe_shutdowns >= 0) j["unsafe_shutdowns"] = d.unsafe_shutdowns;
+        if (d.num_err_log_entries >= 0) j["num_err_log_entries"] = d.num_err_log_entries;
+
+        j["selftest_supported"] = d.selftest_supported;
+        j["selftest_status"] = d.selftest_status;
+        j["selftest_text"] = d.selftest_text;
+
+        j["warning"] = d.warning;
+
+        json msgs = json::array();
+        for (const auto& m : d.messages) msgs.push_back(m);
+        j["messages"] = std::move(msgs);
+
+        arr.push_back(std::move(j));
+    }
+
+    json out;
+    out["ok"] = true;
+    out["updated_iso"] = snap.updated_iso;
+    out["drives"] = std::move(arr);
+    if (!snap.last_error.empty()) out["warning"] = snap.last_error;
 
     reply_json(res, 200, out.dump());
 });
@@ -24079,6 +24184,9 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
 	srv.listen("0.0.0.0", LISTEN_PORT);
 
 	// ---- Shutdown sequence ----
+
+	// Stop background drive health monitor
+	pqnas::drive_health_monitor_stop();
 
 	// Stop RAID / migration async worker (best-effort clean shutdown)
 	user_mig_worker_stop_and_join();

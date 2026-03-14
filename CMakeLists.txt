@@ -141,6 +141,8 @@ add_executable(pqnas_server
         server/src/users_registry.cpp
         server/src/system_metrics.cc
         server/src/storage_info.cc
+        server/src/drive_health.cc
+        server/src/drive_health_monitor.cc
         server/src/share_links.cc
         server/src/static_serve.cc
         server/src/verify_login_common.cc
