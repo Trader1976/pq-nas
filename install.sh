@@ -37,7 +37,11 @@ ensure_os_deps() {
     # - mkfs.btrfs + btrfs subvolume: btrfs-progs
     #
     # Runtime deps required by pqnas_server:
-    # - libqrencode4 (fixes libqrencode.so.4 not found)
+    # - libqrencode4
+    # - libsqlite3-0
+    #
+    # External tools required by drive health probing:
+    # - smartmontools
     #
     # Common on minimal VPS images:
     # - ca-certificates
@@ -50,6 +54,8 @@ ensure_os_deps() {
       e2fsprogs \
       btrfs-progs \
       libqrencode4 \
+      libsqlite3-0 \
+      smartmontools \
       libsodium23 \
       libssl3 \
       libstdc++6 \
@@ -114,7 +120,8 @@ main() {
 
   export PQNAS_ASSET_ROOT="$pkg_root"
 
-  py="$(ensure_venv)"
+  ensure_venv
+  py="/opt/pqnas-installer/venv/bin/python"
   exec "$py" "$installer_dir/pqnas_install.py"
 }
 

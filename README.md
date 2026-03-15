@@ -1,11 +1,18 @@
-
-<img width="1174" height="757" alt="Pasted image" src="https://github.com/user-attachments/assets/521c5a73-6457-44de-8de5-1cb646ed757c" />
-
-<img width="1174" height="757" alt="Pasted image (2)" src="https://github.com/user-attachments/assets/7ee1f614-e2ed-4685-855f-069e5da07dd8" />
-
 # PQ-NAS
 
-## 🚀 Quick Install (Linux x86_64)
+**PQ-NAS** is a lightweight, identity-first personal storage server designed around **device-mediated authentication** and **post-quantum–ready identity verification**.
+
+Instead of usernames, passwords, or browser-stored credentials, PQ-NAS uses **DNA identity** and **QR-based authentication via DNA-Messenger**. Your phone becomes the trust anchor. The server never trusts the browser alone.
+
+PQ-NAS is part of the broader **CPUNK ecosystem**, alongside:
+
+- **DNA-Messenger** – identity and secure messaging  
+- **PQ-SSH** – identity-based SSH access  
+- **PQ-NAS** – identity-secured storage  
+
+---
+
+# 🚀 Quick Install (Linux x86_64)
 
 Download the release tarball and run:
 
@@ -13,89 +20,210 @@ Download the release tarball and run:
 tar -xzf pqnas-<version>-linux-x86_64.tar.gz
 cd pqnas
 sudo ./install.sh
+```
 
+The installer launches a **Textual TUI installer** that guides you through:
 
+- selecting storage
+- configuring networking
+- enabling HTTPS (optional)
+- initializing PQ-NAS
 
-# PQ-NAS
-
-**PQ-NAS** is an identity-first, post-quantum–ready personal storage server.
-
-Instead of usernames, passwords, or browser-stored secrets, PQ-NAS uses
-**DNA identity** and **device-mediated QR authentication** to grant access.
-Your phone is the key. The server never trusts the browser alone.
-
-This project is part of the broader **CPUNK ecosystem**, alongside
-DNA-Messenger and PQ-SSH.
+After installation the server starts automatically.
 
 ---
 
-## What PQ-NAS is (v0)
+# What PQ-NAS Is
 
-PQ-NAS v0 is intentionally minimal.
+PQ-NAS is **not a traditional NAS distribution**.
 
-It is **not** a traditional NAS replacement yet.
-It is a secure access layer that proves the identity model works end-to-end.
+It is a **secure storage service focused on identity and access control**, designed to demonstrate a different security model:
 
-Core ideas:
-- No passwords
-- No long-lived browser secrets
-- No VPN required
-- No server-side session state required
-- Post-quantum–capable identity verification
+- no passwords
+- no browser secrets
+- no long-lived server sessions
+- no VPN required
+- identity verification performed by the user’s device
+
+The core idea:
+
+> The **phone proves identity**, not the browser.
 
 ---
 
-## Core Features (v0)
+# Core Features
 
-- QR-code–based login via DNA-Messenger
-- Device-mediated approval (user confirms on phone)
-- Stateless signature verification on the NAS
+Current PQ-NAS builds include:
+
+- QR-code login via **DNA-Messenger**
+- Device-mediated login approval
+- Stateless identity verification
 - Identity-based authorization (DNA fingerprint)
-- Simple web UI for file access
-- Designed to integrate with PQ-SSH
+- Web File Manager
+- Admin interface
+- Btrfs storage backend
+- Storage pools
+- Background tiering (SSD → HDD landing pools)
+- User storage migration
+- Share links for files
+- Built-in audit logging
+- Drive health monitoring (SMART / NVMe)
+
+PQ-NAS is designed to stay **minimal and transparent**, avoiding large frameworks and unnecessary services.
 
 ---
 
-## Authentication Model
+# Authentication Model
+
+Login works through a device-mediated challenge:
 
 1. Browser requests access
 2. PQ-NAS displays a QR code
-3. DNA-Messenger scans and verifies the request
-4. User approves on the phone
+3. DNA-Messenger scans the QR
+4. User approves the login on their phone
 5. DNA-Messenger signs a challenge using the user’s DNA identity
-6. PQ-NAS verifies the signature (post-quantum capable)
-7. Access is granted without passwords or stored browser secrets
+6. PQ-NAS verifies the signature
+7. Access is granted
+
+This model means:
+
+- no passwords exist
+- the browser cannot authenticate alone
+- stolen browser sessions are useless without the phone
 
 ---
 
-## Non-Goals (for now)
+# Storage Model
 
-- Multi-tenant enterprise features
-- Full NAS management UI (RAID, snapshots, quotas)
-- Cloud sync or replication
-- Usernames, passwords, or WebAuthn
+PQ-NAS uses a **pool-based storage layout** built on Btrfs.
 
-These may come later, but **not in v0**.
+Typical structure:
+
+```
+/srv/pqnas
+├─ pools/
+├─ users/
+├─ data/
+├─ audit/
+└─ metadata/
+```
+
+Pools can represent:
+
+- HDD storage
+- SSD landing pools
+- archive storage
+- backup storage
+
+Files uploaded by users are stored under their identity-derived directories.
 
 ---
 
-## Status
+# System Requirements
 
-🚧 Early development / v0  
-Architecture and authentication flow are the current focus.
+PQ-NAS is intentionally extremely lightweight.
+
+## Runtime Requirements
+
+Measured on a real installation:
+
+| Resource | Usage |
+|--------|------|
+RAM | ~11 MB |
+Application disk footprint | ~7–8 MB |
+Storage overhead | ~300 KB |
+
+Example measurements:
+
+```
+/srv/pqnas        316K
+/opt/pqnas        7.1M
+/etc/pqnas        28K
+```
+
+Server memory usage:
+
+```
+RSS: ~11 MB
+```
+
+## Installation Requirements
+
+The installer uses a temporary Python environment to run the TUI installer.
+
+Typical space usage:
+
+| Component | Size |
+|----------|------|
+Installer environment | ~40–50 MB |
+System dependencies | up to ~400–500 MB |
+
+Recommended minimum free disk space before installation:
+
+```
+500 MB
+```
+
+After installation the runtime system itself occupies only a few megabytes.
 
 ---
 
-## License
+# Architecture
+
+PQ-NAS is intentionally simple:
+
+- **C++ backend server**
+- **static web UI**
+- **Btrfs-based storage**
+- **identity-first security model**
+
+This architecture keeps the runtime footprint extremely small compared to container-heavy NAS systems.
+
+---
+
+# Status
+
+🚧 Early development
+
+PQ-NAS already supports:
+
+- identity login
+- file manager
+- admin UI
+- Btrfs pools
+- background storage operations
+
+But the project is still evolving.
+
+Expect changes while core architecture stabilizes.
+
+---
+
+# Non-Goals (for now)
+
+PQ-NAS deliberately avoids many traditional NAS features in early versions.
+
+Not currently included:
+
+- large enterprise cluster features
+- heavy container ecosystems
+- traditional password authentication
+- complex virtualization layers
+
+The goal is to keep the system **simple, secure, and lightweight**.
+
+---
+
+# License
 
 Apache License 2.0
 
 ---
 
-## Philosophy
+# Philosophy
 
-> Identity should belong to the user, not the server.
->
-> If the browser is compromised, the attacker still should not get in.
->
+> Identity should belong to the user, not the server.  
+>  
+> If the browser is compromised, the attacker should still not get access.  
+>  
 > The phone is the trust anchor.

@@ -74,6 +74,63 @@ def looks_like_ip(host: str) -> bool:
         return True
     return False
 
+def ensure_external_tools(log: Optional[Log] = None) -> None:
+    """
+    Install external runtime tools required by PQ-NAS features.
+    These are not discoverable via ldd because they are executed as programs.
+    """
+    pkgs: List[str] = []
+
+    if not os.path.isfile("/usr/sbin/smartctl") and not shutil.which("smartctl"):
+        pkgs.append("smartmontools")
+
+    if not pkgs:
+        if log:
+            log.write("[*] External tools: OK")
+        return
+
+    if log:
+        log.write("[*] Installing external tools: " + ", ".join(pkgs))
+    apt_install(sorted(set(pkgs)), log=log)
+
+def install_sudoers_rule(name: str, content: str, log: Optional[Log] = None) -> str:
+    if not shutil.which("visudo"):
+        raise RuntimeError("visudo not found; cannot validate sudoers rule.")
+
+    path = f"/etc/sudoers.d/{name}"
+    tmp = path + ".new"
+
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(content)
+        if not content.endswith("\n"):
+            f.write("\n")
+
+    os.chmod(tmp, 0o440)
+
+    # Validate before replacing
+    p = subprocess.run(
+        ["visudo", "-c", "-f", tmp],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if p.returncode != 0:
+        out = (p.stdout or "").strip()
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+        raise RuntimeError(f"sudoers validation failed for {name}:\n{out}")
+
+    os.replace(tmp, path)
+
+    if log:
+        log.write(f"[*] Installed sudoers rule: {path}")
+
+    return path
+def install_pqnas_smartctl_sudoers(log: Optional[Log] = None) -> None:
+    content = "pqnas ALL=(root) NOPASSWD: /usr/sbin/smartctl"
+    install_sudoers_rule("pqnas-smartctl", content, log=log)
 
 def run_cmd_capture(argv: List[str]) -> str:
     p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -177,6 +234,7 @@ def ensure_runtime_deps_for_server(server_exec: str, log: Optional[Log] = None, 
     # Explicit SONAME -> package mapping (extend only when proven missing)
     soname_to_pkg = {
         "libqrencode.so.4": "libqrencode4",
+        "libsqlite3.so.0": "libsqlite3-0",
 
         # Needed by libdna_lib.so on your VPS (Ubuntu noble)
         "libfmt.so.9": "libfmt9",
@@ -787,6 +845,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=pqnas
+Group=pqnas
 EnvironmentFile={env_file}
 EnvironmentFile={keys_file}
 ExecStart={exec_path}
@@ -872,6 +932,37 @@ def install_snapshot_restore_assets(asset_root: str, backend: str, log: Optional
     if log:
         log.write("[*] Snapshot restore assets installed (script + units).")
 
+def ensure_service_user(user: str = "pqnas", log: Optional[Log] = None) -> None:
+    p = subprocess.run(
+        ["id", "-u", user],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if p.returncode == 0:
+        if log:
+            log.write(f"[*] Service user exists: {user}")
+        return
+
+    subprocess.run(
+        ["useradd", "-r", "-s", "/usr/sbin/nologin", "-M", user],
+        check=True,
+    )
+    if log:
+        log.write(f"[*] Created service user: {user}")
+
+def ensure_pqnas_ownership(root: str, log: Optional[Log] = None) -> None:
+    paths = [
+        root,
+        "/etc/pqnas",
+        "/opt/pqnas",
+    ]
+
+    for p in paths:
+        if os.path.exists(p):
+            subprocess.run(["chown", "-R", "pqnas:pqnas", p], check=True)
+            if log:
+                log.write(f"[*] Ownership set: pqnas:pqnas {p}")
 
 def enable_letsencrypt_nginx(domain: str, email: str, redirect: bool, logw=None) -> bool:
     """
@@ -2117,6 +2208,9 @@ class ExecuteScreen(Screen):
             self.logw.write("Ensuring /etc/pqnas config files …")
             ensure_config_files(mp, asset_root)
 
+            self.logw.write("Ensuring pqnas service user …")
+            ensure_service_user("pqnas", log=self.logw)
+
             self.logw.write("Writing /etc/pqnas/pqnas.env …")
 
             dna_path = "/opt/pqnas/lib/dna/libdna_lib.so"
@@ -2205,10 +2299,16 @@ class ExecuteScreen(Screen):
                 extra_ldd_paths=["/opt/pqnas/lib/dna/libdna_lib.so"],
             )
 
+            self.logw.write("Checking required external tools …")
+            ensure_external_tools(log=self.logw)
+
 
             self.logw.write("Generating /etc/pqnas/keys.env …")
             write_keys_env(asset_root, "/etc/pqnas/keys.env")
             self.logw.write("keys.env written (mode 600).")
+
+            self.logw.write("Setting ownership for pqnas runtime paths …")
+            ensure_pqnas_ownership(mp, log=self.logw)
 
             unit_path = write_systemd_unit(server_exec, "/etc/pqnas/pqnas.env")
             self.logw.write(f"Wrote unit: {unit_path}")
@@ -2264,7 +2364,8 @@ class ExecuteScreen(Screen):
 
                 self.logw.write("Testing + reloading nginx …")
                 nginx_test_reload(log=self.logw)
-                # Optional: Let's Encrypt HTTPS (only if user enabled it)
+                # Let's Encrypt HTTPS (only if user enabled it)
+                ok = False
                 if st.https_enabled:
                     self.logw.write("")
                     self.logw.write("== Let's Encrypt HTTPS ==")
@@ -2285,21 +2386,20 @@ class ExecuteScreen(Screen):
                     )
                     run_systemctl(["restart", "pqnas.service"])
 
-                if ok:
-                    self.logw.write("[OK] HTTPS enabled via certbot.")
-                    # Re-write nginx config so it switches to 443 + redirect (now cert exists)
-                    self.logw.write("Rewriting nginx site config for HTTPS …")
-                    conf_path = write_nginx_site_https_if_available(
-                        server_name=st.nginx_hostname,
-                        upstream_host="127.0.0.1",
-                        upstream_port=8081,
-                        client_max_body_size="2g",
-                    )
-                    self.logw.write(f"Wrote: {conf_path}")
-                    self.logw.write("Testing + reloading nginx …")
-                    nginx_test_reload(log=self.logw)
-                else:
-                    self.logw.write("[WARN] HTTPS setup failed; continuing with HTTP.")
+                    if ok:
+                        self.logw.write("[OK] HTTPS enabled via certbot.")
+                        self.logw.write("Rewriting nginx site config for HTTPS …")
+                        conf_path = write_nginx_site_https_if_available(
+                            server_name=st.nginx_hostname,
+                            upstream_host="127.0.0.1",
+                            upstream_port=8081,
+                            client_max_body_size="2g",
+                        )
+                        self.logw.write(f"Wrote: {conf_path}")
+                        self.logw.write("Testing + reloading nginx …")
+                        nginx_test_reload(log=self.logw)
+                    else:
+                        self.logw.write("[WARN] HTTPS setup failed; continuing with HTTP.")
 
                 if have_letsencrypt_cert(st.nginx_hostname):
                     self.logw.write(f"✅ nginx ready: https://{st.nginx_hostname}/  (http redirects with 308)")
