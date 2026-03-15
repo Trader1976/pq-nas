@@ -70,6 +70,23 @@
         if (!j || !j.ok) throw new Error((j && (j.message || j.error)) || "bad JSON");
         return j;
     }
+    async function startDriveSelftest(dev, type) {
+        const r = await fetch("/api/v4/system/drives/selftest/start", {
+            method: "POST",
+            cache: "no-store",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ dev, type })
+        });
+        const txt = await r.text();
+        let j = null;
+        try { j = JSON.parse(txt); } catch {}
+        if (!r.ok || !j || !j.ok) {
+            throw new Error((j && (j.message || j.error)) || `HTTP ${r.status}`);
+        }
+        return j;
+    }
+
     function healthKind(s) {
         if (s === "fail") return "fail";
         if (s === "warn") return "warn";
@@ -586,12 +603,28 @@
             const spare = Number(d.available_spare);
             const media = Number(d.media_errors);
             const poh = Number(d.power_on_hours);
-            const selfText = escapeHtml(d.selftest_text || "—");
+            const selfText = d.selftest_text || "—";
             const warning = escapeHtml(d.warning || "");
 
             const status = String(d.health_status || "unknown");
-            const rowCls = status === "fail" ? "fail" : (status === "warn" ? "warn" : "");
+            const selftestState = String(d.selftest_status || "unknown");
+            const selftestProgress = Number.isFinite(Number(d.selftest_progress_pct))
+                ? Number(d.selftest_progress_pct)
+                : -1;
+
+            let rowCls = "";
+            if (selftestState === "running") {
+                rowCls = "test";
+            } else if (status === "fail") {
+                rowCls = "fail";
+            } else if (status === "warn") {
+                rowCls = "warn";
+            }
+
             const noteCls = rowCls;
+            const canRunSelftest =
+                !!d.selftest_supported &&
+                selftestState !== "running";
 
             const dur = Number(d.data_units_read);
             const duw = Number(d.data_units_written);
@@ -614,11 +647,48 @@
                 </div>
                 <div class="v">${healthText} • 🌡 ${temp}</div>
             </div>
-            <div class="note mono driveNote ${noteCls}" style="margin-top:6px; margin-bottom:12px;">
+            <div class="note mono driveNote ${noteCls}" style="margin-top:6px; margin-bottom:8px;">
                 ${escapeHtml(extras.join(" • ") || "No extra health counters")}
                 <br>
-                Self-test: ${selfText}
+                Self-test: ${
+                selftestState === "running"
+                    ? `<b style="color:rgba(var(--warn-rgb),1)">RUNNING${
+                        selftestProgress >= 0 ? " " + selftestProgress + "%" : ""
+                    }</b> • ${escapeHtml(selfText)}`
+                    : escapeHtml(selfText)
+            }
+                ${
+                selftestState === "running" && selftestProgress >= 0
+                    ? `<div style="margin-top:8px; height:8px; border-radius:999px; overflow:hidden; background:rgba(var(--warn-rgb),0.18); border:1px solid rgba(var(--warn-rgb),0.30);">
+                               <div style="height:100%; width:${selftestProgress}%; background:rgba(var(--warn-rgb),0.92);"></div>
+                           </div>`
+                    : ``
+            }
                 ${warning ? `<br>${warning}` : ``}
+            </div>
+            <div class="driveActions" style="display:flex; gap:8px; margin:0 0 14px 0; flex-wrap:wrap;">
+                ${
+                d.selftest_supported
+                    ? `
+                    <button class="btn js-drive-selftest"
+                            type="button"
+                            data-dev="${escapeHtml(d.dev || "")}"
+                            data-type="short"
+                            ${canRunSelftest ? "" : "disabled"}>
+                        Run short test
+                    </button>
+                    <button class="btn js-drive-selftest"
+                            type="button"
+                            data-dev="${escapeHtml(d.dev || "")}"
+                            data-type="extended"
+                            ${canRunSelftest ? "" : "disabled"}>
+                        Run extended test
+                    </button>
+                    `
+                    : `
+                    <span class="note">Self-test start not available for this drive.</span>
+                    `
+            }
             </div>
         `;
         }).join("");
@@ -738,7 +808,39 @@
         }
     }
 
-    el("btnRefresh").addEventListener("click", refreshOnce);
+    el("btnRefresh").addEventListener("click", async () => {
+        await refreshOnce();
+        await refreshStorageOnce();
+        await refreshDrivesOnce();
+    });
+
+    document.addEventListener("click", async (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest(".js-drive-selftest");
+        if (!btn) return;
+
+        const dev = btn.getAttribute("data-dev") || "";
+        const type = btn.getAttribute("data-type") || "short";
+        if (!dev) return;
+
+        if (type === "extended") {
+            const ok = window.confirm(`Start extended self-test for ${dev}? This may take a long time.`);
+            if (!ok) return;
+        }
+
+        const oldText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Starting…";
+
+        try {
+            await startDriveSelftest(dev, type);
+            await refreshDrivesOnce();
+        } catch (e) {
+            alert("Failed to start self-test: " + String(e && e.message ? e.message : e));
+        } finally {
+            btn.disabled = false;
+            btn.textContent = oldText;
+        }
+    });
 
 
 

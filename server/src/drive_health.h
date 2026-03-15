@@ -42,9 +42,17 @@ namespace pqnas {
         std::string selftest_status; // "unsupported" | "idle" | "running" | "completed" | "failed" | "unknown"
         std::string selftest_text;
 
+        int selftest_progress_pct = -1; // 0..100 when known, else -1
+
         std::string warning;
         std::vector<std::string> messages;
     };
+
+    // Starts a self-test for a known internal drive.
+    // type: "short" | "extended"
+    bool start_drive_selftest(const std::string& dev,
+                              const std::string& type,
+                              std::string* err);
 
     bool probe_drive_health(std::vector<DriveHealthInfo>* out, std::string* err);
 

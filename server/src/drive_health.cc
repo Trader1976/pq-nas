@@ -239,7 +239,9 @@ static void parse_nvme_smart_json(const json& j, const LsblkDisk& inv, DriveHeal
 
     if (j.contains("nvme_self_test_log") && j["nvme_self_test_log"].is_object()) {
         d->selftest_supported = true;
+        d->selftest_progress_pct = -1;
 
+        const auto& st = j["nvme_self_test_log"];
         const std::string cur =
             j_str(j, {"nvme_self_test_log", "current_self_test_operation", "string"});
 
@@ -250,8 +252,8 @@ static void parse_nvme_smart_json(const json& j, const LsblkDisk& inv, DriveHeal
             d->selftest_status = "idle";
             d->selftest_text = "No self-test in progress";
 
-            const auto& st = j["nvme_self_test_log"];
-            if (st.contains("table") && st["table"].is_array() && !st["table"].empty() && st["table"][0].is_object()) {
+            if (st.contains("table") && st["table"].is_array() &&
+                !st["table"].empty() && st["table"][0].is_object()) {
                 const auto& row = st["table"][0];
 
                 std::string code;
@@ -259,26 +261,56 @@ static void parse_nvme_smart_json(const json& j, const LsblkDisk& inv, DriveHeal
 
                 if (row.contains("self_test_code") && row["self_test_code"].is_object()) {
                     auto it = row["self_test_code"].find("string");
-                    if (it != row["self_test_code"].end() && it->is_string()) code = it->get<std::string>();
+                    if (it != row["self_test_code"].end() && it->is_string()) {
+                        code = it->get<std::string>();
+                    }
                 }
+
                 if (row.contains("self_test_result") && row["self_test_result"].is_object()) {
                     auto it = row["self_test_result"].find("string");
-                    if (it != row["self_test_result"].end() && it->is_string()) result = it->get<std::string>();
+                    if (it != row["self_test_result"].end() && it->is_string()) {
+                        result = it->get<std::string>();
+                    }
                 }
 
                 if (!result.empty()) {
-                    d->selftest_text = "Last " + (code.empty() ? std::string("self-test") : code + " test")
-                                     + ": " + result;
+                    d->selftest_text =
+                        "Last " + (code.empty() ? std::string("self-test") : code + " test") +
+                        ": " + result;
                 }
             }
         } else {
             d->selftest_status = "running";
-            d->selftest_text = cur;
+
+            long long remaining = -1;
+
+            if (st.contains("current_self_test_completion_percent") &&
+                st["current_self_test_completion_percent"].is_number_integer()) {
+                remaining = st["current_self_test_completion_percent"].get<long long>();
+            } else if (st.contains("current_self_test_completion_percent") &&
+                       st["current_self_test_completion_percent"].is_object()) {
+                auto it_val = st["current_self_test_completion_percent"].find("value");
+                if (it_val != st["current_self_test_completion_percent"].end() &&
+                    it_val->is_number_integer()) {
+                    remaining = it_val->get<long long>();
+                }
+            }
+
+            if (remaining >= 0 && remaining <= 100) {
+                int done = 100 - static_cast<int>(remaining);
+                if (done < 0) done = 0;
+                if (done > 100) done = 100;
+                d->selftest_progress_pct = done;
+                d->selftest_text = cur + " (" + std::to_string(done) + "%)";
+            } else {
+                d->selftest_text = cur;
+            }
         }
     } else {
         d->selftest_supported = false;
         d->selftest_status = "unsupported";
         d->selftest_text = "Self-test log unavailable";
+        d->selftest_progress_pct = -1;
     }
 
     d->health_status = "ok";
@@ -325,6 +357,43 @@ static void parse_nvme_smart_json(const json& j, const LsblkDisk& inv, DriveHeal
     } else if (critical_warning > 0) {
         d->warning = "NVMe critical warning is non-zero";
     }
+}
+
+static bool is_supported_selftest_type(const std::string& type) {
+    return type == "short" || type == "extended";
+}
+
+static bool start_nvme_selftest(const std::string& dev,
+                                    const std::string& type,
+                                    std::string* err) {
+    if (err) err->clear();
+
+    // smartctl uses "short" and "long"
+    const std::string smart_type = (type == "extended") ? "long" : "short";
+
+    std::string txt;
+    int rc = -1;
+    const std::string cmd =
+        "sudo -n /usr/sbin/smartctl -t " + smart_type + " " + shell_quote(dev) + " 2>&1";
+
+    if (!run_command_capture(cmd, &txt, &rc)) {
+        if (err) *err = "failed to execute smartctl self-test start";
+        return false;
+    }
+
+    // For the start command, smartctl output text is often more useful than rc.
+    if (rc != 0) {
+        std::string preview = trim_ws(txt);
+        if (preview.size() > 400) preview = preview.substr(0, 400);
+        if (err) {
+            *err = preview.empty()
+                ? ("smartctl self-test start failed rc=" + std::to_string(rc))
+                : preview;
+        }
+        return false;
+    }
+
+    return true;
 }
 
 static bool probe_one_drive(const LsblkDisk& inv, DriveHealthInfo* out, std::string* err) {
@@ -381,6 +450,55 @@ static bool probe_one_drive(const LsblkDisk& inv, DriveHealthInfo* out, std::str
 }
 
 } // namespace
+
+bool start_drive_selftest(const std::string& dev,
+                              const std::string& type,
+                              std::string* err) {
+    if (err) err->clear();
+
+    if (dev.empty()) {
+        if (err) *err = "missing device path";
+        return false;
+    }
+    if (!starts_with(dev, "/dev/")) {
+        if (err) *err = "invalid device path";
+        return false;
+    }
+    if (!is_supported_selftest_type(type)) {
+        if (err) *err = "unsupported self-test type";
+        return false;
+    }
+
+    std::vector<LsblkDisk> inv;
+    std::string inv_err;
+    if (!collect_lsblk_disks(&inv, &inv_err)) {
+        if (err) *err = inv_err.empty() ? "failed to enumerate drives" : inv_err;
+        return false;
+    }
+
+    const LsblkDisk* found = nullptr;
+    for (const auto& d : inv) {
+        if (d.path == dev) {
+            found = &d;
+            break;
+        }
+    }
+
+    if (!found) {
+        if (err) *err = "device not found";
+        return false;
+    }
+
+    // Phase 1: NVMe only, because full self-test handling is currently only
+    // implemented/probed properly for NVMe in this module.
+    const bool is_nvme = (found->tran == "nvme") || starts_with(found->name, "nvme");
+    if (!is_nvme) {
+        if (err) *err = "manual self-test start is currently implemented for NVMe drives only";
+        return false;
+    }
+
+    return start_nvme_selftest(dev, type, err);
+}
 
 bool probe_drive_health(std::vector<DriveHealthInfo>* out, std::string* err) {
     if (!out) {

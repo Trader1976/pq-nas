@@ -15469,7 +15469,18 @@ srv.Get("/api/v4/system/drives", [&](const httplib::Request& req, httplib::Respo
     if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &role)) return;
 
     auto snap = pqnas::drive_health_monitor_snapshot();
-    if (!snap.ready) {
+
+    bool should_refresh = !snap.ready;
+    if (!should_refresh) {
+        for (const auto& d : snap.drives) {
+            if (d.selftest_status == "running") {
+                should_refresh = true;
+                break;
+            }
+        }
+    }
+
+    if (should_refresh) {
         std::string err;
         pqnas::drive_health_monitor_refresh_now(&err);
         snap = pqnas::drive_health_monitor_snapshot();
@@ -15512,6 +15523,7 @@ srv.Get("/api/v4/system/drives", [&](const httplib::Request& req, httplib::Respo
         j["selftest_supported"] = d.selftest_supported;
         j["selftest_status"] = d.selftest_status;
         j["selftest_text"] = d.selftest_text;
+        if (d.selftest_progress_pct >= 0) j["selftest_progress_pct"] = d.selftest_progress_pct;
 
         j["warning"] = d.warning;
 
@@ -15528,6 +15540,49 @@ srv.Get("/api/v4/system/drives", [&](const httplib::Request& req, httplib::Respo
     out["drives"] = std::move(arr);
     if (!snap.last_error.empty()) out["warning"] = snap.last_error;
 
+    reply_json(res, 200, out.dump());
+});
+
+srv.Post("/api/v4/system/drives/selftest/start", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &role)) return;
+
+    if (role != "admin") {
+        reply_json(res, 403, R"({"ok":false,"error":"forbidden","message":"admin required"})");
+        return;
+    }
+
+    json in;
+    try {
+        in = json::parse(req.body.empty() ? "{}" : req.body);
+    } catch (...) {
+        reply_json(res, 400, R"({"ok":false,"error":"bad_json","message":"invalid JSON body"})");
+        return;
+    }
+
+    const std::string dev  = in.value("dev", "");
+    const std::string type = in.value("type", "short");
+
+    std::string err;
+    if (!pqnas::start_drive_selftest(dev, type, &err)) {
+        json out;
+        out["ok"] = false;
+        out["error"] = "selftest_start_failed";
+        out["message"] = err.empty() ? "failed to start self-test" : err;
+        reply_json(res, 400, out.dump());
+        return;
+    }
+
+    // Refresh monitor snapshot so the UI can show the new state sooner.
+    std::string refresh_err;
+    pqnas::drive_health_monitor_refresh_now(&refresh_err);
+
+    json out;
+    out["ok"] = true;
+    out["dev"] = dev;
+    out["type"] = type;
+    out["message"] = "self-test started";
+    if (!refresh_err.empty()) out["warning"] = refresh_err;
     reply_json(res, 200, out.dump());
 });
 
