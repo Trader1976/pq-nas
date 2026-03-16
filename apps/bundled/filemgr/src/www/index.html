@@ -15,6 +15,7 @@
       --fm_surface: var(--panel);
       --fm_surface2: var(--panel2);
       --fm_modal_overlay: rgba(0,0,0,0.55);
+      --fav-rgb: 255,210,60;   /* universal favorite color (gold/yellow) */
     }
 
     /* Semantic hook for breadcrumb container (styled mainly via #pathLine) */
@@ -239,6 +240,13 @@
       background: rgba(0,0,0,0.12);
     }
 
+
+    .favBtn.isFav{
+      color: rgb(var(--fav-rgb)) !important;
+      border-color: rgba(var(--fav-rgb),0.55) !important;
+      background: rgba(var(--fav-rgb),0.14) !important;
+      box-shadow: 0 0 12px rgba(var(--fav-rgb),0.18);
+    }
     /* smaller icon in list */
     .grid.list .tile .ico{
       width: 20px;
@@ -801,7 +809,11 @@
       color: rgba(var(--fg-rgb),0.92);
       overflow-wrap: anywhere;
     }
-
+    .actions .btn.active{
+      border-color: rgba(var(--fg-rgb),0.42);
+      background: rgba(var(--fg-rgb),0.10);
+      box-shadow: 0 0 18px rgba(var(--fg-rgb),0.10);
+    }
     .hidden{ display:none !important; }
   </style>
 </head>
@@ -824,6 +836,10 @@
         </button>
         <button class="btn secondary" id="viewToggleBtn" type="button" title="Toggle list/grid view">
           <span class="btnTxt" id="viewToggleTxt">List</span>
+        </button>
+
+        <button class="btn secondary" id="favoritesToggleBtn" type="button" title="Show favorites only">
+          <span class="btnTxt" id="favoritesToggleTxt">Favorites</span>
         </button>
 
         <button class="btn" id="refreshBtn" type="button" title="Refresh">
