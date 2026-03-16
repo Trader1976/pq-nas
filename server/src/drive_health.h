@@ -38,6 +38,15 @@ namespace pqnas {
         long long host_reads = -1;
         long long host_writes = -1;
 
+        long long reallocated_sectors = -1;
+        long long current_pending_sectors = -1;
+        long long offline_uncorrectable = -1;
+        long long reported_uncorrect = -1;
+        long long udma_crc_errors = -1;
+
+        int selftest_short_minutes = -1;
+        int selftest_extended_minutes = -1;
+
         bool selftest_supported = false;
         std::string selftest_status; // "unsupported" | "idle" | "running" | "completed" | "failed" | "unknown"
         std::string selftest_text;

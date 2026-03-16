@@ -86,6 +86,34 @@ static bool j_bool(const json& j, std::initializer_list<const char*> path, bool 
     return cur->is_boolean() ? cur->get<bool>() : def;
 }
 
+static long long ata_attr_raw_value(const json& j, int attr_id, long long def = -1) {
+    auto it = j.find("ata_smart_attributes");
+    if (it == j.end() || !it->is_object()) return def;
+
+    auto it_tbl = it->find("table");
+    if (it_tbl == it->end() || !it_tbl->is_array()) return def;
+
+    for (const auto& row : *it_tbl) {
+        if (!row.is_object()) continue;
+
+        auto it_id = row.find("id");
+        if (it_id == row.end() || !it_id->is_number_integer()) continue;
+        if (it_id->get<int>() != attr_id) continue;
+
+        auto it_raw = row.find("raw");
+        if (it_raw == row.end() || !it_raw->is_object()) return def;
+
+        auto it_val = it_raw->find("value");
+        if (it_val == it_raw->end()) return def;
+
+        if (it_val->is_number_integer()) return it_val->get<long long>();
+        if (it_val->is_number_unsigned()) return (long long)it_val->get<unsigned long long>();
+        return def;
+    }
+
+    return def;
+}
+
 static bool starts_with(const std::string& s, const std::string& p) {
     return s.size() >= p.size() && s.compare(0, p.size(), p) == 0;
 }
@@ -359,11 +387,211 @@ static void parse_nvme_smart_json(const json& j, const LsblkDisk& inv, DriveHeal
     }
 }
 
+
+static void parse_ata_smart_json(const json& j, const LsblkDisk& inv, DriveHealthInfo* d) {
+    if (!d) return;
+
+    d->name      = !inv.name.empty() ? inv.name : j_str(j, {"device", "name"});
+    d->dev       = !inv.path.empty() ? inv.path : j_str(j, {"device", "name"});
+    d->transport = !inv.tran.empty() ? inv.tran : "sata";
+    d->rota      = inv.rota;
+    d->kind      = inv.rota ? "hdd" : "ssd";
+
+    d->model     = !inv.model.empty() ? inv.model : j_str(j, {"model_name"});
+    d->serial    = !inv.serial.empty() ? inv.serial : j_str(j, {"serial_number"});
+    d->firmware  = j_str(j, {"firmware_version"});
+
+    long long cap = j_i64(j, {"user_capacity", "bytes"}, -1);
+    if (cap >= 0) d->size_bytes = static_cast<std::uint64_t>(cap);
+    else d->size_bytes = inv.size_bytes;
+
+    d->smart_available = j_bool(j, {"smart_support", "available"}, false);
+    d->smart_enabled   = j_bool(j, {"smart_support", "enabled"}, d->smart_available);
+
+    const bool passed = j_bool(j, {"smart_status", "passed"}, false);
+
+    d->temperature_c = static_cast<int>(j_i64(j, {"temperature", "current"}, -1));
+    d->power_on_hours = j_i64(j, {"power_on_time", "hours"}, -1);
+
+    d->reallocated_sectors      = ata_attr_raw_value(j, 5, -1);
+    d->reported_uncorrect       = ata_attr_raw_value(j, 187, -1);
+    d->current_pending_sectors  = ata_attr_raw_value(j, 197, -1);
+    d->offline_uncorrectable    = ata_attr_raw_value(j, 198, -1);
+    d->udma_crc_errors          = ata_attr_raw_value(j, 199, -1);
+
+    collect_smart_messages(j, d);
+
+    // ATA SMART self-test state
+    d->selftest_supported = false;
+    d->selftest_status = "unknown";
+    d->selftest_text = "Self-test state unavailable";
+    d->selftest_progress_pct = -1;
+
+    if (j.contains("ata_smart_data") && j["ata_smart_data"].is_object()) {
+        const auto& ata = j["ata_smart_data"];
+                const bool selftests_supported =
+            j_bool(j, {"ata_smart_data", "capabilities", "self_tests_supported"}, false);
+
+        if (ata.contains("self_test") && ata["self_test"].is_object()) {
+            const auto& st = ata["self_test"];
+            d->selftest_supported = selftests_supported;
+
+            if (st.contains("polling_minutes") && st["polling_minutes"].is_object()) {
+                const auto& pm = st["polling_minutes"];
+                if (pm.contains("short") && pm["short"].is_number_integer()) {
+                    d->selftest_short_minutes = pm["short"].get<int>();
+                }
+                if (pm.contains("extended") && pm["extended"].is_number_integer()) {
+                    d->selftest_extended_minutes = pm["extended"].get<int>();
+                }
+            }
+
+            std::string st_text;
+            if (st.contains("status") && st["status"].is_object()) {
+                auto it = st["status"].find("string");
+                if (it != st["status"].end() && it->is_string()) {
+                    st_text = it->get<std::string>();
+                }
+            }
+
+            long long remaining = -1;
+            if (st.contains("remaining_percent") && st["remaining_percent"].is_number_integer()) {
+                remaining = st["remaining_percent"].get<long long>();
+            }
+
+            if (!st_text.empty()) {
+                std::string lower = st_text;
+                for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+                if (lower.find("in progress") != std::string::npos) {
+                    d->selftest_status = "running";
+                    d->selftest_text = st_text;
+
+                    if (remaining >= 0 && remaining <= 100) {
+                        int done = 100 - static_cast<int>(remaining);
+                        if (done < 0) done = 0;
+                        if (done > 100) done = 100;
+                        d->selftest_progress_pct = done;
+                    }
+                } else if (lower.find("completed") != std::string::npos ||
+                           lower.find("without error") != std::string::npos) {
+                    d->selftest_status = "completed";
+                    d->selftest_text = st_text;
+                } else if (lower.find("failed") != std::string::npos ||
+                           lower.find("aborted") != std::string::npos ||
+                           lower.find("interrupted") != std::string::npos) {
+                    d->selftest_status = "failed";
+                    d->selftest_text = st_text;
+                } else if (lower.find("never started") != std::string::npos ||
+                           lower.find("no self-test") != std::string::npos) {
+                    d->selftest_status = "idle";
+                    d->selftest_text = st_text;
+                } else {
+                    d->selftest_status = "idle";
+                    d->selftest_text = st_text;
+                }
+            }
+        }
+    }
+
+    // Prefer explicit self-test log last entry if available
+    if (j.contains("ata_smart_self_test_log") &&
+        j["ata_smart_self_test_log"].is_object()) {
+        const auto& log = j["ata_smart_self_test_log"];
+        if (log.contains("standard") && log["standard"].is_object()) {
+            const auto& stdlog = log["standard"];
+            if (stdlog.contains("table") && stdlog["table"].is_array() &&
+                !stdlog["table"].empty() && stdlog["table"][0].is_object()) {
+                const auto& row = stdlog["table"][0];
+
+                std::string type;
+                std::string status_text;
+
+                if (row.contains("type") && row["type"].is_object()) {
+                    auto it = row["type"].find("string");
+                    if (it != row["type"].end() && it->is_string()) {
+                        type = it->get<std::string>();
+                    }
+                }
+
+                if (row.contains("status") && row["status"].is_object()) {
+                    auto it = row["status"].find("string");
+                    if (it != row["status"].end() && it->is_string()) {
+                        status_text = it->get<std::string>();
+                    }
+                }
+
+                if (!status_text.empty() && d->selftest_status != "running") {
+                    d->selftest_supported = true;
+                    d->selftest_text =
+                        "Last " + (type.empty() ? std::string("self-test") : type + " test") +
+                        ": " + status_text;
+
+                    std::string lower = status_text;
+                    for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+                    if (lower.find("completed") != std::string::npos ||
+                        lower.find("without error") != std::string::npos) {
+                        d->selftest_status = "completed";
+                    } else if (lower.find("failed") != std::string::npos ||
+                               lower.find("aborted") != std::string::npos ||
+                               lower.find("interrupted") != std::string::npos) {
+                        d->selftest_status = "failed";
+                    } else {
+                        d->selftest_status = "idle";
+                    }
+                }
+            }
+        }
+    }
+
+    d->health_status = "ok";
+    d->health_text = "Healthy";
+
+    if (!d->smart_available || !d->smart_enabled || !passed) {
+        d->health_status = "fail";
+        d->health_text = "SMART health failed";
+    } else if (d->current_pending_sectors > 0) {
+        d->health_status = "fail";
+        d->health_text = "Pending sectors reported";
+    } else if (d->offline_uncorrectable > 0) {
+        d->health_status = "fail";
+        d->health_text = "Offline uncorrectable sectors reported";
+    } else if (d->reported_uncorrect > 0) {
+        d->health_status = "fail";
+        d->health_text = "Reported uncorrectable errors";
+    } else if (d->temperature_c >= 60) {
+        d->health_status = "fail";
+        d->health_text = "Drive temperature too high";
+    } else if (d->reallocated_sectors > 0) {
+        d->health_status = "warn";
+        d->health_text = "Reallocated sectors reported";
+    } else if (d->temperature_c >= 50) {
+        d->health_status = "warn";
+        d->health_text = "Warning";
+    }
+
+    d->warning.clear();
+    if (d->current_pending_sectors > 0) {
+        d->warning = "Current pending sectors detected";
+    } else if (d->offline_uncorrectable > 0) {
+        d->warning = "Offline uncorrectable sectors detected";
+    } else if (d->reported_uncorrect > 0) {
+        d->warning = "Reported uncorrectable errors detected";
+    } else if (d->reallocated_sectors > 0) {
+        d->warning = "Reallocated sectors detected";
+    } else if (d->temperature_c >= 60) {
+        d->warning = "Drive temperature is critically high";
+    } else if (d->temperature_c >= 50) {
+        d->warning = "Drive temperature is elevated";
+    }
+}
+
 static bool is_supported_selftest_type(const std::string& type) {
     return type == "short" || type == "extended";
 }
 
-static bool start_nvme_selftest(const std::string& dev,
+static bool start_smartctl_selftest(const std::string& dev,
                                     const std::string& type,
                                     std::string* err) {
     if (err) err->clear();
@@ -431,7 +659,12 @@ static bool probe_one_drive(const LsblkDisk& inv, DriveHealthInfo* out, std::str
         return true;
     }
 
-    // v1: unsupported non-NVMe internal disk
+    if (dev_type == "ata" || dev_type == "sat" || inv.tran == "sata") {
+        parse_ata_smart_json(j, inv, out);
+        return true;
+    }
+
+    // fallback for unsupported buses / virtual disks
     out->name = inv.name;
     out->dev = inv.path;
     out->transport = inv.tran;
@@ -440,11 +673,16 @@ static bool probe_one_drive(const LsblkDisk& inv, DriveHealthInfo* out, std::str
     out->model = inv.model;
     out->serial = inv.serial;
     out->size_bytes = inv.size_bytes;
+    out->smart_available = j_bool(j, {"smart_support", "available"}, false);
+    out->smart_enabled = j_bool(j, {"smart_support", "enabled"}, out->smart_available);
+    out->temperature_c = static_cast<int>(j_i64(j, {"temperature", "current"}, -1));
+    out->power_on_hours = j_i64(j, {"power_on_time", "hours"}, -1);
     out->health_status = "unknown";
-    out->health_text = "Unsupported in v1";
+    out->health_text = out->smart_available ? "Unsupported bus in v1" : "SMART unavailable";
     out->selftest_supported = false;
-    out->selftest_status = "unknown";
-    out->selftest_text = "Not implemented for this bus yet";
+    out->selftest_status = "unsupported";
+    out->selftest_text = out->smart_available ? "Self-test not implemented for this bus yet"
+                                              : "SMART/self-test unavailable";
     collect_smart_messages(j, out);
     return true;
 }
@@ -489,15 +727,15 @@ bool start_drive_selftest(const std::string& dev,
         return false;
     }
 
-    // Phase 1: NVMe only, because full self-test handling is currently only
-    // implemented/probed properly for NVMe in this module.
     const bool is_nvme = (found->tran == "nvme") || starts_with(found->name, "nvme");
-    if (!is_nvme) {
-        if (err) *err = "manual self-test start is currently implemented for NVMe drives only";
+    const bool is_sata = (found->tran == "sata");
+
+    if (!is_nvme && !is_sata) {
+        if (err) *err = "manual self-test start is currently implemented for NVMe and SATA drives only";
         return false;
     }
 
-    return start_nvme_selftest(dev, type, err);
+    return start_smartctl_selftest(dev, type, err);
 }
 
 bool probe_drive_health(std::vector<DriveHealthInfo>* out, std::string* err) {

@@ -605,6 +605,11 @@
             const poh = Number(d.power_on_hours);
             const selfText = d.selftest_text || "—";
             const warning = escapeHtml(d.warning || "");
+            const realloc = Number(d.reallocated_sectors);
+            const pending = Number(d.current_pending_sectors);
+            const offunc  = Number(d.offline_uncorrectable);
+            const repunc  = Number(d.reported_uncorrect);
+            const crc     = Number(d.udma_crc_errors);
 
             const status = String(d.health_status || "unknown");
             const selftestState = String(d.selftest_status || "unknown");
@@ -638,6 +643,11 @@
             if (Number.isFinite(poh) && poh >= 0) extras.push(`Power-on: ${poh} h`);
             if (Number.isFinite(readBytes)) extras.push(`Read: ${fmtBytes(readBytes)}`);
             if (Number.isFinite(writtenBytes)) extras.push(`Written: ${fmtBytes(writtenBytes)}`);
+            if (Number.isFinite(realloc) && realloc >= 0) extras.push(`Realloc: ${realloc}`);
+            if (Number.isFinite(pending) && pending >= 0) extras.push(`Pending: ${pending}`);
+            if (Number.isFinite(offunc) && offunc >= 0) extras.push(`Offline unc: ${offunc}`);
+            if (Number.isFinite(repunc) && repunc >= 0) extras.push(`Reported unc: ${repunc}`);
+            if (Number.isFinite(crc) && crc >= 0) extras.push(`CRC: ${crc}`);
 
             return `
             <div class="kv driveRow ${rowCls}">

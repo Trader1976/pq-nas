@@ -15519,6 +15519,11 @@ srv.Get("/api/v4/system/drives", [&](const httplib::Request& req, httplib::Respo
         if (d.data_units_written >= 0) j["data_units_written"] = d.data_units_written;
         if (d.host_reads >= 0) j["host_reads"] = d.host_reads;
         if (d.host_writes >= 0) j["host_writes"] = d.host_writes;
+        if (d.reallocated_sectors >= 0) j["reallocated_sectors"] = d.reallocated_sectors;
+        if (d.current_pending_sectors >= 0) j["current_pending_sectors"] = d.current_pending_sectors;
+        if (d.offline_uncorrectable >= 0) j["offline_uncorrectable"] = d.offline_uncorrectable;
+        if (d.reported_uncorrect >= 0) j["reported_uncorrect"] = d.reported_uncorrect;
+        if (d.udma_crc_errors >= 0) j["udma_crc_errors"] = d.udma_crc_errors;
 
         j["selftest_supported"] = d.selftest_supported;
         j["selftest_status"] = d.selftest_status;
