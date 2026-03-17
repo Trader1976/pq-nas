@@ -3251,7 +3251,7 @@
     const favoritesPromise = fetchFavoritesFromServer().catch((e) => {
       console.warn("Favorites load failed:", e);
     });
-    
+
     if (!storageBlocked) hideEmptyState();
 
     const loadPath = curPath;

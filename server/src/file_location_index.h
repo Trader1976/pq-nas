@@ -26,16 +26,24 @@ namespace pqnas {
 	struct FileLocationTierSummary {
     std::uint64_t landing_files = 0;
     std::uint64_t landing_bytes = 0;
-
     std::uint64_t migrating_files = 0;
     std::uint64_t migrating_bytes = 0;
-
     std::uint64_t capacity_files = 0;
     std::uint64_t capacity_bytes = 0;
-
     std::uint64_t total_files = 0;
     std::uint64_t total_bytes = 0;
 	};
+
+    struct LogicalListItem {
+        std::string name;
+        std::string type;          // "file" or "dir"
+        std::uint64_t size_bytes = 0;
+        std::int64_t mtime_epoch = 0;
+    };
+
+    std::vector<LogicalListItem> list_immediate_children(const std::string& fp,
+                                                         const std::string& dir_rel,
+                                                         std::string* err);
 
 class FileLocationIndex {
 public:
@@ -51,6 +59,36 @@ public:
     std::optional<FileLocationRecord> get(const std::string& fp,
                                           const std::string& logical_rel_path,
                                           std::string* err);
+
+    std::vector<LogicalListItem> list_immediate_children(const std::string& fp,
+                                                         const std::string& rel_dir_norm,
+                                                         std::string* err);
+
+bool rename_one(const std::string& fp,
+                const std::string& from_logical_rel_path,
+                const std::string& to_logical_rel_path,
+                const std::string& expected_old_physical_path,
+                const std::string& new_physical_path,
+                std::int64_t now_epoch,
+                std::string* err);
+
+bool rename_subtree(const std::string& fp,
+                    const std::string& from_logical_prefix,
+                    const std::string& to_logical_prefix,
+                    std::int64_t now_epoch,
+                    std::string* err);
+
+    bool rename_logical_prefix(const std::string& fp,
+                           const std::string& from_prefix,
+                           const std::string& to_prefix,
+                           std::string* err);
+
+	std::vector<FileLocationRecord> list_subtree_records(const std::string& fp,
+                                                     const std::string& logical_prefix,
+                                                     std::string* err);
+	bool erase_subtree(const std::string& fp,
+                   	const std::string& logical_prefix,
+                   	std::string* err);
 
     bool upsert_landing_file(const FileLocationRecord& rec, std::string* err);
 

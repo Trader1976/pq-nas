@@ -1,4 +1,5 @@
 #include "storage_resolver.h"
+#include <iostream>
 
 #include "file_location_index.h"
 #include "user_quota.h"
@@ -98,24 +99,77 @@ bool resolve_existing_user_file_path(UsersRegistry& users,
     if (g_file_location_index) {
         std::string lookup_err;
         auto rec = g_file_location_index->get(fp_hex, rel_norm, &lookup_err);
+
         if (rec.has_value()) {
-            out->normalized_rel_path = std::move(rel_norm);
+            std::cerr << "[resolver] metadata hit"
+                      << " fp=" << fp_hex
+                      << " rel=" << rel_norm
+                      << " phys=" << rec->physical_path
+                      << " pool=" << rec->current_pool
+                      << " state=" << rec->tier_state
+                      << "\n";
+
+            if (rec->physical_path.empty()) {
+                if (err) *err = "metadata record has empty physical_path";
+                return false;
+            }
+
+            out->normalized_rel_path = rel_norm;
             out->abs_path = std::filesystem::path(rec->physical_path);
             out->from_metadata = true;
             return true;
         }
-        // For this transitional phase, ignore lookup errors and fall back to legacy path.
+
+        std::cerr << "[resolver] metadata miss"
+                  << " fp=" << fp_hex
+                  << " rel=" << rel_norm
+                  << " lookup_err=" << lookup_err
+                  << "\n";
+
+        // If index lookup itself errored, do not silently swallow it.
+        if (!lookup_err.empty()) {
+            if (err) *err = "file location index lookup failed: " + lookup_err;
+            return false;
+        }
     }
 
+    // Transitional fallback:
+    // allow legacy resolution only for directories, not files.
     std::filesystem::path abs;
-    if (!resolve_legacy_user_path(users, fp_hex, rel_norm, &abs, err)) {
+    std::string legacy_err;
+    if (!resolve_legacy_user_path(users, fp_hex, rel_norm, &abs, &legacy_err)) {
+        if (err) *err = legacy_err;
         return false;
     }
 
-    out->normalized_rel_path = std::move(rel_norm);
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        if (err) *err = "not found";
+        return false;
+    }
+
+    // Metadata is authoritative for files.
+    // Legacy fallback is allowed only for directories during migration period.
+    if (!std::filesystem::is_directory(st)) {
+        std::cerr << "[resolver] legacy file fallback refused"
+                  << " fp=" << fp_hex
+                  << " rel=" << rel_norm
+                  << " abs=" << abs.string()
+                  << "\n";
+        if (err) *err = "not found";
+        return false;
+    }
+
+    std::cerr << "[resolver] legacy dir fallback"
+              << " fp=" << fp_hex
+              << " rel=" << rel_norm
+              << " abs=" << abs.string()
+              << "\n";
+
+    out->normalized_rel_path = rel_norm;
     out->abs_path = std::move(abs);
     out->from_metadata = false;
     return true;
 }
-
 } // namespace pqnas

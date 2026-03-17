@@ -1,7 +1,8 @@
 #include "file_location_index.h"
 
 #include <sqlite3.h>
-
+#include <map>
+#include <vector>
 namespace pqnas {
 
 namespace {
@@ -491,6 +492,551 @@ std::vector<FileLocationRecord> FileLocationIndex::list_stuck_migrating_candidat
     return out;
 }
 
+std::vector<LogicalListItem> FileLocationIndex::list_immediate_children(const std::string& fp,
+                                                                        const std::string& dir_rel,
+                                                                        std::string* err) {
+    if (err) err->clear();
+
+    std::vector<LogicalListItem> out;
+    if (!db_) {
+        if (err) *err = "db not open";
+        return out;
+    }
+
+    static const char* kSql =
+        "SELECT logical_rel_path, size_bytes, mtime_epoch "
+        "FROM file_locations "
+        "WHERE fp = ?1 "
+        "ORDER BY logical_rel_path ASC";
+
+    sqlite3_stmt* stmt = nullptr;
+    const int rc_prep = sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr);
+    if (rc_prep != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        return out;
+    }
+
+    sqlite3_bind_text(stmt, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
+
+    const std::string prefix = dir_rel.empty() ? "" : (dir_rel + "/");
+    std::map<std::string, LogicalListItem> by_name;
+
+    while (true) {
+        const int rc = sqlite3_step(stmt);
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) {
+            if (err) *err = sqlite3_errmsg(db_);
+            out.clear();
+            sqlite3_finalize(stmt);
+            return out;
+        }
+
+        const char* rel_c = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        const std::string rel = rel_c ? rel_c : "";
+        if (rel.empty()) continue;
+
+        if (!prefix.empty()) {
+            if (rel.rfind(prefix, 0) != 0) continue;
+        }
+
+        const std::string rest = prefix.empty() ? rel : rel.substr(prefix.size());
+        if (rest.empty()) continue;
+
+        const auto slash = rest.find('/');
+        if (slash == std::string::npos) {
+            LogicalListItem it;
+            it.name = rest;
+            it.type = "file";
+            it.size_bytes = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 1));
+            it.mtime_epoch = static_cast<std::int64_t>(sqlite3_column_int64(stmt, 2));
+            by_name[it.name] = std::move(it); // metadata wins
+        } else {
+            const std::string dir_name = rest.substr(0, slash);
+            auto pos = by_name.find(dir_name);
+            if (pos == by_name.end()) {
+                LogicalListItem it;
+                it.name = dir_name;
+                it.type = "dir";
+                it.size_bytes = 0;
+                it.mtime_epoch = 0;
+                by_name.emplace(dir_name, std::move(it));
+            }
+        }
+    }
+
+    sqlite3_finalize(stmt);
+
+    out.reserve(by_name.size());
+    for (auto& kv : by_name) out.push_back(std::move(kv.second));
+    return out;
+}
+bool FileLocationIndex::rename_one(const std::string& fp,
+                                   const std::string& old_logical_rel_path,
+                                   const std::string& new_logical_rel_path,
+                                   const std::string& old_physical_path,
+                                   const std::string& new_physical_path,
+                                   std::int64_t new_mtime_epoch,
+                                   std::string* err) {
+    if (err) err->clear();
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
+
+    static const char* kSql =
+        "UPDATE file_locations "
+        "SET logical_rel_path = ?1, "
+        "    physical_path = ?2, "
+        "    mtime_epoch = ?3, "
+        "    updated_epoch = ?4, "
+        "    version = version + 1 "
+        "WHERE fp = ?5 "
+        "  AND logical_rel_path = ?6 "
+        "  AND physical_path = ?7";
+
+    sqlite3_stmt* stmt = nullptr;
+    const int rc_prep = sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr);
+    if (rc_prep != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        return false;
+    }
+
+    sqlite3_bind_text(stmt, 1, new_logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, new_physical_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 3, static_cast<sqlite3_int64>(new_mtime_epoch));
+    sqlite3_bind_int64(stmt, 4, static_cast<sqlite3_int64>(new_mtime_epoch));
+    sqlite3_bind_text(stmt, 5, fp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 6, old_logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 7, old_physical_path.c_str(), -1, SQLITE_TRANSIENT);
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        if (err) *err = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        return false;
+    }
+
+    sqlite3_finalize(stmt);
+    return true;
+}
+
+bool FileLocationIndex::rename_subtree(const std::string& fp,
+                                       const std::string& old_logical_prefix,
+                                       const std::string& new_logical_prefix,
+                                       std::int64_t new_mtime_epoch,
+                                       std::string* err) {
+    if (err) err->clear();
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
+
+    char* msg = nullptr;
+    const int rc_begin = sqlite3_exec(db_, "BEGIN IMMEDIATE", nullptr, nullptr, &msg);
+    if (rc_begin != SQLITE_OK) {
+        if (err) *err = msg ? msg : sqlite3_errmsg(db_);
+        if (msg) sqlite3_free(msg);
+        return false;
+    }
+    if (msg) sqlite3_free(msg);
+
+    auto rollback_and_fail = [&](const std::string& e) -> bool {
+        if (err) *err = e;
+        sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+        return false;
+    };
+
+    // -------------------------------------------------------------------------
+    // 1) Collect source rows to rename
+    // -------------------------------------------------------------------------
+    static const char* kSelect =
+        "SELECT logical_rel_path, physical_path, current_pool, tier_state, size_bytes, created_epoch, version "
+        "FROM file_locations "
+        "WHERE fp = ?1 AND (logical_rel_path = ?2 OR logical_rel_path LIKE ?3) "
+        "ORDER BY length(logical_rel_path) DESC, logical_rel_path DESC";
+
+    sqlite3_stmt* sel = nullptr;
+    if (sqlite3_prepare_v2(db_, kSelect, -1, &sel, nullptr) != SQLITE_OK) {
+        return rollback_and_fail(sqlite3_errmsg(db_));
+    }
+
+    const std::string src_like = old_logical_prefix + "/%";
+    sqlite3_bind_text(sel, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(sel, 2, old_logical_prefix.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(sel, 3, src_like.c_str(), -1, SQLITE_TRANSIENT);
+
+    struct Row {
+        std::string logical_rel_path;
+        std::string physical_path;
+        std::string current_pool;
+        std::string tier_state;
+        std::uint64_t size_bytes = 0;
+        std::int64_t created_epoch = 0;
+        std::int64_t version = 1;
+    };
+
+    std::vector<Row> rows;
+
+    while (true) {
+        const int rc = sqlite3_step(sel);
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) {
+            std::string e = sqlite3_errmsg(db_);
+            sqlite3_finalize(sel);
+            return rollback_and_fail(e);
+        }
+
+        Row r;
+        r.logical_rel_path = reinterpret_cast<const char*>(sqlite3_column_text(sel, 0));
+        r.physical_path    = reinterpret_cast<const char*>(sqlite3_column_text(sel, 1));
+        r.current_pool     = reinterpret_cast<const char*>(sqlite3_column_text(sel, 2));
+        r.tier_state       = reinterpret_cast<const char*>(sqlite3_column_text(sel, 3));
+        r.size_bytes       = static_cast<std::uint64_t>(sqlite3_column_int64(sel, 4));
+        r.created_epoch    = static_cast<std::int64_t>(sqlite3_column_int64(sel, 5));
+        r.version          = static_cast<std::int64_t>(sqlite3_column_int64(sel, 6));
+        rows.push_back(std::move(r));
+    }
+    sqlite3_finalize(sel);
+
+    // Nothing to rename is not an error
+    if (rows.empty()) {
+        const int rc_commit = sqlite3_exec(db_, "COMMIT", nullptr, nullptr, &msg);
+        if (rc_commit != SQLITE_OK) {
+            if (err) *err = msg ? msg : sqlite3_errmsg(db_);
+            if (msg) sqlite3_free(msg);
+            sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+            return false;
+        }
+        if (msg) sqlite3_free(msg);
+        return true;
+    }
+
+    // -------------------------------------------------------------------------
+    // 2) Remove stale destination subtree rows first
+    //    This fixes retries after a previous partially-failed move.
+    // -------------------------------------------------------------------------
+    static const char* kDeleteDst =
+        "DELETE FROM file_locations "
+        "WHERE fp = ?1 AND (logical_rel_path = ?2 OR logical_rel_path LIKE ?3)";
+
+    sqlite3_stmt* del = nullptr;
+    if (sqlite3_prepare_v2(db_, kDeleteDst, -1, &del, nullptr) != SQLITE_OK) {
+        return rollback_and_fail(sqlite3_errmsg(db_));
+    }
+
+    const std::string dst_like = new_logical_prefix + "/%";
+    sqlite3_bind_text(del, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(del, 2, new_logical_prefix.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(del, 3, dst_like.c_str(), -1, SQLITE_TRANSIENT);
+
+    if (sqlite3_step(del) != SQLITE_DONE) {
+        std::string e = sqlite3_errmsg(db_);
+        sqlite3_finalize(del);
+        return rollback_and_fail(e);
+    }
+    sqlite3_finalize(del);
+
+    // -------------------------------------------------------------------------
+    // 3) Reinsert subtree rows with rewritten logical/physical paths
+    //    Easier and safer than UPDATE on PK columns.
+    // -------------------------------------------------------------------------
+    static const char* kInsert =
+        "INSERT INTO file_locations ("
+        "  fp, logical_rel_path, current_pool, physical_path, tier_state, "
+        "  size_bytes, mtime_epoch, created_epoch, updated_epoch, version"
+        ") VALUES ("
+        "  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10"
+        ")";
+
+    sqlite3_stmt* ins = nullptr;
+    if (sqlite3_prepare_v2(db_, kInsert, -1, &ins, nullptr) != SQLITE_OK) {
+        return rollback_and_fail(sqlite3_errmsg(db_));
+    }
+
+    static const char* kDeleteSrcOne =
+        "DELETE FROM file_locations "
+        "WHERE fp = ?1 AND logical_rel_path = ?2 AND physical_path = ?3";
+
+    sqlite3_stmt* del_src = nullptr;
+    if (sqlite3_prepare_v2(db_, kDeleteSrcOne, -1, &del_src, nullptr) != SQLITE_OK) {
+        sqlite3_finalize(ins);
+        return rollback_and_fail(sqlite3_errmsg(db_));
+    }
+
+    for (const auto& row : rows) {
+        std::string suffix;
+        if (row.logical_rel_path == old_logical_prefix) {
+            suffix.clear();
+        } else {
+            suffix = row.logical_rel_path.substr(old_logical_prefix.size());
+        }
+
+        const std::string new_logical = new_logical_prefix + suffix;
+
+        std::string phys_suffix;
+        if (row.physical_path == old_logical_prefix) {
+            phys_suffix.clear();
+        } else if (row.physical_path.size() >= row.logical_rel_path.size()) {
+            // safer: derive from logical suffix only if physical path ended correspondingly
+            phys_suffix = suffix;
+        }
+
+        // Build new physical path by replacing the trailing logical path segment.
+        std::filesystem::path old_phys(row.physical_path);
+        std::filesystem::path root = old_phys;
+        for (const auto& _ : std::filesystem::path(row.logical_rel_path)) {
+            (void)_;
+            root = root.parent_path();
+        }
+        const std::filesystem::path new_phys = root / std::filesystem::path(new_logical);
+
+        sqlite3_reset(ins);
+        sqlite3_clear_bindings(ins);
+
+        sqlite3_bind_text(ins, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(ins, 2, new_logical.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(ins, 3, row.current_pool.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(ins, 4, new_phys.string().c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(ins, 5, row.tier_state.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(ins, 6, static_cast<sqlite3_int64>(row.size_bytes));
+        sqlite3_bind_int64(ins, 7, static_cast<sqlite3_int64>(new_mtime_epoch));
+        sqlite3_bind_int64(ins, 8, static_cast<sqlite3_int64>(row.created_epoch));
+        sqlite3_bind_int64(ins, 9, static_cast<sqlite3_int64>(new_mtime_epoch));
+        sqlite3_bind_int64(ins, 10, static_cast<sqlite3_int64>(row.version + 1));
+
+        if (sqlite3_step(ins) != SQLITE_DONE) {
+            std::string e = sqlite3_errmsg(db_);
+            sqlite3_finalize(ins);
+            sqlite3_finalize(del_src);
+            return rollback_and_fail(e);
+        }
+
+        sqlite3_reset(del_src);
+        sqlite3_clear_bindings(del_src);
+
+        sqlite3_bind_text(del_src, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(del_src, 2, row.logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(del_src, 3, row.physical_path.c_str(), -1, SQLITE_TRANSIENT);
+
+        if (sqlite3_step(del_src) != SQLITE_DONE) {
+            std::string e = sqlite3_errmsg(db_);
+            sqlite3_finalize(ins);
+            sqlite3_finalize(del_src);
+            return rollback_and_fail(e);
+        }
+    }
+
+    sqlite3_finalize(ins);
+    sqlite3_finalize(del_src);
+
+    const int rc_commit = sqlite3_exec(db_, "COMMIT", nullptr, nullptr, &msg);
+    if (rc_commit != SQLITE_OK) {
+        if (err) *err = msg ? msg : sqlite3_errmsg(db_);
+        if (msg) sqlite3_free(msg);
+        sqlite3_exec(db_, "ROLLBACK", nullptr, nullptr, nullptr);
+        return false;
+    }
+    if (msg) sqlite3_free(msg);
+
+    return true;
+}
+std::vector<FileLocationRecord> FileLocationIndex::list_subtree_records(const std::string& fp,
+                                                                        const std::string& logical_prefix,
+                                                                        std::string* err) {
+    if (err) err->clear();
+
+    std::vector<FileLocationRecord> out;
+    if (!db_) {
+        if (err) *err = "db not open";
+        return out;
+    }
+
+    static const char* kSql =
+        "SELECT fp, logical_rel_path, current_pool, physical_path, tier_state, "
+        "size_bytes, mtime_epoch, created_epoch, updated_epoch, version "
+        "FROM file_locations "
+        "WHERE fp = ?1 AND (logical_rel_path = ?2 OR logical_rel_path LIKE ?3) "
+        "ORDER BY logical_rel_path ASC";
+
+    sqlite3_stmt* stmt = nullptr;
+    const int rc_prep = sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr);
+    if (rc_prep != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        return out;
+    }
+
+    const std::string like_pat = logical_prefix + "/%";
+    sqlite3_bind_text(stmt, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, logical_prefix.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, like_pat.c_str(), -1, SQLITE_TRANSIENT);
+
+    while (true) {
+        const int rc = sqlite3_step(stmt);
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) {
+            if (err) *err = sqlite3_errmsg(db_);
+            out.clear();
+            sqlite3_finalize(stmt);
+            return out;
+        }
+
+        FileLocationRecord rec;
+        rec.fp = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        rec.logical_rel_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        rec.current_pool = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        rec.physical_path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        rec.tier_state = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4));
+        rec.size_bytes = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 5));
+        rec.mtime_epoch = static_cast<std::int64_t>(sqlite3_column_int64(stmt, 6));
+        rec.created_epoch = static_cast<std::int64_t>(sqlite3_column_int64(stmt, 7));
+        rec.updated_epoch = static_cast<std::int64_t>(sqlite3_column_int64(stmt, 8));
+        rec.version = static_cast<std::int64_t>(sqlite3_column_int64(stmt, 9));
+
+        out.push_back(std::move(rec));
+    }
+
+    sqlite3_finalize(stmt);
+    return out;
+}
+
+bool FileLocationIndex::erase_subtree(const std::string& fp,
+                                      const std::string& logical_prefix,
+                                      std::string* err) {
+    if (err) err->clear();
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
+
+    static const char* kSql =
+        "DELETE FROM file_locations "
+        "WHERE fp = ?1 AND (logical_rel_path = ?2 OR logical_rel_path LIKE ?3)";
+
+    sqlite3_stmt* stmt = nullptr;
+    const int rc_prep = sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr);
+    if (rc_prep != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        return false;
+    }
+
+    const std::string like_pat = logical_prefix + "/%";
+    sqlite3_bind_text(stmt, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, logical_prefix.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, like_pat.c_str(), -1, SQLITE_TRANSIENT);
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        if (err) *err = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        return false;
+    }
+
+    sqlite3_finalize(stmt);
+    return true;
+}
+
+bool FileLocationIndex::rename_logical_prefix(const std::string& fp,
+                                              const std::string& from_prefix,
+                                              const std::string& to_prefix,
+                                              std::string* err) {
+    if (err) err->clear();
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
+
+    if (from_prefix.empty() || to_prefix.empty()) {
+        if (err) *err = "empty prefix";
+        return false;
+    }
+
+    char* msg = nullptr;
+    const int rc_begin = sqlite3_exec(db_, "BEGIN IMMEDIATE TRANSACTION;", nullptr, nullptr, &msg);
+    if (rc_begin != SQLITE_OK) {
+        if (err) *err = msg ? msg : sqlite3_errmsg(db_);
+        if (msg) sqlite3_free(msg);
+        return false;
+    }
+    if (msg) sqlite3_free(msg);
+
+    auto rollback = [&]() {
+        char* rmsg = nullptr;
+        sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, &rmsg);
+        if (rmsg) sqlite3_free(rmsg);
+    };
+
+    // Rename exact directory row if one exists.
+    {
+        static const char* kSqlExact =
+            "UPDATE file_locations "
+            "SET logical_rel_path = ?1, "
+            "    updated_epoch = strftime('%s','now'), "
+            "    version = version + 1 "
+            "WHERE fp = ?2 AND logical_rel_path = ?3";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, kSqlExact, -1, &stmt, nullptr) != SQLITE_OK) {
+            if (err) *err = sqlite3_errmsg(db_);
+            rollback();
+            return false;
+        }
+
+        sqlite3_bind_text(stmt, 1, to_prefix.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, fp.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, from_prefix.c_str(), -1, SQLITE_TRANSIENT);
+
+        const int rc = sqlite3_step(stmt);
+        if (rc != SQLITE_DONE) {
+            if (err) *err = sqlite3_errmsg(db_);
+            sqlite3_finalize(stmt);
+            rollback();
+            return false;
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    // Rename subtree rows under from_prefix/
+    {
+        static const char* kSqlSubtree =
+            "UPDATE file_locations "
+            "SET logical_rel_path = ?1 || substr(logical_rel_path, length(?2) + 1), "
+            "    updated_epoch = strftime('%s','now'), "
+            "    version = version + 1 "
+            "WHERE fp = ?3 "
+            "  AND logical_rel_path LIKE (?2 || '/%')";
+
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, kSqlSubtree, -1, &stmt, nullptr) != SQLITE_OK) {
+            if (err) *err = sqlite3_errmsg(db_);
+            rollback();
+            return false;
+        }
+
+        sqlite3_bind_text(stmt, 1, to_prefix.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, from_prefix.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, fp.c_str(), -1, SQLITE_TRANSIENT);
+
+        const int rc = sqlite3_step(stmt);
+        if (rc != SQLITE_DONE) {
+            if (err) *err = sqlite3_errmsg(db_);
+            sqlite3_finalize(stmt);
+            rollback();
+            return false;
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    const int rc_commit = sqlite3_exec(db_, "COMMIT;", nullptr, nullptr, &msg);
+    if (rc_commit != SQLITE_OK) {
+        if (err) *err = msg ? msg : sqlite3_errmsg(db_);
+        if (msg) sqlite3_free(msg);
+        rollback();
+        return false;
+    }
+    if (msg) sqlite3_free(msg);
+
+    return true;
+}
 bool FileLocationIndex::get_tier_summary(FileLocationTierSummary* out, std::string* err) {
     if (err) err->clear();
     if (!out) {
