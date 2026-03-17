@@ -147,6 +147,7 @@ add_executable(pqnas_server
         server/src/static_serve.cc
         server/src/verify_login_common.cc
         server/src/storage_resolver.cpp
+        server/src/file_favorites.cc
         server/src/file_location_index.cpp
 )
 

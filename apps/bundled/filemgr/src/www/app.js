@@ -257,8 +257,7 @@
   loadViewMode();
 
   // ---- Favorites ------------------------------------------------------------
-  const FAVORITES_KEY = "pqnas_filemgr_favorites_v1";
-  const FAVORITES_ONLY_KEY = "pqnas_filemgr_favorites_only_v1";
+    const FAVORITES_ONLY_KEY = "pqnas_filemgr_favorites_only_v1";
 
   // stored as: { "file:path/to/a.txt": 1, "dir:docs": 1 }
   let favoritesMap = new Map();
@@ -273,27 +272,54 @@
     const p = normalizeRelPath(relPath || "");
     return `${t}:${p}`;
   }
+  async function fetchFavoritesFromServer() {
+    const r = await fetch("/api/v4/files/favorites", {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "Accept": "application/json" }
+    });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok || !Array.isArray(j.items)) {
+      throw new Error((j && (j.message || j.error)) || `HTTP ${r.status}`);
+    }
 
-  function loadFavorites() {
     favoritesMap = new Map();
-    try {
-      const raw = localStorage.getItem(FAVORITES_KEY);
-      if (!raw) return;
-      const obj = JSON.parse(raw);
-      if (!obj || typeof obj !== "object") return;
-      for (const [k, v] of Object.entries(obj)) {
-        if (v) favoritesMap.set(String(k), 1);
-      }
-    } catch (_) {}
+    for (const it of j.items) {
+      if (!it || typeof it !== "object") continue;
+      const p = normalizeRelPath(it.path || "");
+      const t = it.type === "dir" ? "dir" : "file";
+      if (!p) continue;
+      favoritesMap.set(`${t}:${p}`, 1);
+    }
+  }
+  async function favoriteAddServer(relPath, type) {
+    const r = await fetch("/api/v4/files/favorites/add", {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ path: relPath, type })
+    });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok) {
+      throw new Error((j && (j.message || j.error)) || `HTTP ${r.status}`);
+    }
+  }
+  async function favoriteRemoveServer(relPath, type) {
+    const r = await fetch("/api/v4/files/favorites/remove", {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({ path: relPath, type })
+    });
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok) {
+      throw new Error((j && (j.message || j.error)) || `HTTP ${r.status}`);
+    }
   }
 
-  function saveFavorites() {
-    try {
-      const obj = {};
-      for (const k of favoritesMap.keys()) obj[k] = 1;
-      localStorage.setItem(FAVORITES_KEY, JSON.stringify(obj));
-    } catch (_) {}
-  }
 
   function loadFavoritesOnly() {
     try {
@@ -303,11 +329,6 @@
     }
   }
 
-  function saveFavoritesOnly() {
-    try {
-      localStorage.setItem(FAVORITES_ONLY_KEY, favoritesOnly ? "1" : "0");
-    } catch (_) {}
-  }
 
   function isFavoriteRelPath(relPath, type) {
     return favoritesMap.has(favoriteKey(type, relPath));
@@ -316,53 +337,6 @@
   function isFavoriteItem(item) {
     if (!item) return false;
     return isFavoriteRelPath(currentRelPathFor(item), item.type);
-  }
-
-  function setFavoriteRelPath(relPath, type, on) {
-    const k = favoriteKey(type, relPath);
-    if (on) favoritesMap.set(k, 1);
-    else favoritesMap.delete(k);
-    saveFavorites();
-  }
-
-  function toggleFavoriteRelPath(relPath, type) {
-    const on = !isFavoriteRelPath(relPath, type);
-    setFavoriteRelPath(relPath, type, on);
-    return on;
-  }
-
-  function moveFavoriteRelPath(oldRel, newRel, type) {
-    const oldK = favoriteKey(type, oldRel);
-    if (!favoritesMap.has(oldK)) return;
-    favoritesMap.delete(oldK);
-    favoritesMap.set(favoriteKey(type, newRel), 1);
-    saveFavorites();
-  }
-
-  function removeFavoriteRelPath(relPath, type) {
-    const k = favoriteKey(type, relPath);
-    if (favoritesMap.delete(k)) saveFavorites();
-  }
-
-  function removeFavoritesUnderRelPath(relPath, type) {
-    const p = normalizeRelPath(relPath || "");
-    const exact = favoriteKey(type, p);
-    let changed = false;
-
-    if (favoritesMap.delete(exact)) changed = true;
-
-    if (type === "dir" && p) {
-      const prefix = `dir:${p}/`;
-      const prefix2 = `file:${p}/`;
-      for (const k of Array.from(favoritesMap.keys())) {
-        if (k.startsWith(prefix) || k.startsWith(prefix2)) {
-          favoritesMap.delete(k);
-          changed = true;
-        }
-      }
-    }
-
-    if (changed) saveFavorites();
   }
 
   function selectedFavoriteStats() {
@@ -376,34 +350,59 @@
     return { total: paths.length, fav };
   }
 
-  function addSelectionToFavorites() {
+  async function addSelectionToFavorites() {
     const paths = selectedRelPaths();
     if (!paths.length) return;
-    for (const k of selectedKeys) {
-      const rel = keyToItemRelPath(k);
-      if (!rel) continue;
-      const type = String(k).startsWith("dir:") ? "dir" : "file";
-      setFavoriteRelPath(rel, type, true);
-    }
-    applySelectionToDom();
-    setBadge("ok", "ready");
-    status.textContent = `Added ${paths.length} item(s) to favorites.`;
-    load();
-  }
 
-  function removeSelectionFromFavorites() {
-    const paths = selectedRelPaths();
-    if (!paths.length) return;
+    let done = 0;
     for (const k of selectedKeys) {
       const rel = keyToItemRelPath(k);
       if (!rel) continue;
       const type = String(k).startsWith("dir:") ? "dir" : "file";
-      removeFavoriteRelPath(rel, type);
+      await favoriteAddServer(rel, type);
+      favoritesMap.set(favoriteKey(type, rel), 1);
+      done++;
     }
+
     applySelectionToDom();
     setBadge("ok", "ready");
-    status.textContent = `Removed ${paths.length} item(s) from favorites.`;
-    load();
+    status.textContent = `Added ${done} item(s) to favorites.`;
+    await load();
+  }
+  async function toggleFavoriteRelPath(relPath, type) {
+    const on = !isFavoriteRelPath(relPath, type);
+    if (on) {
+      await favoriteAddServer(relPath, type);
+      favoritesMap.set(favoriteKey(type, relPath), 1);
+    } else {
+      await favoriteRemoveServer(relPath, type);
+      favoritesMap.delete(favoriteKey(type, relPath));
+    }
+    return on;
+  }
+  function saveFavoritesOnly() {
+    try {
+      localStorage.setItem(FAVORITES_ONLY_KEY, favoritesOnly ? "1" : "0");
+    } catch (_) {}
+  }
+  async function removeSelectionFromFavorites() {
+    const paths = selectedRelPaths();
+    if (!paths.length) return;
+
+    let done = 0;
+    for (const k of selectedKeys) {
+      const rel = keyToItemRelPath(k);
+      if (!rel) continue;
+      const type = String(k).startsWith("dir:") ? "dir" : "file";
+      await favoriteRemoveServer(rel, type);
+      favoritesMap.delete(favoriteKey(type, rel));
+      done++;
+    }
+
+    applySelectionToDom();
+    setBadge("ok", "ready");
+    status.textContent = `Removed ${done} item(s) from favorites.`;
+    await load();
   }
 
   function applyFavoritesFilterUi() {
@@ -413,7 +412,11 @@
       favoritesToggleBtn.classList.toggle("active", favoritesOnly);
     }
   }
-
+  function cleanupLegacyFavoriteStorage() {
+    try {
+      localStorage.removeItem("pqnas_filemgr_favorites_v1");
+    } catch (_) {}
+  }
   function setFavoritesOnly(next) {
     favoritesOnly = !!next;
     saveFavoritesOnly();
@@ -426,8 +429,8 @@
     setFavoritesOnly(!favoritesOnly);
   }
 
-  loadFavorites();
   loadFavoritesOnly();
+  cleanupLegacyFavoriteStorage();
 
   let selectedKeys = new Set();
   let selectionAnchorKey = "";
@@ -470,12 +473,6 @@
 
     if (e.key === "pqnas_theme") {
       applyIconsNow();
-      load();
-      return;
-    }
-
-    if (e.key === FAVORITES_KEY) {
-      loadFavorites();
       load();
       return;
     }
@@ -826,8 +823,6 @@
               ? `${j.error || ""} ${j.message || ""}`.trim()
               : `HTTP ${r.status}`;
           failures.push(`${rel} — ${msg}`);
-        } else {
-          removeFavoritesUnderRelPath(rel, type);
         }
       } catch (e) {
         failed++;
@@ -848,6 +843,12 @@
       setBadge("ok", "ready");
       status.textContent = `Deleted ${paths.length} item(s).`;
     }
+    try {
+      await fetchFavoritesFromServer();
+    } catch (e) {
+      console.warn("Favorites refresh after multi-delete failed:", e);
+    }
+
     await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
     await load();
   }
@@ -1607,9 +1608,8 @@
     ctxEl.appendChild(menuItem(`Properties (selection)…`, "", () => showSelectionProperties()));
     ctxEl.appendChild(menuSep());
 
-    if (!allFav) ctxEl.appendChild(menuItem(`Add selection to favorites (${stats.total})`, "", () => addSelectionToFavorites()));
-    if (someFav || allFav) ctxEl.appendChild(menuItem(`Remove selection from favorites (${stats.fav})`, "", () => removeSelectionFromFavorites()));
-
+    if (!allFav) ctxEl.appendChild(menuItem(`Add selection to favorites (${stats.total})`, "", async () => await addSelectionToFavorites()));
+    if (someFav || allFav) ctxEl.appendChild(menuItem(`Remove selection from favorites (${stats.fav})`, "", async () => await removeSelectionFromFavorites()));
     ctxEl.appendChild(menuSep());
     ctxEl.appendChild(menuItem(`Download selection (zip) (${selectedKeys.size})`, "", () => downloadSelectionZip()));
     ctxEl.appendChild(menuItem(`Delete selection (${selectedKeys.size})…`, "", () => deleteSelection(), { danger: true }));
@@ -1857,7 +1857,12 @@
       return;
     }
 
-    moveFavoriteRelPath(oldRel, newRel, item.type);
+    try {
+      await fetchFavoritesFromServer();
+    } catch (e) {
+      console.warn("Favorites refresh after rename failed:", e);
+    }
+
     status.textContent = "Renamed.";
     setBadge("ok", "ready");
     clearSelection();
@@ -1892,7 +1897,12 @@
       return;
     }
 
-    removeFavoritesUnderRelPath(rel, item.type);
+    try {
+      await fetchFavoritesFromServer();
+    } catch (e) {
+      console.warn("Favorites refresh after delete failed:", e);
+    }
+
     status.textContent = "Deleted.";
     setBadge("ok", "ready");
     clearSelection();
@@ -2383,11 +2393,16 @@
         downloadFolderZip(relDir);
       }));
 
-      ctxEl.appendChild(menuItem(favLabel, "", () => {
-        const on = toggleFavoriteRelPath(rel, item.type);
-        setBadge("ok", "ready");
-        status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
-        load();
+      ctxEl.appendChild(menuItem(favLabel, "", async () => {
+        try {
+          const on = await toggleFavoriteRelPath(rel, item.type);
+          setBadge("ok", "ready");
+          status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
+          await load();
+        } catch (err) {
+          setBadge("err", "error");
+          status.textContent = `Favorites update failed: ${String(err && err.message ? err.message : err)}`;
+        }
       }));
 
       ctxEl.appendChild(menuItem(shareLabel, "", () => openShareDialogFor(item)));
@@ -2406,12 +2421,18 @@
       }
     } else {
       ctxEl.appendChild(menuItem("Download", "⤓", () => doDownload(item)));
-      ctxEl.appendChild(menuItem(favLabel, "", () => {
-        const on = toggleFavoriteRelPath(rel, item.type);
-        setBadge("ok", "ready");
-        status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
-        load();
+      ctxEl.appendChild(menuItem(favLabel, "", async () => {
+        try {
+          const on = await toggleFavoriteRelPath(rel, item.type);
+          setBadge("ok", "ready");
+          status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
+          await load();
+        } catch (err) {
+          setBadge("err", "error");
+          status.textContent = `Favorites update failed: ${String(err && err.message ? err.message : err)}`;
+        }
       }));
+
       ctxEl.appendChild(menuItem(shareLabel, "", () => openShareDialogFor(item)));
 
       ctxEl.appendChild(menuSep());
@@ -2664,20 +2685,23 @@
 
       btn.classList.toggle("isFav", fav);
 
-      const tileEl = btn.closest(".tile");
-      if (tileEl) tileEl.classList.toggle("favorite", fav);
     };
     refresh();
 
-    btn.addEventListener("click", (e) => {
+    btn.addEventListener("click", async (e) => {
       e.preventDefault();
       e.stopPropagation();
-      const on = toggleFavoriteRelPath(currentRelPathFor(item), item.type);
-      refresh();
-      setBadge("ok", "ready");
-      status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
-      if (favoritesOnly && !on) {
-        load();
+      try {
+        const on = await toggleFavoriteRelPath(currentRelPathFor(item), item.type);
+        refresh();
+        setBadge("ok", "ready");
+        status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
+        if (favoritesOnly && !on) {
+          await load();
+        }
+      } catch (err) {
+        setBadge("err", "error");
+        status.textContent = `Favorites update failed: ${String(err && err.message ? err.message : err)}`;
       }
     });
 
@@ -2696,7 +2720,6 @@
     t.className = "tile";
     t.dataset.key = key;
     t.style.position = "relative";
-    if (isFavoriteItem(item)) t.classList.add("favorite");
 
     const img = document.createElement("img");
     img.className = "ico";
@@ -2983,12 +3006,17 @@
       btn.type = "button";
       btn.textContent = isFavoriteItem(item) ? "Remove from favorites" : "Add to favorites";
       btn.onclick = async () => {
-        const on = toggleFavoriteRelPath(rel, item.type);
-        txt.textContent = on ? "This item is in favorites." : "This item is not in favorites.";
-        btn.textContent = on ? "Remove from favorites" : "Add to favorites";
-        setBadge("ok", "ready");
-        status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
-        await load();
+        try {
+          const on = await toggleFavoriteRelPath(rel, item.type);
+          txt.textContent = on ? "This item is in favorites." : "This item is not in favorites.";
+          btn.textContent = on ? "Remove from favorites" : "Add to favorites";
+          setBadge("ok", "ready");
+          status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
+          await load();
+        } catch (err) {
+          setBadge("err", "error");
+          status.textContent = `Favorites update failed: ${String(err && err.message ? err.message : err)}`;
+        }
       };
 
       vEl.appendChild(txt);
@@ -3220,6 +3248,10 @@
     status.textContent = "Loading…";
     clear();
 
+    const favoritesPromise = fetchFavoritesFromServer().catch((e) => {
+      console.warn("Favorites load failed:", e);
+    });
+    
     if (!storageBlocked) hideEmptyState();
 
     const loadPath = curPath;
@@ -3347,5 +3379,13 @@
 
   applyViewModeToDom();
   applyFavoritesFilterUi();
-  load();
+
+  (async () => {
+    try {
+      await fetchFavoritesFromServer();
+    } catch (e) {
+      console.warn("Favorites load failed:", e);
+    }
+    await load();
+  })();
 })();

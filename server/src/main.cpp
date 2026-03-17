@@ -114,6 +114,10 @@ extern "C" {
 // snapshots
 #include "storage/snapshots/snapshot_scheduler.h"
 
+//favorites
+#include "file_favorites.h"
+#include "storage_resolver.h"
+
 //apps
 #include "static_serve.h"
 
@@ -15837,7 +15841,25 @@ if (ec) {
         return;
     }
 }
-
+// Favorites sync: move favorite entry / subtree if present
+{
+    std::string from_rel_norm, to_rel_norm;
+    std::string nerr1, nerr2;
+    if (pqnas::normalize_user_rel_path_strict(from_rel, &from_rel_norm, &nerr1) &&
+        pqnas::normalize_user_rel_path_strict(to_rel, &to_rel_norm, &nerr2)) {
+        std::string ferr;
+        if (!pqnas::favorites_move_path(user_dir, from_rel_norm, to_rel_norm, type, &ferr)) {
+            audit_fail("favorites_move_failed", 500, ferr, from_rel, to_rel);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "move succeeded but favorites update failed"},
+                {"detail", pqnas::shorten(ferr, 180)}
+            }.dump());
+            return;
+        }
+    }
+}
 audit_ok(from_rel, to_rel, type, bytes);
 
 reply_json(res, 200, json{
@@ -19302,6 +19324,174 @@ srv.Post("/api/v4/files/du", [&](const httplib::Request& req, httplib::Response&
     }.dump());
 });
 
+srv.Get("/api/v4/files/favorites", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+
+    std::vector<pqnas::FavoriteItem> items;
+    std::string err;
+    if (!pqnas::favorites_list_items(user_dir, &items, &err)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "favorites list failed"},
+            {"detail", pqnas::shorten(err, 180)}
+        }.dump());
+        return;
+    }
+
+    json out;
+    out["ok"] = true;
+    out["items"] = json::array();
+    for (const auto& it : items) {
+        out["items"].push_back(json{
+            {"path", it.path},
+            {"type", it.type},
+            {"added_at", it.added_at}
+        });
+    }
+
+    reply_json(res, 200, out.dump());
+});
+
+srv.Post("/api/v4/files/favorites/add", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    json in = json::parse(req.body, nullptr, false);
+    if (in.is_discarded()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid json"}}.dump());
+        return;
+    }
+
+    const std::string rel_path = in.value("path", "");
+    const std::string type = in.value("type", "");
+
+    std::string rel_norm, nerr;
+    if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid path"}}.dump());
+        return;
+    }
+    if (type != "file" && type != "dir") {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid type"}}.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+
+    // Optional existence check
+    std::filesystem::path abs;
+    std::string rerr;
+    if (!pqnas::resolve_legacy_user_path(users, fp_hex, rel_norm, &abs, &rerr)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid path"}}.dump());
+        return;
+    }
+    std::error_code ec;
+    auto st = std::filesystem::status(abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        reply_json(res, 404, json{{"ok", false}, {"error", "not_found"}, {"message", "path not found"}}.dump());
+        return;
+    }
+
+    const bool is_dir = std::filesystem::is_directory(st);
+    const bool is_file = std::filesystem::is_regular_file(st);
+    if ((type == "dir" && !is_dir) || (type == "file" && !is_file)) {
+        reply_json(res, 409, json{{"ok", false}, {"error", "type_mismatch"}, {"message", "type mismatch"}}.dump());
+        return;
+    }
+
+    std::string err;
+    if (!pqnas::favorites_add(user_dir, rel_norm, type, &err)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "favorites add failed"},
+            {"detail", pqnas::shorten(err, 180)}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", rel_norm},
+        {"type", type}
+    }.dump());
+});
+
+srv.Post("/api/v4/files/favorites/remove", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    json in = json::parse(req.body, nullptr, false);
+    if (in.is_discarded()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid json"}}.dump());
+        return;
+    }
+
+    const std::string rel_path = in.value("path", "");
+    const std::string type = in.value("type", "");
+
+    std::string rel_norm, nerr;
+    if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid path"}}.dump());
+        return;
+    }
+    if (type != "file" && type != "dir") {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid type"}}.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+
+    std::string err;
+    if (!pqnas::favorites_remove(user_dir, rel_norm, type, &err)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "favorites remove failed"},
+            {"detail", pqnas::shorten(err, 180)}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", rel_norm},
+        {"type", type}
+    }.dump());
+});
 
 // DELETE /api/v4/files/delete?path=relative/path
 // Deletes a file or directory (recursive). Refuses empty path (won't delete user root).
@@ -19543,7 +19733,24 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             audit_append(mev);
         }
     }
-
+    // Favorites cleanup after successful delete
+    {
+        std::string rel_norm;
+        std::string nerr;
+        if (pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
+            std::string ferr;
+            if (!pqnas::favorites_remove_under_prefix(user_dir, rel_norm, type, &ferr)) {
+                audit_fail("favorites_cleanup_failed", 500, ferr);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "delete succeeded but favorites cleanup failed"},
+                    {"detail", pqnas::shorten(ferr, 180)}
+                }.dump());
+                return;
+            }
+        }
+    }
     audit_ok(rel_path, type, freed_bytes);
 
     reply_json(res, 200, json{
