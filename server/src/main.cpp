@@ -120,7 +120,7 @@ extern "C" {
 
 //apps
 #include "static_serve.h"
-
+#include "path_lock_manager.h"
 #include "system_metrics.h"
 // JSON (header-only)
 #include <nlohmann/json.hpp>
@@ -15720,6 +15720,12 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         }.dump());
         return;
     }
+
+    // Serialize writes on overlapping logical paths for this user.
+    // This prevents PUT/MOVE/DELETE races on the same file/subtree.
+    auto* plm = pqnas::get_path_lock_manager();
+    auto write_guard = plm->lock_paths(fp_hex, {from_rel_norm, to_rel_norm});
+
     // Refuse moves into a destination whose ancestor is already a file.
     // Example: if "a" is a file, moving anything to "a/b.txt" must fail.
     {
@@ -19980,6 +19986,11 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
         return;
     }
 
+    // Serialize writes on overlapping logical paths for this user.
+    // This prevents PUT/MOVE/DELETE races on the same file/subtree.
+    auto* plm = pqnas::get_path_lock_manager();
+    auto write_guard = plm->lock_paths(fp_hex, {rel_norm});
+
     const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
     pqnas::ResolvedLogicalItem item;
@@ -21711,6 +21722,11 @@ srv.Put("/api/v4/files/put",
             return;
         }
     }
+
+    // Serialize writes on overlapping logical paths for this user.
+    // This prevents PUT/MOVE/DELETE races on the same file/subtree.
+    auto* plm = pqnas::get_path_lock_manager();
+    auto write_guard = plm->lock_paths(fp_hex, {rel_norm});
 
     // Refuse uploads under a path whose ancestor is already a file.
     // Example: if "a" is a file, "a/b.txt" must be rejected.
