@@ -248,6 +248,22 @@
       box-shadow: 0 0 12px rgba(var(--fav-rgb),0.18);
     }
     /* smaller icon in list */
+
+    .grid.list .tile .ico,
+    .grid.list .tile .icoWrap{
+      width: 22px;
+      height: 22px;
+      opacity: 0.90;
+      margin: 0;
+      filter: drop-shadow(0 0 8px rgba(var(--fg-rgb),0.08));
+    }
+
+    .grid.list .tile .icoWrap svg{
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
     /* name becomes multi-line-safe but still trims */
     .grid.list .tile .name{
       font-size: 12px;
@@ -260,6 +276,7 @@
     }
 
     /* meta becomes two separate columns: size + mtime */
+
     .grid.list .tile .meta{
       font-size: 11px;
       opacity: 0.65;
@@ -355,8 +372,8 @@
 
     .ico,
     .icoWrap{
-      width: 40px;
-      height: 40px;
+      width: 52px;
+      height: 52px;
       opacity: 0.95;
       filter: drop-shadow(0 0 16px rgba(var(--fg-rgb),0.10));
     }
@@ -373,19 +390,16 @@
     }
 
     .icoWrap svg{
-      width: 40px !important;
-      height: 40px !important;
-      min-width: 40px;
-      min-height: 40px;
-      max-width: none;
-      max-height: none;
+      width: 100%;
+      height: 100%;
       display: block;
-      overflow: visible;
-      margin: 0 !important;
-      padding: 0 !important;
-      transform: none !important;
     }
-
+    .icoWrap{
+      transform: scale(1.08);
+    }
+    .tile:hover .icoWrap{
+      transform: scale(1.15);
+    }
     .name{
       font-weight: 900;
       font-size: 13px;
@@ -963,6 +977,8 @@
 </div>
 
 <div id="ctxMenu" class="ctxMenu" role="menu" aria-hidden="true"></div>
+<script src="./filetype_icons.js"></script>
 <script src="./app.js"></script>
+
 </body>
 </html>

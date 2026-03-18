@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 188 220" role="img" aria-label="OTF file icon">
+  <defs>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3.2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <linearGradient id="panel" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#101321"/>
+      <stop offset="100%" stop-color="#1b2035"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#d7dae4"/>
+      <stop offset="100%" stop-color="#aeb5c5"/>
+    </linearGradient>
+  </defs>
+
+  <!-- shadow backplates -->
+  <path d="M40 22h74l34 34v118a12 12 0 0 1-12 12H40a12 12 0 0 1-12-12V34a12 12 0 0 1 12-12z"
+        fill="#15192a" opacity=".22" transform="translate(14 12)"/>
+  <path d="M40 22h74l34 34v118a12 12 0 0 1-12 12H40a12 12 0 0 1-12-12V34a12 12 0 0 1 12-12z"
+        fill="#0d1020" opacity=".18" transform="translate(8 6)"/>
+
+  <!-- main sheet -->
+  <path d="M40 22h74l34 34v118a12 12 0 0 1-12 12H40a12 12 0 0 1-12-12V34a12 12 0 0 1 12-12z"
+        fill="url(#paper)" stroke="#2e3448" stroke-width="3"/>
+  <path d="M114 22v28a8 8 0 0 0 8 8h26" fill="#c7ccda" stroke="#2e3448" stroke-width="3"/>
+  <path d="M48 36h40" stroke="#ffd166" stroke-width="4" stroke-linecap="round" opacity=".85"/>
+  <path d="M48 44h24" stroke="#2d3348" stroke-width="4" stroke-linecap="round" opacity=".35"/>
+
+  <!-- glyph panel -->
+  <path d="M34 28l12-8h70l28 28v74l-10 10H34z"
+        fill="url(#panel)" opacity=".97" stroke="#2a2f48" stroke-width="2"/>
+
+  <!-- neon accent cuts -->
+  <path d="M36 28l10-6M134 120l10-10M112 22l30 30" stroke="#ffd166" stroke-width="3.2" opacity=".75" filter="url(#glow)"/>
+
+  <!-- category glyph -->
+  <g filter="url(#glow)">
+    
+        <path d="M60 108l34-64 34 64M72 86h44" fill="none" stroke="#ffd166" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+        
+  </g>
+
+  <!-- extension pill -->
+  <g transform="translate(22 150)">
+    <rect x="0" y="0" width="100" height="36" rx="8" fill="#ffd166" opacity=".98"/>
+    <path d="M6 18h10" stroke="#ffffff" stroke-width="2" opacity=".25"/>
+    <text x="50" y="24" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" fill="#ffffff">OTF</text>
+  </g>
+</svg>
