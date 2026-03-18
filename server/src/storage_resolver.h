@@ -17,6 +17,16 @@ struct ResolvedExistingPath {
     bool from_metadata = false; // reserved for future tiering metadata lookup
 };
 
+struct ResolvedLogicalItem {
+    std::string normalized_rel_path;
+    std::filesystem::path abs_path;   // meaningful for files; best-effort anchor for dirs
+    bool exists = false;
+    bool is_file = false;
+    bool is_dir = false;
+    bool from_metadata = false;
+    bool has_physical_anchor = false;
+};
+
 // Normalize a user relative path using the same strict policy as current file APIs.
 // Output is a normalized relative path string such as "movies/video.mkv".
 bool normalize_user_rel_path_strict(const std::string& rel_path,
@@ -39,6 +49,17 @@ bool resolve_existing_user_file_path(UsersRegistry& users,
                                      ResolvedExistingPath* out,
                                      std::string* err);
 
+bool resolve_existing_user_item(UsersRegistry& users,
+                                const std::string& fp_hex,
+                                const std::string& rel_path,
+                                ResolvedLogicalItem* out,
+                                std::string* err);
+
+bool any_file_ancestor_exists(UsersRegistry& users,
+                              const std::string& fp_hex,
+                              const std::string& rel_path,
+                              std::string* found_ancestor,
+                              std::string* err);
 } // namespace pqnas
 
 // Bridge provided by main.cpp for now.

@@ -15656,7 +15656,23 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         audit_append(ev);
     };
 
-    // must have allocated storage
+    auto audit_warn = [&](const std::string& reason,
+                          const std::string& detail,
+                          const std::string& from_rel,
+                          const std::string& to_rel) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_move_warn";
+        ev.outcome = "warn";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["from"] = pqnas::shorten(from_rel, 200);
+        ev.f["to"]   = pqnas::shorten(to_rel, 200);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        ev.f["ua"] = audit_ua();
+        audit_append(ev);
+    };
+
     auto uopt = users.get(fp_hex);
     if (!uopt.has_value() || uopt->storage_state != "allocated") {
         audit_fail("storage_unallocated", 403);
@@ -15682,9 +15698,6 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
-
-    // Normalize both logical paths first
     std::string from_rel_norm, to_rel_norm;
     std::string nerr1, nerr2;
 
@@ -15707,12 +15720,51 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         }.dump());
         return;
     }
+    // Refuse moves into a destination whose ancestor is already a file.
+    // Example: if "a" is a file, moving anything to "a/b.txt" must fail.
+    {
+        std::string found_ancestor;
+        std::string aerr;
+        const bool conflict =
+            pqnas::any_file_ancestor_exists(users, fp_hex, to_rel_norm, &found_ancestor, &aerr);
 
-    // Resolve source via metadata-aware resolver
-    pqnas::ResolvedExistingPath from_rp;
-    std::string from_err;
-    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, from_rel_norm, &from_rp, &from_err)) {
-        audit_fail("not_found", 404, from_err, from_rel, to_rel);
+        if (!aerr.empty()) {
+            audit_fail("ancestor_check_failed", 500, aerr, from_rel, to_rel);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "ancestor conflict check failed"},
+                {"detail", pqnas::shorten(aerr, 180)}
+            }.dump());
+            return;
+        }
+
+        if (conflict) {
+            audit_fail("dest_ancestor_is_file", 409, found_ancestor, from_rel, to_rel);
+            reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "path_conflict"},
+                {"message", "destination parent path is an existing file"},
+                {"ancestor", found_ancestor}
+            }.dump());
+            return;
+        }
+    }
+    if (from_rel_norm == to_rel_norm) {
+        audit_fail("same_path", 400, "", from_rel, to_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "from and to are the same"}
+        }.dump());
+        return;
+    }
+
+    // Resolve logical source (file or dir)
+    pqnas::ResolvedLogicalItem src;
+    std::string rerr;
+    if (!pqnas::resolve_existing_user_item(users, fp_hex, from_rel_norm, &src, &rerr) || !src.exists) {
+        audit_fail("not_found", 404, rerr, from_rel, to_rel);
         reply_json(res, 404, json{
             {"ok", false},
             {"error", "not_found"},
@@ -15721,19 +15773,108 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         return;
     }
 
-    const std::filesystem::path from_abs = from_rp.abs_path;
+    // Destination must not already exist logically
+    {
+        pqnas::ResolvedLogicalItem dst_existing;
+        std::string derr;
+        if (pqnas::resolve_existing_user_item(users, fp_hex, to_rel_norm, &dst_existing, &derr) &&
+            dst_existing.exists) {
+            audit_fail("dest_exists", 409, "", from_rel, to_rel);
+            reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "dest_exists"},
+                {"message", "destination already exists"}
+            }.dump());
+            return;
+        }
+    }
 
-    // Resolve destination
-    std::filesystem::path to_abs;
+    // Prevent moving directory into itself/subtree
+    if (src.is_dir) {
+        if (to_rel_norm == from_rel_norm ||
+            to_rel_norm.rfind(from_rel_norm + "/", 0) == 0) {
+            audit_fail("dir_into_self", 400, "", from_rel, to_rel);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "cannot move a directory into itself"}
+            }.dump());
+            return;
+        }
+    }
 
-    if (from_rp.from_metadata) {
-        auto* idx = pqnas::get_file_location_index();
-        if (!idx) {
-            audit_fail("metadata_index_missing", 500, "", from_rel, to_rel);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+    auto* idx = pqnas::get_file_location_index();
+    if (!idx) {
+        audit_fail("metadata_index_missing", 500, "", from_rel, to_rel);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "metadata index missing"}
+        }.dump());
+        return;
+    }
+
+    auto move_one_path = [&](const std::filesystem::path& src_path,
+                             const std::filesystem::path& dst_path,
+                             bool src_is_dir,
+                             std::string* move_err) -> bool {
+        if (move_err) move_err->clear();
+
+        std::error_code mec;
+        std::filesystem::create_directories(dst_path.parent_path(), mec);
+        if (mec) {
+            if (move_err) *move_err = "mkdir failed: " + mec.message();
+            return false;
+        }
+
+        mec.clear();
+        std::filesystem::rename(src_path, dst_path, mec);
+        if (!mec) return true;
+
+        const bool is_exdev =
+            (mec == std::make_error_code(std::errc::cross_device_link));
+
+        if (!is_exdev) {
+            if (move_err) *move_err = "rename failed: " + mec.message();
+            return false;
+        }
+
+        std::error_code ec_copy;
+        if (src_is_dir) {
+            std::filesystem::copy(src_path, dst_path,
+                                  std::filesystem::copy_options::recursive,
+                                  ec_copy);
+        } else {
+            std::filesystem::copy_file(src_path, dst_path,
+                                       std::filesystem::copy_options::none,
+                                       ec_copy);
+        }
+        if (ec_copy) {
+            if (move_err) *move_err = "copy fallback failed: " + ec_copy.message();
+            return false;
+        }
+
+        std::error_code ec_rm;
+        if (src_is_dir) std::filesystem::remove_all(src_path, ec_rm);
+        else            std::filesystem::remove(src_path, ec_rm);
+
+        if (ec_rm) {
+            if (move_err) *move_err = "cleanup failed: " + ec_rm.message();
+            return false;
+        }
+
+        return true;
+    };
+
+    if (src.is_file) {
+        // ----- FILE MOVE -----
+        if (!src.has_physical_anchor) {
+            audit_fail("file_missing_physical_anchor", 500, "", from_rel, to_rel);
             reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "server_error"},
-                {"message", "metadata index missing"}
+                {"message", "file missing physical anchor"}
             }.dump());
             return;
         }
@@ -15751,7 +15892,7 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
             return;
         }
 
-        // Build destination physical path by replacing logical suffix under same storage root.
+        const std::filesystem::path from_abs = src.abs_path;
         const std::filesystem::path old_phys = std::filesystem::path(rec->physical_path);
         const std::filesystem::path old_logical_path = std::filesystem::path(from_rel_norm);
 
@@ -15761,194 +15902,38 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
             physical_root = physical_root.parent_path();
         }
 
-        to_abs = physical_root / std::filesystem::path(to_rel_norm);
-    } else {
-        std::string perr;
-        if (!pqnas::resolve_user_path_strict(user_dir, to_rel_norm, &to_abs, &perr)) {
-            audit_fail("invalid_to_path", 400, perr, from_rel, to_rel);
-            reply_json(res, 400, json{
+        const std::filesystem::path to_abs = physical_root / std::filesystem::path(to_rel_norm);
+
+        std::error_code ec;
+        auto st = std::filesystem::symlink_status(from_abs, ec);
+        if (ec || !std::filesystem::exists(st) || !std::filesystem::is_regular_file(st)) {
+            audit_fail("not_found", 404, "", from_rel, to_rel);
+            reply_json(res, 404, json{
                 {"ok", false},
-                {"error", "bad_request"},
-                {"message", "invalid to path"}
+                {"error", "not_found"},
+                {"message", "source not found"}
             }.dump());
             return;
         }
-    }
 
-    if (from_abs == to_abs) {
-        audit_fail("same_path", 400, "", from_rel, to_rel);
-        reply_json(res, 400, json{
-            {"ok", false},
-            {"error", "bad_request"},
-            {"message", "from and to are the same"}
-        }.dump());
-        return;
-    }
-
-    // source must exist
-    std::error_code ec;
-    auto st = std::filesystem::status(from_abs, ec);
-    if (ec || !std::filesystem::exists(st)) {
-        audit_fail("not_found", 404, "", from_rel, to_rel);
-        reply_json(res, 404, json{
-            {"ok", false},
-            {"error", "not_found"},
-            {"message", "source not found"}
-        }.dump());
-        return;
-    }
-
-    const bool is_dir  = std::filesystem::is_directory(st);
-    const bool is_file = std::filesystem::is_regular_file(st);
-
-    // Optional hardening: refuse moving symlinks
-    {
-        std::error_code ec2;
-        auto lst = std::filesystem::symlink_status(from_abs, ec2);
-        if (!ec2 && std::filesystem::is_symlink(lst)) {
-            audit_fail("symlink_refused", 400, "source is symlink", from_rel, to_rel);
-            reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "bad_request"},
-                {"message", "refusing to move symlink"}
-            }.dump());
-            return;
-        }
-    }
-
-    // Refuse moving a directory into itself/subtree
-    if (is_dir) {
-        const auto from_norm_abs = from_abs.lexically_normal();
-        const auto to_norm_abs   = to_abs.lexically_normal();
-
-        auto it_from = from_norm_abs.begin();
-        auto it_to   = to_norm_abs.begin();
-        bool prefix = true;
-        for (; it_from != from_norm_abs.end(); ++it_from, ++it_to) {
-            if (it_to == to_norm_abs.end() || *it_from != *it_to) {
-                prefix = false;
-                break;
-            }
-        }
-        if (prefix) {
-            audit_fail("dir_into_self", 400, "", from_rel, to_rel);
-            reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "bad_request"},
-                {"message", "cannot move a directory into itself"}
-            }.dump());
-            return;
-        }
-    }
-
-    // Refuse overwrite
-    ec.clear();
-    auto dst_st = std::filesystem::status(to_abs, ec);
-    if (!ec && std::filesystem::exists(dst_st)) {
-        audit_fail("dest_exists", 409, "", from_rel, to_rel);
-        reply_json(res, 409, json{
-            {"ok", false},
-            {"error", "dest_exists"},
-            {"message", "destination already exists"}
-        }.dump());
-        return;
-    }
-
-    // ensure destination parent exists
-    ec.clear();
-    std::filesystem::create_directories(to_abs.parent_path(), ec);
-    if (ec) {
-        audit_fail("mkdir_failed", 500, ec.message(), from_rel, to_rel);
-        reply_json(res, 500, json{
-            {"ok", false},
-            {"error", "server_error"},
-            {"message", "failed to create destination directories"},
-            {"detail", pqnas::shorten(ec.message(), 180)}
-        }.dump());
-        return;
-    }
-
-    const std::string type = is_dir ? "dir" : (is_file ? "file" : "other");
-    std::uint64_t bytes = 0;
-    if (is_file) bytes = pqnas::file_size_u64_safe(from_abs);
-
-    // Helper for physical move with EXDEV fallback
-    auto move_one_path = [&](const std::filesystem::path& src,
-                             const std::filesystem::path& dst,
-                             bool src_is_dir,
-                             std::string* move_err) -> bool {
-        if (move_err) move_err->clear();
-
-        std::error_code mec;
-        std::filesystem::create_directories(dst.parent_path(), mec);
-        if (mec) {
-            if (move_err) *move_err = "mkdir failed: " + mec.message();
-            return false;
-        }
-
-        mec.clear();
-        std::filesystem::rename(src, dst, mec);
-        if (!mec) return true;
-
-        const bool is_exdev =
-            (mec == std::make_error_code(std::errc::cross_device_link));
-
-        if (!is_exdev) {
-            if (move_err) *move_err = "rename failed: " + mec.message();
-            return false;
-        }
-
-        std::error_code ec_copy;
-        if (src_is_dir) {
-            std::filesystem::copy(src, dst,
-                                  std::filesystem::copy_options::recursive,
-                                  ec_copy);
-        } else {
-            std::filesystem::copy_file(src, dst,
-                                       std::filesystem::copy_options::none,
-                                       ec_copy);
-        }
-        if (ec_copy) {
-            if (move_err) *move_err = "copy fallback failed: " + ec_copy.message();
-            return false;
-        }
-
-        std::error_code ec_rm;
-        if (src_is_dir) std::filesystem::remove_all(src, ec_rm);
-        else            std::filesystem::remove(src, ec_rm);
-
-        if (ec_rm) {
-            if (move_err) *move_err = "cleanup failed: " + ec_rm.message();
-            return false;
-        }
-
-        return true;
-    };
-
-    // For directory moves, fetch subtree metadata rows BEFORE mutating anything.
-    std::vector<pqnas::FileLocationRecord> subtree_rows;
-    {
-        auto* idx = pqnas::get_file_location_index();
-        if (idx && is_dir) {
-            std::string lerr;
-            subtree_rows = idx->list_subtree_records(fp_hex, from_rel_norm, &lerr);
-            if (!lerr.empty()) {
-                audit_fail("metadata_subtree_list_failed", 500, lerr, from_rel, to_rel);
-                reply_json(res, 500, json{
+        {
+            std::error_code dec;
+            auto dst_st = std::filesystem::symlink_status(to_abs, dec);
+            if (!dec && std::filesystem::exists(dst_st)) {
+                audit_fail("dest_exists", 409, "", from_rel, to_rel);
+                reply_json(res, 409, json{
                     {"ok", false},
-                    {"error", "server_error"},
-                    {"message", "failed to list metadata subtree"},
-                    {"detail", pqnas::shorten(lerr, 180)}
+                    {"error", "dest_exists"},
+                    {"message", "destination already exists"}
                 }.dump());
                 return;
             }
         }
-    }
 
-    // Main physical move for the directly resolved source
-    {
+        const std::uint64_t bytes = pqnas::file_size_u64_safe(from_abs);
+
         std::string move_err;
-        if (!move_one_path(from_abs, to_abs, is_dir, &move_err)) {
+        if (!move_one_path(from_abs, to_abs, false, &move_err)) {
             audit_fail("move_failed", 500, move_err, from_rel, to_rel);
             reply_json(res, 500, json{
                 {"ok", false},
@@ -15958,133 +15943,211 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
             }.dump());
             return;
         }
+
+        const std::int64_t now_ts = now_epoch_sec();
+        std::string merr;
+        if (!idx->rename_one(fp_hex,
+                             from_rel_norm,
+                             to_rel_norm,
+                             from_abs.string(),
+                             to_abs.string(),
+                             now_ts,
+                             &merr)) {
+            audit_fail("metadata_rename_failed", 500, merr, from_rel, to_rel);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "move succeeded but metadata rename failed"},
+                {"detail", pqnas::shorten(merr, 180)}
+            }.dump());
+            return;
+        }
+
+        {
+            std::string ferr;
+            if (!pqnas::favorites_move_path(user_dir, from_rel_norm, to_rel_norm, "file", &ferr)) {
+                audit_warn("favorites_move_failed", ferr, from_rel, to_rel);
+            }
+        }
+
+        audit_ok(from_rel, to_rel, "file", bytes);
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"from", from_rel},
+            {"to", to_rel},
+            {"type", "file"},
+            {"bytes", bytes}
+        }.dump());
+        return;
     }
 
-    // Metadata-backed descendant physical moves for directory moves
-    if (is_dir && !subtree_rows.empty()) {
-        for (const auto& rec : subtree_rows) {
-            if (rec.logical_rel_path == from_rel_norm) {
-                continue; // directory row itself usually does not exist; skip if it does
-            }
+    if (src.is_dir) {
+        // ----- DIRECTORY MOVE -----
+        std::string lerr;
+        auto subtree_rows = idx->list_subtree_records(fp_hex, from_rel_norm, &lerr);
+        if (!lerr.empty()) {
+            audit_fail("metadata_subtree_list_failed", 500, lerr, from_rel, to_rel);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to list metadata subtree"},
+                {"detail", pqnas::shorten(lerr, 180)}
+            }.dump());
+            return;
+        }
 
-            std::string suffix;
-            if (rec.logical_rel_path.rfind(from_rel_norm + "/", 0) == 0) {
-                suffix = rec.logical_rel_path.substr(from_rel_norm.size());
-            } else {
-                continue;
-            }
-
-            const std::string new_logical = to_rel_norm + suffix;
-            const std::filesystem::path old_phys = rec.physical_path;
-
-            std::filesystem::path new_phys;
-            if (old_phys == from_abs || old_phys.lexically_normal().string().rfind(from_abs.lexically_normal().string() + "/", 0) == 0) {
-                // same visible tree
-                const auto rel_under_from = std::filesystem::relative(old_phys, from_abs, ec);
-                if (!ec) new_phys = to_abs / rel_under_from;
-            }
-
-            if (new_phys.empty()) {
-                // fallback: rebuild using logical suffix under same physical root
-                const std::filesystem::path old_logical_path = std::filesystem::path(rec.logical_rel_path);
-                std::filesystem::path physical_root = old_phys;
-                for (const auto& _ : old_logical_path) {
-                    (void)_;
-                    physical_root = physical_root.parent_path();
-                }
-                new_phys = physical_root / std::filesystem::path(new_logical);
-            }
-
-            if (old_phys == new_phys) continue;
-
-            std::error_code ecx;
-            if (!std::filesystem::exists(old_phys, ecx) || ecx) {
-                continue;
-            }
-
-            std::string move_err;
-            if (!move_one_path(old_phys, new_phys, false, &move_err)) {
-                audit_fail("metadata_subtree_physical_move_failed", 500, move_err, from_rel, to_rel);
-                reply_json(res, 500, json{
+        // Metadata-backed logical dir must have subtree rows.
+        if (subtree_rows.empty()) {
+            // Legacy physical dir fallback path
+            if (!src.has_physical_anchor) {
+                audit_fail("not_found", 404, "", from_rel, to_rel);
+                reply_json(res, 404, json{
                     {"ok", false},
-                    {"error", "server_error"},
-                    {"message", "move succeeded but subtree physical move failed"},
-                    {"detail", pqnas::shorten(move_err, 180)}
+                    {"error", "not_found"},
+                    {"message", "source not found"}
                 }.dump());
                 return;
             }
         }
-    }
 
-    // Metadata sync for tiered items
-    {
-        auto* idx = pqnas::get_file_location_index();
-        if (idx) {
-            const std::int64_t now_ts = now_epoch_sec();
-            std::string merr;
+        // For now, require one physical root tree for all metadata-backed descendants.
+        std::filesystem::path from_abs;
+        bool have_root = false;
 
-            if (is_file) {
-                if (from_rp.from_metadata) {
-                    if (!idx->rename_one(fp_hex,
-                                         from_rel_norm,
-                                         to_rel_norm,
-                                         from_abs.string(),
-                                         to_abs.string(),
-                                         now_ts,
-                                         &merr)) {
-                        audit_fail("metadata_rename_failed", 500, merr, from_rel, to_rel);
-                        reply_json(res, 500, json{
-                            {"ok", false},
-                            {"error", "server_error"},
-                            {"message", "move succeeded but metadata rename failed"},
-                            {"detail", pqnas::shorten(merr, 180)}
-                        }.dump());
-                        return;
-                    }
-                }
-            } else if (is_dir) {
-                // Run subtree rename for dir moves even if dir itself was legacy-visible.
-                if (!idx->rename_subtree(fp_hex,
-                                         from_rel_norm,
-                                         to_rel_norm,
-                                         now_ts,
-                                         &merr)) {
-                    audit_fail("metadata_subtree_rename_failed", 500, merr, from_rel, to_rel);
-                    reply_json(res, 500, json{
-                        {"ok", false},
-                        {"error", "server_error"},
-                        {"message", "move succeeded but metadata subtree rename failed"},
-                        {"detail", pqnas::shorten(merr, 180)}
-                    }.dump());
-                    return;
-                }
+        // For metadata-backed dirs, metadata physical paths are authoritative.
+        // Do NOT prefer legacy physical anchor here.
+        if (!subtree_rows.empty()) {
+            const auto& first = subtree_rows.front();
+            std::filesystem::path root = std::filesystem::path(first.physical_path);
+            for (const auto& _ : std::filesystem::path(first.logical_rel_path)) {
+                (void)_;
+                root = root.parent_path();
             }
+            from_abs = root / std::filesystem::path(from_rel_norm);
+            have_root = true;
+        } else if (src.has_physical_anchor) {
+            from_abs = src.abs_path;
+            have_root = true;
         }
-    }
 
-    // Favorites sync: move favorite entry / subtree if present
-    {
-        std::string ferr;
-        if (!pqnas::favorites_move_path(user_dir, from_rel_norm, to_rel_norm, type, &ferr)) {
-            audit_fail("favorites_move_failed", 500, ferr, from_rel, to_rel);
-            reply_json(res, 500, json{
+        if (!have_root) {
+            audit_fail("dir_missing_physical_anchor", 409, "", from_rel, to_rel);
+            reply_json(res, 409, json{
                 {"ok", false},
-                {"error", "server_error"},
-                {"message", "move succeeded but favorites update failed"},
-                {"detail", pqnas::shorten(ferr, 180)}
+                {"error", "unsupported"},
+                {"message", "directory move not supported for this layout"}
             }.dump());
             return;
         }
+
+        bool all_under_root = true;
+        const std::string from_root_s = from_abs.lexically_normal().string();
+        for (const auto& rec : subtree_rows) {
+            const std::string phys = std::filesystem::path(rec.physical_path).lexically_normal().string();
+            if (phys != from_root_s && phys.rfind(from_root_s + "/", 0) != 0) {
+                all_under_root = false;
+                break;
+            }
+        }
+
+        if (!all_under_root) {
+            audit_fail("dir_move_cross_root_unsupported", 409, "", from_rel, to_rel);
+            reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "unsupported"},
+                {"message", "directory move across mixed storage roots not supported yet"}
+            }.dump());
+            return;
+        }
+
+        // Destination physical path under same root
+        std::filesystem::path physical_root = from_abs;
+        for (const auto& _ : std::filesystem::path(from_rel_norm)) {
+            (void)_;
+            physical_root = physical_root.parent_path();
+        }
+        const std::filesystem::path to_abs = physical_root / std::filesystem::path(to_rel_norm);
+
+        {
+            std::error_code dec;
+            auto dst_st = std::filesystem::symlink_status(to_abs, dec);
+            if (!dec && std::filesystem::exists(dst_st)) {
+                audit_fail("dest_exists", 409, "", from_rel, to_rel);
+                reply_json(res, 409, json{
+                    {"ok", false},
+                    {"error", "dest_exists"},
+                    {"message", "destination already exists"}
+                }.dump());
+                return;
+            }
+        }
+
+        {
+            std::error_code sec;
+            auto src_st = std::filesystem::symlink_status(from_abs, sec);
+            if (sec || !std::filesystem::exists(src_st) || !std::filesystem::is_directory(src_st)) {
+                audit_fail("not_found", 404, "", from_rel, to_rel);
+                reply_json(res, 404, json{
+                    {"ok", false},
+                    {"error", "not_found"},
+                    {"message", "source not found"}
+                }.dump());
+                return;
+            }
+        }
+
+        std::string move_err;
+        if (!move_one_path(from_abs, to_abs, true, &move_err)) {
+            audit_fail("move_failed", 500, move_err, from_rel, to_rel);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "move failed"},
+                {"detail", pqnas::shorten(move_err, 180)}
+            }.dump());
+            return;
+        }
+
+        const std::int64_t now_ts = now_epoch_sec();
+        std::string merr;
+        if (!idx->rename_subtree(fp_hex,
+                                 from_rel_norm,
+                                 to_rel_norm,
+                                 now_ts,
+                                 &merr)) {
+            audit_fail("metadata_subtree_rename_failed", 500, merr, from_rel, to_rel);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "move succeeded but metadata subtree rename failed"},
+                {"detail", pqnas::shorten(merr, 180)}
+            }.dump());
+            return;
+        }
+
+        {
+            std::string ferr;
+            if (!pqnas::favorites_move_path(user_dir, from_rel_norm, to_rel_norm, "dir", &ferr)) {
+                audit_warn("favorites_move_failed", ferr, from_rel, to_rel);
+            }
+        }
+
+        audit_ok(from_rel, to_rel, "dir", 0);
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"from", from_rel},
+            {"to", to_rel},
+            {"type", "dir"},
+            {"bytes", 0}
+        }.dump());
+        return;
     }
 
-    audit_ok(from_rel, to_rel, type, bytes);
-
-    reply_json(res, 200, json{
-        {"ok", true},
-        {"from", from_rel},
-        {"to", to_rel},
-        {"type", type},
-        {"bytes", bytes}
+    audit_fail("unsupported_type", 400, "", from_rel, to_rel);
+    reply_json(res, 400, json{
+        {"ok", false},
+        {"error", "bad_request"},
+        {"message", "unsupported source type"}
     }.dump());
 });
 // ---- Files API (user storage) ----
@@ -18842,16 +18905,19 @@ const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 std::filesystem::path path_abs;
 std::string err;
 std::string logical_rel_norm;
+pqnas::ResolvedLogicalItem resolved_item;
+bool have_resolved_item = false;
 
 
 // IMPORTANT: root stat still maps to the current user root directory.
-// Non-root paths must resolve through metadata-aware resolver.
+// Non-root paths must resolve through logical metadata-aware resolver.
 if (path_rel.empty()) {
     path_abs = user_dir;
     logical_rel_norm.clear();
+    have_resolved_item = false;
 } else {
-    pqnas::ResolvedExistingPath rp;
-    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, path_rel, &rp, &err)) {
+    if (!pqnas::resolve_existing_user_item(users, fp_hex, path_rel, &resolved_item, &err) ||
+        !resolved_item.exists) {
         audit_fail("not_found", 404, err, path_rel);
         reply_json(res, 404, json{
             {"ok", false},
@@ -18860,8 +18926,68 @@ if (path_rel.empty()) {
         }.dump());
         return;
     }
-    path_abs = rp.abs_path;
-    logical_rel_norm = rp.normalized_rel_path;
+
+    logical_rel_norm = resolved_item.normalized_rel_path;
+    have_resolved_item = true;
+
+    if (resolved_item.is_file) {
+        path_abs = resolved_item.abs_path;
+    } else if (resolved_item.is_dir) {
+        auto* idx = pqnas::get_file_location_index();
+        if (idx) {
+            std::string lerr;
+            auto subtree_rows = idx->list_subtree_records(fp_hex, logical_rel_norm, &lerr);
+            if (!lerr.empty()) {
+                audit_fail("metadata_subtree_list_failed", 500, lerr, path_rel);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "failed to list metadata subtree"},
+                    {"detail", pqnas::shorten(lerr, 180)}
+                }.dump());
+                return;
+            }
+
+            // For metadata-backed dirs, derive physical root from metadata rows first.
+            if (!subtree_rows.empty()) {
+                const auto& first = subtree_rows.front();
+                std::filesystem::path root = std::filesystem::path(first.physical_path);
+                for (const auto& _ : std::filesystem::path(first.logical_rel_path)) {
+                    (void)_;
+                    root = root.parent_path();
+                }
+                path_abs = root / std::filesystem::path(logical_rel_norm);
+            } else if (resolved_item.has_physical_anchor) {
+                path_abs = resolved_item.abs_path;
+            } else {
+                audit_fail("not_found", 404, "", path_rel);
+                reply_json(res, 404, json{
+                    {"ok", false},
+                    {"error", "not_found"},
+                    {"message", "path not found"}
+                }.dump());
+                return;
+            }
+        } else if (resolved_item.has_physical_anchor) {
+            path_abs = resolved_item.abs_path;
+        } else {
+            audit_fail("metadata_index_missing", 500, "", path_rel);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "metadata index missing"}
+            }.dump());
+            return;
+        }
+    } else {
+        audit_fail("not_found", 404, "", path_rel);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "path not found"}
+        }.dump());
+        return;
+    }
 }
 
     // Detect symlink without following (matches /search base behavior)
@@ -18960,9 +19086,18 @@ if (path_rel.empty()) {
         }
         return true;
     };
+    bool is_dir = std::filesystem::is_directory(st);
+    bool is_file = std::filesystem::is_regular_file(st);
 
-    const bool is_dir = std::filesystem::is_directory(st);
-    const bool is_file = std::filesystem::is_regular_file(st);
+    if (!path_rel.empty() && have_resolved_item) {
+        if (resolved_item.is_dir) {
+            is_dir = true;
+            is_file = false;
+        } else if (resolved_item.is_file) {
+            is_file = true;
+            is_dir = false;
+        }
+    }
 
     std::string type = "other";
     if (is_dir) type = "dir";
@@ -19782,29 +19917,45 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
         audit_append(ev);
     };
 
-    // Storage allocated check (fail-closed)
+    auto audit_warn = [&](const std::string& reason,
+                          const std::string& detail,
+                          const std::string& rel_path) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_delete_warn";
+        ev.outcome = "warn";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["path"] = pqnas::shorten(rel_path, 200);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        ev.f["ua"] = audit_ua();
+        audit_append(ev);
+    };
+
     {
         auto uopt = users.get(fp_hex);
         if (!uopt.has_value()) {
             audit_fail("user_missing", 403);
-            reply_json(res, 403, json{{"ok", false}, {"error", "forbidden"}, {"message", "policy denied"}}.dump());
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "policy denied"}
+            }.dump());
             return;
         }
-        const auto& u = *uopt;
-        if (u.storage_state != "allocated") {
+        if (uopt->storage_state != "allocated") {
             audit_fail("storage_unallocated", 403);
             reply_json(res, 403, json{
                 {"ok", false},
                 {"error", "storage_unallocated"},
                 {"message", "Storage not allocated"},
                 {"fingerprint_hex", fp_hex},
-                {"quota_bytes", u.quota_bytes}
+                {"quota_bytes", uopt->quota_bytes}
             }.dump());
             return;
         }
     }
 
-    // path param (required)
     std::string rel_path;
     if (req.has_param("path")) rel_path = req.get_param_value("path");
     if (rel_path.empty()) {
@@ -19817,9 +19968,6 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
-
-    // Normalize once and reuse everywhere
     std::string rel_norm;
     std::string nerr;
     if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
@@ -19832,11 +19980,12 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
         return;
     }
 
-    // Resolve existing logical item via metadata-aware resolver
-    pqnas::ResolvedExistingPath rp;
-    std::string perr;
-    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, rel_norm, &rp, &perr)) {
-        audit_fail("not_found", 404, perr);
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+
+    pqnas::ResolvedLogicalItem item;
+    std::string rerr;
+    if (!pqnas::resolve_existing_user_item(users, fp_hex, rel_norm, &item, &rerr) || !item.exists) {
+        audit_fail("not_found", 404, rerr);
         reply_json(res, 404, json{
             {"ok", false},
             {"error", "not_found"},
@@ -19845,82 +19994,60 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
         return;
     }
 
-    const std::filesystem::path abs_path = rp.abs_path;
-
-    // Extra safety: refuse deleting the user root directly
-    if (abs_path == user_dir) {
-        audit_fail("refuse_root_delete", 400);
-        reply_json(res, 400, json{
+    auto* idx = pqnas::get_file_location_index();
+    if (!idx) {
+        audit_fail("metadata_index_missing", 500);
+        reply_json(res, 500, json{
             {"ok", false},
-            {"error", "bad_request"},
-            {"message", "refusing to delete root"}
+            {"error", "server_error"},
+            {"message", "metadata index missing"}
         }.dump());
         return;
     }
 
-    // Must exist
-    std::error_code ec;
-    auto st = std::filesystem::status(abs_path, ec);
-    if (ec || !std::filesystem::exists(st)) {
-        audit_fail("not_found", 404);
-        reply_json(res, 404, json{
-            {"ok", false},
-            {"error", "not_found"},
-            {"message", "path not found"}
-        }.dump());
-        return;
-    }
-
-    // Compute freed bytes (best-effort)
-    auto compute_freed_bytes = [&](const std::filesystem::path& p) -> std::uint64_t {
-        std::uint64_t total = 0;
-        std::error_code ecx;
-
-        auto st2 = std::filesystem::status(p, ecx);
-        if (ecx) return 0;
-
-        if (std::filesystem::is_regular_file(st2)) {
-            auto sz = std::filesystem::file_size(p, ecx);
-            if (!ecx) total += (std::uint64_t)sz;
-            return total;
-        }
-
-        if (std::filesystem::is_directory(st2)) {
-            for (std::filesystem::recursive_directory_iterator it(
-                     p, std::filesystem::directory_options::skip_permission_denied, ecx), end;
-                 it != end && !ecx;
-                 it.increment(ecx)) {
-                std::error_code ec2;
-                if (it->is_regular_file(ec2) && !ec2) {
-                    std::error_code ec3;
-                    auto sz = it->file_size(ec3);
-                    if (!ec3) total += (std::uint64_t)sz;
-                }
-            }
-        }
-
-        return total;
+    auto file_size_safe = [&](const std::filesystem::path& p) -> std::uint64_t {
+        std::error_code ec;
+        auto sz = std::filesystem::file_size(p, ec);
+        return ec ? 0 : static_cast<std::uint64_t>(sz);
     };
 
-    const bool is_dir = std::filesystem::is_directory(st);
-    const std::string type = is_dir ? "dir" : (std::filesystem::is_regular_file(st) ? "file" : "other");
-
-    std::uint64_t freed_bytes = compute_freed_bytes(abs_path);
-
-    // Delete physical path
-    if (is_dir) {
-        std::uintmax_t removed = std::filesystem::remove_all(abs_path, ec);
-        if (ec || removed == 0) {
-            audit_fail("remove_all_failed", 500, ec.message());
+    if (item.is_file) {
+        if (!item.has_physical_anchor) {
+            audit_fail("file_missing_physical_anchor", 500);
             reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "server_error"},
-                {"message", "delete failed"},
-                {"detail", pqnas::shorten(ec.message(), 180)}
+                {"message", "file missing physical anchor"}
             }.dump());
             return;
         }
-    } else {
+
+        const std::filesystem::path abs_path = item.abs_path;
+
+        if (abs_path == user_dir) {
+            audit_fail("refuse_root_delete", 400);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "refusing to delete root"}
+            }.dump());
+            return;
+        }
+
+        std::error_code ec;
+        auto st = std::filesystem::symlink_status(abs_path, ec);
+        if (ec || !std::filesystem::exists(st) || !std::filesystem::is_regular_file(st)) {
+            audit_fail("not_found", 404);
+            reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "path not found"}
+            }.dump());
+            return;
+        }
+
+        const std::uint64_t freed_bytes = file_size_safe(abs_path);
+
         bool removed = std::filesystem::remove(abs_path, ec);
         if (ec || !removed) {
             audit_fail("remove_failed", 500, ec.message());
@@ -19932,83 +20059,229 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             }.dump());
             return;
         }
-    }
 
-    // Tiering metadata cleanup
-    {
-        auto* idx = pqnas::get_file_location_index();
-        if (idx) {
+        {
             std::string derr;
-
-            if (is_dir) {
-                // Remove metadata rows for everything under this logical directory
-                if (!idx->erase_subtree(fp_hex, rel_norm, &derr)) {
-                    audit_fail("metadata_erase_subtree_failed", 500, derr);
-                    reply_json(res, 500, json{
-                        {"ok", false},
-                        {"error", "server_error"},
-                        {"message", "delete metadata cleanup failed"},
-                        {"detail", pqnas::shorten(derr, 180)}
-                    }.dump());
-                    return;
-                }
-            } else {
-                if (!idx->erase(fp_hex, rel_norm, &derr)) {
-                    audit_fail("metadata_erase_failed", 500, derr);
-                    reply_json(res, 500, json{
-                        {"ok", false},
-                        {"error", "server_error"},
-                        {"message", "delete metadata cleanup failed"},
-                        {"detail", pqnas::shorten(derr, 180)}
-                    }.dump());
-                    return;
-                }
+            if (!idx->erase(fp_hex, rel_norm, &derr)) {
+                audit_fail("metadata_erase_failed", 500, derr);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "delete metadata cleanup failed"},
+                    {"detail", pqnas::shorten(derr, 180)}
+                }.dump());
+                return;
             }
-
-            pqnas::AuditEvent mev;
-            mev.event = "storage.tiering_metadata_erased";
-            mev.outcome = "ok";
-            mev.f["fingerprint"] = fp_hex;
-            mev.f["path"] = pqnas::shorten(rel_norm, 200);
-            mev.f["type"] = type;
-            mev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-
-            auto it_cf = req.headers.find("CF-Connecting-IP");
-            if (it_cf != req.headers.end()) mev.f["cf_ip"] = it_cf->second;
-
-            auto it_xff = req.headers.find("X-Forwarded-For");
-            if (it_xff != req.headers.end()) mev.f["xff"] = pqnas::shorten(it_xff->second, 120);
-
-            mev.f["ua"] = audit_ua();
-            audit_append(mev);
         }
+
+        {
+            std::string ferr;
+            if (!pqnas::favorites_remove_under_prefix(user_dir, rel_norm, "file", &ferr)) {
+                audit_warn("favorites_cleanup_failed", ferr, rel_norm);
+            }
+        }
+
+        audit_ok(rel_path, "file", freed_bytes);
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"fingerprint_hex", fp_hex},
+            {"path", rel_path},
+            {"type", "file"},
+            {"freed_bytes", freed_bytes}
+        }.dump());
+        return;
     }
 
-    // Favorites cleanup after successful delete
-    {
-        std::string ferr;
-        if (!pqnas::favorites_remove_under_prefix(user_dir, rel_norm, type, &ferr)) {
-            audit_fail("favorites_cleanup_failed", 500, ferr);
+    if (item.is_dir) {
+        std::string lerr;
+        auto subtree_rows = idx->list_subtree_records(fp_hex, rel_norm, &lerr);
+        if (!lerr.empty()) {
+            audit_fail("metadata_subtree_list_failed", 500, lerr);
             reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "server_error"},
-                {"message", "delete succeeded but favorites cleanup failed"},
-                {"detail", pqnas::shorten(ferr, 180)}
+                {"message", "failed to list metadata subtree"},
+                {"detail", pqnas::shorten(lerr, 180)}
             }.dump());
             return;
         }
+
+        // Legacy physical dir with no metadata subtree
+        if (subtree_rows.empty()) {
+            if (!item.has_physical_anchor) {
+                audit_fail("not_found", 404);
+                reply_json(res, 404, json{
+                    {"ok", false},
+                    {"error", "not_found"},
+                    {"message", "path not found"}
+                }.dump());
+                return;
+            }
+
+            const std::filesystem::path abs_path = item.abs_path;
+            if (abs_path == user_dir) {
+                audit_fail("refuse_root_delete", 400);
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "refusing to delete root"}
+                }.dump());
+                return;
+            }
+
+            std::uint64_t freed_bytes = 0;
+            std::error_code ec;
+            for (std::filesystem::recursive_directory_iterator it(
+                     abs_path, std::filesystem::directory_options::skip_permission_denied, ec), end;
+                 it != end && !ec;
+                 it.increment(ec)) {
+                std::error_code ec2;
+                if (it->is_regular_file(ec2) && !ec2) {
+                    std::error_code ec3;
+                    auto sz = it->file_size(ec3);
+                    if (!ec3) freed_bytes += static_cast<std::uint64_t>(sz);
+                }
+            }
+
+            std::uintmax_t removed = std::filesystem::remove_all(abs_path, ec);
+            if (ec || removed == 0) {
+                audit_fail("remove_all_failed", 500, ec.message());
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "delete failed"},
+                    {"detail", pqnas::shorten(ec.message(), 180)}
+                }.dump());
+                return;
+            }
+
+            {
+                std::string ferr;
+                if (!pqnas::favorites_remove_under_prefix(user_dir, rel_norm, "dir", &ferr)) {
+                    audit_warn("favorites_cleanup_failed", ferr, rel_norm);
+                }
+            }
+
+            audit_ok(rel_path, "dir", freed_bytes);
+            reply_json(res, 200, json{
+                {"ok", true},
+                {"fingerprint_hex", fp_hex},
+                {"path", rel_path},
+                {"type", "dir"},
+                {"freed_bytes", freed_bytes}
+            }.dump());
+            return;
+        }
+
+        // Metadata-backed dir: for now require all descendant physical files under one root tree.
+        std::filesystem::path dir_abs;
+        bool have_root = false;
+
+        // For metadata-backed dirs, metadata physical paths are authoritative.
+        // Do NOT prefer legacy physical anchor here, because hybrid legacy trees
+        // may exist and point to a different root than the file_locations rows.
+        if (!subtree_rows.empty()) {
+            const auto& first = subtree_rows.front();
+            std::filesystem::path root = std::filesystem::path(first.physical_path);
+            for (const auto& _ : std::filesystem::path(first.logical_rel_path)) {
+                (void)_;
+                root = root.parent_path();
+            }
+            dir_abs = root / std::filesystem::path(rel_norm);
+            have_root = true;
+        } else if (item.has_physical_anchor) {
+            dir_abs = item.abs_path;
+            have_root = true;
+        }
+
+        if (!have_root || dir_abs == user_dir) {
+            audit_fail("refuse_root_delete", 400);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "refusing to delete root"}
+            }.dump());
+            return;
+        }
+
+        const std::string dir_root_s = dir_abs.lexically_normal().string();
+        bool all_under_root = true;
+        std::uint64_t freed_bytes = 0;
+
+        for (const auto& rec : subtree_rows) {
+            const std::filesystem::path phys = std::filesystem::path(rec.physical_path).lexically_normal();
+            const std::string phys_s = phys.string();
+
+            if (phys_s != dir_root_s && phys_s.rfind(dir_root_s + "/", 0) != 0) {
+                all_under_root = false;
+                break;
+            }
+            freed_bytes += rec.size_bytes;
+        }
+
+        if (!all_under_root) {
+            audit_fail("dir_delete_cross_root_unsupported", 409);
+            reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "unsupported"},
+                {"message", "directory delete across mixed storage roots not supported yet"}
+            }.dump());
+            return;
+        }
+
+        std::error_code ec;
+        std::uintmax_t removed = std::filesystem::remove_all(dir_abs, ec);
+        if (ec || removed == 0) {
+            audit_fail("remove_all_failed", 500, ec.message());
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "delete failed"},
+                {"detail", pqnas::shorten(ec.message(), 180)}
+            }.dump());
+            return;
+        }
+
+        {
+            std::string derr;
+            if (!idx->erase_subtree(fp_hex, rel_norm, &derr)) {
+                audit_fail("metadata_erase_subtree_failed", 500, derr);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "delete metadata cleanup failed"},
+                    {"detail", pqnas::shorten(derr, 180)}
+                }.dump());
+                return;
+            }
+        }
+
+        {
+            std::string ferr;
+            if (!pqnas::favorites_remove_under_prefix(user_dir, rel_norm, "dir", &ferr)) {
+                audit_warn("favorites_cleanup_failed", ferr, rel_norm);
+            }
+        }
+
+        audit_ok(rel_path, "dir", freed_bytes);
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"fingerprint_hex", fp_hex},
+            {"path", rel_path},
+            {"type", "dir"},
+            {"freed_bytes", freed_bytes}
+        }.dump());
+        return;
     }
 
-    audit_ok(rel_path, type, freed_bytes);
-
-    reply_json(res, 200, json{
-        {"ok", true},
-        {"fingerprint_hex", fp_hex},
-        {"path", rel_path},
-        {"type", type},
-        {"freed_bytes", freed_bytes}
+    audit_fail("unsupported_type", 400);
+    reply_json(res, 400, json{
+        {"ok", false},
+        {"error", "bad_request"},
+        {"message", "unsupported path type"}
     }.dump());
 });
+
 // GET /api/v4/files/list?path=relative/dir   (path optional; empty => user root)
 // Response: JSON listing of immediate children (no recursion)
 srv.Get("/api/v4/files/list", [&](const httplib::Request& req, httplib::Response& res) {
@@ -21439,6 +21712,73 @@ srv.Put("/api/v4/files/put",
         }
     }
 
+    // Refuse uploads under a path whose ancestor is already a file.
+    // Example: if "a" is a file, "a/b.txt" must be rejected.
+    {
+        std::string found_ancestor;
+        std::string aerr;
+        const bool conflict =
+            pqnas::any_file_ancestor_exists(users, fp_hex, rel_norm, &found_ancestor, &aerr);
+
+        if (!aerr.empty()) {
+            audit_fail("ancestor_check_failed", 500, aerr);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "ancestor conflict check failed"},
+                {"detail", pqnas::shorten(aerr, 180)}
+            }.dump());
+            return;
+        }
+
+        if (conflict) {
+            audit_fail("ancestor_is_file", 409, found_ancestor);
+            reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "path_conflict"},
+                {"message", "a parent path is an existing file"},
+                {"ancestor", found_ancestor}
+            }.dump());
+            return;
+        }
+    }
+    {
+        auto* idx = pqnas::get_file_location_index();
+        if (!idx) {
+            audit_fail("metadata_index_missing", 500);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "metadata index missing"}
+            }.dump());
+            return;
+        }
+
+        std::string derr;
+        const bool has_descendants = idx->logical_dir_exists(fp_hex, rel_norm, &derr);
+
+        if (!derr.empty()) {
+            audit_fail("descendant_check_failed", 500, derr);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "descendant conflict check failed"},
+                {"detail", pqnas::shorten(derr, 180)}
+            }.dump());
+            return;
+        }
+
+        if (has_descendants) {
+            audit_fail("path_has_descendants", 409, rel_norm);
+            reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "path_conflict"},
+                {"message", "path already exists as a logical directory"},
+                {"path", rel_norm}
+            }.dump());
+            return;
+        }
+    }
     // Require Content-Length for v1 streamer so quota can be checked before write.
     std::uint64_t cl = 0;
     if (!header_u64("Content-Length", &cl)) {

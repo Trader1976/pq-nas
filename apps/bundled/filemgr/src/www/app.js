@@ -573,37 +573,90 @@
     const d = new Date(unix * 1000);
     return d.toISOString().replace("T", " ").replace("Z", "");
   }
-
-  function iconFor(item) {
-    const base = iconBase();
-    if (item.type === "dir") return base + "folder.png";
-
-    const n = String(item.name || "");
-    const dot = n.lastIndexOf(".");
-    const ext = (dot >= 0 ? n.slice(dot + 1) : "").toLowerCase();
-
-    if (["txt","log","json","yaml","yml","ini","cfg","conf","toml","xml"].includes(ext)) return base + "text.png";
-    if (["md","markdown"].includes(ext)) return base + "md.png";
-    if (["c","cc","cpp","cxx","h","hh","hpp","hxx"].includes(ext)) return base + "cpp.png";
-    if (["html","htm","css","js","mjs","cjs","ts","tsx","jsx"].includes(ext)) return base + "html.png";
-    if (["png","jpg","jpeg","gif","webp","bmp","svg","ico","tiff"].includes(ext)) return base + "image.png";
-    if (["pdf"].includes(ext)) return base + "pdf.png";
-    if (["doc","docx"].includes(ext)) return base + "doc.png";
-    if (["ppt","pptx"].includes(ext)) return base + "ppt.png";
-    if (["xls","xlsx"].includes(ext)) return base + "xls.png";
-    if (["rtf"].includes(ext)) return base + "rtf.png";
-    if (["mp3","wav","flac","ogg","m4a"].includes(ext)) return base + "mp3.png";
-    if (["mp4","mkv","webm"].includes(ext)) return base + "mp4.png";
-    if (["mov"].includes(ext)) return base + "mov.png";
-    if (["avi"].includes(ext)) return base + "avi.png";
-    if (["mpg","mpeg"].includes(ext)) return base + "mpg.png";
-    if (["zip","7z","tar","gz","tgz","bz2","xz"].includes(ext)) return base + "zip.png";
-    if (["rar"].includes(ext)) return base + "rar.png";
-    if (["exe","bin","run","appimage","sh"].includes(ext)) return base + "exe.png";
-    return base + "file.png";
+  function filetypeIconBase() {
+    return "./icons/filetypes/";
   }
 
-  function clear() { gridEl.innerHTML = ""; }
+  function fileExtLower(name) {
+    const n = String(name || "").toLowerCase().trim();
+    const slash = Math.max(n.lastIndexOf("/"), n.lastIndexOf("\\"));
+    const base = slash >= 0 ? n.slice(slash + 1) : n;
+
+    if (base.startsWith(".") && base.indexOf(".", 1) === -1) return "";
+
+    if (base.endsWith(".tar.gz")) return "gz";
+    if (base.endsWith(".tar.bz2")) return "bz2";
+    if (base.endsWith(".tar.xz")) return "xz";
+
+    const dot = base.lastIndexOf(".");
+    if (dot <= 0 || dot === base.length - 1) return "";
+    return base.slice(dot + 1);
+  }
+
+  function normalizeIconExt(ext) {
+    const e = String(ext || "").toLowerCase();
+
+    const alias = {
+      jpeg: "jpg",
+      htm: "html",
+      yml: "yaml",
+      cxx: "cpp",
+      hh: "hpp",
+      hxx: "hpp",
+      markdown: "md",
+      text: "txt",
+      cfg: "conf"
+    };
+
+    return alias[e] || e;
+  }
+
+  const iconSvgCache = new Map();
+
+  async function fetchIconMarkupOnce(name) {
+    const key = String(name || "").trim();
+    if (!key) return "";
+
+    if (iconSvgCache.has(key)) return iconSvgCache.get(key);
+
+    const url = filetypeIconBase() + key + ".svg";
+
+    try {
+      const r = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+        cache: "force-cache"
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const txt = await r.text();
+      iconSvgCache.set(key, txt);
+      return txt;
+    } catch (_) {
+      iconSvgCache.set(key, "");
+      return "";
+    }
+  }
+
+  async function iconMarkupFor(item) {
+    if (item.type === "dir") {
+      let svg = await fetchIconMarkupOnce("folder");
+      if (svg) return svg;
+
+      svg = await fetchIconMarkupOnce("directory");
+      if (svg) return svg;
+
+      return "";
+    }
+
+    const ext = normalizeIconExt(fileExtLower(item.name));
+
+    if (ext) {
+      const svg = await fetchIconMarkupOnce(ext);
+      if (svg) return svg;
+    }
+
+    return await fetchIconMarkupOnce("default");
+  }  function clear() { gridEl.innerHTML = ""; }
 
   function clearSelectionDom() {
     for (const el of gridEl.querySelectorAll(".tile")) el.classList.remove("sel");
@@ -2721,13 +2774,16 @@
     t.dataset.key = key;
     t.style.position = "relative";
 
-    const img = document.createElement("img");
-    img.className = "ico";
-    img.alt = "";
-    img.loading = "lazy";
-    try { img.decoding = "async"; } catch (_) {}
-    try { img.fetchPriority = "low"; } catch (_) {}
-    img.src = iconFor(item);
+    const icoWrap = document.createElement("div");
+    icoWrap.className = "icoWrap";
+    icoWrap.setAttribute("aria-hidden", "true");
+
+    iconMarkupFor(item)
+        .then((svg) => {
+          if (!svg) return;
+          icoWrap.innerHTML = svg;
+        })
+        .catch(() => {});
 
     const nm = document.createElement("div");
     nm.className = "name";
@@ -2746,7 +2802,7 @@
     meta.appendChild(right);
 
     t.appendChild(makeFavoriteButton(item));
-    t.appendChild(img);
+    t.appendChild(icoWrap);
     t.appendChild(nm);
     t.appendChild(meta);
 

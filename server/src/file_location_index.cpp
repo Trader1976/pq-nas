@@ -63,7 +63,14 @@ bool FileLocationIndex::erase(const std::string& fp,
         return false;
     }
 
+    const int changed = sqlite3_changes(db_);
     sqlite3_finalize(stmt);
+
+    if (changed != 1) {
+        if (err) *err = "erase_no_match";
+        return false;
+    }
+
     return true;
 }
 
@@ -543,23 +550,29 @@ std::vector<LogicalListItem> FileLocationIndex::list_immediate_children(const st
         if (rest.empty()) continue;
 
         const auto slash = rest.find('/');
+        const std::string first_name = (slash == std::string::npos) ? rest : rest.substr(0, slash);
+
+        // Backend hard-filter for reserved namespace.
+        if (first_name == ".pqnas") {
+            continue;
+        }
+
         if (slash == std::string::npos) {
             LogicalListItem it;
             it.name = rest;
             it.type = "file";
             it.size_bytes = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 1));
             it.mtime_epoch = static_cast<std::int64_t>(sqlite3_column_int64(stmt, 2));
-            by_name[it.name] = std::move(it); // metadata wins
+            by_name[it.name] = std::move(it);
         } else {
-            const std::string dir_name = rest.substr(0, slash);
-            auto pos = by_name.find(dir_name);
+            auto pos = by_name.find(first_name);
             if (pos == by_name.end()) {
                 LogicalListItem it;
-                it.name = dir_name;
+                it.name = first_name;
                 it.type = "dir";
                 it.size_bytes = 0;
                 it.mtime_epoch = 0;
-                by_name.emplace(dir_name, std::move(it));
+                by_name.emplace(it.name, std::move(it));
             }
         }
     }
@@ -616,10 +629,16 @@ bool FileLocationIndex::rename_one(const std::string& fp,
         return false;
     }
 
+    const int changed = sqlite3_changes(db_);
     sqlite3_finalize(stmt);
+
+    if (changed != 1) {
+        if (err) *err = "rename_one_no_match";
+        return false;
+    }
+
     return true;
 }
-
 bool FileLocationIndex::rename_subtree(const std::string& fp,
                                        const std::string& old_logical_prefix,
                                        const std::string& new_logical_prefix,
@@ -628,6 +647,16 @@ bool FileLocationIndex::rename_subtree(const std::string& fp,
     if (err) err->clear();
     if (!db_) {
         if (err) *err = "db not open";
+        return false;
+    }
+
+    if (old_logical_prefix.empty() || new_logical_prefix.empty()) {
+        if (err) *err = "empty prefix";
+        return false;
+    }
+
+    if (old_logical_prefix == new_logical_prefix) {
+        if (err) *err = "same prefix";
         return false;
     }
 
@@ -646,25 +675,6 @@ bool FileLocationIndex::rename_subtree(const std::string& fp,
         return false;
     };
 
-    // -------------------------------------------------------------------------
-    // 1) Collect source rows to rename
-    // -------------------------------------------------------------------------
-    static const char* kSelect =
-        "SELECT logical_rel_path, physical_path, current_pool, tier_state, size_bytes, created_epoch, version "
-        "FROM file_locations "
-        "WHERE fp = ?1 AND (logical_rel_path = ?2 OR logical_rel_path LIKE ?3) "
-        "ORDER BY length(logical_rel_path) DESC, logical_rel_path DESC";
-
-    sqlite3_stmt* sel = nullptr;
-    if (sqlite3_prepare_v2(db_, kSelect, -1, &sel, nullptr) != SQLITE_OK) {
-        return rollback_and_fail(sqlite3_errmsg(db_));
-    }
-
-    const std::string src_like = old_logical_prefix + "/%";
-    sqlite3_bind_text(sel, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(sel, 2, old_logical_prefix.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(sel, 3, src_like.c_str(), -1, SQLITE_TRANSIENT);
-
     struct Row {
         std::string logical_rel_path;
         std::string physical_path;
@@ -674,6 +684,26 @@ bool FileLocationIndex::rename_subtree(const std::string& fp,
         std::int64_t created_epoch = 0;
         std::int64_t version = 1;
     };
+
+    // -------------------------------------------------------------------------
+    // 1) Collect source rows to rename
+    // -------------------------------------------------------------------------
+    static const char* kSelectSrc =
+        "SELECT logical_rel_path, physical_path, current_pool, tier_state, "
+        "       size_bytes, created_epoch, version "
+        "FROM file_locations "
+        "WHERE fp = ?1 AND (logical_rel_path = ?2 OR logical_rel_path LIKE ?3) "
+        "ORDER BY length(logical_rel_path) DESC, logical_rel_path DESC";
+
+    sqlite3_stmt* sel = nullptr;
+    if (sqlite3_prepare_v2(db_, kSelectSrc, -1, &sel, nullptr) != SQLITE_OK) {
+        return rollback_and_fail(sqlite3_errmsg(db_));
+    }
+
+    const std::string src_like = old_logical_prefix + "/%";
+    sqlite3_bind_text(sel, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(sel, 2, old_logical_prefix.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(sel, 3, src_like.c_str(), -1, SQLITE_TRANSIENT);
 
     std::vector<Row> rows;
 
@@ -698,7 +728,6 @@ bool FileLocationIndex::rename_subtree(const std::string& fp,
     }
     sqlite3_finalize(sel);
 
-    // Nothing to rename is not an error
     if (rows.empty()) {
         const int rc_commit = sqlite3_exec(db_, "COMMIT", nullptr, nullptr, &msg);
         if (rc_commit != SQLITE_OK) {
@@ -712,33 +741,40 @@ bool FileLocationIndex::rename_subtree(const std::string& fp,
     }
 
     // -------------------------------------------------------------------------
-    // 2) Remove stale destination subtree rows first
-    //    This fixes retries after a previous partially-failed move.
+    // 2) Refuse destination conflicts
     // -------------------------------------------------------------------------
-    static const char* kDeleteDst =
-        "DELETE FROM file_locations "
-        "WHERE fp = ?1 AND (logical_rel_path = ?2 OR logical_rel_path LIKE ?3)";
+    static const char* kCheckDst =
+        "SELECT 1 "
+        "FROM file_locations "
+        "WHERE fp = ?1 AND (logical_rel_path = ?2 OR logical_rel_path LIKE ?3) "
+        "LIMIT 1";
 
-    sqlite3_stmt* del = nullptr;
-    if (sqlite3_prepare_v2(db_, kDeleteDst, -1, &del, nullptr) != SQLITE_OK) {
+    sqlite3_stmt* chk = nullptr;
+    if (sqlite3_prepare_v2(db_, kCheckDst, -1, &chk, nullptr) != SQLITE_OK) {
         return rollback_and_fail(sqlite3_errmsg(db_));
     }
 
     const std::string dst_like = new_logical_prefix + "/%";
-    sqlite3_bind_text(del, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(del, 2, new_logical_prefix.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(del, 3, dst_like.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(chk, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(chk, 2, new_logical_prefix.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(chk, 3, dst_like.c_str(), -1, SQLITE_TRANSIENT);
 
-    if (sqlite3_step(del) != SQLITE_DONE) {
-        std::string e = sqlite3_errmsg(db_);
-        sqlite3_finalize(del);
-        return rollback_and_fail(e);
+    {
+        const int rc = sqlite3_step(chk);
+        if (rc == SQLITE_ROW) {
+            sqlite3_finalize(chk);
+            return rollback_and_fail("destination_subtree_exists");
+        }
+        if (rc != SQLITE_DONE) {
+            std::string e = sqlite3_errmsg(db_);
+            sqlite3_finalize(chk);
+            return rollback_and_fail(e);
+        }
     }
-    sqlite3_finalize(del);
+    sqlite3_finalize(chk);
 
     // -------------------------------------------------------------------------
-    // 3) Reinsert subtree rows with rewritten logical/physical paths
-    //    Easier and safer than UPDATE on PK columns.
+    // 3) Insert rewritten rows
     // -------------------------------------------------------------------------
     static const char* kInsert =
         "INSERT INTO file_locations ("
@@ -767,21 +803,17 @@ bool FileLocationIndex::rename_subtree(const std::string& fp,
         std::string suffix;
         if (row.logical_rel_path == old_logical_prefix) {
             suffix.clear();
-        } else {
+        } else if (row.logical_rel_path.rfind(old_logical_prefix + "/", 0) == 0) {
             suffix = row.logical_rel_path.substr(old_logical_prefix.size());
+        } else {
+            sqlite3_finalize(ins);
+            sqlite3_finalize(del_src);
+            return rollback_and_fail("source_subtree_mismatch");
         }
 
         const std::string new_logical = new_logical_prefix + suffix;
 
-        std::string phys_suffix;
-        if (row.physical_path == old_logical_prefix) {
-            phys_suffix.clear();
-        } else if (row.physical_path.size() >= row.logical_rel_path.size()) {
-            // safer: derive from logical suffix only if physical path ended correspondingly
-            phys_suffix = suffix;
-        }
-
-        // Build new physical path by replacing the trailing logical path segment.
+        // Current implementation still assumes mirrored physical layout.
         std::filesystem::path old_phys(row.physical_path);
         std::filesystem::path root = old_phys;
         for (const auto& _ : std::filesystem::path(row.logical_rel_path)) {
@@ -899,9 +931,11 @@ std::vector<FileLocationRecord> FileLocationIndex::list_subtree_records(const st
     return out;
 }
 
-bool FileLocationIndex::erase_subtree(const std::string& fp,
-                                      const std::string& logical_prefix,
-                                      std::string* err) {
+
+
+bool FileLocationIndex::logical_dir_exists(const std::string& fp,
+                                           const std::string& logical_prefix,
+                                           std::string* err) {
     if (err) err->clear();
     if (!db_) {
         if (err) *err = "db not open";
@@ -909,8 +943,10 @@ bool FileLocationIndex::erase_subtree(const std::string& fp,
     }
 
     static const char* kSql =
-        "DELETE FROM file_locations "
-        "WHERE fp = ?1 AND (logical_rel_path = ?2 OR logical_rel_path LIKE ?3)";
+        "SELECT 1 "
+        "FROM file_locations "
+        "WHERE fp = ?1 AND logical_rel_path LIKE ?2 "
+        "LIMIT 1";
 
     sqlite3_stmt* stmt = nullptr;
     const int rc_prep = sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr);
@@ -921,18 +957,19 @@ bool FileLocationIndex::erase_subtree(const std::string& fp,
 
     const std::string like_pat = logical_prefix + "/%";
     sqlite3_bind_text(stmt, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, logical_prefix.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 3, like_pat.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, like_pat.c_str(), -1, SQLITE_TRANSIENT);
 
     const int rc = sqlite3_step(stmt);
-    if (rc != SQLITE_DONE) {
+    const bool found = (rc == SQLITE_ROW);
+
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
         if (err) *err = sqlite3_errmsg(db_);
         sqlite3_finalize(stmt);
         return false;
     }
 
     sqlite3_finalize(stmt);
-    return true;
+    return found;
 }
 
 bool FileLocationIndex::rename_logical_prefix(const std::string& fp,
@@ -1094,5 +1131,76 @@ bool FileLocationIndex::get_tier_summary(FileLocationTierSummary* out, std::stri
     sqlite3_finalize(stmt);
     return true;
 }
+bool FileLocationIndex::logical_file_exists_exact(const std::string& fp,
+                                                  const std::string& logical_rel_path,
+                                                  std::string* err) {
+    if (err) err->clear();
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
 
+    static const char* kSql =
+        "SELECT 1 "
+        "FROM file_locations "
+        "WHERE fp = ?1 AND logical_rel_path = ?2 "
+        "LIMIT 1";
+
+    sqlite3_stmt* stmt = nullptr;
+    const int rc_prep = sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr);
+    if (rc_prep != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        return false;
+    }
+
+    sqlite3_bind_text(stmt, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+
+    const int rc = sqlite3_step(stmt);
+    const bool found = (rc == SQLITE_ROW);
+
+    if (rc != SQLITE_ROW && rc != SQLITE_DONE) {
+        if (err) *err = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        return false;
+    }
+
+    sqlite3_finalize(stmt);
+    return found;
+}
+bool FileLocationIndex::erase_subtree(const std::string& fp,
+                                      const std::string& logical_prefix,
+                                      std::string* err) {
+    if (err) err->clear();
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
+
+    static const char* kSql =
+        "DELETE FROM file_locations "
+        "WHERE fp = ?1 AND (logical_rel_path = ?2 OR logical_rel_path LIKE ?3)";
+
+    sqlite3_stmt* stmt = nullptr;
+    const int rc_prep = sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr);
+    if (rc_prep != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        return false;
+    }
+
+    const std::string like_pat = logical_prefix + "/%";
+    sqlite3_bind_text(stmt, 1, fp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, logical_prefix.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, like_pat.c_str(), -1, SQLITE_TRANSIENT);
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        if (err) *err = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        return false;
+    }
+
+    sqlite3_finalize(stmt);
+    return true;
+}
 } // namespace pqnas

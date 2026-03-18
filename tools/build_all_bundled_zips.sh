@@ -65,7 +65,12 @@ build_one() {
      echo "[ERROR] $appname: zip missing manifest.json: $out_abs" >&2
      return 3
    }
-
+  [[ "$appname" == "filemgr" ]] && {
+    printf '%s\n' "$names" | grep -q '^www/icons/filetypes/default.svg' || {
+      echo "[ERROR] filemgr missing default icon"
+      return 4
+    }
+  }
    printf '%s\n' "$names" | grep -q '^www/' || {
      echo "[ERROR] $appname: zip missing www/: $out_abs" >&2
      return 3

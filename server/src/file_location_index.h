@@ -86,6 +86,11 @@ bool rename_subtree(const std::string& fp,
 	std::vector<FileLocationRecord> list_subtree_records(const std::string& fp,
                                                      const std::string& logical_prefix,
                                                      std::string* err);
+
+	bool logical_dir_exists(const std::string& fp,
+                        	const std::string& logical_prefix,
+                        	std::string* err);
+
 	bool erase_subtree(const std::string& fp,
                    	const std::string& logical_prefix,
                    	std::string* err);
@@ -95,6 +100,10 @@ bool rename_subtree(const std::string& fp,
     bool erase(const std::string& fp,
                const std::string& logical_rel_path,
                std::string* err);
+
+	bool logical_file_exists_exact(const std::string& fp,
+                               const std::string& logical_rel_path,
+                               std::string* err);
 
     bool switch_to_capacity(const std::string& fp,
                             const std::string& logical_rel_path,

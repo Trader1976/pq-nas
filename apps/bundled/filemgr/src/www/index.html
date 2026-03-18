@@ -248,12 +248,6 @@
       box-shadow: 0 0 12px rgba(var(--fav-rgb),0.18);
     }
     /* smaller icon in list */
-    .grid.list .tile .ico{
-      width: 20px;
-      height: 20px;
-      opacity: 0.85;
-    }
-
     /* name becomes multi-line-safe but still trims */
     .grid.list .tile .name{
       font-size: 12px;
@@ -359,11 +353,37 @@
       box-shadow: 0 0 18px rgba(var(--fg-rgb),0.12);
     }
 
-    .ico{
+    .ico,
+    .icoWrap{
       width: 40px;
       height: 40px;
       opacity: 0.95;
       filter: drop-shadow(0 0 16px rgba(var(--fg-rgb),0.10));
+    }
+
+    .icoWrap{
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 8px auto;
+      line-height: 0;
+      overflow: visible;
+      position: relative;
+      flex: 0 0 auto;
+    }
+
+    .icoWrap svg{
+      width: 40px !important;
+      height: 40px !important;
+      min-width: 40px;
+      min-height: 40px;
+      max-width: none;
+      max-height: none;
+      display: block;
+      overflow: visible;
+      margin: 0 !important;
+      padding: 0 !important;
+      transform: none !important;
     }
 
     .name{
@@ -814,6 +834,7 @@
       background: rgba(var(--fg-rgb),0.10);
       box-shadow: 0 0 18px rgba(var(--fg-rgb),0.10);
     }
+
     .hidden{ display:none !important; }
   </style>
 </head>

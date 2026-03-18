@@ -54,9 +54,16 @@ bool normalize_user_rel_path_strict(const std::string& rel_path,
     }
 
     for (const auto& part : rel) {
-        const auto s = part.string();
+        const std::string s = part.string();
+
         if (s.empty() || s == "." || s == "..") {
             if (err) *err = "invalid path";
+            return false;
+        }
+
+        // Reserved system namespace must never be user-accessible.
+        if (s == ".pqnas") {
+            if (err) *err = "reserved path";
             return false;
         }
     }
@@ -64,7 +71,6 @@ bool normalize_user_rel_path_strict(const std::string& rel_path,
     *out_rel_norm = rel.generic_string();
     return true;
 }
-
 bool resolve_legacy_user_path(UsersRegistry& users,
                               const std::string& fp_hex,
                               const std::string& rel_path,
@@ -91,17 +97,59 @@ bool resolve_existing_user_file_path(UsersRegistry& users,
         return false;
     }
 
+    ResolvedLogicalItem item;
+    if (!resolve_existing_user_item(users, fp_hex, rel_path, &item, err)) {
+        return false;
+    }
+
+    if (!item.exists) {
+        if (err) *err = "not found";
+        return false;
+    }
+
+    // Preserve old behavior as much as possible:
+    // files always resolve; dirs resolve only if they have a physical anchor.
+    if (item.is_dir && !item.has_physical_anchor) {
+        if (err) *err = "not found";
+        return false;
+    }
+
+    out->normalized_rel_path = item.normalized_rel_path;
+    out->abs_path = item.abs_path;
+    out->from_metadata = item.from_metadata;
+    return true;
+}
+bool resolve_existing_user_item(UsersRegistry& users,
+                                const std::string& fp_hex,
+                                const std::string& rel_path,
+                                ResolvedLogicalItem* out,
+                                std::string* err) {
+    if (err) err->clear();
+    if (!out) {
+        if (err) *err = "null out";
+        return false;
+    }
+
+    *out = ResolvedLogicalItem{};
+
     std::string rel_norm;
     if (!normalize_user_rel_path_strict(rel_path, &rel_norm, err)) {
         return false;
     }
 
+    out->normalized_rel_path = rel_norm;
+
     if (g_file_location_index) {
         std::string lookup_err;
         auto rec = g_file_location_index->get(fp_hex, rel_norm, &lookup_err);
 
+        if (!lookup_err.empty()) {
+            if (err) *err = "file location index lookup failed: " + lookup_err;
+            return false;
+        }
+
         if (rec.has_value()) {
-            std::cerr << "[resolver] metadata hit"
+            std::cerr << "[resolver] metadata file hit"
                       << " fp=" << fp_hex
                       << " rel=" << rel_norm
                       << " phys=" << rec->physical_path
@@ -114,27 +162,51 @@ bool resolve_existing_user_file_path(UsersRegistry& users,
                 return false;
             }
 
-            out->normalized_rel_path = rel_norm;
-            out->abs_path = std::filesystem::path(rec->physical_path);
+            out->exists = true;
+            out->is_file = true;
+            out->is_dir = false;
             out->from_metadata = true;
+            out->abs_path = std::filesystem::path(rec->physical_path);
+            out->has_physical_anchor = true;
             return true;
         }
 
-        std::cerr << "[resolver] metadata miss"
-                  << " fp=" << fp_hex
-                  << " rel=" << rel_norm
-                  << " lookup_err=" << lookup_err
-                  << "\n";
-
-        // If index lookup itself errored, do not silently swallow it.
-        if (!lookup_err.empty()) {
-            if (err) *err = "file location index lookup failed: " + lookup_err;
+        std::string derr;
+        const bool metadata_dir_exists = g_file_location_index->logical_dir_exists(fp_hex, rel_norm, &derr);
+        if (!derr.empty()) {
+            if (err) *err = "file location index subtree lookup failed: " + derr;
             return false;
+        }
+
+        if (metadata_dir_exists) {
+            std::cerr << "[resolver] metadata dir hit"
+                      << " fp=" << fp_hex
+                      << " rel=" << rel_norm
+                      << "\n";
+
+            out->exists = true;
+            out->is_file = false;
+            out->is_dir = true;
+            out->from_metadata = true;
+            out->has_physical_anchor = false;
+
+            // Best-effort physical anchor only.
+            std::filesystem::path abs;
+            std::string legacy_err;
+            if (resolve_legacy_user_path(users, fp_hex, rel_norm, &abs, &legacy_err)) {
+                std::error_code ec;
+                auto st = std::filesystem::symlink_status(abs, ec);
+                if (!ec && std::filesystem::exists(st) && std::filesystem::is_directory(st)) {
+                    out->abs_path = std::move(abs);
+                    out->has_physical_anchor = true;
+                }
+            }
+
+            return true;
         }
     }
 
-    // Transitional fallback:
-    // allow legacy resolution only for directories, not files.
+    // Transitional legacy fallback: physical directories only.
     std::filesystem::path abs;
     std::string legacy_err;
     if (!resolve_legacy_user_path(users, fp_hex, rel_norm, &abs, &legacy_err)) {
@@ -149,8 +221,6 @@ bool resolve_existing_user_file_path(UsersRegistry& users,
         return false;
     }
 
-    // Metadata is authoritative for files.
-    // Legacy fallback is allowed only for directories during migration period.
     if (!std::filesystem::is_directory(st)) {
         std::cerr << "[resolver] legacy file fallback refused"
                   << " fp=" << fp_hex
@@ -167,9 +237,52 @@ bool resolve_existing_user_file_path(UsersRegistry& users,
               << " abs=" << abs.string()
               << "\n";
 
-    out->normalized_rel_path = rel_norm;
-    out->abs_path = std::move(abs);
+    out->exists = true;
+    out->is_file = false;
+    out->is_dir = true;
     out->from_metadata = false;
+    out->abs_path = std::move(abs);
+    out->has_physical_anchor = true;
     return true;
+}
+bool any_file_ancestor_exists(UsersRegistry& users,
+                              const std::string& fp_hex,
+                              const std::string& rel_path,
+                              std::string* found_ancestor,
+                              std::string* err) {
+    (void)users; // currently unused, kept for signature consistency
+    if (err) err->clear();
+    if (found_ancestor) found_ancestor->clear();
+
+    std::string rel_norm;
+    if (!normalize_user_rel_path_strict(rel_path, &rel_norm, err)) {
+        return false;
+    }
+
+    auto* idx = get_file_location_index();
+    if (!idx) {
+        if (err) *err = "metadata index missing";
+        return false;
+    }
+
+    std::filesystem::path p(rel_norm);
+    std::filesystem::path cur = p.parent_path();
+
+    while (!cur.empty()) {
+        const std::string anc = cur.generic_string();
+        std::string e;
+        const bool exists = idx->logical_file_exists_exact(fp_hex, anc, &e);
+        if (!e.empty()) {
+            if (err) *err = e;
+            return false;
+        }
+        if (exists) {
+            if (found_ancestor) *found_ancestor = anc;
+            return true;
+        }
+        cur = cur.parent_path();
+    }
+
+    return false;
 }
 } // namespace pqnas
