@@ -8,6 +8,146 @@
 
 namespace pqnas {
 
+/*
+Architecture notes
+==================
+
+Purpose
+-------
+storage_resolver.cpp is the namespace resolution layer between API request paths
+and the current PQ-NAS storage model.
+
+It answers questions like:
+- is this user path syntactically valid?
+- is this path reserved/internal and therefore forbidden?
+- does this logical path currently exist as a file?
+- does this logical path currently exist as a directory?
+- if it exists, where is its current physical anchor, if any?
+
+This file is one of the key transition points from a legacy "filesystem-is-truth"
+model to the newer metadata-first logical namespace model.
+
+Why this layer exists
+---------------------
+PQ-NAS now supports:
+- logical paths decoupled from physical storage paths
+- metadata-backed files
+- implicit logical directories formed by descendant file rows
+- landing/capacity tiering
+- directory operations that may not map 1:1 to a single legacy directory path
+
+That means callers must not directly assume:
+- "if the path exists on disk, it exists logically"
+- "if the path does not exist on disk, it does not exist logically"
+
+This resolver centralizes those rules so request handlers do not each invent
+their own partial interpretation of the namespace.
+
+Resolver model
+--------------
+There are now two main resolution shapes:
+
+1. resolve_existing_user_file_path()
+   Older / compatibility-oriented helper.
+   Best for:
+   - exact file resolution
+   - operations that expect a concrete physical anchor
+
+   It preserves older behavior by refusing metadata-only logical dirs that do
+   not have a concrete physical anchor.
+
+2. resolve_existing_user_item()
+   Newer / logical model helper.
+   Best for:
+   - handlers that need to reason about either files or dirs
+   - metadata-backed logical directories
+   - modern move/delete/stat/list behavior
+
+Path normalization policy
+-------------------------
+normalize_user_rel_path_strict() is the canonical gate for user-visible paths.
+
+It enforces:
+- non-empty path
+- no embedded NUL
+- no absolute paths
+- lexical normalization
+- no "." or ".." path segments
+- no reserved ".pqnas" segments anywhere
+
+This function is intentionally strict because it is the first barrier protecting:
+- filesystem traversal safety
+- hidden internal namespaces
+- stable logical path semantics for locks and metadata lookups
+
+Reserved namespace
+------------------
+".pqnas" is a reserved internal namespace and must never be user-accessible.
+This file enforces that centrally in normalization, so all higher-level callers
+inherit the same rule automatically.
+
+Metadata-first philosophy
+-------------------------
+For files:
+- exact metadata row hit is authoritative
+
+For directories:
+- a logical directory exists if descendant file rows exist beneath it
+- the directory may or may not also have a concrete physical anchor on disk
+
+That distinction is why ResolvedLogicalItem includes:
+- exists
+- is_file
+- is_dir
+- from_metadata
+- abs_path
+- has_physical_anchor
+
+Legacy fallback
+---------------
+This file still contains transitional legacy fallback behavior for physical
+directories. That exists so older layouts continue to work while PQ-NAS moves
+toward full metadata-first operation.
+
+Important nuance:
+- legacy fallback is allowed only for directories
+- legacy file fallback is intentionally refused
+
+That prevents raw physical files outside metadata from reappearing as logical
+user files and undermining file_locations as the source of truth.
+
+Global file location index pointer
+----------------------------------
+g_file_location_index is process-global and injected at startup.
+
+This is simple and acceptable in the current single-process server model.
+If architecture later moves toward stronger dependency injection or multiple
+resolver contexts, this could become an explicit service reference instead.
+
+Debug logging
+-------------
+The std::cerr resolver logs here are deliberately low-level and useful during
+the current migration phase. They help distinguish:
+- metadata file hit
+- metadata dir hit
+- legacy dir fallback
+- legacy file fallback refusal
+
+These logs may later be reduced or moved behind a debug flag.
+
+Important semantic note
+-----------------------
+For metadata-backed logical dirs, a "physical anchor" is only best-effort.
+Handlers that need a real subtree root should derive it from metadata subtree
+rows first, and only use abs_path as a fallback when appropriate.
+
+That rule already became important for:
+- delete
+- move
+- stat
+and is why resolve_existing_user_item() exposes has_physical_anchor separately.
+*/
+
 namespace {
 FileLocationIndex* g_file_location_index = nullptr;
 }
@@ -20,6 +160,18 @@ FileLocationIndex* get_file_location_index() {
     return g_file_location_index;
 }
 
+/*
+normalize_user_rel_path_strict()
+--------------------------------
+Canonical validation + normalization for user-supplied relative paths.
+
+This is the primary path hygiene barrier used by the Files API. It guarantees:
+- relative-only paths
+- no traversal segments
+- no empty path parts
+- reserved namespace rejection
+- normalized generic-string output suitable for metadata keys and locks
+*/
 bool normalize_user_rel_path_strict(const std::string& rel_path,
                                     std::string* out_rel_norm,
                                     std::string* err) {
@@ -71,6 +223,15 @@ bool normalize_user_rel_path_strict(const std::string& rel_path,
     *out_rel_norm = rel.generic_string();
     return true;
 }
+
+/*
+resolve_legacy_user_path()
+--------------------------
+Resolve a normalized relative path against the legacy physical user root.
+
+This is a helper for transitional fallback only. It should not be treated as
+authoritative for file existence; metadata remains authoritative for files.
+*/
 bool resolve_legacy_user_path(UsersRegistry& users,
                               const std::string& fp_hex,
                               const std::string& rel_path,
@@ -86,6 +247,20 @@ bool resolve_legacy_user_path(UsersRegistry& users,
     return resolve_user_path_strict(user_dir, rel_path, out_abs, err);
 }
 
+/*
+resolve_existing_user_file_path()
+---------------------------------
+Compatibility-oriented resolver that maps to the older "existing file path"
+expectation used by some handlers.
+
+Behavior:
+- exact metadata-backed files resolve
+- metadata-backed dirs resolve only if they have a physical anchor
+- metadata-only dirs without anchor are reported as not found here
+
+This preserves older assumptions while newer handlers migrate to
+resolve_existing_user_item().
+*/
 bool resolve_existing_user_file_path(UsersRegistry& users,
                                      const std::string& fp_hex,
                                      const std::string& rel_path,
@@ -119,6 +294,26 @@ bool resolve_existing_user_file_path(UsersRegistry& users,
     out->from_metadata = item.from_metadata;
     return true;
 }
+
+/*
+resolve_existing_user_item()
+----------------------------
+The main logical resolver for the modern Files API.
+
+Resolution order:
+1. normalize path
+2. exact metadata file lookup
+3. metadata logical-directory existence via descendant rows
+4. transitional legacy physical-directory fallback
+5. reject legacy file fallback
+
+Outputs include both logical classification and best-effort physical anchor.
+
+This split is important because:
+- a logical dir may exist even if there is no direct physical directory anchor
+- callers must be able to distinguish "logical dir exists" from
+  "logical dir has concrete on-disk anchor"
+*/
 bool resolve_existing_user_item(UsersRegistry& users,
                                 const std::string& fp_hex,
                                 const std::string& rel_path,
@@ -245,6 +440,25 @@ bool resolve_existing_user_item(UsersRegistry& users,
     out->has_physical_anchor = true;
     return true;
 }
+
+/*
+any_file_ancestor_exists()
+--------------------------
+Check whether any parent segment of rel_path already exists as an exact logical
+file row.
+
+Example:
+- file "a" exists
+- query "a/b.txt"
+=> returns true with found_ancestor = "a"
+
+Used by PUT / MOVE path-conflict enforcement to prevent file/dir namespace
+collisions in the logical tree.
+
+Note:
+- this consults metadata only
+- that is intentional, because files are metadata-authoritative
+*/
 bool any_file_ancestor_exists(UsersRegistry& users,
                               const std::string& fp_hex,
                               const std::string& rel_path,
@@ -285,4 +499,5 @@ bool any_file_ancestor_exists(UsersRegistry& users,
 
     return false;
 }
+
 } // namespace pqnas

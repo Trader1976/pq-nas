@@ -16366,25 +16366,20 @@ srv.Post("/api/v4/files/hash", [&](const httplib::Request& req, httplib::Respons
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
-
-    std::filesystem::path path_abs;
+    pqnas::ResolvedExistingPath resolved;
     std::string err;
-    if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &path_abs, &err)) {
-        audit_fail("invalid_path", 400, err, path_rel, algo);
-        reply_json(res, 400, json{
-            {"ok", false},
-            {"error", "bad_request"},
-            {"message", "invalid path"}
-        }.dump());
-        return;
-    }
+    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, path_rel, &resolved, &err)) {
+        if (err == "empty path" || err == "invalid path" || err == "absolute path not allowed" || err == "reserved path") {
+            audit_fail("invalid_path", 400, err, path_rel, algo);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            }.dump());
+            return;
+        }
 
-    // must exist + must be file
-    std::error_code ec;
-    auto st = std::filesystem::status(path_abs, ec);
-    if (ec || !std::filesystem::exists(st)) {
-        audit_fail("not_found", 404, "", path_rel, algo);
+        audit_fail("not_found", 404, err, path_rel, algo);
         reply_json(res, 404, json{
             {"ok", false},
             {"error", "not_found"},
@@ -16392,12 +16387,17 @@ srv.Post("/api/v4/files/hash", [&](const httplib::Request& req, httplib::Respons
         }.dump());
         return;
     }
-    if (!std::filesystem::is_regular_file(st)) {
-        audit_fail("not_file", 400, "", path_rel, algo);
-        reply_json(res, 400, json{
+
+    const std::filesystem::path path_abs = resolved.abs_path;
+
+    std::error_code ec;
+    auto st = std::filesystem::status(path_abs, ec);
+    if (ec || !std::filesystem::exists(st) || !std::filesystem::is_regular_file(st)) {
+        audit_fail("not_found", 404, "", path_rel, algo);
+        reply_json(res, 404, json{
             {"ok", false},
-            {"error", "bad_request"},
-            {"message", "path is not a file"}
+            {"error", "not_found"},
+            {"message", "file not found"}
         }.dump());
         return;
     }
@@ -19778,23 +19778,16 @@ srv.Post("/api/v4/files/favorites/add", [&](const httplib::Request& req, httplib
 
     const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
-    // Optional existence check
-    std::filesystem::path abs;
+    // Validate logical item existence/type using metadata-aware resolver so
+    // files are favoritable during landing/migration as well as in simple installs.
+    pqnas::ResolvedLogicalItem item;
     std::string rerr;
-    if (!pqnas::resolve_legacy_user_path(users, fp_hex, rel_norm, &abs, &rerr)) {
-        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid path"}}.dump());
-        return;
-    }
-    std::error_code ec;
-    auto st = std::filesystem::status(abs, ec);
-    if (ec || !std::filesystem::exists(st)) {
+    if (!pqnas::resolve_existing_user_item(users, fp_hex, rel_norm, &item, &rerr) || !item.exists) {
         reply_json(res, 404, json{{"ok", false}, {"error", "not_found"}, {"message", "path not found"}}.dump());
         return;
     }
 
-    const bool is_dir = std::filesystem::is_directory(st);
-    const bool is_file = std::filesystem::is_regular_file(st);
-    if ((type == "dir" && !is_dir) || (type == "file" && !is_file)) {
+    if ((type == "dir" && !item.is_dir) || (type == "file" && !item.is_file)) {
         reply_json(res, 409, json{{"ok", false}, {"error", "type_mismatch"}, {"message", "type mismatch"}}.dump());
         return;
     }
@@ -20408,55 +20401,62 @@ srv.Get("/api/v4/files/list", [&](const httplib::Request& req, httplib::Response
 
     std::map<std::string, ListedItem> merged;
 
-    // 1) Legacy filesystem children under current visible directory, if physical dir exists.
-    bool legacy_dir_ok = false;
-    {
-        std::error_code ec;
-        std::filesystem::path dir_to_check = abs_dir.empty() ? user_dir : abs_dir;
-        auto st = std::filesystem::status(dir_to_check, ec);
+// 1) Legacy filesystem children under current visible directory, if physical dir exists.
+bool legacy_dir_ok = false;
+{
+    std::error_code ec;
+    std::filesystem::path dir_to_check = abs_dir.empty() ? user_dir : abs_dir;
+    auto st = std::filesystem::status(dir_to_check, ec);
 
-        if (!ec && std::filesystem::exists(st) && std::filesystem::is_directory(st)) {
-            legacy_dir_ok = true;
+    if (!ec && std::filesystem::exists(st) && std::filesystem::is_directory(st)) {
+        legacy_dir_ok = true;
 
-            for (std::filesystem::directory_iterator it(dir_to_check, ec), end; it != end && !ec; it.increment(ec)) {
-                std::error_code ec2;
+        for (std::filesystem::directory_iterator it(dir_to_check, ec), end; it != end && !ec; it.increment(ec)) {
+            std::error_code ec2;
 
-                const auto name = it->path().filename().string();
-                if (name == "." || name == ".." || name.empty()) continue;
-                if (is_reserved_name(name)) continue;
+            const auto name = it->path().filename().string();
+            if (name == "." || name == ".." || name.empty()) continue;
+            if (is_reserved_name(name)) continue;
 
-                std::string type = "other";
-                if (it->is_directory(ec2) && !ec2) {
-                    type = "dir";
-                } else {
-                    ec2.clear();
-                    if (it->is_regular_file(ec2) && !ec2) {
-                        // Regular files are metadata-driven now.
-                        // Skip raw filesystem files here so stale/orphan files do not leak into listings.
-                        continue;
-                    }
-                }
-
-                long long mtime_unix = 0;
+            std::string type = "other";
+            if (it->is_directory(ec2) && !ec2) {
+                type = "dir";
+            } else {
                 ec2.clear();
-                auto ft = it->last_write_time(ec2);
-                if (!ec2) {
-                    using namespace std::chrono;
-                    auto sctp = time_point_cast<system_clock::duration>(
-                        ft - decltype(ft)::clock::now() + system_clock::now()
-                    );
-                    mtime_unix = (long long)duration_cast<seconds>(sctp.time_since_epoch()).count();
+                if (it->is_regular_file(ec2) && !ec2) {
+                    type = "file";
+                } else {
+                    continue;
                 }
-
-                merged[name] = ListedItem{
-                    name,
-                    type,
-                    0,
-                    mtime_unix
-                };
             }
+
+            std::uint64_t size_bytes = 0;
+            if (type == "file") {
+                ec2.clear();
+                auto sz = it->file_size(ec2);
+                if (!ec2) size_bytes = static_cast<std::uint64_t>(sz);
+            }
+
+            long long mtime_unix = 0;
+            ec2.clear();
+            auto ft = it->last_write_time(ec2);
+            if (!ec2) {
+                using namespace std::chrono;
+                auto sctp = time_point_cast<system_clock::duration>(
+                    ft - decltype(ft)::clock::now() + system_clock::now()
+                );
+                mtime_unix = (long long)duration_cast<seconds>(sctp.time_since_epoch()).count();
+            }
+
+            merged[name] = ListedItem{
+                name,
+                type,
+                size_bytes,
+                mtime_unix
+            };
         }
     }
+}
 
     // 2) Merge metadata-backed immediate children.
     bool metadata_ok = false;
@@ -21851,6 +21851,9 @@ srv.Put("/api/v4/files/put",
     std::filesystem::path out_abs = qc.abs_path;
     bool tiering_write = false;
 
+std::cerr << "[put] qc.abs_path=" << qc.abs_path.string() << "\n";
+
+
     if (tier_cfg.enabled) {
         std::string terr;
         if (!build_landing_abs_path(tier_cfg.landing_pool_id, fp_hex, rel_norm, &out_abs, &terr)) {
@@ -21865,7 +21868,8 @@ srv.Put("/api/v4/files/put",
         }
         tiering_write = true;
     }
-
+std::cerr << "[put] tiering_write=" << (tiering_write ? 1 : 0) << "\n";
+std::cerr << "[put] final out_abs=" << out_abs.string() << "\n";
     // Ensure parent directory exists
     {
         std::error_code ec;
@@ -21974,14 +21978,21 @@ srv.Put("/api/v4/files/put",
             return;
         }
 
-        std::error_code ec;
-        std::filesystem::rename(tmp, out_abs, ec);
-        if (ec) {
-            std::filesystem::remove(tmp, ec);
-            throw std::runtime_error(std::string("rename failed: ") + ec.message());
+        std::cerr << "[put] tmp=" << tmp.string() << "\n";
+        std::cerr << "[put] out_abs=" << out_abs.string() << "\n";
+        std::cerr << "[put] tmp_exists=" << (std::filesystem::exists(tmp) ? 1 : 0) << "\n";
+        std::cerr << "[put] out_parent=" << out_abs.parent_path().string() << "\n";
+        std::cerr << "[put] out_parent_exists=" << (std::filesystem::exists(out_abs.parent_path()) ? 1 : 0) << "\n";
+
+        std::error_code rename_ec;
+        std::filesystem::rename(tmp, out_abs, rename_ec);
+        if (rename_ec) {
+            std::error_code rm_ec;
+            std::filesystem::remove(tmp, rm_ec);
+            throw std::runtime_error(std::string("rename failed: ") + rename_ec.message());
         }
 
-        if (tiering_write) {
+        {
             auto* idx = pqnas::get_file_location_index();
             if (!idx) {
                 std::error_code ec2;
@@ -21994,9 +22005,9 @@ srv.Put("/api/v4/files/put",
             pqnas::FileLocationRecord rec;
             rec.fp = fp_hex;
             rec.logical_rel_path = rel_norm;
-            rec.current_pool = tier_cfg.landing_pool_id;
+            rec.current_pool = tiering_write ? tier_cfg.landing_pool_id : "";
             rec.physical_path = out_abs.string();
-            rec.tier_state = "landing";
+            rec.tier_state = tiering_write ? "landing" : "capacity";
             rec.size_bytes = bytes_written;
             rec.mtime_epoch = now_ts;
             rec.created_epoch = now_ts;
@@ -22010,29 +22021,31 @@ srv.Put("/api/v4/files/put",
                 throw std::runtime_error(std::string("metadata upsert failed: ") + merr);
             }
 
-            pqnas::AuditEvent tev;
-            tev.event = "storage.tiering_upload_landed";
-            tev.outcome = "ok";
-            tev.f["fingerprint"] = fp_hex;
-            tev.f["path"] = pqnas::shorten(rel_norm, 200);
-            tev.f["tier_state"] = "landing";
-            tev.f["pool_id"] = tier_cfg.landing_pool_id;
-            tev.f["physical_path"] = pqnas::shorten(out_abs.string(), 220);
-            tev.f["bytes"] = std::to_string((unsigned long long)bytes_written);
+            if (tiering_write) {
+                pqnas::AuditEvent tev;
+                tev.event = "storage.tiering_upload_landed";
+                tev.outcome = "ok";
+                tev.f["fingerprint"] = fp_hex;
+                tev.f["path"] = pqnas::shorten(rel_norm, 200);
+                tev.f["tier_state"] = "landing";
+                tev.f["pool_id"] = tier_cfg.landing_pool_id;
+                tev.f["physical_path"] = pqnas::shorten(out_abs.string(), 220);
+                tev.f["bytes"] = std::to_string((unsigned long long)bytes_written);
 
-            tev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                tev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
-            auto it_cf = req.headers.find("CF-Connecting-IP");
-            if (it_cf != req.headers.end())
-                tev.f["cf_ip"] = it_cf->second;
+                auto it_cf = req.headers.find("CF-Connecting-IP");
+                if (it_cf != req.headers.end())
+                    tev.f["cf_ip"] = it_cf->second;
 
-            auto it_xff = req.headers.find("X-Forwarded-For");
-            if (it_xff != req.headers.end())
-                tev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+                auto it_xff = req.headers.find("X-Forwarded-For");
+                if (it_xff != req.headers.end())
+                    tev.f["xff"] = pqnas::shorten(it_xff->second, 120);
 
-            tev.f["ua"] = audit_ua();
+                tev.f["ua"] = audit_ua();
 
-            audit_append(tev);
+                audit_append(tev);
+            }
         }
 
         audit_ok(rel_path, bytes_written);

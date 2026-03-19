@@ -3,10 +3,149 @@
 #include <sqlite3.h>
 #include <map>
 #include <vector>
+
 namespace pqnas {
+
+/*
+Architecture notes
+==================
+
+Purpose
+-------
+FileLocationIndex is the metadata authority for the PQ-NAS logical file layer.
+
+It maps:
+- user fingerprint (fp)
+- logical path seen by the API/UI
+to:
+- current physical path on disk
+- current storage pool
+- current tiering state
+- size / mtime / version metadata
+
+This is the core bridge between:
+- logical namespace operations (PUT / MOVE / DELETE / LIST / STAT)
+- physical filesystem layout
+- background tiering / migration workflows
+
+Why this exists
+---------------
+PQ-NAS no longer treats the visible filesystem tree as the sole source of truth.
+Files may live in:
+- landing pool
+- capacity pool
+- future multiple pools / roots
+
+A user-visible logical path must therefore be decoupled from the file's current
+physical location.
+
+file_locations is the authoritative table for that mapping.
+
+What this file is responsible for
+---------------------------------
+This class provides small, focused metadata operations such as:
+- exact lookup of a logical file
+- subtree listing for logical directories
+- state transitions for tiering (landing -> migrating -> capacity)
+- metadata rename for file or subtree moves
+- metadata erase for delete operations
+- existence probes used by path-conflict checks
+- summary reporting for tier-state accounting
+
+What this file is NOT responsible for
+-------------------------------------
+This class does not:
+- perform authorization
+- normalize user input paths
+- manipulate favorites
+- enforce request-level locking
+- perform physical filesystem rename/copy/delete itself
+- infer all business rules for the API
+
+Those responsibilities stay in request handlers, resolvers, and higher-level
+storage orchestration code.
+
+Transaction philosophy
+----------------------
+Most methods here are intentionally small single-statement metadata operations.
+That keeps them predictable and easy to reason about.
+
+The notable exception is rename_subtree(), which performs a multi-row rewrite
+inside an explicit transaction because subtree renames must be all-or-nothing.
+
+Assumptions and current limitations
+-----------------------------------
+1. Primary key
+   file_locations is keyed by:
+     (fp, logical_rel_path)
+
+   This enforces at most one current metadata row per logical file path.
+
+2. Files, not explicit directory rows
+   In the current design, directories usually exist implicitly via descendant
+   files rather than as first-class rows of their own.
+
+   Example:
+     docs/a.txt
+     docs/sub/b.txt
+   implies logical dirs:
+     docs
+     docs/sub
+
+   Many dir operations therefore work by scanning subtree file rows.
+
+3. Mirrored physical layout assumption for subtree rename
+   rename_subtree() currently reconstructs new physical paths by replacing the
+   trailing logical suffix under the same physical root.
+
+   This is valid for the current mirrored layout model, but should be revisited
+   if future tiering allows subtree contents to span unrelated roots.
+
+4. SQLite connection model
+   One sqlite3* handle is owned by this object and used synchronously in the
+   server process. This matches the current process-local lock and request model.
+
+5. Error style
+   Methods return bool / optional / vectors and write diagnostic detail into
+   std::string* err when provided. Callers decide whether a no-match is expected
+   or an internal error.
+
+Schema summary
+--------------
+file_locations columns:
+- fp               : user fingerprint namespace
+- logical_rel_path : canonical logical file path
+- current_pool     : pool id where the file currently resides
+- physical_path    : actual current on-disk location
+- tier_state       : landing / migrating / capacity
+- size_bytes       : last known file size
+- mtime_epoch      : last known file mtime
+- created_epoch    : metadata creation time
+- updated_epoch    : last metadata update time
+- version          : monotonic metadata version
+
+Design note on version
+----------------------
+version is incremented on metadata-changing operations to support:
+- debugging
+- stale-state detection
+- future optimistic concurrency if desired
+
+Reserved namespace handling
+---------------------------
+Reserved logical names such as ".pqnas" are mainly filtered/enforced higher in
+the stack. list_immediate_children() also hard-filters ".pqnas" as a backend
+safety net so internal control paths do not leak back into normal file listings.
+*/
 
 namespace {
 
+/*
+exec_sql()
+----------
+Small helper for one-shot SQL statements such as PRAGMA setup and schema init.
+Used only for statements that do not require parameter binding.
+*/
 static bool exec_sql(sqlite3* db, const char* sql, std::string* err) {
     if (err) err->clear();
     char* msg = nullptr;
@@ -34,6 +173,18 @@ FileLocationIndex::~FileLocationIndex() {
     }
 }
 
+/*
+erase()
+-------
+Remove one exact logical file row.
+
+This is intentionally strict:
+- success requires exactly one row to be deleted
+- zero affected rows is treated as a no-match error
+
+That strictness is useful for delete handlers because it prevents "delete looked
+successful" when metadata did not actually contain the expected row.
+*/
 bool FileLocationIndex::erase(const std::string& fp,
                               const std::string& logical_rel_path,
                               std::string* err) {
@@ -74,6 +225,18 @@ bool FileLocationIndex::erase(const std::string& fp,
     return true;
 }
 
+/*
+open()
+------
+Open the SQLite database and apply connection-local pragmas.
+
+Current choices:
+- WAL journal mode
+- synchronous=NORMAL
+
+This balances durability and performance reasonably well for PQ-NAS metadata.
+If stricter durability is needed later, synchronous can be raised.
+*/
 bool FileLocationIndex::open(std::string* err) {
     if (err) err->clear();
 
@@ -102,6 +265,11 @@ bool FileLocationIndex::open(std::string* err) {
     return true;
 }
 
+/*
+init_schema()
+-------------
+Create the metadata table and supporting index if they do not already exist.
+*/
 bool FileLocationIndex::init_schema(std::string* err) {
     if (err) err->clear();
     if (!db_) {
@@ -131,6 +299,15 @@ ON file_locations(current_pool, tier_state);
     return exec_sql(db_, kSchema, err);
 }
 
+/*
+get()
+-----
+Exact metadata lookup for one logical file path.
+
+Important:
+- absence of a row returns std::nullopt without error
+- actual SQLite failure reports via err
+*/
 std::optional<FileLocationRecord> FileLocationIndex::get(const std::string& fp,
                                                          const std::string& logical_rel_path,
                                                          std::string* err) {
@@ -184,6 +361,20 @@ std::optional<FileLocationRecord> FileLocationIndex::get(const std::string& fp,
     return rec;
 }
 
+/*
+upsert_landing_file()
+---------------------
+Insert or update the metadata row for a file written into the landing area.
+
+This is used by PUT when tiering is enabled.
+
+Conflict behavior:
+- same logical path updates current_pool / physical_path / tier_state / size / mtime
+- created_epoch is preserved from the original row
+- version increments on update
+
+This supports overwrite semantics while keeping logical identity stable.
+*/
 bool FileLocationIndex::upsert_landing_file(const FileLocationRecord& rec, std::string* err) {
     if (err) err->clear();
     if (!db_) {
@@ -235,6 +426,16 @@ bool FileLocationIndex::upsert_landing_file(const FileLocationRecord& rec, std::
     sqlite3_finalize(stmt);
     return true;
 }
+
+/*
+mark_landing_again()
+--------------------
+Revert a row from migrating back to landing, but only if the caller still
+matches the expected source physical path.
+
+This is a guarded state transition used when migration work needs to be undone
+or retried safely.
+*/
 bool FileLocationIndex::mark_landing_again(const std::string& fp,
                                            const std::string& logical_rel_path,
                                            const std::string& expected_src_physical_path,
@@ -277,6 +478,20 @@ bool FileLocationIndex::mark_landing_again(const std::string& fp,
     return true;
 }
 
+/*
+switch_to_capacity()
+--------------------
+Complete a migration by atomically switching one row from:
+- tier_state = migrating
+- old physical path = expected_src_physical_path
+to:
+- new pool
+- new physical path
+- tier_state = capacity
+
+The WHERE clause is intentionally strict so stale workers cannot update the row
+after another actor has already changed it.
+*/
 bool FileLocationIndex::switch_to_capacity(const std::string& fp,
                                            const std::string& logical_rel_path,
                                            const std::string& expected_src_physical_path,
@@ -338,6 +553,14 @@ bool FileLocationIndex::switch_to_capacity(const std::string& fp,
     return true;
 }
 
+/*
+list_landing_candidates()
+-------------------------
+Return rows currently in landing state, oldest updated first.
+
+Used by background migration selection. Ordering by updated_epoch gives a simple
+FIFO-like policy suitable for a first implementation.
+*/
 std::vector<FileLocationRecord> FileLocationIndex::list_landing_candidates(std::size_t limit,
                                                                            std::string* err) {
     if (err) err->clear();
@@ -394,6 +617,14 @@ std::vector<FileLocationRecord> FileLocationIndex::list_landing_candidates(std::
     return out;
 }
 
+/*
+mark_migrating()
+----------------
+Claim a landing row for migration by switching it to migrating, but only if the
+expected source physical path still matches and the row is still in landing.
+
+This is a lightweight compare-and-swap style state transition.
+*/
 bool FileLocationIndex::mark_migrating(const std::string& fp,
                                        const std::string& logical_rel_path,
                                        const std::string& expected_src_physical_path,
@@ -443,6 +674,13 @@ bool FileLocationIndex::mark_migrating(const std::string& fp,
     return true;
 }
 
+/*
+list_stuck_migrating_candidates()
+---------------------------------
+Return rows that have remained in migrating state up to a cutoff time.
+
+Used by recovery / repair logic to detect migrations that likely died mid-flight.
+*/
 std::vector<FileLocationRecord> FileLocationIndex::list_stuck_migrating_candidates(std::int64_t older_than_epoch,
                                                                                    std::string* err) {
     if (err) err->clear();
@@ -499,6 +737,20 @@ std::vector<FileLocationRecord> FileLocationIndex::list_stuck_migrating_candidat
     return out;
 }
 
+/*
+list_immediate_children()
+-------------------------
+Build a synthetic directory listing from file rows.
+
+Because directories are usually implicit rather than explicit rows, this method
+scans all rows for one fp and collapses them into immediate children of dir_rel.
+
+Rules:
+- exact descendant without further slash => file child
+- deeper descendant => first segment becomes dir child
+- metadata "wins" for exact file rows
+- reserved top-level child ".pqnas" is hidden here as a backend safety net
+*/
 std::vector<LogicalListItem> FileLocationIndex::list_immediate_children(const std::string& fp,
                                                                         const std::string& dir_rel,
                                                                         std::string* err) {
@@ -583,6 +835,18 @@ std::vector<LogicalListItem> FileLocationIndex::list_immediate_children(const st
     for (auto& kv : by_name) out.push_back(std::move(kv.second));
     return out;
 }
+
+/*
+rename_one()
+------------
+Rename one exact logical file row and its physical path together.
+
+Strictness:
+- success requires exactly one matching row
+- no-match is returned as rename_one_no_match
+
+This is the metadata companion of a successful physical file move.
+*/
 bool FileLocationIndex::rename_one(const std::string& fp,
                                    const std::string& old_logical_rel_path,
                                    const std::string& new_logical_rel_path,
@@ -639,6 +903,31 @@ bool FileLocationIndex::rename_one(const std::string& fp,
 
     return true;
 }
+
+/*
+rename_subtree()
+----------------
+Rewrite all metadata rows under one logical prefix to a new logical prefix.
+
+This is used for directory moves where directories are represented implicitly by
+descendant file rows.
+
+Important properties:
+- runs inside BEGIN IMMEDIATE transaction
+- collects source rows first
+- refuses destination subtree conflicts
+- reinserts rewritten rows with incremented version
+- deletes original rows only after each rewritten row is inserted
+
+Why reinsert instead of UPDATE PK directly?
+-------------------------------------------
+The primary key includes logical_rel_path. Reinsert + delete is easier to reason
+about for subtree moves and keeps destination conflict handling explicit.
+
+Current limitation:
+- physical path rewrite assumes mirrored physical layout under a shared root
+- mixed-root subtree moves are therefore rejected higher in the stack
+*/
 bool FileLocationIndex::rename_subtree(const std::string& fp,
                                        const std::string& old_logical_prefix,
                                        const std::string& new_logical_prefix,
@@ -872,6 +1161,17 @@ bool FileLocationIndex::rename_subtree(const std::string& fp,
 
     return true;
 }
+
+/*
+list_subtree_records()
+----------------------
+Return all file rows exactly at logical_prefix or beneath logical_prefix/.
+
+This is the core metadata primitive for:
+- directory move
+- directory delete
+- metadata-backed logical directory resolution
+*/
 std::vector<FileLocationRecord> FileLocationIndex::list_subtree_records(const std::string& fp,
                                                                         const std::string& logical_prefix,
                                                                         std::string* err) {
@@ -931,8 +1231,15 @@ std::vector<FileLocationRecord> FileLocationIndex::list_subtree_records(const st
     return out;
 }
 
+/*
+logical_dir_exists()
+--------------------
+A logical directory exists if there is at least one descendant row under
+logical_prefix/.
 
-
+Used for reverse namespace conflict checks such as:
+- reject PUT "docs" if "docs/a.txt" already exists
+*/
 bool FileLocationIndex::logical_dir_exists(const std::string& fp,
                                            const std::string& logical_prefix,
                                            std::string* err) {
@@ -972,6 +1279,17 @@ bool FileLocationIndex::logical_dir_exists(const std::string& fp,
     return found;
 }
 
+/*
+rename_logical_prefix()
+-----------------------
+Older helper that rewrites logical_rel_path prefixes in place.
+
+This updates only logical paths, not physical_path. That means it is less
+appropriate for the current metadata + physical move model than rename_subtree(),
+which rewrites both and is what newer handlers use.
+
+Kept for compatibility with any remaining callers.
+*/
 bool FileLocationIndex::rename_logical_prefix(const std::string& fp,
                                               const std::string& from_prefix,
                                               const std::string& to_prefix,
@@ -1074,6 +1392,12 @@ bool FileLocationIndex::rename_logical_prefix(const std::string& fp,
 
     return true;
 }
+
+/*
+get_tier_summary()
+------------------
+Aggregate counts and bytes by tier_state for observability / admin reporting.
+*/
 bool FileLocationIndex::get_tier_summary(FileLocationTierSummary* out, std::string* err) {
     if (err) err->clear();
     if (!out) {
@@ -1131,6 +1455,15 @@ bool FileLocationIndex::get_tier_summary(FileLocationTierSummary* out, std::stri
     sqlite3_finalize(stmt);
     return true;
 }
+
+/*
+logical_file_exists_exact()
+---------------------------
+Probe for one exact logical file row.
+
+Used by ancestor-file conflict checks such as:
+- reject PUT "a/b.txt" when exact file "a" already exists
+*/
 bool FileLocationIndex::logical_file_exists_exact(const std::string& fp,
                                                   const std::string& logical_rel_path,
                                                   std::string* err) {
@@ -1168,6 +1501,16 @@ bool FileLocationIndex::logical_file_exists_exact(const std::string& fp,
     sqlite3_finalize(stmt);
     return found;
 }
+
+/*
+erase_subtree()
+---------------
+Remove all metadata rows exactly at logical_prefix or beneath logical_prefix/.
+
+This is the metadata companion of a successful directory delete.
+Unlike erase(), zero affected rows is not treated as an error because callers
+may use subtree erase in cases where a logical directory existed only implicitly.
+*/
 bool FileLocationIndex::erase_subtree(const std::string& fp,
                                       const std::string& logical_prefix,
                                       std::string* err) {
@@ -1203,4 +1546,5 @@ bool FileLocationIndex::erase_subtree(const std::string& fp,
     sqlite3_finalize(stmt);
     return true;
 }
+
 } // namespace pqnas
