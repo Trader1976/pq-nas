@@ -24289,36 +24289,47 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+        // Resolve logical item via metadata-aware resolver so share creation works
+        // during landing/migration as well as in simple installs.
+        pqnas::ResolvedLogicalItem item;
+        std::string rerr;
+        if (!pqnas::resolve_existing_user_item(users, fp_hex, path_rel, &item, &rerr) || !item.exists) {
+            if (rerr == "empty path" || rerr == "invalid path" || rerr == "absolute path not allowed" || rerr == "reserved path") {
+                audit_fail("invalid_path", 400, rerr, path_rel);
+                reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid path"}});
+                return;
+            }
 
-    // Resolve path strictly using your existing safe resolver
-    std::filesystem::path abs;
-    std::string rerr;
-    if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &abs, &rerr)) {
-        audit_fail("invalid_path", 400, rerr, path_rel);
-        reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid path"}});
-        return;
-    }
+            audit_fail("not_found", 404, rerr, path_rel);
+            reply(404, json{{"ok", false}, {"error", "not_found"}, {"message", "path not found"}});
+            return;
+        }
 
-    std::error_code ec;
-    auto st = std::filesystem::symlink_status(abs, ec);
-    if (ec || !std::filesystem::exists(st)) {
-        audit_fail("not_found", 404, "", path_rel);
-        reply(404, json{{"ok", false}, {"error", "not_found"}, {"message", "path not found"}});
-        return;
-    }
-    if (std::filesystem::is_symlink(st)) {
-        audit_fail("symlink_not_supported", 400, "", path_rel);
-        reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "symlinks not supported"}});
-        return;
-    }
+        if (!item.has_physical_anchor) {
+            audit_fail("missing_physical_anchor", 404, "", path_rel);
+            reply(404, json{{"ok", false}, {"error", "not_found"}, {"message", "path not found"}});
+            return;
+        }
 
-    std::string type = std::filesystem::is_directory(st) ? "dir" : (std::filesystem::is_regular_file(st) ? "file" : "");
-    if (type.empty()) {
-        audit_fail("unsupported_type", 400, "", path_rel);
-        reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "unsupported path type"}});
-        return;
-    }
+        std::error_code ec;
+        auto st = std::filesystem::symlink_status(item.abs_path, ec);
+        if (ec || !std::filesystem::exists(st)) {
+            audit_fail("not_found", 404, "", path_rel);
+            reply(404, json{{"ok", false}, {"error", "not_found"}, {"message", "path not found"}});
+            return;
+        }
+        if (std::filesystem::is_symlink(st)) {
+            audit_fail("symlink_not_supported", 400, "", path_rel);
+            reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "symlinks not supported"}});
+            return;
+        }
+
+        std::string type = item.is_dir ? "dir" : (item.is_file ? "file" : "");
+        if (type.empty()) {
+            audit_fail("unsupported_type", 400, "", path_rel);
+            reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "unsupported path type"}});
+            return;
+        }
 
     pqnas::ShareLink out;
     std::string err;

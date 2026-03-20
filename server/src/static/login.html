@@ -4,6 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PQ-NAS — Sign in with DNA</title>
+
+    <link rel="stylesheet" href="/static/theme.css">
+    <script src="/static/theme.js"></script>
+
     <style>
         :root{
             --bg: #050712;
@@ -133,18 +137,18 @@
             animation: spin 0.9s linear infinite;
             box-shadow: 0 0 24px rgba(var(--fg-rgb),0.20);
         }
+
         @keyframes spin { to { transform: rotate(360deg); } }
     </style>
-    <link rel="stylesheet" href="/static/theme.css">
-    <script src="/static/theme.js"></script>
-
 </head>
 
 <body>
 <div class="wrap">
     <div class="card">
         <div class="brand">
-            <img src="/static/pqnas_logo.png" alt="DNA PQ-NAS — Post Quantum Network Attached Storage" />
+            <img id="brandLogo"
+                 src="/static/pqnas_logo.png"
+                 alt="DNA PQ-NAS — Post Quantum Network Attached Storage" />
         </div>
 
         <h1>Sign in with DNA</h1>
@@ -161,6 +165,43 @@
         <div class="footer">© CPUNK 2026</div>
     </div>
 </div>
+
+<script>
+    (function () {
+        const logo = document.getElementById("brandLogo");
+        if (!logo) return;
+
+        function pickLogoForTheme(theme) {
+            switch (theme) {
+                case "bright":
+                    return "/static/pqnas_logo_bright.png";
+                case "cpunk_orange":
+                    return "/static/pqnas_logo_orange.png";
+                case "win_classic":
+                    return "/static/pqnas_logo_win.png";
+                case "dark":
+                default:
+                    return "/static/pqnas_logo.png";
+            }
+        }
+
+        function applyThemeLogo() {
+            const theme = document.documentElement.getAttribute("data-theme") || "dark";
+            const nextSrc = pickLogoForTheme(theme);
+            if (logo.getAttribute("src") !== nextSrc) {
+                logo.setAttribute("src", nextSrc);
+            }
+        }
+
+        applyThemeLogo();
+
+        const obs = new MutationObserver(applyThemeLogo);
+        obs.observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ["data-theme"]
+        });
+    })();
+</script>
 
 <script src="/static/pqnas_v5.js"></script>
 </body>
