@@ -975,8 +975,58 @@
     </div>
   </div>
 </div>
+<div id="uploadConflictModal" class="modal" aria-hidden="true">
+  <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="uploadConflictTitle">
+    <div class="modalHead">
+      <div>
+        <div id="uploadConflictTitle" class="modalTitle">File already exists</div>
+        <div id="uploadConflictPath" class="modalSub mono">/</div>
+      </div>
+      <button id="uploadConflictClose" class="btn secondary" type="button">Close</button>
+    </div>
+
+    <div class="modalBody">
+      <div class="k">Existing file</div>
+      <div id="uploadConflictExisting" class="v"></div>
+
+      <div class="k">New file</div>
+      <div id="uploadConflictIncoming" class="v"></div>
+
+      <div class="k">Choice</div>
+      <div class="v" style="display:grid; gap:10px;">
+        <label style="display:flex; gap:10px; align-items:flex-start;">
+          <input type="radio" name="uploadConflictChoice" id="uploadConflictKeepOld" value="keep_old" checked>
+          <span>
+            <strong>Keep existing</strong><br>
+            <span style="opacity:.82;">Skip this upload and keep the file already stored in PQ-NAS.</span>
+          </span>
+        </label>
+
+        <label style="display:flex; gap:10px; align-items:flex-start;">
+          <input type="radio" name="uploadConflictChoice" id="uploadConflictReplace" value="replace">
+          <span>
+            <strong>Replace with new</strong><br>
+            <span style="opacity:.82;">Upload this new file and replace the existing one.</span>
+          </span>
+        </label>
+
+        <label style="display:flex; gap:10px; align-items:center; margin-top:8px;">
+          <input type="checkbox" id="uploadConflictApplyAll">
+          <span>Use this choice for all remaining conflicts in this upload</span>
+        </label>
+      </div>
+
+      <div class="k">Action</div>
+      <div class="v" style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button id="uploadConflictOkBtn" class="btn" type="button">Continue</button>
+        <button id="uploadConflictCancelBtn" class="btn secondary" type="button">Cancel upload</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div id="ctxMenu" class="ctxMenu" role="menu" aria-hidden="true"></div>
+
 <script src="./filetype_icons.js"></script>
 <script src="./app.js"></script>
 

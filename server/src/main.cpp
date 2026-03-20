@@ -21600,7 +21600,7 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
     audit_ok(rel_path, sz);
 });
 // ---- Files API (user storage) ----
-// PUT /api/v4/files/put?path=relative/path.bin
+// PUT /api/v4/files/put?path=relative/path.bin[&overwrite=1]
 // Body: raw bytes (streamed to temp file, then renamed atomically)
 srv.Put("/api/v4/files/put",
 [&](const httplib::Request& req,
@@ -21696,6 +21696,14 @@ srv.Put("/api/v4/files/put",
         audit_append(ev);
     };
 
+    auto file_time_to_epoch_sec = [](const std::filesystem::file_time_type& ft) -> std::int64_t {
+        using namespace std::chrono;
+        const auto sctp = time_point_cast<system_clock::duration>(
+            ft - std::filesystem::file_time_type::clock::now() + system_clock::now()
+        );
+        return (std::int64_t)duration_cast<seconds>(sctp.time_since_epoch()).count();
+    };
+
     // path param
     std::string rel_path;
     if (req.has_param("path")) rel_path = req.get_param_value("path");
@@ -21721,6 +21729,12 @@ srv.Put("/api/v4/files/put",
             }.dump());
             return;
         }
+    }
+
+    bool overwrite = false;
+    if (req.has_param("overwrite")) {
+        const std::string ov = req.get_param_value("overwrite");
+        overwrite = (ov == "1" || ov == "true" || ov == "yes");
     }
 
     // Serialize writes on overlapping logical paths for this user.
@@ -21758,6 +21772,7 @@ srv.Put("/api/v4/files/put",
             return;
         }
     }
+
     {
         auto* idx = pqnas::get_file_location_index();
         if (!idx) {
@@ -21795,6 +21810,7 @@ srv.Put("/api/v4/files/put",
             return;
         }
     }
+
     // Require Content-Length for v1 streamer so quota can be checked before write.
     std::uint64_t cl = 0;
     if (!header_u64("Content-Length", &cl)) {
@@ -21845,14 +21861,13 @@ srv.Put("/api/v4/files/put",
 
     const UploadTieringConfig tier_cfg = upload_tiering_config();
 
-	std::cerr << "[tiering] enabled=" << (tier_cfg.enabled ? 1 : 0)
-	          << " landing_pool_id=" << tier_cfg.landing_pool_id << "\n";
+    std::cerr << "[tiering] enabled=" << (tier_cfg.enabled ? 1 : 0)
+              << " landing_pool_id=" << tier_cfg.landing_pool_id << "\n";
 
     std::filesystem::path out_abs = qc.abs_path;
     bool tiering_write = false;
 
-std::cerr << "[put] qc.abs_path=" << qc.abs_path.string() << "\n";
-
+    std::cerr << "[put] qc.abs_path=" << qc.abs_path.string() << "\n";
 
     if (tier_cfg.enabled) {
         std::string terr;
@@ -21868,8 +21883,121 @@ std::cerr << "[put] qc.abs_path=" << qc.abs_path.string() << "\n";
         }
         tiering_write = true;
     }
-std::cerr << "[put] tiering_write=" << (tiering_write ? 1 : 0) << "\n";
-std::cerr << "[put] final out_abs=" << out_abs.string() << "\n";
+
+    std::cerr << "[put] tiering_write=" << (tiering_write ? 1 : 0) << "\n";
+    std::cerr << "[put] final out_abs=" << out_abs.string() << "\n";
+
+    // Detect existing logical file before writing.
+    // Metadata index is authoritative for logical existence.
+    auto* idx = pqnas::get_file_location_index();
+    if (!idx) {
+        audit_fail("metadata_index_missing", 500);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "metadata index missing"}
+        }.dump());
+        return;
+    }
+
+    std::optional<pqnas::FileLocationRecord> existing_rec;
+    std::string existing_rec_err;
+    existing_rec = idx->get(fp_hex, rel_norm, &existing_rec_err);
+    if (!existing_rec_err.empty()) {
+        audit_fail("metadata_lookup_failed", 500, existing_rec_err);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "metadata lookup failed"},
+            {"detail", pqnas::shorten(existing_rec_err, 180)}
+        }.dump());
+        return;
+    }
+
+    bool physical_exists_at_target = false;
+    std::uint64_t physical_existing_size = 0;
+    std::int64_t physical_existing_mtime = 0;
+
+    {
+        std::error_code ec;
+        physical_exists_at_target = std::filesystem::exists(out_abs, ec);
+        if (ec) {
+            audit_fail("target_exists_check_failed", 500, ec.message());
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "target existence check failed"},
+                {"detail", pqnas::shorten(ec.message(), 180)}
+            }.dump());
+            return;
+        }
+
+        if (physical_exists_at_target) {
+            const bool is_reg = std::filesystem::is_regular_file(out_abs, ec);
+            if (ec) {
+                audit_fail("target_stat_failed", 500, ec.message());
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "target stat failed"},
+                    {"detail", pqnas::shorten(ec.message(), 180)}
+                }.dump());
+                return;
+            }
+
+            if (!is_reg) {
+                audit_fail("target_not_regular_file", 409, out_abs.string());
+                reply_json(res, 409, json{
+                    {"ok", false},
+                    {"error", "path_conflict"},
+                    {"message", "target path exists and is not a regular file"},
+                    {"path", rel_norm}
+                }.dump());
+                return;
+            }
+
+            physical_existing_size = pqnas::file_size_u64_safe(out_abs);
+            auto ft = std::filesystem::last_write_time(out_abs, ec);
+            if (!ec) {
+                physical_existing_mtime = file_time_to_epoch_sec(ft);
+            }
+        }
+    }
+
+    if (!overwrite && (existing_rec.has_value() || physical_exists_at_target)) {
+        json existing = json::object();
+
+        if (existing_rec.has_value()) {
+            existing["size_bytes"] = existing_rec->size_bytes;
+            existing["mtime_epoch"] = existing_rec->mtime_epoch;
+            existing["tier_state"] = existing_rec->tier_state;
+            existing["current_pool"] = existing_rec->current_pool;
+            existing["physical_path"] = existing_rec->physical_path;
+        } else {
+            existing["size_bytes"] = physical_existing_size;
+            existing["mtime_epoch"] = physical_existing_mtime;
+            existing["physical_path"] = out_abs.string();
+        }
+
+        audit_fail("file_exists", 409, rel_norm);
+        reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "file_exists"},
+            {"message", "file already exists"},
+            {"path", rel_norm},
+            {"existing", existing}
+        }.dump());
+        return;
+    }
+
+    // Remember old physical path so overwrite to a different pool/path can clean it up later.
+    std::string old_physical_path;
+    if (existing_rec.has_value()) {
+        old_physical_path = existing_rec->physical_path;
+    } else if (physical_exists_at_target) {
+        old_physical_path = out_abs.string();
+    }
+
     // Ensure parent directory exists
     {
         std::error_code ec;
@@ -21993,13 +22121,6 @@ std::cerr << "[put] final out_abs=" << out_abs.string() << "\n";
         }
 
         {
-            auto* idx = pqnas::get_file_location_index();
-            if (!idx) {
-                std::error_code ec2;
-                std::filesystem::remove(out_abs, ec2);
-                throw std::runtime_error("file location index not initialized");
-            }
-
             const std::int64_t now_ts = now_epoch_sec();
 
             pqnas::FileLocationRecord rec;
@@ -22048,13 +22169,37 @@ std::cerr << "[put] final out_abs=" << out_abs.string() << "\n";
             }
         }
 
+        // If overwrite moved the logical file to a different physical path,
+        // remove the old physical file after metadata points at the new one.
+        if (!old_physical_path.empty()) {
+            const std::string new_physical_path = out_abs.string();
+            if (old_physical_path != new_physical_path) {
+                std::error_code old_rm_ec;
+                std::filesystem::remove(old_physical_path, old_rm_ec);
+                if (old_rm_ec) {
+                    pqnas::AuditEvent ev;
+                    ev.event = "v4.files_put_old_physical_cleanup_fail";
+                    ev.outcome = "warn";
+                    ev.f["fingerprint"] = fp_hex;
+                    ev.f["path"] = pqnas::shorten(rel_norm, 200);
+                    ev.f["old_physical_path"] = pqnas::shorten(old_physical_path, 220);
+                    ev.f["new_physical_path"] = pqnas::shorten(new_physical_path, 220);
+                    ev.f["detail"] = pqnas::shorten(old_rm_ec.message(), 180);
+                    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                    ev.f["ua"] = audit_ua();
+                    audit_append(ev);
+                }
+            }
+        }
+
         audit_ok(rel_path, bytes_written);
 
         reply_json(res, 200, json{
             {"ok", true},
             {"fingerprint_hex", fp_hex},
             {"path", rel_path},
-            {"bytes", bytes_written}
+            {"bytes", bytes_written},
+            {"overwrite", overwrite}
         }.dump());
         return;
 
@@ -22072,7 +22217,6 @@ std::cerr << "[put] final out_abs=" << out_abs.string() << "\n";
         return;
     }
 });
-
 //
 // ---- Snapshots API (admin-only, v1) ----
 //

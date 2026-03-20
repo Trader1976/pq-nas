@@ -32,7 +32,17 @@
   const uploadBtn = document.getElementById("uploadBtn");
   const uploadFolderBtn = document.getElementById("uploadFolderBtn");
   const downloadFolderBtn = document.getElementById("downloadFolderBtn");
-
+  const uploadConflictModal = document.getElementById("uploadConflictModal");
+  const uploadConflictClose = document.getElementById("uploadConflictClose");
+  const uploadConflictTitle = document.getElementById("uploadConflictTitle");
+  const uploadConflictPath = document.getElementById("uploadConflictPath");
+  const uploadConflictExisting = document.getElementById("uploadConflictExisting");
+  const uploadConflictIncoming = document.getElementById("uploadConflictIncoming");
+  const uploadConflictKeepOld = document.getElementById("uploadConflictKeepOld");
+  const uploadConflictReplace = document.getElementById("uploadConflictReplace");
+  const uploadConflictApplyAll = document.getElementById("uploadConflictApplyAll");
+  const uploadConflictCancelBtn = document.getElementById("uploadConflictCancelBtn");
+  const uploadConflictOkBtn = document.getElementById("uploadConflictOkBtn");
   const filePick = document.getElementById("filePick");
   const folderPick = document.getElementById("folderPick");
 
@@ -738,6 +748,122 @@
     for (const el of gridEl.querySelectorAll(".tile")) el.classList.remove("sel");
   }
 
+  function fmtEpochLocal(sec) {
+    const n = Number(sec || 0);
+    if (!Number.isFinite(n) || n <= 0) return "—";
+    const d = new Date(n * 1000);
+    if (isNaN(d.getTime())) return "—";
+    const pad = (x) => String(x).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+
+  function fmtBrowserFileTime(ms) {
+    const n = Number(ms || 0);
+    if (!Number.isFinite(n) || n <= 0) return "—";
+    const d = new Date(n);
+    if (isNaN(d.getTime())) return "—";
+    const pad = (x) => String(x).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  }
+
+  function openUploadConflictModal() {
+    if (!uploadConflictModal) return;
+    uploadConflictModal.classList.add("show");
+    uploadConflictModal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeUploadConflictModal() {
+    if (!uploadConflictModal) return;
+    uploadConflictModal.classList.remove("show");
+    uploadConflictModal.setAttribute("aria-hidden", "true");
+  }
+
+  function describeExistingConflict(existing) {
+    if (!existing || typeof existing !== "object") return "Unknown";
+    const parts = [];
+    if (existing.size_bytes != null) parts.push(`Size: ${fmtSize(existing.size_bytes)}`);
+    if (existing.mtime_epoch) parts.push(`Modified: ${fmtEpochLocal(existing.mtime_epoch)}`);
+    return parts.length ? parts.join(" • ") : "Unknown";
+  }
+
+  function describeIncomingConflict(file) {
+    if (!file) return "Unknown";
+    const parts = [];
+    if (file.size != null) parts.push(`Size: ${fmtSize(file.size)}`);
+    if (file.lastModified) parts.push(`Modified: ${fmtBrowserFileTime(file.lastModified)}`);
+    return parts.length ? parts.join(" • ") : "Unknown";
+  }
+
+  function isFileExistsConflict(errLike) {
+    if (!errLike) return false;
+    if (errLike.error === "file_exists") return true;
+    if (errLike.details && errLike.details.error === "file_exists") return true;
+    return false;
+  }
+
+  function askUploadConflictDecision(rel, file, existing) {
+    return new Promise((resolve) => {
+      if (!uploadConflictModal) {
+        resolve({ action: "cancel", applyAll: false });
+        return;
+      }
+
+      if (uploadConflictTitle) uploadConflictTitle.textContent = "File already exists";
+      if (uploadConflictPath) uploadConflictPath.textContent = "/" + String(rel || "");
+      if (uploadConflictExisting) uploadConflictExisting.textContent = describeExistingConflict(existing);
+      if (uploadConflictIncoming) uploadConflictIncoming.textContent = describeIncomingConflict(file);
+
+      if (uploadConflictKeepOld) uploadConflictKeepOld.checked = true;
+      if (uploadConflictReplace) uploadConflictReplace.checked = false;
+      if (uploadConflictApplyAll) uploadConflictApplyAll.checked = false;
+
+      let settled = false;
+
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        closeUploadConflictModal();
+        cleanup();
+        resolve(result);
+      };
+
+      const onOk = () => {
+        const action = uploadConflictReplace && uploadConflictReplace.checked ? "replace" : "keep_old";
+        const applyAll = !!(uploadConflictApplyAll && uploadConflictApplyAll.checked);
+        finish({ action, applyAll });
+      };
+
+      const onCancel = () => finish({ action: "cancel", applyAll: false });
+
+      const onBackdrop = (e) => {
+        if (e.target === uploadConflictModal) onCancel();
+      };
+
+      const onKey = (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        }
+      };
+
+      const cleanup = () => {
+        uploadConflictOkBtn?.removeEventListener("click", onOk);
+        uploadConflictCancelBtn?.removeEventListener("click", onCancel);
+        uploadConflictClose?.removeEventListener("click", onCancel);
+        uploadConflictModal?.removeEventListener("click", onBackdrop);
+        document.removeEventListener("keydown", onKey);
+      };
+
+      uploadConflictOkBtn?.addEventListener("click", onOk);
+      uploadConflictCancelBtn?.addEventListener("click", onCancel);
+      uploadConflictClose?.addEventListener("click", onCancel);
+      uploadConflictModal?.addEventListener("click", onBackdrop);
+      document.addEventListener("keydown", onKey);
+
+      openUploadConflictModal();
+    });
+  }
+
   function applySelectionToDom() {
     for (const el of gridEl.querySelectorAll(".tile")) {
       el.classList.toggle("sel", selectedKeys.has(el.dataset.key));
@@ -873,6 +999,11 @@
 
     selectedKeys = next;
     applySelectionToDom();
+  });
+
+  uploadConflictClose?.addEventListener("click", closeUploadConflictModal);
+  uploadConflictModal?.addEventListener("click", (e) => {
+    if (e.target === uploadConflictModal) closeUploadConflictModal();
   });
 
   gridWrap?.addEventListener("pointerup", endMarquee);
@@ -1068,6 +1199,9 @@
     const http = (errLike && Number.isFinite(errLike.http)) ? errLike.http : extractHttpStatusFromMsg(msg);
     const low = msg.toLowerCase();
 
+    if (errLike && errLike.error === "file_exists") return "File already exists";
+    if (errLike && errLike.kind === "file_exists") return "File already exists";
+    if (low.includes("file already exists")) return "File already exists";
     if (low.includes("quota exceeded") || low.includes("quota_exceeded")) return "Quota exceeded";
     if (http === 400 || low.includes("gateway") || low.includes("before pq-nas")) return "Gateway rejected before PQ-NAS";
     if (http === 413 || low.includes("too large")) return "Upload too large (server limit)";
@@ -1155,10 +1289,14 @@
     }
   }
 
-  function xhrPutFileTo(relPath, file, onProgress) {
+  function xhrPutFileTo(relPath, file, onProgress, opts = {}) {
     return new Promise((resolve, reject) => {
       const full = curPath ? `${curPath}/${relPath}` : relPath;
-      const url = `/api/v4/files/put?path=${encodeURIComponent(full)}`;
+      const qs = new URLSearchParams();
+      qs.set("path", full);
+      if (opts && opts.overwrite) qs.set("overwrite", "1");
+
+      const url = `/api/v4/files/put?${qs.toString()}`;
 
       const xhr = new XMLHttpRequest();
       activeUploadXhr = xhr;
@@ -1193,6 +1331,7 @@
         clearActive();
         reject(Object.assign(new Error("upload failed (network)"), { kind: "network", source: "client" }));
       };
+
       xhr.onabort = () => {
         clearActive();
         if (uploadCancelRequested) {
@@ -1216,6 +1355,18 @@
         if (status >= 200 && status < 300 && j && j.ok) {
           clearActive();
           resolve(j);
+          return;
+        }
+
+        if (j && j.error === "file_exists") {
+          const err = new Error(j.message || "file already exists");
+          err.http = status || 409;
+          err.kind = "file_exists";
+          err.source = "pqnas";
+          err.error = "file_exists";
+          err.details = j;
+          clearActive();
+          reject(err);
           return;
         }
 
@@ -1360,8 +1511,12 @@
     let doneFiles = 0;
     let uploadedBytesCommitted = 0;
     let failedFiles = 0;
+    let skippedFiles = 0;
     const failures = [];
     const uploadBatchStartedAt = performance.now();
+
+    let conflictApplyAll = false;
+    let conflictActionAll = ""; // "", "keep_old", "replace"
 
     lastUploadError = null;
     setUploadPillClickable(false);
@@ -1374,7 +1529,7 @@
     setUploadProgress(0, `Uploading 0/${totalFiles}…`);
 
     for (let idx = 0; idx < items.length; idx++) {
-      const { rel, file, source } = items[idx];
+      const { rel, file } = items[idx];
       if (uploadCancelRequested) break;
 
       const dir = parentPath(rel);
@@ -1385,7 +1540,7 @@
       try {
         status.textContent = `Uploading: ${rel} (${fmtSize(file.size)})`;
 
-        const runUpload = async () => {
+        const runUpload = async (overwrite = false) => {
           await xhrPutFileTo(rel, file, (loaded) => {
             lastLoaded = Math.max(lastLoaded, loaded || 0);
             const overall = uploadedBytesCommitted + lastLoaded;
@@ -1398,10 +1553,79 @@
                 pct,
                 `Uploading ${doneFiles}/${totalFiles} • ${rel} • ${fmtSize(overall)} / ${fmtSize(totalBytes)} • ${fmtSpeed(speedBps)}`
             );
-          });
+          }, { overwrite });
         };
 
-        await runUpload();
+        let finishedThisFile = false;
+        let skipThisFile = false;
+
+        while (!finishedThisFile && !skipThisFile) {
+          try {
+            const autoOverwrite = conflictApplyAll && conflictActionAll === "replace";
+            await runUpload(autoOverwrite);
+            finishedThisFile = true;
+          } catch (e) {
+            if (e && e.kind === "cancelled") throw e;
+
+            if (isFileExistsConflict(e)) {
+              let decision = null;
+
+              if (conflictApplyAll && conflictActionAll) {
+                decision = { action: conflictActionAll, applyAll: true };
+              } else {
+                setBadge("warn", "conflict");
+                setUploadProgress(
+                    (uploadedBytesCommitted / totalBytes) * 100,
+                    `Conflict: ${rel}`,
+                    `Already exists: ${rel}`,
+                    "warn"
+                );
+
+                decision = await askUploadConflictDecision(
+                    rel,
+                    file,
+                    e && e.details ? e.details.existing : null
+                );
+              }
+
+              if (!decision || decision.action === "cancel") {
+                uploadCancelRequested = true;
+                throw Object.assign(new Error("upload cancelled"), { kind: "cancelled", source: "client" });
+              }
+
+              if (decision.applyAll) {
+                conflictApplyAll = true;
+                conflictActionAll = decision.action;
+              }
+
+              if (decision.action === "keep_old") {
+                skipThisFile = true;
+                skippedFiles++;
+                status.textContent = `Skipped existing file: ${rel}`;
+                setBadge("warn", "skipped");
+                setUploadProgress(
+                    (uploadedBytesCommitted / totalBytes) * 100,
+                    `Skipped existing file • ${rel}`,
+                    `Kept existing: ${rel}`,
+                    "warn"
+                );
+                break;
+              }
+
+              if (decision.action === "replace") {
+                await runUpload(true);
+                finishedThisFile = true;
+                break;
+              }
+            }
+
+            throw e;
+          }
+        }
+
+        if (skipThisFile) {
+          continue;
+        }
 
         uploadedBytesCommitted += (Number(file.size) || lastLoaded || 0);
         doneFiles++;
@@ -1417,12 +1641,12 @@
       } catch (e) {
         if (e && e.kind === "cancelled") {
           setBadge("warn", "cancelled");
-          status.textContent = `Upload cancelled. Completed ${doneFiles}/${totalFiles} files.`;
+          status.textContent = `Upload cancelled. Uploaded ${doneFiles}/${totalFiles}, skipped ${skippedFiles}.`;
 
           const pct = (uploadedBytesCommitted / totalBytes) * 100;
           setUploadProgress(
               pct,
-              `Upload cancelled • OK ${doneFiles}/${totalFiles}`,
+              `Upload cancelled • Uploaded ${doneFiles}/${totalFiles} • Skipped ${skippedFiles}`,
               "",
               "warn"
           );
@@ -1452,14 +1676,18 @@
           message: msg,
           http,
           kind,
-          source,
+          source: errSource,
           atMs: Date.now()
         };
 
         setBadge("err", "error");
         status.textContent = `Upload failed: ${rel} — ${msg}`;
 
-        const isHardStop = (summary === "Quota exceeded") || (summary === "Upload too large (server limit)") || (summary === "Gateway rejected before PQ-NAS");
+        const isHardStop =
+            (summary === "Quota exceeded") ||
+            (summary === "Upload too large (server limit)") ||
+            (summary === "Gateway rejected before PQ-NAS");
+
         const pct = isHardStop ? 100 : (uploadedBytesCommitted / totalBytes) * 100;
 
         const pillText = `Last: ${rel}`;
@@ -1483,14 +1711,17 @@
 
       setUploadProgress(
           pct,
-          `Upload finished • OK ${doneFiles}/${totalFiles} • Failed ${failedFiles} • ${lastSummary}`,
+          `Upload finished • Uploaded ${doneFiles}/${totalFiles} • Skipped ${skippedFiles} • Failed ${failedFiles} • ${lastSummary}`,
           pillText,
           "err"
       );
 
-      const full = lastUploadError ? lastUploadError.message : (failures.length ? failures[failures.length - 1].message : "Upload failed");
+      const full = lastUploadError
+          ? lastUploadError.message
+          : (failures.length ? failures[failures.length - 1].message : "Upload failed");
+
       status.textContent =
-          `Upload finished with errors. OK ${doneFiles}/${totalFiles}, failed ${failedFiles}. ` +
+          `Upload finished with errors. Uploaded ${doneFiles}/${totalFiles}, skipped ${skippedFiles}, failed ${failedFiles}. ` +
           `Last error: ${String(full || "").trim()}`;
 
       console.warn("Upload failures:", failures);
@@ -1498,8 +1729,11 @@
 
     } else {
       setBadge("ok", "ready");
-      setUploadProgress(100, `Upload finished • ${doneFiles}/${totalFiles} files`);
-      status.textContent = `Upload finished. Files: ${doneFiles}/${totalFiles}`;
+      setUploadProgress(
+          100,
+          `Upload finished • Uploaded ${doneFiles}/${totalFiles} • Skipped ${skippedFiles}`
+      );
+      status.textContent = `Upload finished. Uploaded: ${doneFiles}/${totalFiles}. Skipped: ${skippedFiles}.`;
       lastUploadError = null;
       setUploadPillClickable(false);
       setTimeout(() => showUploadProgress(false), 900);
