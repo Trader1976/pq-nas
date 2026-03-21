@@ -2975,6 +2975,21 @@ static inline double round_dp(double value, int decimals) {
     return std::round(value * scale) / scale;
 }
 
+static std::string detect_system_pool_root_disk() {
+    std::string root = getenv_str("PQNAS_STORAGE_ROOT");
+    if (root.empty()) root = "/srv/pqnas";
+
+    std::string source_out;
+    int ec_src = 0;
+
+    run_cmd_capture("/usr/bin/findmnt -no SOURCE --target " + sh_quote(root), &source_out, &ec_src);
+    cap_string(source_out, 4096);
+    rtrim_inplace(source_out);
+
+    if (ec_src != 0 || source_out.empty()) return "";
+
+    return parent_disk_from_dev(source_out);
+}
 
 static json storage_btrfs_status_json(const std::string& mountpoint) {
     json j;
@@ -11054,6 +11069,17 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
     const std::string resolved_source = source_out;
     const std::string resolved_disk   = parent_disk_from_dev(resolved_source);
 
+    const std::string system_root_disk = detect_system_pool_root_disk();
+    if (!system_root_disk.empty() && new_disk == system_root_disk) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "device_is_system_root_disk"},
+            {"system_root_disk", system_root_disk},
+            {"new_disk", new_disk}
+        }.dump());
+        return;
+    }
+
     // Allowlist on resolved mount
     if (resolved_mount.rfind(allowed_prefix, 0) != 0) {
         const std::string test_prefix  = "/srv/pqnas-test";
@@ -11377,6 +11403,8 @@ srv.Post("/api/v4/raid/plan/remove-device", [&](const httplib::Request& req, htt
     const std::string resolved_source = source_out;
     const std::string resolved_disk   = parent_disk_from_dev(resolved_source);
 
+    const std::string system_root_disk = detect_system_pool_root_disk();
+
     // Allowlist on resolved mount
     if (resolved_mount.rfind(allowed_prefix, 0) != 0) {
         const std::string test_prefix  = "/srv/pqnas-test";
@@ -11489,6 +11517,17 @@ srv.Post("/api/v4/raid/plan/remove-device", [&](const httplib::Request& req, htt
             {"error", "device_not_in_filesystem"},
             {"remove_device", remove_device},
             {"mount", resolved_mount}
+        }.dump());
+        return;
+    }
+
+    if (!system_root_disk.empty() && !parent_disk.empty() && parent_disk == system_root_disk) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "device_is_system_root_disk"},
+            {"system_root_disk", system_root_disk},
+            {"remove_device", remove_device},
+            {"parent_disk", parent_disk}
         }.dump());
         return;
     }
@@ -11900,6 +11939,19 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     const std::string resolved_mount  = target_out;
     const std::string resolved_source = source_out;
     const std::string resolved_disk   = parent_disk_from_dev(resolved_source);
+
+    const std::string system_root_disk = detect_system_pool_root_disk();
+    if (!system_root_disk.empty() && new_disk == system_root_disk) {
+        audit_fail(actor_fp, "device_is_system_root_disk", 400, "",
+                   json{{"system_root_disk", system_root_disk}, {"new_disk", new_disk}});
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "device_is_system_root_disk"},
+            {"system_root_disk", system_root_disk},
+            {"new_disk", new_disk}
+        }.dump());
+        return;
+    }
 
     // Allowlist on resolved mount
     if (resolved_mount.rfind(allowed_prefix, 0) != 0) {
@@ -12748,6 +12800,7 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     const std::string resolved_mount  = target_out;
     const std::string resolved_source = source_out;
     const std::string resolved_disk   = parent_disk_from_dev(resolved_source);
+    const std::string system_root_disk = detect_system_pool_root_disk();
 
     // Allowlist on resolved mount
     if (resolved_mount.rfind(allowed_prefix, 0) != 0) {
@@ -12858,6 +12911,23 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
             {"mount", resolved_mount},
             {"remove_device", remove_device},
             {"plan_id", client_plan_id}
+        }.dump());
+        return;
+    }
+
+    if (!system_root_disk.empty() && !parent_disk.empty() && parent_disk == system_root_disk) {
+        json extra = json::object();
+        extra["system_root_disk"] = system_root_disk;
+        extra["remove_device"] = remove_device;
+        extra["parent_disk"] = parent_disk;
+
+        audit_fail(actor_fp, "device_is_system_root_disk", 400, "", extra);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "device_is_system_root_disk"},
+            {"system_root_disk", system_root_disk},
+            {"remove_device", remove_device},
+            {"parent_disk", parent_disk}
         }.dump());
         return;
     }

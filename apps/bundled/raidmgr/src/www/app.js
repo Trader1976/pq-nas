@@ -2436,7 +2436,41 @@
             if (st.layout_drift) return `<span class="badge warn">layout drift</span>`;
             return `<span class="badge ok">online</span>`;
         }
+        function poolPendingState(p) {
+            const slots = Array.isArray(p?.slots) ? p.slots : [];
+            const desired = new Set(
+                slots
+                    .map(s => (s && s.device ? String(s.device).trim() : ""))
+                    .filter(Boolean)
+            );
 
+            const runtime = new Set(
+                Array.isArray(p?.member_parent_disks)
+                    ? p.member_parent_disks.map(x => String(x || "").trim()).filter(Boolean)
+                    : []
+            );
+
+            const toAdd = [];
+            const toRemove = [];
+
+            for (const d of desired) {
+                if (!runtime.has(d)) toAdd.push(d);
+            }
+            for (const d of runtime) {
+                if (!desired.has(d)) toRemove.push(d);
+            }
+
+            if (toAdd.length && toRemove.length) {
+                return `<span class="badge warn">pending change</span>`;
+            }
+            if (toAdd.length) {
+                return `<span class="badge warn">pending add</span>`;
+            }
+            if (toRemove.length) {
+                return `<span class="badge warn">pending remove</span>`;
+            }
+            return "";
+        }
         function slotRowHtml(slot, editable) {
             const idx = Number(slot?.index || 0) + 1;
             const dev = slot?.device ? String(slot.device) : "";
@@ -2762,6 +2796,7 @@ Tip: these are the Btrfs member devices that form this pool.
             const uuid = String(p?.uuid || "").trim();
             const editable = !!p?.is_editable_pool;
             const statusHtml = fmtPoolHealth(p);
+            const pendingHtml = poolPendingState(p);
 
             const hostId = "poolMembers__" + btoa(unescape(encodeURIComponent(mount))).replace(/[^a-z0-9]/gi, "_");
             const slots = Array.isArray(p?.slots) ? p.slots : [];
@@ -2777,14 +2812,15 @@ Tip: these are the Btrfs member devices that form this pool.
       <div class="pqPoolTitle">${esc(label)}</div>
       <div class="pqPoolMount">${esc(mount)}</div>
 
-      <div class="pqPoolMetaPills">
-        ${fstype ? pill(`fs: ${fstype}`) : ""}
-        ${pill(`mode: ${fmtPoolMode(p)}`)}
-        ${pill(`slots: ${String(p?.slot_count ?? slots.length ?? 0)}`)}
-        ${uuid ? pill(`uuid: ${uuid.slice(0, 12)}…`) : ""}
-        ${statusHtml}
-        ${editable ? `<span class="badge ok">editable</span>` : `<span class="badge info">system volume</span>`}
-      </div>
+<div class="pqPoolMetaPills">
+  ${fstype ? pill(`fs: ${fstype}`) : ""}
+  ${pill(`mode: ${fmtPoolMode(p)}`)}
+  ${pill(`slots: ${String(p?.slot_count ?? slots.length ?? 0)}`)}
+  ${uuid ? pill(`uuid: ${uuid.slice(0, 12)}…`) : ""}
+  ${statusHtml}
+  ${pendingHtml}
+  ${editable ? `<span class="badge ok">editable</span>` : `<span class="badge info">system volume</span>`}
+</div>
     </div>
 
     <div class="pqPoolActions">
@@ -2808,7 +2844,9 @@ Tip: these are the Btrfs member devices that form this pool.
   <button class="btn secondary" type="button" data-pool-action="remove-slot" data-mount="${esc(mount)}">Remove empty slot</button>
   <button class="btn" type="button" data-pool-action="apply-layout" data-mount="${esc(mount)}">Apply layout</button>
 </div>
-      <div class="pqPoolNote">Slot editing UI is the next step. Current drive actions still work from “Manage drives”.</div>
+      <div class="pqPoolNote">
+  ${pendingHtml ? "Saved slot layout differs from current pool membership. Use Apply layout to make Btrfs match the saved layout." : "Saved slot layout matches the current pool membership."}
+</div>
     ` : `
       <div class="pqPoolNote">This is a detected Btrfs system volume. It is shown for visibility, not managed as a normal pool.</div>
     `
