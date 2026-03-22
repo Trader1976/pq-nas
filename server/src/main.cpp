@@ -5735,41 +5735,51 @@ static inline void parse_btrfs_df_profiles(const std::string& out,
 //   Used:                  21.50MiB
 // With -b, it should be bytes on those lines (integers).
 static inline void parse_btrfs_usage_bytes(const std::string& out,
-                                          int64_t* size_bytes,
-                                          int64_t* used_bytes) {
+                                           int64_t* size_bytes,
+                                           int64_t* used_bytes,
+                                           int64_t* free_estimated_bytes) {
     if (size_bytes) *size_bytes = -1;
     if (used_bytes) *used_bytes = -1;
+    if (free_estimated_bytes) *free_estimated_bytes = -1;
 
     auto parse_int_after_key = [&](const std::string& line, const std::string& key, int64_t* dst) {
         if (!dst || *dst >= 0) return;
+
         auto pos = line.find(key);
         if (pos == std::string::npos) return;
 
-        // Expect "key:" then number
         auto colon = line.find(':', pos + key.size());
         if (colon == std::string::npos) return;
 
         std::string rest = line.substr(colon + 1);
-        // trim both sides (do not rely on external helpers)
-        // ltrim
+
         size_t i = 0;
-        while (i < rest.size() && (rest[i] == ' ' || rest[i] == '\t' || rest[i] == '\r' || rest[i] == '\n')) i++;
+        while (i < rest.size() &&
+               (rest[i] == ' ' || rest[i] == '\t' || rest[i] == '\r' || rest[i] == '\n')) {
+            i++;
+               }
         if (i) rest.erase(0, i);
-        // first token
+
         auto sp = rest.find_first_of(" \t\r\n");
         std::string tok = (sp == std::string::npos) ? rest : rest.substr(0, sp);
 
-        try { *dst = std::stoll(tok); } catch (...) { /* ignore */ }
+        try {
+            *dst = std::stoll(tok);
+        } catch (...) {
+        }
     };
 
     for (const std::string& raw : split_lines(out)) {
-        // Keep original line; just skip empties
         if (raw.empty()) continue;
 
         parse_int_after_key(raw, "Device size", size_bytes);
         parse_int_after_key(raw, "Used", used_bytes);
+        parse_int_after_key(raw, "Free (estimated)", free_estimated_bytes);
 
-        if (size_bytes && used_bytes && *size_bytes >= 0 && *used_bytes >= 0) break;
+        if (size_bytes && used_bytes && free_estimated_bytes &&
+            *size_bytes >= 0 && *used_bytes >= 0 && *free_estimated_bytes >= 0) {
+            break;
+            }
     }
 }
 
@@ -7997,8 +8007,10 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
 
         int64_t size_bytes = -1;
         int64_t used_bytes = -1;
+        int64_t free_estimated_bytes = -1;
+
         if (rc_usage == 0) {
-            parse_btrfs_usage_bytes(usage_out, &size_bytes, &used_bytes);
+            parse_btrfs_usage_bytes(usage_out, &size_bytes, &used_bytes, &free_estimated_bytes);
         }
 
         BtrfsShowParsed parsed_show = parse_btrfs_filesystem_show(show_out);
@@ -8026,8 +8038,12 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
         runtime_j["devices"] = (devices >= 0) ? devices : 0;
         runtime_j["profile_data"] = prof_data.empty() ? "" : prof_data;
         runtime_j["profile_metadata"] = prof_meta.empty() ? "" : prof_meta;
+        runtime_j["runtime_mode"] = pqnas::pool_mode_from_profiles_best_effort(prof_data, prof_meta);
         runtime_j["size_bytes"] = (size_bytes >= 0) ? size_bytes : 0;
         runtime_j["used_bytes"] = (used_bytes >= 0) ? used_bytes : 0;
+        runtime_j["free_estimated_bytes"] = (free_estimated_bytes >= 0) ? free_estimated_bytes : 0;
+        runtime_j["usable_total_bytes"] =
+            (used_bytes >= 0 && free_estimated_bytes >= 0) ? (used_bytes + free_estimated_bytes) : 0;
         runtime_j["resolved_source"] = source;
 
         {
@@ -11330,7 +11346,577 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
     reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
 });
 
+// ----- POST /api/v4/raid/plan/convert-mode (admin-only, plan-only) ----------
+srv.Post("/api/v4/raid/plan/convert-mode", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
 
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
+        return;
+    }
+    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+
+    json in;
+    try { in = json::parse(req.body.empty() ? "{}" : req.body); }
+    catch (...) {
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+        return;
+    }
+
+    std::string mount = in.value("mount", "");
+    std::string mode  = in.value("mode", "single"); // single|raid1
+
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+    if (mount.empty()) mount = allowed_prefix + "/data";
+
+    if (!is_abs_path_safe(mount)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_mount"}}.dump());
+        return;
+    }
+    if (mode != "single" && mode != "raid1") {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "mode must be single|raid1"}}.dump());
+        return;
+    }
+
+    std::string target_out, fstype_out, source_out;
+    int ec_target = 0, ec_fs = 0, ec_src = 0;
+
+    const bool ok_target = run_cmd_capture(
+        "/usr/bin/findmnt -no TARGET --target " + sh_quote(mount), &target_out, &ec_target);
+    cap_string(target_out, 16 * 1024);
+    rtrim_inplace(target_out);
+
+    const bool ok_fs = run_cmd_capture(
+        "/usr/bin/findmnt -no FSTYPE --target " + sh_quote(mount), &fstype_out, &ec_fs);
+    cap_string(fstype_out, 16 * 1024);
+    rtrim_inplace(fstype_out);
+
+    const bool ok_src = run_cmd_capture(
+        "/usr/bin/findmnt -no SOURCE --target " + sh_quote(mount), &source_out, &ec_src);
+    cap_string(source_out, 16 * 1024);
+    rtrim_inplace(source_out);
+
+    if (!ok_target || ec_target != 0 || target_out.empty() ||
+        !ok_fs     || ec_fs     != 0 || fstype_out.empty() ||
+        !ok_src    || ec_src    != 0 || source_out.empty()) {
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "mount_not_found"},
+            {"mount", mount}
+        }.dump());
+        return;
+    }
+
+    const std::string resolved_mount  = target_out;
+    const std::string resolved_source = source_out;
+    const std::string resolved_disk   = parent_disk_from_dev(resolved_source);
+
+    if (resolved_mount.rfind(allowed_prefix, 0) != 0) {
+        const std::string test_prefix  = "/srv/pqnas-test";
+        const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
+        if (resolved_mount.rfind(test_prefix, 0) != 0 &&
+            resolved_mount.rfind(test_prefix2, 0) != 0) {
+            reply_json(res, 200, json{
+                {"ok", false},
+                {"error", "mount_not_allowed"},
+                {"allowed_prefix", allowed_prefix},
+                {"resolved_mount", resolved_mount}
+            }.dump());
+            return;
+        }
+    }
+
+    if (fstype_out != "btrfs") {
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "not_btrfs"},
+            {"resolved_mount", resolved_mount},
+            {"fstype", fstype_out}
+        }.dump());
+        return;
+    }
+
+    bool busy = false;
+    std::string busy_lock;
+    {
+        const std::string lockp = raid_mount_lock_path(resolved_mount);
+        std::error_code ec;
+        const bool exists = std::filesystem::exists(lockp, ec);
+        if (!ec && exists) {
+            busy = true;
+            busy_lock = lockp;
+        }
+    }
+
+    std::string raw_lsblk;
+    json disks_j = storage_list_disks_json(&raw_lsblk);
+    json by_path = disks_j.value("by_path", json::object());
+
+    const std::string cmd_show =
+        "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(resolved_mount);
+
+    std::string show_raw;
+    int ec_show = 0;
+    const bool ok_show = run_cmd_capture(cmd_show, &show_raw, &ec_show);
+    cap_string(show_raw, 256 * 1024);
+
+    if (!ok_show || ec_show != 0 || show_raw.empty()) {
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "btrfs_show_failed"},
+            {"resolved_mount", resolved_mount},
+            {"btrfs_show_rc", ec_show}
+        }.dump());
+        return;
+    }
+
+    BtrfsShowParsed parsed = parse_btrfs_filesystem_show(show_raw);
+    json btrfs_j = btrfs_show_parsed_to_json(parsed, by_path, disks_j.value("by_name", json::object()));
+
+    const std::string membership_fp = btrfs_membership_fingerprint(btrfs_j);
+    if (membership_fp.empty()) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "membership_fp_failed"},
+            {"message", "failed to compute btrfs membership fingerprint"}
+        }.dump());
+        return;
+    }
+
+    const int total_devices = btrfs_j.value("total_devices", 0);
+    if (total_devices < 1) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "no_devices_in_filesystem"},
+            {"resolved_mount", resolved_mount}
+        }.dump());
+        return;
+    }
+
+    if (mode == "raid1" && total_devices < 2) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "raid1_requires_2_devices"},
+            {"resolved_mount", resolved_mount},
+            {"total_devices", total_devices}
+        }.dump());
+        return;
+    }
+
+    json plan;
+    plan["mount"] = resolved_mount;
+    plan["input_mount"] = mount;
+    plan["resolved_mount"] = resolved_mount;
+    plan["resolved_source"] = resolved_source;
+    if (!resolved_disk.empty()) plan["resolved_disk"] = resolved_disk;
+    plan["fstype"] = fstype_out;
+    plan["mode"] = mode;
+    plan["requires_downtime"] = false;
+    plan["busy"] = busy;
+    if (busy && !busy_lock.empty()) plan["busy_lock"] = busy_lock;
+    plan["total_devices"] = total_devices;
+    plan["btrfs_membership_fp"] = membership_fp;
+
+    json warnings = json::array();
+    json steps = json::array();
+    json commands = json::array();
+
+    steps.push_back("Sanity-check: mount resolves to btrfs and is within allowed prefix.");
+    steps.push_back("Sanity-check: filesystem has enough devices for requested mode.");
+
+    if (busy) {
+        warnings.push_back("BUSY: another RAID operation is currently running for this mount; execute will likely return raid_busy until it finishes.");
+    }
+
+    if (mode == "raid1") {
+        commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs balance start -dconvert=raid1 -mconvert=raid1 " + sh_quote(resolved_mount));
+        steps.push_back("Convert data/metadata profiles to RAID1 via balance.");
+    } else {
+        commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs balance start --force -dconvert=single -mconvert=single -sconvert=single " + sh_quote(resolved_mount));
+        steps.push_back("Convert data/metadata/system profiles to SINGLE via balance (--force for system chunks).");
+        warnings.push_back("Converting to SINGLE with multiple devices reduces redundancy.");
+    }
+
+    warnings.push_back("Profile conversion can take a long time and generate background IO.");
+    warnings.push_back("PLAN ONLY: commands are returned as strings; nothing is executed by this endpoint.");
+
+    plan["steps"] = steps;
+    plan["commands"] = commands;
+    plan["warnings"] = warnings;
+
+    {
+        const std::string joined = join_commands_for_hash(commands);
+        const std::string salt =
+            std::string("mount=") + resolved_mount + "\n" +
+            std::string("btrfs_membership_fp=") + membership_fp + "\n";
+        const std::string pid = sha256_hex_lower_evp(joined + "\n" + salt);
+        if (!pid.empty()) plan["plan_id"] = pid;
+    }
+
+    reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
+});
+
+// ----- POST /api/v4/raid/execute/convert-mode (admin-only) ------------------
+// Body: { mount, mode:"single|raid1", plan_id:string, dry_run?:bool, confirm?:bool }
+srv.Post("/api/v4/raid/execute/convert-mode", [&](const httplib::Request& req, httplib::Response& res) {
+    pqnas::UsersRegistry users;
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
+        return;
+    }
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_kv_merge = [&](pqnas::AuditEvent& ev, const json& extra) {
+        if (!extra.is_object()) return;
+        for (auto it = extra.begin(); it != extra.end(); ++it) {
+            const std::string k = pqnas::shorten(it.key(), 64);
+            const std::string kk = "x_" + k;
+            if (it.value().is_string()) ev.f[kk] = pqnas::shorten(it.value().get<std::string>(), 220);
+            else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f[kk] = it.value().dump();
+            else if (it.value().is_boolean()) ev.f[kk] = (it.value().get<bool>() ? "true" : "false");
+            else ev.f[kk] = pqnas::shorten(it.value().dump(), 220);
+        }
+    };
+
+    auto audit_common = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& actor_fp,
+                          const std::string& reason,
+                          int http,
+                          const std::string& detail = "",
+                          const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.raid_execute_convert_mode_fail";
+        ev.outcome = "fail";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 220);
+        audit_kv_merge(ev, extra);
+        audit_common(ev);
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& actor_fp,
+                        const json& extra = json::object()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.raid_execute_convert_mode_ok";
+        ev.outcome = "ok";
+        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
+        audit_kv_merge(ev, extra);
+        audit_common(ev);
+        audit_append(ev);
+    };
+
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    json in;
+    try { in = json::parse(req.body.empty() ? "{}" : req.body); }
+    catch (...) {
+        audit_fail(actor_fp, "bad_json", 400);
+        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"}}).dump());
+        return;
+    }
+
+    std::string mount = in.value("mount", "");
+    std::string mode  = in.value("mode", "single");
+    bool dry_run      = in.value("dry_run", true);
+    bool confirm      = in.value("confirm", false);
+    const std::string client_plan_id = in.value("plan_id", "");
+
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+    if (mount.empty()) mount = allowed_prefix + "/data";
+
+    if (!is_abs_path_safe(mount)) {
+        audit_fail(actor_fp, "bad_mount", 400, "", json{{"mount", mount}});
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_mount"}}.dump());
+        return;
+    }
+    if (mode != "single" && mode != "raid1") {
+        audit_fail(actor_fp, "bad_mode", 400, "", json{{"mode", mode}});
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message","mode must be single|raid1"}}.dump());
+        return;
+    }
+    if (client_plan_id.empty()) {
+        audit_fail(actor_fp, "missing_plan_id", 400);
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message","missing plan_id"}}.dump());
+        return;
+    }
+    if (!dry_run && !confirm) {
+        audit_fail(actor_fp, "confirm_required", 400, "", json{{"dry_run", dry_run}});
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "confirm_required"},
+            {"message", "set confirm=true when dry_run=false"}
+        }.dump());
+        return;
+    }
+
+    std::string target_out, fstype_out, source_out;
+    int ec_target = 0, ec_fs = 0, ec_src = 0;
+
+    const bool ok_target = run_cmd_capture(
+        "/usr/bin/findmnt -no TARGET --target " + sh_quote(mount), &target_out, &ec_target);
+    cap_string(target_out, 16 * 1024);
+    rtrim_inplace(target_out);
+
+    const bool ok_fs = run_cmd_capture(
+        "/usr/bin/findmnt -no FSTYPE --target " + sh_quote(mount), &fstype_out, &ec_fs);
+    cap_string(fstype_out, 16 * 1024);
+    rtrim_inplace(fstype_out);
+
+    const bool ok_src = run_cmd_capture(
+        "/usr/bin/findmnt -no SOURCE --target " + sh_quote(mount), &source_out, &ec_src);
+    cap_string(source_out, 16 * 1024);
+    rtrim_inplace(source_out);
+
+    if (!ok_target || ec_target != 0 || target_out.empty() ||
+        !ok_fs     || ec_fs     != 0 || fstype_out.empty() ||
+        !ok_src    || ec_src    != 0 || source_out.empty()) {
+        audit_fail(actor_fp, "mount_not_found", 200, "",
+                   json{{"mount", mount}, {"ec_target", ec_target}, {"ec_fs", ec_fs}, {"ec_src", ec_src}});
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "mount_not_found"},
+            {"mount", mount}
+        }.dump());
+        return;
+    }
+
+    const std::string resolved_mount  = target_out;
+    const std::string resolved_source = source_out;
+    const std::string resolved_disk   = parent_disk_from_dev(resolved_source);
+
+    if (resolved_mount.rfind(allowed_prefix, 0) != 0) {
+        const std::string test_prefix  = "/srv/pqnas-test";
+        const std::string test_prefix2 = "/srv/pqnas-test-btrfs";
+        if (resolved_mount.rfind(test_prefix, 0) != 0 && resolved_mount.rfind(test_prefix2, 0) != 0) {
+            audit_fail(actor_fp, "mount_not_allowed", 200, "",
+                       json{{"allowed_prefix", allowed_prefix}, {"resolved_mount", resolved_mount}});
+            reply_json(res, 200, json{
+                {"ok", false},
+                {"error", "mount_not_allowed"},
+                {"allowed_prefix", allowed_prefix},
+                {"resolved_mount", resolved_mount}
+            }.dump());
+            return;
+        }
+    }
+
+    if (fstype_out != "btrfs") {
+        audit_fail(actor_fp, "not_btrfs", 200, "",
+                   json{{"resolved_mount", resolved_mount}, {"fstype", fstype_out}});
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "not_btrfs"},
+            {"resolved_mount", resolved_mount},
+            {"fstype", fstype_out}
+        }.dump());
+        return;
+    }
+
+    std::string raw_lsblk;
+    json disks_j = storage_list_disks_json(&raw_lsblk);
+    json by_path = disks_j.value("by_path", json::object());
+
+    const std::string cmd_show =
+        "/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(resolved_mount);
+
+    std::string show_raw;
+    int ec_show = 0;
+    const bool ok_show = run_cmd_capture(cmd_show, &show_raw, &ec_show);
+    cap_string(show_raw, 256 * 1024);
+
+    if (!ok_show || ec_show != 0 || show_raw.empty()) {
+        audit_fail(actor_fp, "btrfs_show_failed", 200, "",
+                   json{{"resolved_mount", resolved_mount}, {"btrfs_show_rc", ec_show}});
+        reply_json(res, 200, json{
+            {"ok", false},
+            {"error", "btrfs_show_failed"},
+            {"resolved_mount", resolved_mount},
+            {"btrfs_show_rc", ec_show}
+        }.dump());
+        return;
+    }
+
+    BtrfsShowParsed parsed = parse_btrfs_filesystem_show(show_raw);
+    json btrfs_j = btrfs_show_parsed_to_json(parsed, by_path, disks_j.value("by_name", json::object()));
+
+    const std::string membership_fp = btrfs_membership_fingerprint(btrfs_j);
+    if (membership_fp.empty()) {
+        audit_fail(actor_fp, "membership_fp_failed", 500,
+                   "failed to compute btrfs membership fingerprint",
+                   json{{"resolved_mount", resolved_mount}});
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "membership_fp_failed"},
+            {"message", "failed to compute btrfs membership fingerprint"}
+        }.dump());
+        return;
+    }
+
+    const int total_devices = btrfs_j.value("total_devices", 0);
+    if (total_devices < 1) {
+        audit_fail(actor_fp, "no_devices_in_filesystem", 400, "",
+                   json{{"resolved_mount", resolved_mount}});
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "no_devices_in_filesystem"},
+            {"resolved_mount", resolved_mount}
+        }.dump());
+        return;
+    }
+
+    if (mode == "raid1" && total_devices < 2) {
+        audit_fail(actor_fp, "raid1_requires_2_devices", 400, "",
+                   json{{"resolved_mount", resolved_mount}, {"total_devices", total_devices}});
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "raid1_requires_2_devices"},
+            {"resolved_mount", resolved_mount},
+            {"total_devices", total_devices}
+        }.dump());
+        return;
+    }
+
+    json commands = json::array();
+    if (mode == "raid1") {
+        commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs balance start -dconvert=raid1 -mconvert=raid1 " + sh_quote(resolved_mount));
+    } else {
+        commands.push_back("/usr/bin/sudo -n /usr/bin/btrfs balance start --force -dconvert=single -mconvert=single -sconvert=single " + sh_quote(resolved_mount));
+    }
+
+    const std::string joined = join_commands_for_hash(commands);
+    const std::string salt =
+        std::string("mount=") + resolved_mount + "\n" +
+        std::string("btrfs_membership_fp=") + membership_fp + "\n";
+
+    const std::string expected_plan_id = sha256_hex_lower_evp(joined + "\n" + salt);
+
+    if (expected_plan_id.empty()) {
+        audit_fail(actor_fp, "plan_id_compute_failed", 500, "",
+                   json{{"mount", resolved_mount}, {"mode", mode}});
+        reply_json(res, 500, json{{"ok", false}, {"error", "plan_id_compute_failed"}}.dump());
+        return;
+    }
+
+    if (client_plan_id != expected_plan_id) {
+        audit_fail(actor_fp, "plan_mismatch", 400, "",
+                   json{{"expected_plan_id", expected_plan_id}, {"provided_plan_id", client_plan_id}});
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "plan_mismatch"},
+            {"message", "plan_id does not match server recomputed plan"},
+            {"expected_plan_id", expected_plan_id},
+            {"provided_plan_id", client_plan_id}
+        }.dump());
+        return;
+    }
+
+    json plan;
+    plan["plan_id"] = expected_plan_id;
+    plan["mount"] = resolved_mount;
+    plan["input_mount"] = mount;
+    plan["resolved_mount"] = resolved_mount;
+    plan["resolved_source"] = resolved_source;
+    if (!resolved_disk.empty()) plan["resolved_disk"] = resolved_disk;
+    plan["fstype"] = fstype_out;
+    plan["mode"] = mode;
+    plan["requires_downtime"] = false;
+    plan["commands"] = commands;
+    plan["actor_fp"] = actor_fp;
+    plan["total_devices"] = total_devices;
+    plan["btrfs_membership_fp"] = membership_fp;
+
+    if (dry_run) {
+        audit_ok(actor_fp, json{
+            {"dry_run", true},
+            {"mount", resolved_mount},
+            {"mode", mode},
+            {"plan_id", expected_plan_id},
+            {"total_devices", total_devices},
+            {"commands", (int)commands.size()}
+        });
+
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"dry_run", true},
+            {"plan", plan}
+        }.dump());
+        return;
+    }
+
+    try {
+        json q = raid_enqueue_job_fail_closed(expected_plan_id, resolved_mount, plan, commands);
+        audit_ok(actor_fp, json{
+            {"dry_run", false},
+            {"enqueued", true},
+            {"mount", resolved_mount},
+            {"mode", mode},
+            {"plan_id", expected_plan_id},
+            {"total_devices", total_devices}
+        });
+
+        q["dry_run"] = false;
+        q["plan"] = plan;
+        reply_json(res, 200, q.dump());
+        return;
+    } catch (const std::exception& e) {
+        const std::string msg = e.what();
+
+        if (msg == "already_running") {
+            audit_fail(actor_fp, "already_running", 409, "",
+                       json{{"plan_id", expected_plan_id}, {"mount", resolved_mount}});
+            reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "already_running"},
+                {"message", "this plan_id already has a running execution record; refusing replay"},
+                {"plan_id", expected_plan_id},
+                {"record_path", raid_exec_record_path(expected_plan_id)}
+            }.dump());
+            return;
+        }
+
+        if (msg.rfind("raid_state_dir_failed:", 0) == 0) {
+            audit_fail(actor_fp, "raid_state_dir_failed", 500, msg,
+                       json{{"plan_id", expected_plan_id}, {"mount", resolved_mount}});
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "raid_state_dir_failed"},
+                {"message", "cannot create/verify /run/pqnas/raid; refusing to execute"},
+                {"detail", msg}
+            }.dump());
+            return;
+        }
+
+        audit_fail(actor_fp, "enqueue_failed", 500, msg,
+                   json{{"plan_id", expected_plan_id}, {"mount", resolved_mount}});
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "enqueue_failed"},
+            {"detail", msg}
+        }.dump());
+        return;
+    }
+});
 
 // ----- POST /api/v4/raid/plan/remove-device (admin-only, plan-only) ----------
 srv.Post("/api/v4/raid/plan/remove-device", [&](const httplib::Request& req, httplib::Response& res) {

@@ -449,29 +449,35 @@ json merge_pool_runtime_and_config(const json& cfg_pool,
     // ----------------------------
     // Runtime info
     // ----------------------------
-    if (has_rt) {
-        out["uuid"] = runtime_pool.value("uuid", "");
-        out["label"] = runtime_pool.value("label", "");
-        out["devices"] = runtime_pool.value("devices", 0);
-        out["profile_data"] = runtime_pool.value("profile_data", "");
-        out["profile_metadata"] = runtime_pool.value("profile_metadata", "");
-        out["size_bytes"] = runtime_pool.value("size_bytes", int64_t{0});
-        out["used_bytes"] = runtime_pool.value("used_bytes", int64_t{0});
-        out["resolved_source"] = runtime_pool.value("resolved_source", "");
-        out["resolved_disk"] = runtime_pool.value("resolved_disk", "");
-        out["fstype"] = "btrfs";
-    } else {
-        out["uuid"] = "";
-        out["label"] = "";
-        out["devices"] = 0;
-        out["profile_data"] = "";
-        out["profile_metadata"] = "";
-        out["size_bytes"] = 0;
-        out["used_bytes"] = 0;
-        out["resolved_source"] = "";
-        out["resolved_disk"] = "";
-        out["fstype"] = "";
-    }
+	if (has_rt) {
+   		out["uuid"] = runtime_pool.value("uuid", "");
+   		out["label"] = runtime_pool.value("label", "");
+   		out["devices"] = runtime_pool.value("devices", 0);
+   		out["profile_data"] = runtime_pool.value("profile_data", "");
+   		out["profile_metadata"] = runtime_pool.value("profile_metadata", "");
+   		out["size_bytes"] = runtime_pool.value("size_bytes", int64_t{0});
+   		out["used_bytes"] = runtime_pool.value("used_bytes", int64_t{0});
+   		out["resolved_source"] = runtime_pool.value("resolved_source", "");
+   		out["resolved_disk"] = runtime_pool.value("resolved_disk", "");
+   		out["fstype"] = "btrfs";
+   		out["free_estimated_bytes"] = runtime_pool.value("free_estimated_bytes", int64_t{0});
+   		out["usable_total_bytes"] = runtime_pool.value("usable_total_bytes", int64_t{0});
+   		out["runtime_mode"] = runtime_pool.value("runtime_mode", "");
+	} else {
+   		out["uuid"] = "";
+   		out["label"] = "";
+   		out["devices"] = 0;
+   		out["profile_data"] = "";
+	    out["profile_metadata"] = "";
+   		out["size_bytes"] = int64_t{0};
+   		out["used_bytes"] = int64_t{0};
+   		out["resolved_source"] = "";
+   		out["resolved_disk"] = "";
+   		out["fstype"] = "";
+	    out["free_estimated_bytes"] = int64_t{0};
+   		out["usable_total_bytes"] = int64_t{0};
+	    out["runtime_mode"] = "";
+	}
 
     // ----------------------------
     // Mode

@@ -671,7 +671,271 @@
         if (!n) return;
         n.innerHTML = "";
     }
+    async function planConvertMode(mount, mode) {
+        return await postJson("/api/v4/raid/plan/convert-mode", { mount, mode });
+    }
 
+    async function execConvertMode(mount, mode, plan_id) {
+        return await postJson("/api/v4/raid/execute/convert-mode", {
+            mount,
+            mode,
+            plan_id,
+            dry_run: false,
+            confirm: true
+        });
+    }
+    function ensureConvertRaidOverlay() {
+        let ov = document.getElementById("poolConvertRaidOverlay");
+        if (ov) return ov;
+
+        ov = document.createElement("div");
+        ov.id = "poolConvertRaidOverlay";
+        ov.style.position = "fixed";
+        ov.style.inset = "0";
+        ov.style.display = "none";
+        ov.style.alignItems = "center";
+        ov.style.justifyContent = "center";
+        ov.style.background = isDarkThemeNow() ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.25)";
+        ov.style.zIndex = "9999";
+
+        ov.innerHTML = `
+<div style="
+  width:min(860px, 94vw);
+  max-height:90vh;
+  overflow:auto;
+  border-radius:18px;
+  border:1px solid rgba(255,255,255,0.14);
+  background: var(--panel, rgba(0,0,0,0.35));
+  color: var(--fg);
+  padding:14px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
+    <div id="poolConvertRaidTitle" style="font-weight:950;">Convert RAID</div>
+    <button id="poolConvertRaidCloseBtn" class="btn secondary" type="button">Close</button>
+  </div>
+
+  <div class="card" style="margin-top:10px;">
+    <div class="formGrid3">
+      <div class="formField">
+        <div class="k">Current mode</div>
+        <input id="poolConvertCurrentModeInp" type="text" readonly>
+        <div class="formHelp">Detected from current pool state</div>
+      </div>
+
+      <div class="formField">
+        <div class="k">Target mode</div>
+        <select id="poolConvertTargetModeSel">
+          <option value="single">single</option>
+          <option value="raid1">raid1</option>
+        </select>
+        <div class="formHelp" id="poolConvertModeHint"></div>
+      </div>
+
+      <div class="formField">
+        <div class="k">Devices</div>
+        <input id="poolConvertDevicesInp" type="text" readonly>
+        <div class="formHelp">Current member count</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <h3 style="margin:0 0 8px 0;">Summary</h3>
+      <div id="poolConvertSummary" class="v" style="white-space:pre-line;"></div>
+    </div>
+
+    <div class="row" style="gap:10px; margin-top:12px; align-items:center;">
+      <button id="poolConvertPreviewBtn" class="btn secondary" type="button">Preview</button>
+      <button id="poolConvertApplyBtn" class="btn danger" type="button" disabled>Apply</button>
+    </div>
+
+    <details class="card" style="margin-top:12px;">
+      <summary style="cursor:pointer; font-weight:900;">Advanced</summary>
+      <pre id="poolConvertDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
+    </details>
+  </div>
+</div>`;
+        document.body.appendChild(ov);
+        return ov;
+    }
+
+    async function openConvertRaidModal(pool) {
+        const ov = ensureConvertRaidOverlay();
+
+        const titleEl = ov.querySelector("#poolConvertRaidTitle");
+        const closeBtn = ov.querySelector("#poolConvertRaidCloseBtn");
+        const currentModeInp = ov.querySelector("#poolConvertCurrentModeInp");
+        const targetModeSel = ov.querySelector("#poolConvertTargetModeSel");
+        const devicesInp = ov.querySelector("#poolConvertDevicesInp");
+        const modeHint = ov.querySelector("#poolConvertModeHint");
+        const summaryEl = ov.querySelector("#poolConvertSummary");
+        const previewBtn = ov.querySelector("#poolConvertPreviewBtn");
+        const applyBtn = ov.querySelector("#poolConvertApplyBtn");
+        const dbg = ov.querySelector("#poolConvertDebug");
+
+        const mount = String(pool?.mount || "");
+        const currentMode = String(
+            String(pool?.runtime_mode || "").trim()
+                ? pool.runtime_mode
+                : (fmtPoolMode(pool).toLowerCase().includes("raid1") ? "raid1" : "single")
+        );
+        const totalDevices = Number(pool?.devices || pool?.member_parent_disks?.length || 0);
+
+        let lastPlan = null;
+
+        function updateSummary() {
+            const targetMode = String(targetModeSel.value || "single");
+
+            if (modeHint) {
+                if (targetMode === currentMode) {
+                    modeHint.textContent = "Target mode is the same as current mode.";
+                } else if (targetMode === "raid1" && totalDevices < 2) {
+                    modeHint.textContent = "RAID1 requires at least 2 current member devices.";
+                } else if (targetMode === "raid1") {
+                    modeHint.textContent = "Converts current data/metadata profiles to RAID1.";
+                } else {
+                    modeHint.textContent = "Converts current data/metadata/system profiles to SINGLE.";
+                }
+            }
+
+            let text =
+                `Pool: ${mount}\n` +
+                `Current mode: ${currentMode}\n` +
+                `Target mode: ${targetMode}\n` +
+                `Current devices: ${totalDevices}\n\n`;
+
+            if (targetMode === currentMode) {
+                text += "No conversion needed.";
+            } else if (targetMode === "raid1" && totalDevices < 2) {
+                text += "Cannot convert to RAID1 because the pool currently has fewer than 2 devices.";
+            } else if (targetMode === "raid1") {
+                text += "This will run a Btrfs balance to convert data/metadata profiles to RAID1.";
+            } else {
+                text += "This will run a Btrfs balance to convert data/metadata/system profiles to SINGLE.";
+            }
+
+            if (summaryEl) summaryEl.textContent = text;
+            applyBtn.disabled = true;
+            lastPlan = null;
+        }
+
+        async function doPreview() {
+            const targetMode = String(targetModeSel.value || "single");
+
+            if (targetMode === currentMode) {
+                showToast("warn", "Target mode is already current mode.", 3200);
+                return;
+            }
+            if (targetMode === "raid1" && totalDevices < 2) {
+                showToast("err", "RAID1 requires at least 2 current member devices.", 4200);
+                return;
+            }
+
+            dbg.textContent = JSON.stringify({
+                request: { mount, mode: targetMode }
+            }, null, 2);
+
+            showToast("info", "Preparing convert preview…", 1200);
+
+            const { r, j, txt } = await planConvertMode(mount, targetMode);
+
+            dbg.textContent = JSON.stringify({
+                http: r.status,
+                response: j ?? txt,
+                request: { mount, mode: targetMode }
+            }, null, 2);
+
+            if (!r.ok || !j || j.ok !== true || !j.plan || !j.plan.plan_id) {
+                showToast("err", `Convert preview failed: ${prettyError(j, r, txt)}`, 5200);
+                applyBtn.disabled = true;
+                lastPlan = null;
+                return;
+            }
+
+            lastPlan = j.plan;
+            applyBtn.disabled = false;
+            showToast("ok", "Preview ready ✓", 1800);
+        }
+
+        async function doApply() {
+            if (!lastPlan || !lastPlan.plan_id) {
+                showToast("warn", "Preview first.", 2200);
+                return;
+            }
+
+            const targetMode = String(targetModeSel.value || "single");
+
+            const pseudoPlan = {
+                ...lastPlan,
+                mode: targetMode,
+                mount
+            };
+
+            ov.style.display = "none";
+
+            const ok = await confirmExecute(pseudoPlan, {
+                kind: "add",
+                mount,
+                new_disk: targetMode === "raid1"
+                    ? "Convert existing pool to RAID1"
+                    : "Convert existing pool to SINGLE",
+                mode: targetMode,
+                pool_device_label: String(pool?.resolved_disk || pool?.resolved_source || "")
+            });
+
+            if (!ok) {
+                ov.style.display = "flex";
+                showToast("info", "Apply cancelled.", 1800);
+                return;
+            }
+
+            if (!ok) {
+                showToast("info", "Apply cancelled.", 1800);
+                return;
+            }
+
+            showToast("info", "Applying RAID conversion…", 1200);
+
+            const { r, j, txt } = await execConvertMode(mount, targetMode, String(lastPlan.plan_id));
+
+            dbg.textContent = JSON.stringify({
+                http: r.status,
+                response: j ?? txt,
+                request: {
+                    mount,
+                    mode: targetMode,
+                    plan_id: String(lastPlan.plan_id),
+                    dry_run: false,
+                    confirm: true
+                }
+            }, null, 2);
+
+            if (!r.ok || !j || j.ok !== true) {
+                showToast("err", `Convert apply failed: ${prettyError(j, r, txt)}`, 5200);
+                return;
+            }
+
+            const pid = String(j?.plan_id || j?.plan?.plan_id || lastPlan.plan_id || "");
+            if (pid) startExecPolling(pid);
+
+            showToast("ok", "RAID conversion started ✓", 2200);
+            ov.style.display = "none";
+        }
+
+        titleEl.textContent = `Convert RAID • ${poolDisplayName(pool)}`;
+        currentModeInp.value = currentMode;
+        targetModeSel.value = currentMode === "raid1" ? "single" : "raid1";
+        devicesInp.value = String(totalDevices);
+
+        closeBtn.onclick = () => (ov.style.display = "none");
+        previewBtn.onclick = doPreview;
+        applyBtn.onclick = doApply;
+        targetModeSel.onchange = updateSummary;
+
+        updateSummary();
+        dbg.textContent = "(idle)";
+        ov.style.display = "flex";
+    }
     // --- Toast (non-layout-shifting notifications) ---
     let g_toastTimer = null;
 
@@ -1254,7 +1518,9 @@
             });
     }
 
-    function renderActions(parsed, mount, targetEl) {
+    function renderActions(parsed, mount, targetEl, opts) {
+        const o = (opts && typeof opts === "object") ? opts : {};
+        const focus = String(o.focus || "drives"); // "drives" | "remove"
         const out = targetEl || actionsOut;
         if (!out) return;
 
@@ -1279,9 +1545,67 @@
 
         if (!cands.length) {
             html += `<div class="v" style="opacity:.8;">No available drives found. (All disks are already members, or only loop devices exist.)</div>`;
-            out.innerHTML = html;
-            applyDevModeToUi();
-            return;
+        } else {
+            html += `
+  <div class="row" style="gap:10px; align-items:flex-start;">
+    <div style="flex:1 1 520px; min-width:260px;">
+      <div class="k" style="margin-bottom:6px;">Available drive</div>
+
+      <div class="row" style="gap:10px; align-items:center; margin-bottom:8px;">
+        <label style="display:flex; gap:10px; align-items:center; padding:8px 10px; border-radius:12px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.14);">
+          <input id="showInternalChk" type="checkbox" style="transform:scale(1.1);">
+          <span class="v" style="opacity:.9;">Show internal disks (advanced)</span>
+        </label>
+
+        <label style="display:flex; gap:10px; align-items:center; padding:8px 10px; border-radius:12px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.14);">
+          <input id="usbOnlyChk" type="checkbox" style="transform:scale(1.1);">
+          <span class="v" style="opacity:.9;">USB-only (testing)</span>
+        </label>
+      </div>
+
+      <select id="addDiskSel" style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);">
+        ${cands.map((d) => `<option value="${String(d.path)}">${diskLabel(d)}</option>`).join("")}
+      </select>
+
+      <div class="row" style="margin-top:10px; gap:10px;">
+        <div style="flex:1 1 240px; min-width:220px;">
+          <div class="k" style="margin-bottom:6px;">Protection level</div>
+          <select id="modeSel" style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);">
+            <option value="single">No redundancy (Single)</option>
+            <option value="raid1">Mirror (RAID 1)</option>
+          </select>
+          <div class="v" style="opacity:.75; margin-top:6px;">
+            Single = capacity-focused. Mirror = redundancy-focused (conversion can take time).
+          </div>
+        </div>
+
+        <div style="flex:1 1 240px; min-width:220px;">
+          <div class="k" style="margin-bottom:6px;">Erase drive</div>
+          <label style="display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18);">
+            <input id="forceChk" type="checkbox" style="transform:scale(1.1);">
+            <span class="v" style="opacity:.9;">Allow destructive wipe if the drive has partitions</span>
+          </label>
+          <div class="v" id="forceWarn" style="opacity:.75; margin-top:6px;">
+            Keep OFF unless you are OK with wiping the selected drive.
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px;">
+        <h3 style="margin:0 0 8px 0;">Visual preview</h3>
+        <div id="addViz"></div>
+      </div>
+
+      <div class="v" style="opacity:.75; margin-top:10px;">
+        Note: this modifies the existing storage pool. It does not create a brand-new pool from scratch.
+      </div>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:10px; flex:0 0 auto;">
+      <button class="btn" id="planAddBtn" type="button">Preview</button>
+      <button class="btn secondary" id="execAddBtn" type="button" disabled>Apply</button>
+    </div>
+  </div>`;
         }
 
         html += `
@@ -1587,7 +1911,7 @@
                 mode,
             });
         }
-        updateAddViz();
+        if (addSel && modeSel && addViz) updateAddViz();
         addSel?.addEventListener("change", updateAddViz);
         modeSel?.addEventListener("change", updateAddViz);
 
@@ -2423,11 +2747,38 @@
         }
 
         function fmtPoolMode(p) {
-            const mode = String(p?.mode || "").trim().toLowerCase();
-            if (mode === "raid1") return "RAID1";
-            return "Single";
-        }
+            const runtimeMode = String(p?.runtime_mode || "").trim().toLowerCase();
+            const data = String(p?.profile_data || "").trim().toLowerCase();
+            const meta = String(p?.profile_metadata || "").trim().toLowerCase();
+            const cfg = String(p?.mode || "").trim().toLowerCase();
 
+            if (runtimeMode === "raid1") return "RAID1";
+            if (runtimeMode === "single") return "Single";
+
+            if (data.includes("raid1") || meta.includes("raid1")) return "RAID1";
+            if (data.includes("single")) return "Single";
+
+            if (cfg === "raid1") return "RAID1";
+            if (cfg === "single") return "Single";
+
+            return cfg || runtimeMode || data || meta || "?";
+        }
+        function modePillOpts(p) {
+            const m = String(fmtPoolMode(p) || "").toLowerCase();
+            if (m.includes("raid1")) {
+                return {
+                    border: "rgba(0,180,120,0.55)",
+                    bg: "rgba(0,180,120,0.18)"
+                };
+            }
+            if (m.includes("single")) {
+                return {
+                    border: "rgba(var(--info-rgb,0,140,255),0.35)",
+                    bg: "rgba(var(--info-rgb,0,140,255),0.10)"
+                };
+            }
+            return {};
+        }
         function fmtPoolHealth(p) {
             const st = p?.status || {};
             if (!st.mounted) return `<span class="badge warn">offline</span>`;
@@ -2489,9 +2840,13 @@
         }
 
         function poolSummaryHtml(p) {
-            const size = Number(p?.size_bytes || 0);
             const used = Number(p?.used_bytes || 0);
-            const free = Math.max(0, size - used);
+            const freeEstimated = Number(p?.free_estimated_bytes || 0);
+            const usableTotal = Number(p?.usable_total_bytes || 0);
+
+            const free = freeEstimated > 0
+                ? freeEstimated
+                : Math.max(0, Number(p?.size_bytes || 0) - used);
 
             return `
 <div class="pqPoolSummaryGrid">
@@ -2555,13 +2910,16 @@
         fill="var(--fg)" opacity="0.92">${L}</text>
 </svg>`;
         }
-        function pill(text) {
+        function pill(text, opts = {}) {
+            const border = opts.border || "rgba(255,255,255,0.14)";
+            const bg = opts.bg || "rgba(0,0,0,0.10)";
+
             return `<span style="
-          display:inline-block; padding:3px 8px; border-radius:999px;
-          border:1px solid rgba(255,255,255,0.14);
-          background:rgba(0,0,0,0.10);
-          font-size:12px; opacity:.9;
-        ">${esc(text)}</span>`;
+      display:inline-block; padding:3px 8px; border-radius:999px;
+      border:1px solid ${border};
+      background:${bg};
+      font-size:12px; opacity:.9;
+    ">${esc(text)}</span>`;
         }
         function svgDiskIcon() {
             // Theme-aware icon (no hard-coded colors)
@@ -2615,7 +2973,209 @@
   </div>
 </div>`;
         }
+        async function openRemoveDriveModal(pool) {
+            const ov = ensureRemoveDriveOverlay();
 
+            const title = ov.querySelector("#poolRemoveDriveTitle");
+            const closeBtn = ov.querySelector("#poolRemoveDriveCloseBtn");
+            const body = ov.querySelector("#poolRemoveDriveBody");
+
+            const mount = String(pool?.mount || "").trim();
+            if (!mount) return;
+
+            title.textContent = `Remove drive • ${mount}`;
+            body.innerHTML = `<div class="v" style="opacity:.8;">Loading…</div>`;
+            closeBtn.onclick = () => { ov.style.display = "none"; };
+            ov.style.display = "flex";
+
+            const disc = await loadPoolDiscoveryOnce(mount);
+            if (!disc) {
+                body.innerHTML = `<div class="v" style="opacity:.85;">Discovery failed.</div>`;
+                return;
+            }
+
+            const bdevs = Array.isArray(disc?.btrfs?.devices) ? disc.btrfs.devices : [];
+            const totalDevs = Number(disc?.btrfs?.total_devices) || bdevs.length || 0;
+
+            if (totalDevs <= 1) {
+                body.innerHTML = `<div class="v" style="opacity:.85;">Cannot remove a drive: pool has only ${totalDevs} device(s).</div>`;
+                return;
+            }
+
+            body.innerHTML = `
+<div class="card">
+  <h3 style="margin:0 0 8px 0;">Remove drive</h3>
+
+  <div class="k" style="margin-bottom:6px;">Drive in pool</div>
+  <select id="poolRemoveDevSel" style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);">
+    ${bdevs.map((d) => {
+                const mp = String(d?.path || "");
+                const pd = String(d?.parent_disk || "");
+                const size = d?.size_bytes ? fmtBytes(Number(d.size_bytes)) : "";
+                const used = d?.used_bytes ? fmtBytes(Number(d.used_bytes)) : "";
+                const label = [mp, pd && pd !== mp ? `(${pd})` : "", size ? `• ${size}` : "", used ? `• used ${used}` : ""]
+                    .filter(Boolean)
+                    .join(" ");
+                return `<option value="${mp}">${label}</option>`;
+            }).join("")}
+  </select>
+
+  <div style="margin-top:12px;">
+    <label style="display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18);">
+      <input id="poolRemoveForceChk" type="checkbox" style="transform:scale(1.1);">
+      <span class="v" style="opacity:.9;">Force (allow removing the currently-used pool drive)</span>
+    </label>
+    <div id="poolRemoveForceWarn" class="v" style="opacity:.75; margin-top:6px;">
+      Keep OFF unless you know exactly why you need it.
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px;">
+    <h3 style="margin:0 0 8px 0;">Visual preview</h3>
+    <div id="poolRemoveViz"></div>
+  </div>
+
+<div class="row" style="margin-top:12px; gap:10px;">
+  <button class="btn secondary" id="poolRemovePreviewBtn" type="button">Preview</button>
+  <button class="btn danger" id="poolRemoveApplyBtn" type="button" disabled>Apply</button>
+</div>
+
+<div class="v" style="opacity:.75; margin-top:8px;">
+  Click Preview first to enable Apply.
+</div>
+
+<details class="card" style="margin-top:12px;">
+
+  <details class="card" style="margin-top:12px;">
+    <summary style="cursor:pointer; font-weight:900;">Advanced</summary>
+    <pre id="poolRemoveDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
+  </details>
+</div>
+`;
+
+            const rmSel = document.getElementById("poolRemoveDevSel");
+            const rmForceChk = document.getElementById("poolRemoveForceChk");
+            const rmForceWarn = document.getElementById("poolRemoveForceWarn");
+            const rmViz = document.getElementById("poolRemoveViz");
+            const previewBtn = document.getElementById("poolRemovePreviewBtn");
+            const applyBtn = document.getElementById("poolRemoveApplyBtn");
+            const dbg = document.getElementById("poolRemoveDebug");
+
+            let lastPlan = null;
+            let lastPlanId = "";
+            applyBtn.disabled = true;
+
+            function updateViz() {
+                const removeDev = String(rmSel?.value || "");
+                rmViz.innerHTML = svgRemovePreview({
+                    poolLabel: mount ? `Storage pool: ${mount}` : "",
+                    removeDevLabel: removeDev
+                });
+            }
+
+            updateViz();
+
+            rmSel?.addEventListener("change", () => {
+                updateViz();
+                lastPlan = null;
+                lastPlanId = "";
+                applyBtn.disabled = true;
+            });
+
+            rmForceChk?.addEventListener("change", () => {
+                rmForceWarn.textContent = rmForceChk.checked
+                    ? "WARNING: force enabled — you may be removing the drive currently hosting the pool."
+                    : "Keep OFF unless you know exactly why you need it.";
+                lastPlan = null;
+                lastPlanId = "";
+                applyBtn.disabled = true;
+            });
+
+            previewBtn.onclick = async () => {
+                const remove_device = String(rmSel?.value || "").trim();
+                if (!remove_device) return;
+
+                const bodyReq = {
+                    mount,
+                    remove_device,
+                    force: !!rmForceChk?.checked
+                };
+
+                dbg.textContent = JSON.stringify({ request: bodyReq }, null, 2);
+
+                const { r, j, txt } = await postJson("/api/v4/raid/plan/remove-device", bodyReq);
+
+                dbg.textContent = JSON.stringify({
+                    http: r.status,
+                    response: j ?? txt,
+                    request: bodyReq
+                }, null, 2);
+
+                if (!r.ok || !j || j.ok !== true || !j.plan || !j.plan.plan_id) {
+                    showToast("err", `Preview failed: ${prettyError(j, r, txt)}`, 5200);
+                    applyBtn.disabled = true;
+                    lastPlan = null;
+                    lastPlanId = "";
+                    return;
+                }
+
+                lastPlan = j.plan;
+                lastPlanId = String(j.plan.plan_id || "");
+                applyBtn.disabled = !lastPlanId;
+                showToast("ok", "Preview ready ✓", 1800);
+            };
+
+            applyBtn.onclick = async () => {
+                if (!lastPlan || !lastPlanId) {
+                    showToast("warn", "Preview first. Click Preview before Apply.", 2800);
+                    return;
+                }
+
+                const remove_device = String(rmSel?.value || "").trim();
+                ov.style.display = "none";
+
+                const ok = await confirmExecute(lastPlan, {
+                    kind: "remove",
+                    mount,
+                    remove_device,
+                    force: !!rmForceChk?.checked
+                });
+
+                if (!ok) {
+                    ov.style.display = "flex";
+                    showToast("info", "Apply cancelled.", 1800);
+                    return;
+                }
+
+                const bodyReq = {
+                    mount,
+                    remove_device,
+                    force: !!rmForceChk?.checked,
+                    plan_id: lastPlanId,
+                    dry_run: false,
+                    confirm: true
+                };
+
+                const { r, j, txt } = await postJson("/api/v4/raid/execute/remove-device", bodyReq);
+
+                dbg.textContent = JSON.stringify({
+                    http: r.status,
+                    response: j ?? txt,
+                    request: bodyReq
+                }, null, 2);
+
+                if (!r.ok || !j || j.ok !== true) {
+                    showToast("err", `Apply failed: ${prettyError(j, r, txt)}`, 5200);
+                    ov.style.display = "flex";
+                    return;
+                }
+
+                const pid = String(j?.plan_id || j?.plan?.plan_id || lastPlanId || "");
+                if (pid) startExecPolling(pid);
+
+                showToast("ok", "Drive removal started ✓", 2200);
+            };
+        }
         async function loadPoolDiscoveryOnce(mount) {
             const m = String(mount || "").trim();
             if (!m) return null;
@@ -2814,7 +3374,7 @@ Tip: these are the Btrfs member devices that form this pool.
 
 <div class="pqPoolMetaPills">
   ${fstype ? pill(`fs: ${fstype}`) : ""}
-  ${pill(`mode: ${fmtPoolMode(p)}`)}
+  ${pill(`mode: ${fmtPoolMode(p)}`, modePillOpts(p))}
   ${pill(`slots: ${String(p?.slot_count ?? slots.length ?? 0)}`)}
   ${uuid ? pill(`uuid: ${uuid.slice(0, 12)}…`) : ""}
   ${statusHtml}
@@ -3434,7 +3994,42 @@ ${rows}
             document.body.appendChild(ov);
             return ov;
         }
+        function ensureRemoveDriveOverlay() {
+            let ov = document.getElementById("poolRemoveDriveOverlay");
+            if (ov) return ov;
 
+            ov = document.createElement("div");
+            ov.id = "poolRemoveDriveOverlay";
+            ov.style.position = "fixed";
+            ov.style.inset = "0";
+            ov.style.display = "none";
+            ov.style.alignItems = "center";
+            ov.style.justifyContent = "center";
+            ov.style.background = isDarkThemeNow() ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.25)";
+            ov.style.zIndex = "9999";
+
+            ov.innerHTML = `
+<div style="
+  width:min(860px, 94vw);
+  max-height:90vh;
+  overflow:auto;
+  border-radius:18px;
+  border:1px solid rgba(255,255,255,0.14);
+  background: var(--panel, rgba(0,0,0,0.35));
+  color: var(--fg);
+  padding:14px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+">
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
+    <div id="poolRemoveDriveTitle" style="font-weight:950;">Remove drive</div>
+    <button id="poolRemoveDriveCloseBtn" class="btn secondary" type="button">Close</button>
+  </div>
+
+  <div id="poolRemoveDriveBody"></div>
+</div>`;
+            document.body.appendChild(ov);
+            return ov;
+        }
         async function openPoolDrivesModal(mount, opts) {
             const mnt = String(mount || "").trim();
             if (!mnt) return;
@@ -3468,7 +4063,7 @@ ${rows}
             renderPoolSelectorTop();
 
             // render add/remove UI into modal body
-            renderActions(disc, mnt, body);
+            renderActions(disc, mnt, body, { focus });
             // If opened from "Remove drive" button, jump to the Remove section.
             if (focus === "remove") {
                 // renderActions uses fixed ids like rmBlock, rmDevSel; wait one tick.
@@ -4246,15 +4841,33 @@ Optionally it can wipe member disks (VERY destructive).
 
                 if (action === "remove") {
                     try {
-                        await openPoolDrivesModal(mount, { focus: "remove" });
+                        const p = pools.find((x) => String(x?.mount || "") === String(mount));
+                        if (!p) {
+                            showToast("err", "Pool not found.", 3200);
+                            return;
+                        }
+                        await openRemoveDriveModal(p);
                     } catch (e) {
-                        showToast("err", `Remove drive UI crashed: ${String(e && (e.stack || e.message) ? (e.stack || e.message) : e)}`, 6500);
+                        showToast(
+                            "err",
+                            `Remove drive UI crashed: ${String(e && (e.stack || e.message) ? (e.stack || e.message) : e)}`,
+                            6500
+                        );
                     }
                     return;
                 }
 
                 if (action === "convert") {
-                    showToast("info", `convert pool (${mount}): UI coming next.`, 2600);
+                    try {
+                        const p = pools.find((x) => String(x?.mount || "") === String(mount));
+                        if (!p) {
+                            showToast("err", "Pool not found.", 3200);
+                            return;
+                        }
+                        await openConvertRaidModal(p);
+                    } catch (e) {
+                        showToast("err", `Convert RAID UI crashed: ${String(e && e.message ? e.message : e)}`, 5200);
+                    }
                     return;
                 }
 
