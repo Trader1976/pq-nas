@@ -5783,6 +5783,11 @@ static inline void parse_btrfs_usage_bytes(const std::string& out,
     }
 }
 
+static std::string normalize_storage_pool_id(std::string v) {
+    v = trim_copy(v);
+    return v.empty() ? "default" : v;
+}
+
 static bool storage_pool_mount_by_id_adminonly(
     const std::string& users_path,
     const std::string& pool_id,
@@ -16561,7 +16566,30 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
         return;
     }
     pqnas::UserRec u = *cur;
+    auto sum_allocated_quota_on_pool_local =
+        [&](const std::string& want_pool_id, const std::string& exclude_fp) -> std::uint64_t
+    {
+        const std::string want_pool = normalize_storage_pool_id(want_pool_id);
+        std::uint64_t total = 0;
 
+        for (const auto& kv : users.snapshot()) {
+            const auto& it = kv.second;
+
+            if (!exclude_fp.empty() && it.fingerprint == exclude_fp) continue;
+            if (it.storage_state != "allocated") continue;
+
+            const std::string user_pool = normalize_storage_pool_id(it.storage_pool_id);
+            if (user_pool != want_pool) continue;
+
+            const std::uint64_t q = static_cast<std::uint64_t>(it.quota_bytes);
+            if (std::numeric_limits<std::uint64_t>::max() - total < q) {
+                return std::numeric_limits<std::uint64_t>::max();
+            }
+            total += q;
+        }
+
+        return total;
+    };
     // ✅ MUST be approved before allocating/changing storage
     if (u.status != "enabled") {
         // Audit (best-effort)
@@ -16640,7 +16668,88 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
         // (adjust "data" folder name if your pool layout differs)
         data_root = std::filesystem::path(mp) / "data";
     }
+    // Refuse allocations that would overcommit the target pool.
+    {
+        const std::string effective_pool_id = normalize_storage_pool_id(pool_id);
 
+        std::uint64_t pool_total_bytes = 0;
+        std::uint64_t pool_free_bytes = 0;
+
+        // Probe the actual filesystem that backs this pool.
+        // For non-default pools use the mount root; for default use data_root.
+        const std::string stat_path =
+            (effective_pool_id == "default")
+                ? data_root.string()
+                : std::filesystem::path(pool_mount).string();
+
+        if (!statvfs_path(stat_path, &pool_total_bytes, &pool_free_bytes)) {
+            try {
+                pqnas::AuditEvent ev;
+                ev.event = "admin.user_storage_allocate_refused";
+                ev.outcome = "fail";
+                ev.f["fingerprint"] = fp;
+                ev.f["reason"] = "pool_statvfs_failed";
+                ev.f["pool_id"] = effective_pool_id;
+                ev.f["path"] = pqnas::shorten(stat_path, 200);
+                ev.f["ts"] = now_iso;
+                ev.f["actor_fp"] = actor_fp;
+                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                audit_append(ev);
+            } catch (...) {}
+
+            reply_json(res, 500, json({
+                {"ok", false},
+                {"error", "pool_statvfs_failed"},
+                {"message", "failed to read target pool capacity"},
+                {"pool_id", effective_pool_id},
+                {"path", stat_path}
+            }).dump());
+            return;
+        }
+
+		const std::uint64_t allocated_other_bytes =
+    		sum_allocated_quota_on_pool_local(effective_pool_id, fp);
+
+        std::uint64_t would_total_bytes = allocated_other_bytes;
+        if (std::numeric_limits<std::uint64_t>::max() - would_total_bytes < quota_bytes) {
+            would_total_bytes = std::numeric_limits<std::uint64_t>::max();
+        } else {
+            would_total_bytes += quota_bytes;
+        }
+
+        if (would_total_bytes > pool_total_bytes) {
+            try {
+                pqnas::AuditEvent ev;
+                ev.event = "admin.user_storage_allocate_refused";
+                ev.outcome = "fail";
+                ev.f["fingerprint"] = fp;
+                ev.f["reason"] = "pool_quota_overcommit";
+                ev.f["pool_id"] = effective_pool_id;
+                ev.f["requested_quota_bytes"] = std::to_string((unsigned long long)quota_bytes);
+                ev.f["allocated_other_bytes"] = std::to_string((unsigned long long)allocated_other_bytes);
+                ev.f["would_total_bytes"] = std::to_string((unsigned long long)would_total_bytes);
+                ev.f["pool_total_bytes"] = std::to_string((unsigned long long)pool_total_bytes);
+                ev.f["pool_free_bytes"] = std::to_string((unsigned long long)pool_free_bytes);
+                ev.f["ts"] = now_iso;
+                ev.f["actor_fp"] = actor_fp;
+                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+                audit_append(ev);
+            } catch (...) {}
+
+            reply_json(res, 409, json({
+                {"ok", false},
+                {"error", "pool_quota_overcommit"},
+                {"message", "requested quota would exceed pool capacity"},
+                {"pool_id", effective_pool_id},
+                {"requested_quota_bytes", quota_bytes},
+                {"allocated_other_bytes", allocated_other_bytes},
+                {"would_total_bytes", would_total_bytes},
+                {"pool_total_bytes", pool_total_bytes},
+                {"pool_free_bytes", pool_free_bytes}
+            }).dump());
+            return;
+        }
+    }
     // layout: <data_root>/users/<fp>
 	const std::string canonical_root_rel = default_root_rel_for_fp(fp);
 	if (canonical_root_rel.empty() || !is_safe_rel_path(canonical_root_rel)) {
