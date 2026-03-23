@@ -4291,31 +4291,9 @@ Optionally it can wipe member disks (VERY destructive).
                     }
                 }
 
-                // Keep current runtime member disks selectable too,
-                // even if they are mounted / not generically eligible.
-                const runtimeMembers = Array.isArray(pool?.member_parent_disks) ? pool.member_parent_disks : [];
-                for (const v of runtimeMembers) {
-                    const dev = String(v || "").trim();
-                    if (!dev) continue;
-                    if (byPath.has(dev)) continue;
-
-                    const found = arr.find(d => String(d.path || d.dev || "") === dev);
-                    if (found) {
-                        byPath.set(dev, found);
-                    } else {
-                        byPath.set(dev, {
-                            path: dev,
-                            name: dev.replace("/dev/", ""),
-                            model: "Runtime member",
-                            size_bytes: 0
-                        });
-                    }
-                }
-                console.log("[edit-slots] pool.mount =", pool?.mount);
-                console.log("[edit-slots] slotValues =", slotValues);
-                console.log("[edit-slots] runtimeMembers =", Array.isArray(pool?.member_parent_disks) ? pool.member_parent_disks : []);
-                console.log("[edit-slots] all disks =", disks.map(d => ({ path: d.path, mountpoints: d.mountpoints, children: d.children })));
-                console.log("[edit-slots] final eligible =", Array.from(byPath.values()).map(d => d.path || d.dev));
+                console.log("[create-pool] slotValues =", slotValues);
+                console.log("[create-pool] all disks =", disks.map(d => ({ path: d.path, mountpoints: d.mountpoints, children: d.children })));
+                console.log("[create-pool] final eligible =", Array.from(byPath.values()).map(d => d.path || d.dev));
                 return Array.from(byPath.values());
             }
 
