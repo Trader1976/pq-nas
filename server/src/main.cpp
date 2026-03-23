@@ -16967,6 +16967,154 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
     }).dump());
 });
 
+srv.Get("/api/v4/admin/users/storage_preview", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+    res.set_header("Cache-Control", "no-store");
+
+    const std::string fp = trim_copy(req.get_param_value("fingerprint"));
+    if (fp.empty() || !is_valid_fingerprint_hex(fp)) {
+        reply_json(res, 400, json({
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing or invalid fingerprint"}
+        }).dump());
+        return;
+    }
+
+    std::string pool_id = trim_copy(req.get_param_value("pool_id"));
+    pool_id = normalize_storage_pool_id(pool_id);
+
+    auto cur = users.get(fp);
+    if (!cur.has_value()) {
+        reply_json(res, 404, json({
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "user not found"}
+        }).dump());
+        return;
+    }
+    const pqnas::UserRec u = *cur;
+
+    auto sum_allocated_quota_on_pool_local =
+        [&](const std::string& want_pool_id, const std::string& exclude_fp) -> std::uint64_t
+    {
+        const std::string want_pool = normalize_storage_pool_id(want_pool_id);
+        std::uint64_t total = 0;
+
+        for (const auto& kv : users.snapshot()) {
+            const auto& it = kv.second;
+
+            if (!exclude_fp.empty() && it.fingerprint == exclude_fp) continue;
+            if (it.storage_state != "allocated") continue;
+
+            const std::string user_pool = normalize_storage_pool_id(it.storage_pool_id);
+            if (user_pool != want_pool) continue;
+
+            const std::uint64_t q = static_cast<std::uint64_t>(it.quota_bytes);
+            if (std::numeric_limits<std::uint64_t>::max() - total < q) {
+                return std::numeric_limits<std::uint64_t>::max();
+            }
+            total += q;
+        }
+
+        return total;
+    };
+
+    std::filesystem::path data_root = std::filesystem::path(data_root_dir());
+    std::string pool_mount;
+
+    if (pool_id != "default") {
+        std::string err;
+        std::string mp;
+        if (!storage_pool_mount_by_id_adminonly(users_path, pool_id, &mp, &err)) {
+            reply_json(res, 404, json({
+                {"ok", false},
+                {"error", "pool_not_found"},
+                {"message", "pool_id not found"},
+                {"pool_id", pool_id},
+                {"detail", err}
+            }).dump());
+            return;
+        }
+        pool_mount = mp;
+        data_root = std::filesystem::path(mp) / "data";
+    }
+
+    const std::string canonical_root_rel = default_root_rel_for_fp(fp);
+    if (canonical_root_rel.empty() || !is_safe_rel_path(canonical_root_rel)) {
+        reply_json(res, 500, json({
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "computed root_rel is unsafe"},
+            {"root_rel", canonical_root_rel}
+        }).dump());
+        return;
+    }
+
+    const std::filesystem::path udir = data_root / canonical_root_rel;
+
+    std::uint64_t pool_total_bytes = 0;
+    std::uint64_t pool_free_bytes = 0;
+    const std::string stat_path =
+        (pool_id == "default")
+            ? data_root.string()
+            : std::filesystem::path(pool_mount).string();
+
+    if (!statvfs_path(stat_path, &pool_total_bytes, &pool_free_bytes)) {
+        reply_json(res, 500, json({
+            {"ok", false},
+            {"error", "pool_statvfs_failed"},
+            {"message", "failed to read target pool capacity"},
+            {"pool_id", pool_id},
+            {"path", stat_path}
+        }).dump());
+        return;
+    }
+
+    std::uint64_t used_bytes = 0;
+    {
+        std::error_code ec;
+        if (std::filesystem::exists(udir, ec) && std::filesystem::is_directory(udir, ec)) {
+            used_bytes = dir_size_bytes_best_effort(udir);
+        }
+    }
+
+    const std::uint64_t allocated_other_bytes =
+        sum_allocated_quota_on_pool_local(pool_id, fp);
+
+    const std::uint64_t current_quota_bytes =
+        (u.storage_state == "allocated") ? static_cast<std::uint64_t>(u.quota_bytes) : 0;
+
+    std::uint64_t allocated_total_bytes = allocated_other_bytes;
+    if (std::numeric_limits<std::uint64_t>::max() - allocated_total_bytes >= current_quota_bytes) {
+        allocated_total_bytes += current_quota_bytes;
+    } else {
+        allocated_total_bytes = std::numeric_limits<std::uint64_t>::max();
+    }
+
+    const std::uint64_t remaining_allocatable_bytes =
+        (pool_total_bytes > allocated_other_bytes)
+            ? (pool_total_bytes - allocated_other_bytes)
+            : 0;
+
+    reply_json(res, 200, json({
+        {"ok", true},
+        {"fingerprint", fp},
+        {"pool_id", pool_id},
+        {"pool_mount", pool_mount},
+        {"data_root", data_root.string()},
+        {"user_dir", udir.string()},
+        {"used_bytes", used_bytes},
+        {"current_quota_bytes", current_quota_bytes},
+        {"pool_total_bytes", pool_total_bytes},
+        {"pool_free_bytes", pool_free_bytes},
+        {"allocated_other_bytes", allocated_other_bytes},
+        {"allocated_total_bytes", allocated_total_bytes},
+        {"remaining_allocatable_bytes", remaining_allocatable_bytes}
+    }).dump());
+});
 
     // GET /system (static UI) - visible to user + admin (cookie required)
     srv.Get("/system", [&](const httplib::Request& req, httplib::Response& res) {

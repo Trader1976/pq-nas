@@ -768,6 +768,38 @@
             display:none;
         }
         .allocErr.show{ display:block; }
+        .allocPreviewBox{
+            margin-top: 12px;
+            padding: 12px;
+            border: 1px solid rgba(var(--fg-rgb),0.14);
+            border-radius: 14px;
+            background: rgba(0,0,0,0.16);
+        }
+
+        .allocPreviewGrid{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px 14px;
+        }
+
+        @media (max-width: 760px){
+            .allocPreviewGrid{
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .allocPreviewWarn{
+            margin-top: 12px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(var(--fail-rgb),0.40);
+            background: rgba(var(--fail-rgb),0.10);
+            color: rgba(var(--fail-rgb),0.98);
+            box-shadow: 0 0 12px rgba(var(--fail-rgb),0.12);
+            font-weight: 700;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
 
     </style>
     <link rel="stylesheet" href="/static/theme.css">
@@ -928,6 +960,10 @@
                     <input id="allocGb" type="number" min="0" step="1" placeholder="e.g. 10" />
                     <div class="muted" style="font-size:12px; margin-top:6px;">Set a positive quota to allow uploads.</div>
                 </div>
+            </div>
+
+            <div id="allocPreview" class="allocPreviewBox">
+                <div class="muted">Loading pool preview…</div>
             </div>
 
             <div id="allocErr" class="allocErr"></div>

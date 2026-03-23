@@ -230,7 +230,51 @@ function setAllocError(msg) {
     el.textContent = String(msg);
     el.classList.add("show");
 }
+function renderAllocPreview(preview, requestedQuotaBytes = null) {
+    const box = $("allocPreview");
+    if (!box) return;
 
+    if (!preview || !preview.ok) {
+        box.innerHTML = `<div class="muted">No pool preview available.</div>`;
+        return;
+    }
+
+    const used = Number(preview.used_bytes || 0);
+    const currentQuota = Number(preview.current_quota_bytes || 0);
+    const poolTotal = Number(preview.pool_total_bytes || 0);
+    const poolFree = Number(preview.pool_free_bytes || 0);
+    const allocatedOther = Number(preview.allocated_other_bytes || 0);
+    const remainingAlloc = Number(preview.remaining_allocatable_bytes || 0);
+
+    const rq = Number(requestedQuotaBytes);
+    const haveRq = Number.isFinite(rq) && rq >= 0;
+
+    const overAlloc = haveRq && rq > remainingAlloc;
+    const belowUsed = haveRq && rq < used;
+
+    const warnHtml = (overAlloc || belowUsed)
+        ? `
+          <div class="allocPreviewWarn">
+            ${belowUsed ? `Requested quota is below current used space.` : ``}
+            ${belowUsed && overAlloc ? `<br>` : ``}
+            ${overAlloc ? `Requested quota exceeds remaining allocatable capacity on this pool.` : ``}
+          </div>
+        `
+        : ``;
+
+    box.innerHTML = `
+      <div class="allocPreviewGrid">
+        <div class="detailKV"><div class="k">User used</div><div class="v mono">${esc(fmtBytes(used))}</div></div>
+        <div class="detailKV"><div class="k">Current quota</div><div class="v mono">${esc(currentQuota ? fmtBytes(currentQuota) : "—")}</div></div>
+        <div class="detailKV"><div class="k">Pool total</div><div class="v mono">${esc(fmtBytes(poolTotal))}</div></div>
+        <div class="detailKV"><div class="k">Pool free (fs)</div><div class="v mono">${esc(fmtBytes(poolFree))}</div></div>
+        <div class="detailKV"><div class="k">Allocated to others</div><div class="v mono">${esc(fmtBytes(allocatedOther))}</div></div>
+        <div class="detailKV"><div class="k">Remaining allocatable</div><div class="v mono">${esc(fmtBytes(remainingAlloc))}</div></div>
+        ${haveRq ? `<div class="detailKV"><div class="k">Requested quota</div><div class="v mono">${esc(fmtBytes(rq))}</div></div>` : ``}
+      </div>
+      ${warnHtml}
+    `;
+}
 function normalizePoolsFromResponse(j) {
     const arr = Array.isArray(j?.pools) ? j.pools : [];
 
@@ -300,6 +344,21 @@ async function ensurePoolsLoaded() {
     gPools = out;
     return gPools;
 }
+async function refreshAllocPreview() {
+    const fp = gAllocFp;
+    const poolSel = $("allocPoolSel");
+    const gbInp = $("allocGb");
+
+    if (!fp || !poolSel) return;
+
+    const poolId = String(poolSel.value || "default");
+    const quotaGb = Number(String(gbInp?.value || "").trim());
+    const requestedQuotaBytes = isFinite(quotaGb) && quotaGb >= 0 ? gbToBytes(quotaGb) : null;
+
+    const j = await apiGetStoragePreview(fp, poolId);
+    gAllocPreview = j;
+    renderAllocPreview(j, requestedQuotaBytes);
+}
 function openAllocModal(fp, curUser) {
     gAllocFp = String(fp || "");
     gAllocForce = false;
@@ -347,13 +406,31 @@ function openAllocModal(fp, curUser) {
         const selected = pools.find(x => x.id === poolSel.value) || pools[0];
         poolHint.textContent = selected?.hint ? selected.hint : "—";
 
-        poolSel.onchange = () => {
+        poolSel.onchange = async () => {
             const s = (gPools || []).find(x => x.id === poolSel.value);
             poolHint.textContent = s?.hint ? s.hint : "—";
+            try {
+                await refreshAllocPreview();
+            } catch (e) {
+                setAllocError("Failed to refresh pool preview: " + (e?.message || e));
+            }
         };
+
+        gbInp.addEventListener("input", () => {
+            const quotaGb = Number(String(gbInp.value || "").trim());
+            const requestedQuotaBytes = isFinite(quotaGb) && quotaGb >= 0 ? gbToBytes(quotaGb) : null;
+            renderAllocPreview(gAllocPreview, requestedQuotaBytes);
+        }, { passive: true });
+
+        try {
+            await refreshAllocPreview();
+        } catch (e) {
+            setAllocError("Failed to load pool preview: " + (e?.message || e));
+        }
 
         gbInp.focus();
         gbInp.select();
+
     })().catch(e => {
         setAllocError("Failed to load pools: " + (e?.message || e));
     });
@@ -367,6 +444,12 @@ function closeAllocModal() {
     m.setAttribute("aria-hidden", "true");
     setAllocError("");
     gAllocFp = "";
+    gAllocPreview = null;
+
+    const box = $("allocPreview");
+    if (box) {
+        box.innerHTML = `<div class="muted">Loading pool preview…</div>`;
+    }
 }
 
 function setMigrateError(msg) {
@@ -461,7 +544,11 @@ async function apiGetMigrationStatus(jobId) {
     const q = encodeURIComponent(String(jobId || "").trim());
     return await apiGet(`/api/v4/admin/users/migrate_storage_status?job_id=${q}`);
 }
-
+async function apiGetStoragePreview(fp, poolId) {
+    const qfp = encodeURIComponent(String(fp || "").trim());
+    const qpool = encodeURIComponent(String(poolId || "default").trim() || "default");
+    return await apiGet(`/api/v4/admin/users/storage_preview?fingerprint=${qfp}&pool_id=${qpool}`);
+}
 async function apiGetCleanupStatus(jobId) {
     const q = encodeURIComponent(String(jobId || "").trim());
     return await apiGet(`/api/v4/admin/users/cleanup_old_storage_status?job_id=${q}`);
@@ -802,6 +889,7 @@ let actorFp = "";
 let gPools = null; // array of { id, name, hint }
 let gAllocFp = "";
 let gMigrateFp = "";
+let gAllocPreview = null;
 
 function setMsg(text) {
     const el = $("msg");
