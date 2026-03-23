@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Single and RAID1 storage diagram</title>
+  <desc id="desc">An illustration comparing Single mode with RAID1 mirroring using stylized disk stacks.</desc>
+
+  <defs>
+    <style>
+      .bg { fill: #eef2fb; }
+      .panel { fill: #f7f9ff; stroke: #cfd8ea; stroke-width: 2; }
+      .title { font: 700 34px Arial, Helvetica, sans-serif; fill: #1d2530; }
+      .subtitle { font: 400 18px Arial, Helvetica, sans-serif; fill: #445067; }
+      .section { font: 700 52px Arial, Helvetica, sans-serif; fill: #1d2530; }
+      .sectionSub { font: 400 28px Arial, Helvetica, sans-serif; fill: #1d2530; }
+      .label { font: 700 24px Arial, Helvetica, sans-serif; fill: #1d2530; }
+      .diskText { font: 700 20px Arial, Helvetica, sans-serif; fill: #1d2530; }
+      .small { font: 400 16px Arial, Helvetica, sans-serif; fill: #51607a; }
+      .outline { stroke: #232a31; stroke-width: 4; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .blockFill { fill: #cfd9f6; }
+      .blockFill2 { fill: #dbe4fb; }
+      .arrow { stroke: #232a31; stroke-width: 5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .arrowThin { stroke: #232a31; stroke-width: 4; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1600" height="900"/>
+
+  <text class="title" x="800" y="70" text-anchor="middle">PQ-NAS Storage Modes</text>
+  <text class="subtitle" x="800" y="102" text-anchor="middle">Simple visual explanation for the help page</text>
+
+  <rect class="panel" x="50" y="140" rx="28" ry="28" width="700" height="680"/>
+  <rect class="panel" x="850" y="140" rx="28" ry="28" width="700" height="680"/>
+
+  <text class="section" x="400" y="225" text-anchor="middle">Single</text>
+  <text class="sectionSub" x="400" y="275" text-anchor="middle">One copy, capacity-focused</text>
+
+  <text class="section" x="1200" y="225" text-anchor="middle">RAID1</text>
+  <text class="sectionSub" x="1200" y="275" text-anchor="middle">Two copies, mirrored</text>
+
+  <!-- Single disk -->
+  <g transform="translate(250,355)">
+    <ellipse class="blockFill2 outline" cx="0" cy="0" rx="115" ry="28"/>
+    <rect class="blockFill" x="-115" y="0" width="230" height="250"/>
+    <ellipse class="blockFill outline" cx="0" cy="250" rx="115" ry="28"/>
+    <ellipse class="blockFill outline" cx="0" cy="80" rx="115" ry="28"/>
+    <ellipse class="blockFill outline" cx="0" cy="155" rx="115" ry="28"/>
+
+    <text class="diskText" x="0" y="62" text-anchor="middle">Block A</text>
+    <text class="diskText" x="0" y="138" text-anchor="middle">Block B</text>
+    <text class="diskText" x="0" y="213" text-anchor="middle">Block C</text>
+  </g>
+
+  <text class="label" x="250" y="690" text-anchor="middle">Disk 1</text>
+  <text class="small" x="400" y="430">All data lives on one device.</text>
+  <text class="small" x="400" y="460">You get the full usable capacity.</text>
+  <text class="small" x="400" y="490">If the drive fails, the pool is lost.</text>
+
+  <!-- Arrow / capacity note -->
+  <g>
+    <path class="arrowThin" d="M505 525 H650"/>
+    <path class="arrowThin" d="M650 525 l-18 -14"/>
+    <path class="arrowThin" d="M650 525 l-18 14"/>
+    <text class="small" x="578" y="502" text-anchor="middle">one data path</text>
+  </g>
+
+  <!-- RAID1 disks -->
+  <g transform="translate(1030,355)">
+    <ellipse class="blockFill2 outline" cx="0" cy="0" rx="100" ry="26"/>
+    <rect class="blockFill" x="-100" y="0" width="200" height="250"/>
+    <ellipse class="blockFill outline" cx="0" cy="250" rx="100" ry="26"/>
+    <ellipse class="blockFill outline" cx="0" cy="80" rx="100" ry="26"/>
+    <ellipse class="blockFill outline" cx="0" cy="155" rx="100" ry="26"/>
+
+    <text class="diskText" x="0" y="62" text-anchor="middle">Block A</text>
+    <text class="diskText" x="0" y="138" text-anchor="middle">Block B</text>
+    <text class="diskText" x="0" y="213" text-anchor="middle">Block C</text>
+  </g>
+
+  <g transform="translate(1370,355)">
+    <ellipse class="blockFill2 outline" cx="0" cy="0" rx="100" ry="26"/>
+    <rect class="blockFill" x="-100" y="0" width="200" height="250"/>
+    <ellipse class="blockFill outline" cx="0" cy="250" rx="100" ry="26"/>
+    <ellipse class="blockFill outline" cx="0" cy="80" rx="100" ry="26"/>
+    <ellipse class="blockFill outline" cx="0" cy="155" rx="100" ry="26"/>
+
+    <text class="diskText" x="0" y="62" text-anchor="middle">Block A</text>
+    <text class="diskText" x="0" y="138" text-anchor="middle">Block B</text>
+    <text class="diskText" x="0" y="213" text-anchor="middle">Block C</text>
+  </g>
+
+  <text class="label" x="1030" y="690" text-anchor="middle">Disk 1</text>
+  <text class="label" x="1370" y="690" text-anchor="middle">Disk 2</text>
+
+  <!-- top mirror bracket -->
+  <path class="outline" d="M1030 325 V280 H1370 V325"/>
+  <!-- bidirectional arrows -->
+  <path class="arrow" d="M1145 500 H1255"/>
+  <path class="arrow" d="M1255 500 l-22 -18"/>
+  <path class="arrow" d="M1255 500 l-22 18"/>
+
+  <path class="arrow" d="M1255 540 H1145"/>
+  <path class="arrow" d="M1145 540 l22 -18"/>
+  <path class="arrow" d="M1145 540 l22 18"/>
+
+  <text class="small" x="1200" y="430" text-anchor="middle">Each block is mirrored to both disks.</text>
+  <text class="small" x="1200" y="460" text-anchor="middle">Usable capacity is roughly one disk.</text>
+  <text class="small" x="1200" y="490" text-anchor="middle">One drive can fail and the pool stays online.</text>
+
+  <!-- footer note -->
+  <text class="subtitle" x="800" y="860" text-anchor="middle">Illustration only — actual Btrfs layout and metadata handling are more complex.</text>
+</svg>

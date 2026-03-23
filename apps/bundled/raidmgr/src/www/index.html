@@ -92,36 +92,6 @@
             flex-wrap: wrap;
         }
 
-        .poolBar{
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-
-        .poolLabel{
-            opacity: .75;
-            font-weight: 850;
-            font-size: 12px;
-        }
-
-        .poolSel{
-            min-width: min(420px, 52vw);
-            max-width: 62vw;
-            padding: 10px 12px;
-            border-radius: 14px;
-            border: 1px solid rgba(255,255,255,0.14);
-            background: rgba(0,0,0,0.18);
-            color: var(--fg);
-            font-family: var(--sans);
-            font-size: 12px;
-        }
-
-        .poolSel:focus{
-            outline: none;
-            border-color: rgba(255,255,255,0.26);
-        }
-
         .btn{
             display: inline-flex;
             align-items: center;
@@ -482,24 +452,16 @@
             </div>
 
             <div class="actions">
-                <div class="poolBar">
-                    <span class="poolLabel">Pool:</span>
-                    <select id="poolSelTop" class="poolSel" aria-label="Storage pool selector">
-                        <option value="">(loading pools…)</option>
-                    </select>
-                </div>
-
                 <span class="badge warn" id="badge">loading…</span>
+                <button class="btn secondary" id="helpBtn" type="button">Help</button>
                 <button class="btn secondary" id="refreshBtn" type="button">Refresh</button>
             </div>
         </div>
 
         <div class="main">
             <div id="poolsTab">
-
                 <div id="poolsOut"></div>
             </div>
-
         </div>
     </div>
 </div>

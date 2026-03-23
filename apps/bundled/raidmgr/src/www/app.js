@@ -14,6 +14,7 @@
     const subLine = el("subLine");
     const titleLine = el("titleLine");
     const refreshBtn = el("refreshBtn");
+    const helpBtn = el("helpBtn");
     const rawOut = el("rawOut");
     const actionsOut = el("actionsOut");
     const userStatusEl = el("userStatus");
@@ -63,7 +64,13 @@
         if (tabPoolsBtn) tabPoolsBtn.style.display = "none";
     }
     const DEV_MODE_KEY = "pqnas_storagemgr_dev_mode";
+    const HELP_URL = "./help.html";
 
+    refreshBtn?.addEventListener("click", probe);
+
+    helpBtn?.addEventListener("click", () => {
+        window.open(HELP_URL, "_blank", "noopener,noreferrer");
+    });
     function setBadge(kind, text) {
         if (!badge) return;
         badge.className = `badge ${kind || ""}`.trim();
@@ -277,7 +284,7 @@
                 try {
                     setTimeout(async () => {
                         await refreshPoolsState();
-                        renderPoolSelectorTop();
+
                         if (g_tab === "pools") await renderPoolsTab();
                         probe();
                     }, 350);
@@ -2374,26 +2381,9 @@
     }
 
     function renderPoolSelectorTop() {
+        // Obsolete in Pools-only UI.
+        // Keep function for compatibility with older call sites.
         if (!poolSelTop) return;
-
-        if (!g_pools.length) {
-            poolSelTop.innerHTML = `<option value="">(no pools found)</option>`;
-            poolSelTop.disabled = true;
-            return;
-        }
-
-        const opts = g_pools
-            .map((p) => {
-                const m = String(p?.mount || "");
-                const name = poolDisplayName(p);
-                const label = name ? `${name} — ${m}` : m;
-                const sel = m === g_selectedMount ? "selected" : "";
-                return `<option value="${esc(m)}" ${sel}>${esc(label)}</option>`;
-            })
-            .join("");
-
-        poolSelTop.innerHTML = opts;
-        poolSelTop.disabled = false;
     }
     async function renderPoolsTab() {
         if (!poolsOut) return;
@@ -2712,7 +2702,6 @@
                 showToast("ok", "Layout saved ✓", 1800);
                 ov.style.display = "none";
                 await refreshPoolsState();
-                renderPoolSelectorTop();
                 await renderPoolsTab();
             }
 
@@ -3386,7 +3375,6 @@ Tip: these are the Btrfs member devices that form this pool.
     </div>
 
     <div class="pqPoolActions">
-      ${editable ? `<button class="btn secondary" type="button" data-pool-action="drives" data-mount="${esc(mount)}">Manage drives</button>` : ``}
       ${editable ? `<button class="btn secondary" type="button" data-pool-action="remove" data-mount="${esc(mount)}">Remove drive</button>` : ``}
       ${editable ? `<button class="btn secondary" type="button" data-pool-action="rename" data-mount="${esc(mount)}">Rename</button>` : ``}
       ${editable ? `<button class="btn secondary" type="button" data-pool-action="convert" data-mount="${esc(mount)}">Convert RAID</button>` : ``}
@@ -3503,8 +3491,11 @@ Tip: these are the Btrfs member devices that form this pool.
   border:1px solid var(--border2);
   border-radius:16px;
 }
-.pqDriveSvgTile:hover{ filter: brightness(1.06); }
-.pqDriveSvgTile:active{ transform: translateY(1px); }
+.pqDriveSvgTile:hover{ filter:none; }
+.pqDriveSvgTile:active{ transform:none; }
+.pqDriveSvgTile{
+  cursor:default;
+}
 /* Keep the SVG small so it doesn't create vertical bulk */
 .pqDriveSvgWrap{
   width:150px;
@@ -3630,14 +3621,6 @@ Tip: these are the Btrfs member devices that form this pool.
   margin-top:10px;
 }
 
-.pqPoolHeader{
-  display:flex;
-  align-items:flex-start;
-  justify-content:space-between;
-  gap:12px;
-  flex-wrap:wrap;
-}
-
 .pqPoolTitle{
   font-weight:950;
   font-size:15px;
@@ -3735,11 +3718,33 @@ Tip: these are the Btrfs member devices that form this pool.
   margin-top:4px;
 }
 
+.pqPoolHeader{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:12px;
+  flex-wrap:wrap;
+}
+
 .pqPoolActions{
   display:flex;
-  flex-direction:column;
+  flex-direction:row;
+  flex-wrap:wrap;
   gap:8px;
   flex:0 0 auto;
+  justify-content:flex-end;
+  align-items:center;
+}
+
+.pqPoolActions .btn{
+  white-space:nowrap;
+}
+
+@media (max-width: 900px){
+  .pqPoolActions{
+    width:100%;
+    justify-content:flex-start;
+  }
 }
 
 .pqPoolNote{
@@ -3960,42 +3965,7 @@ ${rows}
             document.body.appendChild(ov);
             return ov;
         }
-        function ensurePoolDrivesOverlay() {
-            let ov = document.getElementById("poolDrivesOverlay");
-            if (ov) return ov;
 
-            ov = document.createElement("div");
-            ov.id = "poolDrivesOverlay";
-            ov.style.position = "fixed";
-            ov.style.inset = "0";
-            ov.style.display = "none";
-            ov.style.alignItems = "center";
-            ov.style.justifyContent = "center";
-            ov.style.background = isDarkThemeNow() ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.25)";
-            ov.style.zIndex = "9999";
-
-            ov.innerHTML = `
-<div style="
-  width:min(980px, 96vw);
-  max-height:90vh;
-  overflow:auto;
-  border-radius:18px;
-  border:1px solid rgba(255,255,255,0.14);
-  background: var(--panel, rgba(0,0,0,0.35));
-  color: var(--fg);
-  padding:14px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
-">
-  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
-    <div id="poolDrivesTitle" style="font-weight:950;">Pool drives</div>
-    <button id="poolDrivesCloseBtn" class="btn secondary" type="button">Close</button>
-  </div>
-
-  <div id="poolDrivesBody"></div>
-</div>`;
-            document.body.appendChild(ov);
-            return ov;
-        }
         function ensureRemoveDriveOverlay() {
             let ov = document.getElementById("poolRemoveDriveOverlay");
             if (ov) return ov;
@@ -4032,56 +4002,6 @@ ${rows}
             document.body.appendChild(ov);
             return ov;
         }
-        async function openPoolDrivesModal(mount, opts) {
-            const mnt = String(mount || "").trim();
-            if (!mnt) return;
-
-            const ov = ensurePoolDrivesOverlay();
-            const title = ov.querySelector("#poolDrivesTitle");
-            const closeBtn = ov.querySelector("#poolDrivesCloseBtn");
-            const body = ov.querySelector("#poolDrivesBody");
-
-            if (title) title.textContent = `Drives • ${mnt}`;
-            const o = (opts && typeof opts === "object") ? opts : {};
-            const focus = String(o.focus || "drives"); // "drives" | "remove"
-
-            if (title) title.textContent = (focus === "remove") ? `Remove drive • ${mnt}` : `Drives • ${mnt}`;
-            if (body) body.innerHTML = `<div class="v" style="opacity:.8;">Loading…</div>`;
-
-            closeBtn.onclick = () => { ov.style.display = "none"; };
-
-            ov.style.display = "flex";
-
-            // load discovery once and reuse your existing UI
-            const disc = await loadPoolDiscoveryOnce(mnt);
-            if (!disc) {
-                body.innerHTML = `<div class="v" style="opacity:.85;">Discovery failed.</div>`;
-                return;
-            }
-
-            // IMPORTANT: set the current selection so your hard guard matches
-            g_selectedMount = mnt;
-            saveSelectedMount(mnt);
-            renderPoolSelectorTop();
-
-            // render add/remove UI into modal body
-            renderActions(disc, mnt, body, { focus });
-            // If opened from "Remove drive" button, jump to the Remove section.
-            if (focus === "remove") {
-                // renderActions uses fixed ids like rmBlock, rmDevSel; wait one tick.
-                setTimeout(() => {
-                    const rm = document.getElementById("rmBlock");
-                    const sel = document.getElementById("rmDevSel");
-                    if (rm && rm.scrollIntoView) {
-                        rm.scrollIntoView({ block: "start", behavior: "smooth" });
-                    }
-                    if (sel && sel.focus) {
-                        try { sel.focus(); } catch (_) {}
-                    }
-                }, 0);
-            }
-        }
-
 
 
         // ------------------------------------------------------------
@@ -4236,7 +4156,6 @@ Optionally it can wipe member disks (VERY destructive).
                 // Best-effort: refresh pools list soon (exec polling will also refresh on done)
                 setTimeout(async () => {
                     await refreshPoolsState();
-                    renderPoolSelectorTop();
                     if (g_tab === "pools") await renderPoolsTab();
                 }, 800);
             };
@@ -4497,7 +4416,6 @@ Optionally it can wipe member disks (VERY destructive).
 
                 setTimeout(async () => {
                     await refreshPoolsState();
-                    renderPoolSelectorTop();
                     await renderPoolsTab();
                 }, 1200);
             }
@@ -4553,27 +4471,19 @@ Optionally it can wipe member disks (VERY destructive).
 
                     const grid = host.querySelector(".pqDriveSvgGrid");
                     if (grid) {
-                        // Click anywhere on drives area → open Drives modal for that pool
-                        grid.addEventListener("click", async (e) => {
-                            const mnt = grid.getAttribute("data-mount") || "";
-                            if (!mnt) return;
-
-                            // If user clicked a tile, still open modal (primary action)
-                            try {
-                                await openPoolDrivesModal(mnt);
-                            } catch (err) {
-                                showToast("err", `Drives UI crashed: ${String(err && (err.stack || err.message) ? (err.stack || err.message) : err)}`, 6500);
-                            }
-                        });
-
-                        // Optional: right-click on a tile copies /dev/... (secondary action)
+                        // Member drives are now visual-only.
+                        // Optional secondary action: right-click copies /dev/... path.
                         grid.querySelectorAll(".pqDriveSvgTile").forEach((tile) => {
                             tile.addEventListener("contextmenu", async (ev) => {
                                 ev.preventDefault();
                                 const dev = tile.getAttribute("data-dev") || "";
                                 if (!dev) return;
-                                try { await navigator.clipboard.writeText(dev); showToast("ok", `Copied: ${dev}`, 1400); }
-                                catch { showToast("info", dev, 1600); }
+                                try {
+                                    await navigator.clipboard.writeText(dev);
+                                    showToast("ok", `Copied: ${dev}`, 1400);
+                                } catch (_) {
+                                    showToast("info", dev, 1600);
+                                }
                             });
                         });
                     }
@@ -4759,7 +4669,6 @@ Optionally it can wipe member disks (VERY destructive).
 
                         showToast("ok", "Slot added ✓", 1800);
                         await refreshPoolsState();
-                        renderPoolSelectorTop();
                         await renderPoolsTab();
                     } catch (e) {
                         showToast("err", `Add slot crashed: ${String(e && e.message ? e.message : e)}`, 5200);
@@ -4778,7 +4687,6 @@ Optionally it can wipe member disks (VERY destructive).
 
                         showToast("ok", "Empty slot removed ✓", 1800);
                         await refreshPoolsState();
-                        renderPoolSelectorTop();
                         await renderPoolsTab();
                     } catch (e) {
                         showToast("err", `Remove slot crashed: ${String(e && e.message ? e.message : e)}`, 5200);
@@ -4810,14 +4718,7 @@ Optionally it can wipe member disks (VERY destructive).
                     return;
                 }
 
-                if (action === "drives") {
-                    try {
-                        await openPoolDrivesModal(mount);
-                    } catch (e) {
-                        showToast("err", `Drives UI crashed: ${String(e && (e.stack || e.message) ? (e.stack || e.message) : e)}`, 6500);
-                    }
-                    return;
-                }
+
 
                 if (action === "remove") {
                     try {
@@ -4887,7 +4788,6 @@ Optionally it can wipe member disks (VERY destructive).
                     const exists = g_pools.some((pp) => String(pp?.mount || "") === String(g_selectedMount || ""));
                     if (!exists && g_pools.length) g_selectedMount = String(g_pools[0]?.mount || "");
 
-                    renderPoolSelectorTop();
                     await renderPoolsTab();
                 } catch (e) {
                     showToast("err", `Rename crashed: ${String(e && e.message ? e.message : e)}`, 5200);
@@ -4913,7 +4813,6 @@ Optionally it can wipe member disks (VERY destructive).
         if (!lp.ok) {
             g_pools = [];
             g_selectedMount = "";
-            renderPoolSelectorTop();
 
             // show WHY in UI (so you immediately see 401/403 etc.)
             if (poolsOut) {
@@ -4930,36 +4829,16 @@ ${esc(JSON.stringify({ http: lp.http, error: lp.error, json: lp.j || null, txt: 
 
         const saved = loadSelectedMount();
         if (g_pools.length) {
-            const existsSaved = g_pools.some(p => String(p?.mount||"") === String(saved||""));
-            g_selectedMount = existsSaved ? String(saved||"") : String(g_pools[0]?.mount||"");
+            const existsSaved = g_pools.some(p => String(p?.mount || "") === String(saved || ""));
+            g_selectedMount = existsSaved ? String(saved || "") : String(g_pools[0]?.mount || "");
             saveSelectedMount(g_selectedMount);
         } else {
             g_selectedMount = "";
         }
 
-        renderPoolSelectorTop();
         await renderPoolsTab();
         applyDevModeToUi();
     }
-
-    refreshBtn?.addEventListener("click", probe);
-
-    poolSelTop?.addEventListener("change", () => {
-        const m = String(poolSelTop.value || "").trim();
-        if (!m) return;
-
-        stopAllPolling();
-
-        // clear cached output so Apply cannot accidentally carry across pools
-        g_lastAction = null;
-        g_lastProgress = null;
-
-        saveSelectedMount(m);
-        g_selectedMount = m;
-        probe();
-    });
-
-
 
     function initStoragemgr() {
         // Dev mode init

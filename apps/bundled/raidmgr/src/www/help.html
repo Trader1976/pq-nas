@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>PQ-NAS • Storage Manager Help</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+
+    <link rel="stylesheet" href="/static/theme.css">
+    <script src="/static/theme.js"></script>
+
+    <style>
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            padding: 24px;
+            background: var(--bg);
+            color: var(--fg);
+            font-family: var(--sans);
+        }
+
+        .wrap {
+            max-width: 980px;
+            margin: 0 auto;
+        }
+
+        .hero {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            flex-wrap: wrap;
+            margin-bottom: 18px;
+        }
+
+        .title {
+            font-size: 28px;
+            font-weight: 950;
+            margin: 0;
+        }
+
+        .sub {
+            margin-top: 6px;
+            opacity: .8;
+        }
+
+        .card {
+            margin-top: 14px;
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid var(--border2);
+            background: var(--panel);
+        }
+
+        h2 {
+            margin: 0 0 10px 0;
+            font-size: 18px;
+        }
+
+        p {
+            margin: 8px 0;
+            line-height: 1.55;
+        }
+
+        ul, ol {
+            margin: 8px 0 0 20px;
+            line-height: 1.55;
+        }
+
+        code {
+            font-family: var(--mono);
+            background: var(--panel2);
+            border: 1px solid var(--border2);
+            border-radius: 8px;
+            padding: 1px 6px;
+        }
+
+        .pill {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid var(--border2);
+            background: var(--panel2);
+            font-size: 12px;
+            margin-right: 6px;
+            margin-top: 6px;
+        }
+
+        .warn {
+            border-color: rgba(255,180,0,0.55);
+            background: rgba(255,180,0,0.12);
+        }
+
+        .danger {
+            border-color: rgba(180,60,60,0.55);
+            background: rgba(180,60,60,0.14);
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="hero">
+        <div>
+            <h1 class="title">Storage Manager Help</h1>
+            <div class="sub">Manage storage pools, slots, drives, and RAID mode in PQ-NAS.</div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>What this page is for</h2>
+        <p>
+            Storage Manager is used to create and maintain storage pools in PQ-NAS.
+            It shows all pools, their slots, current member drives, usage summary, and management actions.
+        </p>
+    </div>
+
+    <div class="card">
+        <h2>Main actions</h2>
+        <ul>
+            <li><b>Create new pool</b> creates a new editable PQ-NAS pool.</li>
+            <li><b>Edit slots</b> changes the saved slot layout and pool mode metadata.</li>
+            <li><b>Add slot</b> adds one more empty visible slot.</li>
+            <li><b>Remove empty slot</b> removes one unused empty slot.</li>
+            <li><b>Apply layout</b> applies one pending membership change from the saved slot layout to the real Btrfs pool.</li>
+            <li><b>Remove drive</b> removes a current member drive from the pool.</li>
+            <li><b>Rename</b> changes the display name of the pool.</li>
+            <li><b>Convert RAID</b> converts between <code>single</code> and <code>raid1</code>.</li>
+            <li><b>Destroy</b> removes the pool from PQ-NAS and can optionally wipe member drives.</li>
+        </ul>
+    </div>
+
+    <div class="card">
+        <h2>Slots vs member drives</h2>
+        <p>
+            Slots are the saved PQ-NAS layout. Member drives are the drives currently attached to the live Btrfs pool.
+        </p>
+        <p>
+            These can temporarily differ. When they differ, Pool Manager shows a pending layout state.
+            Use <b>Apply layout</b> to make the real pool membership match the saved layout.
+        </p>
+    </div>
+
+    <div class="card">
+        <h2>Single and RAID1</h2>
+        <img src="./raid-single-raid1-help.svg" alt="Diagram showing Single mode and RAID1 mirroring" style="width:100%; height:auto; border-radius:16px; border:1px solid var(--border2); background:var(--panel2);">
+        <p><span class="pill">Single</span> Capacity-focused mode with no redundancy.</p>
+        <p><span class="pill">RAID1</span> Mirror-focused mode with redundancy across at least two devices.</p>
+        <p>Converting RAID mode may run a Btrfs balance and can take a long time depending on pool size and device speed.</p>
+    </div>
+
+    <div class="card">
+        <h2>Important warnings</h2>
+        <p><span class="pill warn">Long-running operations</span> Add, remove, and convert operations may take a long time.</p>
+        <p><span class="pill warn">Preview first</span> When an action uses Preview and Apply, always preview before applying.</p>
+        <p><span class="pill danger">Destructive wipe</span> Force wipe or destroy with wipe enabled can permanently erase data.</p>
+        <p><span class="pill danger">Be careful with old Btrfs signatures</span> A disk that still contains old Btrfs metadata may look like a pool member even when it is no longer active.</p>
+    </div>
+
+    <div class="card">
+        <h2>Recommended workflow</h2>
+        <ol>
+            <li>Create a pool with the desired initial mode.</li>
+            <li>Adjust slot count if needed.</li>
+            <li>Assign drives or add/remove them through the pool actions.</li>
+            <li>Use Apply layout when saved slots and live membership differ.</li>
+            <li>Use Convert RAID only when the current device count supports the target mode.</li>
+        </ol>
+    </div>
+</div>
+</body>
+</html>
