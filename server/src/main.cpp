@@ -16859,7 +16859,40 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
             return;
         }
     }
+    // Refuse quota changes that would set quota below current used bytes.
+{
+    const std::uint64_t used_bytes = dir_size_bytes_best_effort(udir);
 
+    if (quota_bytes < used_bytes) {
+        try {
+            pqnas::AuditEvent ev;
+            ev.event = "admin.user_storage_allocate_refused";
+            ev.outcome = "fail";
+            ev.f["fingerprint"] = fp;
+            ev.f["reason"] = "quota_below_used_bytes";
+            ev.f["pool_id"] = normalize_storage_pool_id(pool_id);
+            ev.f["requested_quota_bytes"] = std::to_string((unsigned long long)quota_bytes);
+            ev.f["used_bytes"] = std::to_string((unsigned long long)used_bytes);
+            ev.f["user_dir"] = pqnas::shorten(udir.string(), 200);
+            ev.f["ts"] = now_iso;
+            ev.f["actor_fp"] = actor_fp;
+            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            audit_append(ev);
+        } catch (...) {}
+
+        reply_json(res, 409, json({
+            {"ok", false},
+            {"error", "quota_below_used_bytes"},
+            {"message", "requested quota is below current storage usage"},
+            {"fingerprint", fp},
+            {"pool_id", normalize_storage_pool_id(pool_id)},
+            {"requested_quota_bytes", quota_bytes},
+            {"used_bytes", used_bytes},
+            {"user_dir", udir.string()}
+        }).dump());
+        return;
+    }
+}
     const std::string root_rel = canonical_root_rel;
 
     // Audit mkdir success (best-effort)
