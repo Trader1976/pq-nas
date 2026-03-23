@@ -4910,7 +4910,40 @@ static void user_storage_migration_worker_main(std::string users_path) {
                 fail_reason = "same_pool";
                 break;
             }
+            fail_phase = "validating_destination_capacity";
+            user_mig_record_set_phase(&job.record,
+                                      "validating_destination_capacity",
+                                      16,
+                                      "validating destination free space and quota capacity");
+            (void)user_mig_record_write_atomic(job.job_id, job.record);
 
+            {
+                pqnas::UserStorageMigrationCapacityCheck cap;
+                if (!pqnas::validate_user_storage_migration_destination_capacity(users_local,
+                                                                                 users_path,
+                                                                                 plan,
+                                                                                 &cap,
+                                                                                 &err)) {
+                    job.record["result"]["source_used_bytes"] = cap.source_used_bytes;
+                    job.record["result"]["dest_total_bytes"] = cap.dest_total_bytes;
+                    job.record["result"]["dest_free_bytes"] = cap.dest_free_bytes;
+                    job.record["result"]["required_free_bytes"] = cap.required_free_bytes;
+                    job.record["result"]["dest_allocated_other_bytes"] = cap.dest_allocated_other_bytes;
+                    job.record["result"]["dest_would_total_quota_bytes"] = cap.dest_would_total_quota_bytes;
+                    job.record["result"]["user_quota_bytes"] = cap.user_quota_bytes;
+
+                    fail_reason = err.empty() ? "destination_capacity_validation_failed" : err;
+                    break;
+                }
+
+                job.record["result"]["source_used_bytes"] = cap.source_used_bytes;
+                job.record["result"]["dest_total_bytes"] = cap.dest_total_bytes;
+                job.record["result"]["dest_free_bytes"] = cap.dest_free_bytes;
+                job.record["result"]["required_free_bytes"] = cap.required_free_bytes;
+                job.record["result"]["dest_allocated_other_bytes"] = cap.dest_allocated_other_bytes;
+                job.record["result"]["dest_would_total_quota_bytes"] = cap.dest_would_total_quota_bytes;
+                job.record["result"]["user_quota_bytes"] = cap.user_quota_bytes;
+            }
             job.record["resolved_source_pool_id"] = plan.from_pool_id;
             job.record["resolved_dest_pool_id"] = plan.to_pool_id;
             job.record["resolved_source_root"] = plan.src_data_root.string();
@@ -14047,6 +14080,24 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
         if (all_ok) (void)run_step("/usr/bin/sudo -n /usr/bin/udevadm settle");
         if (all_ok) (void)run_step("/usr/bin/sudo -n /usr/bin/btrfs device scan");
         if (all_ok) (void)run_step("/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(mount));
+
+        // Prepare PQ-NAS data root on the new managed pool and make it writable
+        // for the service account. This avoids later storage allocation /
+        // migration / upload failures when the pool was created by root.
+        if (all_ok) {
+            const std::string data_dir = mount + "/data";
+            (void)run_step("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(data_dir));
+        }
+
+        if (all_ok) {
+            const std::string data_dir = mount + "/data";
+            (void)run_step("/usr/bin/sudo -n /bin/chown pqnas:pqnas " + sh_quote(data_dir));
+        }
+
+        if (all_ok) {
+            const std::string data_dir = mount + "/data";
+            (void)run_step("/usr/bin/sudo -n /bin/chmod 0755 " + sh_quote(data_dir));
+        }
 
          // update pools.json
         if (all_ok) {

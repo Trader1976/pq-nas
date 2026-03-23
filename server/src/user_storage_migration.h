@@ -73,6 +73,52 @@ struct UserStorageMigrationPlan {
     std::filesystem::path dst_user_dir;
 };
 
+// Measured destination-capacity data for a planned user-storage migration.
+//
+// Why this struct exists
+// - destination-capacity validation produces several useful numbers
+// - callers may want those numbers for durable job records, UI status, audit
+//   context, or sync-path diagnostics
+//
+// Field meanings
+// - source_used_bytes:
+//     current regular-file byte total under the source user directory
+//
+// - dest_total_bytes:
+//     total capacity of the destination filesystem backing the target pool
+//
+// - dest_free_bytes:
+//     currently available bytes on the destination filesystem
+//
+// - required_free_bytes:
+//     minimum free bytes required for migration to proceed safely:
+//       source_used_bytes + safety_margin
+//
+// - dest_allocated_other_bytes:
+//     sum of quota_bytes for other allocated users already mapped to the
+//     destination pool
+//
+// - dest_would_total_quota_bytes:
+//     destination-pool assigned quota total if the migrating user is moved
+//     there with their current quota
+//
+// - user_quota_bytes:
+//     current stored quota of the migrating user
+//
+// Design note
+// - this struct is informational; it does not itself encode pass/fail
+// - pass/fail is returned by the validation function, while this struct keeps
+//   the underlying measured values available to callers
+struct UserStorageMigrationCapacityCheck {
+    std::uint64_t source_used_bytes = 0;
+    std::uint64_t dest_total_bytes = 0;
+    std::uint64_t dest_free_bytes = 0;
+    std::uint64_t required_free_bytes = 0;
+    std::uint64_t dest_allocated_other_bytes = 0;
+    std::uint64_t dest_would_total_quota_bytes = 0;
+    std::uint64_t user_quota_bytes = 0;
+};
+
 // End-to-end migration result used by the legacy synchronous wrapper.
 //
 // The async worker usually persists equivalent information in its durable job
@@ -191,6 +237,14 @@ bool resolve_user_storage_cleanup(const UsersRegistry& users,
 
 bool validate_user_storage_cleanup(const UserStorageCleanupPlan& plan,
                                   std::string* err);
+
+// Validate that a planned destination pool has enough real free space and
+// enough logical quota capacity for the migration to proceed safely.
+bool validate_user_storage_migration_destination_capacity(const UsersRegistry& users,
+                                                         const std::string& users_path,
+                                                         const UserStorageMigrationPlan& plan,
+                                                         UserStorageMigrationCapacityCheck* out,
+                                                         std::string* err);
 
 bool delete_user_storage_old_copy(const UserStorageCleanupPlan& plan,
                                   std::uint64_t* removed_entries,

@@ -66,6 +66,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <cctype>
+#include <sys/statvfs.h>
+#include <limits>
+#include <sys/stat.h>
 
 using json = nlohmann::json;
 
@@ -225,6 +228,49 @@ static bool ensure_dir_exists_strict(const std::filesystem::path& p, std::string
     return true;
 }
 
+static bool stat_uid_gid(const std::filesystem::path& p,
+                         uid_t* out_uid,
+                         gid_t* out_gid,
+                         std::string* err) {
+    if (out_uid) *out_uid = 0;
+    if (out_gid) *out_gid = 0;
+    if (err) err->clear();
+
+    struct stat st {};
+    if (::stat(p.c_str(), &st) != 0) {
+        if (err) *err = "stat failed for " + p.string();
+        return false;
+    }
+
+    if (out_uid) *out_uid = st.st_uid;
+    if (out_gid) *out_gid = st.st_gid;
+    return true;
+}
+
+static bool chown_path_if_needed(const std::filesystem::path& p,
+                                 uid_t uid,
+                                 gid_t gid,
+                                 std::string* err) {
+    if (err) err->clear();
+
+    struct stat st {};
+    if (::stat(p.c_str(), &st) != 0) {
+        if (err) *err = "stat failed for " + p.string();
+        return false;
+    }
+
+    if (st.st_uid == uid && st.st_gid == gid) {
+        return true;
+    }
+
+    if (::chown(p.c_str(), uid, gid) != 0) {
+        if (err) *err = "chown failed for " + p.string();
+        return false;
+    }
+
+    return true;
+}
+
 // Safe best-effort regular-file size helper used by tree byte summation.
 //
 // Non-regular files and error cases contribute zero bytes.
@@ -260,6 +306,98 @@ static std::uint64_t compute_tree_bytes(const std::filesystem::path& root) {
     return total;
 }
 
+    // Read total and user-available bytes for the filesystem that backs a path.
+    //
+    // Why this helper exists
+    // - migration capacity validation needs a direct filesystem-space probe
+    // - we want a small local helper here rather than depending on HTTP-layer code
+    //
+    // Semantics
+    // - total_bytes uses f_blocks * f_frsize
+    // - free_bytes uses f_bavail * f_frsize
+    // - f_bavail is intentional: it represents bytes available to normal writes,
+    //   which is the right signal for "can we safely migrate user data here?"
+    //
+    // Failure model
+    // - returns false if statvfs() fails
+    // - caller receives zeroed outputs and a short error string
+    //
+    // Scope
+    // - private to the migration module
+    // - used only for destination-capacity validation before copy begins
+    static bool statvfs_bytes_local(const std::filesystem::path& path,
+                                std::uint64_t* total_bytes,
+                                std::uint64_t* free_bytes,
+                                std::string* err) {
+    if (total_bytes) *total_bytes = 0;
+    if (free_bytes) *free_bytes = 0;
+    if (err) err->clear();
+
+    struct statvfs sv {};
+    if (::statvfs(path.c_str(), &sv) != 0) {
+        if (err) *err = "statvfs failed";
+        return false;
+    }
+
+    const std::uint64_t frsize = static_cast<std::uint64_t>(sv.f_frsize);
+    if (total_bytes) *total_bytes = frsize * static_cast<std::uint64_t>(sv.f_blocks);
+    if (free_bytes)  *free_bytes  = frsize * static_cast<std::uint64_t>(sv.f_bavail);
+    return true;
+}
+
+    // Normalize pool-id representation for migration-local comparisons.
+    //
+    // Why this helper exists
+    // - users.json stores the default pool as storage_pool_id == ""
+    // - migration planning and validation use the logical id "default"
+    //
+    // This helper keeps pool comparisons stable when summing allocated quotas or
+    // validating destination-pool policy during migration.
+    static std::string normalize_pool_id_local(const std::string& v) {
+    return (v.empty() || v == "default") ? "default" : v;
+}
+
+    // Sum allocated quota bytes for all users currently mapped to a logical pool.
+    //
+    // Policy intent
+    // - migration should not move a user onto a destination pool whose total
+    //   assigned quotas would exceed that pool's capacity
+    //
+    // Comparison model
+    // - default pool is normalized to logical id "default"
+    // - only users with storage_state == "allocated" are counted
+    // - exclude_fp lets callers avoid double-counting the migrating user when
+    //   calculating "other users already allocated on destination"
+    //
+    // Overflow handling
+    // - saturates to uint64_t max on addition overflow
+    //
+    // Scope
+    // - private helper used by destination-capacity validation
+    static std::uint64_t sum_allocated_quota_on_pool_local(const UsersRegistry& users,
+                                                           const std::string& pool_id,
+                                                           const std::string& exclude_fp) {
+    const std::string want_pool = normalize_pool_id_local(pool_id);
+    std::uint64_t total = 0;
+
+    for (const auto& kv : users.snapshot()) {
+        const auto& u = kv.second;
+
+        if (!exclude_fp.empty() && u.fingerprint == exclude_fp) continue;
+        if (u.storage_state != "allocated") continue;
+
+        const std::string user_pool = normalize_pool_id_local(u.storage_pool_id);
+        if (user_pool != want_pool) continue;
+
+        const std::uint64_t q = static_cast<std::uint64_t>(u.quota_bytes);
+        if (std::numeric_limits<std::uint64_t>::max() - total < q) {
+            return std::numeric_limits<std::uint64_t>::max();
+        }
+        total += q;
+    }
+
+    return total;
+}
 // Execute rsync copy from source user dir to destination user dir.
 //
 // Command intent
@@ -499,19 +637,158 @@ bool resolve_user_storage_migration(const UsersRegistry& users,
     return true;
 }
 
-// Ensure the destination hierarchy exists before copy.
+    // Validate that a planned destination pool can safely receive the migration.
+    //
+    // Why this phase exists
+    // - planning alone only resolves paths and pool ids
+    // - before destination creation/copy begins, we need to confirm that the
+    //   destination pool is still a valid target under current filesystem state
+    //   and current users.json quota assignments
+    //
+    // Validation performed
+    // 1) Actual free-space check
+    //    - compute current source-tree byte total
+    //    - require destination filesystem free bytes to cover:
+    //        source_used_bytes + safety_margin
+    //
+    // 2) Logical quota-capacity check
+    //    - sum allocated quotas already assigned to other users on destination pool
+    //    - add the migrating user's current quota
+    //    - require resulting total assigned quota to fit within destination pool
+    //      total capacity
+    //
+    // Why both checks matter
+    // - free-space check protects the actual copy operation
+    // - quota-capacity check protects the administrative storage-allocation model
+    //
+    // Output model
+    // - optional `out` receives measured values for job records, UI status, and
+    //   future diagnostics
+    //
+    // Non-responsibilities
+    // - does not create directories
+    // - does not copy data
+    // - does not mutate users.json
+    //
+    // Failure model
+    // - returns false with a short machine-friendly error string, such as:
+    //     destination_statvfs_failed
+    //     destination_insufficient_free_space
+    //     destination_pool_quota_overcommit
+    bool validate_user_storage_migration_destination_capacity(const UsersRegistry& users,
+                                                         const std::string& users_path,
+                                                         const UserStorageMigrationPlan& plan,
+                                                         UserStorageMigrationCapacityCheck* out,
+                                                         std::string* err) {
+    (void)users_path;
+
+    if (err) err->clear();
+    if (out) {
+        out->source_used_bytes = 0;
+        out->dest_total_bytes = 0;
+        out->dest_free_bytes = 0;
+        out->required_free_bytes = 0;
+        out->dest_allocated_other_bytes = 0;
+        out->dest_would_total_quota_bytes = 0;
+        out->user_quota_bytes = 0;
+    }
+
+    const std::uint64_t source_used_bytes = compute_tree_bytes(plan.src_user_dir);
+
+    std::uint64_t dest_total_bytes = 0;
+    std::uint64_t dest_free_bytes = 0;
+    std::string stat_err;
+    if (!statvfs_bytes_local(plan.dst_data_root, &dest_total_bytes, &dest_free_bytes, &stat_err)) {
+        if (err) *err = "destination_statvfs_failed: " + stat_err;
+        return false;
+    }
+
+    // Keep a small landing margin so migration does not consume destination
+    // free space to absolute zero. This is intentionally conservative rather
+    // than precise.
+    static constexpr std::uint64_t kMigrationSafetyMarginBytes =
+        512ULL * 1024ULL * 1024ULL; // 512 MiB
+
+    std::uint64_t required_free_bytes = source_used_bytes;
+    if (std::numeric_limits<std::uint64_t>::max() - required_free_bytes < kMigrationSafetyMarginBytes) {
+        required_free_bytes = std::numeric_limits<std::uint64_t>::max();
+    } else {
+        required_free_bytes += kMigrationSafetyMarginBytes;
+    }
+
+    auto uopt = users.get(plan.fingerprint);
+    if (!uopt.has_value()) {
+        if (err) *err = "user_missing_during_capacity_validation";
+        return false;
+    }
+
+    const auto& u = *uopt;
+    const std::uint64_t user_quota_bytes =
+        (u.storage_state == "allocated") ? static_cast<std::uint64_t>(u.quota_bytes) : 0;
+
+    const std::uint64_t dest_allocated_other_bytes =
+        sum_allocated_quota_on_pool_local(users, plan.to_pool_id, plan.fingerprint);
+
+    std::uint64_t dest_would_total_quota_bytes = dest_allocated_other_bytes;
+    if (std::numeric_limits<std::uint64_t>::max() - dest_would_total_quota_bytes < user_quota_bytes) {
+        dest_would_total_quota_bytes = std::numeric_limits<std::uint64_t>::max();
+    } else {
+        dest_would_total_quota_bytes += user_quota_bytes;
+    }
+
+    if (out) {
+        out->source_used_bytes = source_used_bytes;
+        out->dest_total_bytes = dest_total_bytes;
+        out->dest_free_bytes = dest_free_bytes;
+        out->required_free_bytes = required_free_bytes;
+        out->dest_allocated_other_bytes = dest_allocated_other_bytes;
+        out->dest_would_total_quota_bytes = dest_would_total_quota_bytes;
+        out->user_quota_bytes = user_quota_bytes;
+    }
+
+    if (dest_free_bytes < required_free_bytes) {
+        if (err) *err = "destination_insufficient_free_space";
+        return false;
+    }
+
+    if (dest_would_total_quota_bytes > dest_total_bytes) {
+        if (err) *err = "destination_pool_quota_overcommit";
+        return false;
+    }
+
+    return true;
+}
+
+// Ensure the destination hierarchy exists and is writable for migration.
 //
-// We create both:
-// - parent subtree for root_rel
-// - final per-user destination directory
+// Ownership model
+// - destination directories should match the ownership of the source user dir
+// - this avoids permission mismatches when a pool/data root was created
+//   manually as root or otherwise drifted away from the service's expected
+//   ownership model
 //
-// This phase is intentionally separate so async jobs can report progress
-// accurately and fail before copy begins if the destination pool/root is not
-// writable or cannot be prepared.
+// Why this is done here
+// - this is the first phase that prepares destination filesystem state
+// - keeping ownership repair here makes migration robust even when pool setup
+//   happened outside the normal managed-pool creation flow
 bool ensure_user_storage_migration_destination(const UserStorageMigrationPlan& plan,
                                                std::string* err) {
-    if (!ensure_dir_exists_strict(plan.dst_user_dir.parent_path(), err)) return false;
+    if (err) err->clear();
+
+    uid_t src_uid = 0;
+    gid_t src_gid = 0;
+    if (!stat_uid_gid(plan.src_user_dir, &src_uid, &src_gid, err)) {
+        return false;
+    }
+
+    const auto parent = plan.dst_user_dir.parent_path();
+
+    if (!ensure_dir_exists_strict(parent, err)) return false;
+    if (!chown_path_if_needed(parent, src_uid, src_gid, err)) return false;
+
     if (!ensure_dir_exists_strict(plan.dst_user_dir, err)) return false;
+    if (!chown_path_if_needed(plan.dst_user_dir, src_uid, src_gid, err)) return false;
+
     return true;
 }
 
@@ -763,6 +1040,8 @@ bool delete_user_storage_old_copy(const UserStorageCleanupPlan& plan,
 //
 // The async worker should prefer calling the individual phase helpers directly
 // so it can emit durable progress records and audits at each boundary.
+// Apply the same destination-capacity gate used by the async worker so the
+// legacy synchronous path preserves identical safety rules.
 bool migrate_user_storage_sync(UsersRegistry& users,
                                const std::string& users_path,
                                const std::string& actor_fp,
@@ -784,6 +1063,15 @@ bool migrate_user_storage_sync(UsersRegistry& users,
         r.ok = false;
         r.error = "same_pool";
         r.detail = "source and destination pool are the same";
+        if (out) *out = r;
+        return false;
+    }
+
+    UserStorageMigrationCapacityCheck cap;
+    if (!validate_user_storage_migration_destination_capacity(users, users_path, r.plan, &cap, &err)) {
+        r.ok = false;
+        r.error = "capacity_validation_failed";
+        r.detail = err;
         if (out) *out = r;
         return false;
     }
