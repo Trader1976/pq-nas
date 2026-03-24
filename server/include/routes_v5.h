@@ -134,7 +134,46 @@ struct RoutesV5Context {
         std::string role;
         std::string device_id;
     };
+    struct AppPairStartResult {
+        std::string pair_id;
+        std::string pair_token;
+        long expires_at = 0;
+        std::string qr_uri;
+    };
 
+    struct AppPairStatusResult {
+        std::string pair_id;
+        long expires_at = 0;
+        bool consumed = false;
+        std::string consumed_device_id;
+    };
+
+    std::function<bool(const httplib::Request&, httplib::Response&, std::string*, std::string*)> require_user_cookie;
+
+    std::function<void(long)> app_pair_prune;
+
+    std::function<bool(const std::string& fingerprint_hex,
+                       const std::string& role,
+                       AppPairStartResult& out,
+                       std::string& err)> app_pair_start;
+
+    std::function<bool(const std::string& pair_id,
+                       AppPairStatusResult& out,
+                       std::string& err)> app_pair_get;
+
+    std::function<bool(const std::string& pair_token,
+                       std::string& out_pair_id,
+                       std::string& out_fingerprint_hex,
+                       std::string& out_role,
+                       std::string& err)> app_pair_consume;
+
+    std::function<bool(const std::string& pair_id,
+                       const std::string& device_id,
+                       std::string& err)> app_pair_mark_consumed_device;
+
+    std::function<std::string(const std::string& origin,
+                              const std::string& pair_token,
+                              const std::string& app_name)> app_pair_build_qr_uri;
     std::function<bool(const std::string& fingerprint_hex,
                    const std::string& device_name,
                    const std::string& platform,

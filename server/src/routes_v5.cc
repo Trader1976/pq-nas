@@ -615,6 +615,191 @@ srv.Post("/api/v5/token/refresh", [&](const httplib::Request& req, httplib::Resp
     }.dump());
 });
 
+// ---- POST /api/v5/app_pair/start ----
+srv.Post("/api/v5/app_pair/start", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!ctx.require_user_cookie) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "require_user_cookie_not_configured"}}.dump());
+        return;
+    }
+
+    std::string fp_hex, role;
+    if (!ctx.require_user_cookie(req, res, &fp_hex, &role)) return;
+
+    const long now = ctx.now_epoch ? ctx.now_epoch() : 0;
+    if (ctx.app_pair_prune) ctx.app_pair_prune(now);
+
+    if (!ctx.app_pair_start) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "app_pair_start_not_configured"}}.dump());
+        return;
+    }
+
+    RoutesV5Context::AppPairStartResult out;
+    std::string err;
+    if (!ctx.app_pair_start(fp_hex, role, out, err)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", err.empty() ? "pair start failed" : err}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"pair_id", out.pair_id},
+        {"expires_at", out.expires_at},
+        {"qr_uri", out.qr_uri},
+        {"qr_svg", std::string("/api/v5/app_pair/qr.svg?pt=") + (ctx.url_encode ? ctx.url_encode(out.pair_token) : out.pair_token)}
+    }.dump());
+});
+// ---- GET /api/v5/app_pair/qr.svg?pt=... ----
+srv.Get("/api/v5/app_pair/qr.svg", [&](const httplib::Request& req, httplib::Response& res) {
+    auto it = req.params.find("pt");
+    if (it == req.params.end() || it->second.empty()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing pt"}}.dump());
+        return;
+    }
+
+    if (!ctx.app_pair_build_qr_uri || !ctx.qr_svg_from_text || !ctx.origin || !ctx.app) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "pair qr dependencies missing"}}.dump());
+        return;
+    }
+
+    const std::string pt = it->second;
+    const std::string qr_uri = ctx.app_pair_build_qr_uri(*ctx.origin, pt, *ctx.app);
+
+    try {
+        const std::string svg = ctx.qr_svg_from_text(qr_uri, 6, 4);
+        res.status = 200;
+        res.set_header("Content-Type", "image/svg+xml; charset=utf-8");
+        res.set_header("Cache-Control", "no-store");
+        res.body = svg;
+    } catch (const std::exception& e) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", e.what()}}.dump());
+    }
+});
+// ---- GET /api/v5/app_pair/status?pair_id=... ----
+srv.Get("/api/v5/app_pair/status", [&](const httplib::Request& req, httplib::Response& res) {
+    auto it = req.params.find("pair_id");
+    if (it == req.params.end() || it->second.empty()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing pair_id"}}.dump());
+        return;
+    }
+
+    const std::string pair_id = it->second;
+    const long now = ctx.now_epoch ? ctx.now_epoch() : 0;
+    if (ctx.app_pair_prune) ctx.app_pair_prune(now);
+
+    if (!ctx.app_pair_get) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "app_pair_get_not_configured"}}.dump());
+        return;
+    }
+
+    RoutesV5Context::AppPairStatusResult st;
+    std::string err;
+    if (!ctx.app_pair_get(pair_id, st, err)) {
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"state", "missing"},
+            {"pair_id", pair_id}
+        }.dump());
+        return;
+    }
+
+    if (st.expires_at > 0 && now > st.expires_at) {
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"state", "expired"},
+            {"pair_id", pair_id},
+            {"expires_at", st.expires_at}
+        }.dump());
+        return;
+    }
+
+    if (st.consumed) {
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"state", "consumed"},
+            {"pair_id", pair_id},
+            {"device_id", st.consumed_device_id}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"state", "pending"},
+        {"pair_id", pair_id},
+        {"expires_at", st.expires_at}
+    }.dump());
+});
+// ---- POST /api/v5/app_pair/consume {pair_token, device_name?, platform?, app_version?} ----
+srv.Post("/api/v5/app_pair/consume", [&](const httplib::Request& req, httplib::Response& res) {
+    json j;
+    std::string jerr;
+    if (!parse_json_body(req, j, jerr)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", jerr}}.dump());
+        return;
+    }
+
+    const std::string pair_token = j.value("pair_token", std::string{});
+    const std::string device_name = j.value("device_name", std::string{});
+    std::string platform = j.value("platform", std::string{});
+    const std::string app_version = j.value("app_version", std::string{});
+    if (platform.empty()) platform = "android";
+
+    if (pair_token.empty()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing pair_token"}}.dump());
+        return;
+    }
+
+    if (!ctx.app_pair_consume || !ctx.consume_app_mint) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "pair consume not configured"}}.dump());
+        return;
+    }
+
+    std::string pair_id, fingerprint_hex, role;
+    std::string cerr;
+    if (!ctx.app_pair_consume(pair_token, pair_id, fingerprint_hex, role, cerr)) {
+        reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "not_allowed"},
+            {"message", cerr.empty() ? "pair consume failed" : cerr}
+        }.dump());
+        return;
+    }
+
+    RoutesV5Context::ConsumeAppResult out;
+    std::string merr;
+    const std::string client_ip = ctx.client_ip ? ctx.client_ip(req) : req.remote_addr;
+
+    if (!ctx.consume_app_mint(fingerprint_hex, device_name, platform, app_version, client_ip, out, merr)) {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", merr.empty() ? "pair mint denied" : merr}
+        }.dump());
+        return;
+    }
+
+    if (ctx.app_pair_mark_consumed_device) {
+        std::string derr;
+        ctx.app_pair_mark_consumed_device(pair_id, out.device_id, derr);
+    }
+
+    const long now = ctx.now_epoch ? ctx.now_epoch() : 0;
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"token_type", "Bearer"},
+        {"access_token", out.access_token},
+        {"expires_in", (out.access_exp > now ? out.access_exp - now : 0)},
+        {"refresh_token", out.refresh_token},
+        {"refresh_expires_in", (out.refresh_exp > now ? out.refresh_exp - now : 0)},
+        {"device_id", out.device_id},
+        {"fingerprint_hex", out.fingerprint_hex.empty() ? fingerprint_hex : out.fingerprint_hex},
+        {"role", out.role.empty() ? role : out.role}
+    }.dump());
+});
 }
 
 

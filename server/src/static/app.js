@@ -9,6 +9,7 @@
     const stateUnauth = document.getElementById("state_unauth");
 
     const navHome = document.getElementById("nav_home");
+    const navTrustedDevices = document.getElementById("nav_trusted_devices");
 
     const navAdmin = document.getElementById("nav_admin");
     const navUsers = document.getElementById("nav_users");
@@ -53,6 +54,9 @@
     let authed = false;
     let isAdmin = false;
 
+    let currentPairing = null; // { pair_id, expires_at, qr_svg, qr_uri }
+    let pairPollTimer = null;
+
     // small UI state
     let versionShown = false;
 
@@ -86,7 +90,7 @@
     }
 
     function setActiveNav(activeId) {
-        const ids = ["nav_home"];
+        const ids = ["nav_home", "nav_trusted_devices"];
         for (const id of ids) {
             const b = document.getElementById(id);
             if (!b) continue;
@@ -98,7 +102,12 @@
         if (!appsList) return;
         appsList.innerHTML = "";
     }
-
+    function stopPairPolling() {
+        if (pairPollTimer) {
+            clearInterval(pairPollTimer);
+            pairPollTimer = null;
+        }
+    }
     function addAppNavButton(appId, label, href) {
         if (!appsList) return;
 
@@ -591,7 +600,148 @@
 
         updateSelectionVisual();
     }
+    async function startPairingFlow() {
+        try {
+            const r = await fetch("/api/v5/app_pair/start", {
+                method: "POST",
+                credentials: "include",
+                cache: "no-store"
+            });
+
+            const j = await r.json().catch(() => null);
+            if (!r.ok || !j || !j.ok) {
+                throw new Error((j && j.message) ? j.message : `HTTP ${r.status}`);
+            }
+
+            currentPairing = j;
+            renderTrustedDevices();
+
+            stopPairPolling();
+            pairPollTimer = setInterval(async () => {
+                if (!currentPairing || !currentPairing.pair_id) return;
+
+                try {
+                    const sr = await fetch(`/api/v5/app_pair/status?pair_id=${encodeURIComponent(currentPairing.pair_id)}`, {
+                        credentials: "include",
+                        cache: "no-store"
+                    });
+
+                    const sj = await sr.json().catch(() => null);
+                    if (!sr.ok || !sj || !sj.ok) return;
+
+                    const statusEl = document.getElementById("pairStatusLine");
+                    if (!statusEl) return;
+
+                    if (sj.state === "pending") {
+                        statusEl.textContent = "Waiting for phone to scan and confirm…";
+                        return;
+                    }
+
+                    if (sj.state === "consumed") {
+                        statusEl.textContent = `Paired successfully. Device ID: ${sj.device_id || "?"}`;
+                        stopPairPolling();
+                        return;
+                    }
+
+                    if (sj.state === "expired") {
+                        statusEl.textContent = "Pairing request expired. Start a new one.";
+                        stopPairPolling();
+                        return;
+                    }
+
+                    if (sj.state === "missing") {
+                        statusEl.textContent = "Pairing request missing.";
+                        stopPairPolling();
+                    }
+                } catch {
+                    // keep polling quietly
+                }
+            }, 1500);
+        } catch (e) {
+            currentPairing = null;
+            renderTrustedDevices(`Failed to start pairing: ${String(e && e.message ? e.message : e)}`);
+        }
+    }
+
+    function renderTrustedDevices(errorText = "") {
+        currentView = "trusted_devices";
+        currentApp = null;
+
+        setActiveNav("nav_trusted_devices");
+        setActiveApp("");
+
+        if (wsTitle) wsTitle.textContent = "Trusted Devices";
+        if (wsSubtitle) wsSubtitle.textContent = "Pair this phone or other devices with your PQ-NAS account";
+        if (mainPaneTitle) mainPaneTitle.textContent = "Trusted Devices";
+
+        if (!homeBlurb) return;
+
+        const mainPane = homeBlurb.closest(".pane");
+        if (mainPane) {
+            mainPane.classList.remove("appHost");
+            mainPane.classList.add("homeHost");
+        }
+        homeBlurb.classList.remove("appHostBlurb");
+
+        const qrBlock = currentPairing ? `
+        <div style="margin-top:16px; display:flex; flex-direction:column; gap:12px; align-items:flex-start;">
+            <img
+                src="${currentPairing.qr_svg}"
+                alt="Pairing QR"
+                style="width:280px; height:280px; border-radius:16px; border:1px solid rgba(255,255,255,0.12); background:#fff; padding:12px;"
+            />
+            <div class="mini" id="pairStatusLine">Waiting for phone to scan and confirm…</div>
+            <div class="mini" style="word-break:break-all;">
+                ${currentPairing.qr_uri || ""}
+            </div>
+        </div>
+    ` : `
+        <div class="mini" id="pairStatusLine">No active pairing request.</div>
+    `;
+
+        homeBlurb.innerHTML = `
+        <div style="max-width:760px;">
+            <h3 style="margin:0 0 8px 0; font-size:18px;">Pair a new device</h3>
+            <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:14px;">
+                Open the PQ-NAS mobile app, choose scan/pair, and scan the QR code shown here.
+                After you confirm on the phone, this page will update automatically.
+            </div>
+
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
+                <button class="btn" id="pairNewDeviceBtn" type="button">Pair New Device</button>
+                <button class="btn secondary" id="pairStopBtn" type="button">Clear</button>
+            </div>
+
+            ${errorText ? `
+                <div class="bigState" style="display:block; margin-top:8px;">
+                    <h3>Pairing error</h3>
+                    <p>${errorText}</p>
+                </div>
+            ` : ""}
+
+            ${qrBlock}
+        </div>
+    `;
+
+        const pairBtn = document.getElementById("pairNewDeviceBtn");
+        if (pairBtn) {
+            pairBtn.addEventListener("click", () => {
+                startPairingFlow();
+            });
+        }
+
+        const clearBtn = document.getElementById("pairStopBtn");
+        if (clearBtn) {
+            clearBtn.addEventListener("click", () => {
+                stopPairPolling();
+                currentPairing = null;
+                renderTrustedDevices();
+            });
+        }
+    }
     function renderHome() {
+        stopPairPolling();
+
         currentView = "home";
         currentApp = null;
 
@@ -635,6 +785,7 @@
     }
 
     function renderApp(app) {
+        stopPairPolling();
         // app = {id, ver, name?}
         currentView = `app:${app.id}@${app.ver}`;
         currentApp = { id: app.id, ver: app.ver };
@@ -879,7 +1030,7 @@
     }
 
     if (navHome) navHome.addEventListener("click", () => renderHome());
-
+    if (navTrustedDevices) navTrustedDevices.addEventListener("click", () => renderTrustedDevices());
     // Default view
     renderHome();
 

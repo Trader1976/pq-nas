@@ -134,6 +134,7 @@ extern "C" {
 
 // for mobile app
 #include "app_tokens.h"
+#include "app_pairing.h"
 
 using json = nlohmann::json;
 
@@ -240,6 +241,7 @@ const std::string APPS_USERS_DIR     = (std::filesystem::path(APPS_DIR) / "users
 
 // for mobile app
 static pqnas::AppTokenStore g_app_tokens;
+static pqnas::AppPairingStore g_app_pairing;
 
 static std::string ORIGIN   = "https://nas.example.com";
 static std::string ISS      = "pq-nas";
@@ -6928,7 +6930,13 @@ int main()
     } catch (const std::exception& e) {
         std::cerr << "[audit] WARNING: create_directories failed: " << e.what() << std::endl;
     }
+	g_app_pairing.set_now_epoch_fn([]() -> long {
+    	return now_epoch_sec();
+	});
 
+	g_app_pairing.set_random_b64url_fn([](size_t nbytes) -> std::string {
+    	return random_b64url(nbytes);
+	});
     const std::string audit_jsonl_path = audit_dir + "/pqnas_audit.jsonl";
 	std::cerr << "[pqnas] audit_jsonl_path=" << audit_jsonl_path << std::endl;
 
@@ -7576,7 +7584,66 @@ auto maybe_auto_rotate_before_append = [&]() {
 	    for (auto& kv : f) ev.f[kv.first] = kv.second;
 	    audit_append(ev);
 	};
+v5.require_user_cookie =
+    [&](const httplib::Request& req, httplib::Response& res, std::string* fp_hex, std::string* role) -> bool {
+        return require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, fp_hex, role);
+    };
 
+v5.app_pair_prune = [&](long now) {
+    g_app_pairing.prune_expired(now);
+};
+
+v5.app_pair_start =
+    [&](const std::string& fingerprint_hex,
+        const std::string& role,
+        RoutesV5Context::AppPairStartResult& out,
+        std::string& err) -> bool {
+
+        pqnas::AppPairingSession s;
+        if (!g_app_pairing.start_pairing(fingerprint_hex, role, 300, &s, &err)) {
+            return false;
+        }
+
+        out.pair_id = s.pair_id;
+        out.pair_token = s.pair_token;
+        out.expires_at = s.expires_at;
+        out.qr_uri = pqnas::AppPairingStore::build_pair_qr_uri(*v5.origin, s.pair_token, *v5.app, v5.url_encode);
+        return true;
+    };
+
+v5.app_pair_get =
+    [&](const std::string& pair_id,
+        RoutesV5Context::AppPairStatusResult& out,
+        std::string& err) -> bool {
+
+        pqnas::AppPairingSession s;
+        if (!g_app_pairing.get_by_pair_id(pair_id, &s, &err)) return false;
+
+        out.pair_id = s.pair_id;
+        out.expires_at = s.expires_at;
+        out.consumed = s.consumed;
+        out.consumed_device_id = s.consumed_device_id;
+        return true;
+    };
+
+v5.app_pair_consume =
+    [&](const std::string& pair_token,
+        std::string& out_pair_id,
+        std::string& out_fingerprint_hex,
+        std::string& out_role,
+        std::string& err) -> bool {
+        return g_app_pairing.consume_pair_token(pair_token, &out_pair_id, &out_fingerprint_hex, &out_role, &err);
+    };
+
+v5.app_pair_mark_consumed_device =
+    [&](const std::string& pair_id, const std::string& device_id, std::string& err) -> bool {
+        return g_app_pairing.mark_consumed_device(pair_id, device_id, &err);
+    };
+
+v5.app_pair_build_qr_uri =
+    [&](const std::string& origin, const std::string& pair_token, const std::string& app_name) -> std::string {
+        return pqnas::AppPairingStore::build_pair_qr_uri(origin, pair_token, app_name, v5.url_encode);
+    };
 	// v4 verify bridge (phase-1)
 	v5.verify_v4_json = [&](const std::string& body) -> RoutesV5Context::VerifyResult {
     	pqnas::VerifyV4Config cfg;
