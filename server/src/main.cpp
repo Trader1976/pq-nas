@@ -18242,8 +18242,7 @@ srv.Post("/api/v4/files/mkdir", [&](const httplib::Request& req, httplib::Respon
     // POST /api/v4/files/hash?path=rel/path&algo=sha256
 srv.Post("/api/v4/files/hash", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
-        return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -18398,8 +18397,7 @@ srv.Post("/api/v4/files/hash", [&](const httplib::Request& req, httplib::Respons
     // POST /api/v4/files/rmdir?path=rel/dir
 srv.Post("/api/v4/files/rmdir", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
-        return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -18551,8 +18549,7 @@ srv.Post("/api/v4/files/rmdir", [&](const httplib::Request& req, httplib::Respon
     // POST /api/v4/files/tree?path=rel/path&max=500
 srv.Post("/api/v4/files/tree", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
-        return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -19417,8 +19414,7 @@ if (delta_bytes > 0) {
     // POST /api/v4/files/zip?path=rel/path&max_bytes=52428800
 srv.Post("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
-        return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -19757,8 +19753,7 @@ srv.Post("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response
 //   nesting when user selects files from inside a folder.
 srv.Post("/api/v4/files/zip_sel", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
-        return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -20322,8 +20317,7 @@ srv.Post("/api/v4/files/zip_sel", [&](const httplib::Request& req, httplib::Resp
     // POST /api/v4/files/rmrf?path=rel/path
 srv.Post("/api/v4/files/rmrf", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
-        return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -20418,38 +20412,99 @@ srv.Post("/api/v4/files/rmrf", [&](const httplib::Request& req, httplib::Respons
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
-    std::filesystem::path path_abs;
-    std::string err;
-    if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &path_abs, &err)) {
-        audit_fail("invalid_path", 400, err, path_rel);
-        reply_json(res, 400, json{
-            {"ok", false},
-            {"error", "bad_request"},
-            {"message", "invalid path"}
-        }.dump());
-        return;
-    }
+// Serialize writes on overlapping logical paths for this user.
+auto* plm = pqnas::get_path_lock_manager();
+auto write_guard = plm->lock_paths(fp_hex, {norm});
 
-    // refuse deleting the user_dir itself
+pqnas::ResolvedLogicalItem item;
+std::string rerr;
+if (!pqnas::resolve_existing_user_item(users, fp_hex, norm, &item, &rerr) || !item.exists) {
+    audit_fail("not_found", 404, rerr, path_rel);
+    reply_json(res, 404, json{
+        {"ok", false},
+        {"error", "not_found"},
+        {"message", "path not found"}
+    }.dump());
+    return;
+}
+
+auto* idx = pqnas::get_file_location_index();
+if (!idx) {
+    audit_fail("metadata_index_missing", 500, "", path_rel);
+    reply_json(res, 500, json{
+        {"ok", false},
+        {"error", "server_error"},
+        {"message", "metadata index missing"}
+    }.dump());
+    return;
+}
+
+auto file_size_safe = [&](const std::filesystem::path& p) -> std::uint64_t {
     std::error_code ec;
-    auto abs_weak = std::filesystem::weakly_canonical(path_abs, ec);
-    auto user_weak = std::filesystem::weakly_canonical(user_dir, ec);
-    if (!ec && abs_weak == user_weak) {
-        audit_fail("refuse_user_root", 400, "", path_rel);
-        reply_json(res, 400, json{
+    auto sz = std::filesystem::file_size(p, ec);
+    return ec ? 0 : static_cast<std::uint64_t>(sz);
+};
+
+auto count_logical_dirs_under_prefix = [&](const std::string& rel_norm,
+                                           const std::vector<pqnas::FileLocationRecord>& rows) -> std::uint64_t {
+    std::set<std::string> dirs;
+    dirs.insert(rel_norm); // count root dir itself
+
+    const std::string prefix = rel_norm + "/";
+
+    for (const auto& rec : rows) {
+        const std::string& lp = rec.logical_rel_path;
+        if (lp.size() < prefix.size()) continue;
+        if (lp.rfind(prefix, 0) != 0) continue;
+
+        std::string rest = lp.substr(prefix.size());
+        std::string acc = rel_norm;
+
+        std::size_t pos = 0;
+        while (true) {
+            std::size_t slash = rest.find('/', pos);
+            if (slash == std::string::npos) break;
+
+            std::string part = rest.substr(pos, slash - pos);
+            if (!part.empty()) {
+                acc += "/" + part;
+                dirs.insert(acc);
+            }
+            pos = slash + 1;
+        }
+    }
+
+    return static_cast<std::uint64_t>(dirs.size());
+};
+
+if (item.is_file) {
+    if (!item.has_physical_anchor) {
+        audit_fail("file_missing_physical_anchor", 500, "", path_rel);
+        reply_json(res, 500, json{
             {"ok", false},
-            {"error", "bad_request"},
-            {"message", "refusing to delete user storage root"}
+            {"error", "server_error"},
+            {"message", "file missing physical anchor"}
         }.dump());
         return;
     }
 
-    // must exist
-    ec.clear();
-    auto st = std::filesystem::symlink_status(path_abs, ec);
-    if (ec || !std::filesystem::exists(st)) {
+    const std::filesystem::path abs_path = item.abs_path;
+
+    if (abs_path == user_dir) {
+        audit_fail("refuse_root_delete", 400, "", path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "refusing to delete root"}
+        }.dump());
+        return;
+    }
+
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(abs_path, ec);
+    if (ec || !std::filesystem::exists(st) || !std::filesystem::is_regular_file(st)) {
         audit_fail("not_found", 404, "", path_rel);
         reply_json(res, 404, json{
             {"ok", false},
@@ -20459,84 +20514,223 @@ srv.Post("/api/v4/files/rmrf", [&](const httplib::Request& req, httplib::Respons
         return;
     }
 
-    // v1 safety: refuse deleting a symlink target directly (prevents confusion)
-    if (std::filesystem::is_symlink(st)) {
-        audit_fail("target_is_symlink", 400, "", path_rel);
-        reply_json(res, 400, json{
+    const std::uint64_t removed_bytes = file_size_safe(abs_path);
+
+    bool removed = std::filesystem::remove(abs_path, ec);
+    if (ec || !removed) {
+        audit_fail("remove_failed", 500, ec.message(), path_rel);
+        reply_json(res, 500, json{
             {"ok", false},
-            {"error", "bad_request"},
-            {"message", "refusing to rmrf a symlink path"}
+            {"error", "server_error"},
+            {"message", "recursive delete failed"},
+            {"detail", pqnas::shorten(ec.message(), 180)}
         }.dump());
         return;
     }
 
-    const bool is_file = std::filesystem::is_regular_file(st);
-    const bool is_dir  = std::filesystem::is_directory(st);
+    {
+        std::string derr;
+        if (!idx->erase(fp_hex, norm, &derr)) {
+            audit_fail("metadata_erase_failed", 500, derr, path_rel);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "delete metadata cleanup failed"},
+                {"detail", pqnas::shorten(derr, 180)}
+            }.dump());
+            return;
+        }
+    }
 
-    std::string type = is_dir ? "dir" : (is_file ? "file" : "other");
+    {
+        std::string ferr;
+        if (!pqnas::favorites_remove_under_prefix(user_dir, norm, "file", &ferr)) {
+            pqnas::AuditEvent ev;
+            ev.event = "v4.files_rmrf_warn";
+            ev.outcome = "warn";
+            ev.f["fingerprint"] = fp_hex;
+            ev.f["reason"] = "favorites_cleanup_failed";
+            ev.f["path"] = pqnas::shorten(norm, 200);
+            ev.f["detail"] = pqnas::shorten(ferr, 180);
+            add_ip_headers(ev);
+            audit_append(ev);
+        }
+    }
 
-    // Pre-count bytes/files/dirs without following symlinks
-    std::uint64_t removed_files = 0;
-    std::uint64_t removed_dirs  = 0;
-    std::uint64_t removed_bytes = 0;
+    audit_ok(path_rel, "file", 1, 0, removed_bytes);
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", path_rel},
+        {"type", "file"},
+        {"removed_files", 1},
+        {"removed_dirs", 0},
+        {"removed_bytes", removed_bytes}
+    }.dump());
+    return;
+}
 
-    if (is_file) {
-        removed_files = 1;
-        removed_bytes = pqnas::file_size_u64_safe(path_abs);
-    } else if (is_dir) {
-        removed_dirs = 1; // root dir
-        std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
+if (item.is_dir) {
+    std::string lerr;
+    auto subtree_rows = idx->list_subtree_records(fp_hex, norm, &lerr);
+    if (!lerr.empty()) {
+        audit_fail("metadata_subtree_list_failed", 500, lerr, path_rel);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to list metadata subtree"},
+            {"detail", pqnas::shorten(lerr, 180)}
+        }.dump());
+        return;
+    }
 
-        ec.clear();
-        for (auto it = std::filesystem::recursive_directory_iterator(path_abs, opts, ec);
-             it != std::filesystem::recursive_directory_iterator();
+    // Legacy physical dir with no metadata subtree
+    if (subtree_rows.empty()) {
+        if (!item.has_physical_anchor) {
+            audit_fail("not_found", 404, "", path_rel);
+            reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "path not found"}
+            }.dump());
+            return;
+        }
+
+        const std::filesystem::path abs_path = item.abs_path;
+        if (abs_path == user_dir) {
+            audit_fail("refuse_root_delete", 400, "", path_rel);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "refusing to delete user storage root"}
+            }.dump());
+            return;
+        }
+
+        std::uint64_t removed_files = 0;
+        std::uint64_t removed_dirs = 1;
+        std::uint64_t removed_bytes = 0;
+
+        std::error_code ec;
+        for (std::filesystem::recursive_directory_iterator it(
+                 abs_path, std::filesystem::directory_options::skip_permission_denied, ec), end;
+             it != end && !ec;
              it.increment(ec)) {
-
-            if (ec) {
-                audit_fail("walk_failed", 500, ec.message(), path_rel);
-                reply_json(res, 500, json{
-                    {"ok", false},
-                    {"error", "server_error"},
-                    {"message", "directory walk failed"},
-                    {"detail", pqnas::shorten(ec.message(), 180)}
-                }.dump());
-                return;
-            }
 
             std::error_code ec2;
             auto st2 = it->symlink_status(ec2);
             if (ec2) continue;
 
             if (std::filesystem::is_symlink(st2)) {
-                // do not follow; count as "file-like" removed entry of 0 bytes
                 removed_files += 1;
                 if (it->is_directory(ec2)) it.disable_recursion_pending();
                 continue;
             }
-
             if (std::filesystem::is_directory(st2)) {
                 removed_dirs += 1;
                 continue;
             }
-
             if (std::filesystem::is_regular_file(st2)) {
                 removed_files += 1;
-                removed_bytes += pqnas::file_size_u64_safe(it->path());
+                removed_bytes += file_size_safe(it->path());
                 continue;
             }
-
-            // other types counted as file-like entries with 0 bytes
             removed_files += 1;
         }
-    } else {
-        // other types: treat like single entry delete attempt
-        removed_files = 1;
-        removed_bytes = 0;
+
+        std::uintmax_t removed = std::filesystem::remove_all(abs_path, ec);
+        (void)removed;
+        if (ec) {
+            audit_fail("remove_all_failed", 500, ec.message(), path_rel);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "recursive delete failed"},
+                {"detail", pqnas::shorten(ec.message(), 180)}
+            }.dump());
+            return;
+        }
+
+        {
+            std::string ferr;
+            if (!pqnas::favorites_remove_under_prefix(user_dir, norm, "dir", &ferr)) {
+                pqnas::AuditEvent ev;
+                ev.event = "v4.files_rmrf_warn";
+                ev.outcome = "warn";
+                ev.f["fingerprint"] = fp_hex;
+                ev.f["reason"] = "favorites_cleanup_failed";
+                ev.f["path"] = pqnas::shorten(norm, 200);
+                ev.f["detail"] = pqnas::shorten(ferr, 180);
+                add_ip_headers(ev);
+                audit_append(ev);
+            }
+        }
+
+        audit_ok(path_rel, "dir", removed_files, removed_dirs, removed_bytes);
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"path", path_rel},
+            {"type", "dir"},
+            {"removed_files", removed_files},
+            {"removed_dirs", removed_dirs},
+            {"removed_bytes", removed_bytes}
+        }.dump());
+        return;
     }
 
-    // Remove (remove_all handles file or dir)
-    ec.clear();
-    std::uintmax_t removed = std::filesystem::remove_all(path_abs, ec);
+    std::filesystem::path dir_abs;
+    bool have_root = false;
+
+    const auto& first = subtree_rows.front();
+    std::filesystem::path root = std::filesystem::path(first.physical_path);
+    for (const auto& _ : std::filesystem::path(first.logical_rel_path)) {
+        (void)_;
+        root = root.parent_path();
+    }
+    dir_abs = root / std::filesystem::path(norm);
+    have_root = true;
+
+    if (!have_root || dir_abs == user_dir) {
+        audit_fail("refuse_root_delete", 400, "", path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "refusing to delete user storage root"}
+        }.dump());
+        return;
+    }
+
+    const std::string dir_root_s = dir_abs.lexically_normal().string();
+    bool all_under_root = true;
+    std::uint64_t removed_files = 0;
+    std::uint64_t removed_bytes = 0;
+
+    for (const auto& rec : subtree_rows) {
+        const std::filesystem::path phys = std::filesystem::path(rec.physical_path).lexically_normal();
+        const std::string phys_s = phys.string();
+
+        if (phys_s != dir_root_s && phys_s.rfind(dir_root_s + "/", 0) != 0) {
+            all_under_root = false;
+            break;
+        }
+        removed_files += 1;
+        removed_bytes += rec.size_bytes;
+    }
+
+    if (!all_under_root) {
+        audit_fail("dir_delete_cross_root_unsupported", 409, "", path_rel);
+        reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "unsupported"},
+            {"message", "directory delete across mixed storage roots not supported yet"}
+        }.dump());
+        return;
+    }
+
+    const std::uint64_t removed_dirs = count_logical_dirs_under_prefix(norm, subtree_rows);
+
+    std::error_code ec;
+    std::uintmax_t removed = std::filesystem::remove_all(dir_abs, ec);
+    (void)removed;
     if (ec) {
         audit_fail("remove_all_failed", 500, ec.message(), path_rel);
         reply_json(res, 500, json{
@@ -20548,26 +20742,59 @@ srv.Post("/api/v4/files/rmrf", [&](const httplib::Request& req, httplib::Respons
         return;
     }
 
-    // removed is best-effort count from FS; we report our own counts (more meaningful)
-    (void)removed;
+    {
+        std::string derr;
+        if (!idx->erase_subtree(fp_hex, norm, &derr)) {
+            audit_fail("metadata_erase_subtree_failed", 500, derr, path_rel);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "delete metadata cleanup failed"},
+                {"detail", pqnas::shorten(derr, 180)}
+            }.dump());
+            return;
+        }
+    }
 
-    audit_ok(path_rel, type, removed_files, removed_dirs, removed_bytes);
+    {
+        std::string ferr;
+        if (!pqnas::favorites_remove_under_prefix(user_dir, norm, "dir", &ferr)) {
+            pqnas::AuditEvent ev;
+            ev.event = "v4.files_rmrf_warn";
+            ev.outcome = "warn";
+            ev.f["fingerprint"] = fp_hex;
+            ev.f["reason"] = "favorites_cleanup_failed";
+            ev.f["path"] = pqnas::shorten(norm, 200);
+            ev.f["detail"] = pqnas::shorten(ferr, 180);
+            add_ip_headers(ev);
+            audit_append(ev);
+        }
+    }
 
+    audit_ok(path_rel, "dir", removed_files, removed_dirs, removed_bytes);
     reply_json(res, 200, json{
         {"ok", true},
         {"path", path_rel},
-        {"type", type},
+        {"type", "dir"},
         {"removed_files", removed_files},
         {"removed_dirs", removed_dirs},
         {"removed_bytes", removed_bytes}
     }.dump());
+    return;
+}
+
+audit_fail("unsupported_type", 400, "", path_rel);
+reply_json(res, 400, json{
+    {"ok", false},
+    {"error", "bad_request"},
+    {"message", "unsupported path type"}
+}.dump());
 });
 
     // POST /api/v4/files/search?path=rel/dir&q=needle&max=200
 srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
-        return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     const std::uint64_t SCAN_HARD_CAP = 200000; // hard cap for file search
 
@@ -21546,8 +21773,7 @@ srv.Post("/api/v4/files/stat_sel", [&](const httplib::Request& req, httplib::Res
     // POST /api/v4/files/du?path=rel/path
 srv.Post("/api/v4/files/du", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
-        return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -21739,7 +21965,7 @@ srv.Post("/api/v4/files/du", [&](const httplib::Request& req, httplib::Response&
 
 srv.Get("/api/v4/files/favorites", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto uopt = users.get(fp_hex);
     if (!uopt.has_value() || uopt->storage_state != "allocated") {
@@ -21781,7 +22007,7 @@ srv.Get("/api/v4/files/favorites", [&](const httplib::Request& req, httplib::Res
 
 srv.Post("/api/v4/files/favorites/add", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto uopt = users.get(fp_hex);
     if (!uopt.has_value() || uopt->storage_state != "allocated") {
@@ -21848,7 +22074,7 @@ srv.Post("/api/v4/files/favorites/add", [&](const httplib::Request& req, httplib
 
 srv.Post("/api/v4/files/favorites/remove", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto uopt = users.get(fp_hex);
     if (!uopt.has_value() || uopt->storage_state != "allocated") {
@@ -23353,7 +23579,7 @@ if (delta_bytes > 0) {
 // Response: application/zip (streams a zip of the directory)
 srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
