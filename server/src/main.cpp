@@ -18466,83 +18466,198 @@ srv.Post("/api/v4/files/rmdir", [&](const httplib::Request& req, httplib::Respon
         return;
     }
 
-    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
 
-    std::filesystem::path path_abs;
-    std::string err;
-    if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &path_abs, &err)) {
-        audit_fail("invalid_path", 400, err, path_rel);
-        reply_json(res, 400, json{
-            {"ok", false},
-            {"error", "bad_request"},
-            {"message", "invalid path"}
-        }.dump());
-        return;
-    }
-
-    std::error_code ec;
-    auto st = std::filesystem::status(path_abs, ec);
-    if (ec || !std::filesystem::exists(st)) {
-        audit_fail("not_found", 404, "", path_rel);
-        reply_json(res, 404, json{
-            {"ok", false},
-            {"error", "not_found"},
-            {"message", "directory not found"}
-        }.dump());
-        return;
-    }
-    if (!std::filesystem::is_directory(st)) {
-        audit_fail("not_dir", 400, "", path_rel);
-        reply_json(res, 400, json{
-            {"ok", false},
-            {"error", "bad_request"},
-            {"message", "path is not a directory"}
-        }.dump());
-        return;
-    }
-
-    // empty-only v1
-    ec.clear();
-    bool empty = std::filesystem::is_empty(path_abs, ec);
-    if (ec) {
-        audit_fail("is_empty_failed", 500, ec.message(), path_rel);
-        reply_json(res, 500, json{
-            {"ok", false},
-            {"error", "server_error"},
-            {"message", "failed to check if directory is empty"},
-            {"detail", pqnas::shorten(ec.message(), 180)}
-        }.dump());
-        return;
-    }
-    if (!empty) {
-        audit_fail("not_empty", 409, "", path_rel);
-        reply_json(res, 409, json{
-            {"ok", false},
-            {"error", "not_empty"},
-            {"message", "directory is not empty"}
-        }.dump());
-        return;
-    }
-
-    ec.clear();
-    std::filesystem::remove(path_abs, ec);
-    if (ec) {
-        audit_fail("remove_failed", 500, ec.message(), path_rel);
-        reply_json(res, 500, json{
-            {"ok", false},
-            {"error", "server_error"},
-            {"message", "failed to remove directory"},
-            {"detail", pqnas::shorten(ec.message(), 180)}
-        }.dump());
-        return;
-    }
-
-    audit_ok(path_rel);
-
-    reply_json(res, 200, json{
-        {"ok", true},
-        {"path", path_rel}
+std::string rel_norm;
+std::string nerr;
+if (!pqnas::normalize_user_rel_path_strict(path_rel, &rel_norm, &nerr)) {
+    audit_fail("invalid_path", 400, nerr, path_rel);
+    reply_json(res, 400, json{
+        {"ok", false},
+        {"error", "bad_request"},
+        {"message", "invalid path"}
     }.dump());
+    return;
+}
+
+// refuse root-ish directory removal too
+if (rel_norm.empty() || rel_norm == "." || rel_norm == "/") {
+    audit_fail("refuse_root", 400, "", path_rel);
+    reply_json(res, 400, json{
+        {"ok", false},
+        {"error", "bad_request"},
+        {"message", "refusing to delete root"}
+    }.dump());
+    return;
+}
+
+// Serialize writes on overlapping logical paths for this user.
+auto* plm = pqnas::get_path_lock_manager();
+auto write_guard = plm->lock_paths(fp_hex, {rel_norm});
+
+pqnas::ResolvedLogicalItem item;
+std::string rerr;
+if (!pqnas::resolve_existing_user_item(users, fp_hex, rel_norm, &item, &rerr) || !item.exists) {
+    audit_fail("not_found", 404, rerr, path_rel);
+    reply_json(res, 404, json{
+        {"ok", false},
+        {"error", "not_found"},
+        {"message", "directory not found"}
+    }.dump());
+    return;
+}
+
+if (!item.is_dir) {
+    audit_fail("not_dir", 400, "", path_rel);
+    reply_json(res, 400, json{
+        {"ok", false},
+        {"error", "bad_request"},
+        {"message", "path is not a directory"}
+    }.dump());
+    return;
+}
+
+auto* idx = pqnas::get_file_location_index();
+if (!idx) {
+    audit_fail("metadata_index_missing", 500, "", path_rel);
+    reply_json(res, 500, json{
+        {"ok", false},
+        {"error", "server_error"},
+        {"message", "metadata index missing"}
+    }.dump());
+    return;
+}
+
+// Logical emptiness check first.
+// If metadata subtree has any descendant file rows, the directory is not empty.
+std::string lerr;
+auto subtree_rows = idx->list_subtree_records(fp_hex, rel_norm, &lerr);
+if (!lerr.empty()) {
+    audit_fail("metadata_subtree_list_failed", 500, lerr, path_rel);
+    reply_json(res, 500, json{
+        {"ok", false},
+        {"error", "server_error"},
+        {"message", "failed to inspect directory contents"},
+        {"detail", pqnas::shorten(lerr, 180)}
+    }.dump());
+    return;
+}
+
+if (!subtree_rows.empty()) {
+    audit_fail("not_empty", 409, "", path_rel);
+    reply_json(res, 409, json{
+        {"ok", false},
+        {"error", "not_empty"},
+        {"message", "directory is not empty"}
+    }.dump());
+    return;
+}
+
+// No metadata descendants.
+// Allow legacy physical-empty-dir fallback.
+if (!item.has_physical_anchor) {
+    // Logical dir exists but has no metadata subtree and no physical anchor:
+    // treat as not found / unsupported for now.
+    audit_fail("not_found", 404, "", path_rel);
+    reply_json(res, 404, json{
+        {"ok", false},
+        {"error", "not_found"},
+        {"message", "directory not found"}
+    }.dump());
+    return;
+}
+
+const std::filesystem::path path_abs = item.abs_path;
+
+if (path_abs == user_dir) {
+    audit_fail("refuse_user_root", 400, "", path_rel);
+    reply_json(res, 400, json{
+        {"ok", false},
+        {"error", "bad_request"},
+        {"message", "refusing to delete user storage root"}
+    }.dump());
+    return;
+}
+
+std::error_code ec;
+auto st = std::filesystem::symlink_status(path_abs, ec);
+if (ec || !std::filesystem::exists(st)) {
+    audit_fail("not_found", 404, "", path_rel);
+    reply_json(res, 404, json{
+        {"ok", false},
+        {"error", "not_found"},
+        {"message", "directory not found"}
+    }.dump());
+    return;
+}
+if (!std::filesystem::is_directory(st)) {
+    audit_fail("not_dir", 400, "", path_rel);
+    reply_json(res, 400, json{
+        {"ok", false},
+        {"error", "bad_request"},
+        {"message", "path is not a directory"}
+    }.dump());
+    return;
+}
+
+// Empty-only physical fallback
+ec.clear();
+bool empty = std::filesystem::is_empty(path_abs, ec);
+if (ec) {
+    audit_fail("is_empty_failed", 500, ec.message(), path_rel);
+    reply_json(res, 500, json{
+        {"ok", false},
+        {"error", "server_error"},
+        {"message", "failed to check if directory is empty"},
+        {"detail", pqnas::shorten(ec.message(), 180)}
+    }.dump());
+    return;
+}
+if (!empty) {
+    audit_fail("not_empty", 409, "", path_rel);
+    reply_json(res, 409, json{
+        {"ok", false},
+        {"error", "not_empty"},
+        {"message", "directory is not empty"}
+    }.dump());
+    return;
+}
+
+ec.clear();
+bool removed = std::filesystem::remove(path_abs, ec);
+if (ec || !removed) {
+    audit_fail("remove_failed", 500, ec.message(), path_rel);
+    reply_json(res, 500, json{
+        {"ok", false},
+        {"error", "server_error"},
+        {"message", "failed to remove directory"},
+        {"detail", pqnas::shorten(ec.message(), 180)}
+    }.dump());
+    return;
+}
+
+// Best-effort favorites cleanup in case an empty dir was favorited.
+{
+    std::string ferr;
+    if (!pqnas::favorites_remove_under_prefix(user_dir, rel_norm, "dir", &ferr)) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_rmdir_warn";
+        ev.outcome = "warn";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = "favorites_cleanup_failed";
+        ev.f["path"] = pqnas::shorten(rel_norm, 200);
+        ev.f["detail"] = pqnas::shorten(ferr, 180);
+        add_ip_headers(ev);
+        audit_append(ev);
+    }
+}
+
+audit_ok(path_rel);
+
+reply_json(res, 200, json{
+    {"ok", true},
+    {"path", path_rel}
+}.dump());
 });
 
 
