@@ -18128,8 +18128,8 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
 // POST /api/v4/files/mkdir?path=relative/dir
 srv.Post("/api/v4/files/mkdir", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
-        return;
+
+	if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -22258,7 +22258,7 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
 // Response: JSON listing of immediate children (no recursion)
 srv.Get("/api/v4/files/list", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -22522,7 +22522,7 @@ bool legacy_dir_ok = false;
 // }
 srv.Get("/api/v4/me/storage", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -23403,7 +23403,7 @@ srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response&
 // Response: raw bytes (streams file)
 srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -23575,7 +23575,7 @@ srv.Put("/api/v4/files/put",
     httplib::Response& res,
     const httplib::ContentReader& content_reader) {
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
