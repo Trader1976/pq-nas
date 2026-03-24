@@ -652,6 +652,12 @@ def ensure_config_files(root: str, asset_root: str) -> None:
 
         shutil.copy2(s, d)
 
+    # Ensure app auth store exists (mutable runtime auth state)
+    app_auth_path = os.path.join(etc_dir, "app_auth.json")
+    if not os.path.exists(app_auth_path):
+        with open(app_auth_path, "w", encoding="utf-8") as f:
+            f.write('{\n  "version": 1,\n  "devices": {},\n  "refresh_tokens": {}\n}\n')
+            
     # Optional breadcrumb under storage root
     try:
         marker_dir = os.path.join(root, "config")
@@ -690,6 +696,7 @@ def write_env_file(
         "PQNAS_USERS_PATH=/etc/pqnas/users.json",
         "PQNAS_SHARES_PATH=/etc/pqnas/shares.json",
         "PQNAS_POOLS_PATH=/etc/pqnas/pools.json",
+        "PQNAS_APP_AUTH_PATH=/etc/pqnas/app_auth.json",
         "",
         f"PQNAS_AUDIT_DIR={root}/audit",
         f"PQNAS_LOG_DIR={root}/logs",
