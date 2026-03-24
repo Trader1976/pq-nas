@@ -132,6 +132,8 @@ extern "C" {
 #include <sys/utsname.h>
 #include <sys/wait.h>
 
+// for mobile app
+#include "app_tokens.h"
 
 using json = nlohmann::json;
 
@@ -236,7 +238,8 @@ const std::string APPS_BUNDLED_DIR   = (std::filesystem::path(APPS_DIR) / "bundl
 const std::string APPS_INSTALLED_DIR = (std::filesystem::path(APPS_DIR) / "installed").string();
 const std::string APPS_USERS_DIR     = (std::filesystem::path(APPS_DIR) / "users").string();
 
-
+// for mobile app
+static pqnas::AppTokenStore g_app_tokens;
 
 static std::string ORIGIN   = "https://nas.example.com";
 static std::string ISS      = "pq-nas";
@@ -7204,14 +7207,44 @@ auto maybe_auto_rotate_before_append = [&]() {
         }
     }
 
+    std::string app_auth_path;
+    if (const char* p = std::getenv("PQNAS_APP_AUTH_PATH")) {
+        app_auth_path = p;
+    } else {
+        const std::string config_root = getenv_str("PQNAS_CONFIG_ROOT");
+        if (!config_root.empty()) {
+            app_auth_path = (std::filesystem::path(config_root) / "app_auth.json").string();
+        } else {
+            app_auth_path = (std::filesystem::path(REPO_ROOT) / "config" / "app_auth.json").string();
+        }
+    }
+
     std::cerr << "[cfg] allowlist_path=" << allowlist_path << std::endl;
     std::cerr << "[cfg] users_path=" << users_path << std::endl;
+	std::cerr << "[cfg] app_auth_path=" << app_auth_path << std::endl;
 
     pqnas::UsersRegistry users;
     if (!users.load(users_path)) {
         std::cerr << "[users] FATAL: failed to load users registry: " << users_path << std::endl;
         return 4;
     }
+
+	// for mobile app
+	g_app_tokens.set_now_epoch_fn([]() { return pqnas::now_epoch(); });
+	g_app_tokens.set_now_iso_utc_fn([]() { return pqnas::now_iso_utc(); });
+	g_app_tokens.set_random_b64url_fn([](size_t n) { return random_b64url(n); });
+
+	{
+    	std::string app_auth_err;
+	    if (!g_app_tokens.load(app_auth_path, &app_auth_err)) {
+    	    std::cerr << "[app_tokens] FATAL: failed to load app auth store: "
+        	          << app_auth_path
+	                  << " err=" << app_auth_err
+    	              << std::endl;
+        	return 5;
+    	}
+	}
+
 	g_users_path_for_raid = users_path;
 	pool_mounts_init_default_only();
 	pool_mounts_restore_managed(users_path);

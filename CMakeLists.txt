@@ -151,6 +151,7 @@ add_executable(pqnas_server
         server/src/file_location_index.cpp
         server/src/path_lock_manager.cpp
         server/src/storage_pools.cc
+        server/src/app_tokens.cpp
 )
 
 # Treat warnings as errors for the server (security-sensitive)
