@@ -7374,6 +7374,109 @@ auto maybe_auto_rotate_before_append = [&]() {
 	v5.random_b64url = [&](int n) { return random_b64url(n); };
 	v5.url_encode    = [&](const std::string& s) { return url_encode(s); };
 
+	v5.consume_app_mint =
+	    [&](const std::string& fingerprint_hex,
+	        const std::string& device_name,
+	        const std::string& platform,
+	        const std::string& app_version,
+	        const std::string& client_ip,
+	        RoutesV5Context::ConsumeAppResult& out,
+	        std::string& err) -> bool {
+	        err.clear();
+
+	        auto uopt = users.get(fingerprint_hex);
+	        if (!uopt.has_value()) {
+	            err = "policy denied";
+	            return false;
+	        }
+
+	        const auto& u = *uopt;
+	        const bool is_admin = (u.role == "admin" && u.status == "enabled");
+	        const bool is_user  = (u.status == "enabled") || is_admin;
+	        if (!is_user) {
+	            err = "policy denied";
+	            return false;
+	        }
+
+	        std::string device_id;
+	        std::string access_token;
+	        long access_exp = 0;
+	        std::string refresh_token;
+	        long refresh_exp = 0;
+
+	        if (!g_app_tokens.mint_from_approved_fingerprint(
+	                fingerprint_hex,
+	                is_admin ? "admin" : "user",
+	                device_name,
+	                platform,
+	                app_version,
+	                client_ip,
+	                &device_id,
+	                &access_token,
+	                &access_exp,
+	                &refresh_token,
+	                &refresh_exp,
+	                &err)) {
+	            return false;
+	        }
+
+	        out.device_id = device_id;
+	        out.access_token = access_token;
+	        out.access_exp = access_exp;
+	        out.refresh_token = refresh_token;
+	        out.refresh_exp = refresh_exp;
+	        out.fingerprint_hex = fingerprint_hex;
+	        out.role = is_admin ? "admin" : "user";
+	        return true;
+	    };
+
+	v5.refresh_app_token =
+	    [&](const std::string& refresh_token,
+	        const std::string& device_id,
+	        const std::string& client_ip,
+	        RoutesV5Context::RefreshAppResult& out,
+	        std::string& err) -> bool {
+	        err.clear();
+
+	        std::string fingerprint_hex;
+	        std::string token_role;
+	        std::string access_token;
+	        long access_exp = 0;
+
+	        if (!g_app_tokens.refresh_access_token(
+	                refresh_token,
+	                device_id,
+	                client_ip,
+	                &fingerprint_hex,
+	                &token_role,
+	                &access_token,
+	                &access_exp,
+	                &err)) {
+	            return false;
+	        }
+
+	        auto uopt = users.get(fingerprint_hex);
+	        if (!uopt.has_value()) {
+	            err = "policy denied";
+	            return false;
+	        }
+
+	        const auto& u = *uopt;
+	        const bool is_admin = (u.role == "admin" && u.status == "enabled");
+	        const bool is_user  = (u.status == "enabled") || is_admin;
+	        if (!is_user) {
+	            err = "policy denied";
+	            return false;
+	        }
+
+	        out.access_token = access_token;
+	        out.access_exp = access_exp;
+	        out.fingerprint_hex = fingerprint_hex;
+	        out.role = is_admin ? "admin" : "user";
+	        out.device_id = device_id;
+	        return true;
+	    };
+
 	v5.build_req_payload_canonical = [&](const std::string& sid,
                                      const std::string& chal,
                                      const std::string& nonce,

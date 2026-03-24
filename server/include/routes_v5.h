@@ -117,6 +117,38 @@ struct RoutesV5Context {
         std::string fingerprint_hex;
     };
 
+    struct ConsumeAppResult {
+        std::string device_id;
+        std::string access_token;
+        long access_exp = 0;
+        std::string refresh_token;
+        long refresh_exp = 0;
+        std::string fingerprint_hex;
+        std::string role;
+    };
+
+    struct RefreshAppResult {
+        std::string access_token;
+        long access_exp = 0;
+        std::string fingerprint_hex;
+        std::string role;
+        std::string device_id;
+    };
+
+    std::function<bool(const std::string& fingerprint_hex,
+                   const std::string& device_name,
+                   const std::string& platform,
+                   const std::string& app_version,
+                   const std::string& client_ip,
+                   ConsumeAppResult& out,
+                   std::string& err)> consume_app_mint;
+
+    std::function<bool(const std::string& refresh_token,
+                       const std::string& device_id,
+                       const std::string& client_ip,
+                       RefreshAppResult& out,
+                       std::string& err)> refresh_app_token;
+
     std::function<VerifyResult(const std::string& body)> verify_v4_json;
     std::function<std::string(const nlohmann::json&, const unsigned char* /*SERVER_SK*/)> sign_token_v4_ed25519;
 };

@@ -52,6 +52,11 @@ static void reply_json(httplib::Response& res, int status, const std::string& bo
 }
 
 
+static std::string req_header_or_empty(const httplib::Request& req, const char* key) {
+    auto it = req.headers.find(key);
+    return (it == req.headers.end()) ? std::string{} : it->second;
+}
+
 // Normalizes base64 values that arrive via URL/query decoding.
 // Some stacks decode '+' as space in query parameters (application/x-www-form-urlencoded).
 // We reverse that and trim surrounding whitespace to keep k parsing robust.
@@ -439,6 +444,174 @@ srv.Post("/api/v5/consume", [&](const httplib::Request& req, httplib::Response& 
         {"k", key},
         {"fingerprint", ae.fingerprint},
         {"expires_at", ae.expires_at}
+    }.dump());
+});
+
+// ---- POST /api/v5/consume_app {st|k|sid, device_name?, platform?, app_version?} ----
+// Mobile/app equivalent of /consume: returns bearer tokens instead of Set-Cookie.
+srv.Post("/api/v5/consume_app", [&](const httplib::Request& req, httplib::Response& res) {
+    const long now = ctx.now_epoch ? ctx.now_epoch() : 0;
+    if (ctx.approvals_prune) ctx.approvals_prune(now);
+    if (ctx.pending_prune)   ctx.pending_prune(now);
+
+    json j;
+    std::string jerr;
+    if (!parse_json_body(req, j, jerr)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", jerr}}.dump());
+        return;
+    }
+
+    std::string key, kerr;
+    if (!resolve_approval_key_from_req(ctx, req, &j, key, kerr)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", kerr}}.dump());
+        return;
+    }
+
+    RoutesV5Context::ApprovalEntry ae;
+    if (!(ctx.approvals_get && ctx.approvals_get(key, ae))) {
+        reply_json(res, 409, json{{"ok", false}, {"error", "not_approved"}, {"k", key}}.dump());
+        return;
+    }
+
+    if (ae.fingerprint.empty()) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "approval_missing_fingerprint"}, {"k", key}}.dump());
+        return;
+    }
+
+    if (!ctx.consume_app_mint) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "consume_app_not_configured"}, {"k", key}}.dump());
+        return;
+    }
+
+    const std::string device_name = j.value("device_name", std::string{});
+    std::string platform = j.value("platform", std::string{});
+    const std::string app_version = j.value("app_version", std::string{});
+    if (platform.empty()) platform = "android";
+
+    RoutesV5Context::ConsumeAppResult out;
+    std::string merr;
+    const std::string client_ip = ctx.client_ip ? ctx.client_ip(req) : req.remote_addr;
+
+    if (!ctx.consume_app_mint(ae.fingerprint, device_name, platform, app_version, client_ip, out, merr)) {
+        if (ctx.audit_emit) {
+            ctx.audit_emit("v5.consume_app_fail", "fail", [&](std::map<std::string,std::string>& f) {
+                f["k"] = key;
+                f["fingerprint"] = ae.fingerprint;
+                f["reason"] = merr.empty() ? "mint_failed" : merr;
+                if (!platform.empty()) f["platform"] = platform;
+                if (!device_name.empty()) f["device_name"] = device_name;
+                if (!app_version.empty()) f["app_version"] = app_version;
+                if (!client_ip.empty()) f["ip"] = client_ip;
+                const std::string ua = req_header_or_empty(req, "User-Agent");
+                if (!ua.empty()) f["ua"] = ua;
+            });
+        }
+
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", merr.empty() ? "app consume denied" : merr},
+            {"k", key}
+        }.dump());
+        return;
+    }
+
+    if (ctx.approvals_pop) ctx.approvals_pop(key);
+
+    if (ctx.audit_emit) {
+        ctx.audit_emit("v5.consume_app_ok", "ok", [&](std::map<std::string,std::string>& f) {
+            f["k"] = key;
+            f["fingerprint"] = out.fingerprint_hex.empty() ? ae.fingerprint : out.fingerprint_hex;
+            f["device_id"] = out.device_id;
+            f["role"] = out.role;
+            f["platform"] = platform;
+            if (!device_name.empty()) f["device_name"] = device_name;
+            if (!app_version.empty()) f["app_version"] = app_version;
+            if (!client_ip.empty()) f["ip"] = client_ip;
+            const std::string ua = req_header_or_empty(req, "User-Agent");
+            if (!ua.empty()) f["ua"] = ua;
+        });
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"token_type", "Bearer"},
+        {"access_token", out.access_token},
+        {"expires_in", (out.access_exp > now ? out.access_exp - now : 0)},
+        {"refresh_token", out.refresh_token},
+        {"refresh_expires_in", (out.refresh_exp > now ? out.refresh_exp - now : 0)},
+        {"device_id", out.device_id},
+        {"fingerprint_hex", out.fingerprint_hex.empty() ? ae.fingerprint : out.fingerprint_hex},
+        {"role", out.role}
+    }.dump());
+});
+
+// ---- POST /api/v5/token/refresh {refresh_token, device_id} ----
+// Mobile/app access-token refresh.
+srv.Post("/api/v5/token/refresh", [&](const httplib::Request& req, httplib::Response& res) {
+    json j;
+    std::string jerr;
+    if (!parse_json_body(req, j, jerr)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", jerr}}.dump());
+        return;
+    }
+
+    const std::string refresh_token = j.value("refresh_token", std::string{});
+    const std::string device_id = j.value("device_id", std::string{});
+    if (refresh_token.empty() || device_id.empty()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing refresh_token or device_id"}}.dump());
+        return;
+    }
+
+    if (!ctx.refresh_app_token) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "refresh_app_token_not_configured"}}.dump());
+        return;
+    }
+
+    RoutesV5Context::RefreshAppResult out;
+    std::string rerr;
+    const std::string client_ip = ctx.client_ip ? ctx.client_ip(req) : req.remote_addr;
+
+    if (!ctx.refresh_app_token(refresh_token, device_id, client_ip, out, rerr)) {
+        if (ctx.audit_emit) {
+            ctx.audit_emit("v5.token_refresh_fail", "fail", [&](std::map<std::string,std::string>& f) {
+                f["device_id"] = device_id;
+                f["reason"] = rerr.empty() ? "refresh_failed" : rerr;
+                if (!client_ip.empty()) f["ip"] = client_ip;
+                const std::string ua = req_header_or_empty(req, "User-Agent");
+                if (!ua.empty()) f["ua"] = ua;
+            });
+        }
+
+        reply_json(res, 401, json{
+            {"ok", false},
+            {"error", "unauthorized"},
+            {"message", rerr.empty() ? "refresh denied" : rerr},
+            {"device_id", device_id}
+        }.dump());
+        return;
+    }
+
+    if (ctx.audit_emit) {
+        ctx.audit_emit("v5.token_refresh_ok", "ok", [&](std::map<std::string,std::string>& f) {
+            f["device_id"] = out.device_id.empty() ? device_id : out.device_id;
+            if (!out.fingerprint_hex.empty()) f["fingerprint"] = out.fingerprint_hex;
+            if (!out.role.empty()) f["role"] = out.role;
+            if (!client_ip.empty()) f["ip"] = client_ip;
+            const std::string ua = req_header_or_empty(req, "User-Agent");
+            if (!ua.empty()) f["ua"] = ua;
+        });
+    }
+
+    const long now = ctx.now_epoch ? ctx.now_epoch() : 0;
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"token_type", "Bearer"},
+        {"access_token", out.access_token},
+        {"expires_in", (out.access_exp > now ? out.access_exp - now : 0)},
+        {"fingerprint_hex", out.fingerprint_hex},
+        {"role", out.role},
+        {"device_id", out.device_id.empty() ? device_id : out.device_id}
     }.dump());
 });
 
