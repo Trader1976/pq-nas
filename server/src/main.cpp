@@ -1132,6 +1132,89 @@ static bool require_user_cookie_users_actor(
     return true;
 }
 
+// ----- Bearer gate: user OR admin (AppTokenStore + UsersRegistry policy) -----
+// Mobile/API auth path. Accepts Authorization: Bearer <access_token>.
+// Returns false silently if there is no usable bearer auth, so caller can
+// fall back to cookie auth.
+// Returns actor_fp_hex + role ("admin"|"user") on success.
+[[maybe_unused]] static bool try_user_bearer_users_actor(
+    const httplib::Request& req,
+    httplib::Response& res,
+    pqnas::UsersRegistry* users,
+    std::string* out_fp_hex,
+    std::string* out_role
+) {
+    if (out_fp_hex) out_fp_hex->clear();
+    if (out_role) out_role->clear();
+
+    auto it = req.headers.find("Authorization");
+    if (it == req.headers.end()) {
+        return false;
+    }
+
+    const std::string& hdr = it->second;
+    const std::string prefix = "Bearer ";
+    if (hdr.size() <= prefix.size() || hdr.compare(0, prefix.size(), prefix) != 0) {
+        return false;
+    }
+
+    const std::string raw_token = hdr.substr(prefix.size());
+    if (raw_token.empty()) {
+        return false;
+    }
+
+    std::string fp_hex;
+    std::string token_role;
+    std::string device_id;
+    std::string terr;
+    if (!g_app_tokens.verify_access_token(raw_token, &fp_hex, &token_role, &device_id, &terr)) {
+        return false;
+    }
+
+    if (!users) {
+        reply_json(res, 403, json({{"ok",false},{"error","forbidden"},{"message","policy denied"}}).dump());
+        return false;
+    }
+
+    auto uopt = users->get(fp_hex);
+    if (!uopt.has_value()) {
+        reply_json(res, 403, json({{"ok",false},{"error","forbidden"},{"message","policy denied"}}).dump());
+        return false;
+    }
+
+    const auto& u = *uopt;
+    const bool is_admin = (u.role == "admin" && u.status == "enabled");
+    const bool is_user  = (u.status == "enabled") || is_admin;
+
+    if (!is_user) {
+        reply_json(res, 403, json({{"ok",false},{"error","forbidden"},{"message","policy denied"}}).dump());
+        return false;
+    }
+
+    if (out_fp_hex) *out_fp_hex = fp_hex;
+    if (out_role) *out_role = is_admin ? "admin" : "user";
+    return true;
+}
+
+// ----- Mixed gate: Bearer first, then cookie -------------------------------
+// For routes that should accept either mobile bearer auth or browser cookie auth.
+[[maybe_unused]] static bool require_user_auth_users_actor(
+    const httplib::Request& req,
+    httplib::Response& res,
+    const unsigned char cookie_key[32],
+    pqnas::UsersRegistry* users,
+    std::string* out_fp_hex,
+    std::string* out_role
+) {
+    if (out_fp_hex) out_fp_hex->clear();
+    if (out_role) out_role->clear();
+
+    if (try_user_bearer_users_actor(req, res, users, out_fp_hex, out_role)) {
+        return true;
+    }
+
+    return require_user_cookie_users_actor(req, res, cookie_key, users, out_fp_hex, out_role);
+}
 
 static std::string random_b64url(size_t nbytes) {
     std::string b(nbytes, '\0');
