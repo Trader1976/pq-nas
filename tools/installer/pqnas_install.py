@@ -657,7 +657,7 @@ def ensure_config_files(root: str, asset_root: str) -> None:
     if not os.path.exists(app_auth_path):
         with open(app_auth_path, "w", encoding="utf-8") as f:
             f.write('{\n  "version": 1,\n  "devices": {},\n  "refresh_tokens": {}\n}\n')
-            
+
     # Optional breadcrumb under storage root
     try:
         marker_dir = os.path.join(root, "config")
