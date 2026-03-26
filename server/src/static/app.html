@@ -13,7 +13,7 @@
         body{
             margin: 0;
             color: var(--fg);
-            font-family: var(--mono);
+            font-family: var(--sans);
             background:
                     radial-gradient(1200px 700px at 18% 8%, rgba(var(--fg-rgb),0.11), transparent 55%),
                     radial-gradient(1000px 700px at 82% 12%, rgba(var(--fg-rgb),0.07), transparent 60%),
@@ -94,7 +94,9 @@
             letter-spacing: 0.6px;
             text-transform: uppercase;
         }
-
+        .btn{
+            font-family: var(--sans);
+        }
         .navbtn{
             display:flex;
             align-items:center;
@@ -113,7 +115,9 @@
             transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
             font-size: 14px;
         }
-
+        #homeBlurb{
+            font-family: var(--sans);
+        }
         .navbtn:hover{
             transform: translateY(-1px);
             background: rgba(var(--fg-rgb),0.06);

@@ -700,14 +700,14 @@
     `;
 
         homeBlurb.innerHTML = `
-        <div style="max-width:760px;">
-            <h3 style="margin:0 0 8px 0; font-size:18px;">Pair a new device</h3>
-            <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:14px;">
+        <div style="max-width:760px; font-family:var(--sans);">
+            <h3 style="margin:0 0 8px 0; font-size:18px; font-family:inherit;">Pair a new device</h3>
+            <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:14px; font-family:inherit;">
                 Open the PQ-NAS mobile app, choose scan/pair, and scan the QR code shown here.
                 After you confirm on the phone, this page will update automatically.
             </div>
 
-            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; font-family:inherit;">
                 <button class="btn" id="pairNewDeviceBtn" type="button">Pair New Device</button>
                 <button class="btn secondary" id="pairStopBtn" type="button">Clear</button>
             </div>
