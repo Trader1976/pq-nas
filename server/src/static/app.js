@@ -786,7 +786,14 @@
             <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
                 <div>
                     <div style="font-weight:600;">${d.device_name || "Unnamed device"}</div>
-                    <div class="mini">${d.platform || "?"}${d.app_version ? ` · app ${d.app_version}` : ""}</div>
+                    <div class="mini">
+    ${[
+                d.device_manufacturer,
+                d.device_model,
+                d.os_version,
+                d.app_version ? `app ${d.app_version}` : ""
+            ].filter(Boolean).join(" · ") || (d.platform || "?")}
+</div>
                     <div class="mini">Paired: ${fmtDateTime(d.created_at)}</div>
                     <div class="mini">Last seen: ${fmtDateTime(d.last_seen_at)}</div>
                     <div class="mini">Trusted until: ${trustedUntil}</div>

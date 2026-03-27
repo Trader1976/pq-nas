@@ -483,16 +483,28 @@ srv.Post("/api/v5/consume_app", [&](const httplib::Request& req, httplib::Respon
         return;
     }
 
-    const std::string device_name = j.value("device_name", std::string{});
-    std::string platform = j.value("platform", std::string{});
-    const std::string app_version = j.value("app_version", std::string{});
-    if (platform.empty()) platform = "android";
+	const std::string device_name = j.value("device_name", std::string{});
+	std::string platform = j.value("platform", std::string{});
+	const std::string app_version = j.value("app_version", std::string{});
+	const std::string device_model = j.value("device_model", std::string{});
+	const std::string device_manufacturer = j.value("device_manufacturer", std::string{});
+	const std::string os_version = j.value("os_version", std::string{});
+	if (platform.empty()) platform = "android";
 
     RoutesV5Context::ConsumeAppResult out;
     std::string merr;
     const std::string client_ip = ctx.client_ip ? ctx.client_ip(req) : req.remote_addr;
 
-    if (!ctx.consume_app_mint(ae.fingerprint, device_name, platform, app_version, client_ip, out, merr)) {
+    if (!ctx.consume_app_mint(ae.fingerprint,
+                          device_name,
+                          platform,
+                          app_version,
+                          device_model,
+                          device_manufacturer,
+                          os_version,
+                          client_ip,
+                          out,
+                          merr)) {
         if (ctx.audit_emit) {
             ctx.audit_emit("v5.consume_app_fail", "fail", [&](std::map<std::string,std::string>& f) {
                 f["k"] = key;
@@ -501,6 +513,9 @@ srv.Post("/api/v5/consume_app", [&](const httplib::Request& req, httplib::Respon
                 if (!platform.empty()) f["platform"] = platform;
                 if (!device_name.empty()) f["device_name"] = device_name;
                 if (!app_version.empty()) f["app_version"] = app_version;
+				if (!device_model.empty()) f["device_model"] = device_model;
+				if (!device_manufacturer.empty()) f["device_manufacturer"] = device_manufacturer;
+				if (!os_version.empty()) f["os_version"] = os_version;
                 if (!client_ip.empty()) f["ip"] = client_ip;
                 const std::string ua = req_header_or_empty(req, "User-Agent");
                 if (!ua.empty()) f["ua"] = ua;
@@ -527,6 +542,9 @@ srv.Post("/api/v5/consume_app", [&](const httplib::Request& req, httplib::Respon
             f["platform"] = platform;
             if (!device_name.empty()) f["device_name"] = device_name;
             if (!app_version.empty()) f["app_version"] = app_version;
+			if (!device_model.empty()) f["device_model"] = device_model;
+			if (!device_manufacturer.empty()) f["device_manufacturer"] = device_manufacturer;
+			if (!os_version.empty()) f["os_version"] = os_version;
             if (!client_ip.empty()) f["ip"] = client_ip;
             const std::string ua = req_header_or_empty(req, "User-Agent");
             if (!ua.empty()) f["ua"] = ua;
@@ -718,27 +736,30 @@ srv.Get("/api/v5/app_devices", [&](const httplib::Request& req, httplib::Respons
 
     json arr = json::array();
 
-for (const auto& d : devices) {
-    if (d.revoked) continue;
+	for (const auto& d : devices) {
+    	if (d.revoked) continue;
 
-    long refresh_expires_at = 0;
-    const bool has_refresh_expiry =
-        ctx.app_device_refresh_expiry &&
-        ctx.app_device_refresh_expiry(d.device_id, refresh_expires_at);
+	    long refresh_expires_at = 0;
+    	const bool has_refresh_expiry =
+        	ctx.app_device_refresh_expiry &&
+	        ctx.app_device_refresh_expiry(d.device_id, refresh_expires_at);
 
-    arr.push_back(json{
-        {"device_id", d.device_id},
-        {"role", d.role},
-        {"platform", d.platform},
-        {"device_name", d.device_name},
-        {"app_version", d.app_version},
-        {"created_at", d.created_at},
-        {"last_seen_at", d.last_seen_at},
-        {"last_ip", d.last_ip},
-        {"revoked", d.revoked},
-        {"refresh_expires_at", has_refresh_expiry ? refresh_expires_at : 0}
-    });
-}
+		arr.push_back(json{
+    		{"device_id", d.device_id},
+	    	{"role", d.role},
+	    	{"platform", d.platform},
+		    {"device_name", d.device_name},
+    		{"app_version", d.app_version},
+		    {"device_model", d.device_model},
+    		{"device_manufacturer", d.device_manufacturer},
+	    	{"os_version", d.os_version},
+	    	{"created_at", d.created_at},
+		    {"last_seen_at", d.last_seen_at},
+    		{"last_ip", d.last_ip},
+	    	{"revoked", d.revoked},
+		    {"refresh_expires_at", has_refresh_expiry ? refresh_expires_at : 0}
+		});
+	}
 
     reply_json(res, 200, json{
         {"ok", true},
@@ -896,11 +917,14 @@ srv.Post("/api/v5/app_pair/consume", [&](const httplib::Request& req, httplib::R
         return;
     }
 
-    const std::string pair_token = j.value("pair_token", std::string{});
-    const std::string device_name = j.value("device_name", std::string{});
-    std::string platform = j.value("platform", std::string{});
-    const std::string app_version = j.value("app_version", std::string{});
-    if (platform.empty()) platform = "android";
+	const std::string pair_token = j.value("pair_token", std::string{});
+	const std::string device_name = j.value("device_name", std::string{});
+	std::string platform = j.value("platform", std::string{});
+	const std::string app_version = j.value("app_version", std::string{});
+	const std::string device_model = j.value("device_model", std::string{});
+	const std::string device_manufacturer = j.value("device_manufacturer", std::string{});
+	const std::string os_version = j.value("os_version", std::string{});
+	if (platform.empty()) platform = "android";
 
     if (pair_token.empty()) {
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing pair_token"}}.dump());
@@ -927,7 +951,16 @@ srv.Post("/api/v5/app_pair/consume", [&](const httplib::Request& req, httplib::R
     std::string merr;
     const std::string client_ip = ctx.client_ip ? ctx.client_ip(req) : req.remote_addr;
 
-    if (!ctx.consume_app_mint(fingerprint_hex, device_name, platform, app_version, client_ip, out, merr)) {
+    if (!ctx.consume_app_mint(fingerprint_hex,
+                          device_name,
+                          platform,
+                          app_version,
+                          device_model,
+                          device_manufacturer,
+                          os_version,
+                          client_ip,
+                          out,
+                          merr)) {
         reply_json(res, 403, json{
             {"ok", false},
             {"error", "forbidden"},

@@ -179,13 +179,17 @@ struct RoutesV5Context {
     std::function<std::string(const std::string& origin,
                               const std::string& pair_token,
                               const std::string& app_name)> app_pair_build_qr_uri;
-    std::function<bool(const std::string& fingerprint_hex,
-                   const std::string& device_name,
-                   const std::string& platform,
-                   const std::string& app_version,
-                   const std::string& client_ip,
-                   ConsumeAppResult& out,
-                   std::string& err)> consume_app_mint;
+
+	std::function<bool(const std::string& fingerprint_hex,
+    	               const std::string& device_name,
+        	           const std::string& platform,
+            	       const std::string& app_version,
+                	   const std::string& device_model,
+	                   const std::string& device_manufacturer,
+    	               const std::string& os_version,
+        	           const std::string& client_ip,
+            	       ConsumeAppResult& out,
+                	   std::string& err)> consume_app_mint;
 
     std::function<bool(const std::string& refresh_token,
                        const std::string& device_id,

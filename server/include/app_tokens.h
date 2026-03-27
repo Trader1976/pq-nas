@@ -21,6 +21,10 @@ struct TrustedAppDevice {
     std::string last_seen_at;
     std::string last_ip;
 
+	std::string device_model;
+	std::string device_manufacturer;
+	std::string os_version;
+
     bool revoked = false;
 };
 
@@ -58,19 +62,22 @@ public:
     void set_now_iso_utc_fn(std::function<std::string()> fn) { now_iso_utc_fn_ = std::move(fn); }
     void set_random_b64url_fn(std::function<std::string(size_t)> fn) { random_b64url_fn_ = std::move(fn); }
 
-    bool mint_from_approved_fingerprint(
-        const std::string& fingerprint_hex,
-        const std::string& role,
-        const std::string& device_name,
-        const std::string& platform,
-        const std::string& app_version,
-        const std::string& client_ip,
-        std::string* out_device_id,
-        std::string* out_access_token,
-        long* out_access_exp,
-        std::string* out_refresh_token,
-        long* out_refresh_exp,
-        std::string* err);
+	bool mint_from_approved_fingerprint(
+    	const std::string& fingerprint_hex,
+    	const std::string& role,
+    	const std::string& device_name,
+	    const std::string& platform,
+    	const std::string& app_version,
+    	const std::string& device_model,
+	    const std::string& device_manufacturer,
+    	const std::string& os_version,
+	    const std::string& client_ip,
+    	std::string* out_device_id,
+	    std::string* out_access_token,
+    	long* out_access_exp,
+	    std::string* out_refresh_token,
+    	long* out_refresh_exp,
+    	std::string* err);
 
     bool verify_access_token(
         const std::string& raw_access_token,

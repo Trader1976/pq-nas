@@ -217,6 +217,9 @@ bool AppTokenStore::load(const std::string& path, std::string* err) {
             d.platform        = json_string_or_empty(dj, "platform");
             d.device_name     = json_string_or_empty(dj, "device_name");
             d.app_version     = json_string_or_empty(dj, "app_version");
+            d.device_model        = json_string_or_empty(dj, "device_model");
+            d.device_manufacturer = json_string_or_empty(dj, "device_manufacturer");
+            d.os_version          = json_string_or_empty(dj, "os_version");
             d.created_at      = json_string_or_empty(dj, "created_at");
             d.last_seen_at    = json_string_or_empty(dj, "last_seen_at");
             d.last_ip         = json_string_or_empty(dj, "last_ip");
@@ -291,6 +294,9 @@ bool AppTokenStore::save(std::string* err) const {
             {"platform", d.platform},
             {"device_name", d.device_name},
             {"app_version", d.app_version},
+            {"device_model", d.device_model},
+            {"device_manufacturer", d.device_manufacturer},
+            {"os_version", d.os_version},
             {"created_at", d.created_at},
             {"last_seen_at", d.last_seen_at},
             {"last_ip", d.last_ip},
@@ -319,6 +325,9 @@ bool AppTokenStore::mint_from_approved_fingerprint(
     const std::string& device_name,
     const std::string& platform,
     const std::string& app_version,
+    const std::string& device_model,
+    const std::string& device_manufacturer,
+    const std::string& os_version,
     const std::string& client_ip,
     std::string* out_device_id,
     std::string* out_access_token,
@@ -365,6 +374,9 @@ bool AppTokenStore::mint_from_approved_fingerprint(
         d.platform = platform.empty() ? "android" : platform;
         d.device_name = device_name;
         d.app_version = app_version;
+        d.device_model = device_model;
+        d.device_manufacturer = device_manufacturer;
+        d.os_version = os_version;
         d.created_at = now_iso;
         d.last_seen_at = now_iso;
         d.last_ip = client_ip;
