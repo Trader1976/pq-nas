@@ -1,3 +1,5 @@
+window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
+
 (() => {
   "use strict";
   const el = (id) => document.getElementById(id);
@@ -232,6 +234,7 @@
   // ---- State ----------------------------------------------------------------
   let curPath = "";
   let storageBlocked = false;
+  let lastListedItems = [];
 
   const VIEW_KEY = "pqnas_filemgr_view_mode";
   let viewMode = "grid";
@@ -620,6 +623,29 @@
 
     return alias[e] || e;
   }
+
+  const TEXT_EDIT_EXTS = new Set([
+    "txt","md","json","js","ts","jsx","tsx","html","htm","css",
+    "xml","yml","yaml","toml","ini","conf","log",
+    "c","cc","cpp","cxx","h","hh","hpp","hxx",
+    "py","sh","bash","zsh","sql","csv","tsv",
+    "java","go","rs","rb","php","lua","swift","kt"
+  ]);
+
+  function isProbablyTextEditableName(name) {
+    const ext = normalizeIconExt(fileExtLower(name));
+    return !!ext && TEXT_EDIT_EXTS.has(ext);
+  }
+
+  const IMAGE_PREVIEW_EXTS = new Set([
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"
+  ]);
+
+  function isProbablyImagePreviewableName(name) {
+    const ext = normalizeIconExt(fileExtLower(name));
+    return !!ext && IMAGE_PREVIEW_EXTS.has(ext);
+  }
+
 
   function iconMap() {
     return (window.PQNAS_FILE_ICONS && typeof window.PQNAS_FILE_ICONS === "object")
@@ -1986,7 +2012,10 @@
     const p = currentRelPathFor(item);
     window.location.href = `/api/v4/files/get?path=${encodeURIComponent(p)}`;
   }
-
+  function doOpenOriginal(item) {
+    const p = currentRelPathFor(item);
+    window.open(`/api/v4/files/get?path=${encodeURIComponent(p)}`, "_blank", "noopener");
+  }
   function downloadFolderZip(relDir) {
     const p = relDir || "";
     window.location.href = `/api/v4/files/zip?path=${encodeURIComponent(p)}`;
@@ -2714,7 +2743,6 @@
     if (!Number.isFinite(ms)) return false;
     return Date.now() >= ms;
   }
-
   function openMenuAt(x, y, item) {
     if (!ctxEl) return;
 
@@ -2783,6 +2811,15 @@
         ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
       }
     } else {
+      if (window.PQNAS_FILEMGR && window.PQNAS_FILEMGR.imagePreview && isProbablyImagePreviewableName(item.name)) {
+        ctxEl.appendChild(menuItem("Open preview", "", () => window.PQNAS_FILEMGR.imagePreview.open(item)));
+        ctxEl.appendChild(menuItem("Open original", "", () => doOpenOriginal(item)));
+      }
+
+      if (window.PQNAS_FILEMGR && window.PQNAS_FILEMGR.textEdit && isProbablyTextEditableName(item.name)) {
+        ctxEl.appendChild(menuItem("Open / edit text…", "", () => window.PQNAS_FILEMGR.textEdit.open(item)));
+      }
+
       ctxEl.appendChild(menuItem("Download", "⤓", () => doDownload(item)));
       ctxEl.appendChild(menuItem(favLabel, "", async () => {
         try {
@@ -2811,7 +2848,6 @@
     ctxEl.setAttribute("aria-hidden", "false");
     placeMenu(x, y);
   }
-
   function openBackgroundMenuAt(x, y) {
     if (!ctxEl) return;
 
@@ -3158,7 +3194,13 @@
         clearSelection();
         load();
       } else if (item.type === "file") {
-        doDownload(item);
+        if (window.PQNAS_FILEMGR && window.PQNAS_FILEMGR.imagePreview && isProbablyImagePreviewableName(item.name)) {
+          window.PQNAS_FILEMGR.imagePreview.open(item);
+        } else if (window.PQNAS_FILEMGR && window.PQNAS_FILEMGR.textEdit && isProbablyTextEditableName(item.name)) {
+          window.PQNAS_FILEMGR.textEdit.open(item);
+        } else {
+          doDownload(item);
+        }
       }
     });
 
@@ -3665,7 +3707,7 @@
       const items = favoritesOnly
           ? allItems.filter((it) => isFavoriteRelPath(currentRelPathFor(it), it.type))
           : allItems;
-
+      lastListedItems = items.slice();
       setBadge("ok", "ready");
       status.textContent = favoritesOnly
           ? `Favorites: ${items.length} / ${allItems.length}`
@@ -3741,7 +3783,18 @@
 
   applyViewModeToDom();
   applyFavoritesFilterUi();
-
+  const FM = window.PQNAS_FILEMGR;
+  FM.getCurPath = () => curPath;
+  FM.getLastListedItems = () => lastListedItems.slice();
+  FM.currentRelPathFor = currentRelPathFor;
+  FM.joinPath = joinPath;
+  FM.fmtSize = fmtSize;
+  FM.setBadge = setBadge;
+  FM.copyText = copyText;
+  FM.getStatusEl = () => status;
+  FM.getLoadFn = () => load;
+  FM.isProbablyTextEditableName = isProbablyTextEditableName;
+  FM.isProbablyImagePreviewableName = isProbablyImagePreviewableName;
   (async () => {
     try {
       await fetchFavoritesFromServer();

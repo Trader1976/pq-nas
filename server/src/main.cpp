@@ -6802,7 +6802,45 @@ static void tiering_recover_stuck_migrating_files() {
         }
     }
 }
+static std::string guess_download_mime_from_name(const std::string& name) {
+    auto lower = [](std::string s) {
+        for (char& c : s) c = (char)std::tolower((unsigned char)c);
+        return s;
+    };
 
+    const std::string n = lower(name);
+    const auto dot = n.rfind('.');
+    const std::string ext = (dot == std::string::npos) ? "" : n.substr(dot + 1);
+
+    if (ext == "png") return "image/png";
+    if (ext == "jpg" || ext == "jpeg") return "image/jpeg";
+    if (ext == "gif") return "image/gif";
+    if (ext == "webp") return "image/webp";
+    if (ext == "svg") return "image/svg+xml";
+    if (ext == "bmp") return "image/bmp";
+    if (ext == "ico") return "image/x-icon";
+
+    if (ext == "txt" || ext == "log" || ext == "md") return "text/plain; charset=utf-8";
+    if (ext == "json") return "application/json; charset=utf-8";
+    if (ext == "html" || ext == "htm") return "text/html; charset=utf-8";
+    if (ext == "css") return "text/css; charset=utf-8";
+    if (ext == "js") return "application/javascript; charset=utf-8";
+    if (ext == "xml") return "application/xml; charset=utf-8";
+    if (ext == "csv") return "text/csv; charset=utf-8";
+    if (ext == "pdf") return "application/pdf";
+
+    return "application/octet-stream";
+}
+
+static bool is_inline_preview_mime(const std::string& mime) {
+    return mime == "image/png" ||
+           mime == "image/jpeg" ||
+           mime == "image/gif" ||
+           mime == "image/webp" ||
+           mime == "image/svg+xml" ||
+           mime == "image/bmp" ||
+           mime == "image/x-icon";
+}
 static void tiering_worker_loop(pqnas::UsersRegistry* users,
                                 std::atomic<bool>* stop_flag) {
 	std::cerr << "[tiering-worker] started\n";
@@ -6866,7 +6904,221 @@ static void tiering_worker_loop(pqnas::UsersRegistry* users,
         }
     }
 }
+namespace {
 
+// Keep MVP conservative.
+static constexpr std::uint64_t k_text_edit_max_bytes = 1024 * 1024; // 1 MiB
+
+bool looks_like_text_no_nul_prefix(const std::filesystem::path& p,
+                                   std::string* err) {
+    if (err) err->clear();
+
+    std::ifstream f(p, std::ios::binary);
+    if (!f.good()) {
+        if (err) *err = "open failed";
+        return false;
+    }
+
+    char buf[4096];
+    f.read(buf, sizeof(buf));
+    const std::streamsize n = f.gcount();
+
+    for (std::streamsize i = 0; i < n; ++i) {
+        if (buf[i] == '\0') {
+            if (err) *err = "binary file";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool read_file_bytes_all(const std::filesystem::path& p,
+                         std::string* out,
+                         std::string* err) {
+    if (err) err->clear();
+    if (!out) {
+        if (err) *err = "null out";
+        return false;
+    }
+
+    std::ifstream f(p, std::ios::binary);
+    if (!f.good()) {
+        if (err) *err = "open failed";
+        return false;
+    }
+
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    if (!f.good() && !f.eof()) {
+        if (err) *err = "read failed";
+        return false;
+    }
+
+    *out = ss.str();
+    return true;
+}
+
+// Minimal strict UTF-8 validator.
+// Accepts plain UTF-8, rejects malformed sequences.
+bool is_valid_utf8(const std::string& s) {
+    const auto* p = reinterpret_cast<const unsigned char*>(s.data());
+    const size_t n = s.size();
+    size_t i = 0;
+
+    while (i < n) {
+        const unsigned char c = p[i];
+
+        if (c <= 0x7F) {
+            ++i;
+            continue;
+        }
+
+        if ((c >> 5) == 0x6) { // 110xxxxx 10xxxxxx
+            if (i + 1 >= n) return false;
+            const unsigned char c1 = p[i + 1];
+            if ((c1 >> 6) != 0x2) return false;
+            const unsigned int cp = ((c & 0x1F) << 6) | (c1 & 0x3F);
+            if (cp < 0x80) return false; // overlong
+            i += 2;
+            continue;
+        }
+
+        if ((c >> 4) == 0xE) { // 1110xxxx 10xxxxxx 10xxxxxx
+            if (i + 2 >= n) return false;
+            const unsigned char c1 = p[i + 1];
+            const unsigned char c2 = p[i + 2];
+            if ((c1 >> 6) != 0x2 || (c2 >> 6) != 0x2) return false;
+            const unsigned int cp =
+                ((c & 0x0F) << 12) |
+                ((c1 & 0x3F) << 6) |
+                (c2 & 0x3F);
+            if (cp < 0x800) return false; // overlong
+            if (cp >= 0xD800 && cp <= 0xDFFF) return false; // surrogate range
+            i += 3;
+            continue;
+        }
+
+        if ((c >> 3) == 0x1E) { // 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+            if (i + 3 >= n) return false;
+            const unsigned char c1 = p[i + 1];
+            const unsigned char c2 = p[i + 2];
+            const unsigned char c3 = p[i + 3];
+            if ((c1 >> 6) != 0x2 || (c2 >> 6) != 0x2 || (c3 >> 6) != 0x2) return false;
+            const unsigned int cp =
+                ((c & 0x07) << 18) |
+                ((c1 & 0x3F) << 12) |
+                ((c2 & 0x3F) << 6) |
+                (c3 & 0x3F);
+            if (cp < 0x10000) return false; // overlong
+            if (cp > 0x10FFFF) return false;
+            i += 4;
+            continue;
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
+std::string strip_utf8_bom(const std::string& s, bool* had_bom = nullptr) {
+    const bool bom = s.size() >= 3 &&
+                     (unsigned char)s[0] == 0xEF &&
+                     (unsigned char)s[1] == 0xBB &&
+                     (unsigned char)s[2] == 0xBF;
+    if (had_bom) *had_bom = bom;
+    return bom ? s.substr(3) : s;
+}
+
+std::uint64_t file_mtime_epoch_safe(const std::filesystem::path& p) {
+    std::error_code ec;
+    auto ftime = std::filesystem::last_write_time(p, ec);
+    if (ec) return 0;
+
+    using namespace std::chrono;
+    auto sctp = time_point_cast<system_clock::duration>(
+        ftime - std::filesystem::file_time_type::clock::now() + system_clock::now()
+    );
+    const auto sec = duration_cast<seconds>(sctp.time_since_epoch()).count();
+    return sec > 0 ? (std::uint64_t)sec : 0;
+}
+
+std::string guess_text_mime_from_name(const std::string& name) {
+    auto lower = [](std::string s) {
+        for (char& c : s) c = (char)std::tolower((unsigned char)c);
+        return s;
+    };
+
+    const std::string n = lower(name);
+    const auto dot = n.rfind('.');
+    const std::string ext = (dot == std::string::npos) ? "" : n.substr(dot + 1);
+
+    if (ext == "txt" || ext == "log" || ext == "md" || ext == "ini" || ext == "conf")
+        return "text/plain";
+    if (ext == "json") return "application/json";
+    if (ext == "html" || ext == "htm") return "text/html";
+    if (ext == "css") return "text/css";
+    if (ext == "js") return "application/javascript";
+    if (ext == "xml") return "application/xml";
+    if (ext == "csv") return "text/csv";
+    if (ext == "yml" || ext == "yaml") return "text/yaml";
+    if (ext == "sh" || ext == "bash" || ext == "zsh") return "text/x-shellscript";
+    if (ext == "c" || ext == "cc" || ext == "cpp" || ext == "h" || ext == "hpp")
+        return "text/plain";
+    if (ext == "py") return "text/x-python";
+    if (ext == "sql") return "text/plain";
+
+    return "text/plain";
+}
+
+bool write_text_file_atomic_utf8(const std::filesystem::path& target_abs,
+                                 const std::string& text_utf8,
+                                 std::string* err) {
+    if (err) err->clear();
+
+    const auto parent = target_abs.parent_path();
+    const auto name = target_abs.filename().string();
+
+    std::error_code ec;
+    std::filesystem::create_directories(parent, ec);
+    if (ec) {
+        if (err) *err = "create parent failed: " + ec.message();
+        return false;
+    }
+
+    const std::string tmp_name =
+        "." + name + ".textedit." + std::to_string((unsigned long long)std::time(nullptr)) + ".tmp";
+    const std::filesystem::path tmp_abs = parent / tmp_name;
+
+    {
+        std::ofstream f(tmp_abs, std::ios::binary | std::ios::trunc);
+        if (!f.good()) {
+            if (err) *err = "open tmp failed";
+            return false;
+        }
+
+        f.write(text_utf8.data(), (std::streamsize)text_utf8.size());
+        f.flush();
+
+        if (!f.good()) {
+            f.close();
+            std::filesystem::remove(tmp_abs, ec);
+            if (err) *err = "write tmp failed";
+            return false;
+        }
+    }
+
+    std::filesystem::rename(tmp_abs, target_abs, ec);
+    if (ec) {
+        std::filesystem::remove(tmp_abs, ec);
+        if (err) *err = "rename failed: " + ec.message();
+        return false;
+    }
+
+    return true;
+}
+
+} // namespace
 
 // -----------------------------------------------------------------------------
 // main
@@ -19626,6 +19878,526 @@ if (delta_bytes > 0) {
     }.dump());
 });
 
+// GET /api/v4/files/read_text?path=rel/path
+srv.Get("/api/v4/files/read_text", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http,
+                          const std::string& detail = "",
+                          const std::string& path_rel = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_read_text_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!path_rel.empty()) ev.f["path"] = pqnas::shorten(path_rel, 200);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        add_ip_headers(ev);
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& path_rel,
+                        std::uint64_t bytes,
+                        std::uint64_t mtime_epoch,
+                        const std::string& sha256_hex) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_read_text_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(path_rel, 200);
+        ev.f["bytes"] = std::to_string((unsigned long long)bytes);
+        ev.f["mtime_epoch"] = std::to_string((unsigned long long)mtime_epoch);
+        ev.f["sha256"] = pqnas::shorten(sha256_hex, 80);
+        add_ip_headers(ev);
+        audit_append(ev);
+    };
+
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    std::string path_rel;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+    if (path_rel.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    pqnas::ResolvedExistingPath rp;
+    std::string err;
+    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, path_rel, &rp, &err)) {
+        if (err == "empty path" || err == "invalid path" || err == "absolute path not allowed" || err == "reserved path") {
+            audit_fail("invalid_path", 400, err, path_rel);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            }.dump());
+            return;
+        }
+
+        audit_fail("not_found", 404, err, path_rel);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "file not found"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path path_abs = rp.abs_path;
+
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(path_abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404, "", path_rel);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "file not found"}
+        }.dump());
+        return;
+    }
+
+    if (std::filesystem::is_symlink(st)) {
+        audit_fail("symlink_not_supported", 400, "", path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "symlinks not supported"}
+        }.dump());
+        return;
+    }
+
+    if (!std::filesystem::is_regular_file(st)) {
+        audit_fail("not_file", 400, "", path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "not a file"}
+        }.dump());
+        return;
+    }
+
+    const std::uint64_t bytes = pqnas::file_size_u64_safe(path_abs);
+    if (bytes > k_text_edit_max_bytes) {
+        audit_fail("too_large", 413, std::to_string((unsigned long long)bytes), path_rel);
+        reply_json(res, 413, json{
+            {"ok", false},
+            {"error", "too_large"},
+            {"message", "file too large to edit in browser"},
+            {"bytes", bytes},
+            {"max_bytes", k_text_edit_max_bytes}
+        }.dump());
+        return;
+    }
+
+    std::string terr;
+    if (!looks_like_text_no_nul_prefix(path_abs, &terr)) {
+        audit_fail("not_text", 400, terr, path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "not_text"},
+            {"message", "file does not look like text"}
+        }.dump());
+        return;
+    }
+
+    std::string raw;
+    if (!read_file_bytes_all(path_abs, &raw, &err)) {
+        audit_fail("read_failed", 500, err, path_rel);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "read failed"},
+            {"detail", pqnas::shorten(err, 180)}
+        }.dump());
+        return;
+    }
+
+    bool had_bom = false;
+    std::string text = strip_utf8_bom(raw, &had_bom);
+    if (!is_valid_utf8(text)) {
+        audit_fail("decode_failed", 400, "invalid utf-8", path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "decode_failed"},
+            {"message", "file is not valid UTF-8 text"}
+        }.dump());
+        return;
+    }
+
+    std::string digest_hex, herr;
+    if (!sha256_file(path_abs, &digest_hex, &herr)) {
+        audit_fail("hash_failed", 500, herr, path_rel);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "hash failed"},
+            {"detail", pqnas::shorten(herr, 180)}
+        }.dump());
+        return;
+    }
+
+    const std::uint64_t mtime_epoch = file_mtime_epoch_safe(path_abs);
+    const std::string name = path_abs.filename().string();
+
+    audit_ok(path_rel, bytes, mtime_epoch, digest_hex);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", rp.normalized_rel_path},
+        {"name", pqnas::shorten(name, 200)},
+        {"mime", guess_text_mime_from_name(name)},
+        {"encoding", "utf-8"},
+        {"had_utf8_bom", had_bom},
+        {"bytes", bytes},
+        {"mtime_epoch", mtime_epoch},
+        {"sha256", digest_hex},
+        {"text", text}
+    }.dump());
+});
+
+// POST /api/v4/files/write_text
+srv.Post("/api/v4/files/write_text", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http,
+                          const std::string& detail = "",
+                          const std::string& path_rel = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_write_text_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!path_rel.empty()) ev.f["path"] = pqnas::shorten(path_rel, 200);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        add_ip_headers(ev);
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& path_rel,
+                        std::uint64_t bytes,
+                        std::uint64_t mtime_epoch,
+                        const std::string& sha256_hex) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_write_text_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(path_rel, 200);
+        ev.f["bytes"] = std::to_string((unsigned long long)bytes);
+        ev.f["mtime_epoch"] = std::to_string((unsigned long long)mtime_epoch);
+        ev.f["sha256"] = pqnas::shorten(sha256_hex, 80);
+        add_ip_headers(ev);
+        audit_append(ev);
+    };
+
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    json in = json::parse(req.body, nullptr, false);
+    if (in.is_discarded() || !in.is_object()) {
+        audit_fail("invalid_json", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    const std::string path_rel = in.value("path", "");
+    const std::string text = in.value("text", "");
+    const std::uint64_t expected_mtime_epoch =
+        (in.contains("expected_mtime_epoch") && in["expected_mtime_epoch"].is_number_unsigned())
+            ? in["expected_mtime_epoch"].get<std::uint64_t>()
+            : 0;
+    const std::string expected_sha256 = in.value("expected_sha256", "");
+
+    if (path_rel.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    if (!is_valid_utf8(text)) {
+        audit_fail("invalid_utf8", 400, "", path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "text must be valid UTF-8"}
+        }.dump());
+        return;
+    }
+
+    if ((std::uint64_t)text.size() > k_text_edit_max_bytes) {
+        audit_fail("too_large", 413, std::to_string((unsigned long long)text.size()), path_rel);
+        reply_json(res, 413, json{
+            {"ok", false},
+            {"error", "too_large"},
+            {"message", "file too large to edit in browser"},
+            {"bytes", (std::uint64_t)text.size()},
+            {"max_bytes", k_text_edit_max_bytes}
+        }.dump());
+        return;
+    }
+
+    pqnas::ResolvedExistingPath rp;
+    std::string err;
+    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, path_rel, &rp, &err)) {
+        if (err == "empty path" || err == "invalid path" || err == "absolute path not allowed" || err == "reserved path") {
+            audit_fail("invalid_path", 400, err, path_rel);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            }.dump());
+            return;
+        }
+
+        audit_fail("not_found", 404, err, path_rel);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "file not found"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path path_abs = rp.abs_path;
+
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(path_abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404, "", path_rel);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "file not found"}
+        }.dump());
+        return;
+    }
+
+    if (std::filesystem::is_symlink(st)) {
+        audit_fail("symlink_not_supported", 400, "", path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "symlinks not supported"}
+        }.dump());
+        return;
+    }
+
+    if (!std::filesystem::is_regular_file(st)) {
+        audit_fail("not_file", 400, "", path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "not a file"}
+        }.dump());
+        return;
+    }
+
+    const std::uint64_t old_bytes = pqnas::file_size_u64_safe(path_abs);
+    if (old_bytes > k_text_edit_max_bytes) {
+        audit_fail("too_large", 413, std::to_string((unsigned long long)old_bytes), path_rel);
+        reply_json(res, 413, json{
+            {"ok", false},
+            {"error", "too_large"},
+            {"message", "file too large to edit in browser"},
+            {"bytes", old_bytes},
+            {"max_bytes", k_text_edit_max_bytes}
+        }.dump());
+        return;
+    }
+
+    std::string terr;
+    if (!looks_like_text_no_nul_prefix(path_abs, &terr)) {
+        audit_fail("not_text", 400, terr, path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "not_text"},
+            {"message", "file does not look like text"}
+        }.dump());
+        return;
+    }
+
+    const std::uint64_t current_mtime_epoch = file_mtime_epoch_safe(path_abs);
+
+    std::string current_sha256, herr;
+    if (!sha256_file(path_abs, &current_sha256, &herr)) {
+        audit_fail("hash_failed", 500, herr, path_rel);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "hash failed"},
+            {"detail", pqnas::shorten(herr, 180)}
+        }.dump());
+        return;
+    }
+
+    if (expected_mtime_epoch != 0 && current_mtime_epoch != 0 && expected_mtime_epoch != current_mtime_epoch) {
+        audit_fail("changed_on_server", 409, "mtime mismatch", path_rel);
+        reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "changed_on_server"},
+            {"message", "file changed on server"},
+            {"current_mtime_epoch", current_mtime_epoch},
+            {"current_sha256", current_sha256}
+        }.dump());
+        return;
+    }
+
+    if (!expected_sha256.empty() && expected_sha256 != current_sha256) {
+        audit_fail("changed_on_server", 409, "sha256 mismatch", path_rel);
+        reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "changed_on_server"},
+            {"message", "file changed on server"},
+            {"current_mtime_epoch", current_mtime_epoch},
+            {"current_sha256", current_sha256}
+        }.dump());
+        return;
+    }
+
+    // Optional quota safety: text edit can increase file size.
+    // Reuse upload quota model using overwrite semantics.
+    {
+        const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+        auto qc = pqnas::quota_check_for_upload_v1(
+            users,
+            fp_hex,
+            user_dir,
+            rp.normalized_rel_path,
+            (std::uint64_t)text.size()
+        );
+
+        if (!qc.ok) {
+            if (qc.error == "quota_exceeded") {
+                audit_fail("quota_exceeded", 413, "", path_rel);
+                reply_json(res, 413, json{
+                    {"ok", false},
+                    {"error", "quota_exceeded"},
+                    {"message", "Quota exceeded"},
+                    {"used_bytes", qc.used_bytes},
+                    {"quota_bytes", qc.quota_bytes},
+                    {"incoming_bytes", qc.incoming_bytes},
+                    {"existing_bytes", qc.existing_bytes},
+                    {"would_used_bytes", qc.would_used_bytes}
+                }.dump());
+                return;
+            }
+
+            audit_fail("quota_check_failed", 500, qc.error, path_rel);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "quota check failed"},
+                {"detail", qc.error}
+            }.dump());
+            return;
+        }
+    }
+
+    if (!write_text_file_atomic_utf8(path_abs, text, &err)) {
+        audit_fail("write_failed", 500, err, path_rel);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "write failed"},
+            {"detail", pqnas::shorten(err, 180)}
+        }.dump());
+        return;
+    }
+
+    const std::uint64_t new_bytes = pqnas::file_size_u64_safe(path_abs);
+    const std::uint64_t new_mtime_epoch = file_mtime_epoch_safe(path_abs);
+
+    std::string new_sha256, herr2;
+    if (!sha256_file(path_abs, &new_sha256, &herr2)) {
+        audit_fail("hash_after_write_failed", 500, herr2, path_rel);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "hash failed after write"},
+            {"detail", pqnas::shorten(herr2, 180)}
+        }.dump());
+        return;
+    }
+
+    audit_ok(path_rel, new_bytes, new_mtime_epoch, new_sha256);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", rp.normalized_rel_path},
+        {"bytes", new_bytes},
+        {"mtime_epoch", new_mtime_epoch},
+        {"sha256", new_sha256}
+    }.dump());
+});
+
     // POST /api/v4/files/zip?path=rel/path&max_bytes=52428800
 srv.Post("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
@@ -24158,18 +24930,23 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
         return;
     }
 
+    const std::string mime = guess_download_mime_from_name(abs.filename().string());
+    const bool inline_preview = is_inline_preview_mime(mime);
+
     res.set_header("Cache-Control", "no-store");
-    res.set_header("Content-Type", "application/octet-stream");
+    res.set_header("Content-Type", mime);
     res.set_header("Content-Length", std::to_string((unsigned long long)sz));
 
-    // Optional: browser-friendly filename (safe-ish: just basename)
-    res.set_header("Content-Disposition",
-                   std::string("attachment; filename=\"") + abs.filename().string() + "\"");
+    res.set_header(
+        "Content-Disposition",
+        std::string(inline_preview ? "inline; filename=\"" : "attachment; filename=\"") +
+        abs.filename().string() + "\""
+    );
 
     // httplib content provider: called repeatedly until it returns false
     res.set_content_provider(
         (size_t)sz,
-        "application/octet-stream",
+        mime.c_str(),
         [fp](size_t /*offset*/, size_t length, httplib::DataSink& sink) mutable {
             std::string buf;
             buf.resize(length);
