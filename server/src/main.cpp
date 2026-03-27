@@ -24934,8 +24934,6 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
     const bool inline_preview = is_inline_preview_mime(mime);
 
     res.set_header("Cache-Control", "no-store");
-    res.set_header("Content-Type", mime);
-    res.set_header("Content-Length", std::to_string((unsigned long long)sz));
 
     res.set_header(
         "Content-Disposition",
