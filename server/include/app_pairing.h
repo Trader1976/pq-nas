@@ -50,6 +50,9 @@ public:
                               const std::string& device_id,
                               std::string* err);
 
+    bool cancel_pairing(const std::string& pair_id,
+                        std::string* err);
+
     void prune_expired(long now);
 
     static std::string build_pair_qr_uri(const std::string& origin,

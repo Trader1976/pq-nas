@@ -59,12 +59,39 @@
 
     // small UI state
     let versionShown = false;
+    let trustedDevices = [];
+    let trustedDevicesError = "";
 
     function show(el, on) {
         if (!el) return;
         el.style.display = on ? "" : "none";
     }
+    function fmtDateTime(value) {
+        if (!value) return "—";
 
+        if (typeof value === "number") {
+            const d = new Date(value * 1000);
+            if (isNaN(d.getTime())) return "—";
+            return d.toLocaleString();
+        }
+
+        const d = new Date(value);
+        if (isNaN(d.getTime())) return String(value);
+        return d.toLocaleString();
+    }
+
+    function fmtRemainingSec(sec) {
+        if (!Number.isFinite(sec)) return "—";
+        if (sec <= 0) return "expired";
+
+        const days = Math.floor(sec / 86400);
+        const hours = Math.floor((sec % 86400) / 3600);
+        const mins = Math.floor((sec % 3600) / 60);
+
+        if (days > 0) return `${days}d ${hours}h`;
+        if (hours > 0) return `${hours}h ${mins}m`;
+        return `${mins}m`;
+    }
     function setBadge(kind, text) {
         if (!badge) return;
 
@@ -336,7 +363,53 @@
     }
 
 
-
+    async function loadTrustedDevices() {
+        try {
+            const r = await fetch("/api/v5/app_devices", {
+                credentials: "include",
+                cache: "no-store"
+            });
+            const j = await r.json().catch(() => null);
+            if (!r.ok || !j || !j.ok) {
+                throw new Error((j && j.message) ? j.message : `HTTP ${r.status}`);
+            }
+            trustedDevices = Array.isArray(j.devices) ? j.devices : [];
+            trustedDevicesError = "";
+        } catch (e) {
+            trustedDevices = [];
+            trustedDevicesError = String(e && e.message ? e.message : e);
+        }
+    }
+    async function openTrustedDevices(errorText = "") {
+        await loadTrustedDevices();
+        renderTrustedDevices(errorText);
+    }
+    async function cancelPairing(pairId) {
+        const r = await fetch("/api/v5/app_pair/cancel", {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ pair_id: pairId })
+        });
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            throw new Error((j && j.message) ? j.message : `HTTP ${r.status}`);
+        }
+    }
+    async function revokeTrustedDevice(deviceId) {
+        const r = await fetch("/api/v5/app_devices/revoke", {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ device_id: deviceId })
+        });
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            throw new Error((j && j.message) ? j.message : `HTTP ${r.status}`);
+        }
+    }
 
     function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
 
@@ -614,6 +687,7 @@
             }
 
             currentPairing = j;
+            await loadTrustedDevices();
             renderTrustedDevices();
 
             stopPairPolling();
@@ -633,13 +707,20 @@
                     if (!statusEl) return;
 
                     if (sj.state === "pending") {
-                        statusEl.textContent = "Waiting for phone to scan and confirm…";
+                        const left = (typeof sj.expires_at === "number" && typeof sj.now === "number")
+                            ? Math.max(0, sj.expires_at - sj.now)
+                            : 0;
+
+                        statusEl.textContent =
+                            `Waiting for phone to scan and confirm… Expires ${fmtDateTime(sj.expires_at)} (${fmtRemainingSec(left)} left)`;
                         return;
                     }
 
                     if (sj.state === "consumed") {
                         statusEl.textContent = `Paired successfully. Device ID: ${sj.device_id || "?"}`;
                         stopPairPolling();
+                        await loadTrustedDevices();
+                        renderTrustedDevices();
                         return;
                     }
 
@@ -659,11 +740,11 @@
             }, 1500);
         } catch (e) {
             currentPairing = null;
-            renderTrustedDevices(`Failed to start pairing: ${String(e && e.message ? e.message : e)}`);
+            renderTrustedDevices(`Failed to start pairing: ${String(e && e.message ? e.message : e)}`, "err");
         }
     }
 
-    function renderTrustedDevices(errorText = "") {
+    function renderTrustedDevices(messageText = "", messageKind = "") {
         currentView = "trusted_devices";
         currentApp = null;
 
@@ -698,29 +779,68 @@
     ` : `
         <div class="mini" id="pairStatusLine">No active pairing request.</div>
     `;
+        const deviceRows = trustedDevices.map((d) => {
+            const trustedUntil = d.refresh_expires_at ? fmtDateTime(d.refresh_expires_at) : "—";
+            return `
+        <div class="card" style="padding:12px; margin-top:10px;">
+            <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
+                <div>
+                    <div style="font-weight:600;">${d.device_name || "Unnamed device"}</div>
+                    <div class="mini">${d.platform || "?"}${d.app_version ? ` · app ${d.app_version}` : ""}</div>
+                    <div class="mini">Paired: ${fmtDateTime(d.created_at)}</div>
+                    <div class="mini">Last seen: ${fmtDateTime(d.last_seen_at)}</div>
+                    <div class="mini">Trusted until: ${trustedUntil}</div>
+                    ${d.revoked ? `<div class="mini">Status: revoked</div>` : `<div class="mini">Status: active</div>`}
+                </div>
+                ${d.revoked ? "" : `
+                    <button class="btn secondary trustedRevokeBtn" type="button" data-device-id="${String(d.device_id || "")}">
+                        Forget pairing
+                    </button>
+                `}
+            </div>
+        </div>
+    `;
+        }).join("");
+
+        const devicesBlock = `
+    <div style="margin-top:24px;">
+        <h3 style="margin:0 0 8px 0; font-size:18px;">Trusted devices</h3>
+        <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:12px;">
+            Devices that can access your PQ-NAS account through app pairing.
+        </div>
+        ${trustedDevicesError ? `
+            <div class="bigState" style="display:block; margin-top:8px;">
+                <h3>Could not load devices</h3>
+                <p>${trustedDevicesError}</p>
+            </div>
+        ` : ""}
+        ${trustedDevices.length ? deviceRows : `<div class="mini">No trusted devices yet.</div>`}
+    </div>
+`;
 
         homeBlurb.innerHTML = `
-        <div style="max-width:760px; font-family:var(--sans);">
-            <h3 style="margin:0 0 8px 0; font-size:18px; font-family:inherit;">Pair a new device</h3>
-            <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:14px; font-family:inherit;">
-                Open the PQ-NAS mobile app, choose scan/pair, and scan the QR code shown here.
-                After you confirm on the phone, this page will update automatically.
-            </div>
+    <div style="max-width:760px; font-family:var(--sans);">
+        <h3 style="margin:0 0 8px 0; font-size:18px; font-family:inherit;">Pair a new device</h3>
+        <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:14px; font-family:inherit;">
+            Open the PQ-NAS mobile app, choose scan/pair, and scan the QR code shown here.
+            After you confirm on the phone, this page will update automatically.
+        </div>
 
-            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; font-family:inherit;">
-                <button class="btn" id="pairNewDeviceBtn" type="button">Pair New Device</button>
-                <button class="btn secondary" id="pairStopBtn" type="button">Clear</button>
-            </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; font-family:inherit;">
+            <button class="btn" id="pairNewDeviceBtn" type="button">Pair New Device</button>
+            <button class="btn secondary" id="pairStopBtn" type="button">Cancel pairing</button>
+        </div>
 
-            ${errorText ? `
-                <div class="bigState" style="display:block; margin-top:8px;">
-                    <h3>Pairing error</h3>
-                    <p>${errorText}</p>
-                </div>
+        ${messageText ? `
+            <div class="bigState" style="display:block; margin-top:8px;">
+                <h3>${messageKind === "ok" ? "Success" : "Pairing error"}</h3>
+                <p>${messageText}</p>
+            </div>
             ` : ""}
 
             ${qrBlock}
-        </div>
+            ${devicesBlock}
+    </div>
     `;
 
         const pairBtn = document.getElementById("pairNewDeviceBtn");
@@ -729,13 +849,35 @@
                 startPairingFlow();
             });
         }
+        for (const btn of homeBlurb.querySelectorAll(".trustedRevokeBtn")) {
+            btn.addEventListener("click", async () => {
+                const deviceId = btn.dataset.deviceId || "";
+                if (!deviceId) return;
+
+                try {
+                    await revokeTrustedDevice(deviceId);
+                    await loadTrustedDevices();
+                    renderTrustedDevices(`Pairing forgotten for device: ${deviceId}`, "ok");
+                } catch (e) {
+                    renderTrustedDevices("Device removed from trusted devices.", "ok");
+                }
+            });
+        }
 
         const clearBtn = document.getElementById("pairStopBtn");
         if (clearBtn) {
-            clearBtn.addEventListener("click", () => {
-                stopPairPolling();
-                currentPairing = null;
-                renderTrustedDevices();
+            clearBtn.addEventListener("click", async () => {
+                try {
+                    if (currentPairing && currentPairing.pair_id) {
+                        await cancelPairing(currentPairing.pair_id);
+                    }
+                    stopPairPolling();
+                    currentPairing = null;
+                    await loadTrustedDevices();
+                    renderTrustedDevices();
+                } catch (e) {
+                    renderTrustedDevices(`Failed to cancel pairing: ${String(e && e.message ? e.message : e)}`);
+                }
             });
         }
     }
@@ -761,6 +903,11 @@
                 mainPane.classList.add("homeHost");
             }
             homeBlurb.classList.remove("appHostBlurb");
+            if (mainPane) {
+                mainPane.style.overflow = "auto";
+            }
+            homeBlurb.style.overflowY = "auto";
+            homeBlurb.style.maxHeight = "100%";
         }
 
 
@@ -1030,7 +1177,9 @@
     }
 
     if (navHome) navHome.addEventListener("click", () => renderHome());
-    if (navTrustedDevices) navTrustedDevices.addEventListener("click", () => renderTrustedDevices());
+    if (navTrustedDevices) navTrustedDevices.addEventListener("click", () => {
+        openTrustedDevices();
+    });
     // Default view
     renderHome();
 

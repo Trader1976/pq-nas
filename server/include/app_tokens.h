@@ -95,6 +95,8 @@ public:
     bool revoke_device(const std::string& device_id, std::string* err);
 
     bool get_device(const std::string& device_id, TrustedAppDevice* out) const;
+    bool get_refresh_expiry_for_device(const std::string& device_id,
+                                   long* out_expires_at) const;
     std::vector<TrustedAppDevice> list_devices_for_fingerprint(const std::string& fingerprint_hex) const;
 
 private:

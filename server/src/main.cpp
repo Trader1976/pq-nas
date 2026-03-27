@@ -7554,6 +7554,24 @@ auto maybe_auto_rotate_before_append = [&]() {
 	};
 	v5.pending_pop = [&](const std::string& sid) { pending_pop(sid); };
 
+	v5.app_device_refresh_expiry =
+    	[&](const std::string& device_id, long& out_expires_at) -> bool {
+        	return g_app_tokens.get_refresh_expiry_for_device(device_id, &out_expires_at);
+    	};
+	v5.app_devices_list_for_fingerprint =
+    	[&](const std::string& fingerprint_hex) -> std::vector<pqnas::TrustedAppDevice> {
+        	return g_app_tokens.list_devices_for_fingerprint(fingerprint_hex);
+    	};
+
+	v5.app_device_get =
+    	[&](const std::string& device_id, pqnas::TrustedAppDevice& out) -> bool {
+        	return g_app_tokens.get_device(device_id, &out);
+    	};
+
+	v5.app_device_revoke =
+    	[&](const std::string& device_id, std::string& err) -> bool {
+        	return g_app_tokens.revoke_device(device_id, &err);
+    	};
 	// cookie minting + base64
 	v5.session_cookie_mint = [&](const unsigned char* key,
                              const std::string& fp_b64,
@@ -7619,11 +7637,20 @@ v5.app_pair_get =
         pqnas::AppPairingSession s;
         if (!g_app_pairing.get_by_pair_id(pair_id, &s, &err)) return false;
 
-        out.pair_id = s.pair_id;
-        out.expires_at = s.expires_at;
-        out.consumed = s.consumed;
-        out.consumed_device_id = s.consumed_device_id;
+		out.pair_id = s.pair_id;
+		out.fingerprint_hex = s.fingerprint_hex;
+		out.role = s.role;
+		out.issued_at = s.issued_at;
+		out.expires_at = s.expires_at;
+		out.consumed = s.consumed;
+		out.consumed_at = s.consumed_at;
+		out.consumed_device_id = s.consumed_device_id;
         return true;
+    };
+
+v5.app_pair_cancel =
+    [&](const std::string& pair_id, std::string& err) -> bool {
+        return g_app_pairing.cancel_pairing(pair_id, &err);
     };
 
 v5.app_pair_consume =

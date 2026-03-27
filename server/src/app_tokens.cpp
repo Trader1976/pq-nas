@@ -608,6 +608,31 @@ bool AppTokenStore::revoke_device(const std::string& device_id, std::string* err
     }
     return true;
 }
+    bool AppTokenStore::get_refresh_expiry_for_device(const std::string& device_id,
+                                                      long* out_expires_at) const {
+    if (out_expires_at) *out_expires_at = 0;
+    if (device_id.empty()) return false;
+
+    std::lock_guard<std::mutex> lk(mu_);
+
+    long best = 0;
+    bool found = false;
+
+    for (const auto& kv : refresh_by_hash_) {
+        const auto& rs = kv.second;
+        if (rs.device_id != device_id) continue;
+        if (rs.revoked) continue;
+
+        if (!found || rs.expires_at > best) {
+            best = rs.expires_at;
+            found = true;
+        }
+    }
+
+    if (!found) return false;
+    if (out_expires_at) *out_expires_at = best;
+    return true;
+}
 
 bool AppTokenStore::get_device(const std::string& device_id, TrustedAppDevice* out) const {
     if (!out) return false;

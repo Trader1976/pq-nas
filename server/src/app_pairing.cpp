@@ -78,7 +78,27 @@ bool AppPairingStore::get_by_pair_id(const std::string& pair_id,
     if (out) *out = it->second;
     return true;
 }
+    bool AppPairingStore::cancel_pairing(const std::string& pair_id,
+                                         std::string* err) {
+    if (err) err->clear();
 
+    if (pair_id.empty()) {
+        if (err) *err = "empty pair_id";
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lk(mu_);
+
+    auto it = by_pair_id_.find(pair_id);
+    if (it == by_pair_id_.end()) {
+        if (err) *err = "pair_id_not_found";
+        return false;
+    }
+
+    pair_id_by_token_.erase(it->second.pair_token);
+    by_pair_id_.erase(it);
+    return true;
+}
 bool AppPairingStore::get_by_pair_token(const std::string& pair_token,
                                         AppPairingSession* out,
                                         std::string* err) const {

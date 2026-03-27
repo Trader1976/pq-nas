@@ -652,6 +652,151 @@ srv.Post("/api/v5/app_pair/start", [&](const httplib::Request& req, httplib::Res
         {"qr_svg", std::string("/api/v5/app_pair/qr.svg?pt=") + (ctx.url_encode ? ctx.url_encode(out.pair_token) : out.pair_token)}
     }.dump());
 });
+
+srv.Post("/api/v5/app_pair/cancel", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!ctx.require_user_cookie) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "require_user_cookie_not_configured"}}.dump());
+        return;
+    }
+
+    std::string fp_hex, role;
+    if (!ctx.require_user_cookie(req, res, &fp_hex, &role)) return;
+
+    json j;
+    std::string jerr;
+    if (!parse_json_body(req, j, jerr)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", jerr}}.dump());
+        return;
+    }
+
+    const std::string pair_id = j.value("pair_id", std::string{});
+    if (pair_id.empty()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing pair_id"}}.dump());
+        return;
+    }
+
+    if (!ctx.app_pair_get || !ctx.app_pair_cancel) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "app_pair cancel dependencies missing"}}.dump());
+        return;
+    }
+
+    RoutesV5Context::AppPairStatusResult st;
+    std::string err;
+    if (!ctx.app_pair_get(pair_id, st, err)) {
+        reply_json(res, 404, json{{"ok", false}, {"error", "not_found"}, {"message", "pairing not found"}, {"pair_id", pair_id}}.dump());
+        return;
+    }
+
+    if (st.fingerprint_hex != fp_hex) {
+        reply_json(res, 403, json{{"ok", false}, {"error", "forbidden"}, {"message", "pairing does not belong to current user"}}.dump());
+        return;
+    }
+
+    if (!ctx.app_pair_cancel(pair_id, err)) {
+        reply_json(res, 409, json{{"ok", false}, {"error", "not_allowed"}, {"message", err.empty() ? "cancel failed" : err}, {"pair_id", pair_id}}.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{{"ok", true}, {"pair_id", pair_id}, {"state", "cancelled"}}.dump());
+});
+
+srv.Get("/api/v5/app_devices", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!ctx.require_user_cookie) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "require_user_cookie_not_configured"}}.dump());
+        return;
+    }
+
+    std::string fp_hex, role;
+    if (!ctx.require_user_cookie(req, res, &fp_hex, &role)) return;
+
+    if (!ctx.app_devices_list_for_fingerprint) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "app_devices_list_for_fingerprint_not_configured"}}.dump());
+        return;
+    }
+
+    const auto devices = ctx.app_devices_list_for_fingerprint(fp_hex);
+
+    json arr = json::array();
+
+for (const auto& d : devices) {
+    if (d.revoked) continue;
+
+    long refresh_expires_at = 0;
+    const bool has_refresh_expiry =
+        ctx.app_device_refresh_expiry &&
+        ctx.app_device_refresh_expiry(d.device_id, refresh_expires_at);
+
+    arr.push_back(json{
+        {"device_id", d.device_id},
+        {"role", d.role},
+        {"platform", d.platform},
+        {"device_name", d.device_name},
+        {"app_version", d.app_version},
+        {"created_at", d.created_at},
+        {"last_seen_at", d.last_seen_at},
+        {"last_ip", d.last_ip},
+        {"revoked", d.revoked},
+        {"refresh_expires_at", has_refresh_expiry ? refresh_expires_at : 0}
+    });
+}
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"devices", arr}
+    }.dump());
+});
+
+srv.Post("/api/v5/app_devices/revoke", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!ctx.require_user_cookie) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "require_user_cookie_not_configured"}}.dump());
+        return;
+    }
+
+    std::string fp_hex, role;
+    if (!ctx.require_user_cookie(req, res, &fp_hex, &role)) return;
+
+    json j;
+    std::string jerr;
+    if (!parse_json_body(req, j, jerr)) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", jerr}}.dump());
+        return;
+    }
+
+    const std::string device_id = j.value("device_id", std::string{});
+    if (device_id.empty()) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing device_id"}}.dump());
+        return;
+    }
+
+    if (!ctx.app_device_get || !ctx.app_device_revoke) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "app device revoke dependencies missing"}}.dump());
+        return;
+    }
+
+    pqnas::TrustedAppDevice d;
+    if (!ctx.app_device_get(device_id, d)) {
+        reply_json(res, 404, json{{"ok", false}, {"error", "not_found"}, {"message", "device not found"}, {"device_id", device_id}}.dump());
+        return;
+    }
+
+    if (d.fingerprint_hex != fp_hex) {
+        reply_json(res, 403, json{{"ok", false}, {"error", "forbidden"}, {"message", "device does not belong to current user"}}.dump());
+        return;
+    }
+
+    std::string err;
+    if (!ctx.app_device_revoke(device_id, err)) {
+        reply_json(res, 409, json{{"ok", false}, {"error", "not_allowed"}, {"message", err.empty() ? "revoke failed" : err}, {"device_id", device_id}}.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"device_id", device_id},
+        {"state", "revoked"}
+    }.dump());
+});
+
 // ---- GET /api/v5/app_pair/qr.svg?pt=... ----
 srv.Get("/api/v5/app_pair/qr.svg", [&](const httplib::Request& req, httplib::Response& res) {
     auto it = req.params.find("pt");
@@ -707,32 +852,41 @@ srv.Get("/api/v5/app_pair/status", [&](const httplib::Request& req, httplib::Res
     }
 
     if (st.expires_at > 0 && now > st.expires_at) {
-        reply_json(res, 200, json{
-            {"ok", true},
-            {"state", "expired"},
-            {"pair_id", pair_id},
-            {"expires_at", st.expires_at}
-        }.dump());
+		reply_json(res, 200, json{
+    		{"ok", true},
+		    {"state", "expired"},
+    		{"pair_id", pair_id},
+    		{"issued_at", st.issued_at},
+    		{"expires_at", st.expires_at},
+    		{"now", now}
+		}.dump());
         return;
     }
 
     if (st.consumed) {
-        reply_json(res, 200, json{
-            {"ok", true},
-            {"state", "consumed"},
-            {"pair_id", pair_id},
-            {"device_id", st.consumed_device_id}
-        }.dump());
+		reply_json(res, 200, json{
+    		{"ok", true},
+    		{"state", "consumed"},
+    		{"pair_id", pair_id},
+    		{"issued_at", st.issued_at},
+    		{"expires_at", st.expires_at},
+    		{"consumed_at", st.consumed_at},
+    		{"device_id", st.consumed_device_id},
+    		{"now", now}
+		}.dump());
         return;
     }
 
-    reply_json(res, 200, json{
-        {"ok", true},
-        {"state", "pending"},
-        {"pair_id", pair_id},
-        {"expires_at", st.expires_at}
-    }.dump());
+	reply_json(res, 200, json{
+	    {"ok", true},
+    	{"state", "pending"},
+    	{"pair_id", pair_id},
+	    {"issued_at", st.issued_at},
+    	{"expires_at", st.expires_at},
+    	{"now", now}
+	}.dump());
 });
+
 // ---- POST /api/v5/app_pair/consume {pair_token, device_name?, platform?, app_version?} ----
 srv.Post("/api/v5/app_pair/consume", [&](const httplib::Request& req, httplib::Response& res) {
     json j;

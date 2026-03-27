@@ -1,5 +1,6 @@
 #pragma once
 #include <httplib.h>
+#include "app_tokens.h"
 
 #include <array>
 #include <functional>
@@ -141,12 +142,16 @@ struct RoutesV5Context {
         std::string qr_uri;
     };
 
-    struct AppPairStatusResult {
-        std::string pair_id;
-        long expires_at = 0;
-        bool consumed = false;
-        std::string consumed_device_id;
-    };
+	struct AppPairStatusResult {
+    	std::string pair_id;
+	    std::string fingerprint_hex;
+    	std::string role;
+	    long issued_at = 0;
+    	long expires_at = 0;
+	    bool consumed = false;
+    	long consumed_at = 0;
+	    std::string consumed_device_id;
+	};
 
     std::function<bool(const httplib::Request&, httplib::Response&, std::string*, std::string*)> require_user_cookie;
 
@@ -190,6 +195,20 @@ struct RoutesV5Context {
 
     std::function<VerifyResult(const std::string& body)> verify_v4_json;
     std::function<std::string(const nlohmann::json&, const unsigned char* /*SERVER_SK*/)> sign_token_v4_ed25519;
+
+    std::function<bool(const std::string& pair_id,
+                   std::string& err)> app_pair_cancel;
+
+    std::function<std::vector<pqnas::TrustedAppDevice>(const std::string& fingerprint_hex)> app_devices_list_for_fingerprint;
+
+    std::function<bool(const std::string& device_id,
+                       pqnas::TrustedAppDevice& out)> app_device_get;
+
+    std::function<bool(const std::string& device_id,
+                       std::string& err)> app_device_revoke;
+
+    std::function<bool(const std::string& device_id,
+                   long& out_expires_at)> app_device_refresh_expiry;
 };
 
 void register_routes_v5(httplib::Server& srv, const RoutesV5Context& ctx);
