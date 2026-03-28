@@ -1167,8 +1167,8 @@
   </div>
 </div>
 <div id="imagePreviewModal" class="modal" aria-hidden="true">
-  <div id="imagePreviewCard" class="modalCard" style="width:min(1200px,96vw); max-height:92vh; display:flex; flex-direction:column;">
-    <div class="modalHead">
+  <div id="imagePreviewCard" class="modalCard" style="width:min(1200px,96vw); max-height:92vh; display:flex; flex-direction:column; position:absolute; left:50%; top:80px; transform:translateX(-50%);">
+    <div id="imagePreviewHead" class="modalHead" style="cursor:move; user-select:none;">
       <div>
         <div id="imagePreviewTitle" class="modalTitle">Image preview</div>
         <div id="imagePreviewPath" class="modalSub mono">/</div>
@@ -1180,6 +1180,7 @@
         <button id="imagePreviewClose" class="iconBtn" type="button" aria-label="Close">✕</button>
       </div>
     </div>
+
     <div style="padding:10px 14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--border2);">
       <button id="imagePreviewFitBtn" class="btn secondary" type="button">Fit</button>
       <button id="imagePreviewActualBtn" class="btn secondary" type="button">100%</button>

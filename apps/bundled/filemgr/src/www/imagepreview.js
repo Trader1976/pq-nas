@@ -5,6 +5,8 @@
     if (!FM) return;
 
     const imagePreviewModal = document.getElementById("imagePreviewModal");
+    const imagePreviewCard = document.getElementById("imagePreviewCard");
+    const imagePreviewHead = document.getElementById("imagePreviewHead");
     const imagePreviewClose = document.getElementById("imagePreviewClose");
     const imagePreviewTitle = document.getElementById("imagePreviewTitle");
     const imagePreviewPath = document.getElementById("imagePreviewPath");
@@ -18,6 +20,14 @@
     let state = {
         relPath: "",
         objectMode: "fit"
+    };
+    let dragState = {
+        active: false,
+        startX: 0,
+        startY: 0,
+        cardLeft: 0,
+        cardTop: 0,
+        moved: false
     };
     function isImageItem(item) {
         return !!(item &&
@@ -79,7 +89,37 @@
             imagePreviewImg.alt = "";
         }
     }
+    function clamp(n, lo, hi) {
+        return Math.max(lo, Math.min(hi, n));
+    }
 
+    function placeCardCentered() {
+        if (!imagePreviewCard) return;
+
+        imagePreviewCard.style.transform = "translateX(-50%)";
+        imagePreviewCard.style.left = "50%";
+        imagePreviewCard.style.top = "80px";
+    }
+
+    function clampCardIntoViewport() {
+        if (!imagePreviewCard) return;
+
+        const rect = imagePreviewCard.getBoundingClientRect();
+        const pad = 8;
+
+        let left = rect.left;
+        let top = rect.top;
+
+        const maxLeft = Math.max(pad, window.innerWidth - rect.width - pad);
+        const maxTop = Math.max(pad, window.innerHeight - rect.height - pad);
+
+        left = clamp(left, pad, maxLeft);
+        top = clamp(top, pad, maxTop);
+
+        imagePreviewCard.style.transform = "none";
+        imagePreviewCard.style.left = `${left}px`;
+        imagePreviewCard.style.top = `${top}px`;
+    }
     function applyFitMode() {
         state.objectMode = "fit";
         if (!imagePreviewImg) return;
@@ -127,6 +167,7 @@
         }
 
         applyFitMode();
+        placeCardCentered();
         openModal();
         updateNavButtons();
 
@@ -135,6 +176,10 @@
     imagePreviewClose?.addEventListener("click", closeModal);
 
     imagePreviewModal?.addEventListener("click", (e) => {
+        if (dragState.moved) {
+            dragState.moved = false;
+            return;
+        }
         if (e.target === imagePreviewModal) closeModal();
     });
 
@@ -163,7 +208,66 @@
             openNextImage();
         }
     });
+    imagePreviewHead?.addEventListener("pointerdown", (e) => {
+        if (!imagePreviewCard) return;
+        if (e.target && e.target.closest && e.target.closest("button")) return;
 
+        const rect = imagePreviewCard.getBoundingClientRect();
+
+        dragState.active = true;
+        dragState.startX = e.clientX;
+        dragState.startY = e.clientY;
+        dragState.cardLeft = rect.left;
+        dragState.cardTop = rect.top;
+        dragState.moved = false;
+
+        imagePreviewCard.style.transform = "none";
+        imagePreviewCard.style.left = `${rect.left}px`;
+        imagePreviewCard.style.top = `${rect.top}px`;
+
+        try { imagePreviewHead.setPointerCapture(e.pointerId); } catch (_) {}
+        e.preventDefault();
+    });
+
+    imagePreviewHead?.addEventListener("pointermove", (e) => {
+        if (!dragState.active || !imagePreviewCard) return;
+
+        const dx = e.clientX - dragState.startX;
+        const dy = e.clientY - dragState.startY;
+
+        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragState.moved = true;
+
+        const rect = imagePreviewCard.getBoundingClientRect();
+        const pad = 8;
+
+        const nextLeft = clamp(
+            dragState.cardLeft + dx,
+            pad,
+            Math.max(pad, window.innerWidth - rect.width - pad)
+        );
+
+        const nextTop = clamp(
+            dragState.cardTop + dy,
+            pad,
+            Math.max(pad, window.innerHeight - rect.height - pad)
+        );
+
+        imagePreviewCard.style.left = `${nextLeft}px`;
+        imagePreviewCard.style.top = `${nextTop}px`;
+    });
+
+    function endDrag() {
+        dragState.active = false;
+    }
+
+    imagePreviewHead?.addEventListener("pointerup", endDrag);
+    imagePreviewHead?.addEventListener("pointercancel", endDrag);
+
+    window.addEventListener("resize", () => {
+        if (imagePreviewModal && imagePreviewModal.classList.contains("show")) {
+            clampCardIntoViewport();
+        }
+    });
     FM.imagePreview = {
         open: openImageFor
     };
