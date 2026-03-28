@@ -563,6 +563,11 @@
         .modalBd{
             padding: 14px;
         }
+        #dnaIdentityModalBody{
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
         .uploadsCardBody{
             position: relative;
         }
@@ -993,6 +998,92 @@
                     </div>
                 </div>
             </div>
+
+            <!-- DNA Connect alerts -->
+            <div class="card accordion" data-acc="settings">
+                <div class="hd" role="button" tabindex="0" aria-expanded="false">
+                    <div class="h">DNA Connect alerts</div>
+                    <div class="pill info" id="dnaAlertsPill">
+                        <span class="k">DNA alerts:</span>
+                        <span class="v">—</span>
+                    </div>
+                    <span class="chev" aria-hidden="true">▸</span>
+                </div>
+
+                <div class="bd">
+                    <div class="row">
+                        <label class="pill" style="gap:10px;">
+                            <span class="k">Enabled</span>
+                            <input id="dnaAlertsEnabled" type="checkbox" />
+                        </label>
+
+                        <select id="dnaAlertsMinLevel" aria-label="DNA alert minimum level">
+                            <option value="security">Security</option>
+                            <option value="error">Error</option>
+                            <option value="warning">Warning</option>
+                            <option value="info">Info</option>
+                        </select>
+
+                        <button id="btnDnaAlertsSave" class="btn primary" type="button">Save DNA alerts</button>
+                        <button id="btnDnaAlertsReload" class="btn" type="button">Reload</button>
+                        <button id="btnDnaAlertsTest" class="btn" type="button">Send test alert</button>
+                    </div>
+                    <div class="row">
+                        <button id="btnDnaAlertsCreateId" class="btn" type="button">Create PQ-NAS ID</button>
+                        <button id="btnDnaAlertsShowId" class="btn" type="button">Show ID info</button>
+                        <button id="btnDnaAlertsSendRequest" class="btn" type="button">Send contact request</button>
+
+                        <span class="pill info" id="dnaAlertsIdentityPill">
+                            <span class="k">PQ-NAS ID:</span>
+                            <span class="v">—</span>
+                        </span>
+                    </div>
+                    <div class="row">
+                        <input id="dnaAlertsRecipient"
+                               class="input mono"
+                               style="min-width:320px; flex:1 1 260px;"
+                               type="text"
+                               placeholder="recipient name or fingerprint" />
+
+                        <input id="dnaAlertsCliPath"
+                               class="input mono"
+                               style="min-width:320px; flex:1 1 260px;"
+                               type="text"
+                               placeholder="/usr/local/bin/dna-connect-cli" />
+                    </div>
+
+                    <div class="row">
+                        <input id="dnaAlertsDataDir"
+                               class="input mono"
+                               style="min-width:520px; flex:1 1 auto;"
+                               type="text"
+                               placeholder="/var/lib/pqnas/dna-alerts" />
+                    </div>
+
+                    <div class="row">
+                        <span class="pill info" id="dnaAlertsInfoPill">
+                            <span class="k">Route:</span>
+                            <span class="v">—</span>
+                        </span>
+                    </div>
+
+                    <div class="note">
+                        PQ-NAS can send warnings to DNA Connect by invoking
+                        <span class="mono">dna-connect-cli</span>.
+                    </div>
+
+                    <div class="note">
+                        A dedicated PQ-NAS DNA identity must already exist in the configured
+                        <span class="mono">DNA data directory</span>, and the recipient should already
+                        have accepted that identity as a contact.
+                    </div>
+
+                    <div class="note">
+                        The test button sends a real message using the current saved settings.
+                        This is optional and fully admin-controlled.
+                    </div>
+                </div>
+            </div>
             <!-- Theme -->
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
@@ -1030,7 +1121,17 @@
         </div>
     </main>
 </div>
-
+<div id="dnaIdentityModalBackdrop" class="modalBackdrop hidden">
+    <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="dnaIdentityModalTitle">
+        <div class="modalHd">
+            <div id="dnaIdentityModalTitle" style="font-weight:950;">PQ-NAS DNA Identity</div>
+            <button id="btnDnaIdentityModalClose" class="btn" type="button">Close</button>
+        </div>
+        <div class="modalBd">
+            <div class="note mono" id="dnaIdentityModalBody">—</div>
+        </div>
+    </div>
+</div>
 <!-- Upload help modal -->
 <div id="helpModalBackdrop" class="modalBackdrop hidden">
     <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
@@ -1115,6 +1216,6 @@
 </script>
 
 <script src="/static/admin_badges.js"></script>
-<script src="/static/admin_settings.js?v=5"></script>
+<script src="/static/admin_settings.js?v=6"></script>
 </body>
 </html>

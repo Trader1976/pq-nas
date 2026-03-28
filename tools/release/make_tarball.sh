@@ -38,6 +38,12 @@ CLEAN_CONFIG_DIR="$REL_ROOT/config"
 SYSTEMD_DIR="$REL_ROOT/systemd"
 RESTORE_JOB_SRC="$REPO_ROOT/server/src/storage/snapshots/pqnas_restore_job.sh"
 
+# DNA Connect runtime for alerts
+# Override from environment if needed:
+#   DNA_ALERT_CLI_SRC=/path/to/dna-connect-cli DNA_ALERT_SO_SRC=/path/to/libdna.so ./tools/release/make_tarball.sh 0.9.0
+DNA_ALERT_CLI_SRC="${DNA_ALERT_CLI_SRC:-$REPO_ROOT/third_party/dna-runtime/linux-x64/dna-connect-cli}"
+DNA_ALERT_SO_SRC="${DNA_ALERT_SO_SRC:-$REPO_ROOT/third_party/dna-runtime/linux-x64/libdna.so}"
+
 echo "[*] Repo root: $REPO_ROOT"
 echo "[*] Release:   $VER"
 echo "[*] App ver:   $APP_VER"
@@ -66,11 +72,10 @@ if [[ -d "$REPO_ROOT/config" ]]; then
   fi
 fi
 
-
 # ---- 3) Ensure release template config exists + contains required files ----
 if [[ ! -d "$CLEAN_CONFIG_DIR" ]]; then
   echo "ERROR: Missing clean config templates: $CLEAN_CONFIG_DIR"
-  echo "Create it and add sanitized defaults (admin_settings.json, policy.json, users.json, shares.json)."
+  echo "Create it and add sanitized defaults (admin_settings.json, policy.json, users.json, shares.json, pools.json)."
   exit 2
 fi
 
@@ -108,7 +113,6 @@ else
   echo "[!] Missing $REPO_ROOT/uninstall.sh (safe uninstaller)."
 fi
 
-
 # Binaries at package root
 install -m 0755 "$REPO_ROOT/build/bin/pqnas_server" "$STAGE/pqnas_server"
 install -m 0755 "$REPO_ROOT/build/bin/pqnas_keygen" "$STAGE/pqnas_keygen"
@@ -123,6 +127,32 @@ else
   echo "Build or fetch libdna_lib.so before making a release."
   exit 3
 fi
+
+# DNA Connect alert runtime (required)
+if [[ ! -f "$DNA_ALERT_CLI_SRC" ]]; then
+  echo "ERROR: Missing DNA Connect CLI: $DNA_ALERT_CLI_SRC"
+  echo "Set DNA_ALERT_CLI_SRC or place runtime in third_party/dna-runtime/linux-x64/"
+  exit 13
+fi
+
+if [[ ! -f "$DNA_ALERT_SO_SRC" ]]; then
+  echo "ERROR: Missing DNA Connect shared lib: $DNA_ALERT_SO_SRC"
+  echo "Set DNA_ALERT_SO_SRC or place runtime in third_party/dna-runtime/linux-x64/"
+  exit 14
+fi
+
+install -d "$STAGE/runtime/dna"
+install -m 0755 "$DNA_ALERT_CLI_SRC" "$STAGE/runtime/dna/dna-connect-cli"
+install -m 0755 "$DNA_ALERT_SO_SRC"  "$STAGE/runtime/dna/libdna.so"
+
+test -x "$STAGE/runtime/dna/dna-connect-cli" || {
+  echo "ERROR: staged dna-connect-cli missing or not executable"
+  exit 15
+}
+test -f "$STAGE/runtime/dna/libdna.so" || {
+  echo "ERROR: staged libdna.so missing"
+  exit 16
+}
 
 # systemd units (restore jobs + helpers)
 if [[ -d "$SYSTEMD_DIR" ]]; then
@@ -207,7 +237,6 @@ for appdir in "$REPO_ROOT/apps/bundled"/*; do
 done
 [[ "$missing_zips" -eq 0 ]] || exit 12
 
-
 # Bundled apps (zips + any bundled folders)
 if [[ -d "$REPO_ROOT/apps/bundled" ]]; then
   rsync -a --delete \
@@ -218,7 +247,6 @@ if [[ -d "$REPO_ROOT/apps/bundled" ]]; then
 else
   mkdir -p "$STAGE/bundled"
 fi
-
 
 # Clean default config (IMPORTANT: from tools/release/config, not repo config/)
 rsync -a --delete \
@@ -269,3 +297,7 @@ echo "Test extract:"
 echo "  rm -rf /tmp/pqnas-test && mkdir -p /tmp/pqnas-test"
 echo "  tar -xzf '$TARBALL' -C /tmp/pqnas-test"
 echo "  ls -la /tmp/pqnas-test/pqnas"
+echo
+echo "Expected DNA runtime inside tarball:"
+echo "  /tmp/pqnas-test/pqnas/runtime/dna/dna-connect-cli"
+echo "  /tmp/pqnas-test/pqnas/runtime/dna/libdna.so"

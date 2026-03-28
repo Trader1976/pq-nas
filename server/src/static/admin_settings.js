@@ -95,6 +95,29 @@
     const helpModalBackdrop = $("helpModalBackdrop");
     const btnHelpModalClose = $("btnHelpModalClose");
 
+    // --- DNA Connect alerts ---
+    const dnaAlertsPill = $("dnaAlertsPill");
+    const dnaAlertsEnabled = $("dnaAlertsEnabled");
+    const dnaAlertsRecipient = $("dnaAlertsRecipient");
+    const dnaAlertsMinLevel = $("dnaAlertsMinLevel");
+    const dnaAlertsCliPath = $("dnaAlertsCliPath");
+    const dnaAlertsDataDir = $("dnaAlertsDataDir");
+    const btnDnaAlertsSave = $("btnDnaAlertsSave");
+    const btnDnaAlertsReload = $("btnDnaAlertsReload");
+    const btnDnaAlertsTest = $("btnDnaAlertsTest");
+    const dnaAlertsInfoPill = $("dnaAlertsInfoPill");
+
+    const btnDnaAlertsCreateId = $("btnDnaAlertsCreateId");
+    const btnDnaAlertsShowId = $("btnDnaAlertsShowId");
+    const btnDnaAlertsSendRequest = $("btnDnaAlertsSendRequest");
+    const dnaAlertsIdentityPill = $("dnaAlertsIdentityPill");
+
+    const dnaIdentityModalBackdrop = $("dnaIdentityModalBackdrop");
+    const btnDnaIdentityModalClose = $("btnDnaIdentityModalClose");
+    const dnaIdentityModalBody = $("dnaIdentityModalBody");
+
+    let gDnaConnectIdentity = null;
+
     const ALLOWED_THEMES = new Set(["dark", "bright", "cpunk_orange", "win_classic"]);
     const ALLOWED_ROT_MODES = new Set(["manual", "daily", "size_mb", "daily_or_size_mb"]);
     let gStorageRoots = null; // populated from GET /api/v4/admin/settings
@@ -242,7 +265,37 @@
         if (themePill) setSimplePill(themePill, "info", "Theme", t);
         return t;
     }
+    async function apiCreateDnaAlertIdentity() {
+        return await fetchJsonOrThrow("/api/v4/admin/settings/create-dna-alert-identity", {
+            method: "POST",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+        });
+    }
 
+    async function apiGetDnaAlertIdentityInfo() {
+        return await fetchJsonOrThrow("/api/v4/admin/settings/dna-alert-identity-info", {
+            cache: "no-store"
+        });
+    }
+
+    async function apiSendDnaAlertContactRequest() {
+        return await fetchJsonOrThrow("/api/v4/admin/settings/send-dna-alert-contact-request", {
+            method: "POST",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+        });
+    }
+    function openDnaIdentityModal(text) {
+        if (dnaIdentityModalBody) dnaIdentityModalBody.textContent = text || "—";
+        dnaIdentityModalBackdrop?.classList.remove("hidden");
+    }
+
+    function closeDnaIdentityModal() {
+        dnaIdentityModalBackdrop?.classList.add("hidden");
+    }
     // ---------------------------
     // HTTP helper (robust JSON parsing)
     // ---------------------------
@@ -347,7 +400,14 @@
             body: JSON.stringify({}),
         });
     }
-
+    async function apiTestDnaAlert() {
+        return await fetchJsonOrThrow("/api/v4/admin/settings/test-dna-alert", {
+            method: "POST",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+        });
+    }
     function defaultSnapshots() {
         return {
             enabled: false,
@@ -850,6 +910,92 @@
             max_candidates_per_pass: clampInt(tieringMaxPass?.value, 8, 1, 1000)
         };
     }
+    // ---------------------------
+    // DNA Connect alerts UI helpers
+    // ---------------------------
+    function normalizeDnaAlertLevel(v) {
+        const s = String(v || "").trim().toLowerCase();
+        if (s === "security") return "security";
+        if (s === "error") return "error";
+        if (s === "warning") return "warning";
+        if (s === "info") return "info";
+        return "warning";
+    }
+
+    function applyDnaAlertsToUi(j) {
+        const d = (j && typeof j.dna_connect_alerts === "object" && j.dna_connect_alerts)
+            ? j.dna_connect_alerts
+            : {};
+
+        const enabled = !!d.enabled;
+        const recipient = String(d.recipient || "").trim();
+        const minLevel = normalizeDnaAlertLevel(d.min_level || "warning");
+        const cliPath = String(d.cli_path || "/usr/local/bin/dna-connect-cli").trim();
+        const dataDir = String(d.data_dir || "/var/lib/pqnas/dna-alerts").trim();
+
+        if (dnaAlertsEnabled) dnaAlertsEnabled.checked = enabled;
+        if (dnaAlertsRecipient) dnaAlertsRecipient.value = recipient;
+        if (dnaAlertsMinLevel) dnaAlertsMinLevel.value = minLevel;
+        if (dnaAlertsCliPath) dnaAlertsCliPath.value = cliPath;
+        if (dnaAlertsDataDir) dnaAlertsDataDir.value = dataDir;
+
+        let txt = "Disabled";
+        let kind = "warn";
+        if (enabled) {
+            if (recipient) {
+                txt = `Enabled • ${recipient}`;
+                kind = "ok";
+            } else {
+                txt = "Enabled • recipient missing";
+                kind = "warn";
+            }
+        }
+
+        if (dnaAlertsPill) {
+            dnaAlertsPill.className = "pill " + kind;
+            dnaAlertsPill.innerHTML =
+                `<span class="k">DNA alerts:</span> <span class="v">${escapeHtml(txt)}</span>`;
+        }
+
+        if (dnaAlertsInfoPill) {
+            const info = `${minLevel} • ${cliPath}`;
+            dnaAlertsInfoPill.className = "pill info";
+            dnaAlertsInfoPill.innerHTML =
+                `<span class="k">Route:</span> <span class="v">${escapeHtml(info)}</span>`;
+        }
+    }
+    function applyDnaIdentityToUi(j) {
+        const d = (j && typeof j.dna_connect_identity === "object" && j.dna_connect_identity)
+            ? j.dna_connect_identity
+            : {};
+
+        gDnaConnectIdentity = d;
+
+        const exists = !!d.exists;
+        const fp = String(d.fingerprint || "").trim();
+
+        if (dnaAlertsIdentityPill) {
+            const txt = exists
+                ? (fp ? `${fp.slice(0, 16)}…` : "Present")
+                : "Not created";
+            dnaAlertsIdentityPill.className = "pill " + (exists ? "ok" : "warn");
+            dnaAlertsIdentityPill.innerHTML =
+                `<span class="k">PQ-NAS ID:</span><span class="v">${escapeHtml(txt)}</span>`;
+        }
+
+        if (btnDnaAlertsCreateId) btnDnaAlertsCreateId.disabled = exists;
+        if (btnDnaAlertsShowId) btnDnaAlertsShowId.disabled = !exists;
+        if (btnDnaAlertsSendRequest) btnDnaAlertsSendRequest.disabled = !exists;
+    }
+    function currentDnaAlertsFromUi() {
+        return {
+            enabled: !!dnaAlertsEnabled?.checked,
+            recipient: String(dnaAlertsRecipient?.value || "").trim(),
+            min_level: normalizeDnaAlertLevel(dnaAlertsMinLevel?.value || "warning"),
+            cli_path: String(dnaAlertsCliPath?.value || "").trim(),
+            data_dir: String(dnaAlertsDataDir?.value || "").trim()
+        };
+    }
     function clampU64(n) {
         const x = Number(n);
         if (!Number.isFinite(x)) return null;
@@ -930,6 +1076,11 @@
             // tiering
             applyTieringToUi(j);
 
+            // DNA Connect alerts
+            applyDnaAlertsToUi(j);
+            applyDnaIdentityToUi(j);
+
+
             clearPreview();
             setStatusPill("ok", "ready");
         } catch (e) {
@@ -998,11 +1149,28 @@
         const backdrop = document.getElementById("helpModalBackdrop");
         if (backdrop && ev.target === backdrop) {
             closeHelpModal();
+            return;
+        }
+
+        const closeDnaBtn = ev.target.closest("#btnDnaIdentityModalClose");
+        if (closeDnaBtn) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            closeDnaIdentityModal();
+            return;
+        }
+
+        if (dnaIdentityModalBackdrop && ev.target === dnaIdentityModalBackdrop) {
+            closeDnaIdentityModal();
+            return;
         }
     });
 
     document.addEventListener("keydown", (ev) => {
-        if (ev.key === "Escape") closeHelpModal();
+        if (ev.key === "Escape") {
+            closeHelpModal();
+            closeDnaIdentityModal();
+        }
     });
     // ---------------------------
     // Wire retention
@@ -1246,7 +1414,124 @@
             btnRotateNow.disabled = false;
         }
     });
+    btnDnaAlertsReload?.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        refreshAll();
+    });
 
+    btnDnaAlertsSave?.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+
+        const d = currentDnaAlertsFromUi();
+
+        if (d.enabled && !d.recipient) {
+            showToast("fail", "Invalid DNA alerts", "Recipient is required when DNA alerts are enabled.");
+            return;
+        }
+        if (d.enabled && !d.cli_path) {
+            showToast("fail", "Invalid DNA alerts", "CLI path is required when DNA alerts are enabled.");
+            return;
+        }
+
+
+        btnDnaAlertsSave.disabled = true;
+        setStatusPill("warn", "saving…");
+        try {
+            await apiSettingsPost({ dna_connect_alerts: d });
+            showToast("ok", "Saved", d.enabled
+                ? `DNA alerts enabled for ${d.recipient}`
+                : "DNA alerts disabled");
+            await refreshAll();
+        } catch (e) {
+            console.error(e);
+            showToast("fail", "Save failed", String(e.message || e));
+            setStatusPill("error", "error");
+        } finally {
+            btnDnaAlertsSave.disabled = false;
+        }
+    });
+    btnDnaAlertsCreateId?.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+
+        btnDnaAlertsCreateId.disabled = true;
+        setStatusPill("warn", "creating DNA ID…");
+        try {
+            const j = await apiCreateDnaAlertIdentity();
+            showToast("ok", "PQ-NAS ID created", String(j.message || "DNA identity created"));
+            await refreshAll();
+        } catch (e) {
+            console.error(e);
+            showToast("fail", "Create ID failed", String(e.message || e));
+            setStatusPill("error", "error");
+        } finally {
+            await refreshAll();
+        }
+    });
+
+    btnDnaAlertsShowId?.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+
+        try {
+            const j = await apiGetDnaAlertIdentityInfo();
+            const d = j.dna_connect_identity || {};
+            const text =
+                `Exists: ${d.exists ? "yes" : "no"}\n` +
+                `Name: ${d.name || "—"}\n` +
+                `Fingerprint: ${d.fingerprint || "—"}\n` +
+                `CLI: ${d.cli_path || "—"}\n` +
+                `Data dir: ${d.data_dir || "—"}`;
+            openDnaIdentityModal(text);
+        } catch (e) {
+            console.error(e);
+            showToast("fail", "Load ID info failed", String(e.message || e));
+        }
+    });
+
+    btnDnaAlertsSendRequest?.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+
+        btnDnaAlertsSendRequest.disabled = true;
+        setStatusPill("warn", "sending contact request…");
+        try {
+            const j = await apiSendDnaAlertContactRequest();
+            showToast("ok", "Contact request sent", String(j.message || "Contact request sent"));
+            await refreshAll();
+        } catch (e) {
+            console.error(e);
+            showToast("fail", "Contact request failed", String(e.message || e));
+            setStatusPill("error", "error");
+        } finally {
+            btnDnaAlertsSendRequest.disabled = false;
+        }
+    });
+    btnDnaAlertsTest?.addEventListener("click", async (ev) => {
+        ev.preventDefault();
+
+        const d = currentDnaAlertsFromUi();
+        if (!d.enabled) {
+            showToast("fail", "DNA alerts disabled", "Enable DNA alerts before sending a test.");
+            return;
+        }
+        if (!d.recipient || !d.cli_path || !d.data_dir) {
+            showToast("fail", "Incomplete DNA alerts settings", "Recipient, CLI path and DNA data directory are required.");
+            return;
+        }
+
+        btnDnaAlertsTest.disabled = true;
+        setStatusPill("warn", "testing…");
+        try {
+            const j = await apiTestDnaAlert();
+            const detail = String(j.message || "Test alert sent");
+            showToast("ok", "Test sent", detail);
+            await refreshAll();
+        } catch (e) {
+            console.error(e);
+            showToast("fail", "Test failed", String(e.message || e));
+            setStatusPill("error", "error");
+        } finally {
+            btnDnaAlertsTest.disabled = false;
+        }
+    });
     // ---------------------------
     // Wire theme
     // ---------------------------

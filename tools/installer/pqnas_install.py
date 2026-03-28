@@ -536,7 +536,157 @@ def find_dna_lib_source(asset_root: str) -> str:
         + "\n".join(f"  - {p}" for p in candidates)
         + "\nFix your release packaging to include libdna_lib.so, or set PQNAS_ASSET_ROOT correctly."
     )
+def find_dna_alert_runtime_sources(asset_root: str) -> Tuple[str, str]:
+    """
+    Locate bundled DNA Connect runtime files inside release assets.
 
+    Expected package layout:
+      <asset_root>/runtime/dna/dna-connect-cli
+      <asset_root>/runtime/dna/libdna.so
+
+    Returns:
+      (cli_src, libdna_src)
+    """
+    cli_src = os.path.join(asset_root, "runtime", "dna", "dna-connect-cli")
+    libdna_src = os.path.join(asset_root, "runtime", "dna", "libdna.so")
+
+    missing = []
+    if not os.path.isfile(cli_src):
+        missing.append(cli_src)
+    if not os.path.isfile(libdna_src):
+        missing.append(libdna_src)
+
+    if missing:
+        raise RuntimeError(
+            "Bundled DNA alert runtime not found. Missing:\n"
+            + "\n".join(f"  - {p}" for p in missing)
+            + "\nFix release packaging so runtime/dna contains dna-connect-cli and libdna.so."
+        )
+
+    return cli_src, libdna_src
+
+
+def install_dna_alert_runtime(asset_root: str, log: Optional[Log] = None) -> Tuple[str, str]:
+    """
+    Install bundled DNA Connect CLI runtime for PQ-NAS alerts.
+
+    Installs:
+      /usr/local/bin/dna-connect-cli
+      /usr/local/lib/libdna.so
+
+    Returns:
+      (installed_cli_path, installed_lib_path)
+    """
+    cli_src, libdna_src = find_dna_alert_runtime_sources(asset_root)
+
+    cli_dst = "/usr/local/bin/dna-connect-cli"
+    lib_dst = "/usr/local/lib/libdna.so"
+
+    os.makedirs("/usr/local/bin", exist_ok=True)
+    os.makedirs("/usr/local/lib", exist_ok=True)
+
+    tmp_cli = cli_dst + ".new"
+    shutil.copy2(cli_src, tmp_cli)
+    os.chmod(tmp_cli, 0o755)
+    os.replace(tmp_cli, cli_dst)
+    subprocess.run(["chown", "root:root", cli_dst], check=False)
+    subprocess.run(["chmod", "755", cli_dst], check=False)
+
+    tmp_lib = lib_dst + ".new"
+    shutil.copy2(libdna_src, tmp_lib)
+    os.chmod(tmp_lib, 0o755)
+    os.replace(tmp_lib, lib_dst)
+    subprocess.run(["chown", "root:root", lib_dst], check=False)
+    subprocess.run(["chmod", "755", lib_dst], check=False)
+
+    # Refresh linker cache so /usr/local/lib/libdna.so is picked up.
+    subprocess.run(["ldconfig"], check=False)
+
+    if log:
+        log.write(f"[*] Installed DNA alert CLI: {cli_dst}  (from {cli_src})")
+        log.write(f"[*] Installed DNA alert lib: {lib_dst}  (from {libdna_src})")
+
+    return cli_dst, lib_dst
+
+
+def ensure_dna_alerts_runtime_dir(log: Optional[Log] = None) -> str:
+    """
+    Create runtime data dir for PQ-NAS DNA alerts identity.
+    Does NOT create identity; only prepares filesystem.
+    """
+    path = "/var/lib/pqnas/dna-alerts"
+    os.makedirs(path, exist_ok=True)
+
+    subprocess.run(["chown", "-R", "pqnas:pqnas", "/var/lib/pqnas"], check=False)
+    subprocess.run(["chmod", "750", "/var/lib/pqnas"], check=False)
+    subprocess.run(["chmod", "750", path], check=False)
+
+    if log:
+        log.write(f"[*] Prepared DNA alerts runtime dir: {path}")
+
+    return path
+
+
+def seed_dna_connect_alert_defaults(
+        admin_settings_path: str = "/etc/pqnas/admin_settings.json",
+        *,
+        cli_path: str = "/usr/local/bin/dna-connect-cli",
+        data_dir: str = "/var/lib/pqnas/dna-alerts",
+        log: Optional[Log] = None,
+) -> None:
+    """
+    Ensure admin_settings.json contains sane dna_connect_alerts defaults.
+    Does not force-enable alerts and does not overwrite existing admin choices.
+    """
+    try:
+        data = {}
+        if os.path.isfile(admin_settings_path):
+            with open(admin_settings_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if not isinstance(data, dict):
+                    data = {}
+
+        cfg = data.get("dna_connect_alerts")
+        if not isinstance(cfg, dict):
+            cfg = {}
+
+        changed = False
+
+        if "enabled" not in cfg:
+            cfg["enabled"] = False
+            changed = True
+        if not isinstance(cfg.get("recipient"), str):
+            cfg["recipient"] = ""
+            changed = True
+        if not isinstance(cfg.get("cli_path"), str) or not cfg.get("cli_path", "").strip():
+            cfg["cli_path"] = cli_path
+            changed = True
+        if not isinstance(cfg.get("data_dir"), str) or not cfg.get("data_dir", "").strip():
+            cfg["data_dir"] = data_dir
+            changed = True
+        if cfg.get("min_level") not in ("security", "error", "warning", "info"):
+            cfg["min_level"] = "warning"
+            changed = True
+
+        data["dna_connect_alerts"] = cfg
+
+        if changed:
+            tmp = admin_settings_path + ".new"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+                f.write("\n")
+            os.replace(tmp, admin_settings_path)
+            if log:
+                log.write(f"[*] Seeded DNA alert defaults in {admin_settings_path}")
+        else:
+            if log:
+                log.write("[*] DNA alert defaults already present in admin settings.")
+
+    except Exception as e:
+        raise RuntimeError(f"Failed to seed DNA alert defaults: {e}")
+
+def ensure_runtime_deps_for_dna_alert_cli(cli_path: str, log: Optional[Log] = None) -> None:
+    ensure_runtime_deps_for_server(cli_path, log=log, extra_ldd_paths=["/usr/local/lib/libdna.so"])
 def install_static_assets(asset_root: str, dest_root: str = "/opt/pqnas/static") -> None:
     """
     Copy static web assets into /opt/pqnas/static.
@@ -2214,6 +2364,23 @@ class ExecuteScreen(Screen):
 
             self.logw.write("Ensuring /etc/pqnas config files …")
             ensure_config_files(mp, asset_root)
+
+            self.logw.write("Installing DNA Connect alert runtime …")
+            dna_alert_cli_path, dna_alert_lib_path = install_dna_alert_runtime(asset_root, log=self.logw)
+
+            self.logw.write("Preparing DNA alerts runtime directory …")
+            dna_alert_data_dir = ensure_dna_alerts_runtime_dir(log=self.logw)
+
+            self.logw.write("Seeding DNA alert defaults into admin settings …")
+            seed_dna_connect_alert_defaults(
+            "/etc/pqnas/admin_settings.json",
+                cli_path=dna_alert_cli_path,
+                data_dir=dna_alert_data_dir,
+                log=self.logw,
+            )
+
+            self.logw.write("Checking DNA alert CLI runtime dependencies …")
+            ensure_runtime_deps_for_dna_alert_cli(dna_alert_cli_path, log=self.logw)
 
             self.logw.write("Ensuring pqnas service user …")
             ensure_service_user("pqnas", log=self.logw)

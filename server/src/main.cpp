@@ -1898,7 +1898,28 @@ static bool run_cmd_capture(const std::string& cmd, std::string* out, int* exit_
     return false;
 }
 
+static std::string shell_quote_posix(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    out.push_back('\'');
+    for (char c : s) {
+        if (c == '\'') out += "'\\''";
+        else out.push_back(c);
+    }
+    out.push_back('\'');
+    return out;
+}
 
+static bool run_cmd_capture_argv(const std::vector<std::string>& argv, std::string* out, int* exit_code) {
+    std::string cmd;
+    bool first = true;
+    for (const auto& a : argv) {
+        if (!first) cmd.push_back(' ');
+        first = false;
+        cmd += shell_quote_posix(a);
+    }
+    return run_cmd_capture(cmd, out, exit_code);
+}
 static std::string rand_hex_16() {
     static const char* k = "0123456789abcdef";
     std::array<unsigned char, 8> b{};
@@ -6326,6 +6347,9 @@ static std::string admin_settings_path_for_helpers() {
 
     return "/etc/pqnas/admin_settings.json";
 }
+// -----------------------------------------------------------------------------
+// DNA Connect alerts helpers
+// -----------------------------------------------------------------------------
 
 static json load_admin_settings_json_safe() {
     try {
@@ -7070,7 +7094,65 @@ std::string guess_text_mime_from_name(const std::string& name) {
 
     return "text/plain";
 }
+// -----------------------------------------------------------------------------
+// DNA Connect alert sender
+// Uses dna-connect-cli to send a real message from a dedicated PQ-NAS DNA identity
+// -----------------------------------------------------------------------------
 
+struct DnaAlertSendResult {
+    bool ok = false;
+    int exit_code = -1;
+    std::string output;
+    std::string detail;
+};
+
+
+static json build_dna_connect_identity_status_json() {
+    const json persisted = load_admin_settings_json_safe();
+
+    json cfg = json::object();
+    if (persisted.contains("dna_connect_alerts") && persisted["dna_connect_alerts"].is_object()) {
+        cfg = persisted["dna_connect_alerts"];
+    }
+
+    const std::string cli_path = trim_copy(cfg.value("cli_path", std::string("/usr/local/bin/dna-connect-cli")));
+    const std::string data_dir = trim_copy(cfg.value("data_dir", std::string("/var/lib/pqnas/dna-alerts")));
+
+    json out = {
+        {"exists", false},
+        {"fingerprint", ""},
+        {"name", ""},
+        {"data_dir", data_dir},
+        {"cli_path", cli_path}
+    };
+
+    if (cli_path.empty() || data_dir.empty()) return out;
+
+    const std::filesystem::path fp_path =
+        std::filesystem::path(data_dir) / "identity" / "fingerprint.txt";
+
+    const std::filesystem::path keys_dir =
+        std::filesystem::path(data_dir) / "keys";
+
+    if (!std::filesystem::exists(keys_dir)) {
+        return out;
+    }
+
+    out["exists"] = true;
+
+    try {
+        if (std::filesystem::exists(fp_path)) {
+            std::ifstream f(fp_path.string());
+            std::string fp;
+            std::getline(f, fp);
+            out["fingerprint"] = trim_copy(fp);
+        }
+    } catch (...) {}
+
+    // optional friendly name
+    out["name"] = "pqnasalerts";
+    return out;
+}
 bool write_text_file_atomic_utf8(const std::filesystem::path& target_abs,
                                  const std::string& text_utf8,
                                  std::string* err) {
@@ -15486,6 +15568,71 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 	if (!tiering.contains("max_candidates_per_pass") || !tiering["max_candidates_per_pass"].is_number_integer()) {
 	    tiering["max_candidates_per_pass"] = 8;
 	}
+	// DNA Connect alerts defaults
+	json dna_connect_alerts = json::object();
+	if (persisted.contains("dna_connect_alerts") && persisted["dna_connect_alerts"].is_object()) {
+    	dna_connect_alerts = persisted["dna_connect_alerts"];
+	} else {
+	    dna_connect_alerts = json{
+    	    {"enabled", false},
+        	{"recipient", ""},
+	        {"cli_path", "/usr/local/bin/dna-connect-cli"},
+    	    {"data_dir", "/var/lib/pqnas/dna-alerts"},
+        	{"min_level", "warning"}   // security | error | warning | info
+	    };
+	}
+
+	if (!dna_connect_alerts.contains("enabled") || !dna_connect_alerts["enabled"].is_boolean()) {
+	    dna_connect_alerts["enabled"] = false;
+	}
+	if (!dna_connect_alerts.contains("recipient") || !dna_connect_alerts["recipient"].is_string()) {
+	    dna_connect_alerts["recipient"] = "";
+	}
+	if (!dna_connect_alerts.contains("cli_path") || !dna_connect_alerts["cli_path"].is_string()) {
+	    dna_connect_alerts["cli_path"] = "/usr/local/bin/dna-connect-cli";
+	}
+	if (!dna_connect_alerts.contains("data_dir") || !dna_connect_alerts["data_dir"].is_string()) {
+    	dna_connect_alerts["data_dir"] = "/var/lib/pqnas/dna-alerts";
+	}
+	if (!dna_connect_alerts.contains("min_level") || !dna_connect_alerts["min_level"].is_string()) {
+	    dna_connect_alerts["min_level"] = "warning";
+	}
+	{
+	    const std::string ml = dna_connect_alerts["min_level"].get<std::string>();
+	    if (!(ml == "security" || ml == "error" || ml == "warning" || ml == "info")) {
+	        dna_connect_alerts["min_level"] = "warning";
+	    }
+	}
+json dna_connect_identity = json{
+    {"exists", false},
+    {"fingerprint", ""},
+    {"name", "pqnasalerts"},
+    {"cli_path", dna_connect_alerts.value("cli_path", std::string("/usr/local/bin/dna-connect-cli"))},
+    {"data_dir", dna_connect_alerts.value("data_dir", std::string("/var/lib/pqnas/dna-alerts"))},
+    {"admin_recipient", dna_connect_alerts.value("recipient", std::string(""))}
+};
+
+	try {
+    	const std::string data_dir =
+        	trim_copy(dna_connect_alerts.value("data_dir", std::string("/var/lib/pqnas/dna-alerts")));
+
+    	const std::filesystem::path fp_path =
+        	std::filesystem::path(data_dir) / "identity" / "fingerprint.txt";
+
+	    const std::filesystem::path keys_dir =
+    	    std::filesystem::path(data_dir) / "keys";
+
+	    if (std::filesystem::is_directory(keys_dir)) {
+    	    dna_connect_identity["exists"] = true;
+
+	        if (std::filesystem::exists(fp_path)) {
+    	        std::ifstream f(fp_path.string());
+        	    std::string fp;
+            	std::getline(f, fp);
+	            dna_connect_identity["fingerprint"] = trim_copy(fp);
+    	    }
+    	}
+	} catch (...) {}
 
 		reply_json(res, 200, json{
     		{"ok", true},
@@ -15505,7 +15652,9 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 			{"snapshots", snapshots},
 			{"storage_roots", storage_roots},
 			{"tiering", tiering},
-    		{"upload_tiering_candidates", build_upload_tiering_candidates_json()},
+			{"dna_connect_alerts", dna_connect_alerts},
+			{"dna_connect_identity", dna_connect_identity},
+			{"upload_tiering_candidates", build_upload_tiering_candidates_json()},
 
 			{"transport_max_upload_bytes", tmax},
 			{"payload_max_upload_bytes", k_payload_max_upload_bytes}
@@ -15513,6 +15662,78 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 
     });
 
+srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
+    try {
+        const json persisted = load_admin_settings_json_safe();
+
+        json cfg = json::object();
+        if (persisted.contains("dna_connect_alerts") && persisted["dna_connect_alerts"].is_object()) {
+            cfg = persisted["dna_connect_alerts"];
+        }
+
+        const std::string cli_path = trim_copy(cfg.value("cli_path", std::string("/usr/local/bin/dna-connect-cli")));
+        const std::string data_dir = trim_copy(cfg.value("data_dir", std::string("/var/lib/pqnas/dna-alerts")));
+        const std::string recipient = trim_copy(cfg.value("recipient", std::string()));
+
+        if (recipient.empty()) {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "recipient is empty in dna_connect_alerts settings"}
+            }.dump());
+            return;
+        }
+
+        auto st = build_dna_connect_identity_status_json();
+        if (!st.value("exists", false)) {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "PQ-NAS DNA identity does not exist yet"}
+            }.dump());
+            return;
+        }
+
+        std::vector<std::string> argv = {
+            cli_path,
+            "-d", data_dir,
+            "contact", "request", recipient,
+            "PQ-NAS alerts"
+        };
+
+        std::string out;
+        int exit_code = -1;
+        const bool ok_run = run_cmd_capture_argv(argv, &out, &exit_code);
+
+        if (!ok_run || exit_code != 0) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to send DNA contact request"},
+                {"detail", out}
+            }.dump());
+            return;
+        }
+
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"message", "DNA contact request sent"},
+            {"detail", out}
+        }.dump());
+        return;
+
+    } catch (const std::exception& e) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "exception while sending DNA contact request"},
+            {"detail", e.what()}
+        }.dump());
+        return;
+    }
+});
  // Admin settings API
 srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Response& res) {
     if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
@@ -15594,7 +15815,87 @@ srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Res
     return (t == "dark" || t == "bright" || t == "cpunk_orange" || t == "win_classic");
 	};
 
+	auto is_allowed_dna_alert_level = [&](const std::string& s) -> bool {
+	    return (s == "security" || s == "error" || s == "warning" || s == "info");
+	};
 
+	auto normalize_dna_connect_alerts = [&](const json& in_cfg, std::string& err) -> json {
+	    err.clear();
+
+	    if (!in_cfg.is_object()) {
+	        err = "dna_connect_alerts must be an object";
+	        return json();
+	    }
+
+	    bool enabled = false;
+	    if (in_cfg.contains("enabled")) {
+	        if (!in_cfg["enabled"].is_boolean()) {
+	            err = "dna_connect_alerts.enabled must be boolean";
+	            return json();
+	        }
+	        enabled = in_cfg["enabled"].get<bool>();
+	    }
+
+	    std::string recipient = "";
+	    if (in_cfg.contains("recipient")) {
+	        if (!in_cfg["recipient"].is_string()) {
+	            err = "dna_connect_alerts.recipient must be string";
+	            return json();
+	        }
+	        recipient = trim_copy(in_cfg["recipient"].get<std::string>());
+	    }
+
+	    std::string cli_path = "/usr/local/bin/dna-connect-cli";
+	    if (in_cfg.contains("cli_path")) {
+	        if (!in_cfg["cli_path"].is_string()) {
+	            err = "dna_connect_alerts.cli_path must be string";
+	            return json();
+	        }
+	        cli_path = trim_copy(in_cfg["cli_path"].get<std::string>());
+	    }
+
+	    std::string data_dir = "";
+	    if (in_cfg.contains("data_dir")) {
+	        if (!in_cfg["data_dir"].is_string()) {
+	            err = "dna_connect_alerts.data_dir must be string";
+	            return json();
+	        }
+	        data_dir = trim_copy(in_cfg["data_dir"].get<std::string>());
+	    }
+
+	    std::string min_level = "warning";
+	    if (in_cfg.contains("min_level")) {
+	        if (!in_cfg["min_level"].is_string()) {
+	            err = "dna_connect_alerts.min_level must be string";
+	            return json();
+	        }
+	        min_level = trim_copy(in_cfg["min_level"].get<std::string>());
+	    }
+
+	    if (!is_allowed_dna_alert_level(min_level)) {
+	        err = "dna_connect_alerts.min_level must be one of: security, error, warning, info";
+	        return json();
+	    }
+
+	    if (enabled) {
+	        if (recipient.empty()) {
+	            err = "dna_connect_alerts.recipient required when alerts are enabled";
+	            return json();
+	        }
+	        if (cli_path.empty()) {
+	            err = "dna_connect_alerts.cli_path required when alerts are enabled";
+	            return json();
+	        }
+	    }
+
+	    return json{
+	        {"enabled", enabled},
+	        {"recipient", recipient},
+	        {"cli_path", cli_path},
+	        {"data_dir", data_dir},
+	        {"min_level", min_level}
+	    };
+	};
 
 auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
     err.clear();
@@ -15996,6 +16297,7 @@ auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
         bool changed_snapshots = false;
         bool changed_transport = false;
 		bool changed_tiering   = false;
+        bool changed_dna_alerts = false;
 
         json patch = json::object();
 
@@ -16210,6 +16512,40 @@ auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
         		audit_append(ev);
 		    } catch (...) {}
 		}
+				// ---- dna_connect_alerts (optional) ----
+		if (in.contains("dna_connect_alerts")) {
+		    std::string err;
+		    json norm = normalize_dna_connect_alerts(in["dna_connect_alerts"], err);
+		    if (!err.empty()) {
+		        reply_json(res, 400, json{
+		            {"ok", false},
+		            {"error", "bad_request"},
+		            {"message", err}
+		        }.dump());
+		        return;
+		    }
+
+		    json before_dna_alerts = json::object();
+		    if (persisted.contains("dna_connect_alerts") && persisted["dna_connect_alerts"].is_object()) {
+		        before_dna_alerts = persisted["dna_connect_alerts"];
+		    }
+
+		    patch["dna_connect_alerts"] = norm;
+		    persisted["dna_connect_alerts"] = norm;
+		    changed_dna_alerts = true;
+
+		    try {
+		        pqnas::AuditEvent ev;
+		        ev.event = "admin.settings_changed";
+		        ev.outcome = "ok";
+		        ev.f["dna_connect_alerts_before"] = before_dna_alerts.is_null() ? json::object() : before_dna_alerts;
+		        ev.f["dna_connect_alerts_after"]  = norm;
+		        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+		        auto it_ua = req.headers.find("User-Agent");
+		        ev.f["ua"] = pqnas::shorten(it_ua == req.headers.end() ? "" : it_ua->second);
+		        audit_append(ev);
+		    } catch (...) {}
+		}
        // ---- transport_max_upload_bytes (optional) ----
         if (in.contains("transport_max_upload_bytes")) {
             // Accept: integer only (safe-by-default)
@@ -16268,11 +16604,11 @@ auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
         }
 
         if (!changed_level && !changed_ret && !changed_rotation && !changed_theme &&
-    		!changed_snapshots && !changed_transport && !changed_tiering) {
+    		!changed_snapshots && !changed_transport && !changed_tiering && !changed_dna_alerts) {
             reply_json(res, 400, json{
                 {"ok", false},
                 {"error", "bad_request"},
-                {"message", "nothing to update (provide audit_min_level and/or audit_retention and/or audit_rotation and/or ui_theme and/or snapshots and/or tiering and/or transport_max_upload_bytes)"}
+                                {"message", "nothing to update (provide audit_min_level and/or audit_retention and/or audit_rotation and/or ui_theme and/or snapshots and/or tiering and/or dna_connect_alerts and/or transport_max_upload_bytes)"}
             }.dump());
             return;
         }
@@ -16310,7 +16646,40 @@ auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
 		if (!tiering.contains("max_candidates_per_pass") || !tiering["max_candidates_per_pass"].is_number_integer()) {
 		    tiering["max_candidates_per_pass"] = 8;
 		}
+		json dna_connect_alerts = json::object();
+		if (persisted.contains("dna_connect_alerts") && persisted["dna_connect_alerts"].is_object()) {
+		    dna_connect_alerts = persisted["dna_connect_alerts"];
+		} else {
+		    dna_connect_alerts = json{
+		        {"enabled", false},
+		        {"recipient", ""},
+		        {"cli_path", "/usr/local/bin/dna-connect-cli"},
+		        {"data_dir", ""},
+		        {"min_level", "warning"}
+		    };
+		}
 
+		if (!dna_connect_alerts.contains("enabled") || !dna_connect_alerts["enabled"].is_boolean()) {
+		    dna_connect_alerts["enabled"] = false;
+		}
+		if (!dna_connect_alerts.contains("recipient") || !dna_connect_alerts["recipient"].is_string()) {
+		    dna_connect_alerts["recipient"] = "";
+		}
+		if (!dna_connect_alerts.contains("cli_path") || !dna_connect_alerts["cli_path"].is_string()) {
+		    dna_connect_alerts["cli_path"] = "/usr/local/bin/dna-connect-cli";
+		}
+		if (!dna_connect_alerts.contains("data_dir") || !dna_connect_alerts["data_dir"].is_string()) {
+		    dna_connect_alerts["data_dir"] = "";
+		}
+		if (!dna_connect_alerts.contains("min_level") || !dna_connect_alerts["min_level"].is_string()) {
+		    dna_connect_alerts["min_level"] = "warning";
+		}
+		{
+		    const std::string ml = dna_connect_alerts["min_level"].get<std::string>();
+		    if (!(ml == "security" || ml == "error" || ml == "warning" || ml == "info")) {
+		        dna_connect_alerts["min_level"] = "warning";
+		    }
+		}
         std::string save_err;
         if (!save_settings_patch(patch, save_err)) {
             // Also audit the failure (best-effort)
@@ -16409,7 +16778,9 @@ auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
 
             {"ui_theme", ui_theme_value},
             {"snapshots", snapshots},
+            {"storage_roots", storage_roots},
 			{"tiering", tiering},
+			{"dna_connect_alerts", dna_connect_alerts},
     		{"upload_tiering_candidates", build_upload_tiering_candidates_json()},
 
             {"transport_max_upload_bytes", tmax},
@@ -16428,8 +16799,173 @@ auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
         return;
     }
 });
+srv.Post("/api/v4/admin/settings/create-dna-alert-identity", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
 
+    try {
+        const json persisted = load_admin_settings_json_safe();
+        json cfg = json::object();
+        if (persisted.contains("dna_connect_alerts") && persisted["dna_connect_alerts"].is_object()) {
+            cfg = persisted["dna_connect_alerts"];
+        }
 
+        const std::string cli_path = trim_copy(cfg.value("cli_path", std::string("/usr/local/bin/dna-connect-cli")));
+        const std::string data_dir = trim_copy(cfg.value("data_dir", std::string("/var/lib/pqnas/dna-alerts")));
+
+        if (cli_path.empty() || !std::filesystem::exists(cli_path)) {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "dna-connect-cli not found"},
+                {"detail", std::string("cli_path does not exist: ") + cli_path}
+            }.dump());
+            return;
+        }
+
+        if (data_dir.empty()) {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "DNA data directory is empty"}
+            }.dump());
+            return;
+        }
+
+        std::error_code ec;
+        std::filesystem::create_directories(data_dir, ec);
+
+        auto status = build_dna_connect_identity_status_json();
+        if (status.value("exists", false)) {
+            reply_json(res, 200, json{
+                {"ok", true},
+                {"message", "DNA identity already exists"},
+                {"dna_connect_identity", status}
+            }.dump());
+            return;
+        }
+
+        std::vector<std::string> argv = {
+            cli_path,
+            "-d", data_dir,
+            "identity", "create", "pqnasalerts"
+        };
+
+        std::string out;
+        int exit_code = -1;
+        const bool ok_run = run_cmd_capture_argv(argv, &out, &exit_code);
+
+        if (!ok_run || exit_code != 0) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to create DNA identity"},
+                {"detail", out}
+            }.dump());
+            return;
+        }
+
+        auto after = build_dna_connect_identity_status_json();
+
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"message", "DNA identity created"},
+            {"detail", out},
+            {"dna_connect_identity", after}
+        }.dump());
+        return;
+
+    } catch (const std::exception& e) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "exception while creating DNA identity"},
+            {"detail", e.what()}
+        }.dump());
+        return;
+    }
+});
+
+srv.Get("/api/v4/admin/settings/dna-alert-identity-info", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
+    json st = build_dna_connect_identity_status_json();
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"dna_connect_identity", st}
+    }.dump());
+});
+
+srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
+    try {
+        const json persisted = load_admin_settings_json_safe();
+        json cfg = json::object();
+        if (persisted.contains("dna_connect_alerts") && persisted["dna_connect_alerts"].is_object()) {
+            cfg = persisted["dna_connect_alerts"];
+        }
+
+        const std::string cli_path = trim_copy(cfg.value("cli_path", std::string("/usr/local/bin/dna-connect-cli")));
+        const std::string data_dir = trim_copy(cfg.value("data_dir", std::string("/var/lib/pqnas/dna-alerts")));
+        const std::string recipient = trim_copy(cfg.value("recipient", std::string()));
+
+        if (recipient.empty()) {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "recipient is empty in dna_connect_alerts settings"}
+            }.dump());
+            return;
+        }
+
+        auto st = build_dna_connect_identity_status_json();
+        if (!st.value("exists", false)) {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "PQ-NAS DNA identity does not exist yet"}
+            }.dump());
+            return;
+        }
+
+        std::vector<std::string> argv = {
+            cli_path,
+            "-d", data_dir,
+            "contact", "request", recipient,
+            "PQ-NAS alerts"
+        };
+
+        std::string out;
+        int exit_code = -1;
+        const bool ok_run = run_cmd_capture_argv(argv, &out, &exit_code);
+
+        if (!ok_run || exit_code != 0) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to send DNA contact request"},
+                {"detail", out}
+            }.dump());
+            return;
+        }
+
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"message", "DNA contact request sent"},
+            {"detail", out}
+        }.dump());
+        return;
+
+    } catch (const std::exception& e) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "exception while sending contact request"},
+            {"detail", e.what()}
+        }.dump());
+        return;
+    }
+});
 	// GET /api/v4/me  (returns role + decoded fingerprint)
 	srv.Get("/api/v4/me", [&](const httplib::Request& req, httplib::Response& res) {
     	auto audit_ua = [&]() -> std::string {
