@@ -752,7 +752,7 @@
         setActiveApp("");
 
         if (wsTitle) wsTitle.textContent = "Trusted Devices";
-        if (wsSubtitle) wsSubtitle.textContent = "Pair this phone or other devices with your PQ-NAS account";
+        if (wsSubtitle) wsSubtitle.textContent = "Pair this phone or other devices with your DNA-Nexus account";
         if (mainPaneTitle) mainPaneTitle.textContent = "Trusted Devices";
 
         if (!homeBlurb) return;
@@ -813,7 +813,7 @@
     <div style="margin-top:24px;">
         <h3 style="margin:0 0 8px 0; font-size:18px;">Trusted devices</h3>
         <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:12px;">
-            Devices that can access your PQ-NAS account through app pairing.
+            Devices that can access your DNA-Nexus account through app pairing.
         </div>
         ${trustedDevicesError ? `
             <div class="bigState" style="display:block; margin-top:8px;">
@@ -829,7 +829,7 @@
     <div style="max-width:760px; font-family:var(--sans);">
         <h3 style="margin:0 0 8px 0; font-size:18px; font-family:inherit;">Pair a new device</h3>
         <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:14px; font-family:inherit;">
-            Open the PQ-NAS mobile app, choose scan/pair, and scan the QR code shown here.
+            Open the DNA-Nexus mobile app, choose scan/pair, and scan the QR code shown here.
             After you confirm on the phone, this page will update automatically.
         </div>
 
@@ -1075,7 +1075,7 @@
 
                     // show version once (don’t stomp useful status text every refresh)
                     if (!versionShown && statusLine) {
-                        statusLine.textContent = "PQ-NAS v__PQNAS_VERSION__";
+                        statusLine.textContent = "DNA-Nexus v1.0.120";
                         versionShown = true;
                     }
 

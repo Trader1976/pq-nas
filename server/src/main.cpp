@@ -1139,7 +1139,7 @@ static bool require_user_cookie_users_actor(
 // Returns false silently if there is no usable bearer auth, so caller can
 // fall back to cookie auth.
 // Returns actor_fp_hex + role ("admin"|"user") on success.
-[[maybe_unused]] static bool try_user_bearer_users_actor(
+static bool try_user_bearer_users_actor(
     const httplib::Request& req,
     httplib::Response& res,
     pqnas::UsersRegistry* users,
@@ -1170,6 +1170,13 @@ static bool require_user_cookie_users_actor(
     std::string device_id;
     std::string terr;
     if (!g_app_tokens.verify_access_token(raw_token, &fp_hex, &token_role, &device_id, &terr)) {
+        std::cerr << "[bearer-auth] verify_access_token failed: "
+                  << (terr.empty() ? "unknown" : terr) << "\n";
+        reply_json(res, 401, json({
+            {"ok", false},
+            {"error", "unauthorized"},
+            {"message", terr.empty() ? "invalid access token" : terr}
+        }).dump());
         return false;
     }
 
@@ -1200,7 +1207,7 @@ static bool require_user_cookie_users_actor(
 
 // ----- Mixed gate: Bearer first, then cookie -------------------------------
 // For routes that should accept either mobile bearer auth or browser cookie auth.
-[[maybe_unused]] static bool require_user_auth_users_actor(
+static bool require_user_auth_users_actor(
     const httplib::Request& req,
     httplib::Response& res,
     const unsigned char cookie_key[32],
@@ -1211,8 +1218,15 @@ static bool require_user_cookie_users_actor(
     if (out_fp_hex) out_fp_hex->clear();
     if (out_role) out_role->clear();
 
-    if (try_user_bearer_users_actor(req, res, users, out_fp_hex, out_role)) {
-        return true;
+    auto it = req.headers.find("Authorization");
+    const bool has_authz = (it != req.headers.end());
+    const bool has_bearer =
+        has_authz &&
+        it->second.size() > 7 &&
+        it->second.compare(0, 7, "Bearer ") == 0;
+
+    if (has_bearer) {
+        return try_user_bearer_users_actor(req, res, users, out_fp_hex, out_role);
     }
 
     return require_user_cookie_users_actor(req, res, cookie_key, users, out_fp_hex, out_role);
@@ -28235,9 +28249,8 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         res.set_content(j.dump(2), "application/json; charset=utf-8");
     };
 
-    std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
-        return;
+	std::string fp_hex, role;
+	if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -28419,8 +28432,7 @@ if (!shares.create(fp_hex, path_rel, type, expires_sec, &out, &err)) {
     };
 
     std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
-        return;
+	if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -28502,9 +28514,8 @@ if (!shares.create(fp_hex, path_rel, type, expires_sec, &out, &err)) {
 
 
 srv.Get("/api/v4/shares/list", [&](const httplib::Request& req, httplib::Response& res) {
-    std::string fp_hex, role;
-    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role))
-        return;
+	std::string fp_hex, role;
+	if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
     // List only shares owned by the current user.
     auto v = shares.list();

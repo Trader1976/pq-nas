@@ -943,7 +943,11 @@
         let kind = "warn";
         if (enabled) {
             if (recipient) {
-                txt = `Enabled • ${recipient}`;
+                const recipientShort =
+                    recipient.length > 48
+                        ? `${recipient.slice(0, 48)}…`
+                        : recipient;
+                txt = `Enabled • ${recipientShort}`;
                 kind = "ok";
             } else {
                 txt = "Enabled • recipient missing";

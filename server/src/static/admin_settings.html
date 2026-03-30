@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>PQ-NAS • Admin Settings</title>
+    <title>DNA-Nexus NAS • Admin Settings</title>
 
     <style>
         *{ box-sizing:border-box; }
@@ -292,7 +292,34 @@
         .pill.fail{ border-color: rgba(var(--fail-rgb),0.42); background: rgba(var(--fail-rgb),0.10); color: rgba(var(--fail-rgb),0.92); }
         .pill.warn{ border-color: rgba(var(--warn-rgb),0.38); background: rgba(var(--warn-rgb),0.10); color: rgba(var(--warn-rgb),0.92); }
         .pill.info{ border-color: rgba(var(--info-rgb),0.38); background: rgba(var(--info-rgb),0.08); color: rgba(var(--info-rgb),0.92); }
+        #dnaAlertsPill{
+            max-width: 100%;
+            min-width: 0;
+        }
 
+        #dnaAlertsPill .v{
+            display: inline-block;
+            min-width: 0;
+            max-width: min(760px, 70vw);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            vertical-align: bottom;
+        }
+        #dnaAlertsPill{
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            overflow: hidden;
+        }
+
+        #dnaAlertsPill .k{
+            flex: 0 0 auto;
+        }
+
+        #dnaAlertsPill .v{
+            flex: 1 1 auto;
+        }
         .input, select{
             border:1px solid rgba(var(--fg-rgb),0.18);
             background:rgba(0,0,0,0.24);

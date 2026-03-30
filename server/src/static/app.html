@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>PQ-NAS</title>
+    <title>DNA-Nexus NAS</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
 
     <style>
@@ -51,7 +51,7 @@
 
         .brand{
             display:flex;
-            gap: 10px;
+            gap: 12px;
             align-items: center;
             padding: 10px 10px 14px;
             border-bottom: 1px solid var(--border2);
@@ -542,11 +542,7 @@
     <!-- Left menu / launcher -->
     <aside class="sidebar">
         <div class="brand">
-            <div class="logoDot" aria-hidden="true"></div>
-            <div style="min-width:0">
-                <h1>PQ-NAS</h1>
-                <div class="sub">Desktop shell • static UI</div>
-            </div>
+            <img class="brandLogo" id="brandLogo" src="/static/img/logo/nexuslogo1_dark_small.png" alt="DNA-Nexus logo">
         </div>
 
         <nav class="nav" aria-label="Main navigation">
@@ -643,7 +639,7 @@
             </aside>
         </div>
 
-        <div class="footerline">© CPUNK 2026</div>
+        <div class="footerline">© CPUNK 2026 • DNA-Nexus</div>
     </main>
 </div>
 
@@ -654,6 +650,29 @@
         document.head.appendChild(s);
     })();
 </script>
+<script>
+    (function () {
+        function pickBrandLogo() {
+            var theme = document.documentElement.getAttribute("data-theme")
+                || document.body.getAttribute("data-theme")
+                || "";
 
+            var img = document.getElementById("brandLogo");
+            if (!img) return;
+
+            var file = "nexuslogo1_dark_small.png";
+
+            if (theme === "bright") file = "nexuslogo1_bright_small.png";
+            else if (theme === "cpunk_orange") file = "nexuslogo1_orange_small.png";
+            else if (theme === "win_classic") file = "nexuslogo1_win_small.png";
+            else file = "nexuslogo1_dark_small.png";
+
+            img.src = "/static/img/logo/" + file;
+        }
+
+        document.addEventListener("DOMContentLoaded", pickBrandLogo);
+        window.addEventListener("load", pickBrandLogo);
+    })();
+</script>
 </body>
 </html>

@@ -2,11 +2,10 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>PQ-NAS Admin</title>
+    <title>DNA-Nexus NAS</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
 
     <style>
-
         * { box-sizing: border-box; }
         html, body { height: 100%; }
 
@@ -61,7 +60,8 @@
         }
 
         .brand .logoDot{
-            width: 14px; height: 14px;
+            width: 14px;
+            height: 14px;
             border-radius: 50%;
             background: var(--fg);
             box-shadow: 0 0 18px rgba(var(--fg-rgb),0.38);
@@ -74,6 +74,7 @@
             font-weight: 900;
             letter-spacing: 0.2px;
         }
+
         .brand .sub{
             margin-top: 2px;
             font-size: 12px;
@@ -88,13 +89,13 @@
             overflow: auto;
             min-height: 0;
         }
-        /* Approvals attention badge */
+
         .navAlertBadge{
             margin-left: 10px;
             width: 18px;
             height: 18px;
             border-radius: 999px;
-            display: none;               /* toggled by JS */
+            display: none;
             align-items: center;
             justify-content: center;
             font-weight: 950;
@@ -106,17 +107,16 @@
             box-shadow: 0 0 18px rgba(var(--fail-rgb),0.25);
         }
 
-        /* Make the Approvals button pop when pending */
         .navbtn.needs-attn{
             border-color: rgba(var(--fail-rgb),0.55);
             background: rgba(var(--fail-rgb),0.08);
             box-shadow: 0 0 18px rgba(var(--fail-rgb),0.18);
         }
+
         .navbtn.needs-attn:hover{
             border-color: rgba(var(--fail-rgb),0.70);
             background: rgba(var(--fail-rgb),0.12);
         }
-
 
         .nav .sectionLabel{
             margin: 10px 6px 2px;
@@ -179,7 +179,6 @@
             padding: 10px 12px;
         }
 
-        /* IMPORTANT: keep id="roleBadge" */
         .badge{
             display:inline-flex;
             align-items:center;
@@ -193,7 +192,7 @@
             color: var(--fg);
             white-space: nowrap;
         }
-        /* keep your original semantic classes too */
+
         .badge.admin { border-color: rgba(var(--fg-rgb),0.30); background: rgba(var(--fg-rgb),0.08); }
         .badge.user { border-color: rgba(var(--info-rgb),0.22); background: rgba(var(--info-rgb),0.10); color: rgba(var(--info-rgb),0.92); }
         .badge.unknown { border-color: rgba(var(--fg-rgb),0.14); background: rgba(255,255,255,0.03); color: rgba(var(--fg-rgb),0.80); }
@@ -217,171 +216,42 @@
             overflow: hidden;
         }
 
-        .topbar{
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 12px 14px;
-            border-bottom: 1px solid var(--border2);
-            background: rgba(0,0,0,0.18);
-        }
-
-        .crumbs{
-            display:flex;
-            flex-direction: column;
-            min-width: 0;
-        }
-
-        .crumbs .title{
-            font-weight: 950;
-            letter-spacing: 0.2px;
-            font-size: 14px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .crumbs .sub{
-            margin-top: 2px;
-            font-size: 12px;
-            color: var(--fg-dim);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .actions{
-            display:flex;
-            align-items:center;
-            gap: 10px;
-            flex: 0 0 auto;
-        }
-
-        .btn{
-            display:inline-flex;
-            align-items:center;
-            justify-content:center;
-            gap: 10px;
-            padding: 10px 12px;
-            border-radius: 14px;
-            border: 1px solid rgba(var(--fg-rgb),0.28);
-            background: rgba(0,0,0,0.26);
-            color: var(--fg);
-            font-weight: 900;
-            cursor:pointer;
-            text-decoration:none;
-            user-select:none;
-            transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
-        }
-        .btn:hover{
-            transform: translateY(-1px);
-            border-color: rgba(var(--fg-rgb),0.42);
-            background: rgba(var(--fg-rgb),0.07);
-        }
-        .btn.secondary{
-            border-color: rgba(255,255,255,0.12);
-            color: rgba(var(--fg-rgb),0.82);
-        }
-        .btn.secondary:hover{
-            border-color: rgba(255,255,255,0.22);
-            background: rgba(255,255,255,0.05);
-        }
-
         .content{
-            display:grid;
-            grid-template-columns: 1fr 420px;
-            gap: 14px;
-            padding: 14px;
-            min-height: 0;
-            min-width: 0;
-            overflow: hidden;
-        }
-
-        @media (max-width: 1200px){
-            .content{ grid-template-columns: 1fr; overflow:auto; }
-        }
-
-        .pane{
-            border: 1px solid var(--border2);
-            border-radius: var(--radius);
-            background: rgba(0,0,0,0.22);
-            padding: 14px;
+            flex: 1 1 auto;
             min-width: 0;
             min-height: 0;
-            overflow: hidden;
+            padding: 18px;
+            display: flex;
+            align-items: flex-start;
+            justify-content: flex-end;
         }
 
-        .pane h2{
-            margin: 0 0 10px 0;
-            font-size: 12px;
-            color: rgba(var(--fg-rgb),0.60);
-            font-weight: 900;
-            letter-spacing: 0.6px;
-            text-transform: uppercase;
-        }
-
-        /* IMPORTANT: keep id="status" */
-        .statusline{
-            font-size: 14px;
-            color: rgba(var(--fg-rgb),0.92);
-            padding: 10px 12px;
-            border-radius: 14px;
-            border: 1px solid rgba(var(--fg-rgb),0.16);
-            background: rgba(0,0,0,0.28);
-        }
-
-        pre{
-            margin: 0;
-            padding: 12px 12px;
-            border-radius: 14px;
-            border: 1px solid rgba(255,255,255,0.10);
-            background: rgba(0,0,0,0.32);
-            color: rgba(var(--fg-rgb),0.88);
-            overflow: auto;
-            font-size: 12.5px;
-            line-height: 1.35;
-            white-space: pre-wrap;
-            overflow-wrap: anywhere;
-            word-break: break-word;
-            height: calc(100% - 0px);
-        }
-
-        .kvs{
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 8px;
-            margin-top: 10px;
-        }
-
-        .kv{
-            border: 1px solid rgba(var(--fg-rgb),0.12);
-            background: rgba(0,0,0,0.22);
-            border-radius: 14px;
-            padding: 10px 12px;
-            display:flex;
-            justify-content: space-between;
-            gap: 10px;
-        }
-        .kv .k{
-            color: rgba(var(--fg-rgb),0.62);
-            font-size: 13px;
-        }
-        .kv .v{
-            font-weight: 850;
-            font-size: 13px;
-            color: rgba(var(--fg-rgb),0.90);
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            max-width: 65%;
+        .clockWrap{
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
             text-align: right;
+            user-select: none;
         }
 
-        .hint{
-            color: var(--fg-dim);
-            font-size: 13px;
-            margin-top: 10px;
-            line-height: 1.4;
+        .clockTime{
+            font-size: clamp(28px, 4.5vw, 60px);
+            line-height: 0.95;
+            font-weight: 950;
+            letter-spacing: 1.5px;
+            color: rgba(var(--fg-rgb),0.96);
+            text-shadow:
+                    0 0 18px rgba(var(--fg-rgb),0.10),
+                    0 0 36px rgba(var(--fg-rgb),0.06);
+        }
+
+        .clockDate{
+            margin-top: 6px;
+            font-size: clamp(10px, 1.2vw, 16px);
+            line-height: 1.2;
+            font-weight: 700;
+            letter-spacing: 0.4px;
+            color: rgba(var(--fg-rgb),0.70);
         }
 
         .footerline{
@@ -394,16 +264,26 @@
             background: rgba(0,0,0,0.12);
         }
 
-        code{ color: rgba(var(--fg-rgb),0.86); }
+        @media (max-width: 980px){
+            .content{
+                justify-content: center;
+                align-items: center;
+                padding: 24px 16px;
+            }
+
+            .clockWrap{
+                align-items: center;
+                text-align: center;
+            }
+        }
     </style>
+
     <link rel="stylesheet" href="/static/theme.css">
     <script src="/static/theme.js"></script>
-
 </head>
 
 <body>
 <div class="desktop">
-    <!-- Left launcher -->
     <aside class="sidebar">
         <div class="brand">
             <div class="logoDot" aria-hidden="true"></div>
@@ -444,7 +324,6 @@
 
         <div class="bottom">
             <div class="statusCard">
-                <!-- IMPORTANT: keep id="roleBadge" -->
                 <div id="roleBadge" class="badge unknown">role: ?</div>
                 <div class="mini" id="sidebarHint">
                     Manage users, review audit logs, and verify server integrity.
@@ -453,58 +332,12 @@
         </div>
     </aside>
 
-    <!-- Right workspace -->
     <main class="workspace">
-        <div class="topbar">
-            <div class="crumbs">
-                <div class="title">Admin overview</div>
-                <div class="sub">Session, role and API status</div>
-            </div>
-
-            <div class="actions">
-                <a class="btn secondary" href="/admin/users">Users</a>
-                <a class="btn secondary" href="/admin/audit">Audit</a>
-                <a class="btn secondary" href="/admin/settings">Settings</a>
-                <a class="btn secondary" href="/system">System</a>
-                <button class="btn" id="refreshBtn" type="button">Refresh</button>
-            </div>
-        </div>
-
         <div class="content">
-            <section class="pane" aria-label="Session pane">
-                <h2>Session status</h2>
-
-                <!-- IMPORTANT: keep id="status" -->
-                <div id="status" class="statusline">Loading…</div>
-
-                <div class="hint">
-                    Tip: If something looks off, open DevTools → Network and confirm <code>/api/v4/me</code> returns 200 and JSON.
-                </div>
-
-                <div class="kvs">
-                    <div class="kv">
-                        <div class="k">Endpoint</div>
-                        <div class="v">/api/v4/me</div>
-                    </div>
-                    <div class="kv">
-                        <div class="k">Policy</div>
-                        <div class="v">fail-closed</div>
-                    </div>
-                    <div class="kv">
-                        <div class="k">Cache</div>
-                        <div class="v">no-store (admin)</div>
-                    </div>
-                </div>
+            <section class="clockWrap" aria-label="Clock">
+                <div id="clockTime" class="clockTime">--:--:--</div>
+                <div id="clockDate" class="clockDate">----</div>
             </section>
-
-            <aside class="pane" aria-label="Inspector pane">
-                <h2>Inspector</h2>
-                <!-- IMPORTANT: keep id="me" -->
-                <pre id="me">(waiting)</pre>
-                <div class="hint">
-                    This is the raw response of <code>/api/v4/me</code>.
-                </div>
-            </aside>
         </div>
 
         <div class="footerline">© CPUNK 2026</div>
@@ -512,6 +345,35 @@
 </div>
 
 <script src="/static/admin_badges.js"></script>
-<script src="/static/admin.js"></script>
+<script>
+    (function(){
+        const timeEl = document.getElementById('clockTime');
+        const dateEl = document.getElementById('clockDate');
+
+        function pad(n){
+            return String(n).padStart(2, '0');
+        }
+
+        function updateClock(){
+            const now = new Date();
+
+            const hh = pad(now.getHours());
+            const mm = pad(now.getMinutes());
+            const ss = pad(now.getSeconds());
+            timeEl.textContent = `${hh}:${mm}:${ss}`;
+
+            const dateText = now.toLocaleDateString(undefined, {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+            });
+            dateEl.textContent = dateText;
+        }
+
+        updateClock();
+        setInterval(updateClock, 1000);
+    })();
+</script>
 </body>
 </html>

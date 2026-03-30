@@ -13,8 +13,8 @@ using nlohmann::json;
 namespace pqnas {
 namespace {
 
-    constexpr long kAccessTtlSec = 15 * 60;               // 15 min
-    constexpr long kRefreshTtlSec = 365L * 24 * 3600;    // 1 year
+constexpr long kAccessTtlSec = 15 * 60;                 // 15 minutes
+constexpr long kRefreshTtlSec = 365L * 24 * 3600;    // 1 year
 
 static std::string json_string_or_empty(const json& j, const char* key) {
     auto it = j.find(key);
