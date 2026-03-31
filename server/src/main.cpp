@@ -79,6 +79,7 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include <set>
 #include <map>
 
+
 extern "C" {
 #include "qrauth_v4.h"
 }
@@ -110,6 +111,7 @@ extern "C" {
 //sharing
 #include "share_links.h"
 #include "share_pq_v1.h"
+#include "share_pq_crypto_v1.h"
 
 //pool migration
 #include "user_storage_migration.h"
@@ -28273,28 +28275,55 @@ srv.Post("/api/v4/shares/pq/enroll", [&](const httplib::Request& req, httplib::R
         reply(404, json{{"ok", false}, {"error", "not_found"}, {"message", "share manifest not found"}});
         return;
     }
-
     pqnas::PqShareRecipientDeviceV1 dev;
-    dev.owner_fp = inv.owner_fp;
-    dev.recipient_device_id = pqnas::SharePqStoreV1::random_id_b64url_local(24);
-    dev.label = device_label;
-    dev.state = "active";
-    dev.created_at = pqnas::SharePqStoreV1::now_iso_utc_local();
-    dev.updated_at = dev.created_at;
-    dev.last_used_at = dev.created_at;
-    dev.registered_via = "invite";
-    dev.invite_id = invite_id;
-    dev.kem_alg = kem_alg;
-    dev.key_id = pqnas::SharePqStoreV1::random_id_b64url_local(12);
-    dev.public_key_b64 = public_key_b64;
+    std::string find_dev_err;
+    const bool reused_device =
+        share_pq.find_active_recipient_device_by_public_key(
+            inv.owner_fp,
+            kem_alg,
+            public_key_b64,
+            &dev,
+            &find_dev_err);
 
-    std::string dev_err;
-    if (!share_pq.save_recipient_device(dev, &dev_err)) {
-        reply(500, json{{"ok", false}, {"error", "server_error"}, {"message", "recipient save failed"}});
-        return;
+    if (!reused_device) {
+        dev.owner_fp = inv.owner_fp;
+        dev.recipient_device_id = pqnas::SharePqStoreV1::random_id_b64url_local(24);
+        dev.label = device_label;
+        dev.state = "active";
+        dev.created_at = pqnas::SharePqStoreV1::now_iso_utc_local();
+        dev.updated_at = dev.created_at;
+        dev.last_used_at = dev.created_at;
+        dev.registered_via = "invite";
+        dev.invite_id = invite_id;
+        dev.kem_alg = kem_alg;
+        dev.key_id = pqnas::SharePqStoreV1::random_id_b64url_local(12);
+        dev.public_key_b64 = public_key_b64;
+
+        std::string dev_err;
+        if (!share_pq.save_recipient_device(dev, &dev_err)) {
+            reply(500, json{{"ok", false}, {"error", "server_error"}, {"message", "recipient save failed"}});
+            return;
+        }
+    } else {
+        // Preserve stable human label unless explicitly empty
+        if (dev.label.empty() && !device_label.empty()) {
+            dev.label = device_label;
+        }
+        dev.updated_at = pqnas::SharePqStoreV1::now_iso_utc_local();
+        dev.last_used_at = dev.updated_at;
+
+        std::string dev_err;
+        if (!share_pq.save_recipient_device(dev, &dev_err)) {
+            reply(500, json{{"ok", false}, {"error", "server_error"}, {"message", "recipient update failed"}});
+            return;
+        }
     }
 
+    if (std::find(mf.recipient_device_ids.begin(),
+              mf.recipient_device_ids.end(),
+              dev.recipient_device_id) == mf.recipient_device_ids.end()) {
     mf.recipient_device_ids.push_back(dev.recipient_device_id);
+}
     mf.state = "active";
 
     std::string save_mf_err;
@@ -28333,12 +28362,608 @@ srv.Post("/api/v4/shares/pq/enroll", [&](const httplib::Request& req, httplib::R
 
     reply(200, json{
         {"ok", true},
+        {"share_token", inv.share_token},
         {"share_url", std::string("/s/") + inv.share_token},
-        {"recipient_device_id", dev.recipient_device_id}
+        {"recipient_device_id", dev.recipient_device_id},
+        {"pq_state", "active"}
     });
 });
 
-    srv.Post("/api/v4/shares/create", [&](const httplib::Request& req, httplib::Response& res) {
+    struct PqShareOpenContextV1 {
+        std::string share_token;
+        std::string owner_fp;
+        std::string rel_path;
+        std::string file_name;
+        std::filesystem::path abs_path;
+        pqnas::ShareLink share;
+        pqnas::PqShareManifestV1 manifest;
+        pqnas::PqShareRecipientSessionV1 session;
+        pqnas::PqShareRecipientDeviceV1 device;
+    };
+auto sha256_file_hex_local = [&](const std::filesystem::path& p,
+                                 std::string* out_hex,
+                                 std::string* err) -> bool {
+    if (out_hex) out_hex->clear();
+    if (err) err->clear();
+
+    std::ifstream f(p, std::ios::binary);
+    if (!f) {
+        if (err) *err = "open_failed";
+        return false;
+    }
+
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) {
+        if (err) *err = "digest_ctx_new_failed";
+        return false;
+    }
+
+    bool ok = false;
+    do {
+        if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1) {
+            if (err) *err = "digest_init_failed";
+            break;
+        }
+
+        std::array<char, 64 * 1024> buf{};
+        while (f.good()) {
+            f.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+            const std::streamsize n = f.gcount();
+            if (n > 0) {
+                if (EVP_DigestUpdate(ctx, buf.data(), static_cast<size_t>(n)) != 1) {
+                    if (err) *err = "digest_update_failed";
+                    break;
+                }
+            }
+        }
+
+        if (!f.eof() && f.fail()) {
+            if (err) *err = "read_failed";
+            break;
+        }
+
+        unsigned char md[EVP_MAX_MD_SIZE];
+        unsigned int md_len = 0;
+        if (EVP_DigestFinal_ex(ctx, md, &md_len) != 1) {
+            if (err) *err = "digest_final_failed";
+            break;
+        }
+
+        static const char* kHex = "0123456789abcdef";
+        std::string hex;
+        hex.reserve(md_len * 2);
+        for (unsigned int i = 0; i < md_len; ++i) {
+            unsigned char b = md[i];
+            hex.push_back(kHex[(b >> 4) & 0x0f]);
+            hex.push_back(kHex[b & 0x0f]);
+        }
+
+        if (out_hex) *out_hex = std::move(hex);
+        ok = true;
+    } while (false);
+
+    EVP_MD_CTX_free(ctx);
+    return ok;
+};
+
+auto resolve_pq_share_open_context_v1 =
+    [&](const httplib::Request& req,
+        const std::string& share_token,
+        PqShareOpenContextV1* out,
+        std::string* err) -> bool {
+
+    if (out) *out = PqShareOpenContextV1{};
+    if (err) err->clear();
+
+    auto fail = [&](const std::string& why) -> bool {
+        if (err) *err = why;
+        return false;
+    };
+
+    auto lower_ascii = [](std::string s) -> std::string {
+        for (char& c : s) {
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        }
+        return s;
+    };
+
+    auto get_cookie_value_local = [&](const std::string& name) -> std::string {
+        auto it = req.headers.find("Cookie");
+        if (it == req.headers.end()) return {};
+
+        const std::string all = it->second;
+        const std::string needle = name + "=";
+
+        std::size_t pos = 0;
+        while (pos < all.size()) {
+            while (pos < all.size() && (all[pos] == ' ' || all[pos] == ';')) ++pos;
+            if (pos >= all.size()) break;
+
+            if (all.compare(pos, needle.size(), needle) == 0) {
+                std::size_t start = pos + needle.size();
+                std::size_t end = all.find(';', start);
+                if (end == std::string::npos) end = all.size();
+                return all.substr(start, end - start);
+            }
+
+            std::size_t next = all.find(';', pos);
+            if (next == std::string::npos) break;
+            pos = next + 1;
+        }
+        return {};
+    };
+
+    pqnas::ShareLink s;
+    std::string share_err;
+    auto valid = shares.is_valid_now(share_token, &s, &share_err);
+
+    if (!valid.has_value()) return fail("share_not_found");
+    if (!valid.value()) return fail("share_expired");
+
+    pqnas::PqShareManifestV1 mf;
+    std::string mf_err;
+    if (!share_pq.load_manifest(share_token, &mf, &mf_err)) {
+        return fail("share_not_found");
+    }
+    if (mf.kind != "pq_recipient_enrolled_v1") {
+        return fail("pq_open_denied");
+    }
+
+    if (s.type != "file") {
+        return fail("pq_share_requires_file");
+    }
+
+    const std::string session_id = get_cookie_value_local("pqnas_share_recipient");
+    if (session_id.empty()) {
+        return fail("enrollment_required");
+    }
+
+    pqnas::PqShareRecipientSessionV1 sess;
+    std::string sess_err;
+    if (!share_pq.load_session(session_id, &sess, &sess_err)) {
+        return fail("enrollment_required");
+    }
+    if (sess.state != "active") {
+        return fail("enrollment_required");
+    }
+    if (pqnas::SharePqStoreV1::iso_expired_local(sess.expires_at)) {
+        return fail("enrollment_required");
+    }
+    if (sess.owner_fp != s.owner_fp) {
+        return fail("enrollment_required");
+    }
+
+    pqnas::PqShareRecipientDeviceV1 dev;
+    std::string dev_err;
+    if (!share_pq.load_recipient_device(sess.owner_fp, sess.recipient_device_id, &dev, &dev_err)) {
+        return fail("enrollment_required");
+    }
+    if (dev.state != "active") {
+        return fail("enrollment_required");
+    }
+    if (dev.owner_fp != s.owner_fp) {
+        return fail("enrollment_required");
+    }
+
+    const bool allowed =
+        std::find(mf.recipient_device_ids.begin(),
+                  mf.recipient_device_ids.end(),
+                  sess.recipient_device_id) != mf.recipient_device_ids.end();
+    if (!allowed) {
+        return fail("enrollment_required");
+    }
+
+    pqnas::ResolvedExistingPath rp;
+    std::string rerr;
+    if (!pqnas::resolve_existing_user_file_path(users, s.owner_fp, s.path, &rp, &rerr)) {
+        return fail("share_not_found");
+    }
+
+    const std::filesystem::path abs = rp.abs_path;
+
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(abs, ec);
+    if (ec || !std::filesystem::exists(st) || std::filesystem::is_symlink(st)) {
+        return fail("share_not_found");
+    }
+    if (!std::filesystem::is_regular_file(st)) {
+        return fail("share_not_found");
+    }
+
+    {
+        std::error_code ec_size;
+        const auto live_size = std::filesystem::file_size(abs, ec_size);
+        if (ec_size) return fail("share_not_found");
+
+        if (mf.snapshot.size_bytes > 0 &&
+            static_cast<std::uint64_t>(live_size) != mf.snapshot.size_bytes) {
+            return fail("snapshot_mismatch");
+        }
+    }
+
+    if (!mf.snapshot.sha256_hex.empty()) {
+        std::string got_sha;
+        std::string sha_err;
+        if (!sha256_file_hex_local(abs, &got_sha, &sha_err)) {
+            return fail("snapshot_mismatch");
+        }
+        if (lower_ascii(got_sha) != lower_ascii(mf.snapshot.sha256_hex)) {
+            return fail("snapshot_mismatch");
+        }
+    }
+
+    if (out) {
+        out->share_token = share_token;
+        out->owner_fp = s.owner_fp;
+        out->rel_path = s.path;
+        out->file_name = std::filesystem::path(s.path).filename().string();
+        out->abs_path = abs;
+        out->share = s;
+        out->manifest = mf;
+        out->session = sess;
+        out->device = dev;
+    }
+
+    return true;
+};
+srv.Post("/api/v4/shares/pq/open", [&](const httplib::Request& req, httplib::Response& res) {
+    auto reply = [&](int status, const json& j) {
+        res.status = status;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(j.dump(2), "application/json; charset=utf-8");
+    };
+
+    auto json_string = [](const json& j, const char* key) -> std::string {
+        auto it = j.find(key);
+        return (it != j.end() && it->is_string()) ? it->get<std::string>() : std::string{};
+    };
+
+    json body = json::object();
+    try {
+        if (!req.body.empty()) body = json::parse(req.body);
+    } catch (...) {
+        reply(400, {
+            {"ok", false},
+            {"error", "bad_json"},
+            {"message", "Request body must be valid JSON"}
+        });
+        return;
+    }
+
+    const std::string share_token = json_string(body, "share_token");
+    if (share_token.empty()) {
+        reply(400, {
+            {"ok", false},
+            {"error", "missing_share_token"},
+            {"message", "share_token is required"}
+        });
+        return;
+    }
+
+    // IMPORTANT:
+    // Resolve the exact same PQ-share access context that your current GET /s/<token>
+    // PQ branch already validates today:
+    //
+    //   - find share by token
+    //   - verify share exists / not revoked / not expired
+    //   - verify PQ mode is active for this share
+    //   - resolve active manifest from SharePqStoreV1
+    //   - validate recipient session cookie
+    //   - load recipient device
+    //   - resolve file absolute path
+    //   - verify snapshot against the live file BEFORE returning any encrypted material
+    //
+    // Do that by extracting the current logic from /s/<token> into a small local helper.
+    //
+    // On success this helper must populate:
+    //   ctx.share_token
+    //   ctx.owner_fp
+    //   ctx.rel_path
+    //   ctx.file_name
+    //   ctx.abs_path
+    //   ctx.manifest
+    //   ctx.session
+    //   ctx.device
+    //
+    // It must fail closed.
+    PqShareOpenContextV1 ctx;
+    std::string ctx_err;
+
+    if (!resolve_pq_share_open_context_v1(req, share_token, &ctx, &ctx_err)) {
+        if (ctx_err == "share_not_found") {
+            reply(404, {
+                {"ok", false},
+                {"error", "share_not_found"}
+            });
+            return;
+        }
+
+        if (ctx_err == "enrollment_required") {
+            reply(403, {
+                {"ok", false},
+                {"error", "enrollment_required"},
+                {"message", "This protected share requires browser enrollment first"}
+            });
+            return;
+        }
+        if (ctx_err == "share_expired") {
+            reply(410, {
+                {"ok", false},
+                {"error", "share_expired"}
+            });
+            return;
+        }
+        if (ctx_err == "snapshot_mismatch") {
+        reply(409, {
+            {"ok", false},
+            {"error", "snapshot_mismatch"},
+            {"message", "Shared file changed since PQ share snapshot was created"}
+        });
+        return;
+    }
+        reply(403, {
+            {"ok", false},
+            {"error", ctx_err.empty() ? "pq_open_denied" : ctx_err}
+        });
+        return;
+    }
+
+    if (ctx.device.public_key_b64.empty()) {
+        reply(403, {
+            {"ok", false},
+            {"error", "recipient_public_key_missing"}
+        });
+        return;
+    }
+
+    std::vector<std::uint8_t> plaintext;
+    {
+        std::ifstream f(ctx.abs_path, std::ios::binary);
+        if (!f) {
+            reply(404, {
+                {"ok", false},
+                {"error", "file_not_found"}
+            });
+            return;
+        }
+        plaintext.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    }
+
+    // Keep AAD stable and explicit.
+    json aad = {
+        {"v", 1},
+        {"purpose", "pq_share_open"},
+        {"mode", "x25519_aes256gcm_v1"},
+        {"share_token", ctx.share_token},
+        {"recipient_device_id", ctx.device.recipient_device_id},
+        {"file_name", ctx.file_name},
+        {"snapshot_sha256_hex", ctx.manifest.snapshot.sha256_hex},
+        {"snapshot_size_bytes", ctx.manifest.snapshot.size_bytes},
+        {"snapshot_mtime_epoch", ctx.manifest.snapshot.mtime_epoch}
+    };
+
+    pqnas::PqOpenSnapshotV1 snap;
+    snap.size_bytes = ctx.manifest.snapshot.size_bytes;
+    snap.mtime_epoch = ctx.manifest.snapshot.mtime_epoch;
+    snap.sha256_hex = ctx.manifest.snapshot.sha256_hex;
+
+    pqnas::PqOpenEnvelopeV1 env;
+    std::string crypto_err;
+    if (!pqnas::build_pq_open_envelope_x25519_v1(
+            ctx.share_token,
+            ctx.file_name,
+            ctx.device.recipient_device_id,
+            ctx.device.public_key_b64,
+            plaintext,
+            aad.dump(),
+            snap,
+            &env,
+            &crypto_err)) {
+        reply(500, {
+            {"ok", false},
+            {"error", "pq_envelope_build_failed"},
+            {"detail", crypto_err}
+        });
+        return;
+    }
+
+    reply(200, {
+        {"ok", true},
+        {"envelope", {
+            {"version", env.version},
+            {"mode", env.mode},
+            {"share_token", env.share_token},
+            {"file_name", env.file_name},
+            {"mime_type", env.mime_type},
+            {"recipient_device_id", env.recipient_device_id},
+            {"aad_b64", env.aad_b64},
+            {"snapshot", {
+                {"size_bytes", env.snapshot.size_bytes},
+                {"mtime_epoch", env.snapshot.mtime_epoch},
+                {"sha256_hex", env.snapshot.sha256_hex}
+            }},
+            {"wrapped_key", {
+                {"mode", env.wrapped_key.mode},
+                {"recipient_device_id", env.wrapped_key.recipient_device_id},
+                {"kem_alg", env.wrapped_key.kem_alg},
+                {"sender_public_key_b64", env.wrapped_key.sender_public_key_b64},
+                {"hkdf_salt_b64", env.wrapped_key.hkdf_salt_b64},
+                {"hkdf_info_b64", env.wrapped_key.hkdf_info_b64},
+                {"wrap_iv_b64", env.wrapped_key.wrap_iv_b64},
+                {"wrapped_cek_b64", env.wrapped_key.wrapped_cek_b64}
+            }},
+            {"payload", {
+                {"enc_alg", env.payload.enc_alg},
+                {"iv_b64", env.payload.iv_b64},
+                {"ciphertext_b64", env.payload.ciphertext_b64}
+            }}
+        }}
+    });
+});
+
+srv.Post("/api/v4/shares/pq/recipient/update", [&](const httplib::Request& req, httplib::Response& res) {
+    auto reply = [&](int status, const json& j) {
+        res.status = status;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(j.dump(2), "application/json; charset=utf-8");
+    };
+
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        ev.f["ua"] = audit_ua();
+    };
+
+    json body;
+    try {
+        body = json::parse(req.body.empty() ? "{}" : req.body);
+    } catch (const std::exception& e) {
+        reply(400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"},
+            {"detail", e.what()}
+        });
+        return;
+    }
+
+    const std::string share_token = body.value("share_token", std::string{});
+    const std::string recipient_device_id = body.value("recipient_device_id", std::string{});
+
+    if (share_token.empty() || recipient_device_id.empty()) {
+        reply(400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing share_token or recipient_device_id"}
+        });
+        return;
+    }
+
+    const bool has_label = body.contains("label") && body["label"].is_string();
+    const bool has_note  = body.contains("note")  && body["note"].is_string();
+
+    if (!has_label && !has_note) {
+        reply(400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "nothing to update"}
+        });
+        return;
+    }
+
+    pqnas::ShareLink share_row;
+    bool share_found = false;
+    for (const auto& s : shares.list()) {
+        if (s.token == share_token && s.owner_fp == fp_hex) {
+            share_row = s;
+            share_found = true;
+            break;
+        }
+    }
+
+    if (!share_found) {
+        reply(404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "share not found"}
+        });
+        return;
+    }
+
+    pqnas::PqShareManifestV1 mf;
+    std::string mf_err;
+    if (!share_pq.load_manifest(share_token, &mf, &mf_err) || mf.kind != "pq_recipient_enrolled_v1") {
+        reply(404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "PQ share manifest not found"}
+        });
+        return;
+    }
+
+    const bool recipient_allowed =
+        std::find(mf.recipient_device_ids.begin(),
+                  mf.recipient_device_ids.end(),
+                  recipient_device_id) != mf.recipient_device_ids.end();
+
+    if (!recipient_allowed) {
+        reply(404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "recipient device not found for this share"}
+        });
+        return;
+    }
+
+    pqnas::PqShareRecipientDeviceV1 dev;
+    std::string dev_err;
+    if (!share_pq.load_recipient_device(fp_hex, recipient_device_id, &dev, &dev_err)) {
+        reply(404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "recipient device not found"}
+        });
+        return;
+    }
+
+    if (has_label) dev.label = body["label"].get<std::string>();
+    if (has_note)  dev.note  = body["note"].get<std::string>();
+    dev.updated_at = pqnas::SharePqStoreV1::now_iso_utc_local();
+
+    std::string save_err;
+    if (!share_pq.save_recipient_device(dev, &save_err)) {
+        reply(500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "recipient update failed"},
+            {"detail", save_err}
+        });
+        return;
+    }
+
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "share_pq_recipient_update";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["token"] = pqnas::shorten(share_token, 32);
+        ev.f["recipient_device_id"] = pqnas::shorten(recipient_device_id, 32);
+        if (has_label) ev.f["label"] = pqnas::shorten(dev.label, 120);
+        if (has_note) ev.f["note"] = pqnas::shorten(dev.note, 120);
+        add_ip_headers(ev);
+        audit_append(ev);
+    }
+
+    reply(200, json{
+        {"ok", true},
+        {"recipient", {
+            {"recipient_device_id", dev.recipient_device_id},
+            {"label", dev.label},
+            {"note", dev.note},
+            {"state", dev.state},
+            {"created_at", dev.created_at},
+            {"updated_at", dev.updated_at},
+            {"last_used_at", dev.last_used_at},
+            {"registered_via", dev.registered_via},
+            {"invite_id", dev.invite_id},
+            {"kem_alg", dev.kem_alg},
+            {"key_id", dev.key_id}
+        }}
+    });
+});
+
+srv.Post("/api/v4/shares/create", [&](const httplib::Request& req, httplib::Response& res) {
     auto reply = [&](int status, const json& j) {
         res.status = status;
         res.set_header("Cache-Control", "no-store");
@@ -28738,6 +29363,35 @@ srv.Get("/api/v4/shares/list", [&](const httplib::Request& req, httplib::Respons
 
             it["recipient_count"] = static_cast<int>(mf.recipient_device_ids.size());
             it["recipient_device_ids"] = mf.recipient_device_ids;
+
+            json recipients = json::array();
+            for (const auto& rid : mf.recipient_device_ids) {
+                pqnas::PqShareRecipientDeviceV1 dev;
+                std::string dev_err;
+                if (share_pq.load_recipient_device(mf.owner_fp, rid, &dev, &dev_err)) {
+                    recipients.push_back(json{
+                        {"recipient_device_id", dev.recipient_device_id},
+                        {"label", dev.label},
+                        {"note", dev.note},
+                        {"state", dev.state},
+                        {"created_at", dev.created_at},
+                        {"updated_at", dev.updated_at},
+                        {"last_used_at", dev.last_used_at},
+                        {"registered_via", dev.registered_via},
+                        {"invite_id", dev.invite_id},
+                        {"kem_alg", dev.kem_alg},
+                        {"key_id", dev.key_id}
+                    });
+                } else {
+                    recipients.push_back(json{
+                        {"recipient_device_id", rid},
+                        {"label", ""},
+                        {"note", ""},
+                        {"state", "missing"}
+                    });
+                }
+            }
+            it["recipients"] = std::move(recipients);
 
             pqnas::PqShareInviteV1 inv;
             std::string inv_err;
@@ -29195,29 +29849,29 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
         ev.f["ua"] = audit_ua();
     };
     auto get_cookie_value = [&](const std::string& name) -> std::string {
-    auto it = req.headers.find("Cookie");
-    if (it == req.headers.end()) return {};
-    const std::string all = it->second;
-    const std::string needle = name + "=";
+        auto it = req.headers.find("Cookie");
+        if (it == req.headers.end()) return {};
+        const std::string all = it->second;
+        const std::string needle = name + "=";
 
-    std::size_t pos = 0;
-    while (pos < all.size()) {
-        while (pos < all.size() && (all[pos] == ' ' || all[pos] == ';')) ++pos;
-        if (pos >= all.size()) break;
+        std::size_t pos = 0;
+        while (pos < all.size()) {
+            while (pos < all.size() && (all[pos] == ' ' || all[pos] == ';')) ++pos;
+            if (pos >= all.size()) break;
 
-        if (all.compare(pos, needle.size(), needle) == 0) {
-            std::size_t start = pos + needle.size();
-            std::size_t end = all.find(';', start);
-            if (end == std::string::npos) end = all.size();
-            return all.substr(start, end - start);
+            if (all.compare(pos, needle.size(), needle) == 0) {
+                std::size_t start = pos + needle.size();
+                std::size_t end = all.find(';', start);
+                if (end == std::string::npos) end = all.size();
+                return all.substr(start, end - start);
+            }
+
+            std::size_t next = all.find(';', pos);
+            if (next == std::string::npos) break;
+            pos = next + 1;
         }
-
-        std::size_t next = all.find(';', pos);
-        if (next == std::string::npos) break;
-        pos = next + 1;
-    }
-    return {};
-};
+        return {};
+    };
     auto audit_event = [&](const std::string& name,
                            const std::string& outcome,
                            const pqnas::ShareLink* s,
@@ -29263,56 +29917,48 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
         res.set_content("Expired\n", "text/plain; charset=utf-8");
         return;
     }
+
     pqnas::PqShareManifestV1 pq_mf;
-std::string pq_mf_err;
-const bool has_pq_manifest = share_pq.load_manifest(token, &pq_mf, &pq_mf_err);
+    std::string pq_mf_err;
+    const bool has_pq_manifest = share_pq.load_manifest(token, &pq_mf, &pq_mf_err);
+    const bool is_pq_share = has_pq_manifest && pq_mf.kind == "pq_recipient_enrolled_v1";
 
-if (has_pq_manifest) {
-    if (pq_mf.kind == "pq_recipient_enrolled_v1") {
+    pqnas::PqShareRecipientSessionV1 pq_sess;
+    pqnas::PqShareRecipientDeviceV1 pq_rdev;
+    bool pq_session_ok = false;
+
+    if (is_pq_share) {
         const std::string session_id = get_cookie_value("pqnas_share_recipient");
-        if (session_id.empty()) {
-            audit_event("share_pq_access", "fail", &s, "missing_recipient_session", 403);
-            res.status = 403;
-            res.set_header("Cache-Control", "no-store");
-            res.set_content("Recipient enrollment required\n", "text/plain; charset=utf-8");
-            return;
-        }
 
-        pqnas::PqShareRecipientSessionV1 sess;
-        std::string sess_err;
-        if (!share_pq.load_session(session_id, &sess, &sess_err) || sess.state != "active") {
-            audit_event("share_pq_access", "fail", &s, "invalid_recipient_session", 403);
-            res.status = 403;
-            res.set_header("Cache-Control", "no-store");
-            res.set_content("Recipient enrollment required\n", "text/plain; charset=utf-8");
-            return;
-        }
+        if (!session_id.empty()) {
+            std::string sess_err;
+            if (share_pq.load_session(session_id, &pq_sess, &sess_err) &&
+                pq_sess.state == "active" &&
+                !pqnas::SharePqStoreV1::iso_expired_local(pq_sess.expires_at)) {
 
-        pqnas::PqShareRecipientDeviceV1 rdev;
-        std::string rdev_err;
-        if (!share_pq.load_recipient_device(sess.owner_fp, sess.recipient_device_id, &rdev, &rdev_err) ||
-            rdev.state != "active") {
-            audit_event("share_pq_access", "fail", &s, "recipient_device_invalid", 403);
-            res.status = 403;
-            res.set_header("Cache-Control", "no-store");
-            res.set_content("Recipient enrollment required\n", "text/plain; charset=utf-8");
-            return;
-        }
+                std::string rdev_err;
+                if (share_pq.load_recipient_device(
+                        pq_sess.owner_fp,
+                        pq_sess.recipient_device_id,
+                        &pq_rdev,
+                        &rdev_err) &&
+                    pq_rdev.state == "active") {
 
-        const bool allowed = std::find(
-            pq_mf.recipient_device_ids.begin(),
-            pq_mf.recipient_device_ids.end(),
-            sess.recipient_device_id) != pq_mf.recipient_device_ids.end();
+                    const bool allowed =
+                        std::find(
+                            pq_mf.recipient_device_ids.begin(),
+                            pq_mf.recipient_device_ids.end(),
+                            pq_sess.recipient_device_id
+                        ) != pq_mf.recipient_device_ids.end();
 
-        if (!allowed) {
-            audit_event("share_pq_access", "fail", &s, "recipient_not_allowed", 403);
-            res.status = 403;
-            res.set_header("Cache-Control", "no-store");
-            res.set_content("Not allowed\n", "text/plain; charset=utf-8");
-            return;
+                    if (allowed) {
+                        pq_session_ok = true;
+                    }
+                }
+            }
         }
     }
-}
+
     // Resolve to disk
     const std::filesystem::path user_dir = user_dir_for_fp(users, s.owner_fp); // still needed for legacy dir zip path below
 
@@ -29328,40 +29974,119 @@ if (has_pq_manifest) {
 
     const std::filesystem::path abs = rp.abs_path;
 
-    if (has_pq_manifest && pq_mf.kind == "pq_recipient_enrolled_v1") {
-    bool snap_ok = false;
-    std::string snap_err;
-    if (!share_pq.verify_snapshot(abs, pq_mf.snapshot, &snap_ok, &snap_err) || !snap_ok) {
-        audit_event("share_pq_access", "fail", &s, "share_snapshot_mismatch", 409, snap_err);
-        res.status = 409;
+    if (is_pq_share) {
+        std::error_code ec;
+        auto st = std::filesystem::symlink_status(abs, ec);
+        if (ec || !std::filesystem::exists(st) || std::filesystem::is_symlink(st)) {
+            audit_event("share_download", "fail", &s, "not_found", 404);
+            res.status = 404;
+            res.set_header("Cache-Control", "no-store");
+            res.set_content("Not found\n", "text/plain; charset=utf-8");
+            return;
+        }
+
+        if (s.type == "file" && !std::filesystem::is_regular_file(st)) {
+            audit_event("share_download", "fail", &s, "type_mismatch", 404);
+            res.status = 404;
+            res.set_header("Cache-Control", "no-store");
+            res.set_content("Not found\n", "text/plain; charset=utf-8");
+            return;
+        }
+
+        if (s.type == "dir" && !std::filesystem::is_directory(st)) {
+            audit_event("share_download", "fail", &s, "type_mismatch", 404);
+            res.status = 404;
+            res.set_header("Cache-Control", "no-store");
+            res.set_content("Not found\n", "text/plain; charset=utf-8");
+            return;
+        }
+
+        if (s.type != "file") {
+            audit_event("share_pq_access", "fail", &s, "pq_share_requires_file", 400);
+            res.status = 400;
+            res.set_header("Cache-Control", "no-store");
+            res.set_content("Bad request\n", "text/plain; charset=utf-8");
+            return;
+        }
+
+        if (!pq_session_ok) {
+    pqnas::PqShareInviteV1 inv;
+    std::string inv_err;
+
+    if (share_pq.load_latest_invite_for_share(token, &inv, &inv_err) &&
+        inv.state == "pending" &&
+        !pqnas::SharePqStoreV1::iso_expired_local(inv.expires_at)) {
+        audit_event("share_pq_access", "ok", &s, "redirect_pending_invite", 302, inv.invite_id);
+        res.status = 302;
         res.set_header("Cache-Control", "no-store");
-        res.set_content("Share content changed\n", "text/plain; charset=utf-8");
-        return;
-    }
-}
-    std::error_code ec;
-    auto st = std::filesystem::symlink_status(abs, ec);
-    if (ec || !std::filesystem::exists(st) || std::filesystem::is_symlink(st)) {
-        audit_event("share_download", "fail", &s, "not_found", 404);
-        res.status = 404;
-        res.set_header("Cache-Control", "no-store");
-        res.set_content("Not found\n", "text/plain; charset=utf-8");
+        res.set_header("Location", share_pq.invite_url_path(inv.invite_id).c_str());
         return;
     }
 
-    // Optional: enforce stored type matches on-disk type
-    if (s.type == "file" && !std::filesystem::is_regular_file(st)) {
-        audit_event("share_download", "fail", &s, "type_mismatch", 404);
-        res.status = 404;
+    audit_event("share_pq_access", "fail", &s, "recipient_enrollment_required", 403);
+
+    std::ostringstream html;
+    html
+        << "<!doctype html>"
+        << "<html lang='en'>"
+        << "<head>"
+        << "<meta charset='utf-8'>"
+        << "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        << "<title>DNA-Nexus secure share</title>"
+        << "</head>"
+        << "<body style='font-family:system-ui,sans-serif;padding:24px;max-width:760px;margin:auto'>"
+        << "<h2>Recipient enrollment required</h2>"
+        << "<p>This secure share must be opened from an enrolled browser or device.</p>"
+        << "<p>If you received an invite link, open that invite first.</p>"
+        << "</body>"
+        << "</html>";
+
+    res.status = 403;
+    res.set_header("Cache-Control", "no-store");
+    res.set_content(html.str(), "text/html; charset=utf-8");
+    return;
+}
+
+        // best effort: touch last_used_at
+        {
+            std::string touch_err;
+            (void)share_pq.touch_session(
+                pq_sess.session_id,
+                pqnas::SharePqStoreV1::now_iso_utc_local(),
+                &touch_err
+            );
+        }
+
+        const json boot = {
+            {"token", token}, // keep for temporary compatibility
+            {"share_token", token},
+            {"open_api", "/api/v4/shares/pq/open"},
+            {"file_name", std::filesystem::path(s.path).filename().string()},
+            {"recipient_device_id", pq_sess.recipient_device_id}
+        };
+
+        std::ostringstream html;
+        html
+            << "<!doctype html>"
+            << "<html lang='en'>"
+            << "<head>"
+            << "<meta charset='utf-8'>"
+            << "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            << "<title>DNA-Nexus secure share</title>"
+            << "<script>window.PQ_SHARE_OPEN_BOOT=" << boot.dump() << ";</script>"
+            << "<script defer src='/static/share_pq_keys.js'></script>"
+            << "<script defer src='/static/share_pq_open.js'></script>"
+            << "</head>"
+            << "<body>"
+            << "<div id='pqShareOpenApp'>Opening secure share…</div>"
+            << "</body>"
+            << "</html>";
+
+        audit_event("share_pq_access", "ok", &s, "serve_pq_bootstrap", 200);
+
+        res.status = 200;
         res.set_header("Cache-Control", "no-store");
-        res.set_content("Not found\n", "text/plain; charset=utf-8");
-        return;
-    }
-    if (s.type == "dir" && !std::filesystem::is_directory(st)) {
-        audit_event("share_download", "fail", &s, "type_mismatch", 404);
-        res.status = 404;
-        res.set_header("Cache-Control", "no-store");
-        res.set_content("Not found\n", "text/plain; charset=utf-8");
+        res.set_content(html.str(), "text/html; charset=utf-8");
         return;
     }
 
@@ -29402,6 +30127,7 @@ if (has_pq_manifest) {
     dirs = 1;
     {
         std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
+        std::error_code ec;
         ec.clear();
         for (auto it = std::filesystem::recursive_directory_iterator(abs, opts, ec);
              it != std::filesystem::recursive_directory_iterator();
@@ -29525,50 +30251,56 @@ if (has_pq_manifest) {
 
 
 srv.Get(R"(/pq/invite/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Response& res) {
-    const std::string invite_id = req.matches[1].str();
+        const std::string invite_id = req.matches[1].str();
 
-    pqnas::PqShareInviteV1 inv;
-    std::string err;
-    if (!share_pq.load_invite(invite_id, &inv, &err) || inv.state != "pending") {
-        res.status = 404;
+        pqnas::PqShareInviteV1 inv;
+        std::string err;
+        if (!share_pq.load_invite(invite_id, &inv, &err) || inv.state != "pending") {
+            res.status = 404;
+            res.set_header("Cache-Control", "no-store");
+            res.set_content("Invite not found\n", "text/plain; charset=utf-8");
+            return;
+        }
+
+        if (pqnas::SharePqStoreV1::iso_expired_local(inv.expires_at)) {
+            res.status = 410;
+            res.set_header("Cache-Control", "no-store");
+            res.set_content("Invite expired\n", "text/plain; charset=utf-8");
+            return;
+        }
+
+        const json boot = {
+            {"invite_id", invite_id},
+            {"expires_at", inv.expires_at},
+            {"label_hint", inv.label_hint}
+        };
+
+        std::ostringstream html;
+        html
+            << "<!doctype html>"
+            << "<html lang='en'>"
+            << "<head>"
+            << "<meta charset='utf-8'>"
+            << "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            << "<title>DNA-Nexus secure share</title>"
+            << "<script>window.PQ_SHARE_INVITE_BOOT=" << boot.dump() << ";</script>"
+            << "<script defer src='/static/share_pq_keys.js'></script>"
+            << "<script defer src='/static/share_pq_invite.js'></script>"
+            << "</head>"
+            << "<body>"
+            << "<div id='pqShareInviteApp'>Loading…</div>"
+            << "</body>"
+            << "</html>";
+
+        res.status = 200;
         res.set_header("Cache-Control", "no-store");
-        res.set_content("Invite not found\n", "text/plain; charset=utf-8");
-        return;
-    }
-
-    if (pqnas::SharePqStoreV1::iso_expired_local(inv.expires_at)) {
-        res.status = 410;
-        res.set_header("Cache-Control", "no-store");
-        res.set_content("Invite expired\n", "text/plain; charset=utf-8");
-        return;
-    }
-
-    const json boot = {
-        {"invite_id", invite_id},
-        {"expires_at", inv.expires_at},
-        {"label_hint", inv.label_hint}
-    };
-
-    std::ostringstream html;
-    html
-        << "<!doctype html>"
-        << "<html lang='en'>"
-        << "<head>"
-        << "<meta charset='utf-8'>"
-        << "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        << "<title>DNA-Nexus secure share</title>"
-        << "<script>window.PQ_SHARE_INVITE_BOOT=" << boot.dump() << ";</script>"
-        << "<script defer src='/static/share_pq_invite.js'></script>"
-        << "</head>"
-        << "<body>"
-        << "<div id='pqShareInviteApp'>Loading…</div>"
-        << "</body>"
-        << "</html>";
-
-    res.status = 200;
-    res.set_header("Cache-Control", "no-store");
-    res.set_content(html.str(), "text/html; charset=utf-8");
+        res.set_content(html.str(), "text/html; charset=utf-8");
 });
+
+    // ************************* END OF ROUTES *************************** //
+
+
+
 
 	// ---- Start background workers ----
 

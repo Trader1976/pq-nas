@@ -36,36 +36,15 @@
         return looksMobile() ? "My phone browser" : "This browser";
     }
 
-    function bytesToBase64Url(bytes) {
-        let bin = "";
-        const chunk = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunk) {
-            const part = bytes.subarray(i, i + chunk);
-            bin += String.fromCharCode.apply(null, Array.from(part));
-        }
-        return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-    }
-
-    // Temporary plumbing stub:
-    // this is NOT a real ML-KEM keypair yet.
-    // It lets the browser enrollment flow work end-to-end with the current backend.
-    function generatePlaceholderMlKem768PublicKeyB64() {
-        const bytes = new Uint8Array(1184);
-        crypto.getRandomValues(bytes);
-        return bytesToBase64Url(bytes);
-    }
-
     async function enroll(inviteId, deviceLabel, statusEl, submitBtn) {
         if (!inviteId) throw new Error("Missing invite id");
         if (!deviceLabel) throw new Error("Please enter a device name");
-        if (!window.crypto || !window.crypto.getRandomValues) {
-            throw new Error("This browser cannot generate a device key");
-        }
+        if (!window.PqShareKeysV1) throw new Error("PQ key helper not loaded");
 
         statusEl.textContent = "Preparing secure browser enrollment…";
         submitBtn.disabled = true;
 
-        const publicKeyB64 = generatePlaceholderMlKem768PublicKeyB64();
+        const pending = await window.PqShareKeysV1.generatePendingEnrollment(inviteId);
 
         statusEl.textContent = "Enrolling this browser…";
 
@@ -80,8 +59,8 @@
             body: JSON.stringify({
                 invite_id: inviteId,
                 device_label: deviceLabel,
-                kem_alg: "ml-kem-768",
-                public_key_b64: publicKeyB64
+                kem_alg: pending.kem_alg,          // "X25519" for current MVP
+                public_key_b64: pending.public_key_b64
             })
         });
 
@@ -92,6 +71,12 @@
                 : `HTTP ${r.status}`;
             throw new Error(msg || "Enrollment failed");
         }
+
+        if (!j.recipient_device_id) {
+            throw new Error("Enrollment succeeded but recipient_device_id is missing");
+        }
+
+        await window.PqShareKeysV1.claimPendingEnrollment(inviteId, j.recipient_device_id);
 
         statusEl.textContent = "Enrollment complete. Opening share…";
 
@@ -290,7 +275,8 @@
           <div id="status" class="status"></div>
 
           <div class="small">
-            Current build note: browser enrollment plumbing is being wired first. A full browser-side PQ key implementation can be swapped in later without changing this page flow.
+            Current crypto mode in this MVP uses real browser-generated X25519 keys for local decrypt flow.
+            PQ-native browser ML-KEM can be added later behind the same page flow.
           </div>
         </div>
       </div>

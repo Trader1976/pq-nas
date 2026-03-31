@@ -137,6 +137,16 @@ public:
     static bool sha256_file_hex_local(const std::filesystem::path& abs,
                                       std::string* out_hex,
                                       std::string* err);
+    bool find_active_recipient_device_by_public_key(
+    const std::string& owner_fp,
+    const std::string& kem_alg,
+    const std::string& public_key_b64,
+    PqShareRecipientDeviceV1* out,
+    std::string* err) const;
+    bool list_recipient_devices_for_owner(
+    const std::string& owner_fp,
+    std::vector<PqShareRecipientDeviceV1>* out,
+    std::string* err) const;
 
 private:
     mutable std::mutex mu_;

@@ -756,6 +756,113 @@ bool SharePqStoreV1::save_recipient_device(const PqShareRecipientDeviceV1& d, st
                                    err);
 }
 
+    bool SharePqStoreV1::find_active_recipient_device_by_public_key(
+    const std::string& owner_fp,
+    const std::string& kem_alg,
+    const std::string& public_key_b64,
+    PqShareRecipientDeviceV1* out,
+    std::string* err) const {
+
+    if (out) *out = PqShareRecipientDeviceV1{};
+    if (err) err->clear();
+
+    if (owner_fp.empty() || public_key_b64.empty()) {
+        if (err) *err = "missing owner_fp or public_key_b64";
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lk(mu_);
+
+    const auto dir = recipients_dir() / owner_fp;
+
+    std::error_code ec;
+    if (!std::filesystem::exists(dir, ec)) {
+        if (ec && err) *err = ec.message();
+        return false;
+    }
+
+    for (const auto& de : std::filesystem::directory_iterator(dir, ec)) {
+        if (ec) {
+            if (err) *err = ec.message();
+            return false;
+        }
+        if (!de.is_regular_file()) continue;
+
+        std::string text;
+        std::string read_err;
+        if (!read_text_file_local(de.path(), &text, &read_err)) continue;
+
+        try {
+            const json j = json::parse(text);
+            PqShareRecipientDeviceV1 d;
+            if (!recipient_from_json(j, &d)) continue;
+
+            if (d.owner_fp != owner_fp) continue;
+            if (d.state != "active") continue;
+            if (!kem_alg.empty() && d.kem_alg != kem_alg) continue;
+            if (d.public_key_b64 != public_key_b64) continue;
+
+            if (out) *out = std::move(d);
+            return true;
+        } catch (...) {
+            continue;
+        }
+    }
+
+    return false;
+}
+
+    bool SharePqStoreV1::list_recipient_devices_for_owner(
+    const std::string& owner_fp,
+    std::vector<PqShareRecipientDeviceV1>* out,
+    std::string* err) const {
+
+    if (out) out->clear();
+    if (err) err->clear();
+
+    if (owner_fp.empty()) {
+        if (err) *err = "missing owner_fp";
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lk(mu_);
+
+    const auto dir = recipients_dir() / owner_fp;
+
+    std::error_code ec;
+    if (!std::filesystem::exists(dir, ec)) {
+        if (ec && err) *err = ec.message();
+        return false;
+    }
+
+    std::vector<PqShareRecipientDeviceV1> items;
+
+    for (const auto& de : std::filesystem::directory_iterator(dir, ec)) {
+        if (ec) {
+            if (err) *err = ec.message();
+            return false;
+        }
+        if (!de.is_regular_file()) continue;
+
+        std::string text;
+        std::string read_err;
+        if (!read_text_file_local(de.path(), &text, &read_err)) continue;
+
+        try {
+            const json j = json::parse(text);
+            PqShareRecipientDeviceV1 d;
+            if (!recipient_from_json(j, &d)) continue;
+            if (d.owner_fp != owner_fp) continue;
+            items.push_back(std::move(d));
+        } catch (...) {
+            continue;
+        }
+    }
+
+    if (out) *out = std::move(items);
+    return true;
+}
+
 bool SharePqStoreV1::revoke_recipient_device(const std::string& owner_fp,
                                              const std::string& recipient_device_id,
                                              std::string* err) {
@@ -888,9 +995,9 @@ bool SharePqStoreV1::create_recipient_enrolled_share(const std::string& share_to
     mf.expires_at = expires_at;
     mf.state = "pending_enrollment";
     mf.snapshot = snap;
-    mf.kem_alg = "ml-kem-768";
-    mf.sig_alg = "ml-dsa-65";
-    mf.crypto_backend = "pending";
+    mf.kem_alg = "X25519";
+    mf.sig_alg.clear();
+    mf.crypto_backend = "x25519_aes256gcm_v1";
 
     PqShareInviteV1 inv;
     inv.version = 1;

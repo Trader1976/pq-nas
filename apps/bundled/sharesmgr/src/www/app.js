@@ -200,7 +200,56 @@
         if (st === "expired") return `<span class="badge badgeDanger">expired</span>`;
         return `<span class="badge">${escapeHtml(st || "unknown")}</span>`;
     }
+    function shortenMiddle(s, max = 24) {
+        s = String(s || "");
+        if (!s || s.length <= max) return s;
+        const keep = Math.max(6, Math.floor((max - 3) / 2));
+        return s.slice(0, keep) + "..." + s.slice(s.length - keep);
+    }
 
+    function firstPqRecipient(s) {
+        if (Array.isArray(s?.recipients) && s.recipients.length) return s.recipients[0];
+        if (Array.isArray(s?.recipient_device_ids) && s.recipient_device_ids.length) {
+            return {
+                recipient_device_id: s.recipient_device_ids[0],
+                label: "",
+                note: "",
+                state: ""
+            };
+        }
+        return null;
+    }
+
+    function pqRecipientInfoHtml(s) {
+        const r = firstPqRecipient(s);
+        if (!r) return "";
+
+        const label = String(r.label || "").trim();
+        const note = String(r.note || "").trim();
+        const rid = String(r.recipient_device_id || "").trim();
+        const extraCount = Math.max(0, (Number(s?.recipient_count || 0) - 1));
+
+        let html = `<div style="margin-top:6px;display:flex;flex-direction:column;gap:4px">`;
+
+        if (label) {
+            html += `<div><span class="badge badgeOk">${escapeHtml(label)}</span></div>`;
+        }
+
+        if (note) {
+            html += `<div style="font-size:12px;color:var(--fg-dim, #9aa4b2)">${escapeHtml(note)}</div>`;
+        }
+
+        if (rid) {
+            html += `<div style="font-size:12px;color:var(--fg-dim, #9aa4b2)" class="mono">recipient ${escapeHtml(shortenMiddle(rid, 26))}</div>`;
+        }
+
+        if (extraCount > 0) {
+            html += `<div style="font-size:12px;color:var(--fg-dim, #9aa4b2)">+${extraCount} more recipient${extraCount === 1 ? "" : "s"}</div>`;
+        }
+
+        html += `</div>`;
+        return html;
+    }
     function normalStateBadgeHtml(s) {
         if (isExpired(s)) return `<span class="badge badgeDanger">expired</span>`;
         if (s.expires_at) return `<span class="badge">active</span>`;
@@ -289,7 +338,28 @@
             throw new Error(msg);
         }
     }
+    async function updatePqRecipient(shareToken, recipientDeviceId, patch) {
+        const body = {
+            share_token: shareToken,
+            recipient_device_id: recipientDeviceId
+        };
 
+        if (Object.prototype.hasOwnProperty.call(patch || {}, "label")) {
+            body.label = patch.label;
+        }
+        if (Object.prototype.hasOwnProperty.call(patch || {}, "note")) {
+            body.note = patch.note;
+        }
+
+        const { r, j } = await apiJson("POST", "/api/v4/shares/pq/recipient/update", body);
+        if (!r.ok || !j || !j.ok) {
+            const msg = (j && (j.message || j.error))
+                ? `${j.error || ""} ${j.message || ""}`.trim()
+                : `recipient update failed (${r.status})`;
+            throw new Error(msg);
+        }
+        return j.recipient || null;
+    }
     async function revokeExpired() {
         const exp = expiredShares(shares);
 
@@ -340,6 +410,16 @@
 
         if (qq) {
             out = out.filter(s => {
+                const recipientParts = Array.isArray(s?.recipients)
+                    ? s.recipients.map(r => [
+                        r?.recipient_device_id || "",
+                        r?.label || "",
+                        r?.note || "",
+                        r?.state || "",
+                        r?.kem_alg || ""
+                    ].join("\n")).join("\n")
+                    : "";
+
                 const parts = [
                     s.path || "",
                     s.token || "",
@@ -349,7 +429,8 @@
                     s.pq_state || "",
                     s.mode || "",
                     s.pq_mode || "",
-                    s.kind || ""
+                    s.kind || "",
+                    recipientParts
                 ].join("\n").toLowerCase();
                 return parts.includes(qq);
             });
@@ -508,7 +589,13 @@
         for (const s of list) {
             const tr = document.createElement("tr");
 
-            tr.appendChild(td(s.path || "", "colPath mono"));
+            tr.appendChild(
+                tdHtml(
+                    `${escapeHtml(s.path || "")}${pqRecipientInfoHtml(s)}`,
+                    "colPath"
+                )
+            );
+
             tr.appendChild(tdHtml(pqStateBadgeHtml(s), "colState"));
             tr.appendChild(td(fmtTsMaybe(s.expires_at), "colExp"));
             tr.appendChild(td(fmtTsMaybe(s.created_at), "colCreated"));
@@ -544,6 +631,35 @@
 
             const wrap = document.createElement("div");
             wrap.className = "actions";
+
+            const recipient = firstPqRecipient(s);
+            if (recipient && recipient.recipient_device_id) {
+                wrap.appendChild(makeActionButton("Rename recipient", "btn", async (e) => {
+                    const btn = e.currentTarget;
+                    const curLabel = String(recipient.label || "").trim();
+                    const curNote = String(recipient.note || "").trim();
+
+                    const newLabel = prompt("Recipient label", curLabel);
+                    if (newLabel === null) return;
+
+                    const newNote = prompt("Recipient note", curNote);
+                    if (newNote === null) return;
+
+                    btn.disabled = true;
+                    try {
+                        await updatePqRecipient(s.token, recipient.recipient_device_id, {
+                            label: String(newLabel),
+                            note: String(newNote)
+                        });
+                        toast("ok", "Recipient updated.");
+                        await loadShares();
+                    } catch (err) {
+                        toast("err", String(err && err.message ? err.message : err));
+                    } finally {
+                        btn.disabled = false;
+                    }
+                }));
+            }
 
             if (inviteAbs) {
                 wrap.appendChild(makeActionButton("Copy invite", "btn", async () => {
