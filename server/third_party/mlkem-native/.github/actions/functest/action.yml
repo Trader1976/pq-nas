@@ -1,0 +1,100 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT
+
+name: Functional tests
+description: Run functional tests
+
+inputs:
+  nix-shell:
+    description: Run in the specified Nix environment if exists
+    default: "ci"
+  nix-cache:
+    description: Determine whether to enable nix cache
+    default: 'false'
+  nix-verbose:
+    description: Determine wether to suppress nix log or not
+    default: 'false'
+  custom_shell:
+    description: The shell to use. Only relevant if no nix-shell specified
+    default: "bash"
+  gh_token:
+    description: Github access token to use
+    required: true
+  cflags:
+    description: CFLAGS to pass to compilation
+    default: ""
+  cross_prefix:
+    description: Binary prefix for cross compilation
+    default: ""
+  exec_wrapper:
+    description: Binary wrapper for execution (e.g. QEMU)
+    default: ""
+  opt:
+    description: Whether to build opt/non-opt binaries or all (all | opt | no_opt)
+    default: "all"
+  func:
+    description: Determine whether to run functional test or not
+    default: "true"
+  kat:
+    description: Determine whether to run kat test or not
+    default: "true"
+  acvp:
+    description: Determine whether to run acvp test or not
+    default: "true"
+  examples:
+    description: Determine whether to run examples or not
+    default: "true"
+  check_namespace:
+    description: Determine whether to check namespacing or not
+    default: "true"
+runs:
+  using: composite
+  steps:
+      - name: Preprocess
+        shell: bash
+        run: |
+          arch=$(uname -m)
+          echo MODE="${{ inputs.cross_prefix == '' && 'native' || 'cross' }}" >> $GITHUB_ENV
+          echo FUNC="${{ inputs.func == 'true' && 'func' || 'no-func' }}" >> $GITHUB_ENV
+          echo KAT="${{ inputs.kat == 'true' && 'kat' || 'no-kat' }}" >> $GITHUB_ENV
+          echo ACVP="${{ inputs.acvp == 'true' && 'acvp' || 'no-acvp' }}" >> $GITHUB_ENV
+          echo EXAMPLES="${{ inputs.examples == 'true' && 'examples' || 'no-examples' }}" >> $GITHUB_ENV
+      - name: Setup nix
+        uses: ./.github/actions/setup-shell
+        with:
+          nix-shell: ${{ inputs.nix-shell }}
+          nix-cache: ${{ inputs.nix-cache }}
+          nix-verbose: ${{ inputs.nix-verbose }}
+          gh_token: ${{ inputs.gh_token }}
+          custom_shell: ${{ inputs.custom_shell }}
+      - name: System info
+        shell: ${{ env.SHELL }}
+        run: |
+          ARCH=$(uname -m)
+          echo <<-EOF
+            ## Setup
+            Architecture: $ARCH
+            - $(uname -a)
+            - $(nix --version || echo 'nix not present')
+            - $(bash --version | grep -m1 "")
+            - $(python3 --version)
+            - $(${{ inputs.cross_prefix }}${CC} --version | grep -m1 "")
+          EOF
+          cat >> $GITHUB_STEP_SUMMARY <<-EOF
+            ## Setup
+            Architecture: $ARCH
+            - $(uname -a)
+            - $(nix --version || echo 'nix not present')
+            - $(bash --version | grep -m1 "")
+            - $(python3 --version)
+            - $(${{ inputs.cross_prefix }}${CC} --version | grep -m1 "")
+          EOF
+      - name: ${{ env.MODE }} ${{ inputs.opt }} tests (${{ env.FUNC }}, ${{ env.KAT }}, ${{ env.EXAMPLES }})
+        shell: ${{ env.SHELL }}
+        run: |
+          make clean
+          ./scripts/tests all ${{ inputs.check_namespace == 'true' && '--check-namespace' || ''}} --exec-wrapper="${{ inputs.exec_wrapper }}" --cross-prefix="${{ inputs.cross_prefix }}" --cflags="${{ inputs.cflags }}" --opt=${{ inputs.opt }} --${{ env.FUNC }} --${{ env.KAT }} --${{ env.ACVP }} --${{ env.EXAMPLES }} -v
+      - name: Post ${{ env.MODE }} Tests
+        shell: ${{ env.SHELL }}
+        if: success() || failure()
+        run: |
+          make clean

@@ -1,0 +1,140 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT
+
+name: Bench
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+    types: [ "labeled" ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  bench:
+    permissions:
+      contents: write
+      pull-requests: write
+    name: ${{ matrix.target.name }}
+    strategy:
+      fail-fast: true
+      matrix:
+       target:
+        - system: rpi4
+          name: Arm Cortex-A72 (Raspberry Pi 4) benchmarks
+          bench_pmu: PMU
+          archflags: -mcpu=cortex-a72 -DMLK_SYS_AARCH64_SLOW_BARREL_SHIFTER
+          cflags: "-flto -DMLK_FORCE_AARCH64"
+          bench_extra_args: ""
+        - system: rpi5
+          name: Arm Cortex-A76 (Raspberry Pi 5) benchmarks
+          bench_pmu: PERF
+          archflags: "-mcpu=cortex-a76 -march=armv8.2-a"
+          cflags: "-flto -DMLK_FORCE_AARCH64"
+          bench_extra_args: ""
+        - system: a55
+          name: Arm Cortex-A55 (Snapdragon 888) benchmarks
+          bench_pmu: PERF
+          archflags: "-mcpu=cortex-a55 -march=armv8.2-a"
+          cflags: "-flto -static -DMLK_FORCE_AARCH64 -DMLK_CONFIG_FIPS202_BACKEND_FILE=\\\\\\\"fips202/native/aarch64/x1_scalar.h\\\\\\\""
+          bench_extra_args: -w exec-on-a55
+        - system: bpi
+          name: SpacemiT K1 8 (Banana Pi F3) benchmarks
+          bench_pmu: PERF
+          archflags: "-march=rv64imafdcv_zicsr_zifencei"
+          cflags: "-static"
+          bench_extra_args: -w exec-on-bpi
+          cross_prefix: riscv64-unknown-linux-gnu-
+        - system: m1-mac-mini
+          name: Mac Mini (M1, 2020) benchmarks
+          bench_pmu: MAC
+          archflags: "-mcpu=apple-m1 -march=armv8.4-a+sha3"
+          cflags: "-flto"
+          bench_extra_args: "-r"
+    if: github.repository_owner == 'pq-code-package' && (github.event.label.name == 'benchmark' || github.ref == 'refs/heads/main')
+    runs-on: self-hosted-${{ matrix.target.system }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/bench
+        with:
+          name: ${{ matrix.target.name }}
+          cflags: ${{ matrix.target.cflags }}
+          archflags: ${{ matrix.target.archflags }}
+          perf: ${{ matrix.target.bench_pmu }}
+          store_results: ${{ github.repository_owner == 'pq-code-package' && github.ref == 'refs/heads/main' }}
+          bench_extra_args: ${{ matrix.target.bench_extra_args }}
+          gh_token: ${{ secrets.AWS_GITHUB_TOKEN }}
+          nix-shell: ${{ matrix.target.cross_prefix != '' && 'ci-cross' || 'ci-bench' }}
+          cross_prefix: ${{ matrix.target.cross_prefix }}
+
+  ec2_all:
+    name: ${{ matrix.target.name }} ${{ matrix.opt.name }}
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: Graviton2
+            ec2_instance_type: t4g.small
+            ec2_ami: ubuntu-latest (aarch64)
+            archflags: -mcpu=cortex-a76 -march=armv8.2-a
+            cflags: "-flto -DMLK_FORCE_AARCH64"
+            perf: PERF
+          - name: Graviton3
+            ec2_instance_type: c7g.medium
+            ec2_ami: ubuntu-latest (aarch64)
+            archflags: -march=armv8.4-a+sha3
+            cflags: "-flto -DMLK_FORCE_AARCH64"
+            perf: PERF
+          - name: Graviton4
+            ec2_instance_type: c8g.medium
+            ec2_ami: ubuntu-latest (aarch64)
+            archflags: -march=armv9-a+sha3
+            cflags: "-flto -DMLK_FORCE_AARCH64"
+            perf: PERF
+          - name: AMD EPYC 4th gen (c7a)
+            ec2_instance_type: c7a.medium
+            ec2_ami: ubuntu-latest (x86_64)
+            archflags: -mavx2 -mbmi2 -mpopcnt -maes -march=znver4
+            cflags: "-flto -DMLK_FORCE_X86_64"
+            perf: PMU
+          - name: Intel Xeon 4th gen (c7i)
+            ec2_instance_type: c7i.metal-24xl
+            ec2_ami: ubuntu-latest (x86_64)
+            archflags: -mavx2 -mbmi2 -mpopcnt -maes -march=sapphirerapids
+            cflags: "-flto -DMLK_FORCE_X86_64"
+            perf: PMU
+          - name: AMD EPYC 3rd gen (c6a)
+            ec2_instance_type: c6a.large
+            ec2_ami: ubuntu-latest (x86_64)
+            archflags: -mavx2 -mbmi2 -mpopcnt -maes -march=znver3
+            cflags: "-flto -DMLK_FORCE_X86_64"
+            perf: PMU
+          - name: Intel Xeon 3rd gen (c6i)
+            ec2_instance_type: c6i.large
+            ec2_ami: ubuntu-latest (x86_64)
+            archflags: -mavx2 -mbmi2 -mpopcnt -maes -march=icelake-server
+            cflags: "-flto -DMLK_FORCE_X86_64"
+            perf: PMU
+    uses: ./.github/workflows/bench_ec2_reusable.yml
+    if: github.repository_owner == 'pq-code-package' && (github.event.label.name == 'benchmark' || github.ref == 'refs/heads/main')
+    with:
+      ec2_instance_type: ${{ matrix.target.ec2_instance_type }}
+      ec2_ami: ${{ matrix.target.ec2_ami }}
+      archflags: ${{ matrix.target.archflags }}
+      cflags: ${{ matrix.target.cflags }}
+      opt: "all"
+      store_results: ${{ github.repository_owner == 'pq-code-package' && github.ref == 'refs/heads/main' }} # Only store optimized results
+      name: ${{ matrix.target.name }}
+      perf: ${{ matrix.target.perf }}
+    secrets: inherit

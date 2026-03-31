@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT
+
+name: HOL-Light
+permissions:
+  contents: read
+on:
+  push:
+    branches: ["main"]
+    paths:
+     - '.github/workflows/hol_light.yml'
+     - 'proofs/hol_light/arm/Makefile'
+     - 'proofs/hol_light/arm/**/*.S'
+     - 'proofs/hol_light/arm/**/*.ml'
+     - 'flake.nix'
+     - 'flake.lock'
+     - 'nix/hol_light/*'
+     - 'nix/s2n_bignum/*'
+  pull_request:
+    branches: ["main"]
+    paths:
+      - '.github/workflows/hol_light.yml'
+      - 'proofs/hol_light/arm/Makefile'
+      - 'proofs/hol_light/arm/**/*.S'
+      - 'proofs/hol_light/arm/**/*.ml'
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'nix/hol_light/*'
+      - 'nix/s2n_bignum/*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hol_light_proofs:
+    strategy:
+      fail-fast: false
+      matrix:
+        proof:
+          # Dependencies on {name}.{S,ml} are implicit
+          - name: mlkem_ntt
+            needs: ["mlkem_specs.ml", "mlkem_utils.ml", "mlkem_zetas.ml"]
+          - name: mlkem_intt
+            needs: ["mlkem_specs.ml", "mlkem_utils.ml", "mlkem_zetas.ml"]
+          - name: mlkem_poly_tomont
+            needs: ["mlkem_specs.ml", "mlkem_utils.ml"]
+          - name: mlkem_poly_mulcache_compute
+            needs: ["mlkem_specs.ml", "mlkem_utils.ml", "mlkem_zetas.ml"]
+          - name: mlkem_poly_reduce
+            needs: ["mlkem_specs.ml", "mlkem_utils.ml"]
+          - name: mlkem_poly_basemul_acc_montgomery_cached_k2
+            needs: ["mlkem_specs.ml", "mlkem_utils.ml"]
+          - name: mlkem_poly_basemul_acc_montgomery_cached_k3
+            needs: ["mlkem_specs.ml", "mlkem_utils.ml"]
+          - name: mlkem_poly_basemul_acc_montgomery_cached_k4
+            needs: ["mlkem_specs.ml", "mlkem_utils.ml"]
+          - name: mlkem_poly_tobytes
+            needs: ["mlkem_specs.ml", "mlkem_utils.ml" ]
+          - name: mlkem_rej_uniform
+            needs: ["mlkem_specs.ml", "mlkem_utils.ml", "mlkem_rej_uniform_table.ml"]
+          - name: keccak_f1600_x1_scalar
+            needs: ["keccak_specs.ml"]
+          - name: keccak_f1600_x1_v84a
+            needs: ["keccak_specs.ml"]
+          - name: keccak_f1600_x2_v84a
+            needs: ["keccak_specs.ml"]
+          - name: keccak_f1600_x4_v8a_v84a_scalar
+            needs: ["keccak_specs.ml"]
+          - name: keccak_f1600_x4_v8a_scalar
+            needs: ["keccak_specs.ml"]
+    name: HOL Light proof for ${{ matrix.proof.name }}.S
+    runs-on: pqcp-arm64
+    if: github.repository_owner == 'pq-code-package' && !github.event.pull_request.head.repo.fork
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@ed68ef82c095e0d48ec87eccea555d944a631a4c # v46.0.5
+      - name: Check if dependencies changed
+        id: check_run
+        shell: bash
+        run: |
+          run_needed=0
+          changed_files="${{ steps.changed-files.outputs.all_changed_files }}"
+          dependencies="${{ join(matrix.proof.needs, ' ') }} ${{ format('{0}.S {0}.ml', matrix.proof.name) }}"
+          for changed in $changed_files; do
+            for needs in $dependencies; do
+               if [[ "$changed" == *"$needs" ]]; then
+                 run_needed=1
+               fi
+            done
+          done
+
+          # Always re-run upon change to nix files for HOL-Light
+          if [[ "$changed_files" == *"nix/"* ]] || [[ "$changed_files" == *"hol_light.yml"* ]] || [[ "$changed_files" == *"flake"* ]] || [[ "$changed_files" == *"proofs/hol_light/arm/Makefile"* ]]; then
+            run_needed=1
+          fi
+
+          echo "run_needed=${run_needed}" >> $GITHUB_OUTPUT
+      - uses: ./.github/actions/setup-shell
+        if: |
+          steps.check_run.outputs.run_needed == '1'
+        with:
+          gh_token: ${{ secrets.GITHUB_TOKEN }}
+          nix-shell: 'hol_light'
+          script: |
+            tests hol_light -p ${{ matrix.proof.name }} --verbose
