@@ -120,7 +120,21 @@ target_link_libraries(pqnas_verify_v4 PUBLIC
         OpenSSL::Crypto
         dl
 )
+# -----------------------------------------------------------------------------
+# Vendored ML-KEM-768 backend (portable C, first integration)
+# -----------------------------------------------------------------------------
+add_library(pqnas_mlkem_native_obj OBJECT
+        server/third_party/mlkem-native/mlkem/mlkem_native.c
+)
 
+target_include_directories(pqnas_mlkem_native_obj PRIVATE
+        ${CMAKE_SOURCE_DIR}/server/third_party/mlkem-native
+        ${CMAKE_SOURCE_DIR}/server/src
+)
+
+target_compile_definitions(pqnas_mlkem_native_obj PRIVATE
+        MLK_CONFIG_FILE=\"pqnas_mlkem_native_config_768.h\"
+)
 # -----------------------------------------------------------------------------
 # Server (C++ / httplib)
 # -----------------------------------------------------------------------------
@@ -157,6 +171,7 @@ add_executable(pqnas_server
         server/src/share_pq_crypto_v1.cpp
         server/src/share_pq_mlkem_v1.cpp
         server/src/share_pq_mlkem_v1.h
+        $<TARGET_OBJECTS:pqnas_mlkem_native_obj>
 )
 
 # Treat warnings as errors for the server (security-sensitive)
@@ -168,6 +183,7 @@ target_include_directories(pqnas_server PRIVATE
         ${CMAKE_SOURCE_DIR}/core
         ${CMAKE_SOURCE_DIR}/server/include
         ${CMAKE_SOURCE_DIR}/server/third_party
+        ${CMAKE_SOURCE_DIR}/server/third_party/mlkem-native
         ${SODIUM_INCLUDE_DIRS}
         ${QRENCODE_INCLUDE_DIRS}
 )

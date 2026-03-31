@@ -29,5 +29,7 @@ namespace pqnas {
                                  const std::vector<std::uint8_t>& ciphertext,
                                  std::vector<std::uint8_t>* out_shared_secret,
                                  std::string* err);
+    
+    bool mlkem768_selftest_v1(std::string* err);
 
 } // namespace pqnas
