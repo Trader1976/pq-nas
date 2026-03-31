@@ -2344,17 +2344,22 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return 0;
   }
 
-  async function createShareLinkFor(relPath, type, expiresSec) {
+  async function createShareLinkFor(relPath, type, expiresSec, opts = {}) {
+    const body = {
+      path: relPath,
+      expires_sec: expiresSec,
+      mode: opts.mode || "standard"
+    };
+
+    if (opts.inviteExpiresSec != null) body.invite_expires_sec = opts.inviteExpiresSec;
+    if (opts.recipientLabelHint) body.recipient_label_hint = opts.recipientLabelHint;
+
     const r = await fetch("/api/v4/shares/create", {
       method: "POST",
       credentials: "include",
       cache: "no-store",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({
-        path: relPath,
-        type,
-        expires_sec: expiresSec
-      })
+      body: JSON.stringify(body)
     });
 
     const j = await r.json().catch(() => null);
@@ -2365,9 +2370,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       throw new Error(msg || "share create failed");
     }
 
-    const url = j.url || "";
-    if (!url) throw new Error("server did not return url");
-    return `${window.location.origin}${url}`;
+    return j;
   }
 
   async function copyText(s) {
@@ -2385,22 +2388,32 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
   }
 
-  function openShareDialogFor(item) {
+  function openShareDialogFor(item, opts = {}) {
     const rel = currentRelPathFor(item);
     const type = (item.type === "dir") ? "dir" : "file";
+    const isPq = !!(opts && opts.forceMode === "pq_recipient_enrolled_v1");
 
     const existing = existingShareFor(rel, type);
 
-    if (shareTitle) shareTitle.textContent = "Share link";
+    if (shareTitle) {
+      shareTitle.textContent = isPq
+          ? "PQ recipient-enrolled share"
+          : "Share link";
+    }
+
     if (sharePath) sharePath.textContent = "/" + (rel || "");
-    if (shareStatus) shareStatus.textContent = "";
+    if (shareStatus) {
+      shareStatus.textContent = isPq
+          ? "Creates an invite URL for recipient enrollment. Files only."
+          : "";
+    }
+
     if (shareOutWrap) shareOutWrap.classList.add("hidden");
     if (shareOut) shareOut.value = "";
-
     if (shareExpiry) shareExpiry.value = "24h";
 
-    if (existing) {
-      const full = `${window.location.origin}${existing.url || ("/s/" + (existing.token || ""))}`;
+    if (existing && !isPq) {
+      const full = fullShareUrl(existing.url || ("/s/" + (existing.token || "")));
       if (shareOut) shareOut.value = full;
       if (shareOutWrap) shareOutWrap.classList.remove("hidden");
 
@@ -2409,13 +2422,18 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
       if (shareCreateBtn) shareCreateBtn.textContent = "Create new link (rotate)…";
     } else {
-      if (shareCreateBtn) shareCreateBtn.textContent = "Create link";
+      if (shareCreateBtn) {
+        shareCreateBtn.textContent = isPq
+            ? "Create PQ invite"
+            : "Create link";
+      }
     }
 
     if (shareCreateBtn) {
       shareCreateBtn.onclick = async () => {
         try {
-          if (shareStatus) shareStatus.textContent = "Creating…";
+          if (shareStatus) shareStatus.textContent = isPq ? "Creating PQ invite…" : "Creating…";
+
           const expiresSec = expiresSecFromPreset(shareExpiry ? shareExpiry.value : "24h");
 
           if (existing && existing.token) {
@@ -2423,16 +2441,47 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
           }
 
           const shareType = type === "folder" ? "dir" : type;
-          const link = await createShareLinkFor(rel, shareType, expiresSec);
 
-          if (shareOut) shareOut.value = link;
+          const resp = await createShareLinkFor(
+              rel,
+              shareType,
+              expiresSec,
+              isPq
+                  ? {
+                    mode: "pq_recipient_enrolled_v1",
+                    inviteExpiresSec: 24 * 3600
+                  }
+                  : {
+                    mode: "standard"
+                  }
+          );
+
+          const publicUrl = fullShareUrl(resp.url || ("/s/" + (resp.token || "")));
+          const inviteUrl = resp.invite_url ? fullShareUrl(resp.invite_url) : "";
+
+          const outUrl = (isPq && inviteUrl) ? inviteUrl : publicUrl;
+
+          if (shareOut) shareOut.value = outUrl;
           if (shareOutWrap) shareOutWrap.classList.remove("hidden");
-          if (shareStatus) shareStatus.textContent = existing ? "New link created (old revoked)." : "Link created.";
+
+          if (shareStatus) {
+            if (isPq) {
+              shareStatus.textContent = inviteUrl
+                  ? "PQ invite created. Copy this invite URL and send it to the recipient."
+                  : "PQ share created.";
+            } else {
+              shareStatus.textContent = existing
+                  ? "New link created (old revoked)."
+                  : "Link created.";
+            }
+          }
 
           await refreshSharesCache();
           await load();
         } catch (e) {
-          if (shareStatus) shareStatus.textContent = `Error: ${String(e && e.message ? e.message : e)}`;
+          if (shareStatus) {
+            shareStatus.textContent = `Error: ${String(e && e.message ? e.message : e)}`;
+          }
         }
       };
     }
@@ -2759,7 +2808,6 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     const rel = currentRelPathFor(item);
     const share = existingShareFor(rel, item.type === "dir" ? "dir" : "file");
-    const shareLabel = share ? "Shared… (copy/revoke)" : "Share link…";
 
     const fav = isFavoriteItem(item);
     const favLabel = fav ? "Remove from favorites" : "Add to favorites";
@@ -2833,7 +2881,10 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         }
       }));
 
-      ctxEl.appendChild(menuItem(shareLabel, "", () => openShareDialogFor(item)));
+      ctxEl.appendChild(menuItem("Standard share link…", "", () => openShareDialogFor(item)));
+      ctxEl.appendChild(menuItem("PQ recipient-enrolled share…", "", () => openShareDialogFor(item, {
+        forceMode: "pq_recipient_enrolled_v1"
+      })));
 
       ctxEl.appendChild(menuSep());
       ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
@@ -3604,11 +3655,28 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         if (share.downloads != null) vEl.appendChild(dl);
         vEl.appendChild(actions);
       } else {
+        const rowBtns = document.createElement("div");
+        rowBtns.style.display = "flex";
+        rowBtns.style.gap = "8px";
+        rowBtns.style.flexWrap = "wrap";
+
         const btn = document.createElement("button");
         btn.type = "button";
         btn.textContent = "Create share link…";
         btn.onclick = () => openShareDialogFor(item);
-        vEl.appendChild(btn);
+        rowBtns.appendChild(btn);
+
+        if (st.type === "file") {
+          const btnPq = document.createElement("button");
+          btnPq.type = "button";
+          btnPq.textContent = "Create PQ invite…";
+          btnPq.onclick = () => openShareDialogFor(item, {
+            forceMode: "pq_recipient_enrolled_v1"
+          });
+          rowBtns.appendChild(btnPq);
+        }
+
+        vEl.appendChild(rowBtns);
       }
 
       propsBody.appendChild(kEl);

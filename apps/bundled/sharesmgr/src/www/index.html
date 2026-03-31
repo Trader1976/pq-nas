@@ -6,11 +6,9 @@
     <meta http-equiv="Cache-Control" content="no-store" />
     <title>PQ-NAS • Shares Manager</title>
 
-    <!-- PQ-NAS global theme (tokens + theme switcher) -->
     <link rel="stylesheet" href="/static/theme.css" />
     <script src="/static/theme.js"></script>
 
-    <!-- app-local -->
     <link rel="stylesheet" href="./app.css" />
 </head>
 <body>
@@ -21,7 +19,7 @@
             <div class="titles">
                 <div class="h1">Shares Manager</div>
                 <div class="sub">
-                    Manage your public share links (/s/&lt;token&gt;).
+                    Manage your share links.
                     <span class="muted" id="appVersion"></span>
                 </div>
             </div>
@@ -32,21 +30,22 @@
             <button class="btn" id="btnRevokeExpired">Revoke expired</button>
             <button class="btn btnGhost" id="btnClear">Clear</button>
         </div>
-
     </header>
 
-    <main class="grid gridOne">
-        <section class="card spanFull">
+    <main class="stack">
+        <section class="card">
             <div class="cardTitle">
-                <span>My shares</span>
-                <span class="pill" id="countPill">0</span>
+                <div class="cardTitleLeft">
+                    <div class="cardTitleMain">Filters</div>
+                    <div class="cardTitleSub">These filters affect both sections below.</div>
+                </div>
             </div>
 
             <div class="cardBody">
                 <div class="toolbar">
                     <div class="tool">
                         <label class="lblSmall">Search</label>
-                        <input class="inp" id="q" placeholder="Filter by path or token…" autocomplete="off" />
+                        <input class="inp" id="q" placeholder="Filter by path, token, invite…" autocomplete="off" />
                     </div>
 
                     <div class="tool">
@@ -74,11 +73,35 @@
                         <label class="lblSmall" for="showToken">Show token</label>
                         <input type="checkbox" id="showToken" />
                     </div>
-
                 </div>
 
+                <div class="foot">
+                    <div class="muted" id="statusLine">—</div>
+                </div>
+
+                <div class="toastArea" id="toastArea"></div>
+            </div>
+        </section>
+
+        <section class="card" id="standardCard">
+            <div class="cardTitle">
+                <div class="cardTitleLeft">
+                    <div class="cardTitleMain">My shares</div>
+                    <div class="cardTitleSub">Regular share links using /s/&lt;token&gt;.</div>
+                </div>
+
+                <div class="cardTitleRight">
+                    <span class="pill" id="countPillStandard">0</span>
+                    <button class="btn sectionToggle" id="btnToggleStandard" type="button" aria-expanded="true">
+                        <span class="chev">▾</span>
+                        <span class="txt">Hide</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="cardBody">
                 <div class="tableWrap">
-                    <table class="tbl" id="tbl">
+                    <table class="tbl">
                         <thead>
                         <tr>
                             <th class="colPath">Path</th>
@@ -87,21 +110,54 @@
                             <th class="colDl">Downloads</th>
                             <th class="colCreated">Created</th>
                             <th class="colUrl">URL</th>
-                            <th class="colToken hidden" id="thToken">Token</th>
+                            <th class="colToken hidden" id="thTokenStandard">Token</th>
                             <th class="colAct">Actions</th>
                         </tr>
                         </thead>
-                        <tbody id="tbody">
+                        <tbody id="tbodyStandard">
                         <tr><td colspan="8" class="empty">Loading…</td></tr>
                         </tbody>
                     </table>
                 </div>
+            </div>
+        </section>
 
-                <div class="foot">
-                    <div class="muted" id="statusLine">—</div>
+        <section class="card" id="pqCard">
+            <div class="cardTitle">
+                <div class="cardTitleLeft">
+                    <div class="cardTitleMain">PQ shares</div>
+                    <div class="cardTitleSub">Recipient-enrolled secure shares and invite links.</div>
                 </div>
 
-                <div class="toastArea" id="toastArea"></div>
+                <div class="cardTitleRight">
+                    <span class="pill" id="countPillPq">0</span>
+                    <button class="btn sectionToggle" id="btnTogglePq" type="button" aria-expanded="true">
+                        <span class="chev">▾</span>
+                        <span class="txt">Hide</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="cardBody">
+                <div class="tableWrap">
+                    <table class="tbl">
+                        <thead>
+                        <tr>
+                            <th class="colPath">Path</th>
+                            <th class="colState">PQ state</th>
+                            <th class="colExp">Expires</th>
+                            <th class="colCreated">Created</th>
+                            <th class="colInvite">Invite URL</th>
+                            <th class="colUrl">Share URL</th>
+                            <th class="colToken hidden" id="thTokenPq">Token</th>
+                            <th class="colAct">Actions</th>
+                        </tr>
+                        </thead>
+                        <tbody id="tbodyPq">
+                        <tr><td colspan="8" class="empty">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </section>
     </main>

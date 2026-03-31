@@ -2,6 +2,7 @@
     "use strict";
 
     const $ = (id) => document.getElementById(id);
+
     const appVersionEl = $("appVersion");
 
     const btnRefresh = $("btnRefresh");
@@ -9,21 +10,34 @@
     const btnClear = $("btnClear");
 
     const toastArea = $("toastArea");
+    const statusLine = $("statusLine");
 
     const q = $("q");
     const state = $("state");
     const sort = $("sort");
     const showToken = $("showToken");
-    const thToken = $("thToken");
 
-    const tbody = $("tbody");
-    const countPill = $("countPill");
-    const statusLine = $("statusLine");
+    const standardCard = $("standardCard");
+    const pqCard = $("pqCard");
+    const btnToggleStandard = $("btnToggleStandard");
+    const btnTogglePq = $("btnTogglePq");
 
-    let shares = []; // raw shares from server
+    const countPillStandard = $("countPillStandard");
+    const countPillPq = $("countPillPq");
+
+    const thTokenStandard = $("thTokenStandard");
+    const thTokenPq = $("thTokenPq");
+
+    const tbodyStandard = $("tbodyStandard");
+    const tbodyPq = $("tbodyPq");
+
+    const OPEN_STD_KEY = "sharesmgr_standard_open_v1";
+    const OPEN_PQ_KEY = "sharesmgr_pq_open_v1";
+
+    let shares = [];
     let lastLoadedAt = 0;
 
-    function nowMs(){ return Date.now(); }
+    function nowMs() { return Date.now(); }
 
     function toast(kind, msg) {
         if (!toastArea) return;
@@ -37,6 +51,64 @@
     function fmtTsMaybe(iso) {
         if (!iso) return "—";
         return iso;
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, (c) => ({
+            "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+        }[c]));
+    }
+
+    function escapeAttr(s) {
+        return escapeHtml(s).replace(/`/g, "&#96;");
+    }
+
+    async function copyText(text) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch {
+            try {
+                const ta = document.createElement("textarea");
+                ta.value = text;
+                ta.style.position = "fixed";
+                ta.style.left = "-2000px";
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand("copy");
+                ta.remove();
+                return true;
+            } catch {
+                return false;
+            }
+        }
+    }
+
+    async function apiJson(method, url, bodyObj) {
+        const opts = {
+            method,
+            credentials: "include",
+            cache: "no-store",
+            headers: {}
+        };
+        if (bodyObj !== undefined) {
+            opts.headers["Content-Type"] = "application/json; charset=utf-8";
+            opts.body = JSON.stringify(bodyObj);
+        }
+
+        let r;
+        try {
+            r = await fetch(url, opts);
+        } catch (e) {
+            const msg = (e && e.message) ? e.message : String(e);
+            if (statusLine) statusLine.textContent = `Network error calling ${url}: ${msg}`;
+            console.error("fetch failed:", url, e);
+            throw e;
+        }
+
+        let j = null;
+        try { j = await r.json(); } catch {}
+        return { r, j };
     }
 
     async function loadVersion() {
@@ -77,31 +149,108 @@
         return base + (s.url || ("/s/" + s.token));
     }
 
-    async function apiJson(method, url, bodyObj) {
-        const opts = {
-            method,
-            credentials: "include",
-            cache: "no-store",
-            headers: {}
-        };
-        if (bodyObj !== undefined) {
-            opts.headers["Content-Type"] = "application/json; charset=utf-8";
-            opts.body = JSON.stringify(bodyObj);
+    function inviteUrlAbs(s) {
+        if (!s || !s.invite_url) return "";
+        if (/^https?:\/\//i.test(String(s.invite_url))) return String(s.invite_url);
+        return window.location.origin + String(s.invite_url);
+    }
+
+    function pqModeOf(s) {
+        return String(s?.pq_mode || s?.mode || s?.kind || "").trim();
+    }
+
+    function isPqShare(s) {
+        const mode = pqModeOf(s).toLowerCase();
+        if (mode.includes("pq")) return true;
+        if (s?.invite_url) return true;
+        if (s?.invite_id) return true;
+        if (s?.pq_state) return true;
+        if (s?.recipient_count != null) return true;
+        if (Array.isArray(s?.recipient_device_ids)) return true;
+        return false;
+    }
+
+    function splitShares(list) {
+        const standard = [];
+        const pq = [];
+
+        for (const s of (list || [])) {
+            if (isPqShare(s)) pq.push(s);
+            else standard.push(s);
         }
 
-        let r;
+        return { standard, pq };
+    }
+
+    function pqStateOf(s) {
+        const st = String(s?.pq_state || s?.state || "").trim().toLowerCase();
+        if (!st) {
+            if (s?.invite_url) return "pending";
+            return "active";
+        }
+        return st;
+    }
+
+    function pqStateBadgeHtml(s) {
+        const st = pqStateOf(s);
+        if (st === "active") return `<span class="badge badgeOk">active</span>`;
+        if (st === "pending" || st === "pending_enrollment") return `<span class="badge badgeWarn">pending</span>`;
+        if (st === "claimed") return `<span class="badge badgeOk">claimed</span>`;
+        if (st === "revoked") return `<span class="badge badgeDanger">revoked</span>`;
+        if (st === "expired") return `<span class="badge badgeDanger">expired</span>`;
+        return `<span class="badge">${escapeHtml(st || "unknown")}</span>`;
+    }
+
+    function normalStateBadgeHtml(s) {
+        if (isExpired(s)) return `<span class="badge badgeDanger">expired</span>`;
+        if (s.expires_at) return `<span class="badge">active</span>`;
+        return `<span class="badge badgeDim">no expiry</span>`;
+    }
+
+    function getStoredBool(key, defv) {
         try {
-            r = await fetch(url, opts);
-        } catch (e) {
-            const msg = (e && e.message) ? e.message : String(e);
-            if (statusLine) statusLine.textContent = `Network error calling ${url}: ${msg}`;
-            console.error("fetch failed:", url, e);
-            throw e;
+            const v = localStorage.getItem(key);
+            if (v === null) return !!defv;
+            return v === "1";
+        } catch {
+            return !!defv;
         }
+    }
 
-        let j = null;
-        try { j = await r.json(); } catch {}
-        return { r, j };
+    function setStoredBool(key, on) {
+        try { localStorage.setItem(key, on ? "1" : "0"); } catch {}
+    }
+
+    function setSectionOpen(cardEl, btnEl, open, persistKey) {
+        if (!cardEl || !btnEl) return;
+        cardEl.classList.toggle("collapsed", !open);
+        btnEl.setAttribute("aria-expanded", open ? "true" : "false");
+
+        const chev = btnEl.querySelector(".chev");
+        const txt = btnEl.querySelector(".txt");
+
+        if (chev) chev.textContent = open ? "▾" : "▸";
+        if (txt) txt.textContent = open ? "Hide" : "Show";
+
+        if (persistKey) setStoredBool(persistKey, open);
+    }
+
+    function initSectionToggles() {
+        const stdOpen = getStoredBool(OPEN_STD_KEY, true);
+        const pqOpen = getStoredBool(OPEN_PQ_KEY, true);
+
+        setSectionOpen(standardCard, btnToggleStandard, stdOpen, null);
+        setSectionOpen(pqCard, btnTogglePq, pqOpen, null);
+
+        btnToggleStandard?.addEventListener("click", () => {
+            const nowOpen = standardCard && !standardCard.classList.contains("collapsed");
+            setSectionOpen(standardCard, btnToggleStandard, !nowOpen, OPEN_STD_KEY);
+        });
+
+        btnTogglePq?.addEventListener("click", () => {
+            const nowOpen = pqCard && !pqCard.classList.contains("collapsed");
+            setSectionOpen(pqCard, btnTogglePq, !nowOpen, OPEN_PQ_KEY);
+        });
     }
 
     async function loadShares() {
@@ -128,9 +277,19 @@
 
         shares = j.shares.slice();
         lastLoadedAt = nowMs();
-        if (statusLine) statusLine.textContent = `Loaded ${shares.length} shares.`;
         render();
     }
+
+    async function revokeShare(token) {
+        const { r, j } = await apiJson("POST", "/api/v4/shares/revoke", { token });
+        if (!r.ok || !j || !j.ok) {
+            const msg = (j && (j.message || j.error))
+                ? `${j.error || ""} ${j.message || ""}`.trim()
+                : `revoke failed (${r.status})`;
+            throw new Error(msg);
+        }
+    }
+
     async function revokeExpired() {
         const exp = expiredShares(shares);
 
@@ -154,12 +313,10 @@
         let failCount = 0;
 
         try {
-            // Revoke sequentially (safer for server + simpler)
             for (const s of exp) {
                 try {
-                    const { r, j } = await apiJson("POST", "/api/v4/shares/revoke", { token: s.token });
-                    if (r.ok && j && j.ok) okCount++;
-                    else failCount++;
+                    await revokeShare(s.token);
+                    okCount++;
                 } catch {
                     failCount++;
                 }
@@ -179,13 +336,22 @@
         const qq = (q?.value || "").trim().toLowerCase();
         const st = state?.value || "all";
 
-        let out = list;
+        let out = list.slice();
 
         if (qq) {
             out = out.filter(s => {
-                const a = (s.path || "").toLowerCase();
-                const b = (s.token || "").toLowerCase();
-                return a.includes(qq) || b.includes(qq);
+                const parts = [
+                    s.path || "",
+                    s.token || "",
+                    s.url || "",
+                    s.invite_url || "",
+                    s.invite_id || "",
+                    s.pq_state || "",
+                    s.mode || "",
+                    s.pq_mode || "",
+                    s.kind || ""
+                ].join("\n").toLowerCase();
+                return parts.includes(qq);
             });
         }
 
@@ -234,68 +400,42 @@
         return el;
     }
 
-    async function copyText(text) {
-        try {
-            await navigator.clipboard.writeText(text);
-            return true;
-        } catch {
-            try {
-                const ta = document.createElement("textarea");
-                ta.value = text;
-                ta.style.position = "fixed";
-                ta.style.left = "-2000px";
-                document.body.appendChild(ta);
-                ta.select();
-                document.execCommand("copy");
-                ta.remove();
-                return true;
-            } catch {
-                return false;
-            }
-        }
+    function makeActionButton(text, className, onClick) {
+        const btn = document.createElement("button");
+        btn.className = className || "btn";
+        btn.textContent = text;
+        btn.onclick = onClick;
+        return btn;
     }
 
-    function render() {
-        const filtered = applySort(applyFilters(shares));
-        if (countPill) countPill.textContent = String(filtered.length);
+    function renderEmpty(tbodyEl, text, colSpan) {
+        if (!tbodyEl) return;
+        tbodyEl.innerHTML = "";
+        const tr = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = colSpan;
+        cell.className = "empty";
+        cell.textContent = text;
+        tr.appendChild(cell);
+        tbodyEl.appendChild(tr);
+    }
 
-        const showTok = !!showToken?.checked;
-        if (thToken) thToken.classList.toggle("hidden", !showTok);
+    function renderStandardRows(list, showTok) {
+        if (!tbodyStandard) return;
 
-        if (!tbody) return;
-        tbody.innerHTML = "";
+        tbodyStandard.innerHTML = "";
 
-        if (!filtered.length) {
-            const tr = document.createElement("tr");
-            const colCount = showTok ? 8 : 7;
-            const cell = document.createElement("td");
-            cell.colSpan = colCount;
-            cell.className = "empty";
-            cell.textContent = shares.length ? "No matches." : "No shares yet.";
-            tr.appendChild(cell);
-            tbody.appendChild(tr);
-
-            if (lastLoadedAt && statusLine) {
-                const ageSec = Math.round((Date.now() - lastLoadedAt) / 1000);
-                statusLine.textContent = `Showing 0/${shares.length}. Last refresh ${ageSec}s ago.`;
-            }
+        if (!list.length) {
+            renderEmpty(tbodyStandard, shares.length ? "No normal shares match the current filter." : "No shares yet.", showTok ? 8 : 7);
             return;
         }
 
-        for (const s of filtered) {
+        for (const s of list) {
             const tr = document.createElement("tr");
-
-            // Path + state badge
-            const expired = isExpired(s);
-            const badge = expired
-                ? `<span class="badge badgeDanger">expired</span>`
-                : (s.expires_at
-                    ? `<span class="badge">active</span>`
-                    : `<span class="badge badgeDim">no expiry</span>`);
 
             tr.appendChild(
                 tdHtml(
-                    `${escapeHtml(s.path || "")}<div style="margin-top:6px">${badge}</div>`,
+                    `${escapeHtml(s.path || "")}<div style="margin-top:6px">${normalStateBadgeHtml(s)}</div>`,
                     "colPath"
                 )
             );
@@ -309,17 +449,15 @@
             tr.appendChild(
                 tdHtml(
                     `<a class="a mono" href="${escapeAttr(urlAbs)}" target="_blank" rel="noreferrer">
-                ${escapeHtml(s.url || ("/s/" + s.token))}
-             </a>`,
+                        ${escapeHtml(s.url || ("/s/" + s.token))}
+                     </a>`,
                     "colUrl"
                 )
             );
 
             if (showTok) {
-                tr.appendChild(td((s.token || ""), "colToken"));
+                tr.appendChild(td((s.token || ""), "colToken mono"));
             }
-
-            /* ---------- Actions ---------- */
 
             const act = document.createElement("td");
             act.className = "colAct";
@@ -327,98 +465,162 @@
             const wrap = document.createElement("div");
             wrap.className = "actions";
 
-            const btnCopy = document.createElement("button");
-            btnCopy.className = "btn";
-            btnCopy.textContent = "Copy link";
-            btnCopy.onclick = async () => {
+            wrap.appendChild(makeActionButton("Copy link", "btn", async () => {
                 const ok = await copyText(urlAbs);
                 toast(ok ? "ok" : "err", ok ? "Copied link." : "Copy failed.");
-            };
+            }));
 
-            const btnRevoke = document.createElement("button");
-            btnRevoke.className = "btn btnDanger";
-            btnRevoke.textContent = "Revoke";
-            btnRevoke.onclick = async () => {
-                btnRevoke.disabled = true;
+            wrap.appendChild(makeActionButton("Revoke", "btn btnDanger", async (e) => {
+                const btn = e.currentTarget;
+                btn.disabled = true;
                 try {
-                    const { r, j } = await apiJson(
-                        "POST",
-                        "/api/v4/shares/revoke",
-                        { token: s.token }
-                    );
-                    if (r.ok && j && j.ok) {
-                        toast("ok", "Revoked.");
-                        await loadShares();
-                    } else {
-                        const msg =
-                            (j && j.message)
-                                ? j.message
-                                : `revoke failed (${r.status})`;
-                        toast("err", msg);
-                    }
+                    await revokeShare(s.token);
+                    toast("ok", "Revoked.");
+                    await loadShares();
+                } catch (err) {
+                    toast("err", String(err && err.message ? err.message : err));
                 } finally {
-                    btnRevoke.disabled = false;
+                    btn.disabled = false;
                 }
-            };
+            }));
 
-            wrap.appendChild(btnCopy);
-            wrap.appendChild(btnRevoke);
             act.appendChild(wrap);
-
             tr.appendChild(act);
 
-            tbody.appendChild(tr);
+            tbodyStandard.appendChild(tr);
+        }
+    }
+
+    function renderPqRows(list, showTok) {
+        if (!tbodyPq) return;
+
+        tbodyPq.innerHTML = "";
+
+        if (!list.length) {
+            renderEmpty(
+                tbodyPq,
+                "No PQ shares yet. When /api/v4/shares/list returns PQ metadata, they will appear here.",
+                showTok ? 8 : 7
+            );
+            return;
         }
 
-        // Update bulk revoke button label + enabled state
+        for (const s of list) {
+            const tr = document.createElement("tr");
+
+            tr.appendChild(td(s.path || "", "colPath mono"));
+            tr.appendChild(tdHtml(pqStateBadgeHtml(s), "colState"));
+            tr.appendChild(td(fmtTsMaybe(s.expires_at), "colExp"));
+            tr.appendChild(td(fmtTsMaybe(s.created_at), "colCreated"));
+
+            const inviteAbs = inviteUrlAbs(s);
+            if (inviteAbs) {
+                tr.appendChild(
+                    tdHtml(
+                        `<a class="a mono" href="${escapeAttr(inviteAbs)}" target="_blank" rel="noreferrer">${escapeHtml(s.invite_url)}</a>`,
+                        "colInvite"
+                    )
+                );
+            } else {
+                tr.appendChild(td("—", "colInvite"));
+            }
+
+            const shareAbs = shareUrlAbs(s);
+            tr.appendChild(
+                tdHtml(
+                    `<a class="a mono" href="${escapeAttr(shareAbs)}" target="_blank" rel="noreferrer">
+                        ${escapeHtml(s.url || ("/s/" + s.token))}
+                     </a>`,
+                    "colUrl"
+                )
+            );
+
+            if (showTok) {
+                tr.appendChild(td((s.token || ""), "colToken mono"));
+            }
+
+            const act = document.createElement("td");
+            act.className = "colAct";
+
+            const wrap = document.createElement("div");
+            wrap.className = "actions";
+
+            if (inviteAbs) {
+                wrap.appendChild(makeActionButton("Copy invite", "btn", async () => {
+                    const ok = await copyText(inviteAbs);
+                    toast(ok ? "ok" : "err", ok ? "Copied invite link." : "Copy failed.");
+                }));
+            }
+
+            wrap.appendChild(makeActionButton("Revoke", "btn btnDanger", async (e) => {
+                const btn = e.currentTarget;
+                btn.disabled = true;
+                try {
+                    await revokeShare(s.token);
+                    toast("ok", "Revoked.");
+                    await loadShares();
+                } catch (err) {
+                    toast("err", String(err && err.message ? err.message : err));
+                } finally {
+                    btn.disabled = false;
+                }
+            }));
+
+            act.appendChild(wrap);
+            tr.appendChild(act);
+
+            tbodyPq.appendChild(tr);
+        }
+    }
+
+    function render() {
+        const filteredAll = applySort(applyFilters(shares));
+        const groups = splitShares(filteredAll);
+
+        const showTok = !!showToken?.checked;
+        if (thTokenStandard) thTokenStandard.classList.toggle("hidden", !showTok);
+        if (thTokenPq) thTokenPq.classList.toggle("hidden", !showTok);
+
+        if (countPillStandard) countPillStandard.textContent = String(groups.standard.length);
+        if (countPillPq) countPillPq.textContent = String(groups.pq.length);
+
+        renderStandardRows(groups.standard, showTok);
+        renderPqRows(groups.pq, showTok);
+
         if (btnRevokeExpired) {
             const nExp = expiredShares(shares).length;
-            btnRevokeExpired.textContent = nExp
-                ? `Revoke expired (${nExp})`
-                : "Revoke expired";
+            btnRevokeExpired.textContent = nExp ? `Revoke expired (${nExp})` : "Revoke expired";
             btnRevokeExpired.disabled = (nExp === 0);
         }
 
         if (lastLoadedAt && statusLine) {
             const ageSec = Math.round((Date.now() - lastLoadedAt) / 1000);
-            statusLine.textContent = `Showing ${filtered.length}/${shares.length}. Last refresh ${ageSec}s ago.`;
+            statusLine.textContent =
+                `Showing ${groups.standard.length + groups.pq.length}/${shares.length}. ` +
+                `My shares ${groups.standard.length}. PQ shares ${groups.pq.length}. ` +
+                `Last refresh ${ageSec}s ago.`;
         }
-
     }
 
-    function escapeHtml(s) {
-        return String(s).replace(/[&<>"']/g, (c) => ({
-            "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
-        }[c]));
-    }
-
-    function escapeAttr(s) {
-        return escapeHtml(s).replace(/`/g, "&#96;");
-    }
-
-// Events
-
-// style bulk revoke button as danger
     if (btnRevokeExpired) btnRevokeExpired.classList.add("btnDanger");
 
     if (btnRefresh) btnRefresh.onclick = () => loadShares();
-
     if (btnRevokeExpired) btnRevokeExpired.onclick = () => revokeExpired();
 
     if (btnClear) btnClear.onclick = () => {
         if (q) q.value = "";
         if (state) state.value = "all";
         if (sort) sort.value = "created_desc";
+        if (showToken) showToken.checked = false;
         render();
     };
 
     if (q) q.oninput = () => render();
     if (state) state.onchange = () => render();
     if (sort) sort.onchange = () => render();
-
     if (showToken) showToken.onchange = () => render();
 
-// Boot
+    initSectionToggles();
     loadVersion();
     loadShares().catch(() => {
         if (statusLine) statusLine.textContent = "Failed to load (network error).";
