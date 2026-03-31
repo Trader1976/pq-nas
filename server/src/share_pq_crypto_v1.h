@@ -17,6 +17,7 @@ namespace pqnas {
         std::string recipient_device_id;
         std::string kem_alg;              // "X25519" for this first real browser flow
         std::string sender_public_key_b64;
+        std::string kem_ciphertext_b64;       // ML-KEM ciphertext for pq decapsulation mode
         std::string hkdf_salt_b64;
         std::string hkdf_info_b64;
         std::string wrap_iv_b64;
@@ -43,6 +44,17 @@ namespace pqnas {
     };
 
     bool build_pq_open_envelope_x25519_v1(
+        const std::string& share_token,
+        const std::string& file_name,
+        const std::string& recipient_device_id,
+        const std::string& recipient_public_key_b64,
+        const std::vector<std::uint8_t>& plaintext,
+        const std::string& aad_json_utf8,
+        const PqOpenSnapshotV1& snapshot,
+        PqOpenEnvelopeV1* out,
+        std::string* err);
+
+    bool build_pq_open_envelope_mlkem768_v1(
         const std::string& share_token,
         const std::string& file_name,
         const std::string& recipient_device_id,

@@ -1,4 +1,5 @@
 #include "share_pq_crypto_v1.h"
+#include "share_pq_mlkem_v1.h"
 
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
@@ -365,6 +366,99 @@ bool build_pq_open_envelope_x25519_v1(
     env.wrapped_key.recipient_device_id = recipient_device_id;
     env.wrapped_key.kem_alg = "X25519";
     env.wrapped_key.sender_public_key_b64 = b64_encode(eph_pub_raw);
+    env.wrapped_key.kem_ciphertext_b64.clear();
+    env.wrapped_key.hkdf_salt_b64 = b64_encode(hkdf_salt);
+    env.wrapped_key.hkdf_info_b64 = b64_encode(hkdf_info);
+    env.wrapped_key.wrap_iv_b64 = b64_encode(wrap_iv);
+    env.wrapped_key.wrapped_cek_b64 = b64_encode(wrapped_cek);
+
+    env.payload.enc_alg = "AES-256-GCM";
+    env.payload.iv_b64 = b64_encode(payload_iv);
+    env.payload.ciphertext_b64 = b64_encode(ciphertext);
+
+    *out = std::move(env);
+    return true;
+}
+
+bool build_pq_open_envelope_mlkem768_v1(
+    const std::string& share_token,
+    const std::string& file_name,
+    const std::string& recipient_device_id,
+    const std::string& recipient_public_key_b64,
+    const std::vector<std::uint8_t>& plaintext,
+    const std::string& aad_json_utf8,
+    const PqOpenSnapshotV1& snapshot,
+    PqOpenEnvelopeV1* out,
+    std::string* err) {
+    if (!out) {
+        if (err) *err = "output_null";
+        return false;
+    }
+
+    std::vector<std::uint8_t> recipient_pub_raw;
+    if (!b64_decode(recipient_public_key_b64, &recipient_pub_raw)) {
+        if (err) *err = "recipient_public_key_b64_invalid";
+        return false;
+    }
+
+    MlKem768EncapResultV1 encap;
+    std::string mlkem_err;
+    if (!mlkem768_encapsulate_v1(recipient_pub_raw, &encap, &mlkem_err)) {
+        if (err) *err = mlkem_err.empty() ? "mlkem768_encapsulate_failed" : mlkem_err;
+        return false;
+    }
+
+    std::vector<std::uint8_t> hkdf_salt;
+    if (!random_bytes(32, &hkdf_salt)) {
+        if (err) *err = "random_hkdf_salt_failed";
+        return false;
+    }
+
+    const std::vector<std::uint8_t> hkdf_info = to_bytes("pqnas-share-open-mlkem768-wrap-v1");
+    std::vector<std::uint8_t> wrap_key;
+    if (!hkdf_sha256(encap.shared_secret, hkdf_salt, hkdf_info, 32, &wrap_key, err)) return false;
+
+    std::vector<std::uint8_t> cek;
+    if (!random_bytes(32, &cek)) {
+        if (err) *err = "random_cek_failed";
+        return false;
+    }
+
+    std::vector<std::uint8_t> aad = to_bytes(aad_json_utf8);
+
+    std::vector<std::uint8_t> wrap_iv;
+    if (!random_bytes(12, &wrap_iv)) {
+        if (err) *err = "random_wrap_iv_failed";
+        return false;
+    }
+
+    std::vector<std::uint8_t> wrapped_cek;
+    if (!aes_256_gcm_encrypt(wrap_key, wrap_iv, aad, cek, &wrapped_cek, err)) return false;
+
+    std::vector<std::uint8_t> payload_iv;
+    if (!random_bytes(12, &payload_iv)) {
+        if (err) *err = "random_payload_iv_failed";
+        return false;
+    }
+
+    std::vector<std::uint8_t> ciphertext;
+    if (!aes_256_gcm_encrypt(cek, payload_iv, aad, plaintext, &ciphertext, err)) return false;
+
+    PqOpenEnvelopeV1 env;
+    env.version = 1;
+    env.mode = "mlkem768_aes256gcm_v1";
+    env.share_token = share_token;
+    env.file_name = file_name;
+    env.mime_type = "application/octet-stream";
+    env.recipient_device_id = recipient_device_id;
+    env.aad_b64 = b64_encode(aad);
+    env.snapshot = snapshot;
+
+    env.wrapped_key.mode = "mlkem768_hkdf_sha256_aes256gcm_v1";
+    env.wrapped_key.recipient_device_id = recipient_device_id;
+    env.wrapped_key.kem_alg = "ML-KEM-768";
+    env.wrapped_key.sender_public_key_b64.clear();
+    env.wrapped_key.kem_ciphertext_b64 = b64_encode(encap.ciphertext);
     env.wrapped_key.hkdf_salt_b64 = b64_encode(hkdf_salt);
     env.wrapped_key.hkdf_info_b64 = b64_encode(hkdf_info);
     env.wrapped_key.wrap_iv_b64 = b64_encode(wrap_iv);

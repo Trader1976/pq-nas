@@ -155,6 +155,8 @@ add_executable(pqnas_server
         server/src/app_pairing.cpp
         server/src/share_pq_v1.cpp
         server/src/share_pq_crypto_v1.cpp
+        server/src/share_pq_mlkem_v1.cpp
+        server/src/share_pq_mlkem_v1.h
 )
 
 # Treat warnings as errors for the server (security-sensitive)
