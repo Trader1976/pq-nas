@@ -275,6 +275,91 @@ static bool aes_256_gcm_encrypt(
     return true;
 }
 
+static bool aes_256_gcm_decrypt(
+    const std::vector<std::uint8_t>& key,
+    const std::vector<std::uint8_t>& iv,
+    const std::vector<std::uint8_t>& aad,
+    const std::vector<std::uint8_t>& ciphertext_and_tag,
+    std::vector<std::uint8_t>* out,
+    std::string* err) {
+    if (!out) return false;
+    out->clear();
+
+    if (key.size() != 32) {
+        if (err) *err = "aes256gcm_bad_key_len";
+        return false;
+    }
+    if (iv.empty()) {
+        if (err) *err = "aes256gcm_bad_iv_len";
+        return false;
+    }
+    if (ciphertext_and_tag.size() < 16) {
+        if (err) *err = "aes256gcm_bad_ciphertext_len";
+        return false;
+    }
+
+    const std::size_t ct_len = ciphertext_and_tag.size() - 16;
+    const unsigned char* tag = ciphertext_and_tag.data() + ct_len;
+
+    EvpCipherCtxPtr ctx(EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_free);
+    if (!ctx) {
+        if (err) *err = "aes256gcm_ctx_create_failed";
+        return false;
+    }
+
+    if (EVP_DecryptInit_ex(ctx.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1) {
+        if (err) *err = "aes256gcm_init_failed";
+        return false;
+    }
+    if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(iv.size()), nullptr) != 1) {
+        if (err) *err = "aes256gcm_set_ivlen_failed";
+        return false;
+    }
+    if (EVP_DecryptInit_ex(ctx.get(), nullptr, nullptr, key.data(), iv.data()) != 1) {
+        if (err) *err = "aes256gcm_set_key_failed";
+        return false;
+    }
+
+    int n = 0;
+    if (!aad.empty()) {
+        if (EVP_DecryptUpdate(ctx.get(), nullptr, &n, aad.data(), static_cast<int>(aad.size())) != 1) {
+            if (err) *err = "aes256gcm_aad_failed";
+            return false;
+        }
+    }
+
+    std::vector<std::uint8_t> pt(ct_len, 0);
+    int total = 0;
+
+    if (ct_len > 0) {
+        if (EVP_DecryptUpdate(ctx.get(),
+                              pt.data(),
+                              &n,
+                              ciphertext_and_tag.data(),
+                              static_cast<int>(ct_len)) != 1) {
+            if (err) *err = "aes256gcm_decrypt_failed";
+            return false;
+        }
+        total += n;
+    }
+
+    if (EVP_CIPHER_CTX_ctrl(ctx.get(), EVP_CTRL_GCM_SET_TAG, 16, const_cast<unsigned char*>(tag)) != 1) {
+        if (err) *err = "aes256gcm_set_tag_failed";
+        return false;
+    }
+
+    if (EVP_DecryptFinal_ex(ctx.get(), pt.data() + total, &n) != 1) {
+        if (err) *err = "aes256gcm_auth_failed";
+        return false;
+    }
+    total += n;
+
+    pt.resize(static_cast<std::size_t>(total));
+    *out = std::move(pt);
+    return true;
+}
+
+
 static std::vector<std::uint8_t> to_bytes(const std::string& s) {
     return std::vector<std::uint8_t>(s.begin(), s.end());
 }
@@ -471,7 +556,150 @@ bool build_pq_open_envelope_mlkem768_v1(
     *out = std::move(env);
     return true;
 }
+bool pq_open_envelope_mlkem768_selftest_v1(std::string* err) {
+    if (err) err->clear();
 
+    MlKem768KeypairV1 kp;
+    std::string step_err;
+    if (!mlkem768_keygen_v1(&kp, &step_err)) {
+        if (err) *err = "selftest:keygen:" + step_err;
+        return false;
+    }
+
+    const std::string share_token = "selftest-share-token";
+    const std::string file_name = "selftest.bin";
+    const std::string recipient_device_id = "selftest-recipient";
+    const std::string recipient_public_key_b64 = b64_encode(kp.public_key);
+
+    const std::string aad_json_utf8 =
+        R"({"v":1,"purpose":"pq_share_open_selftest","mode":"mlkem768_aes256gcm_v1"})";
+
+    const std::string sample = "pqnas mlkem envelope selftest plaintext";
+    const std::vector<std::uint8_t> plaintext(sample.begin(), sample.end());
+
+    PqOpenSnapshotV1 snapshot;
+    snapshot.size_bytes = plaintext.size();
+    snapshot.mtime_epoch = 1775000000;
+    snapshot.sha256_hex = "selftest";
+
+    PqOpenEnvelopeV1 env;
+    if (!build_pq_open_envelope_mlkem768_v1(
+            share_token,
+            file_name,
+            recipient_device_id,
+            recipient_public_key_b64,
+            plaintext,
+            aad_json_utf8,
+            snapshot,
+            &env,
+            &step_err)) {
+        if (err) *err = "selftest:build_envelope:" + step_err;
+        return false;
+    }
+
+    if (env.mode != "mlkem768_aes256gcm_v1") {
+        if (err) *err = "selftest:bad_env_mode";
+        return false;
+    }
+    if (env.wrapped_key.mode != "mlkem768_hkdf_sha256_aes256gcm_v1") {
+        if (err) *err = "selftest:bad_wrapped_key_mode";
+        return false;
+    }
+    if (env.wrapped_key.kem_alg != "ML-KEM-768") {
+        if (err) *err = "selftest:bad_kem_alg";
+        return false;
+    }
+    if (env.wrapped_key.kem_ciphertext_b64.empty()) {
+        if (err) *err = "selftest:missing_kem_ciphertext";
+        return false;
+    }
+
+    std::vector<std::uint8_t> kem_ct;
+    if (!b64_decode(env.wrapped_key.kem_ciphertext_b64, &kem_ct)) {
+        if (err) *err = "selftest:bad_kem_ciphertext_b64";
+        return false;
+    }
+
+    std::vector<std::uint8_t> shared_secret;
+    if (!mlkem768_decapsulate_v1(kp.secret_key, kem_ct, &shared_secret, &step_err)) {
+        if (err) *err = "selftest:decapsulate:" + step_err;
+        return false;
+    }
+
+    std::vector<std::uint8_t> hkdf_salt;
+    std::vector<std::uint8_t> hkdf_info;
+    if (!b64_decode(env.wrapped_key.hkdf_salt_b64, &hkdf_salt)) {
+        if (err) *err = "selftest:bad_hkdf_salt_b64";
+        return false;
+    }
+    if (!b64_decode(env.wrapped_key.hkdf_info_b64, &hkdf_info)) {
+        if (err) *err = "selftest:bad_hkdf_info_b64";
+        return false;
+    }
+
+    std::vector<std::uint8_t> wrap_key;
+    if (!hkdf_sha256(shared_secret, hkdf_salt, hkdf_info, 32, &wrap_key, &step_err)) {
+        if (err) *err = "selftest:hkdf:" + step_err;
+        return false;
+    }
+
+    std::vector<std::uint8_t> aad;
+    std::vector<std::uint8_t> wrap_iv;
+    std::vector<std::uint8_t> wrapped_cek;
+    if (!b64_decode(env.aad_b64, &aad)) {
+        if (err) *err = "selftest:bad_aad_b64";
+        return false;
+    }
+    if (!b64_decode(env.wrapped_key.wrap_iv_b64, &wrap_iv)) {
+        if (err) *err = "selftest:bad_wrap_iv_b64";
+        return false;
+    }
+    if (!b64_decode(env.wrapped_key.wrapped_cek_b64, &wrapped_cek)) {
+        if (err) *err = "selftest:bad_wrapped_cek_b64";
+        return false;
+    }
+
+    std::vector<std::uint8_t> cek;
+    if (!aes_256_gcm_decrypt(wrap_key, wrap_iv, aad, wrapped_cek, &cek, &step_err)) {
+        if (err) *err = "selftest:unwrap_cek:" + step_err;
+        return false;
+    }
+    if (cek.size() != 32) {
+        if (err) *err = "selftest:bad_cek_len";
+        return false;
+    }
+
+    std::vector<std::uint8_t> payload_iv;
+    std::vector<std::uint8_t> payload_ct;
+    if (!b64_decode(env.payload.iv_b64, &payload_iv)) {
+        if (err) *err = "selftest:bad_payload_iv_b64";
+        return false;
+    }
+    if (!b64_decode(env.payload.ciphertext_b64, &payload_ct)) {
+        if (err) *err = "selftest:bad_payload_ciphertext_b64";
+        return false;
+    }
+
+    std::vector<std::uint8_t> recovered;
+    if (!aes_256_gcm_decrypt(cek, payload_iv, aad, payload_ct, &recovered, &step_err)) {
+        if (err) *err = "selftest:decrypt_payload:" + step_err;
+        return false;
+    }
+
+    if (recovered != plaintext) {
+        if (err) *err = "selftest:plaintext_mismatch";
+        return false;
+    }
+
+    if (env.snapshot.size_bytes != snapshot.size_bytes ||
+        env.snapshot.mtime_epoch != snapshot.mtime_epoch ||
+        env.snapshot.sha256_hex != snapshot.sha256_hex) {
+        if (err) *err = "selftest:snapshot_mismatch";
+        return false;
+    }
+
+    return true;
+}
 bool openssl_has_mlkem_v1() {
     return OpenSSL_version_num() >= 0x30500000L;
 }

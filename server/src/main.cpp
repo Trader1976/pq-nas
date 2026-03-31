@@ -112,6 +112,7 @@ extern "C" {
 #include "share_links.h"
 #include "share_pq_v1.h"
 #include "share_pq_crypto_v1.h"
+#include "share_pq_mlkem_v1.h"
 
 //pool migration
 #include "user_storage_migration.h"
@@ -138,6 +139,7 @@ extern "C" {
 // for mobile app
 #include "app_tokens.h"
 #include "app_pairing.h"
+
 
 using json = nlohmann::json;
 
@@ -30310,7 +30312,26 @@ srv.Get(R"(/pq/invite/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httpl
 	});
 
 	// ---- Start HTTP server ----
-
+    {
+        std::string mlkem_err;
+        const bool mlkem_ok = pqnas::mlkem768_selftest_v1(&mlkem_err);
+        std::cerr << "[pq/mlkem] backend=" << pqnas::mlkem768_backend_name_v1()
+                  << " available=" << (pqnas::mlkem768_available_v1() ? "yes" : "no")
+                  << " selftest=" << (mlkem_ok ? "ok" : "fail");
+        if (!mlkem_ok && !mlkem_err.empty()) {
+            std::cerr << " detail=" << mlkem_err;
+        }
+        std::cerr << std::endl;
+    }
+    {
+        std::string env_err;
+        const bool env_ok = pqnas::pq_open_envelope_mlkem768_selftest_v1(&env_err);
+        std::cerr << "[pq/mlkem-envelope] selftest=" << (env_ok ? "ok" : "fail");
+        if (!env_ok && !env_err.empty()) {
+            std::cerr << " detail=" << env_err;
+        }
+        std::cerr << std::endl;
+    }
 	std::cerr << "PQ-NAS server listening on 0.0.0.0:" << LISTEN_PORT << std::endl;
 	srv.listen("0.0.0.0", LISTEN_PORT);
 

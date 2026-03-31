@@ -65,6 +65,8 @@ namespace pqnas {
         PqOpenEnvelopeV1* out,
         std::string* err);
 
+    bool pq_open_envelope_mlkem768_selftest_v1(std::string* err);
+
     bool openssl_has_mlkem_v1();
 
 } // namespace pqnas
