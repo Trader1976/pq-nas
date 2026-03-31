@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: Apache-2.0 OR ISC OR MIT
+
+name: CBMC
+description: Run CBMC proofs for mlkem-native
+
+inputs:
+  nix-shell:
+    description: Run in the specified Nix environment if exists
+    default: "ci-cbmc"
+  nix-cache:
+    description: Determine whether to enable nix cache
+    default: 'true'
+  nix-verbose:
+    description: Determine wether to suppress nix log or not
+    default: 'false'
+  custom_shell:
+    description: The shell to use. Only relevant if use-nix is 'false'
+    default: "bash"
+  mlkem_k:
+    description: "Security level for ML-KEM (2,3,4)"
+    default: "2"
+  gh_token:
+    description: Github access token to use
+    required: true
+runs:
+  using: composite
+  steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: ./.github/actions/setup-shell
+        with:
+          nix-shell: ${{ inputs.nix-shell }}
+          nix-cache: ${{ inputs.nix-cache }}
+          nix-verbose: ${{ inputs.nix-verbose }}
+          gh_token: ${{ inputs.gh_token }}
+          custom_shell: ${{ inputs.custom_shell }}
+          script: |
+
+            if [[ ${{ inputs.nix-shell }} != '' ]]; then
+              nix-collect-garbage
+            fi
+
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+              ## Setup
+              Architecture: $(uname -m)
+              - $(nix --version)
+              - $(cbmc --version)
+              - litani Version $(litani --version)
+              - Cadical Version $(cadical --version)
+              - $(bash --version | grep -m1 "")
+            EOF
+      - name: Run CBMC proofs (MLKEM_K=${{ inputs.mlkem_k }})
+        shell: ${{ env.SHELL }}
+        run: |
+          echo "::group::cbmc_${{ inputs.mlkem_k }}"
+          tests cbmc --k ${{ inputs.mlkem_k }};
+          echo "::endgroup::"
