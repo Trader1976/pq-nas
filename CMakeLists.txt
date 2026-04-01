@@ -797,10 +797,10 @@ add_custom_target(run_test_mlkem_tomont
         DEPENDS test_mlkem_tomont
 )
 # -----------------------------------------------------------------------------
-# Tool: test_mlkem_indcpa_decrypt_skeleton (learning implementation, deterministic IND-CPA decryption algebra core)
+# Tool: test_mlkem_indcpa_roundtrip_skeleton (learning implementation, deterministic IND-CPA algebra roundtrip)
 # -----------------------------------------------------------------------------
-add_executable(test_mlkem_indcpa_decrypt_skeleton
-        tests/dna_pqcore_learn/test_mlkem_indcpa_decrypt_skeleton.cpp
+add_executable(test_mlkem_indcpa_roundtrip_skeleton
+        tests/dna_pqcore_learn/test_mlkem_indcpa_roundtrip_skeleton.cpp
         core/dna_pqcore_learn/dna_mlkem_cbd.cpp
         core/dna_pqcore_learn/dna_mlkem_prf.cpp
         core/dna_pqcore_learn/dna_mlkem_getnoise.cpp
@@ -815,24 +815,25 @@ add_executable(test_mlkem_indcpa_decrypt_skeleton
         core/dna_pqcore_learn/dna_mlkem_indcpa_keygen_skeleton.cpp
         core/dna_pqcore_learn/dna_mlkem_indcpa_encrypt_skeleton.cpp
         core/dna_pqcore_learn/dna_mlkem_indcpa_decrypt_skeleton.cpp
+        core/dna_pqcore_learn/dna_mlkem_indcpa_roundtrip_skeleton.cpp
 )
 
-target_include_directories(test_mlkem_indcpa_decrypt_skeleton PRIVATE
+target_include_directories(test_mlkem_indcpa_roundtrip_skeleton PRIVATE
         ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
 )
 
-target_link_libraries(test_mlkem_indcpa_decrypt_skeleton PRIVATE
+target_link_libraries(test_mlkem_indcpa_roundtrip_skeleton PRIVATE
         OpenSSL::Crypto
 )
 
-set_target_properties(test_mlkem_indcpa_decrypt_skeleton PROPERTIES
+set_target_properties(test_mlkem_indcpa_roundtrip_skeleton PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
-add_custom_target(run_test_mlkem_indcpa_decrypt_skeleton
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_indcpa_decrypt_skeleton"
+add_custom_target(run_test_mlkem_indcpa_roundtrip_skeleton
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_indcpa_roundtrip_skeleton"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_indcpa_decrypt_skeleton
+        DEPENDS test_mlkem_indcpa_roundtrip_skeleton
 )
 # -----------------------------------------------------------------------------
 # Tool: test_mlkem_noisevec (learning implementation, k=3 noise-vector generation)
