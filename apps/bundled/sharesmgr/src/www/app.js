@@ -206,7 +206,13 @@
         const keep = Math.max(6, Math.floor((max - 3) / 2));
         return s.slice(0, keep) + "..." + s.slice(s.length - keep);
     }
-
+    function normalizeKemAlgUi(kem) {
+        const v = String(kem || "").trim();
+        if (!v) return "";
+        if (v === "ml-kem-768" || v === "mlkem768" || v === "MLKEM768") return "ML-KEM-768";
+        if (v === "x25519" || v === "X25519") return "X25519";
+        return v;
+    }
     function firstPqRecipient(s) {
         if (Array.isArray(s?.recipients) && s.recipients.length) return s.recipients[0];
         if (Array.isArray(s?.recipient_device_ids) && s.recipient_device_ids.length) {
@@ -227,12 +233,19 @@
         const label = String(r.label || "").trim();
         const note = String(r.note || "").trim();
         const rid = String(r.recipient_device_id || "").trim();
+        const kem = normalizeKemAlgUi(r.kem_alg);
         const extraCount = Math.max(0, (Number(s?.recipient_count || 0) - 1));
 
         let html = `<div style="margin-top:6px;display:flex;flex-direction:column;gap:4px">`;
 
         if (label) {
             html += `<div><span class="badge badgeOk">${escapeHtml(label)}</span></div>`;
+        }
+
+        if (kem === "ML-KEM-768") {
+            html += `<div><span class="badge badgeOk">Post-Quantum</span> <span class="badge">${escapeHtml(kem)}</span></div>`;
+        } else if (kem) {
+            html += `<div><span class="badge badgeWarn">${escapeHtml(kem)}</span></div>`;
         }
 
         if (note) {
@@ -580,7 +593,7 @@
         if (!list.length) {
             renderEmpty(
                 tbodyPq,
-                "No PQ shares yet. When /api/v4/shares/list returns PQ metadata, they will appear here.",
+                "No Post-Quantum shares yet.",
                 showTok ? 8 : 7
             );
             return;
@@ -713,7 +726,7 @@
             const ageSec = Math.round((Date.now() - lastLoadedAt) / 1000);
             statusLine.textContent =
                 `Showing ${groups.standard.length + groups.pq.length}/${shares.length}. ` +
-                `My shares ${groups.standard.length}. PQ shares ${groups.pq.length}. ` +
+                `My shares ${groups.standard.length}. Post-Quantum shares ${groups.pq.length}. ` +
                 `Last refresh ${ageSec}s ago.`;
         }
     }

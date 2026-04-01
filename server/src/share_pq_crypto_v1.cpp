@@ -700,8 +700,5 @@ bool pq_open_envelope_mlkem768_selftest_v1(std::string* err) {
 
     return true;
 }
-bool openssl_has_mlkem_v1() {
-    return OpenSSL_version_num() >= 0x30500000L;
-}
 
 } // namespace pqnas

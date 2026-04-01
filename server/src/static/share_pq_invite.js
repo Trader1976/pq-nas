@@ -8,7 +8,7 @@
     const inviteId = String(boot.invite_id || "").trim();
     const expiresAt = String(boot.expires_at || "").trim();
     const labelHint = String(boot.label_hint || "").trim();
-    const preferredKemAlg = String(boot.preferred_kem_alg || "X25519").trim();
+    const preferredKemAlg = String(boot.preferred_kem_alg || "ML-KEM-768").trim();
 
     const host = document.getElementById("pqShareInviteApp") || document.body;
 
@@ -40,13 +40,13 @@
     function algBlurb() {
         const norm = window.PqShareKeysV1
             ? window.PqShareKeysV1.normalizeKemAlg(preferredKemAlg)
-            : String(preferredKemAlg || "X25519");
+            : String(preferredKemAlg || "ML-KEM-768");
 
-        if (norm === "ML-KEM-768") {
-            return "This invite requests ML-KEM-768 enrollment. Browser ML-KEM support is not wired yet, so such invites will currently fail clearly instead of silently downgrading.";
+        if (norm !== "ML-KEM-768") {
+            return "This invite requires ML-KEM-768. Legacy non-post-quantum enrollment is not supported on this page.";
         }
 
-        return "Current crypto mode in this MVP uses real browser-generated X25519 keys for local decrypt flow. PQ-native browser ML-KEM can be added later behind the same page flow.";
+        return "This browser will generate a local ML-KEM-768 keypair. The file key is wrapped for this browser using post-quantum key encapsulation, and the shared file is decrypted locally in your browser.";
     }
 
     async function enroll(inviteId, deviceLabel, statusEl, submitBtn) {
@@ -259,11 +259,11 @@
 
       <div class="wrap">
         <div class="card">
-          <div class="eyebrow">DNA-Nexus Secure Share</div>
-          <h1>Open secure share in this browser</h1>
-          <p class="lead">
-            You do not need the DNA-Nexus app. This page can enroll this browser and then open the shared file.
-          </p>
+        <div class="eyebrow">DNA-Nexus Post-Quantum Share</div>
+        <h1>Open post-quantum protected share</h1>
+        <p class="lead">
+          This page enrolls this browser with ML-KEM-768 and then opens the shared file locally.
+        </p>
 
           <div class="good">
             This invite is one-time and stays valid until enrollment succeeds or the invite expires.
@@ -276,8 +276,8 @@
             <div class="k">Expires</div>
             <div class="v">${escapeHtml(fmtDateTime(expiresAt))}</div>
 
-            <div class="k">Requested KEM</div>
-            <div class="v">${escapeHtml(preferredKemAlg || "X25519")}</div>
+            <div class="k">Post-Quantum KEM</div>
+            <div class="v">${escapeHtml(preferredKemAlg || "ML-KEM-768")}</div>
           </div>
 
           <div class="field">

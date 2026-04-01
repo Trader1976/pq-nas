@@ -13,9 +13,9 @@ namespace pqnas {
     };
 
     struct PqWrappedKeyV1 {
-        std::string mode;                 // "x25519_hkdf_sha256_aes256gcm_v1"
+        std::string mode;                 // "mlkem768_aes256gcm_v1"
         std::string recipient_device_id;
-        std::string kem_alg;              // "X25519" for this first real browser flow
+        std::string kem_alg;
         std::string sender_public_key_b64;
         std::string kem_ciphertext_b64;       // ML-KEM ciphertext for pq decapsulation mode
         std::string hkdf_salt_b64;
@@ -66,7 +66,5 @@ namespace pqnas {
         std::string* err);
 
     bool pq_open_envelope_mlkem768_selftest_v1(std::string* err);
-
-    bool openssl_has_mlkem_v1();
 
 } // namespace pqnas

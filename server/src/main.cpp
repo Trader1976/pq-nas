@@ -28251,7 +28251,17 @@ srv.Post("/api/v4/shares/pq/enroll", [&](const httplib::Request& req, httplib::R
 
     const std::string invite_id = body.value("invite_id", std::string{});
     const std::string device_label = body.value("device_label", std::string{});
-    const std::string kem_alg = body.value("kem_alg", std::string{"ml-kem-768"});
+    std::string kem_alg = body.value("kem_alg", std::string{});
+    if (kem_alg.empty() || kem_alg == "ml-kem-768" || kem_alg == "mlkem768" || kem_alg == "MLKEM768") {
+        kem_alg = "ML-KEM-768";
+    } else if (kem_alg != "ML-KEM-768") {
+        reply(400, {
+            {"ok", false},
+            {"error", "unsupported_kem_alg"},
+            {"message", "Only ML-KEM-768 is supported"}
+        });
+        return;
+    }
     const std::string public_key_b64 = body.value("public_key_b64", std::string{});
 
     if (invite_id.empty() || device_label.empty() || public_key_b64.empty()) {
@@ -28709,19 +28719,21 @@ srv.Post("/api/v4/shares/pq/open", [&](const httplib::Request& req, httplib::Res
     }
 
     std::string device_kem_alg = ctx.device.kem_alg;
-    if (device_kem_alg.empty()) device_kem_alg = "X25519";
+    if (device_kem_alg == "ml-kem-768" || device_kem_alg == "mlkem768" || device_kem_alg == "MLKEM768") {
+        device_kem_alg = "ML-KEM-768";
+    }
 
-    std::string envelope_mode;
-    if (device_kem_alg == "ML-KEM-768") envelope_mode = "mlkem768_aes256gcm_v1";
-    else if (device_kem_alg == "X25519") envelope_mode = "x25519_aes256gcm_v1";
-    else {
+    if (device_kem_alg != "ML-KEM-768") {
         reply(400, {
             {"ok", false},
             {"error", "unsupported_recipient_kem_alg"},
-            {"message", device_kem_alg}
+            {"message", "Only ML-KEM-768 recipients are supported"}
         });
         return;
     }
+
+    const std::string envelope_mode = "mlkem768_aes256gcm_v1";
+
 
     json aad = {
         {"v", 1},
@@ -28742,33 +28754,18 @@ srv.Post("/api/v4/shares/pq/open", [&](const httplib::Request& req, httplib::Res
 
     pqnas::PqOpenEnvelopeV1 env;
     std::string crypto_err;
-    bool build_ok = false;
 
-    if (device_kem_alg == "ML-KEM-768") {
-        build_ok = pqnas::build_pq_open_envelope_mlkem768_v1(
-            ctx.share_token,
-            ctx.file_name,
-            ctx.device.recipient_device_id,
-            ctx.device.public_key_b64,
-            plaintext,
-            aad.dump(),
-            snap,
-            &env,
-            &crypto_err
-        );
-    } else {
-        build_ok = pqnas::build_pq_open_envelope_x25519_v1(
-            ctx.share_token,
-            ctx.file_name,
-            ctx.device.recipient_device_id,
-            ctx.device.public_key_b64,
-            plaintext,
-            aad.dump(),
-            snap,
-            &env,
-            &crypto_err
-        );
-    }
+    const bool build_ok = pqnas::build_pq_open_envelope_mlkem768_v1(
+        ctx.share_token,
+        ctx.file_name,
+        ctx.device.recipient_device_id,
+        ctx.device.public_key_b64,
+        plaintext,
+        aad.dump(),
+        snap,
+        &env,
+        &crypto_err
+    );
 
     if (!build_ok) {
         reply(500, {
