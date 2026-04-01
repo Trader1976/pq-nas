@@ -30076,8 +30076,9 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
             << "<meta name='viewport' content='width=device-width,initial-scale=1'>"
             << "<title>DNA-Nexus secure share</title>"
             << "<script>window.PQ_SHARE_OPEN_BOOT=" << boot.dump() << ";</script>"
-            << "<script defer src='/static/share_pq_keys.js'></script>"
-            << "<script defer src='/static/share_pq_open.js'></script>"
+            << "<script defer src='/static/share_pq_mlkem.js?v=5'></script>"
+            << "<script defer src='/static/share_pq_keys.js?v=5'></script>"
+            << "<script defer src='/static/share_pq_open.js?v=5'></script>"
             << "</head>"
             << "<body>"
             << "<div id='pqShareOpenApp'>Opening secure share…</div>"
@@ -30274,7 +30275,8 @@ srv.Get(R"(/pq/invite/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httpl
         const json boot = {
             {"invite_id", invite_id},
             {"expires_at", inv.expires_at},
-            {"label_hint", inv.label_hint}
+            {"label_hint", inv.label_hint},
+            {"preferred_kem_alg", "ML-KEM-768"}
         };
 
         std::ostringstream html;
@@ -30286,8 +30288,9 @@ srv.Get(R"(/pq/invite/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httpl
             << "<meta name='viewport' content='width=device-width,initial-scale=1'>"
             << "<title>DNA-Nexus secure share</title>"
             << "<script>window.PQ_SHARE_INVITE_BOOT=" << boot.dump() << ";</script>"
-            << "<script defer src='/static/share_pq_keys.js'></script>"
-            << "<script defer src='/static/share_pq_invite.js'></script>"
+            << "<script defer src='/static/share_pq_mlkem.js?v=5'></script>"
+            << "<script defer src='/static/share_pq_keys.js?v=5'></script>"
+            << "<script defer src='/static/share_pq_invite.js?v=5'></script>"
             << "</head>"
             << "<body>"
             << "<div id='pqShareInviteApp'>Loading…</div>"

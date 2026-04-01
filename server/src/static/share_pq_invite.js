@@ -8,6 +8,7 @@
     const inviteId = String(boot.invite_id || "").trim();
     const expiresAt = String(boot.expires_at || "").trim();
     const labelHint = String(boot.label_hint || "").trim();
+    const preferredKemAlg = String(boot.preferred_kem_alg || "X25519").trim();
 
     const host = document.getElementById("pqShareInviteApp") || document.body;
 
@@ -36,6 +37,18 @@
         return looksMobile() ? "My phone browser" : "This browser";
     }
 
+    function algBlurb() {
+        const norm = window.PqShareKeysV1
+            ? window.PqShareKeysV1.normalizeKemAlg(preferredKemAlg)
+            : String(preferredKemAlg || "X25519");
+
+        if (norm === "ML-KEM-768") {
+            return "This invite requests ML-KEM-768 enrollment. Browser ML-KEM support is not wired yet, so such invites will currently fail clearly instead of silently downgrading.";
+        }
+
+        return "Current crypto mode in this MVP uses real browser-generated X25519 keys for local decrypt flow. PQ-native browser ML-KEM can be added later behind the same page flow.";
+    }
+
     async function enroll(inviteId, deviceLabel, statusEl, submitBtn) {
         if (!inviteId) throw new Error("Missing invite id");
         if (!deviceLabel) throw new Error("Please enter a device name");
@@ -44,7 +57,9 @@
         statusEl.textContent = "Preparing secure browser enrollment…";
         submitBtn.disabled = true;
 
-        const pending = await window.PqShareKeysV1.generatePendingEnrollment(inviteId);
+        const pending = await window.PqShareKeysV1.generatePendingEnrollment(inviteId, {
+            preferredAlg: preferredKemAlg
+        });
 
         statusEl.textContent = "Enrolling this browser…";
 
@@ -59,7 +74,7 @@
             body: JSON.stringify({
                 invite_id: inviteId,
                 device_label: deviceLabel,
-                kem_alg: pending.kem_alg,          // "X25519" for current MVP
+                kem_alg: pending.kem_alg,
                 public_key_b64: pending.public_key_b64
             })
         });
@@ -260,6 +275,9 @@
 
             <div class="k">Expires</div>
             <div class="v">${escapeHtml(fmtDateTime(expiresAt))}</div>
+
+            <div class="k">Requested KEM</div>
+            <div class="v">${escapeHtml(preferredKemAlg || "X25519")}</div>
           </div>
 
           <div class="field">
@@ -275,8 +293,7 @@
           <div id="status" class="status"></div>
 
           <div class="small">
-            Current crypto mode in this MVP uses real browser-generated X25519 keys for local decrypt flow.
-            PQ-native browser ML-KEM can be added later behind the same page flow.
+            ${escapeHtml(algBlurb())}
           </div>
         </div>
       </div>
