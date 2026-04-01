@@ -717,6 +717,33 @@ add_custom_target(run_test_mlkem_uniform_rej
         DEPENDS test_mlkem_uniform_rej
 )
 # -----------------------------------------------------------------------------
+# Tool: test_mlkem_matrix_entry_ntt (learning implementation, matrix entry wrapper)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_matrix_entry_ntt
+        tests/dna_pqcore_learn/test_mlkem_matrix_entry_ntt.cpp
+        core/dna_pqcore_learn/dna_mlkem_matrix_gen.cpp
+        core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
+        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
+)
+
+target_include_directories(test_mlkem_matrix_entry_ntt PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+target_link_libraries(test_mlkem_matrix_entry_ntt PRIVATE
+        OpenSSL::Crypto
+)
+
+set_target_properties(test_mlkem_matrix_entry_ntt PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_matrix_entry_ntt
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_matrix_entry_ntt"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_matrix_entry_ntt
+)
+# -----------------------------------------------------------------------------
 # Tool: test_mlkem_sample_ntt (learning implementation, SHAKE-128 uniform NTT sampler)
 # -----------------------------------------------------------------------------
 add_executable(test_mlkem_sample_ntt
