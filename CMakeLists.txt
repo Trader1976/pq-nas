@@ -422,6 +422,95 @@ add_custom_target(run_test_mlkem_poly_bytes
         DEPENDS test_mlkem_poly_bytes
 )
 # -----------------------------------------------------------------------------
+# Tool: test_mlkem_poly_compress_dv4 (learning implementation, dv=4 compression)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_poly_compress_dv4
+        tests/dna_pqcore_learn/test_mlkem_poly_compress_dv4.cpp
+        core/dna_pqcore_learn/dna_mlkem_poly.cpp
+        core/dna_pqcore_learn/dna_mlkem_compress.cpp
+)
+
+target_include_directories(test_mlkem_poly_compress_dv4 PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_poly_compress_dv4 PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_poly_compress_dv4
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_compress_dv4"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_poly_compress_dv4
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_polyvec_compress_du10 (learning implementation, du=10 polyvec compression)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_polyvec_compress_du10
+        tests/dna_pqcore_learn/test_mlkem_polyvec_compress_du10.cpp
+        core/dna_pqcore_learn/dna_mlkem_poly.cpp
+        core/dna_pqcore_learn/dna_mlkem_polyvec.cpp
+        core/dna_pqcore_learn/dna_mlkem_compress_du10.cpp
+        core/dna_pqcore_learn/dna_mlkem_polyvec_compress_du10.cpp
+)
+
+target_include_directories(test_mlkem_polyvec_compress_du10 PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_polyvec_compress_du10 PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_polyvec_compress_du10
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_polyvec_compress_du10"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_polyvec_compress_du10
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_field (learning implementation, finite-field arithmetic)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_field
+        tests/dna_pqcore_learn/test_mlkem_field.cpp
+        core/dna_pqcore_learn/dna_mlkem_field.cpp
+)
+
+target_include_directories(test_mlkem_field PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_field PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_field
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_field"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_field
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_poly_compress_du10 (learning implementation, du=10 compression)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_poly_compress_du10
+        tests/dna_pqcore_learn/test_mlkem_poly_compress_du10.cpp
+        core/dna_pqcore_learn/dna_mlkem_poly.cpp
+        core/dna_pqcore_learn/dna_mlkem_compress_du10.cpp
+)
+
+target_include_directories(test_mlkem_poly_compress_du10 PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_poly_compress_du10 PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_poly_compress_du10
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_compress_du10"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_poly_compress_du10
+)
+# -----------------------------------------------------------------------------
 # Tool: test_mlkem_polyvec_bytes (learning implementation, polyvec byte encoding)
 # -----------------------------------------------------------------------------
 add_executable(test_mlkem_polyvec_bytes
