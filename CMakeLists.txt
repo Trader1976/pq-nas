@@ -774,6 +774,29 @@ add_custom_target(run_test_mlkem_matvec_row_ntt
         DEPENDS test_mlkem_matvec_row_ntt
 )
 # -----------------------------------------------------------------------------
+# Tool: test_mlkem_tomont (learning implementation, Montgomery-domain conversion helpers)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_tomont
+        tests/dna_pqcore_learn/test_mlkem_tomont.cpp
+        core/dna_pqcore_learn/dna_mlkem_field.cpp
+        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
+        core/dna_pqcore_learn/dna_mlkem_tomont.cpp
+)
+
+target_include_directories(test_mlkem_tomont PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_tomont PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_tomont
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_tomont"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_tomont
+)
+# -----------------------------------------------------------------------------
 # Tool: test_mlkem_noisevec (learning implementation, k=3 noise-vector generation)
 # -----------------------------------------------------------------------------
 add_executable(test_mlkem_noisevec
