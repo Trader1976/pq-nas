@@ -68,23 +68,12 @@
     }
 
     async function decryptEnvelope(env) {
-        if (env.mode !== "x25519_aes256gcm_v1") {
-            throw new Error(`Unsupported open mode: ${env.mode}`);
+        if (!window.PqShareKeysV1) {
+            throw new Error("PQ key helper not loaded");
         }
 
-        const privateKey = await PqShareKeysV1.loadDevicePrivateKey(env.recipient_device_id);
-        const wrapKey = await PqShareKeysV1.deriveWrapKeyFromEnvelope(privateKey, env);
         const aad = PqShareKeysV1.b64ToBytes(env.aad_b64);
-
-        const cekRaw = new Uint8Array(await crypto.subtle.decrypt(
-            {
-                name: "AES-GCM",
-                iv: PqShareKeysV1.b64ToBytes(env.wrapped_key.wrap_iv_b64),
-                additionalData: aad
-            },
-            wrapKey,
-            PqShareKeysV1.b64ToBytes(env.wrapped_key.wrapped_cek_b64)
-        ));
+        const cekRaw = await PqShareKeysV1.unwrapCekFromEnvelope(env);
 
         const cek = await crypto.subtle.importKey(
             "raw",

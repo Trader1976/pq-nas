@@ -28642,32 +28642,6 @@ srv.Post("/api/v4/shares/pq/open", [&](const httplib::Request& req, httplib::Res
         return;
     }
 
-    // IMPORTANT:
-    // Resolve the exact same PQ-share access context that your current GET /s/<token>
-    // PQ branch already validates today:
-    //
-    //   - find share by token
-    //   - verify share exists / not revoked / not expired
-    //   - verify PQ mode is active for this share
-    //   - resolve active manifest from SharePqStoreV1
-    //   - validate recipient session cookie
-    //   - load recipient device
-    //   - resolve file absolute path
-    //   - verify snapshot against the live file BEFORE returning any encrypted material
-    //
-    // Do that by extracting the current logic from /s/<token> into a small local helper.
-    //
-    // On success this helper must populate:
-    //   ctx.share_token
-    //   ctx.owner_fp
-    //   ctx.rel_path
-    //   ctx.file_name
-    //   ctx.abs_path
-    //   ctx.manifest
-    //   ctx.session
-    //   ctx.device
-    //
-    // It must fail closed.
     PqShareOpenContextV1 ctx;
     std::string ctx_err;
 
@@ -28688,6 +28662,7 @@ srv.Post("/api/v4/shares/pq/open", [&](const httplib::Request& req, httplib::Res
             });
             return;
         }
+
         if (ctx_err == "share_expired") {
             reply(410, {
                 {"ok", false},
@@ -28695,14 +28670,16 @@ srv.Post("/api/v4/shares/pq/open", [&](const httplib::Request& req, httplib::Res
             });
             return;
         }
+
         if (ctx_err == "snapshot_mismatch") {
-        reply(409, {
-            {"ok", false},
-            {"error", "snapshot_mismatch"},
-            {"message", "Shared file changed since PQ share snapshot was created"}
-        });
-        return;
-    }
+            reply(409, {
+                {"ok", false},
+                {"error", "snapshot_mismatch"},
+                {"message", "Shared file changed since PQ share snapshot was created"}
+            });
+            return;
+        }
+
         reply(403, {
             {"ok", false},
             {"error", ctx_err.empty() ? "pq_open_denied" : ctx_err}
@@ -28731,11 +28708,25 @@ srv.Post("/api/v4/shares/pq/open", [&](const httplib::Request& req, httplib::Res
         plaintext.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
     }
 
-    // Keep AAD stable and explicit.
+    std::string device_kem_alg = ctx.device.kem_alg;
+    if (device_kem_alg.empty()) device_kem_alg = "X25519";
+
+    std::string envelope_mode;
+    if (device_kem_alg == "ML-KEM-768") envelope_mode = "mlkem768_aes256gcm_v1";
+    else if (device_kem_alg == "X25519") envelope_mode = "x25519_aes256gcm_v1";
+    else {
+        reply(400, {
+            {"ok", false},
+            {"error", "unsupported_recipient_kem_alg"},
+            {"message", device_kem_alg}
+        });
+        return;
+    }
+
     json aad = {
         {"v", 1},
         {"purpose", "pq_share_open"},
-        {"mode", "x25519_aes256gcm_v1"},
+        {"mode", envelope_mode},
         {"share_token", ctx.share_token},
         {"recipient_device_id", ctx.device.recipient_device_id},
         {"file_name", ctx.file_name},
@@ -28751,7 +28742,10 @@ srv.Post("/api/v4/shares/pq/open", [&](const httplib::Request& req, httplib::Res
 
     pqnas::PqOpenEnvelopeV1 env;
     std::string crypto_err;
-    if (!pqnas::build_pq_open_envelope_x25519_v1(
+    bool build_ok = false;
+
+    if (device_kem_alg == "ML-KEM-768") {
+        build_ok = pqnas::build_pq_open_envelope_mlkem768_v1(
             ctx.share_token,
             ctx.file_name,
             ctx.device.recipient_device_id,
@@ -28760,13 +28754,46 @@ srv.Post("/api/v4/shares/pq/open", [&](const httplib::Request& req, httplib::Res
             aad.dump(),
             snap,
             &env,
-            &crypto_err)) {
+            &crypto_err
+        );
+    } else {
+        build_ok = pqnas::build_pq_open_envelope_x25519_v1(
+            ctx.share_token,
+            ctx.file_name,
+            ctx.device.recipient_device_id,
+            ctx.device.public_key_b64,
+            plaintext,
+            aad.dump(),
+            snap,
+            &env,
+            &crypto_err
+        );
+    }
+
+    if (!build_ok) {
         reply(500, {
             {"ok", false},
             {"error", "pq_envelope_build_failed"},
             {"detail", crypto_err}
         });
         return;
+    }
+
+    json wrapped_key = {
+        {"mode", env.wrapped_key.mode},
+        {"recipient_device_id", env.wrapped_key.recipient_device_id},
+        {"kem_alg", env.wrapped_key.kem_alg},
+        {"hkdf_salt_b64", env.wrapped_key.hkdf_salt_b64},
+        {"hkdf_info_b64", env.wrapped_key.hkdf_info_b64},
+        {"wrap_iv_b64", env.wrapped_key.wrap_iv_b64},
+        {"wrapped_cek_b64", env.wrapped_key.wrapped_cek_b64}
+    };
+
+    if (!env.wrapped_key.sender_public_key_b64.empty()) {
+        wrapped_key["sender_public_key_b64"] = env.wrapped_key.sender_public_key_b64;
+    }
+    if (!env.wrapped_key.kem_ciphertext_b64.empty()) {
+        wrapped_key["kem_ciphertext_b64"] = env.wrapped_key.kem_ciphertext_b64;
     }
 
     reply(200, {
@@ -28784,16 +28811,7 @@ srv.Post("/api/v4/shares/pq/open", [&](const httplib::Request& req, httplib::Res
                 {"mtime_epoch", env.snapshot.mtime_epoch},
                 {"sha256_hex", env.snapshot.sha256_hex}
             }},
-            {"wrapped_key", {
-                {"mode", env.wrapped_key.mode},
-                {"recipient_device_id", env.wrapped_key.recipient_device_id},
-                {"kem_alg", env.wrapped_key.kem_alg},
-                {"sender_public_key_b64", env.wrapped_key.sender_public_key_b64},
-                {"hkdf_salt_b64", env.wrapped_key.hkdf_salt_b64},
-                {"hkdf_info_b64", env.wrapped_key.hkdf_info_b64},
-                {"wrap_iv_b64", env.wrapped_key.wrap_iv_b64},
-                {"wrapped_cek_b64", env.wrapped_key.wrapped_cek_b64}
-            }},
+            {"wrapped_key", wrapped_key},
             {"payload", {
                 {"enc_alg", env.payload.enc_alg},
                 {"iv_b64", env.payload.iv_b64},
@@ -30076,8 +30094,9 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
             << "<meta name='viewport' content='width=device-width,initial-scale=1'>"
             << "<title>DNA-Nexus secure share</title>"
             << "<script>window.PQ_SHARE_OPEN_BOOT=" << boot.dump() << ";</script>"
-            << "<script defer src='/static/share_pq_keys.js'></script>"
-            << "<script defer src='/static/share_pq_open.js'></script>"
+            << "<script defer src='/static/share_pq_mlkem.js?v=5'></script>"
+            << "<script defer src='/static/share_pq_keys.js?v=5'></script>"
+            << "<script defer src='/static/share_pq_open.js?v=5'></script>"
             << "</head>"
             << "<body>"
             << "<div id='pqShareOpenApp'>Opening secure share…</div>"
@@ -30274,7 +30293,8 @@ srv.Get(R"(/pq/invite/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httpl
         const json boot = {
             {"invite_id", invite_id},
             {"expires_at", inv.expires_at},
-            {"label_hint", inv.label_hint}
+            {"label_hint", inv.label_hint},
+            {"preferred_kem_alg", "ML-KEM-768"}
         };
 
         std::ostringstream html;
@@ -30286,8 +30306,9 @@ srv.Get(R"(/pq/invite/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httpl
             << "<meta name='viewport' content='width=device-width,initial-scale=1'>"
             << "<title>DNA-Nexus secure share</title>"
             << "<script>window.PQ_SHARE_INVITE_BOOT=" << boot.dump() << ";</script>"
-            << "<script defer src='/static/share_pq_keys.js'></script>"
-            << "<script defer src='/static/share_pq_invite.js'></script>"
+            << "<script defer src='/static/share_pq_mlkem.js?v=5'></script>"
+            << "<script defer src='/static/share_pq_keys.js?v=5'></script>"
+            << "<script defer src='/static/share_pq_invite.js?v=5'></script>"
             << "</head>"
             << "<body>"
             << "<div id='pqShareInviteApp'>Loading…</div>"
