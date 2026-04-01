@@ -380,6 +380,115 @@ set_target_properties(test_admin_cookie PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 # -----------------------------------------------------------------------------
+# Tool: test_mlkem_params_768 (learning implementation, params only)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_params_768
+        tests/dna_pqcore_learn/test_mlkem_params_768.cpp
+)
+
+target_include_directories(test_mlkem_params_768 PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_params_768 PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_params_768
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_params_768"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_params_768
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_poly_bytes (learning implementation, poly byte encoding)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_poly_bytes
+        tests/dna_pqcore_learn/test_mlkem_poly_bytes.cpp
+        core/dna_pqcore_learn/dna_mlkem_poly.cpp
+        core/dna_pqcore_learn/dna_mlkem_poly_bytes.cpp
+)
+
+target_include_directories(test_mlkem_poly_bytes PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_poly_bytes PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_poly_bytes
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_bytes"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_poly_bytes
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_polyvec_bytes (learning implementation, polyvec byte encoding)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_polyvec_bytes
+        tests/dna_pqcore_learn/test_mlkem_polyvec_bytes.cpp
+        core/dna_pqcore_learn/dna_mlkem_poly.cpp
+        core/dna_pqcore_learn/dna_mlkem_poly_bytes.cpp
+        core/dna_pqcore_learn/dna_mlkem_polyvec.cpp
+        core/dna_pqcore_learn/dna_mlkem_polyvec_bytes.cpp
+)
+
+target_include_directories(test_mlkem_polyvec_bytes PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_polyvec_bytes PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_polyvec_bytes
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_polyvec_bytes"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_polyvec_bytes
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_polyvec_basics (learning implementation, polyvec helpers)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_polyvec_basics
+        tests/dna_pqcore_learn/test_mlkem_polyvec_basics.cpp
+        core/dna_pqcore_learn/dna_mlkem_poly.cpp
+        core/dna_pqcore_learn/dna_mlkem_polyvec.cpp
+)
+
+target_include_directories(test_mlkem_polyvec_basics PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_polyvec_basics PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_polyvec_basics
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_polyvec_basics"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_polyvec_basics
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_poly_basics (learning implementation, poly helpers)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_poly_basics
+        tests/dna_pqcore_learn/test_mlkem_poly_basics.cpp
+        core/dna_pqcore_learn/dna_mlkem_poly.cpp
+)
+
+target_include_directories(test_mlkem_poly_basics PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_poly_basics PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_poly_basics
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_basics"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_poly_basics
+)
+# -----------------------------------------------------------------------------
 # Tool: test_dna_mlkem768_backend (experimental dna_pqcore test only)
 # -----------------------------------------------------------------------------
 add_executable(test_dna_mlkem768_backend
