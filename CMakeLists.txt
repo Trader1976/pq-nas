@@ -468,6 +468,72 @@ add_custom_target(run_test_mlkem_polyvec_compress_du10
         DEPENDS test_mlkem_polyvec_compress_du10
 )
 # -----------------------------------------------------------------------------
+# Tool: test_mlkem_ntt_constants (learning implementation, NTT constants/schedule)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_ntt_constants
+        tests/dna_pqcore_learn/test_mlkem_ntt_constants.cpp
+        core/dna_pqcore_learn/dna_mlkem_field.cpp
+        core/dna_pqcore_learn/dna_mlkem_ntt_constants.cpp
+)
+
+target_include_directories(test_mlkem_ntt_constants PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_ntt_constants PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_ntt_constants
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_ntt_constants"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_ntt_constants
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_ntt_butterfly (learning implementation, first real NTT unit)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_ntt_butterfly
+        tests/dna_pqcore_learn/test_mlkem_ntt_butterfly.cpp
+        core/dna_pqcore_learn/dna_mlkem_field.cpp
+        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
+)
+
+target_include_directories(test_mlkem_ntt_butterfly PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_ntt_butterfly PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_ntt_butterfly
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_ntt_butterfly"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_ntt_butterfly
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_ntt_layer (learning implementation, one full forward NTT layer)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_ntt_layer
+        tests/dna_pqcore_learn/test_mlkem_ntt_layer.cpp
+        core/dna_pqcore_learn/dna_mlkem_field.cpp
+        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
+)
+
+target_include_directories(test_mlkem_ntt_layer PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_ntt_layer PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_ntt_layer
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_ntt_layer"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_ntt_layer
+)
+# -----------------------------------------------------------------------------
 # Tool: test_mlkem_field (learning implementation, finite-field arithmetic)
 # -----------------------------------------------------------------------------
 add_executable(test_mlkem_field
