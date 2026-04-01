@@ -939,6 +939,48 @@ add_custom_target(run_test_mlkem_cpapke
         DEPENDS test_mlkem_cpapke
 )
 # -----------------------------------------------------------------------------
+# Tool: test_mlkem_kem (learning implementation, deterministic ML-KEM-768 wrapper)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_kem
+        tests/dna_pqcore_learn/test_mlkem_kem.cpp
+        core/dna_pqcore_learn/dna_mlkem_cbd.cpp
+        core/dna_pqcore_learn/dna_mlkem_prf.cpp
+        core/dna_pqcore_learn/dna_mlkem_getnoise.cpp
+        core/dna_pqcore_learn/dna_mlkem_noisevec.cpp
+        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
+        core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
+        core/dna_pqcore_learn/dna_mlkem_matrix_gen.cpp
+        core/dna_pqcore_learn/dna_mlkem_matvec.cpp
+        core/dna_pqcore_learn/dna_mlkem_field.cpp
+        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
+        core/dna_pqcore_learn/dna_mlkem_tomont.cpp
+        core/dna_pqcore_learn/dna_mlkem_message.cpp
+        core/dna_pqcore_learn/dna_mlkem_indcpa_keygen_skeleton.cpp
+        core/dna_pqcore_learn/dna_mlkem_indcpa_encrypt_skeleton.cpp
+        core/dna_pqcore_learn/dna_mlkem_indcpa_decrypt_skeleton.cpp
+        core/dna_pqcore_learn/dna_mlkem_indcpa_packed.cpp
+        core/dna_pqcore_learn/dna_mlkem_cpapke.cpp
+        core/dna_pqcore_learn/dna_mlkem_kem.cpp
+)
+
+target_include_directories(test_mlkem_kem PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+target_link_libraries(test_mlkem_kem PRIVATE
+        OpenSSL::Crypto
+)
+
+set_target_properties(test_mlkem_kem PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_kem
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_kem"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_kem
+)
+# -----------------------------------------------------------------------------
 # Tool: test_mlkem_noisevec (learning implementation, k=3 noise-vector generation)
 # -----------------------------------------------------------------------------
 add_executable(test_mlkem_noisevec
