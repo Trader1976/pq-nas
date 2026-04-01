@@ -136,6 +136,41 @@ target_compile_definitions(pqnas_mlkem_native_obj PRIVATE
         MLK_CONFIG_FILE=\"pqnas_mlkem_native_config_768.h\"
 )
 # -----------------------------------------------------------------------------
+# Vendored ML-KEM-768 backend for dna_pqcore (separate namespace prefix)
+# -----------------------------------------------------------------------------
+add_library(dnanexus_mlkem_native_obj OBJECT
+        server/third_party/mlkem-native/mlkem/mlkem_native.c
+)
+
+target_include_directories(dnanexus_mlkem_native_obj PRIVATE
+        ${CMAKE_SOURCE_DIR}/server/third_party/mlkem-native
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore
+)
+
+target_compile_definitions(dnanexus_mlkem_native_obj PRIVATE
+        MLK_CONFIG_FILE=\"dna_mlkem_native_config_768.h\"
+)
+# -----------------------------------------------------------------------------
+# Experimental DNA PQ core library (not wired into pqnas_server yet)
+# -----------------------------------------------------------------------------
+add_library(dna_pqcore_mlkem STATIC
+        core/dna_pqcore/dna_mlkem768_backend.cpp
+        core/dna_pqcore/dna_mlkem768_backend.h
+        $<TARGET_OBJECTS:dnanexus_mlkem_native_obj>
+)
+
+target_include_directories(dna_pqcore_mlkem PUBLIC
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore
+)
+
+target_include_directories(dna_pqcore_mlkem PRIVATE
+        ${CMAKE_SOURCE_DIR}/server/third_party/mlkem-native
+)
+
+target_link_libraries(dna_pqcore_mlkem PRIVATE
+        OpenSSL::Crypto
+)
+# -----------------------------------------------------------------------------
 # Server (C++ / httplib)
 # -----------------------------------------------------------------------------
 add_executable(pqnas_server
@@ -344,7 +379,26 @@ target_link_libraries(test_admin_cookie PRIVATE
 set_target_properties(test_admin_cookie PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
+# -----------------------------------------------------------------------------
+# Tool: test_dna_mlkem768_backend (experimental dna_pqcore test only)
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_backend
+        tests/dna_pqcore/test_dna_mlkem768_backend.cpp
+)
 
+target_link_libraries(test_dna_mlkem768_backend PRIVATE
+        dna_pqcore_mlkem
+)
+
+set_target_properties(test_dna_mlkem768_backend PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_dna_mlkem768_backend
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_backend"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_dna_mlkem768_backend
+)
 # -----------------------------------------------------------------------------
 # Tool: pqnas_keygen
 # -----------------------------------------------------------------------------
