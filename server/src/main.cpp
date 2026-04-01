@@ -28683,6 +28683,67 @@ auto make_chunk_aad_v2_local = [&](const std::vector<std::uint8_t>& base_aad,
     return true;
 };
 
+auto guess_mime_type_local = [&](const std::string& file_name) -> std::string {
+    auto lower_ascii = [](std::string s) -> std::string {
+        for (char& c : s) {
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        }
+        return s;
+    };
+
+    const std::string fn = lower_ascii(file_name);
+
+    auto ends_with = [&](const char* suffix) -> bool {
+        const std::string suf = suffix ? suffix : "";
+        return fn.size() >= suf.size() &&
+               fn.compare(fn.size() - suf.size(), suf.size(), suf) == 0;
+    };
+
+    if (ends_with(".txt"))  return "text/plain";
+    if (ends_with(".md"))   return "text/markdown";
+    if (ends_with(".html")) return "text/html";
+    if (ends_with(".htm"))  return "text/html";
+    if (ends_with(".css"))  return "text/css";
+    if (ends_with(".js"))   return "application/javascript";
+    if (ends_with(".json")) return "application/json";
+    if (ends_with(".csv"))  return "text/csv";
+    if (ends_with(".xml"))  return "application/xml";
+
+    if (ends_with(".pdf"))  return "application/pdf";
+    if (ends_with(".zip"))  return "application/zip";
+    if (ends_with(".gz"))   return "application/gzip";
+    if (ends_with(".tar"))  return "application/x-tar";
+    if (ends_with(".7z"))   return "application/x-7z-compressed";
+    if (ends_with(".rar"))  return "application/vnd.rar";
+
+    if (ends_with(".png"))  return "image/png";
+    if (ends_with(".jpg"))  return "image/jpeg";
+    if (ends_with(".jpeg")) return "image/jpeg";
+    if (ends_with(".gif"))  return "image/gif";
+    if (ends_with(".webp")) return "image/webp";
+    if (ends_with(".svg"))  return "image/svg+xml";
+    if (ends_with(".bmp"))  return "image/bmp";
+    if (ends_with(".ico"))  return "image/x-icon";
+
+    if (ends_with(".mp3"))  return "audio/mpeg";
+    if (ends_with(".wav"))  return "audio/wav";
+    if (ends_with(".ogg"))  return "audio/ogg";
+    if (ends_with(".flac")) return "audio/flac";
+
+    if (ends_with(".mp4"))  return "video/mp4";
+    if (ends_with(".webm")) return "video/webm";
+    if (ends_with(".mkv"))  return "video/x-matroska";
+    if (ends_with(".mov"))  return "video/quicktime";
+    if (ends_with(".avi"))  return "video/x-msvideo";
+
+    if (ends_with(".deb"))  return "application/vnd.debian.binary-package";
+    if (ends_with(".rpm"))  return "application/x-rpm";
+    if (ends_with(".apk"))  return "application/vnd.android.package-archive";
+    if (ends_with(".exe"))  return "application/vnd.microsoft.portable-executable";
+
+    return "application/octet-stream";
+};
+
 srv.Post("/api/v4/shares/pq/open/init", [&](const httplib::Request& req, httplib::Response& res) {
     auto reply = [&](int status, const json& j) {
         res.status = status;
@@ -28803,7 +28864,7 @@ srv.Post("/api/v4/shares/pq/open/init", [&](const httplib::Request& req, httplib
     os.recipient_device_id = ctx.device.recipient_device_id;
     os.rel_path = ctx.rel_path;
     os.file_name = ctx.file_name;
-    os.mime_type = "application/octet-stream";
+    os.mime_type = guess_mime_type_local(ctx.file_name);
     os.file_size_bytes = file_size;
     os.chunk_size_bytes = chunk_size;
     os.chunk_count = chunk_count;
@@ -28840,7 +28901,7 @@ srv.Post("/api/v4/shares/pq/open/init", [&](const httplib::Request& req, httplib
             {"mode", "mlkem768_aes256gcm_chunks_v2"},
             {"share_token", ctx.share_token},
             {"file_name", ctx.file_name},
-            {"mime_type", "application/octet-stream"},
+            {"mime_type", os.mime_type},
             {"recipient_device_id", ctx.device.recipient_device_id},
             {"aad_b64", os.aad_b64},
             {"snapshot", {
@@ -29104,6 +29165,7 @@ srv.Post("/api/v4/shares/pq/open", [&](const httplib::Request& req, httplib::Res
 
     const std::string envelope_mode = "mlkem768_aes256gcm_v1";
 
+    const std::string mime_type = guess_mime_type_local(ctx.file_name);
 
     json aad = {
         {"v", 1},
