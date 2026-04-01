@@ -3,6 +3,17 @@
 
     let modPromise = null;
 
+    function normalizeB64(s) {
+        return String(s || "").replace(/-/g, "+").replace(/_/g, "/");
+    }
+
+    function b64ToBytes(b64) {
+        const bin = atob(normalizeB64(b64));
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out;
+    }
+
     function bytesToB64(bytes) {
         let s = "";
         const chunk = 0x8000;
@@ -10,13 +21,6 @@
             s += String.fromCharCode(...bytes.subarray(i, i + chunk));
         }
         return btoa(s);
-    }
-
-    function b64ToBytes(b64) {
-        const bin = atob(String(b64 || "").replace(/-/g, "+").replace(/_/g, "/"));
-        const out = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-        return out;
     }
 
     async function loadMlKemModule() {
