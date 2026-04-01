@@ -744,6 +744,94 @@ add_custom_target(run_test_mlkem_matrix_entry_ntt
         DEPENDS test_mlkem_matrix_entry_ntt
 )
 # -----------------------------------------------------------------------------
+# Tool: test_mlkem_matvec_row_ntt (learning implementation, one NTT-domain matrix row times vector)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_matvec_row_ntt
+        tests/dna_pqcore_learn/test_mlkem_matvec_row_ntt.cpp
+        core/dna_pqcore_learn/dna_mlkem_matvec.cpp
+        core/dna_pqcore_learn/dna_mlkem_matrix_gen.cpp
+        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
+        core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
+        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
+        core/dna_pqcore_learn/dna_mlkem_field.cpp
+)
+
+target_include_directories(test_mlkem_matvec_row_ntt PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+target_link_libraries(test_mlkem_matvec_row_ntt PRIVATE
+        OpenSSL::Crypto
+)
+
+set_target_properties(test_mlkem_matvec_row_ntt PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_matvec_row_ntt
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_matvec_row_ntt"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_matvec_row_ntt
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_noisevec (learning implementation, k=3 noise-vector generation)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_noisevec
+        tests/dna_pqcore_learn/test_mlkem_noisevec.cpp
+        core/dna_pqcore_learn/dna_mlkem_cbd.cpp
+        core/dna_pqcore_learn/dna_mlkem_prf.cpp
+        core/dna_pqcore_learn/dna_mlkem_getnoise.cpp
+        core/dna_pqcore_learn/dna_mlkem_noisevec.cpp
+)
+
+target_include_directories(test_mlkem_noisevec PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+target_link_libraries(test_mlkem_noisevec PRIVATE
+        OpenSSL::Crypto
+)
+
+set_target_properties(test_mlkem_noisevec PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_noisevec
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_noisevec"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_noisevec
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_matvec_full_ntt (learning implementation, full 3x3 matrix-vector multiply)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_matvec_full_ntt
+        tests/dna_pqcore_learn/test_mlkem_matvec_full_ntt.cpp
+        core/dna_pqcore_learn/dna_mlkem_matvec.cpp
+        core/dna_pqcore_learn/dna_mlkem_matrix_gen.cpp
+        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
+        core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
+        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
+        core/dna_pqcore_learn/dna_mlkem_field.cpp
+)
+
+target_include_directories(test_mlkem_matvec_full_ntt PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+target_link_libraries(test_mlkem_matvec_full_ntt PRIVATE
+        OpenSSL::Crypto
+)
+
+set_target_properties(test_mlkem_matvec_full_ntt PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_matvec_full_ntt
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_matvec_full_ntt"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_matvec_full_ntt
+)
+# -----------------------------------------------------------------------------
 # Tool: test_mlkem_matrix_full_ntt (learning implementation, full 3x3 matrix generator)
 # -----------------------------------------------------------------------------
 add_executable(test_mlkem_matrix_full_ntt
