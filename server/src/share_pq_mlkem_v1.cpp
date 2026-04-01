@@ -15,6 +15,8 @@ extern "C" {
 namespace pqnas {
 namespace {
 
+// Best-effort wipe helper for temporary sensitive byte buffers.
+// Used for random coins and shared-secret material owned by std::vector.
 static void wipe_bytes(std::vector<std::uint8_t>* v) {
     if (!v) return;
     std::fill(v->begin(), v->end(), 0);
@@ -22,6 +24,7 @@ static void wipe_bytes(std::vector<std::uint8_t>* v) {
     v->shrink_to_fit();
 }
 
+// Fill `out` with `n` cryptographically random bytes.
 static bool random_bytes_local(std::size_t n, std::vector<std::uint8_t>* out) {
     if (!out) return false;
     out->assign(n, 0);
@@ -32,14 +35,17 @@ static bool random_bytes_local(std::size_t n, std::vector<std::uint8_t>* out) {
 
 } // namespace
 
+// Vendored native ML-KEM backend is compiled in, so availability is constant.
 bool mlkem768_available_v1() {
     return true;
 }
 
+// Human-readable backend label for startup logs / diagnostics.
 std::string mlkem768_backend_name_v1() {
     return "mlkem-native-c";
 }
 
+// Generate an ML-KEM-768 keypair using the vendored native implementation.
 bool mlkem768_keygen_v1(MlKem768KeypairV1* out, std::string* err) {
     if (err) err->clear();
     if (!out) {
@@ -50,6 +56,7 @@ bool mlkem768_keygen_v1(MlKem768KeypairV1* out, std::string* err) {
     wipe_bytes(&out->public_key);
     wipe_bytes(&out->secret_key);
 
+    // ML-KEM key generation consumes 2 * MLKEM_SYMBYTES of randomness.
     std::vector<std::uint8_t> coins(2 * MLKEM_SYMBYTES, 0);
     if (!random_bytes_local(coins.size(), &coins)) {
         if (err) *err = "random_coins_failed";
@@ -76,6 +83,8 @@ bool mlkem768_keygen_v1(MlKem768KeypairV1* out, std::string* err) {
     return true;
 }
 
+// Encapsulate to a recipient ML-KEM-768 public key.
+// Produces both the KEM ciphertext and the derived shared secret.
 bool mlkem768_encapsulate_v1(const std::vector<std::uint8_t>& public_key,
                              MlKem768EncapResultV1* out,
                              std::string* err) {
@@ -93,6 +102,7 @@ bool mlkem768_encapsulate_v1(const std::vector<std::uint8_t>& public_key,
         return false;
     }
 
+    // ML-KEM encapsulation consumes MLKEM_SYMBYTES of randomness.
     std::vector<std::uint8_t> coins(MLKEM_SYMBYTES, 0);
     if (!random_bytes_local(coins.size(), &coins)) {
         if (err) *err = "random_coins_failed";
@@ -120,6 +130,8 @@ bool mlkem768_encapsulate_v1(const std::vector<std::uint8_t>& public_key,
     return true;
 }
 
+// Decapsulate an ML-KEM-768 ciphertext using the recipient secret key.
+// Recovers the same shared secret produced during encapsulation.
 bool mlkem768_decapsulate_v1(const std::vector<std::uint8_t>& secret_key,
                              const std::vector<std::uint8_t>& ciphertext,
                              std::vector<std::uint8_t>* out_shared_secret,
@@ -158,7 +170,9 @@ bool mlkem768_decapsulate_v1(const std::vector<std::uint8_t>& secret_key,
     return true;
 }
 
-    bool mlkem768_selftest_v1(std::string* err) {
+// End-to-end ML-KEM self-test:
+// keygen -> encapsulate -> decapsulate -> shared-secret equality check.
+bool mlkem768_selftest_v1(std::string* err) {
     if (err) err->clear();
 
     MlKem768KeypairV1 kp;

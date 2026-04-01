@@ -14,9 +14,24 @@
 namespace pqnas {
 namespace {
 
+// Internal OpenSSL RAII helpers used throughout this file.
 using EvpPkeyPtr = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
 using EvpPkeyCtxPtr = std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>;
 using EvpCipherCtxPtr = std::unique_ptr<EVP_CIPHER_CTX, decltype(&EVP_CIPHER_CTX_free)>;
+
+// This file implements the crypto building blocks for PQ share open.
+// High-level model:
+//
+// 1) Generate a random content-encryption key (CEK).
+// 2) Wrap that CEK for the intended recipient.
+//    - Legacy path: X25519 + HKDF-SHA256 + AES-256-GCM
+//    - Current PQ path: ML-KEM-768 + HKDF-SHA256 + AES-256-GCM
+// 3) Encrypt either:
+//    - the whole payload (v1 whole-envelope flow), or
+//    - chunk payloads elsewhere using the same CEK (v2 chunked flow)
+//
+// The ML-KEM wrapped-key format is intentionally shared by both the
+// whole-payload v1 route and the v2 chunked-stream route.
 
 static std::string b64_encode(const std::vector<std::uint8_t>& in) {
     if (in.empty()) return std::string{};
@@ -52,12 +67,14 @@ static bool b64_decode(const std::string& in, std::vector<std::uint8_t>* out) {
     return true;
 }
 
+// Fills `out` with `n` cryptographically random bytes.
 static bool random_bytes(std::size_t n, std::vector<std::uint8_t>* out) {
     if (!out) return false;
     out->assign(n, 0);
     return RAND_bytes(reinterpret_cast<unsigned char*>(out->data()), static_cast<int>(n)) == 1;
 }
 
+// Legacy X25519 helper: generate an ephemeral sender key.
 static bool make_x25519_ephemeral(EVP_PKEY** out_key, std::string* err) {
     if (!out_key) return false;
     *out_key = nullptr;
@@ -80,6 +97,7 @@ static bool make_x25519_ephemeral(EVP_PKEY** out_key, std::string* err) {
     return true;
 }
 
+// Export X25519 public key bytes in raw form.
 static bool export_x25519_public_raw(EVP_PKEY* pkey, std::vector<std::uint8_t>* out, std::string* err) {
     if (!pkey || !out) return false;
     std::size_t n = 0;
@@ -96,6 +114,7 @@ static bool export_x25519_public_raw(EVP_PKEY* pkey, std::vector<std::uint8_t>* 
     return true;
 }
 
+// Import raw X25519 public key bytes into EVP_PKEY form.
 static bool import_x25519_public_raw(
     const std::vector<std::uint8_t>& raw_pub,
     EVP_PKEY** out_key,
@@ -121,6 +140,7 @@ static bool import_x25519_public_raw(
     return true;
 }
 
+// Legacy X25519 helper: perform DH and return the raw shared secret.
 static bool derive_x25519_shared_secret(
     EVP_PKEY* local_private,
     EVP_PKEY* peer_public,
@@ -157,6 +177,7 @@ static bool derive_x25519_shared_secret(
     return true;
 }
 
+// HKDF-SHA256 used to turn KEM/DH shared secret material into an AES wrap key.
 static bool hkdf_sha256(
     const std::vector<std::uint8_t>& ikm,
     const std::vector<std::uint8_t>& salt,
@@ -202,6 +223,8 @@ static bool hkdf_sha256(
     return true;
 }
 
+// Encrypts `plaintext` with AES-256-GCM.
+// Output format is ciphertext||tag, which keeps transport simple.
 static bool aes_256_gcm_encrypt(
     const std::vector<std::uint8_t>& key,
     const std::vector<std::uint8_t>& iv,
@@ -275,6 +298,7 @@ static bool aes_256_gcm_encrypt(
     return true;
 }
 
+// Decrypts AES-256-GCM data in ciphertext||tag format.
 static bool aes_256_gcm_decrypt(
     const std::vector<std::uint8_t>& key,
     const std::vector<std::uint8_t>& iv,
@@ -359,13 +383,14 @@ static bool aes_256_gcm_decrypt(
     return true;
 }
 
-
 static std::vector<std::uint8_t> to_bytes(const std::string& s) {
     return std::vector<std::uint8_t>(s.begin(), s.end());
 }
 
 } // namespace
 
+// Legacy whole-payload X25519 envelope builder.
+// Kept for compatibility, but new PQ share open flow uses ML-KEM-768.
 bool build_pq_open_envelope_x25519_v1(
     const std::string& share_token,
     const std::string& file_name,
@@ -411,6 +436,7 @@ bool build_pq_open_envelope_x25519_v1(
     std::vector<std::uint8_t> wrap_key;
     if (!hkdf_sha256(shared_secret, hkdf_salt, hkdf_info, 32, &wrap_key, err)) return false;
 
+    // Random CEK used for payload encryption.
     std::vector<std::uint8_t> cek;
     if (!random_bytes(32, &cek)) {
         if (err) *err = "random_cek_failed";
@@ -425,6 +451,7 @@ bool build_pq_open_envelope_x25519_v1(
         return false;
     }
 
+    // Wrap CEK for recipient.
     std::vector<std::uint8_t> wrapped_cek;
     if (!aes_256_gcm_encrypt(wrap_key, wrap_iv, aad, cek, &wrapped_cek, err)) return false;
 
@@ -434,6 +461,7 @@ bool build_pq_open_envelope_x25519_v1(
         return false;
     }
 
+    // Encrypt whole payload with CEK.
     std::vector<std::uint8_t> ciphertext;
     if (!aes_256_gcm_encrypt(cek, payload_iv, aad, plaintext, &ciphertext, err)) return false;
 
@@ -465,6 +493,12 @@ bool build_pq_open_envelope_x25519_v1(
     return true;
 }
 
+// Whole-payload ML-KEM v1 envelope builder.
+// This is the self-contained flow:
+// - generate CEK
+// - wrap CEK for recipient using ML-KEM-768 + HKDF + AES-GCM
+// - encrypt full plaintext with CEK
+// - return a complete envelope for browser decrypt.
 bool build_pq_open_envelope_mlkem768_v1(
     const std::string& share_token,
     const std::string& file_name,
@@ -503,6 +537,7 @@ bool build_pq_open_envelope_mlkem768_v1(
     std::vector<std::uint8_t> wrap_key;
     if (!hkdf_sha256(encap.shared_secret, hkdf_salt, hkdf_info, 32, &wrap_key, err)) return false;
 
+    // Random CEK used for payload encryption.
     std::vector<std::uint8_t> cek;
     if (!random_bytes(32, &cek)) {
         if (err) *err = "random_cek_failed";
@@ -517,6 +552,7 @@ bool build_pq_open_envelope_mlkem768_v1(
         return false;
     }
 
+    // Wrap CEK for recipient.
     std::vector<std::uint8_t> wrapped_cek;
     if (!aes_256_gcm_encrypt(wrap_key, wrap_iv, aad, cek, &wrapped_cek, err)) return false;
 
@@ -526,6 +562,7 @@ bool build_pq_open_envelope_mlkem768_v1(
         return false;
     }
 
+    // Encrypt whole payload with CEK.
     std::vector<std::uint8_t> ciphertext;
     if (!aes_256_gcm_encrypt(cek, payload_iv, aad, plaintext, &ciphertext, err)) return false;
 
@@ -557,6 +594,8 @@ bool build_pq_open_envelope_mlkem768_v1(
     return true;
 }
 
+// Public helper for v2 chunked flow.
+// The route layer uses this to encrypt chunk payloads with an already-unwrapped CEK.
 bool encrypt_aes256gcm_bytes_v1(
     const std::vector<std::uint8_t>& key,
     const std::vector<std::uint8_t>& iv,
@@ -567,6 +606,10 @@ bool encrypt_aes256gcm_bytes_v1(
     return aes_256_gcm_encrypt(key, iv, aad, plaintext, out, err);
 }
 
+// v2 chunked-stream helper.
+// Wraps an already-generated CEK for the recipient using the same wrapped-key
+// format as ML-KEM v1 whole-payload envelopes. The caller then uses that CEK
+// separately for per-chunk AES-GCM encryption.
 bool wrap_pq_stream_cek_mlkem768_v1(
     const std::string& recipient_device_id,
     const std::string& recipient_public_key_b64,
@@ -631,6 +674,9 @@ bool wrap_pq_stream_cek_mlkem768_v1(
     *out = std::move(wk);
     return true;
 }
+
+// End-to-end self-test for ML-KEM envelope construction and recovery:
+// encapsulate -> derive wrap key -> unwrap CEK -> decrypt payload.
 bool pq_open_envelope_mlkem768_selftest_v1(std::string* err) {
     if (err) err->clear();
 
@@ -734,6 +780,7 @@ bool pq_open_envelope_mlkem768_selftest_v1(std::string* err) {
         return false;
     }
 
+    // Recover CEK.
     std::vector<std::uint8_t> cek;
     if (!aes_256_gcm_decrypt(wrap_key, wrap_iv, aad, wrapped_cek, &cek, &step_err)) {
         if (err) *err = "selftest:unwrap_cek:" + step_err;
@@ -755,6 +802,7 @@ bool pq_open_envelope_mlkem768_selftest_v1(std::string* err) {
         return false;
     }
 
+    // Recover full plaintext.
     std::vector<std::uint8_t> recovered;
     if (!aes_256_gcm_decrypt(cek, payload_iv, aad, payload_ct, &recovered, &step_err)) {
         if (err) *err = "selftest:decrypt_payload:" + step_err;
