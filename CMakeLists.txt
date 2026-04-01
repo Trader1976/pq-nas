@@ -512,6 +512,211 @@ add_custom_target(run_test_mlkem_ntt_butterfly
         DEPENDS test_mlkem_ntt_butterfly
 )
 # -----------------------------------------------------------------------------
+# Tool: test_mlkem_poly_ntt_forward (learning implementation, full forward NTT)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_poly_ntt_forward
+        tests/dna_pqcore_learn/test_mlkem_poly_ntt_forward.cpp
+        core/dna_pqcore_learn/dna_mlkem_field.cpp
+        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
+)
+
+target_include_directories(test_mlkem_poly_ntt_forward PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_poly_ntt_forward PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_poly_ntt_forward
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_ntt_forward"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_poly_ntt_forward
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_poly_invntt_tomont (learning implementation, inverse NTT)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_poly_invntt_tomont
+        tests/dna_pqcore_learn/test_mlkem_poly_invntt_tomont.cpp
+        core/dna_pqcore_learn/dna_mlkem_field.cpp
+        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
+)
+
+target_include_directories(test_mlkem_poly_invntt_tomont PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_poly_invntt_tomont PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_poly_invntt_tomont
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_invntt_tomont"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_poly_invntt_tomont
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_basemul_pair (learning implementation, NTT base multiplication)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_basemul_pair
+        tests/dna_pqcore_learn/test_mlkem_basemul_pair.cpp
+        core/dna_pqcore_learn/dna_mlkem_field.cpp
+        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
+)
+
+target_include_directories(test_mlkem_basemul_pair PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_basemul_pair PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_basemul_pair
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_basemul_pair"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_basemul_pair
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_poly_basemul_montgomery (learning implementation, full NTT-domain polynomial multiply)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_poly_basemul_montgomery
+        tests/dna_pqcore_learn/test_mlkem_poly_basemul_montgomery.cpp
+        core/dna_pqcore_learn/dna_mlkem_field.cpp
+        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
+)
+
+target_include_directories(test_mlkem_poly_basemul_montgomery PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_poly_basemul_montgomery PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_poly_basemul_montgomery
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_basemul_montgomery"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_poly_basemul_montgomery
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_poly_mul_via_ntt (learning implementation, full polynomial multiplication pipeline)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_poly_mul_via_ntt
+        tests/dna_pqcore_learn/test_mlkem_poly_mul_via_ntt.cpp
+        core/dna_pqcore_learn/dna_mlkem_field.cpp
+        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
+)
+
+target_include_directories(test_mlkem_poly_mul_via_ntt PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_poly_mul_via_ntt PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_poly_mul_via_ntt
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_mul_via_ntt"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_poly_mul_via_ntt
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_cbd (learning implementation, centered binomial sampling)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_cbd
+        tests/dna_pqcore_learn/test_mlkem_cbd.cpp
+        core/dna_pqcore_learn/dna_mlkem_cbd.cpp
+)
+
+target_include_directories(test_mlkem_cbd PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_cbd PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_cbd
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_cbd"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_cbd
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_prf (learning implementation, SHAKE-256 seed||nonce expansion)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_prf
+        tests/dna_pqcore_learn/test_mlkem_prf.cpp
+        core/dna_pqcore_learn/dna_mlkem_prf.cpp
+)
+
+target_include_directories(test_mlkem_prf PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+target_link_libraries(test_mlkem_prf PRIVATE
+        OpenSSL::Crypto
+)
+
+set_target_properties(test_mlkem_prf PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_prf
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_prf"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_prf
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_getnoise (learning implementation, PRF + CBD composition)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_getnoise
+        tests/dna_pqcore_learn/test_mlkem_getnoise.cpp
+        core/dna_pqcore_learn/dna_mlkem_cbd.cpp
+        core/dna_pqcore_learn/dna_mlkem_prf.cpp
+        core/dna_pqcore_learn/dna_mlkem_getnoise.cpp
+)
+
+target_include_directories(test_mlkem_getnoise PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+target_link_libraries(test_mlkem_getnoise PRIVATE
+        OpenSSL::Crypto
+)
+
+set_target_properties(test_mlkem_getnoise PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_getnoise
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_getnoise"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_getnoise
+)
+# -----------------------------------------------------------------------------
+# Tool: test_mlkem_uniform_rej (learning implementation, uniform rejection sampler)
+# -----------------------------------------------------------------------------
+add_executable(test_mlkem_uniform_rej
+        tests/dna_pqcore_learn/test_mlkem_uniform_rej.cpp
+        core/dna_pqcore_learn/dna_mlkem_field.cpp
+        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
+)
+
+target_include_directories(test_mlkem_uniform_rej PRIVATE
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+set_target_properties(test_mlkem_uniform_rej PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+add_custom_target(run_test_mlkem_uniform_rej
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_uniform_rej"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        DEPENDS test_mlkem_uniform_rej
+)
+# -----------------------------------------------------------------------------
 # Tool: test_mlkem_ntt_layer (learning implementation, one full forward NTT layer)
 # -----------------------------------------------------------------------------
 add_executable(test_mlkem_ntt_layer
