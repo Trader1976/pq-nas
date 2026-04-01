@@ -113,6 +113,7 @@ extern "C" {
 #include "share_pq_v1.h"
 #include "share_pq_crypto_v1.h"
 #include "share_pq_mlkem_v1.h"
+#include <openssl/rand.h>
 
 //pool migration
 #include "user_storage_migration.h"
@@ -28618,6 +28619,375 @@ auto resolve_pq_share_open_context_v1 =
 
     return true;
 };
+auto b64_encode_bytes_local = [&](const std::vector<std::uint8_t>& in) -> std::string {
+    if (in.empty()) return {};
+    const int out_len = 4 * static_cast<int>((in.size() + 2) / 3);
+    std::string out(out_len, '\0');
+    const int n = EVP_EncodeBlock(
+        reinterpret_cast<unsigned char*>(&out[0]),
+        reinterpret_cast<const unsigned char*>(in.data()),
+        static_cast<int>(in.size()));
+    if (n < 0) return {};
+    out.resize(static_cast<std::size_t>(n));
+    return out;
+};
+
+auto b64_decode_bytes_local = [&](const std::string& in, std::vector<std::uint8_t>* out) -> bool {
+    if (!out) return false;
+    out->clear();
+    if (in.empty()) return true;
+
+    int pad = 0;
+    if (!in.empty() && in.back() == '=') ++pad;
+    if (in.size() >= 2 && in[in.size() - 2] == '=') ++pad;
+
+    std::vector<std::uint8_t> tmp(3 * ((in.size() + 3) / 4), 0);
+    const int n = EVP_DecodeBlock(
+        reinterpret_cast<unsigned char*>(tmp.data()),
+        reinterpret_cast<const unsigned char*>(in.data()),
+        static_cast<int>(in.size()));
+    if (n < 0) return false;
+
+    tmp.resize(static_cast<std::size_t>(n - pad));
+    *out = std::move(tmp);
+    return true;
+};
+
+auto u32be_local = [&](std::uint32_t v) -> std::vector<std::uint8_t> {
+    return {
+        static_cast<std::uint8_t>((v >> 24) & 0xff),
+        static_cast<std::uint8_t>((v >> 16) & 0xff),
+        static_cast<std::uint8_t>((v >>  8) & 0xff),
+        static_cast<std::uint8_t>(v & 0xff)
+    };
+};
+
+auto make_chunk_iv_v2_local = [&](const std::vector<std::uint8_t>& prefix8, std::uint32_t chunk_index, std::vector<std::uint8_t>* out) -> bool {
+    if (!out || prefix8.size() != 8) return false;
+    *out = prefix8;
+    const auto tail = u32be_local(chunk_index);
+    out->insert(out->end(), tail.begin(), tail.end());
+    return true;
+};
+
+auto make_chunk_aad_v2_local = [&](const std::vector<std::uint8_t>& base_aad,
+                                   std::uint32_t chunk_index,
+                                   std::uint32_t plain_chunk_size,
+                                   std::vector<std::uint8_t>* out) -> bool {
+    if (!out) return false;
+    *out = base_aad;
+    const auto idx = u32be_local(chunk_index);
+    const auto psz = u32be_local(plain_chunk_size);
+    out->insert(out->end(), idx.begin(), idx.end());
+    out->insert(out->end(), psz.begin(), psz.end());
+    return true;
+};
+
+srv.Post("/api/v4/shares/pq/open/init", [&](const httplib::Request& req, httplib::Response& res) {
+    auto reply = [&](int status, const json& j) {
+        res.status = status;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(j.dump(2), "application/json; charset=utf-8");
+    };
+
+    json body = json::object();
+    try {
+        if (!req.body.empty()) body = json::parse(req.body);
+    } catch (...) {
+        reply(400, {{"ok", false}, {"error", "bad_json"}});
+        return;
+    }
+
+    const std::string share_token =
+        (body.contains("share_token") && body["share_token"].is_string())
+            ? body["share_token"].get<std::string>()
+            : std::string{};
+
+    if (share_token.empty()) {
+        reply(400, {{"ok", false}, {"error", "missing_share_token"}});
+        return;
+    }
+
+    PqShareOpenContextV1 ctx;
+    std::string ctx_err;
+    if (!resolve_pq_share_open_context_v1(req, share_token, &ctx, &ctx_err)) {
+        reply(ctx_err == "share_not_found" ? 404 : 403, {
+            {"ok", false},
+            {"error", ctx_err.empty() ? "pq_open_denied" : ctx_err}
+        });
+        return;
+    }
+
+    std::string device_kem_alg = ctx.device.kem_alg;
+    if (device_kem_alg == "ml-kem-768" || device_kem_alg == "mlkem768" || device_kem_alg == "MLKEM768") {
+        device_kem_alg = "ML-KEM-768";
+    }
+    if (device_kem_alg != "ML-KEM-768") {
+        reply(400, {
+            {"ok", false},
+            {"error", "unsupported_recipient_kem_alg"},
+            {"message", "Only ML-KEM-768 recipients are supported"}
+        });
+        return;
+    }
+
+    const std::uint64_t file_size = ctx.manifest.snapshot.size_bytes;
+    const std::uint64_t chunk_size = 1024ull * 1024ull;
+    const std::uint64_t chunk_count = (file_size == 0) ? 0 : ((file_size + chunk_size - 1) / chunk_size);
+
+    json aad = {
+        {"v", 2},
+        {"purpose", "pq_share_open_stream"},
+        {"mode", "mlkem768_aes256gcm_chunks_v2"},
+        {"share_token", ctx.share_token},
+        {"recipient_device_id", ctx.device.recipient_device_id},
+        {"file_name", ctx.file_name},
+        {"snapshot_sha256_hex", ctx.manifest.snapshot.sha256_hex},
+        {"snapshot_size_bytes", ctx.manifest.snapshot.size_bytes},
+        {"snapshot_mtime_epoch", ctx.manifest.snapshot.mtime_epoch}
+    };
+    const std::string aad_json = aad.dump();
+
+    std::vector<std::uint8_t> cek(32, 0);
+    if (RAND_bytes(reinterpret_cast<unsigned char*>(cek.data()), static_cast<int>(cek.size())) != 1) {
+        reply(500, {{"ok", false}, {"error", "random_cek_failed"}});
+        return;
+    }
+
+    std::vector<std::uint8_t> nonce_prefix(8, 0);
+    if (RAND_bytes(reinterpret_cast<unsigned char*>(nonce_prefix.data()), static_cast<int>(nonce_prefix.size())) != 1) {
+        reply(500, {{"ok", false}, {"error", "random_nonce_prefix_failed"}});
+        return;
+    }
+
+    pqnas::PqOpenSnapshotV1 snap;
+    snap.size_bytes = ctx.manifest.snapshot.size_bytes;
+    snap.mtime_epoch = ctx.manifest.snapshot.mtime_epoch;
+    snap.sha256_hex = ctx.manifest.snapshot.sha256_hex;
+
+    pqnas::PqWrappedKeyV1 wrapped_key_rec;
+    std::string crypto_err;
+    if (!pqnas::wrap_pq_stream_cek_mlkem768_v1(
+            ctx.device.recipient_device_id,
+            ctx.device.public_key_b64,
+            cek,
+            aad_json,
+            &wrapped_key_rec,
+            &crypto_err)) {
+        reply(500, {
+            {"ok", false},
+            {"error", "pq_wrap_stream_cek_failed"},
+            {"detail", crypto_err}
+        });
+        return;
+    }
+
+    const std::string recipient_session_id = [&]() -> std::string {
+        auto it = req.headers.find("Cookie");
+        if (it == req.headers.end()) return {};
+        const std::string all = it->second;
+        const std::string needle = "pqnas_share_recipient=";
+        std::size_t pos = all.find(needle);
+        if (pos == std::string::npos) return {};
+        pos += needle.size();
+        std::size_t end = all.find(';', pos);
+        if (end == std::string::npos) end = all.size();
+        return all.substr(pos, end - pos);
+    }();
+
+    pqnas::PqShareOpenStreamSessionV1 os;
+    os.open_id = pqnas::SharePqStoreV1::random_id_b64url_local(24);
+    os.owner_fp = ctx.owner_fp;
+    os.share_token = ctx.share_token;
+    os.recipient_session_id = recipient_session_id;
+    os.recipient_device_id = ctx.device.recipient_device_id;
+    os.rel_path = ctx.rel_path;
+    os.file_name = ctx.file_name;
+    os.mime_type = "application/octet-stream";
+    os.file_size_bytes = file_size;
+    os.chunk_size_bytes = chunk_size;
+    os.chunk_count = chunk_count;
+    os.snapshot_mtime_epoch = ctx.manifest.snapshot.mtime_epoch;
+    os.snapshot_sha256_hex = ctx.manifest.snapshot.sha256_hex;
+    os.aad_b64 = b64_encode_bytes_local(std::vector<std::uint8_t>(aad_json.begin(), aad_json.end()));
+    os.cek_b64 = b64_encode_bytes_local(cek);
+    os.chunk_nonce_prefix_b64 = b64_encode_bytes_local(nonce_prefix);
+    os.created_at = pqnas::SharePqStoreV1::now_iso_utc_local();
+    os.expires_at = pqnas::SharePqStoreV1::add_seconds_iso_utc_local(15 * 60);
+    os.state = "active";
+
+    std::string os_err;
+    if (!share_pq.save_open_stream_session(os, &os_err)) {
+        reply(500, {{"ok", false}, {"error", "open_stream_session_save_failed"}, {"detail", os_err}});
+        return;
+    }
+
+    json wrapped_key = {
+        {"mode", wrapped_key_rec.mode},
+        {"recipient_device_id", wrapped_key_rec.recipient_device_id},
+        {"kem_alg", wrapped_key_rec.kem_alg},
+        {"kem_ciphertext_b64", wrapped_key_rec.kem_ciphertext_b64},
+        {"hkdf_salt_b64", wrapped_key_rec.hkdf_salt_b64},
+        {"hkdf_info_b64", wrapped_key_rec.hkdf_info_b64},
+        {"wrap_iv_b64", wrapped_key_rec.wrap_iv_b64},
+        {"wrapped_cek_b64", wrapped_key_rec.wrapped_cek_b64}
+    };
+
+    reply(200, {
+        {"ok", true},
+        {"open", {
+            {"version", 2},
+            {"mode", "mlkem768_aes256gcm_chunks_v2"},
+            {"share_token", ctx.share_token},
+            {"file_name", ctx.file_name},
+            {"mime_type", "application/octet-stream"},
+            {"recipient_device_id", ctx.device.recipient_device_id},
+            {"aad_b64", os.aad_b64},
+            {"snapshot", {
+                {"size_bytes", snap.size_bytes},
+                {"mtime_epoch", snap.mtime_epoch},
+                {"sha256_hex", snap.sha256_hex}
+            }},
+            {"wrapped_key", wrapped_key},
+            {"stream", {
+                {"open_id", os.open_id},
+                {"chunk_size_bytes", os.chunk_size_bytes},
+                {"chunk_count", os.chunk_count},
+                {"chunk_nonce_prefix_b64", os.chunk_nonce_prefix_b64},
+                {"chunk_api", "/api/v4/shares/pq/open/chunk"}
+            }}
+        }}
+    });
+});
+
+srv.Get("/api/v4/shares/pq/open/chunk", [&](const httplib::Request& req, httplib::Response& res) {
+    auto fail = [&](int status, const std::string& err, const std::string& msg = std::string{}) {
+        json j{{"ok", false}, {"error", err}};
+        if (!msg.empty()) j["message"] = msg;
+        res.status = status;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(j.dump(2), "application/json; charset=utf-8");
+    };
+
+    const std::string open_id = req.get_param_value("open_id");
+    const std::string idx_s = req.get_param_value("i");
+    if (open_id.empty() || idx_s.empty()) {
+        fail(400, "missing_open_id_or_index");
+        return;
+    }
+
+    std::uint64_t chunk_index = 0;
+    try {
+        chunk_index = static_cast<std::uint64_t>(std::stoull(idx_s));
+    } catch (...) {
+        fail(400, "bad_chunk_index");
+        return;
+    }
+
+    pqnas::PqShareOpenStreamSessionV1 os;
+    std::string os_err;
+    if (!share_pq.load_open_stream_session(open_id, &os, &os_err)) {
+        fail(404, "open_stream_session_not_found");
+        return;
+    }
+    if (os.state != "active") {
+        fail(403, "open_stream_session_inactive");
+        return;
+    }
+    if (pqnas::SharePqStoreV1::iso_expired_local(os.expires_at)) {
+        fail(410, "open_stream_session_expired");
+        return;
+    }
+    if (chunk_index >= os.chunk_count) {
+        fail(416, "chunk_index_out_of_range");
+        return;
+    }
+
+    // Bind chunk fetch to the same recipient browser session
+    auto get_cookie_value_local = [&](const std::string& name) -> std::string {
+        auto it = req.headers.find("Cookie");
+        if (it == req.headers.end()) return {};
+        const std::string all = it->second;
+        const std::string needle = name + "=";
+        std::size_t pos = all.find(needle);
+        if (pos == std::string::npos) return {};
+        pos += needle.size();
+        std::size_t end = all.find(';', pos);
+        if (end == std::string::npos) end = all.size();
+        return all.substr(pos, end - pos);
+    };
+    if (get_cookie_value_local("pqnas_share_recipient") != os.recipient_session_id) {
+        fail(403, "recipient_session_mismatch");
+        return;
+    }
+
+    pqnas::ResolvedExistingPath rp;
+    std::string rerr;
+    if (!pqnas::resolve_existing_user_file_path(users, os.owner_fp, os.rel_path, &rp, &rerr)) {
+        fail(404, "file_not_found");
+        return;
+    }
+
+    const std::uint64_t offset = chunk_index * os.chunk_size_bytes;
+    const std::uint64_t remain = (offset < os.file_size_bytes) ? (os.file_size_bytes - offset) : 0;
+    const std::uint64_t this_plain_size = std::min<std::uint64_t>(os.chunk_size_bytes, remain);
+
+    std::ifstream f(rp.abs_path, std::ios::binary);
+    if (!f) {
+        fail(404, "file_open_failed");
+        return;
+    }
+    f.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+    if (!f) {
+        fail(500, "file_seek_failed");
+        return;
+    }
+
+    std::vector<std::uint8_t> plain(static_cast<std::size_t>(this_plain_size), 0);
+    if (this_plain_size > 0) {
+        f.read(reinterpret_cast<char*>(plain.data()), static_cast<std::streamsize>(this_plain_size));
+        if (static_cast<std::uint64_t>(f.gcount()) != this_plain_size) {
+            fail(500, "file_read_failed");
+            return;
+        }
+    }
+
+    std::vector<std::uint8_t> cek;
+    std::vector<std::uint8_t> nonce_prefix;
+    std::vector<std::uint8_t> base_aad;
+    if (!b64_decode_bytes_local(os.cek_b64, &cek) ||
+        !b64_decode_bytes_local(os.chunk_nonce_prefix_b64, &nonce_prefix) ||
+        !b64_decode_bytes_local(os.aad_b64, &base_aad)) {
+        fail(500, "open_stream_session_decode_failed");
+        return;
+    }
+
+    std::vector<std::uint8_t> iv;
+    std::vector<std::uint8_t> chunk_aad;
+    if (!make_chunk_iv_v2_local(nonce_prefix, static_cast<std::uint32_t>(chunk_index), &iv) ||
+        !make_chunk_aad_v2_local(base_aad,
+                                 static_cast<std::uint32_t>(chunk_index),
+                                 static_cast<std::uint32_t>(this_plain_size),
+                                 &chunk_aad)) {
+        fail(500, "chunk_crypto_params_failed");
+        return;
+    }
+
+    std::vector<std::uint8_t> ciphertext;
+    std::string enc_err;
+    if (!pqnas::encrypt_aes256gcm_bytes_v1(cek, iv, chunk_aad, plain, &ciphertext, &enc_err)) {
+        fail(500, "chunk_encrypt_failed", enc_err);
+        return;
+    }
+
+    res.status = 200;
+    res.set_header("Cache-Control", "no-store");
+    res.set_header("Content-Type", "application/octet-stream");
+    res.set_content(reinterpret_cast<const char*>(ciphertext.data()),
+                    static_cast<size_t>(ciphertext.size()),
+                    "application/octet-stream");
+});
+
 srv.Post("/api/v4/shares/pq/open", [&](const httplib::Request& req, httplib::Response& res) {
     auto reply = [&](int status, const json& j) {
         res.status = status;
@@ -30078,6 +30448,8 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
             {"token", token}, // keep for temporary compatibility
             {"share_token", token},
             {"open_api", "/api/v4/shares/pq/open"},
+            {"open_init_api", "/api/v4/shares/pq/open/init"},
+            {"open_chunk_api", "/api/v4/shares/pq/open/chunk"},
             {"file_name", std::filesystem::path(s.path).filename().string()},
             {"recipient_device_id", pq_sess.recipient_device_id}
         };

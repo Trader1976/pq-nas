@@ -556,6 +556,81 @@ bool build_pq_open_envelope_mlkem768_v1(
     *out = std::move(env);
     return true;
 }
+
+bool encrypt_aes256gcm_bytes_v1(
+    const std::vector<std::uint8_t>& key,
+    const std::vector<std::uint8_t>& iv,
+    const std::vector<std::uint8_t>& aad,
+    const std::vector<std::uint8_t>& plaintext,
+    std::vector<std::uint8_t>* out,
+    std::string* err) {
+    return aes_256_gcm_encrypt(key, iv, aad, plaintext, out, err);
+}
+
+bool wrap_pq_stream_cek_mlkem768_v1(
+    const std::string& recipient_device_id,
+    const std::string& recipient_public_key_b64,
+    const std::vector<std::uint8_t>& cek,
+    const std::string& aad_json_utf8,
+    PqWrappedKeyV1* out,
+    std::string* err) {
+    if (!out) {
+        if (err) *err = "output_null";
+        return false;
+    }
+    if (cek.size() != 32) {
+        if (err) *err = "bad_cek_len";
+        return false;
+    }
+
+    std::vector<std::uint8_t> recipient_pub_raw;
+    if (!b64_decode(recipient_public_key_b64, &recipient_pub_raw)) {
+        if (err) *err = "recipient_public_key_b64_invalid";
+        return false;
+    }
+
+    MlKem768EncapResultV1 encap;
+    std::string mlkem_err;
+    if (!mlkem768_encapsulate_v1(recipient_pub_raw, &encap, &mlkem_err)) {
+        if (err) *err = mlkem_err.empty() ? "mlkem768_encapsulate_failed" : mlkem_err;
+        return false;
+    }
+
+    std::vector<std::uint8_t> hkdf_salt;
+    if (!random_bytes(32, &hkdf_salt)) {
+        if (err) *err = "random_hkdf_salt_failed";
+        return false;
+    }
+
+    const std::vector<std::uint8_t> hkdf_info = to_bytes("pqnas-share-open-mlkem768-wrap-v1");
+    std::vector<std::uint8_t> wrap_key;
+    if (!hkdf_sha256(encap.shared_secret, hkdf_salt, hkdf_info, 32, &wrap_key, err)) return false;
+
+    std::vector<std::uint8_t> aad = to_bytes(aad_json_utf8);
+
+    std::vector<std::uint8_t> wrap_iv;
+    if (!random_bytes(12, &wrap_iv)) {
+        if (err) *err = "random_wrap_iv_failed";
+        return false;
+    }
+
+    std::vector<std::uint8_t> wrapped_cek;
+    if (!aes_256_gcm_encrypt(wrap_key, wrap_iv, aad, cek, &wrapped_cek, err)) return false;
+
+    PqWrappedKeyV1 wk;
+    wk.mode = "mlkem768_hkdf_sha256_aes256gcm_v1";
+    wk.recipient_device_id = recipient_device_id;
+    wk.kem_alg = "ML-KEM-768";
+    wk.sender_public_key_b64.clear();
+    wk.kem_ciphertext_b64 = b64_encode(encap.ciphertext);
+    wk.hkdf_salt_b64 = b64_encode(hkdf_salt);
+    wk.hkdf_info_b64 = b64_encode(hkdf_info);
+    wk.wrap_iv_b64 = b64_encode(wrap_iv);
+    wk.wrapped_cek_b64 = b64_encode(wrapped_cek);
+
+    *out = std::move(wk);
+    return true;
+}
 bool pq_open_envelope_mlkem768_selftest_v1(std::string* err) {
     if (err) err->clear();
 

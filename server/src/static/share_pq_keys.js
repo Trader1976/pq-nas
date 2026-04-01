@@ -248,35 +248,7 @@
         );
     }
 
-    async function deriveWrapKeyFromEnvelope(privateKey, env) {
-        const senderPub = await importSenderPublicKeyX25519(env.wrapped_key.sender_public_key_b64);
-        const sharedBits = await crypto.subtle.deriveBits(
-            { name: "X25519", public: senderPub },
-            privateKey,
-            256
-        );
 
-        const hkdfBaseKey = await crypto.subtle.importKey(
-            "raw",
-            sharedBits,
-            "HKDF",
-            false,
-            ["deriveKey"]
-        );
-
-        return crypto.subtle.deriveKey(
-            {
-                name: "HKDF",
-                hash: "SHA-256",
-                salt: b64ToBytes(env.wrapped_key.hkdf_salt_b64),
-                info: b64ToBytes(env.wrapped_key.hkdf_info_b64)
-            },
-            hkdfBaseKey,
-            { name: "AES-GCM", length: 256 },
-            false,
-            ["decrypt"]
-        );
-    }
     async function deriveWrapKeyFromEnvelope(privateKey, env) {
         const senderPub = await importSenderPublicKeyX25519(env.wrapped_key.sender_public_key_b64);
         const sharedBits = await crypto.subtle.deriveBits(
@@ -345,7 +317,7 @@
             ));
         }
 
-        if (env.mode === "mlkem768_aes256gcm_v1") {
+        if (env.mode === "mlkem768_aes256gcm_v1" || env.mode === "mlkem768_aes256gcm_chunks_v2") {
             if (!globalThis.PqShareMlKemV1) {
                 throw new Error("ML-KEM-768 browser helper not loaded");
             }

@@ -72,6 +72,28 @@ struct PqShareRecipientSessionV1 {
     std::string state; // "active" | "revoked"
 };
 
+    struct PqShareOpenStreamSessionV1 {
+        std::string open_id;
+        std::string owner_fp;
+        std::string share_token;
+        std::string recipient_session_id;
+        std::string recipient_device_id;
+        std::string rel_path;
+        std::string file_name;
+        std::string mime_type;
+        std::uint64_t file_size_bytes = 0;
+        std::uint64_t chunk_size_bytes = 0;
+        std::uint64_t chunk_count = 0;
+        std::int64_t snapshot_mtime_epoch = 0;
+        std::string snapshot_sha256_hex;
+        std::string aad_b64;
+        std::string cek_b64;
+        std::string chunk_nonce_prefix_b64;   // 8 random bytes; IV = prefix || u32be(chunk_index)
+        std::string created_at;
+        std::string expires_at;
+        std::string state;                    // "active", "done", "expired", "revoked"
+    };
+
 struct PqShareCreateResultV1 {
     PqShareManifestV1 manifest;
     PqShareInviteV1 invite;
@@ -107,6 +129,9 @@ public:
 
     bool load_session(const std::string& session_id, PqShareRecipientSessionV1* out, std::string* err) const;
     bool save_session(const PqShareRecipientSessionV1& s, std::string* err);
+    bool load_open_stream_session(const std::string& open_id, PqShareOpenStreamSessionV1* out, std::string* err) const;
+    bool save_open_stream_session(const PqShareOpenStreamSessionV1& s, std::string* err);
+    bool revoke_open_stream_session(const std::string& open_id, std::string* err);
     bool touch_session(const std::string& session_id, const std::string& now_iso, std::string* err);
 
     bool file_snapshot_from_abs_path(const std::filesystem::path& abs,
@@ -162,6 +187,8 @@ private:
     std::filesystem::path recipient_path(const std::string& owner_fp,
                                          const std::string& recipient_device_id) const;
     std::filesystem::path session_path(const std::string& session_id) const;
+
+    std::filesystem::path open_stream_session_path(const std::string& open_id) const;
 
     static bool write_json_atomic_local(const std::filesystem::path& path,
                                         const std::string& text,

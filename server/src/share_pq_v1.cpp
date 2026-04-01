@@ -208,7 +208,79 @@ static bool session_from_json(const json& j, PqShareRecipientSessionV1* out) {
     out->state = json_string_or(j, "state", "");
     return !out->session_id.empty();
 }
+static json open_stream_session_to_json(const PqShareOpenStreamSessionV1& s) {
+    return json{
+        {"open_id", s.open_id},
+        {"owner_fp", s.owner_fp},
+        {"share_token", s.share_token},
+        {"recipient_session_id", s.recipient_session_id},
+        {"recipient_device_id", s.recipient_device_id},
+        {"rel_path", s.rel_path},
+        {"file_name", s.file_name},
+        {"mime_type", s.mime_type},
+        {"file_size_bytes", s.file_size_bytes},
+        {"chunk_size_bytes", s.chunk_size_bytes},
+        {"chunk_count", s.chunk_count},
+        {"snapshot_mtime_epoch", s.snapshot_mtime_epoch},
+        {"snapshot_sha256_hex", s.snapshot_sha256_hex},
+        {"aad_b64", s.aad_b64},
+        {"cek_b64", s.cek_b64},
+        {"chunk_nonce_prefix_b64", s.chunk_nonce_prefix_b64},
+        {"created_at", s.created_at},
+        {"expires_at", s.expires_at},
+        {"state", s.state}
+    };
+}
 
+static bool open_stream_session_from_json(const json& j, PqShareOpenStreamSessionV1* out) {
+    if (!out) return false;
+    *out = PqShareOpenStreamSessionV1{};
+
+    auto json_string = [&](const char* key) -> std::string {
+        auto it = j.find(key);
+        return (it != j.end() && it->is_string()) ? it->get<std::string>() : std::string{};
+    };
+    auto json_u64 = [&](const char* key) -> std::uint64_t {
+        auto it = j.find(key);
+        if (it == j.end()) return 0;
+        if (it->is_number_unsigned()) return it->get<std::uint64_t>();
+        if (it->is_number_integer()) return static_cast<std::uint64_t>(it->get<std::int64_t>());
+        return 0;
+    };
+    auto json_i64 = [&](const char* key) -> std::int64_t {
+        auto it = j.find(key);
+        if (it == j.end()) return 0;
+        if (it->is_number_integer()) return it->get<std::int64_t>();
+        if (it->is_number_unsigned()) return static_cast<std::int64_t>(it->get<std::uint64_t>());
+        return 0;
+    };
+
+    out->open_id = json_string("open_id");
+    out->owner_fp = json_string("owner_fp");
+    out->share_token = json_string("share_token");
+    out->recipient_session_id = json_string("recipient_session_id");
+    out->recipient_device_id = json_string("recipient_device_id");
+    out->rel_path = json_string("rel_path");
+    out->file_name = json_string("file_name");
+    out->mime_type = json_string("mime_type");
+    out->file_size_bytes = json_u64("file_size_bytes");
+    out->chunk_size_bytes = json_u64("chunk_size_bytes");
+    out->chunk_count = json_u64("chunk_count");
+    out->snapshot_mtime_epoch = json_i64("snapshot_mtime_epoch");
+    out->snapshot_sha256_hex = json_string("snapshot_sha256_hex");
+    out->aad_b64 = json_string("aad_b64");
+    out->cek_b64 = json_string("cek_b64");
+    out->chunk_nonce_prefix_b64 = json_string("chunk_nonce_prefix_b64");
+    out->created_at = json_string("created_at");
+    out->expires_at = json_string("expires_at");
+    out->state = json_string("state");
+
+    return !out->open_id.empty() &&
+           !out->owner_fp.empty() &&
+           !out->share_token.empty() &&
+           !out->recipient_session_id.empty() &&
+           !out->recipient_device_id.empty();
+}
 static std::int64_t file_mtime_epoch_local(const std::filesystem::path& p, std::string* err) {
     if (err) err->clear();
     std::error_code ec;
@@ -356,6 +428,9 @@ std::filesystem::path SharePqStoreV1::session_path(const std::string& session_id
     return true;
 }
 
+    std::filesystem::path SharePqStoreV1::open_stream_session_path(const std::string& open_id) const {
+    return session_path("open_" + open_id);
+}
 bool SharePqStoreV1::read_text_file_local(const std::filesystem::path& path,
                                           std::string* out,
                                           std::string* err) {
@@ -892,6 +967,40 @@ bool SharePqStoreV1::save_session(const PqShareRecipientSessionV1& s, std::strin
     return write_json_atomic_local(session_path(s.session_id), session_to_json(s).dump(2) + "\n", err);
 }
 
+bool SharePqStoreV1::load_open_stream_session(const std::string& open_id, PqShareOpenStreamSessionV1* out, std::string* err) const {
+    if (out) *out = PqShareOpenStreamSessionV1{};
+
+    std::string text;
+    if (!read_text_file_local(open_stream_session_path(open_id), &text, err)) return false;
+
+    json j;
+    try {
+        j = json::parse(text);
+    } catch (...) {
+        if (err) *err = "bad_json";
+        return false;
+    }
+
+    if (!open_stream_session_from_json(j, out)) {
+        if (err) *err = "bad_open_stream_session";
+        return false;
+    }
+    return true;
+}
+
+    bool SharePqStoreV1::save_open_stream_session(const PqShareOpenStreamSessionV1& s, std::string* err) {
+    return write_json_atomic_local(
+        open_stream_session_path(s.open_id),
+        open_stream_session_to_json(s).dump(2) + "\n",
+        err);
+}
+
+    bool SharePqStoreV1::revoke_open_stream_session(const std::string& open_id, std::string* err) {
+    PqShareOpenStreamSessionV1 s;
+    if (!load_open_stream_session(open_id, &s, err)) return false;
+    s.state = "revoked";
+    return save_open_stream_session(s, err);
+}
 bool SharePqStoreV1::touch_session(const std::string& session_id, const std::string& now_iso, std::string* err) {
     PqShareRecipientSessionV1 s;
     if (!load_session(session_id, &s, err)) return false;

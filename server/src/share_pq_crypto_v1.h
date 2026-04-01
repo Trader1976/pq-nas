@@ -65,6 +65,22 @@ namespace pqnas {
         PqOpenEnvelopeV1* out,
         std::string* err);
 
+    bool wrap_pq_stream_cek_mlkem768_v1(
+        const std::string& recipient_device_id,
+        const std::string& recipient_public_key_b64,
+        const std::vector<std::uint8_t>& cek,
+        const std::string& aad_json_utf8,
+        PqWrappedKeyV1* out,
+        std::string* err);
+
+    bool encrypt_aes256gcm_bytes_v1(
+        const std::vector<std::uint8_t>& key,
+        const std::vector<std::uint8_t>& iv,
+        const std::vector<std::uint8_t>& aad,
+        const std::vector<std::uint8_t>& plaintext,
+        std::vector<std::uint8_t>* out,
+        std::string* err);
+    
     bool pq_open_envelope_mlkem768_selftest_v1(std::string* err);
 
 } // namespace pqnas
