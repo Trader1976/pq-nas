@@ -1,0 +1,17 @@
+BUILD
+
+cd ~/CLionProjects/pq-nas
+cmake -S mlkem_lab -B build-mlkem
+cmake --build build-mlkem -j
+
+
+RUN
+
+cmake --build build-mlkem --target run_mlkem_lab_freeze_tests
+
+
+LARGE FUZZ TEST
+
+./build-mlkem/bin/test_mlkem_kem_diff_fuzz
+./build-mlkem/bin/test_mlkem_kem_diff_fuzz 10000
+./build-mlkem/bin/test_mlkem_kem_diff_fuzz 10000 0x12345678 8

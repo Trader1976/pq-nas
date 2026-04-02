@@ -36,3 +36,5 @@ apps/bundled/**/filemgr-*.zip
 apps/bundled/**/**/*.zip
 apps/bundled/**/*.zip
 apps/bundled/*/*.zip
+
+build-mlkem/

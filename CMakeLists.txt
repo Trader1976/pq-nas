@@ -120,8 +120,9 @@ target_link_libraries(pqnas_verify_v4 PUBLIC
         OpenSSL::Crypto
         dl
 )
+
 # -----------------------------------------------------------------------------
-# Vendored ML-KEM-768 backend (portable C, first integration)
+# Vendored ML-KEM-768 backend used by pqnas_server
 # -----------------------------------------------------------------------------
 add_library(pqnas_mlkem_native_obj OBJECT
         server/third_party/mlkem-native/mlkem/mlkem_native.c
@@ -135,41 +136,7 @@ target_include_directories(pqnas_mlkem_native_obj PRIVATE
 target_compile_definitions(pqnas_mlkem_native_obj PRIVATE
         MLK_CONFIG_FILE=\"pqnas_mlkem_native_config_768.h\"
 )
-# -----------------------------------------------------------------------------
-# Vendored ML-KEM-768 backend for dna_pqcore (separate namespace prefix)
-# -----------------------------------------------------------------------------
-add_library(dnanexus_mlkem_native_obj OBJECT
-        server/third_party/mlkem-native/mlkem/mlkem_native.c
-)
 
-target_include_directories(dnanexus_mlkem_native_obj PRIVATE
-        ${CMAKE_SOURCE_DIR}/server/third_party/mlkem-native
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore
-)
-
-target_compile_definitions(dnanexus_mlkem_native_obj PRIVATE
-        MLK_CONFIG_FILE=\"dna_mlkem_native_config_768.h\"
-)
-# -----------------------------------------------------------------------------
-# Experimental DNA PQ core library (not wired into pqnas_server yet)
-# -----------------------------------------------------------------------------
-add_library(dna_pqcore_mlkem STATIC
-        core/dna_pqcore/dna_mlkem768_backend.cpp
-        core/dna_pqcore/dna_mlkem768_backend.h
-        $<TARGET_OBJECTS:dnanexus_mlkem_native_obj>
-)
-
-target_include_directories(dna_pqcore_mlkem PUBLIC
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore
-)
-
-target_include_directories(dna_pqcore_mlkem PRIVATE
-        ${CMAKE_SOURCE_DIR}/server/third_party/mlkem-native
-)
-
-target_link_libraries(dna_pqcore_mlkem PRIVATE
-        OpenSSL::Crypto
-)
 # -----------------------------------------------------------------------------
 # Server (C++ / httplib)
 # -----------------------------------------------------------------------------
@@ -233,7 +200,7 @@ target_link_libraries(pqnas_server PRIVATE
         ${QRENCODE_LIBRARIES}
         OpenSSL::Crypto
         SQLite::SQLite3
-        Threads::Threads                   # <-- robust std::thread support (-pthread)
+        Threads::Threads
         dl
 )
 
@@ -255,7 +222,6 @@ add_custom_command(TARGET pqnas_server POST_BUILD
 add_executable(verify_vectors
         tests/vectors/verify_vectors.c
 )
-
 
 target_include_directories(verify_vectors PRIVATE
         ${CMAKE_SOURCE_DIR}/core
@@ -290,14 +256,12 @@ add_executable(verify_v4_vectors
         tests/v4_vectors/verify_v4_vectors.cpp
 )
 
-
 target_link_libraries(verify_v4_vectors PRIVATE
         pqnas_verify_v4
 )
 
-# Keep output next to other tools
 set_target_properties(verify_v4_vectors PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
 target_compile_options(verify_v4_vectors PRIVATE
@@ -317,6 +281,7 @@ add_custom_command(TARGET verify_v4_vectors POST_BUILD
         "${PQNAS_DNA_LIB_SRC}"
         "$<TARGET_FILE_DIR:verify_v4_vectors>/libdna_lib.so"
 )
+
 # -----------------------------------------------------------------------------
 # Tool: verify_v5_vectors (v5 glue checks; derives/compares k == st_hash_b64)
 # -----------------------------------------------------------------------------
@@ -329,7 +294,7 @@ target_link_libraries(verify_v5_vectors PRIVATE
 )
 
 set_target_properties(verify_v5_vectors PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
 target_compile_options(verify_v5_vectors PRIVATE
@@ -362,7 +327,6 @@ add_executable(test_admin_cookie
         server/src/users_registry.cpp
 )
 
-
 target_include_directories(test_admin_cookie PRIVATE
         ${CMAKE_SOURCE_DIR}/server/include
         ${CMAKE_SOURCE_DIR}/server/third_party
@@ -373,880 +337,19 @@ target_include_directories(test_admin_cookie PRIVATE
 target_link_libraries(test_admin_cookie PRIVATE
         OpenSSL::Crypto
         ${SODIUM_LIBRARIES}
-        Threads::Threads                  # (harmless; keeps things consistent)
+        Threads::Threads
 )
 
 set_target_properties(test_admin_cookie PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_params_768 (learning implementation, params only)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_params_768
-        tests/dna_pqcore_learn/test_mlkem_params_768.cpp
-)
 
-target_include_directories(test_mlkem_params_768 PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_params_768 PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_params_768
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_params_768"
+add_custom_target(run_test_admin_cookie
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_admin_cookie"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_params_768
+        DEPENDS test_admin_cookie
 )
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_poly_bytes (learning implementation, poly byte encoding)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_poly_bytes
-        tests/dna_pqcore_learn/test_mlkem_poly_bytes.cpp
-        core/dna_pqcore_learn/dna_mlkem_poly.cpp
-        core/dna_pqcore_learn/dna_mlkem_poly_bytes.cpp
-)
-
-target_include_directories(test_mlkem_poly_bytes PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_poly_bytes PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_poly_bytes
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_bytes"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_poly_bytes
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_poly_compress_dv4 (learning implementation, dv=4 compression)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_poly_compress_dv4
-        tests/dna_pqcore_learn/test_mlkem_poly_compress_dv4.cpp
-        core/dna_pqcore_learn/dna_mlkem_poly.cpp
-        core/dna_pqcore_learn/dna_mlkem_compress.cpp
-)
-
-target_include_directories(test_mlkem_poly_compress_dv4 PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_poly_compress_dv4 PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_poly_compress_dv4
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_compress_dv4"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_poly_compress_dv4
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_polyvec_compress_du10 (learning implementation, du=10 polyvec compression)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_polyvec_compress_du10
-        tests/dna_pqcore_learn/test_mlkem_polyvec_compress_du10.cpp
-        core/dna_pqcore_learn/dna_mlkem_poly.cpp
-        core/dna_pqcore_learn/dna_mlkem_polyvec.cpp
-        core/dna_pqcore_learn/dna_mlkem_compress_du10.cpp
-        core/dna_pqcore_learn/dna_mlkem_polyvec_compress_du10.cpp
-)
-
-target_include_directories(test_mlkem_polyvec_compress_du10 PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_polyvec_compress_du10 PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_polyvec_compress_du10
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_polyvec_compress_du10"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_polyvec_compress_du10
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_ntt_constants (learning implementation, NTT constants/schedule)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_ntt_constants
-        tests/dna_pqcore_learn/test_mlkem_ntt_constants.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt_constants.cpp
-)
-
-target_include_directories(test_mlkem_ntt_constants PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_ntt_constants PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_ntt_constants
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_ntt_constants"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_ntt_constants
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_ntt_butterfly (learning implementation, first real NTT unit)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_ntt_butterfly
-        tests/dna_pqcore_learn/test_mlkem_ntt_butterfly.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-)
-
-target_include_directories(test_mlkem_ntt_butterfly PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_ntt_butterfly PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_ntt_butterfly
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_ntt_butterfly"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_ntt_butterfly
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_poly_ntt_forward (learning implementation, full forward NTT)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_poly_ntt_forward
-        tests/dna_pqcore_learn/test_mlkem_poly_ntt_forward.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-)
-
-target_include_directories(test_mlkem_poly_ntt_forward PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_poly_ntt_forward PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_poly_ntt_forward
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_ntt_forward"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_poly_ntt_forward
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_poly_invntt_tomont (learning implementation, inverse NTT)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_poly_invntt_tomont
-        tests/dna_pqcore_learn/test_mlkem_poly_invntt_tomont.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-)
-
-target_include_directories(test_mlkem_poly_invntt_tomont PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_poly_invntt_tomont PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_poly_invntt_tomont
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_invntt_tomont"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_poly_invntt_tomont
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_basemul_pair (learning implementation, NTT base multiplication)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_basemul_pair
-        tests/dna_pqcore_learn/test_mlkem_basemul_pair.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-)
-
-target_include_directories(test_mlkem_basemul_pair PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_basemul_pair PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_basemul_pair
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_basemul_pair"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_basemul_pair
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_poly_basemul_montgomery (learning implementation, full NTT-domain polynomial multiply)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_poly_basemul_montgomery
-        tests/dna_pqcore_learn/test_mlkem_poly_basemul_montgomery.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-)
-
-target_include_directories(test_mlkem_poly_basemul_montgomery PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_poly_basemul_montgomery PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_poly_basemul_montgomery
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_basemul_montgomery"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_poly_basemul_montgomery
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_poly_mul_via_ntt (learning implementation, full polynomial multiplication pipeline)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_poly_mul_via_ntt
-        tests/dna_pqcore_learn/test_mlkem_poly_mul_via_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-)
-
-target_include_directories(test_mlkem_poly_mul_via_ntt PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_poly_mul_via_ntt PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_poly_mul_via_ntt
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_mul_via_ntt"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_poly_mul_via_ntt
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_cbd (learning implementation, centered binomial sampling)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_cbd
-        tests/dna_pqcore_learn/test_mlkem_cbd.cpp
-        core/dna_pqcore_learn/dna_mlkem_cbd.cpp
-)
-
-target_include_directories(test_mlkem_cbd PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_cbd PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_cbd
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_cbd"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_cbd
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_prf (learning implementation, SHAKE-256 seed||nonce expansion)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_prf
-        tests/dna_pqcore_learn/test_mlkem_prf.cpp
-        core/dna_pqcore_learn/dna_mlkem_prf.cpp
-)
-
-target_include_directories(test_mlkem_prf PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-target_link_libraries(test_mlkem_prf PRIVATE
-        OpenSSL::Crypto
-)
-
-set_target_properties(test_mlkem_prf PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_prf
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_prf"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_prf
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_getnoise (learning implementation, PRF + CBD composition)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_getnoise
-        tests/dna_pqcore_learn/test_mlkem_getnoise.cpp
-        core/dna_pqcore_learn/dna_mlkem_cbd.cpp
-        core/dna_pqcore_learn/dna_mlkem_prf.cpp
-        core/dna_pqcore_learn/dna_mlkem_getnoise.cpp
-)
-
-target_include_directories(test_mlkem_getnoise PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-target_link_libraries(test_mlkem_getnoise PRIVATE
-        OpenSSL::Crypto
-)
-
-set_target_properties(test_mlkem_getnoise PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_getnoise
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_getnoise"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_getnoise
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_uniform_rej (learning implementation, uniform rejection sampler)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_uniform_rej
-        tests/dna_pqcore_learn/test_mlkem_uniform_rej.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
-)
-
-target_include_directories(test_mlkem_uniform_rej PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_uniform_rej PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_uniform_rej
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_uniform_rej"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_uniform_rej
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_matrix_entry_ntt (learning implementation, matrix entry wrapper)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_matrix_entry_ntt
-        tests/dna_pqcore_learn/test_mlkem_matrix_entry_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_matrix_gen.cpp
-        core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
-)
-
-target_include_directories(test_mlkem_matrix_entry_ntt PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-target_link_libraries(test_mlkem_matrix_entry_ntt PRIVATE
-        OpenSSL::Crypto
-)
-
-set_target_properties(test_mlkem_matrix_entry_ntt PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_matrix_entry_ntt
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_matrix_entry_ntt"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_matrix_entry_ntt
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_matvec_row_ntt (learning implementation, one NTT-domain matrix row times vector)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_matvec_row_ntt
-        tests/dna_pqcore_learn/test_mlkem_matvec_row_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_matvec.cpp
-        core/dna_pqcore_learn/dna_mlkem_matrix_gen.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-)
-
-target_include_directories(test_mlkem_matvec_row_ntt PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-target_link_libraries(test_mlkem_matvec_row_ntt PRIVATE
-        OpenSSL::Crypto
-)
-
-set_target_properties(test_mlkem_matvec_row_ntt PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_matvec_row_ntt
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_matvec_row_ntt"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_matvec_row_ntt
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_tomont (learning implementation, Montgomery-domain conversion helpers)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_tomont
-        tests/dna_pqcore_learn/test_mlkem_tomont.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_tomont.cpp
-)
-
-target_include_directories(test_mlkem_tomont PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_tomont PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_tomont
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_tomont"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_tomont
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_indcpa_roundtrip_skeleton (learning implementation, deterministic IND-CPA algebra roundtrip)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_indcpa_roundtrip_skeleton
-        tests/dna_pqcore_learn/test_mlkem_indcpa_roundtrip_skeleton.cpp
-        core/dna_pqcore_learn/dna_mlkem_cbd.cpp
-        core/dna_pqcore_learn/dna_mlkem_prf.cpp
-        core/dna_pqcore_learn/dna_mlkem_getnoise.cpp
-        core/dna_pqcore_learn/dna_mlkem_noisevec.cpp
-        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
-        core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_matrix_gen.cpp
-        core/dna_pqcore_learn/dna_mlkem_matvec.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_tomont.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_keygen_skeleton.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_encrypt_skeleton.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_decrypt_skeleton.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_roundtrip_skeleton.cpp
-)
-
-target_include_directories(test_mlkem_indcpa_roundtrip_skeleton PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-target_link_libraries(test_mlkem_indcpa_roundtrip_skeleton PRIVATE
-        OpenSSL::Crypto
-)
-
-set_target_properties(test_mlkem_indcpa_roundtrip_skeleton PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_indcpa_roundtrip_skeleton
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_indcpa_roundtrip_skeleton"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_indcpa_roundtrip_skeleton
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_message (learning implementation, message polynomial encode/decode)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_message
-        tests/dna_pqcore_learn/test_mlkem_message.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_message.cpp
-)
-
-target_include_directories(test_mlkem_message PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_message PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_message
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_message"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_message
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_indcpa_packed (learning implementation, packed deterministic IND-CPA flow)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_indcpa_packed
-        tests/dna_pqcore_learn/test_mlkem_indcpa_packed.cpp
-        core/dna_pqcore_learn/dna_mlkem_cbd.cpp
-        core/dna_pqcore_learn/dna_mlkem_prf.cpp
-        core/dna_pqcore_learn/dna_mlkem_getnoise.cpp
-        core/dna_pqcore_learn/dna_mlkem_noisevec.cpp
-        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
-        core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_matrix_gen.cpp
-        core/dna_pqcore_learn/dna_mlkem_matvec.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_tomont.cpp
-        core/dna_pqcore_learn/dna_mlkem_message.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_keygen_skeleton.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_encrypt_skeleton.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_decrypt_skeleton.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_packed.cpp
-)
-
-target_include_directories(test_mlkem_indcpa_packed PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-target_link_libraries(test_mlkem_indcpa_packed PRIVATE
-        OpenSSL::Crypto
-)
-
-set_target_properties(test_mlkem_indcpa_packed PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_indcpa_packed
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_indcpa_packed"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_indcpa_packed
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_kem_diff_many (learning implementation, many-case backend parity harness)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_kem_diff_many
-        tests/dna_pqcore_learn/test_mlkem_kem_diff_many.cpp
-        core/dna_pqcore_learn/dna_mlkem_backend_oracle.cpp
-        core/dna_pqcore_learn/dna_mlkem_cbd.cpp
-        core/dna_pqcore_learn/dna_mlkem_prf.cpp
-        core/dna_pqcore_learn/dna_mlkem_getnoise.cpp
-        core/dna_pqcore_learn/dna_mlkem_noisevec.cpp
-        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
-        core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_matrix_gen.cpp
-        core/dna_pqcore_learn/dna_mlkem_matvec.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_tomont.cpp
-        core/dna_pqcore_learn/dna_mlkem_message.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_keygen_skeleton.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_encrypt_skeleton.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_decrypt_skeleton.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_packed.cpp
-        core/dna_pqcore_learn/dna_mlkem_cpapke.cpp
-        core/dna_pqcore_learn/dna_mlkem_kem.cpp
-)
-
-target_include_directories(test_mlkem_kem_diff_many PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore
-)
-
-target_link_libraries(test_mlkem_kem_diff_many PRIVATE
-        dna_pqcore_mlkem
-        OpenSSL::Crypto
-)
-
-set_target_properties(test_mlkem_kem_diff_many PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_kem_diff_many
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_kem_diff_many"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_kem_diff_many
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_kem (learning implementation, deterministic ML-KEM-768 wrapper)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_kem
-        tests/dna_pqcore_learn/test_mlkem_kem.cpp
-        core/dna_pqcore_learn/dna_mlkem_cbd.cpp
-        core/dna_pqcore_learn/dna_mlkem_prf.cpp
-        core/dna_pqcore_learn/dna_mlkem_getnoise.cpp
-        core/dna_pqcore_learn/dna_mlkem_noisevec.cpp
-        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
-        core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_matrix_gen.cpp
-        core/dna_pqcore_learn/dna_mlkem_matvec.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_tomont.cpp
-        core/dna_pqcore_learn/dna_mlkem_message.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_keygen_skeleton.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_encrypt_skeleton.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_decrypt_skeleton.cpp
-        core/dna_pqcore_learn/dna_mlkem_indcpa_packed.cpp
-        core/dna_pqcore_learn/dna_mlkem_cpapke.cpp
-        core/dna_pqcore_learn/dna_mlkem_kem.cpp
-)
-
-target_include_directories(test_mlkem_kem PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-target_link_libraries(test_mlkem_kem PRIVATE
-        OpenSSL::Crypto
-)
-
-set_target_properties(test_mlkem_kem PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_kem
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_kem"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_kem
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_noisevec (learning implementation, k=3 noise-vector generation)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_noisevec
-        tests/dna_pqcore_learn/test_mlkem_noisevec.cpp
-        core/dna_pqcore_learn/dna_mlkem_cbd.cpp
-        core/dna_pqcore_learn/dna_mlkem_prf.cpp
-        core/dna_pqcore_learn/dna_mlkem_getnoise.cpp
-        core/dna_pqcore_learn/dna_mlkem_noisevec.cpp
-)
-
-target_include_directories(test_mlkem_noisevec PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-target_link_libraries(test_mlkem_noisevec PRIVATE
-        OpenSSL::Crypto
-)
-
-set_target_properties(test_mlkem_noisevec PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_noisevec
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_noisevec"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_noisevec
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_matvec_full_ntt (learning implementation, full 3x3 matrix-vector multiply)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_matvec_full_ntt
-        tests/dna_pqcore_learn/test_mlkem_matvec_full_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_matvec.cpp
-        core/dna_pqcore_learn/dna_mlkem_matrix_gen.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-)
-
-target_include_directories(test_mlkem_matvec_full_ntt PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-target_link_libraries(test_mlkem_matvec_full_ntt PRIVATE
-        OpenSSL::Crypto
-)
-
-set_target_properties(test_mlkem_matvec_full_ntt PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_matvec_full_ntt
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_matvec_full_ntt"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_matvec_full_ntt
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_matrix_full_ntt (learning implementation, full 3x3 matrix generator)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_matrix_full_ntt
-        tests/dna_pqcore_learn/test_mlkem_matrix_full_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_matrix_gen.cpp
-        core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
-)
-
-target_include_directories(test_mlkem_matrix_full_ntt PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-target_link_libraries(test_mlkem_matrix_full_ntt PRIVATE
-        OpenSSL::Crypto
-)
-
-set_target_properties(test_mlkem_matrix_full_ntt PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_matrix_full_ntt
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_matrix_full_ntt"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_matrix_full_ntt
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_sample_ntt (learning implementation, SHAKE-128 uniform NTT sampler)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_sample_ntt
-        tests/dna_pqcore_learn/test_mlkem_sample_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
-        core/dna_pqcore_learn/dna_mlkem_uniform.cpp
-)
-
-target_include_directories(test_mlkem_sample_ntt PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-target_link_libraries(test_mlkem_sample_ntt PRIVATE
-        OpenSSL::Crypto
-)
-
-set_target_properties(test_mlkem_sample_ntt PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_sample_ntt
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_sample_ntt"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_sample_ntt
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_ntt_layer (learning implementation, one full forward NTT layer)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_ntt_layer
-        tests/dna_pqcore_learn/test_mlkem_ntt_layer.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-)
-
-target_include_directories(test_mlkem_ntt_layer PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_ntt_layer PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_ntt_layer
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_ntt_layer"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_ntt_layer
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_field (learning implementation, finite-field arithmetic)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_field
-        tests/dna_pqcore_learn/test_mlkem_field.cpp
-        core/dna_pqcore_learn/dna_mlkem_field.cpp
-)
-
-target_include_directories(test_mlkem_field PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_field PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_field
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_field"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_field
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_poly_compress_du10 (learning implementation, du=10 compression)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_poly_compress_du10
-        tests/dna_pqcore_learn/test_mlkem_poly_compress_du10.cpp
-        core/dna_pqcore_learn/dna_mlkem_poly.cpp
-        core/dna_pqcore_learn/dna_mlkem_compress_du10.cpp
-)
-
-target_include_directories(test_mlkem_poly_compress_du10 PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_poly_compress_du10 PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_poly_compress_du10
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_compress_du10"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_poly_compress_du10
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_polyvec_bytes (learning implementation, polyvec byte encoding)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_polyvec_bytes
-        tests/dna_pqcore_learn/test_mlkem_polyvec_bytes.cpp
-        core/dna_pqcore_learn/dna_mlkem_poly.cpp
-        core/dna_pqcore_learn/dna_mlkem_poly_bytes.cpp
-        core/dna_pqcore_learn/dna_mlkem_polyvec.cpp
-        core/dna_pqcore_learn/dna_mlkem_polyvec_bytes.cpp
-)
-
-target_include_directories(test_mlkem_polyvec_bytes PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_polyvec_bytes PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_polyvec_bytes
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_polyvec_bytes"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_polyvec_bytes
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_polyvec_basics (learning implementation, polyvec helpers)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_polyvec_basics
-        tests/dna_pqcore_learn/test_mlkem_polyvec_basics.cpp
-        core/dna_pqcore_learn/dna_mlkem_poly.cpp
-        core/dna_pqcore_learn/dna_mlkem_polyvec.cpp
-)
-
-target_include_directories(test_mlkem_polyvec_basics PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_polyvec_basics PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_mlkem_polyvec_basics
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_polyvec_basics"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_polyvec_basics
-)
-# -----------------------------------------------------------------------------
-# Tool: test_mlkem_poly_basics (learning implementation, poly helpers)
-# -----------------------------------------------------------------------------
-add_executable(test_mlkem_poly_basics
-        tests/dna_pqcore_learn/test_mlkem_poly_basics.cpp
-        core/dna_pqcore_learn/dna_mlkem_poly.cpp
-)
-
-target_include_directories(test_mlkem_poly_basics PRIVATE
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-set_target_properties(test_mlkem_poly_basics PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
 
-add_custom_target(run_test_mlkem_poly_basics
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_poly_basics"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_poly_basics
-)
-# -----------------------------------------------------------------------------
-# Tool: test_dna_mlkem768_backend (experimental dna_pqcore test only)
-# -----------------------------------------------------------------------------
-add_executable(test_dna_mlkem768_backend
-        tests/dna_pqcore/test_dna_mlkem768_backend.cpp
-)
-
-target_link_libraries(test_dna_mlkem768_backend PRIVATE
-        dna_pqcore_mlkem
-)
-
-set_target_properties(test_dna_mlkem768_backend PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
-add_custom_target(run_test_dna_mlkem768_backend
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_backend"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_dna_mlkem768_backend
-)
 # -----------------------------------------------------------------------------
 # Tool: pqnas_keygen
 # -----------------------------------------------------------------------------
@@ -1270,8 +373,9 @@ set_target_properties(pqnas_keygen PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
+# -----------------------------------------------------------------------------
 # Run targets
-
+# -----------------------------------------------------------------------------
 add_custom_target(run_verify_v4_vectors
         COMMAND "${CMAKE_BINARY_DIR}/bin/verify_v4_vectors" "${CMAKE_SOURCE_DIR}/tests/v4_vectors/vectors.json"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
@@ -1282,10 +386,4 @@ add_custom_target(run_verify_v5_vectors
         COMMAND "${CMAKE_BINARY_DIR}/bin/verify_v5_vectors" "${CMAKE_SOURCE_DIR}/tests/v5_vectors/v5_vectors.json"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         DEPENDS verify_v5_vectors
-)
-
-add_custom_target(run_test_admin_cookie
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_admin_cookie"
-        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_admin_cookie
 )
