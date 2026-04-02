@@ -898,10 +898,11 @@ add_custom_target(run_test_mlkem_indcpa_packed
         DEPENDS test_mlkem_indcpa_packed
 )
 # -----------------------------------------------------------------------------
-# Tool: test_mlkem_cpapke (learning implementation, deterministic CPA-PKE API wrapper)
+# Tool: test_mlkem_kem_vs_backend (learning implementation vs backend oracle)
 # -----------------------------------------------------------------------------
-add_executable(test_mlkem_cpapke
-        tests/dna_pqcore_learn/test_mlkem_cpapke.cpp
+add_executable(test_mlkem_kem_vs_backend
+        tests/dna_pqcore_learn/test_mlkem_kem_vs_backend.cpp
+        core/dna_pqcore_learn/dna_mlkem_backend_oracle.cpp
         core/dna_pqcore_learn/dna_mlkem_cbd.cpp
         core/dna_pqcore_learn/dna_mlkem_prf.cpp
         core/dna_pqcore_learn/dna_mlkem_getnoise.cpp
@@ -919,24 +920,27 @@ add_executable(test_mlkem_cpapke
         core/dna_pqcore_learn/dna_mlkem_indcpa_decrypt_skeleton.cpp
         core/dna_pqcore_learn/dna_mlkem_indcpa_packed.cpp
         core/dna_pqcore_learn/dna_mlkem_cpapke.cpp
+        core/dna_pqcore_learn/dna_mlkem_kem.cpp
 )
 
-target_include_directories(test_mlkem_cpapke PRIVATE
+target_include_directories(test_mlkem_kem_vs_backend PRIVATE
         ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore
 )
 
-target_link_libraries(test_mlkem_cpapke PRIVATE
+target_link_libraries(test_mlkem_kem_vs_backend PRIVATE
+        dna_pqcore_mlkem
         OpenSSL::Crypto
 )
 
-set_target_properties(test_mlkem_cpapke PROPERTIES
+set_target_properties(test_mlkem_kem_vs_backend PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
-add_custom_target(run_test_mlkem_cpapke
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_cpapke"
+add_custom_target(run_test_mlkem_kem_vs_backend
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_kem_vs_backend"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_cpapke
+        DEPENDS test_mlkem_kem_vs_backend
 )
 # -----------------------------------------------------------------------------
 # Tool: test_mlkem_kem (learning implementation, deterministic ML-KEM-768 wrapper)

@@ -134,18 +134,6 @@ bool shake256_32(std::uint8_t out[kMlkemKemSharedSecretBytes],
     return ok;
 }
 
-bool derive_shared_secret(std::uint8_t ss[kMlkemKemSharedSecretBytes],
-                          const std::uint8_t key_part[kMlkemKemSeedBytes],
-                          const std::uint8_t hct[kSha3_256_Bytes],
-                          std::string* err) {
-    std::array<std::uint8_t, 64> in{};
-    for (std::size_t i = 0; i < 32; ++i) {
-        in[i] = key_part[i];
-        in[32 + i] = hct[i];
-    }
-    return shake256_32(ss, in.data(), in.size(), err);
-}
-
 } // namespace
 
 bool mlkem_kem_keypair_derand(
@@ -175,10 +163,6 @@ bool mlkem_kem_keypair_derand(
         return false;
     }
 
-    // Extend secret key from:
-    //   sk_cpapke
-    // to:
-    //   sk_cpapke || pk || H(pk) || z
     for (std::size_t i = 0; i < kMlkemKemPublicKeyBytes; ++i) {
         sk[kPkOffset + i] = pk[i];
     }
@@ -202,7 +186,6 @@ bool mlkem_kem_encaps_derand(
     }
 
     std::uint8_t hpk[32]{};
-    std::uint8_t hct[32]{};
     std::uint8_t kr[64]{};
     std::array<std::uint8_t, 64> g_in{};
 
@@ -226,11 +209,11 @@ bool mlkem_kem_encaps_derand(
         return false;
     }
 
-    if (!sha3_256_bytes(hct, ct, kMlkemKemCiphertextBytes, err)) {
-        return false;
+    for (std::size_t i = 0; i < 32; ++i) {
+        ss[i] = kbar[i];
     }
 
-    return derive_shared_secret(ss, kbar, hct, err);
+    return true;
 }
 
 bool mlkem_kem_decaps(
@@ -250,9 +233,9 @@ bool mlkem_kem_decaps(
 
     std::uint8_t m_prime[32]{};
     std::uint8_t ct_cmp[kMlkemKemCiphertextBytes]{};
-    std::uint8_t hct[32]{};
     std::uint8_t kr[64]{};
     std::array<std::uint8_t, 64> g_in{};
+    std::array<std::uint8_t, 32 + kMlkemKemCiphertextBytes> rej_in{};
 
     if (!mlkem_cpapke_decrypt(m_prime, ct, sk_cpapke, err)) {
         return false;
@@ -274,15 +257,24 @@ bool mlkem_kem_decaps(
         return false;
     }
 
-    if (!sha3_256_bytes(hct, ct, kMlkemKemCiphertextBytes, err)) {
+    for (std::size_t i = 0; i < 32; ++i) {
+        rej_in[i] = z[i];
+    }
+    for (std::size_t i = 0; i < kMlkemKemCiphertextBytes; ++i) {
+        rej_in[32 + i] = ct[i];
+    }
+
+    if (!shake256_32(ss, rej_in.data(), rej_in.size(), err)) {
         return false;
     }
 
-    const std::uint8_t* key_part = bytes_equal(ct, ct_cmp, kMlkemKemCiphertextBytes)
-        ? kbar_prime
-        : z;
+    if (bytes_equal(ct, ct_cmp, kMlkemKemCiphertextBytes)) {
+        for (std::size_t i = 0; i < 32; ++i) {
+            ss[i] = kbar_prime[i];
+        }
+    }
 
-    return derive_shared_secret(ss, key_part, hct, err);
+    return true;
 }
 
 } // namespace pqnas::dna_pqcore_learn

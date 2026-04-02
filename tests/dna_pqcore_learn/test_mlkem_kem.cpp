@@ -139,10 +139,8 @@ bool ref_kem_encaps(std::uint8_t ct[kMlkemKemCiphertextBytes],
                     const std::uint8_t m[kMlkemKemMsgBytes],
                     std::string* err) {
     std::uint8_t hpk[32]{};
-    std::uint8_t hct[32]{};
     std::uint8_t kr[64]{};
     std::array<std::uint8_t, 64> g_in{};
-    std::array<std::uint8_t, 64> kdf_in{};
 
     if (!ref_sha3_256(hpk, pk, kMlkemKemPublicKeyBytes, err)) return false;
 
@@ -157,14 +155,12 @@ bool ref_kem_encaps(std::uint8_t ct[kMlkemKemCiphertextBytes],
     const std::uint8_t* coins = &kr[32];
 
     if (!mlkem_cpapke_encrypt_derand(ct, m, pk, coins, err)) return false;
-    if (!ref_sha3_256(hct, ct, kMlkemKemCiphertextBytes, err)) return false;
 
     for (std::size_t i = 0; i < 32; ++i) {
-        kdf_in[i] = kbar[i];
-        kdf_in[32 + i] = hct[i];
+        ss[i] = kbar[i];
     }
 
-    return ref_shake256_32(ss, kdf_in.data(), kdf_in.size(), err);
+    return true;
 }
 
 bool ref_kem_decaps(std::uint8_t ss[kMlkemKemSharedSecretBytes],
@@ -178,10 +174,9 @@ bool ref_kem_decaps(std::uint8_t ss[kMlkemKemSharedSecretBytes],
 
     std::uint8_t m_prime[32]{};
     std::uint8_t ct_cmp[kMlkemKemCiphertextBytes]{};
-    std::uint8_t hct[32]{};
     std::uint8_t kr[64]{};
     std::array<std::uint8_t, 64> g_in{};
-    std::array<std::uint8_t, 64> kdf_in{};
+    std::array<std::uint8_t, 32 + kMlkemKemCiphertextBytes> rej_in{};
 
     if (!mlkem_cpapke_decrypt(m_prime, ct, sk_cpapke, err)) return false;
 
@@ -196,9 +191,16 @@ bool ref_kem_decaps(std::uint8_t ss[kMlkemKemSharedSecretBytes],
     const std::uint8_t* coins_prime = &kr[32];
 
     if (!mlkem_cpapke_encrypt_derand(ct_cmp, m_prime, pk, coins_prime, err)) return false;
-    if (!ref_sha3_256(hct, ct, kMlkemKemCiphertextBytes, err)) return false;
 
-    const std::uint8_t* chosen = z;
+    for (std::size_t i = 0; i < 32; ++i) {
+        rej_in[i] = z[i];
+    }
+    for (std::size_t i = 0; i < kMlkemKemCiphertextBytes; ++i) {
+        rej_in[32 + i] = ct[i];
+    }
+
+    if (!ref_shake256_32(ss, rej_in.data(), rej_in.size(), err)) return false;
+
     bool same = true;
     for (std::size_t i = 0; i < kMlkemKemCiphertextBytes; ++i) {
         if (ct[i] != ct_cmp[i]) {
@@ -206,14 +208,14 @@ bool ref_kem_decaps(std::uint8_t ss[kMlkemKemSharedSecretBytes],
             break;
         }
     }
-    if (same) chosen = kbar_prime;
 
-    for (std::size_t i = 0; i < 32; ++i) {
-        kdf_in[i] = chosen[i];
-        kdf_in[32 + i] = hct[i];
+    if (same) {
+        for (std::size_t i = 0; i < 32; ++i) {
+            ss[i] = kbar_prime[i];
+        }
     }
 
-    return ref_shake256_32(ss, kdf_in.data(), kdf_in.size(), err);
+    return true;
 }
 
 bool check_case(const std::array<std::uint8_t, kMlkemKemSeedBytes>& d,
@@ -338,7 +340,6 @@ bool check_case(const std::array<std::uint8_t, kMlkemKemSeedBytes>& d,
 
     if (!bytes_equal(ss_dec_ref, ss_dec_ref2)) return fail("decaps reference mismatch");
 
-    // Tamper ciphertext and verify decapsulation follows the reference fallback path.
     std::array<std::uint8_t, kMlkemKemCiphertextBytes> ct_tampered = ct;
     ct_tampered[0] ^= 0x01u;
 
@@ -376,7 +377,6 @@ int main() {
     static_assert(kMlkemKemCiphertextBytes == 1088, "test assumes ct bytes = 1088");
     static_assert(kMlkemKemSharedSecretBytes == 32, "test assumes ss bytes = 32");
 
-    // Case 1
     {
         std::array<std::uint8_t, kMlkemKemSeedBytes> d{};
         std::array<std::uint8_t, kMlkemKemSeedBytes> z{};
@@ -393,7 +393,6 @@ int main() {
         if (!check_case(d, z, m, m2)) return 1;
     }
 
-    // Case 2
     {
         std::array<std::uint8_t, kMlkemKemSeedBytes> d{};
         std::array<std::uint8_t, kMlkemKemSeedBytes> z{};

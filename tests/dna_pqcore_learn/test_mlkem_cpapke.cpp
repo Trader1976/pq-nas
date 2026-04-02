@@ -37,10 +37,10 @@ bool any_diff(const std::array<std::uint8_t, N>& a,
     }
     return false;
 }
-
-bool ref_sha3_512(std::uint8_t out[kSha3_512_Bytes],
-                  const std::uint8_t in[kMlkemCpapkeSeedBytes],
-                  std::string* err) {
+    bool ref_sha3_512(std::uint8_t out[kSha3_512_Bytes],
+                      const std::uint8_t* in,
+                      std::size_t in_len,
+                      std::string* err) {
     EVP_MD_CTX* ctx = EVP_MD_CTX_new();
     if (ctx == nullptr) {
         if (err) *err = "EVP_MD_CTX_new failed";
@@ -53,7 +53,7 @@ bool ref_sha3_512(std::uint8_t out[kSha3_512_Bytes],
     if (EVP_DigestInit_ex(ctx, EVP_sha3_512(), nullptr) != 1) {
         if (err) *err = "EVP_DigestInit_ex(EVP_sha3_512) failed";
         ok = false;
-    } else if (EVP_DigestUpdate(ctx, in, kMlkemCpapkeSeedBytes) != 1) {
+    } else if (EVP_DigestUpdate(ctx, in, in_len) != 1) {
         if (err) *err = "EVP_DigestUpdate failed";
         ok = false;
     } else if (EVP_DigestFinal_ex(ctx, out, &out_len) != 1) {
@@ -94,11 +94,16 @@ bool check_case(const std::array<std::uint8_t, kMlkemCpapkeSeedBytes>& d,
     if (!bytes_equal(rho, rho_again)) return fail("rho determinism mismatch");
     if (!bytes_equal(sigma, sigma_again)) return fail("sigma determinism mismatch");
 
-    if (!ref_sha3_512(ref_hash.data(), d.data(), &err)) {
+    std::array<std::uint8_t, kMlkemCpapkeSeedBytes + 1> g_in{};
+    for (std::size_t i = 0; i < kMlkemCpapkeSeedBytes; ++i) {
+        g_in[i] = d[i];
+    }
+    g_in[kMlkemCpapkeSeedBytes] = 3;
+
+    if (!ref_sha3_512(ref_hash.data(), g_in.data(), g_in.size(), &err)) {
         std::cerr << err << "\n";
         return fail("reference sha3_512 failed");
     }
-
     for (std::size_t i = 0; i < kMlkemCpapkeSeedBytes; ++i) {
         if (rho[i] != ref_hash[i]) return fail("rho split mismatch");
         if (sigma[i] != ref_hash[kMlkemCpapkeSeedBytes + i]) return fail("sigma split mismatch");

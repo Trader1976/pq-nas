@@ -25,7 +25,7 @@ namespace pqnas::dna_pqcore_learn {
     constexpr std::size_t kMlkemCpapkeCiphertextBytes = 1088;
 
     // Learning helper:
-    // derive rho || sigma = SHA3-512(d), split into two 32-byte halves.
+    // derive rho || sigma = SHA3-512(d || 0x03), split into two 32-byte halves.
     bool mlkem_cpapke_derive_rho_sigma(
         std::uint8_t rho[kMlkemCpapkeSeedBytes],
         std::uint8_t sigma[kMlkemCpapkeSeedBytes],

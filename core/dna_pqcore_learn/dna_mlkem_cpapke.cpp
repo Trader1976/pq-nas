@@ -10,9 +10,11 @@ namespace pqnas::dna_pqcore_learn {
 namespace {
 
 constexpr std::size_t kSha3_512_Bytes = 64;
+constexpr std::uint8_t kMlkem768KByte = 3;
 
 bool mlkem_sha3_512(std::uint8_t out[kSha3_512_Bytes],
-                    const std::uint8_t in[kMlkemCpapkeSeedBytes],
+                    const std::uint8_t* in,
+                    std::size_t in_len,
                     std::string* err) {
     if (out == nullptr || in == nullptr) {
         if (err) *err = "null pointer input";
@@ -31,7 +33,7 @@ bool mlkem_sha3_512(std::uint8_t out[kSha3_512_Bytes],
     if (EVP_DigestInit_ex(ctx, EVP_sha3_512(), nullptr) != 1) {
         if (err) *err = "EVP_DigestInit_ex(EVP_sha3_512) failed";
         ok = false;
-    } else if (EVP_DigestUpdate(ctx, in, kMlkemCpapkeSeedBytes) != 1) {
+    } else if (EVP_DigestUpdate(ctx, in, in_len) != 1) {
         if (err) *err = "EVP_DigestUpdate failed";
         ok = false;
     } else if (EVP_DigestFinal_ex(ctx, out, &out_len) != 1) {
@@ -58,8 +60,17 @@ bool mlkem_cpapke_derive_rho_sigma(
         return false;
     }
 
+    // ML-KEM-768 keygen derives rho || sigma from:
+    //   G(d || k)
+    // with k = 3 for ML-KEM-768.
+    std::array<std::uint8_t, kMlkemCpapkeSeedBytes + 1> in{};
+    for (std::size_t i = 0; i < kMlkemCpapkeSeedBytes; ++i) {
+        in[i] = d[i];
+    }
+    in[kMlkemCpapkeSeedBytes] = kMlkem768KByte;
+
     std::array<std::uint8_t, kSha3_512_Bytes> buf{};
-    if (!mlkem_sha3_512(buf.data(), d, err)) {
+    if (!mlkem_sha3_512(buf.data(), in.data(), in.size(), err)) {
         return false;
     }
 
