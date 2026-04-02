@@ -898,10 +898,10 @@ add_custom_target(run_test_mlkem_indcpa_packed
         DEPENDS test_mlkem_indcpa_packed
 )
 # -----------------------------------------------------------------------------
-# Tool: test_mlkem_kem_vs_backend (learning implementation vs backend oracle)
+# Tool: test_mlkem_kem_diff_many (learning implementation, many-case backend parity harness)
 # -----------------------------------------------------------------------------
-add_executable(test_mlkem_kem_vs_backend
-        tests/dna_pqcore_learn/test_mlkem_kem_vs_backend.cpp
+add_executable(test_mlkem_kem_diff_many
+        tests/dna_pqcore_learn/test_mlkem_kem_diff_many.cpp
         core/dna_pqcore_learn/dna_mlkem_backend_oracle.cpp
         core/dna_pqcore_learn/dna_mlkem_cbd.cpp
         core/dna_pqcore_learn/dna_mlkem_prf.cpp
@@ -923,24 +923,24 @@ add_executable(test_mlkem_kem_vs_backend
         core/dna_pqcore_learn/dna_mlkem_kem.cpp
 )
 
-target_include_directories(test_mlkem_kem_vs_backend PRIVATE
+target_include_directories(test_mlkem_kem_diff_many PRIVATE
         ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
         ${CMAKE_SOURCE_DIR}/core/dna_pqcore
 )
 
-target_link_libraries(test_mlkem_kem_vs_backend PRIVATE
+target_link_libraries(test_mlkem_kem_diff_many PRIVATE
         dna_pqcore_mlkem
         OpenSSL::Crypto
 )
 
-set_target_properties(test_mlkem_kem_vs_backend PROPERTIES
+set_target_properties(test_mlkem_kem_diff_many PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
-add_custom_target(run_test_mlkem_kem_vs_backend
-        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_kem_vs_backend"
+add_custom_target(run_test_mlkem_kem_diff_many
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_kem_diff_many"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-        DEPENDS test_mlkem_kem_vs_backend
+        DEPENDS test_mlkem_kem_diff_many
 )
 # -----------------------------------------------------------------------------
 # Tool: test_mlkem_kem (learning implementation, deterministic ML-KEM-768 wrapper)
