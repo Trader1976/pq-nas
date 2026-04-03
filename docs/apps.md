@@ -2,154 +2,381 @@
 
 This document is for **PQ-NAS developers** and **app authors**. It describes:
 
-- App package format (zip)
-- Where apps live on disk (repo vs runtime)
-- How to bundle and install apps
-- Current server endpoints (“app manager” + file APIs) available to apps
+- the current app package format
+- where apps live on disk
+- how apps are installed and served
+- how launch behavior currently works
+- the main PQ-NAS APIs apps use today
 
-> Status: early, “static web app in a zip” model. No sandboxing beyond path-based restrictions yet.
+> Status: current model is still **static web apps** served by PQ-NAS.  
+> Apps run in the browser and use PQ-NAS HTTP APIs with cookie-based auth.  
+> There is still **no real sandbox** beyond server-side auth, path validation, and static serving restrictions.
 
 ---
 
-## 1) App model (today)
+## 1) App model (current)
 
-An “app” is a **static web bundle**:
+An app is a **static web bundle** containing:
 
-- HTML/CSS/JS
-- icons/images/fonts/etc.
+- HTML
+- CSS
+- JavaScript
+- images / icons / fonts / other assets
 - a `manifest.json`
 
-Apps are served at:
+Installed apps are served at:
 
 `/apps/<id>/<version>/www/...`
 
-Apps run in the browser and call PQ-NAS APIs via `fetch()` (cookie-based auth).
+Typical entry URL:
+
+`/apps/<id>/<version>/www/index.html`
+
+Apps run in the browser and call PQ-NAS APIs with:
+
+```js
+fetch("/api/v4/...", {
+  credentials: "include",
+  cache: "no-store"
+})
+```
+
+Authentication is still based on the normal PQ-NAS session cookie.
 
 ---
 
-## 2) Directory layout
+## 2) Runtime roots and directory layout
 
-### Repo layout (source tree)
+PQ-NAS now resolves app paths **env-first**.
 
-Bundled app sources and versioned bundles live under:
+### Apps root
 
+The server resolves the apps root like this:
 
-```
-apps/bundled/<appId>/<version>/
-manifest.json
-www/
-index.html
-app.js
-*.png
-```
+1. `PQNAS_APPS_ROOT` environment variable
+2. `/srv/pqnas/apps`
+3. repo fallback in development (`<repo>/apps`)
 
-Optional dev/source copy (may exist for some apps):
-```
-apps/bundled/<appId>/src/
-manifest.json
-www/
-```
-
-Installed apps live in:
-
-```
-apps/installed/<appId>/<version>/
-  manifest.json
-  www/
-    index.html
-    app.js
-    icons/
-    ...
-```
-
-> Note: In development you may also see absolute paths in API responses depending on build; the server tries to return repo-relative paths where possible.
-
-> Repo does **not** contain installed runtime app copies. Anything under `apps/installed/` is treated as runtime state and must not be committed.
-
-### Runtime layout (installed system)
-
-At runtime PQ-NAS uses an “apps root” directory resolved by `apps_root_dir()` (env-first).
-Under that root it uses these subdirectories:
+From that root the server uses:
 
 - `APPS_BUNDLED_DIR   = <apps_root>/bundled`
 - `APPS_INSTALLED_DIR = <apps_root>/installed`
 - `APPS_USERS_DIR     = <apps_root>/users`
 
-Typical installation uses:
-```
+Typical runtime layout:
+
+```text
 /srv/pqnas/apps/
-bundled/
-installed/
-users/
+  bundled/
+  installed/
+  users/
+```
+
+### Installed apps
+
+Installed apps live under:
+
+```text
+<apps_root>/installed/<appId>/<version>/
+  manifest.json
+  www/
+    index.html
+    app.js
+    app.css
+    icons/
+    img/
     ...
 ```
+
+Example:
+
+```text
+/srv/pqnas/apps/installed/sharesmgr/1.0.0/
+  manifest.json
+  www/
+    index.html
+    app.js
+    app.css
+```
+
+### Bundled apps
+
+Bundled app zips are currently expected under:
+
+```text
+<apps_root>/bundled/<appId>/*.zip
+```
+
+Example:
+
+```text
+/srv/pqnas/apps/bundled/filemgr/filemgr-1.0.0.zip
+/srv/pqnas/apps/bundled/sharesmgr/sharesmgr-1.0.0.zip
+```
+
+### Important repo note
+
+`apps/installed/` is **runtime state** and must not be committed.
+
+If development falls back to repo-local `apps/`, that is still treated as runtime/install state, not source-of-truth source code.
+
 ---
 
 ## 3) Zip package format (required)
 
 Your zip **must** contain at minimum:
 
-```
+```text
 manifest.json
 www/index.html
 ```
 
 Typical structure:
 
-```
+```text
 myapp-0.1.0.zip
   manifest.json
   www/
     index.html
     app.js
+    app.css
     icons/
-      file.png
-      folder.png
-    css/
+      ...
     img/
+      ...
 ```
 
-### manifest.json (current fields)
+If either `manifest.json` or `www/index.html` is missing, install should be treated as invalid.
+
+---
+
+## 4) `manifest.json` (current practical fields)
 
 Example:
 
 ```json
 {
-  "id": "filemgr",
-  "name": "File Manager",
+  "id": "sharesmgr",
+  "name": "Shares Manager",
   "version": "1.0.0",
   "entry": "www/index.html",
   "icons": {
-    "win_classic": "www/files_win.png",
-    "cpunk_orange": "www/files_ora.png",
-    "dark": "www/files_dark.png",
-    "bright": "www/files_bright.png",
-    "default": "www/files_dark.png"
+    "win_classic": "www/share_win.png",
+    "cpunk_orange": "www/share_ora.png",
+    "dark": "www/share_dark.png",
+    "bright": "www/share_bright.png",
+    "default": "www/share_dark.png"
   },
-  "api_base": "/api/v4/files",
+  "api_base": "/api/v4/shares",
   "permissions": []
 }
 ```
 
-Notes:
+### Notes
 
-- id must match the app folder and install request id.
-- version is used as the install directory name.
-- entry is informational today (we currently serve /www/index.html directly).
-- icons is used by the PQ-NAS desktop to show per-theme app icons.
-- api_base and permissions are informational today (future use).
+- `id` must match the app folder/install identity.
+- `version` is used as the install directory name.
+- `entry` is informational today; current serving still expects `www/index.html`.
+- `icons` is used by the desktop/app shell for per-theme icons.
+- `name` is what the desktop/shell should prefer to display.
+- `api_base` and `permissions` are informational today unless your own UI uses them.
+
+### Current desktop icon behavior
+
+The desktop/app shell tries to resolve icons from `manifest.json` using the current theme, typically preferring:
+
+1. exact current theme key
+2. mapped theme alias if applicable
+3. `default`
+4. first icon entry found
+5. fallback to `www/icon.png`
 
 ---
 
-## 4) Bundling an app zip (example)
+## 5) Serving model
 
-Create a working directory:
+Once installed, files are reachable at URLs like:
+
+- `/apps/<id>/<version>/www/index.html`
+- `/apps/<id>/<version>/www/app.js`
+- `/apps/<id>/<version>/manifest.json`
+
+Example:
+
+```bash
+curl -i http://127.0.0.1:8081/apps/sharesmgr/1.0.0/www/index.html | head
+```
+
+Apps are still plain browser apps. There is no iframe-to-native bridge or separate app runtime.
+
+---
+
+## 6) Current install / uninstall flow
+
+### List apps
+
+Current admin/app-management UI uses:
+
+- `GET /api/v4/apps`
+
+This returns a JSON view of installed apps, and bundled zips for admin-only visibility.
+
+Typical installed entry fields currently include:
+
+- `id`
+- `version`
+- `root`
+- `has_manifest`
+
+Depending on UI path / server version, other endpoints may also exist for app-shell-friendly listing.
+
+### Upload and install a zip
+
+Current admin install flow uses:
+
+- `POST /api/v4/apps/upload_install`
+
+Request style:
+
+- body = raw zip bytes
+- `Content-Type: application/zip`
+- `X-PQNAS-Filename: <original filename>`
+
+Example:
+
+```bash
+curl -X POST http://127.0.0.1:8081/api/v4/apps/upload_install \
+  -H 'Content-Type: application/zip' \
+  -H 'X-PQNAS-Filename: sharesmgr-1.0.0.zip' \
+  --data-binary @sharesmgr-1.0.0.zip
+```
+
+### Uninstall
+
+- `POST /api/v4/apps/uninstall`
+
+Body:
+
+```json
+{
+  "id": "sharesmgr",
+  "version": "1.0.0"
+}
+```
+
+Example:
+
+```bash
+curl -s -X POST http://127.0.0.1:8081/api/v4/apps/uninstall \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"sharesmgr","version":"1.0.0"}' | jq .
+```
+
+---
+
+## 7) Launch behavior (embedded vs detached)
+
+PQ-NAS now has a separate **app launch policy** concept.
+
+### Important design rule
+
+Launch behavior is **not stored inside app zips**.
+
+It is stored separately in server config so it remains flexible even when the system later has many apps.
+
+Current config path:
+
+```text
+/srv/pqnas/config/app_launch_policy.json
+```
+
+### Current policy shape
+
+```json
+{
+  "schema": 1,
+  "defaults": {
+    "default_launch": "embedded",
+    "window_profile": "auto",
+    "allow_user_override": true
+  },
+  "by_app_id": {
+    "filemgr": {
+      "default_launch": "detached",
+      "window_profile": "large",
+      "allow_user_override": false
+    },
+    "sharesmgr": {
+      "default_launch": "embedded",
+      "window_profile": "full",
+      "allow_user_override": false
+    }
+  }
+}
+```
+
+### Current supported values
+
+`default_launch`:
+
+- `auto`
+- `embedded`
+- `detached`
+
+`window_profile`:
+
+- `auto`
+- `small`
+- `normal`
+- `large`
+- `full`
+
+`allow_user_override`:
+
+- `true`
+- `false`
+
+### Meaning
+
+- **embedded** = open inside the PQ-NAS app workspace
+- **detached** = currently opens a real browser popup/window
+- **auto** = let shell logic choose
+
+### Current implementation note
+
+“Detached” currently means a real browser window / popup via browser behavior, not a fake internal sub-window rendered inside the main workspace.
+
+That may change later if PQ-NAS gets its own internal window manager model.
+
+---
+
+## 8) Development workflow
+
+Recommended workflow:
+
+1. build/edit the app in a working folder
+2. make sure zip contains `manifest.json` + `www/index.html`
+3. upload/install through the current app manager flow
+4. refresh the PQ-NAS shell
+5. uninstall old version if needed
+6. bump version aggressively during development
+
+### Practical rule
+
+- If you edit files under `apps/installed/...`, you are editing the installed copy.
+- If you edit a temp/dev folder, nothing changes until you install again.
+
+---
+
+## 9) Example minimal app bundle
+
+Create a working folder:
 
 ```bash
 mkdir -p /tmp/pqnas_myapp/www
 ```
 
-Put your files there:
+Create manifest:
 
 ```bash
 cat > /tmp/pqnas_myapp/manifest.json <<'EOF'
@@ -159,339 +386,303 @@ cat > /tmp/pqnas_myapp/manifest.json <<'EOF'
   "version": "0.1.0",
   "entry": "www/index.html",
   "icons": {
-    "win_classic": "www/myapp_win.png",
-    "cpunk_orange": "www/myapp_ora.png",
-    "dark": "www/myapp_dark.png",
-    "bright": "www/myapp_bright.png",
-    "default": "www/myapp_dark.png"
+    "dark": "www/icon_dark.png",
+    "bright": "www/icon_bright.png",
+    "default": "www/icon_dark.png"
   },
   "api_base": "/api/v4/files",
   "permissions": []
 }
 EOF
+```
 
+Create entry page:
+
+```bash
 cat > /tmp/pqnas_myapp/www/index.html <<'EOF'
 <!doctype html>
 <html>
-<head><meta charset="utf-8"><title>My App</title></head>
+<head>
+  <meta charset="utf-8">
+  <title>My App</title>
+</head>
 <body>
   <h1>My App</h1>
   <script src="./app.js"></script>
 </body>
 </html>
 EOF
+```
 
+Create JS:
+
+```bash
 cat > /tmp/pqnas_myapp/www/app.js <<'EOF'
 console.log("hello from myapp");
 EOF
 ```
 
-Build the zip into the PQ-NAS repo bundled directory:
+Zip it:
 
 ```bash
-mkdir -p apps/bundled/myapp
-mkdir -p apps/bundled/myapp/0.1.0
-cp -a /tmp/pqnas_myapp/manifest.json apps/bundled/myapp/0.1.0/
-cp -a /tmp/pqnas_myapp/www apps/bundled/myapp/0.1.0/
+cd /tmp/pqnas_myapp
+zip -r myapp-0.1.0.zip manifest.json www
 ```
 
----
-
-## 5) Listing bundled and installed apps
-
-Endpoint:
-
-- GET /api/v4/apps
-- The server may return a combined view of bundled + installed apps depending on implementation.
----
-
-## 6) Installing a bundled app
-
-Endpoint:
-
-- POST /api/v4/apps/install_bundled
-  JSON body: { "id": "<appId>", "zip": "<zipFileName>" }
-
-Example:
-
-```bash
-curl -s -X POST http://127.0.0.1:8081/api/v4/apps/install_bundled \
-  -H 'Content-Type: application/json' \
-  -d '{"id":"filemgr","zip":"filemgr-0.1.0.zip"}' | jq .
-
-```
-
-Notes:
-
-- Server installs into APPS_INSTALLED_DIR/<id>/<version>/
-- If that version already exists, install returns a conflict (remove first).
+Then upload/install via the current admin app manager flow.
 
 ---
 
-## 7) Uninstalling an installed version
-
-Endpoint:
-
-- POST /api/v4/apps/uninstall
-  JSON body: { "id": "<appId>", "version": "<version>" }
-
-Example:
-
-```bash
-curl -s -X POST http://127.0.0.1:8081/api/v4/apps/uninstall \
-  -H 'Content-Type: application/json' \
-  -d '{"id":"filemgr","version":"1.0.0"}' | jq .
-
-```
-
----
-
-## 8) Serving an installed app (URL)
-
-Once installed, files are reachable at:
-
-- /apps/<id>/<version>/www/index.html
-- /apps/<id>/<version>/www/app.js
-- /apps/<id>/<version>/www/icons/...
-
-Example:
-
-```bash
-curl -i http://127.0.0.1:8081/apps/filemgr/0.1.0/www/index.html | head
-```
-
----
-
-## 9) Editing apps during development
-
-Quick rule:
-
-- If you edit files under apps/installed/..., you are editing the installed copy.
-- If you edit /tmp/..., you are editing a staging folder (nothing changes until you re-zip and re-install).
-
-Recommended workflow:
-
-1. Edit in a working folder (/tmp/pqnas_myapp/... or a real repo folder)
-2. Zip → apps/bundled/<id>/<id>-<ver>.zip
-3. Uninstall old version
-4. Install new version
-
----
-
-## 10) API endpoints apps can use (current)
-
-Apps run in the user’s browser and can call PQ-NAS endpoints with:
-Some read-only endpoints may be callable with GET or POST for convenience and backward compatibility. 
-Mutating endpoints always use POST/PUT/DELETE.
-
-```js
-fetch("/api/v4/...", { credentials: "include", cache: "no-store" })
-```
-## 11) Security notes
-
-Apps are not sandboxed yet.
-- File APIs must enforce:
-- cookie auth
-- user root confinement
-- storage allocation requirement
-- symlink rejection (where applicable)
-
-Static serving must ensure:
-- no traversal escapes
-- correct content-type
-- X-Content-Type-Options: nosniff
-- Cache-Control: no-store during dev (and for sensitive pages)
-
-Shares/public links must ensure:
-- no path traversal via stored share paths
-- expired tokens return 410
-- avoid leaking whether a path exists (prefer 404 in many invalid-path cases)
+## 10) Identity/session API apps commonly use
 
 ### Identity/session
 
-- GET /api/v4/me
+- `GET /api/v4/me`
 
-Returns { ok, fingerprint_hex, role, exp, ... } when signed in.
+Typical use:
 
-### Apps (app manager)
+- confirm session is valid
+- get fingerprint
+- get role
+- get storage state
 
-- GET /api/v4/apps
-- POST /api/v4/apps/install_bundled
-- POST /api/v4/apps/uninstall
+Typical response shape includes fields like:
 
-### File manager APIs (user-scoped)
+- `ok`
+- `fingerprint_hex`
+- `role`
+- `storage_state`
+- `exp`
 
-All file operations are scoped to:
+Apps should handle:
 
-build/bin/data/users/<fingerprint>/
-
-Current endpoints:
-
-PUT  /api/v4/files/put  
-GET  /api/v4/files/get  
-POST /api/v4/files/zip
-POST /api/v4/files/zip_sel (if present in your tree)
-
-Browse / inspect:
-
-GET  /api/v4/files/list  
-POST /api/v4/files/tree  
-POST /api/v4/files/search  
-POST /api/v4/files/exists  
-POST /api/v4/files/du  
-POST /api/v4/files/hash  
-POST /api/v4/files/cat  
-POST /api/v4/files/touch  
-POST /api/v4/files/save_text
-GET  /api/v4/files/stat  
-POST /api/v4/files/stat
-POST /api/v4/files/stat_sel
-GET  /api/v4/shares/list
-srv.Get(R"(/s/([A-Za-z0-9_-]+))",
-
-/api/v4/files/stat
-Returns metadata about a file or directory.
-Query parameter:
-path — relative path inside the user root, or "." for root.
-Notes:
-Symlinks are rejected.
-Paths are validated via strict resolver.
-Requires allocated storage.
-Returns recursive size + children counts for directories (subject to caps).
-Example:
-curl -s -X POST "http://127.0.0.1:8081/api/v4/files/stat?path=." \
---cookie "pqnas_session=..." | jq .
-
-Success response fields (current):
-
-Common:
-ok
-path
-path_norm
-name
-type (file|dir|other)
-exists
-mode_octal
-mtime_epoch (if available)
-File only:
-bytes
-mime
-is_text
-Directory only:
-children.files
-children.dirs
-children.other
-bytes_recursive
-recursive_scanned_entries
-recursive_complete
-scan_cap
-time_cap_ms
-Mutations:
-
-POST   /api/v4/files/mkdir  
-POST   /api/v4/files/rmdir  
-POST   /api/v4/files/rmrf  
-DELETE /api/v4/files/delete  
-POST   /api/v4/files/move  
-POST   /api/v4/files/copy
-
-All assume:
-
-- cookie auth
-- storage allocated
-- audit logging server-side
+- `401` = not signed in
+- `403` = signed in but blocked / disabled / not allowed
 
 ---
 
-## 11) Security notes
+## 11) Apps / desktop APIs commonly used
+
+### App manager
+
+- `GET /api/v4/apps`
+- `POST /api/v4/apps/upload_install`
+- `POST /api/v4/apps/uninstall`
+
+### App shell / desktop list
+
+Some shell code paths may use a list endpoint intended for installed apps and desktop rendering.  
+Check your current server tree for the exact shape if you are wiring shell/app-launch UI.
+
+---
+
+## 12) File APIs apps commonly use
+
+Apps still use the normal PQ-NAS file APIs.
+
+### Upload/download / archive
+
+- `PUT /api/v4/files/put`
+- `GET /api/v4/files/get`
+- `POST /api/v4/files/zip`
+- `POST /api/v4/files/zip_sel` (if present in your tree)
+
+### Browse / inspect
+
+- `GET /api/v4/files/list`
+- `POST /api/v4/files/tree`
+- `POST /api/v4/files/search`
+- `POST /api/v4/files/exists`
+- `POST /api/v4/files/du`
+- `POST /api/v4/files/hash`
+- `POST /api/v4/files/cat`
+- `POST /api/v4/files/touch`
+- `POST /api/v4/files/save_text`
+- `GET /api/v4/files/stat`
+- `POST /api/v4/files/stat`
+- `POST /api/v4/files/stat_sel`
+
+### Mutations
+
+- `POST /api/v4/files/mkdir`
+- `POST /api/v4/files/rmdir`
+- `POST /api/v4/files/rmrf`
+- `DELETE /api/v4/files/delete`
+- `POST /api/v4/files/move`
+- `POST /api/v4/files/copy`
+
+### Storage assumptions
+
+All file APIs assume:
+
+- cookie auth
+- user-root confinement
+- storage allocation present
+- server-side path validation
+- server-side audit logging
+
+### `stat` notes
+
+`/api/v4/files/stat` returns metadata about a file or directory.
+
+Typical fields may include:
+
+Common:
+
+- `ok`
+- `path`
+- `path_norm`
+- `name`
+- `type`
+- `exists`
+- `mode_octal`
+- `mtime_epoch`
+
+File only:
+
+- `bytes`
+- `mime`
+- `is_text`
+
+Directory only:
+
+- `children.files`
+- `children.dirs`
+- `children.other`
+- `bytes_recursive`
+- `recursive_scanned_entries`
+- `recursive_complete`
+- `scan_cap`
+- `time_cap_ms`
+
+---
+
+## 13) Shares / public links APIs
+
+### Authenticated share management
+
+- `POST /api/v4/shares/create`
+- `POST /api/v4/shares/revoke`
+- `GET /api/v4/shares/list`
+
+Typical create body:
+
+```json
+{
+  "path": "<rel>",
+  "expires_sec": 86400
+}
+```
+
+Typical list response contains entries like:
+
+- `token`
+- `url`
+- `owner_fp`
+- `path`
+- `type`
+- `created_at`
+- `expires_at`
+- `downloads`
+
+### Public share URL
+
+- `GET /s/<token>`
+
+Behavior:
+
+- file token downloads the file
+- directory token may return a zip
+- expired token should return `410`
+- should not leak unnecessary internal details
+
+### App-side share badge pattern
+
+If your app wants “shared” badges:
+
+1. load `GET /api/v4/shares/list`
+2. build a map keyed by path or type+path
+3. overlay a share badge in your grid/list
+4. refresh after create/revoke
+
+### PQ shares / secure share manager
+
+PQ share flows now also exist in the tree, and a dedicated shares manager UI may distinguish:
+
+- normal shares
+- PQ shares
+- recipient / invite-based secure share flows
+
+If your app needs PQ-share-specific behavior, inspect the current tree for the exact route set in your branch.
+
+---
+
+## 14) Security notes
 
 Apps are not sandboxed yet.
 
-File APIs must enforce:
+### File APIs must enforce
 
 - cookie auth
 - user root confinement
 - storage allocation requirement
+- strict path validation
+- symlink rejection where applicable
 
-Static serving must ensure:
+### Static serving must enforce
 
 - no traversal escapes
-- correct content-type
-- X-Content-Type-Options: nosniff
-- Cache-Control: no-store during dev
+- correct content type
+- `X-Content-Type-Options: nosniff`
+- sensible `Cache-Control` behavior, especially during development and on sensitive pages
+
+### Shares must enforce
+
+- no traversal through stored share paths
+- expired tokens return `410`
+- avoid leaking internal path existence unnecessarily
+
+### App launch policy must remain server-owned
+
+Launch behavior should stay in server config, not inside app bundles, so admins can change policy without repackaging apps and so future installations with many apps remain manageable.
 
 ---
 
-## 12) Versioning rules
+## 15) Versioning rules
 
-- Uninstall same version before reinstalling.
-- Bump versions aggressively during dev.
+- uninstall same version before reinstalling when required by your current server flow
+- bump versions aggressively during development
+- apps can infer their own version from URL:
+
+```text
+/apps/<id>/<version>/...
+```
 
 ---
 
-## 13) TODO / future ideas
+## 16) Practical guidance for app authors
 
-- App permissions model
-- Admin allow/deny apps
-- Per-user app installs
-- App signing
-- Built-in filemgr bundled
-- App registry UI
+Prefer these rules:
 
-14) Shares / public links API (current)
-These are the endpoints used by the file manager “share link” UI and the /s/<token> public downloader.
-Authenticated share management
-POST /api/v4/shares/create
-Body: { "path": "<rel>", "expires_sec": 86400 }
-Returns: { ok:true, token:"...", url:"/s/<token>", expires_at, type, path }
-POST /api/v4/shares/revoke
-Body: { "token": "<token>" }
-Returns: { ok:true }
-GET /api/v4/shares/list
-Returns: { ok:true, shares:[{token,url,owner_fp,path,type,created_at,expires_at,downloads}] }
-Role note: currently this may be admin-gated in your server code. Apps should handle 403 and either:
-hide “already shared” badges/menus, or
-degrade to “create share only” UI without list/badges.
-Public download
-GET /s/<token>
-Downloads a file, or returns a zip if token targets a directory.
-Returns 410 if expired (and should not leak extra details).
-Should set Cache-Control: no-store.
-App-side caching pattern (recommended)
-If you want “shared” badges in a file grid:
-load shares list once (or on interval / after create/revoke)
-build a map keyed by <type>:<path>
-when rendering each tile, check if it exists in the map and overlay a 🔗 badge
+- keep app bundles small and static
+- do not assume a writable app directory
+- treat manifest metadata as display metadata, not security policy
+- always handle `401` and `403`
+- assume some users may open the app embedded and others detached
+- do not hardcode repo-local absolute paths
+- do not assume bundled and installed roots are the same
 
-15) Security notes
+---
 
-Apps are not sandboxed yet.
-File APIs must enforce:
-cookie auth
-user root confinement
-storage allocation requirement
-symlink rejection (where applicable)
-Static serving must ensure:
-no traversal escapes
-correct content-type
-X-Content-Type-Options: nosniff
-Cache-Control: no-store during dev (and for sensitive pages)
-Shares/public links must ensure:
-no path traversal via stored share paths
-expired tokens return 410
-avoid leaking whether a path exists (prefer 404 in many invalid-path cases)
+## 17) TODO / future ideas
 
-16) Versioning rules
-Uninstall same version before reinstalling.
-Bump versions aggressively during dev.
-Apps can show their version by parsing URL:
-/apps/<id>/<version>/www/...
-
-17) TODO / future ideas
-App permissions model
-Admin allow/deny apps
-Per-user app installs
-App signing
-Built-in filemgr bundled
-App registry UI
-Dedicated “Share Manager” app (list/revoke/expiry/search/export) as an optional bundled app
+- app permission model
+- admin allow/deny apps
+- per-user app installs
+- app signing
+- better app registry UI
+- user preferences for launch mode
+- internal detached-window manager instead of browser popup windows
+- manifest-declared preferred window hints if needed later
+- tighter app-to-shell integration
+```
