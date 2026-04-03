@@ -6,233 +6,6 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
 
     <style>
-
-        *{ box-sizing:border-box; }
-        html,body{ height:100%; }
-
-        body{
-            margin:0;
-            color:var(--fg);
-            font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial;
-            background:
-                    radial-gradient(1200px 700px at 18% 8%, rgba(var(--fg-rgb),0.11), transparent 55%),
-                    radial-gradient(1000px 700px at 82% 12%, rgba(var(--fg-rgb),0.07), transparent 60%),
-                    linear-gradient(180deg, #04050f, var(--bg));
-            overflow:hidden;
-        }
-
-        a{ color:var(--fg); text-decoration:none; }
-        a:hover{ text-shadow: 0 0 10px rgba(var(--fg-rgb),0.25); }
-
-        /* ===== Layout (match admin pages) ===== */
-        .desktop{
-            height: 100%;
-            display: grid;
-            grid-template-columns: 280px 1fr;
-            gap: 14px;
-            padding: 14px;
-        }
-
-        @media (max-width: 980px){
-            body{ overflow:auto; }
-            .desktop{
-                grid-template-columns: 1fr;
-                overflow: visible;
-            }
-        }
-
-        .sidebar{
-            border: 1px solid var(--border);
-            border-radius: var(--radius2);
-            background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.24));
-            box-shadow: var(--shadow);
-            padding: 14px;
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-        }
-
-        .brand{
-            display:flex;
-            gap: 10px;
-            align-items: center;
-            padding: 10px 10px 14px;
-            border-bottom: 1px solid var(--border2);
-            margin-bottom: 12px;
-        }
-
-        .brand .logoDot{
-            width: 14px; height: 14px;
-            border-radius: 50%;
-            background: var(--fg);
-            box-shadow: 0 0 18px rgba(var(--fg-rgb),0.38);
-            flex: 0 0 auto;
-        }
-
-        .brand h1{
-            margin: 0;
-            font-size: 16px;
-            font-weight: 900;
-            letter-spacing: 0.2px;
-        }
-        .brand .sub{
-            margin-top: 2px;
-            font-size: 12px;
-            color: var(--fg-dim);
-        }
-
-        .nav{
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            padding: 10px 6px;
-            overflow: auto;
-            min-height: 0;
-        }
-
-        .nav .sectionLabel{
-            margin: 10px 6px 2px;
-            font-size: 11px;
-            color: rgba(var(--fg-rgb),0.55);
-            letter-spacing: 0.6px;
-            text-transform: uppercase;
-        }
-        .navbtn{
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            gap: 10px;
-            padding: 10px 12px;
-            border-radius: 14px;
-            border: 1px solid var(--border2);
-            background: rgba(0,0,0,0.22);
-            color: var(--fg);
-            cursor: pointer;
-            user-select:none;
-            text-decoration:none;
-            transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
-            min-height: 42px;
-        }
-        .navbtn:hover{
-            transform: translateY(-1px);
-            background: rgba(var(--fg-rgb),0.06);
-            border-color: rgba(var(--fg-rgb),0.30);
-        }
-        .navbtn.active{
-            background: rgba(var(--fg-rgb),0.10);
-            border-color: rgba(var(--fg-rgb),0.38);
-            box-shadow: 0 0 18px rgba(var(--fg-rgb),0.12);
-        }
-
-
-        .navbtn .k{
-            font-size: 12px;
-            color: rgba(var(--fg-rgb),0.55);
-            border: 1px solid rgba(var(--fg-rgb),0.16);
-            border-radius: 10px;
-            padding: 2px 8px;
-            background: rgba(0,0,0,0.22);
-        }
-
-        .bottom{
-            border-top: 1px solid var(--border2);
-            margin-top: auto;
-            padding-top: 12px;
-            display:flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .statusCard{
-            border: 1px solid var(--border2);
-            border-radius: 16px;
-            background: rgba(0,0,0,0.22);
-            padding: 10px 12px;
-        }
-
-
-        /* IMPORTANT: keep id="roleBadge" */
-        .badge{
-            display:inline-flex;
-            align-items:center;
-            gap: 8px;
-            padding: 6px 12px;
-            border-radius: 999px;
-            font-size: 12px;
-            font-weight: 900;
-            border: 1px solid var(--border2);
-            background: rgba(0,0,0,0.28);
-            color: var(--fg);
-            white-space: nowrap;
-        }
-        .badge.admin { border-color: rgba(var(--fg-rgb),0.30); background: rgba(var(--fg-rgb),0.08); }
-        .badge.user{
-            border-color: rgba(var(--info-rgb),0.30);
-            background: rgba(var(--info-rgb),0.10);
-            color: rgba(var(--info-rgb),0.92);
-        }
-        .badge.unknown { border-color: rgba(var(--fg-rgb),0.14); background: rgba(255,255,255,0.03); color: rgba(var(--fg-rgb),0.80); }
-
-        .mini{
-            margin-top: 8px;
-            font-size: 12px;
-            color: var(--fg-dim);
-            line-height: 1.35;
-        }
-
-        .workspace{
-            border: 1px solid var(--border);
-            border-radius: var(--radius2);
-            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
-            box-shadow: var(--shadow);
-            display:flex;
-            flex-direction: column;
-            min-width: 0;
-            min-height: 0;
-            overflow: hidden;
-        }
-
-
-        .topbar{
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 12px 14px;
-            border-bottom: 1px solid var(--border2);
-            background: rgba(0,0,0,0.18);
-        }
-
-        .crumbs{
-            display:flex;
-            flex-direction: column;
-            min-width: 0;
-        }
-
-        .crumbs .title{
-            font-weight: 950;
-            letter-spacing: 0.2px;
-            font-size: 14px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .crumbs .sub{
-            margin-top: 2px;
-            font-size: 12px;
-            color: var(--fg-dim);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .actions{
-            display:flex;
-            align-items:center;
-            gap: 10px;
-            flex: 0 0 auto;
-        }
-
         .btn{
             display:inline-flex;
             align-items:center;
@@ -248,38 +21,43 @@
             user-select:none;
             transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
         }
+
         .btn:hover{
             transform: translateY(-1px);
             border-color: rgba(var(--fg-rgb),0.42);
             background: rgba(var(--fg-rgb),0.07);
         }
+
         .btn.secondary{
             border-color: rgba(var(--fg-rgb),0.24);
             color: rgba(var(--fg-rgb),0.95);
             background: rgba(255,255,255,0.04);
         }
+
         .btn.secondary:hover{
             border-color: rgba(255,255,255,0.22);
             background: rgba(255,255,255,0.05);
         }
+
         .btn.danger{
             border-color: rgba(var(--fail-rgb),0.30);
             color: rgba(255,200,200,0.95);
         }
+
         .btn.danger:hover{
             border-color: rgba(var(--fail-rgb),0.55);
             background: rgba(var(--fail-rgb),0.10);
         }
 
-        /* ===== Apps page content ===== */
         .content{
-            padding: 14px;
+            padding: 14px 20px 0 20px;
             min-height: 0;
             min-width: 0;
             overflow: hidden;
             display:flex;
             flex-direction: column;
             gap: 14px;
+            flex: 1 1 auto;
         }
 
         .pane{
@@ -301,10 +79,21 @@
             text-transform: uppercase;
         }
 
-        .row{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+        .row{
+            display:flex;
+            gap:10px;
+            align-items:center;
+            flex-wrap:wrap;
+        }
 
-        .mono{ font-family: var(--mono); font-size: 12.5px; }
-        .muted{ color: var(--fg-dim); }
+        .mono{
+            font-family: var(--mono);
+            font-size: 12.5px;
+        }
+
+        .muted{
+            color: var(--fg-dim);
+        }
 
         input[type="file"]{
             width:100%;
@@ -321,6 +110,7 @@
             gap: 14px;
             min-height: 0;
         }
+
         @media (max-width: 1100px){
             body{ overflow:auto; }
             .grid{ grid-template-columns: 1fr; }
@@ -334,13 +124,18 @@
             overflow:hidden;
         }
 
-        .card h3{ margin:0 0 10px 0; font-size: 14px; letter-spacing:0.2px; }
+        .card h3{
+            margin:0 0 10px 0;
+            font-size: 14px;
+            letter-spacing:0.2px;
+        }
 
         .list{
             display:flex;
             flex-direction:column;
             gap:10px;
         }
+
         .item{
             border: 1px solid rgba(var(--fg-rgb),0.16);
             border-radius: 16px;
@@ -352,9 +147,27 @@
             gap: 12px;
         }
 
-        .item .left{ min-width:0; display:flex; flex-direction:column; gap: 4px; }
-        .item .name{ font-weight: 950; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-        .item .meta{ font-size: 12px; color: var(--fg-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .item .left{
+            min-width:0;
+            display:flex;
+            flex-direction:column;
+            gap: 4px;
+        }
+
+        .item .name{
+            font-weight: 950;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }
+
+        .item .meta{
+            font-size: 12px;
+            color: var(--fg-dim);
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }
 
         .appPolicyRight{
             min-width: 420px;
@@ -419,34 +232,15 @@
                 grid-template-columns: 1fr;
             }
         }
-
-        /* keep the "badge warn/ok/err" API from admin_apps.js */
-        .badge.ok{
-            border-color: rgba(var(--ok-rgb),0.30);
-            background: rgba(var(--ok-rgb),0.08);
-            color: rgba(var(--ok-rgb),0.92);
-        }
-        .badge.warn { border-color: rgba(var(--warn-rgb),0.25); background: rgba(var(--warn-rgb),0.10); color: rgba(var(--warn-rgb),0.92); }
-        .badge.err  { border-color: rgba(var(--fail-rgb),0.25); background: rgba(var(--fail-rgb),0.10); color: rgba(var(--fail-rgb),0.92); }
-
-        .footerline{
-            padding: 10px 14px;
-            border-top: 1px solid var(--border2);
-            color: rgba(var(--fg-rgb),0.55);
-            font-size: 12px;
-            text-align: right;
-            user-select: none;
-            background: rgba(0,0,0,0.12);
-        }
     </style>
-    <link rel="stylesheet" href="/static/theme.css">
-    <script src="/static/theme.js"></script>
 
+    <link rel="stylesheet" href="/static/theme.css">
+    <link rel="stylesheet" href="/static/shell_menu.css">
+    <script src="/static/theme.js"></script>
 </head>
 
 <body>
 <div class="desktop">
-    <!-- Left launcher -->
     <aside class="sidebar">
         <div class="brand">
             <div class="logoDot" aria-hidden="true"></div>
@@ -487,7 +281,6 @@
 
         <div class="bottom">
             <div class="statusCard">
-                <!-- IMPORTANT: keep id="roleBadge" -->
                 <div id="roleBadge" class="badge unknown">role: ?</div>
                 <div class="mini">
                     Upload app zip → validate → install.
@@ -497,7 +290,6 @@
         </div>
     </aside>
 
-    <!-- Right workspace -->
     <main class="workspace">
         <div class="topbar">
             <div class="crumbs">

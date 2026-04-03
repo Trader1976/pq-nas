@@ -5,236 +5,11 @@
     <title>DNA-Nexus NAS</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
 
+    <link rel="stylesheet" href="/static/theme.css">
+    <link rel="stylesheet" href="/static/shell_menu.css">
+    <script src="/static/theme.js"></script>
+
     <style>
-
-        * { box-sizing: border-box; }
-        html, body { height: 100%; }
-
-        body{
-            margin: 0;
-            color: var(--fg);
-            font-family: var(--sans);
-            background:
-                    radial-gradient(1200px 700px at 18% 8%, rgba(var(--fg-rgb),0.11), transparent 55%),
-                    radial-gradient(1000px 700px at 82% 12%, rgba(var(--fg-rgb),0.07), transparent 60%),
-                    linear-gradient(180deg, #04050f, var(--bg));
-            overflow: hidden;
-        }
-
-        /* Desktop frame */
-        .desktop{
-            height: 100%;
-            display: grid;
-            grid-template-columns: 280px 1fr;
-            gap: 14px;
-            padding: 14px;
-        }
-
-        @media (max-width: 980px){
-            body{ overflow:auto; }
-            .desktop{
-                grid-template-columns: 1fr;
-                overflow: visible;
-            }
-        }
-
-        .sidebar{
-            border: 1px solid var(--border);
-            border-radius: var(--radius2);
-            background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.24));
-            box-shadow: var(--shadow);
-            padding: 14px;
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-        }
-
-        .brand{
-            display:flex;
-            gap: 12px;
-            align-items: center;
-            padding: 10px 10px 14px;
-            border-bottom: 1px solid var(--border2);
-            margin-bottom: 12px;
-        }
-
-        .brand .logoDot{
-            width: 14px; height: 14px;
-            border-radius: 50%;
-            background: var(--fg);
-            box-shadow: 0 0 18px rgba(var(--fg-rgb),0.38);
-            flex: 0 0 auto;
-        }
-
-        .brand h1{
-            margin: 0;
-            font-size: 16px;
-            font-weight: 950;
-            letter-spacing: 0.2px;
-        }
-        .brand .sub{
-            margin-top: 2px;
-            font-size: 12px;
-            color: var(--fg-dim);
-        }
-
-        .nav{
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            padding: 10px 6px;
-            overflow: auto;
-            min-height: 0;
-        }
-
-        .nav .sectionLabel{
-            margin: 10px 6px 2px;
-            font-size: 11px;
-            color: rgba(var(--fg-rgb),0.55);
-            letter-spacing: 0.6px;
-            text-transform: uppercase;
-        }
-        .btn{
-            font-family: var(--sans);
-        }
-        .navbtn{
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            gap: 10px;
-            padding: 10px 12px;
-            border-radius: 14px;
-            border: 1px solid var(--border2);
-            background: rgba(0,0,0,0.22);
-            color: var(--fg);
-            line-height: 1;
-            min-height: 42px;
-            cursor: pointer;
-            user-select:none;
-            text-decoration:none;
-            transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
-            font-size: 14px;
-        }
-        #homeBlurb{
-            font-family: var(--sans);
-        }
-        .navbtn:hover{
-            transform: translateY(-1px);
-            background: rgba(var(--fg-rgb),0.06);
-            border-color: rgba(var(--fg-rgb),0.30);
-        }
-
-        .navbtn.active{
-            background: rgba(var(--fg-rgb),0.10);
-            border-color: rgba(var(--fg-rgb),0.38);
-            box-shadow: 0 0 18px rgba(var(--fg-rgb),0.12);
-        }
-
-        .navbtn .k{
-            font-size: 12px;
-            color: rgba(var(--fg-rgb),0.55);
-            border: 1px solid rgba(var(--fg-rgb),0.16);
-            border-radius: 10px;
-            padding: 2px 8px;
-            background: rgba(0,0,0,0.22);
-            display:inline-flex;
-            align-items:center;
-            justify-content:center;
-        }
-
-        .bottom{
-            border-top: 1px solid var(--border2);
-            margin-top: auto;
-            padding-top: 12px;
-            display:flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .statusCard{
-            border: 1px solid var(--border2);
-            border-radius: 16px;
-            background: rgba(0,0,0,0.22);
-            padding: 10px 12px;
-        }
-
-        .badge{
-            display:inline-flex;
-            align-items:center;
-            gap: 8px;
-            padding: 6px 12px;
-            border-radius: 999px;
-            font-size: 12px;
-            font-weight: 800;
-            border: 1px solid var(--border2);
-            background: rgba(0,0,0,0.28);
-            color: var(--fg);
-            white-space: nowrap;
-        }
-        .badge.ok { border-color: rgba(var(--fg-rgb),0.30); background: rgba(var(--fg-rgb),0.08); }
-        .badge.warn { border-color: rgba(var(--warn-rgb),0.25); background: rgba(var(--warn-rgb),0.10); color: rgba(var(--warn-rgb),0.92); }
-        .badge.err  { border-color: rgba(var(--fail-rgb),0.25); background: rgba(var(--fail-rgb),0.10); color: rgba(var(--fail-rgb),0.92); }
-
-        .mini{
-            margin-top: 8px;
-            font-size: 12px;
-            color: var(--fg-dim);
-            line-height: 1.35;
-        }
-
-        /* Workspace */
-        .workspace{
-            border: 1px solid var(--border);
-            border-radius: var(--radius2);
-            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
-            box-shadow: var(--shadow);
-            display:flex;
-            flex-direction: column;
-            min-width: 0;
-            min-height: 0;
-            overflow: hidden;
-        }
-
-        .topbar{
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 12px 14px;
-            border-bottom: 1px solid var(--border2);
-            background: rgba(0,0,0,0.18);
-        }
-
-        .crumbs{
-            display:flex;
-            flex-direction: column;
-            min-width: 0;
-        }
-
-        .crumbs .title{
-            font-weight: 900;
-            letter-spacing: 0.2px;
-            font-size: 14px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .crumbs .sub{
-            margin-top: 2px;
-            font-size: 12px;
-            color: var(--fg-dim);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .actions{
-            display:flex;
-            align-items:center;
-            gap: 10px;
-            flex: 0 0 auto;
-        }
-
         .btn{
             display:inline-flex;
             align-items:center;
@@ -245,21 +20,25 @@
             border: 1px solid rgba(var(--fg-rgb),0.28);
             background: rgba(0,0,0,0.26);
             color: var(--fg);
+            font-family: var(--sans);
             font-weight: 950;
             cursor:pointer;
             text-decoration:none;
             user-select:none;
             transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
         }
+
         .btn:hover{
             transform: translateY(-1px);
             border-color: rgba(var(--fg-rgb),0.42);
             background: rgba(var(--fg-rgb),0.07);
         }
+
         .btn.secondary{
             border-color: rgba(255,255,255,0.12);
             color: rgba(var(--fg-rgb),0.82);
         }
+
         .btn.secondary:hover{
             border-color: rgba(255,255,255,0.22);
             background: rgba(255,255,255,0.05);
@@ -269,8 +48,8 @@
             display:grid;
             grid-template-rows: 1fr;
             grid-template-columns: 1fr 420px;
-            gap: 14px;
-            padding: 14px;
+            gap: 0;
+            padding: 10px 20px 0 20px;
             min-height: 0;
             min-width: 0;
             overflow: hidden;
@@ -279,30 +58,30 @@
         }
 
         @media (max-width: 1200px){
-            .content{ grid-template-columns: 1fr; overflow:auto; }
+            .content{
+                grid-template-columns: 1fr;
+                overflow:auto;
+            }
+        }
+
+        .content.noInspector{
+            grid-template-columns: 1fr;
         }
 
         .pane{
-            border: 1px solid var(--border2);
-            border-radius: var(--radius);
-            background: rgba(0,0,0,0.22);
-            padding: 14px;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            padding: 0;
             min-width: 0;
             min-height: 0;
             overflow: hidden;
             display:flex;
             flex-direction:column;
-            min-height:0;
             height: 100%;
         }
 
-        /* When an app is embedded, make the host pane frameless (the main pane already provides the frame) */
-        .pane.appHost{
-            padding: 0;
-            border: 0;
-            border-radius: 0;
-            background: transparent;
-        }
+        .pane.appHost,
         .pane.homeHost{
             padding: 0;
             border: 0;
@@ -310,31 +89,69 @@
             background: transparent;
         }
 
-        /* The area where renderApp() injects content */
+        .pane h2{
+            margin: 0 0 10px 0;
+            font-size: 12px;
+            color: rgba(var(--fg-rgb),0.60);
+            font-weight: 950;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+        }
+
+        .pane.appHost h2{
+            display:none;
+        }
+
+        .mainArea{
+            min-width: 0;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            overflow: hidden;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            padding: 0;
+        }
+
+        #homeBlurb{
+            flex: 1 1 auto;
+            min-height: 0;
+            display:flex;
+            flex-direction:column;
+            gap: 12px;
+            color: var(--fg-dim);
+            line-height: 1.5;
+            font-family: var(--sans);
+        }
+
         #homeBlurb.appHostBlurb{
             gap: 10px;
         }
 
-        #toggleInspectorBtn{
-            padding: 8px 12px;
-            opacity: 0.92;
-        }
-        /* Make iframe wrapper flush and reduce extra borders */
         .appFrameWrap{
+            flex: 1 1 auto;
+            min-height: 0;
+            display:flex;
             border: 0;
             border-radius: 0;
             background: transparent;
-            overflow: hidden; /* keep clipping */
+            overflow: hidden;
         }
 
-        /* Remove iframe border now that wrapper has it */
         .appFrame{
+            flex: 1 1 auto;
+            min-height: 0;
+            width: 100%;
+            height: 100%;
+            display:block;
             border: 0;
             border-radius: 0;
             background: transparent;
+            animation: appIn 180ms ease-out;
         }
 
-        /* App open animation */
         @keyframes appIn {
             from { opacity: 0; transform: scale(0.985); }
             to   { opacity: 1; transform: scale(1); }
@@ -346,19 +163,11 @@
             gap:8px;
         }
 
-        .appFrame {
-            animation: appIn 180ms ease-out;
+        #toggleInspectorBtn{
+            padding: 8px 12px;
+            opacity: 0.92;
+            font-family: var(--sans);
         }
-
-        .pane h2{
-            margin: 0 0 10px 0;
-            font-size: 12px;
-            color: rgba(var(--fg-rgb),0.60);
-            font-weight: 950;
-            letter-spacing: 0.6px;
-            text-transform: uppercase;
-        }
-        .pane.appHost h2{ display:none; }
 
         .bigState{
             display:none;
@@ -368,8 +177,17 @@
             padding: 14px;
             margin-bottom: 12px;
         }
-        .bigState h3{ margin:0 0 6px 0; font-size: 16px; }
-        .bigState p{ margin:0; color: var(--fg-dim); line-height: 1.45; }
+
+        .bigState h3{
+            margin:0 0 6px 0;
+            font-size: 16px;
+        }
+
+        .bigState p{
+            margin:0;
+            color: var(--fg-dim);
+            line-height: 1.45;
+        }
 
         .mono{
             font-family: var(--mono);
@@ -392,74 +210,20 @@
             height: calc(100% - 0px);
         }
 
-        .footerline{
-            padding: 10px 14px;
-            border-top: 1px solid var(--border2);
-            color: rgba(var(--fg-rgb),0.55);
-            font-size: 12px;
-            text-align: right;
-            user-select: none;
-            background: rgba(0,0,0,0.12);
-        }
-
-        a{ color: var(--fg); }
-        a:hover{ text-shadow: 0 0 10px rgba(var(--fg-rgb),0.25); }
-        /* Make sure sidebar stays clickable above any content overlays */
-        .sidebar { position: relative; z-index: 10; }
-        .workspace { position: relative; z-index: 1; }
-        /* Defensive: prevent main content from stealing clicks from sidebar */
-        .workspace { pointer-events: auto; }
-        .sidebar, .sidebar * { pointer-events: auto; }
-        .content.noInspector{
-            grid-template-columns: 1fr;
-        }
-        #homeBlurb {
-            flex: 1 1 auto;
-            min-height: 0;
-            display:flex;
-            flex-direction:column;
-            gap: 12px;
-        }
-
-        .appFrameWrap{
-            flex: 1 1 auto;
-            min-height: 0;
-            display:flex;
-            border: 0;
-            border-radius: 0;
-            background: transparent;
-            overflow: hidden; /* keep clipping */
-        }
-
-        .appFrame{
-            flex: 1 1 auto;
-            min-height: 0;
-            width: 100%;
-            height: 100%;
-            display:block;
-            border: 0;
-            border-radius: 0;
-            background: transparent;
-        }
-
-        /* =======================
-           Desktop (Home icons)
-           ======================= */
-
         .desktopSurface{
             position: relative;
             flex: 1 1 auto;
             min-height: 260px;
             height: 100%;
             border: 0;
-            border-radius: 16px;
+            border-radius: 0;
             background: transparent;
             overflow: hidden;
         }
 
         .desktopIcon{
             position: absolute;
-            width: 72px; /* icon + label */
+            width: 72px;
             user-select: none;
             cursor: default;
             display: flex;
@@ -523,191 +287,35 @@
             border-radius:6px;
             z-index:1000;
         }
-        /* Home desktop should NOT be framed inside another framed pane */
-        .pane.homeHost{
-            padding: 0;
-            border: 0;
-            border-radius: 0;
-            background: transparent;
-        }
-        /* =========================
-           Frameless / Nextcloud-like shell
-           ========================= */
 
-        html, body {
-            height: 100%;
-        }
-
-        body {
-            margin: 0;
-            overflow: hidden;
-            background: var(--bg);
-        }
-
-        /* Use the viewport itself as the shell */
-        .desktop{
-            height: 100dvh;
-            grid-template-columns: 260px 1fr;
-            gap: 0;
-            padding: 0;
-        }
-
-        /* Sidebar becomes part of the shell, not a floating card */
-        .sidebar{
-            border: 0;
-            border-radius: 0;
-            box-shadow: none;
-            background: rgba(0,0,0,0.10);
-            padding: 0;
-        }
-
-        /* Brand area */
-        .brand {
-            margin: 0;
-            padding: 20px 18px 16px;
-            border-bottom: 0;
-        }
-
-        /* Navigation spacing */
-        .nav {
-            gap: 2px;
-            padding: 8px 10px 12px;
-        }
-
-        /* Section labels can stay, but softer */
-        .nav .sectionLabel {
-            margin: 14px 10px 6px;
-            font-size: 11px;
-            color: rgba(var(--fg-rgb), 0.45);
-            letter-spacing: 0.6px;
-            text-transform: uppercase;
-        }
-
-        /* Turn left menu buttons into flat rows */
-        .navbtn {
-            min-height: 40px;
-            border: 0;
-            border-radius: 10px;
-            background: transparent;
-            padding: 10px 12px;
-            box-shadow: none;
-        }
-
-        .navbtn:hover {
-            transform: none;
-            background: rgba(var(--fg-rgb), 0.06);
-            border-color: transparent;
-        }
-
-        .navbtn.active {
-            background: rgba(var(--fg-rgb), 0.12);
-            border: 0;
-            box-shadow: none;
-        }
-
-        .navbtn .k {
-            border: 0;
-            background: rgba(255,255,255,0.08);
-        }
-
-        /* Bottom block also flat */
-        .bottom {
-            border-top: 0;
-            padding: 10px;
-            gap: 8px;
-        }
-
-        .statusCard {
-            border: 0;
-            border-radius: 12px;
-            background: rgba(0,0,0,0.14);
-        }
-
-        /* Workspace must not look like a second window */
-        .workspace{
-            border: 0;
-            border-radius: 0;
-            box-shadow: none;
-            background: transparent;
-        }
-
-        /* Topbar becomes flat */
-        .topbar{
-            border-bottom: 0;
-            background: transparent;
-            padding: 16px 20px 10px;
-        }
-
-        /* Remove extra framed spacing */
-        .content{
-            gap: 0;
-            padding: 10px 20px 0 20px;
-        }
-
-        /* Main content must not sit inside a card */
-        .pane{
-            border: 0;
-            border-radius: 0;
-            background: transparent;
-            padding: 0;
-            min-width: 0;
-            min-height: 0;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-        }
-
-        /* Keep embedded app host fully flush */
-        .pane.appHost,
-        .pane.homeHost {
-            padding: 0;
-            border: 0;
-            border-radius: 0;
-            background: transparent;
-        }
-
-        /* Home desktop surface: no extra frame */
-        .desktopSurface {
-            border: 0;
-            border-radius: 0;
-            background: transparent;
-        }
-
-        /* Footer should not look like a panel edge */
-        .footerline{
-            border-top: 0;
-            background: transparent;
-            padding: 8px 20px 12px;
-        }
-
-        /* Inspector can stay as the only intentionally separated area */
-        #inspectorPane {
+        #inspectorPane{
             margin-left: 24px;
             padding-left: 20px;
-            border-left: 1px solid rgba(var(--fg-rgb), 0.10);
+            border-left: 1px solid rgba(var(--fg-rgb),0.10);
         }
-        .mainArea{
-            min-width: 0;
-            min-height: 0;
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-            overflow: hidden;
-            border: 0;
-            border-radius: 0;
-            background: transparent;
-            padding: 0;
+
+        a{ color: var(--fg); }
+        a:hover{ text-shadow: 0 0 10px rgba(var(--fg-rgb),0.25); }
+
+        .sidebar{
+            position: relative;
+            z-index: 10;
+        }
+
+        .workspace{
+            position: relative;
+            z-index: 1;
+            pointer-events: auto;
+        }
+
+        .sidebar, .sidebar *{
+            pointer-events: auto;
         }
     </style>
-    <link rel="stylesheet" href="/static/theme.css">
-    <script src="/static/theme.js"></script>
-
 </head>
 
 <body>
 <div class="desktop">
-    <!-- Left menu / launcher -->
     <aside class="sidebar">
         <div class="brand">
             <img class="brandLogo" id="brandLogo" src="/static/img/logo/nexuslogo1_dark_small.png" alt="DNA-Nexus logo">
@@ -721,10 +329,9 @@
             <button class="navbtn" id="nav_trusted_devices" type="button">
                 <span>Trusted Devices</span><span class="k">D</span>
             </button>
+
             <div class="sectionLabel">Apps</div>
             <div id="appsList"></div>
-
-
 
             <div class="sectionLabel">Admin</div>
             <a class="navbtn" id="nav_admin" href="/admin" style="display:none">
@@ -732,7 +339,6 @@
             </a>
 
             <div class="sectionLabel">Session</div>
-
             <a class="navbtn" id="nav_login" href="/" style="display:none">
                 <span>Sign in</span><span class="k">↩</span>
             </a>
@@ -753,13 +359,10 @@
         </div>
     </aside>
 
-    <!-- Right workspace area -->
     <main class="workspace">
         <div class="content" id="contentGrid">
-            <!-- Large primary pane (future file manager / apps) -->
             <section class="pane mainArea" data-main-host aria-label="Main pane">
                 <h2 id="mainPaneTitle" style="display:none"></h2>
-
 
                 <div id="state_disabled" class="bigState">
                     <h3>Waiting for admin approval…</h3>
@@ -780,15 +383,13 @@
                     </div>
                 </div>
 
-                <div class="mono" id="homeBlurb" style="color: var(--fg-dim); line-height: 1.5;">
+                <div class="mono" id="homeBlurb">
                     <div id="desktopSurface" class="desktopSurface" aria-label="Desktop"></div>
                 </div>
-
             </section>
 
-            <!-- Right inspector pane (JSON state / logs preview etc) -->
             <aside class="pane" aria-label="Inspector pane" id="inspectorPane" style="display:none">
-            <h2>Inspector</h2>
+                <h2>Inspector</h2>
                 <pre id="out">Loading…</pre>
                 <div style="margin-top:10px; color: rgba(var(--fg-rgb),0.60); font-size: 12px;">
                     Tip: <code>/api/v4/me</code> should return JSON.
@@ -807,6 +408,7 @@
         document.head.appendChild(s);
     })();
 </script>
+
 <script>
     (function () {
         function pickBrandLogo() {

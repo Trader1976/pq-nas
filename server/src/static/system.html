@@ -1,249 +1,15 @@
 <!doctype html>
 <html lang="en">
 <head>
-    <meta charset="utf-8" />
+    <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>DNA-Nexus NAS • System</title>
+
     <link rel="stylesheet" href="/static/theme.css">
+    <link rel="stylesheet" href="/static/shell_menu.css">
     <script src="/static/theme.js"></script>
+
     <style>
-
-        *{ box-sizing:border-box; }
-        html,body{ height:100%; }
-
-        body{
-            margin:0;
-            font-family:var(--sans);
-            background:
-                    radial-gradient(1200px 700px at 18% 8%, rgba(var(--fg-rgb),0.11), transparent 55%),
-                    radial-gradient(1000px 700px at 82% 12%, rgba(var(--fg-rgb),0.07), transparent 60%),
-                    linear-gradient(180deg, #04050f, var(--bg));
-            color:var(--fg);
-            overflow:hidden;
-        }
-
-        a{ color:var(--fg); text-decoration:none; }
-        a:hover{ text-shadow: 0 0 10px rgba(var(--fg-rgb),0.25); }
-
-        .desktop{
-            height: 100%;
-            display: grid;
-            grid-template-columns: 280px 1fr;
-            gap: 14px;
-            padding: 14px;
-        }
-
-        @media (max-width: 980px){
-            body{ overflow:auto; }
-            .desktop{ grid-template-columns: 1fr; overflow: visible; }
-        }
-
-        /* Sidebar */
-        .sidebar{
-            border: 1px solid var(--border);
-            border-radius: var(--radius2);
-            background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.24));
-            box-shadow: var(--shadow);
-            padding: 14px;
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-        }
-
-        .brand{
-            display:flex;
-            gap: 10px;
-            align-items: center;
-            padding: 10px 10px 14px;
-            border-bottom: 1px solid var(--border2);
-            margin-bottom: 12px;
-        }
-
-        .brand .logoDot{
-            width: 14px; height: 14px;
-            border-radius: 50%;
-            background: var(--fg);
-            box-shadow: 0 0 18px rgba(var(--fg-rgb),0.38);
-            flex: 0 0 auto;
-        }
-
-        .brand h1{
-            margin: 0;
-            font-size: 16px;
-            font-weight: 950;
-            letter-spacing: 0.2px;
-        }
-
-        .brand .sub{
-            margin-top: 2px;
-            font-size: 12px;
-            color: var(--fg-dim);
-        }
-
-        .nav{
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            padding: 10px 6px;
-            overflow: auto;
-            min-height: 0;
-        }
-
-        .nav .sectionLabel{
-            margin: 10px 6px 2px;
-            font-size: 11px;
-            color: rgba(var(--fg-rgb),0.55);
-            letter-spacing: 0.6px;
-            text-transform: uppercase;
-        }
-
-        .navbtn{
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            gap: 10px;
-            padding: 10px 12px;
-            border-radius: 14px;
-            border: 1px solid var(--border2);
-            background: rgba(0,0,0,0.22);
-            color: var(--fg);
-            cursor: pointer;
-            user-select:none;
-            text-decoration:none;
-            transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
-        }
-        /* Approvals attention badge */
-        .navAlertBadge{
-            margin-left: 10px;
-            width: 18px;
-            height: 18px;
-            border-radius: 999px;
-            display: none;               /* toggled by JS */
-            align-items: center;
-            justify-content: center;
-            font-weight: 950;
-            font-size: 12px;
-            line-height: 1;
-            color: rgba(255,255,255,0.98);
-            border: 1px solid rgba(var(--fail-rgb),0.75);
-            background: rgba(var(--fail-rgb),0.22);
-            box-shadow: 0 0 18px rgba(var(--fail-rgb),0.25);
-        }
-
-        /* Make the Approvals button pop when pending */
-        .navbtn.needs-attn{
-            border-color: rgba(var(--fail-rgb),0.55);
-            background: rgba(var(--fail-rgb),0.08);
-            box-shadow: 0 0 18px rgba(var(--fail-rgb),0.18);
-        }
-        .navbtn.needs-attn:hover{
-            border-color: rgba(var(--fail-rgb),0.70);
-            background: rgba(var(--fail-rgb),0.12);
-        }
-
-
-        .navbtn:hover{
-            transform: translateY(-1px);
-            background: rgba(var(--fg-rgb),0.06);
-            border-color: rgba(var(--fg-rgb),0.30);
-        }
-
-        .navbtn.active{
-            background: rgba(var(--fg-rgb),0.10);
-            border-color: rgba(var(--fg-rgb),0.38);
-            box-shadow: 0 0 18px rgba(var(--fg-rgb),0.12);
-        }
-
-        .navbtn .k{
-            font-size: 12px;
-            color: rgba(var(--fg-rgb),0.55);
-            border: 1px solid rgba(var(--fg-rgb),0.16);
-            border-radius: 10px;
-            padding: 2px 8px;
-            background: rgba(0,0,0,0.22);
-        }
-
-        .bottom{
-            border-top: 1px solid var(--border2);
-            margin-top: auto;
-            padding-top: 12px;
-            display:flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .statusCard{
-            border: 1px solid var(--border2);
-            border-radius: 16px;
-            background: rgba(0,0,0,0.22);
-            padding: 10px 12px;
-        }
-
-        .mini{
-            margin-top: 8px;
-            font-size: 12px;
-            color: var(--fg-dim);
-            line-height: 1.35;
-            white-space: pre-wrap;
-            overflow-wrap: anywhere;
-        }
-
-        /* Workspace */
-        .workspace{
-            border: 1px solid var(--border);
-            border-radius: var(--radius2);
-            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
-            box-shadow: var(--shadow);
-            display:flex;
-            flex-direction: column;
-            min-width: 0;
-            min-height: 0;
-            overflow: hidden;
-        }
-
-        .topbar{
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 12px 14px;
-            border-bottom: 1px solid var(--border2);
-            background: rgba(0,0,0,0.18);
-        }
-
-        .crumbs{
-            display:flex;
-            flex-direction: column;
-            min-width: 0;
-        }
-
-        .crumbs .title{
-            font-weight: 950;
-            letter-spacing: 0.2px;
-            font-size: 14px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .crumbs .sub{
-            margin-top: 2px;
-            font-size: 12px;
-            color: var(--fg-dim);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .actions{
-            display:flex;
-            align-items:center;
-            gap: 10px;
-            flex: 0 0 auto;
-            flex-wrap: wrap;
-            justify-content: flex-end;
-        }
-
         .btn{
             border: 1px solid rgba(var(--fg-rgb),0.28);
             background: rgba(0,0,0,0.26);
@@ -251,7 +17,7 @@
             padding: 10px 12px;
             border-radius: 14px;
             cursor:pointer;
-            font-weight: 900;
+            font-weight: 700;
             letter-spacing: 0.2px;
             transition: transform 120ms ease, border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
             user-select:none;
@@ -261,12 +27,16 @@
             justify-content:center;
             gap: 10px;
         }
+
         .btn:hover{
             transform: translateY(-1px);
             border-color: rgba(var(--fg-rgb),0.42);
             background: rgba(var(--fg-rgb),0.07);
         }
-        .btn:active{ transform: translateY(0px); }
+
+        .btn:active{
+            transform: translateY(0px);
+        }
 
         .pill{
             display:inline-flex;
@@ -280,37 +50,46 @@
             color: rgba(var(--fg-rgb),0.70);
             white-space:nowrap;
             max-width: 100%;
-        }
-        .pill .k{ color: rgba(var(--fg-rgb),0.62); }
-        .pill .v{ color: rgba(var(--fg-rgb),0.92); font-weight: 900; }
-        .pill.ok{ border-color: rgba(var(--fg-rgb),0.38); background: rgba(var(--fg-rgb),0.08); }
-        .pill.warn{ border-color: rgba(var(--warn-rgb),0.38); background: rgba(var(--warn-rgb),0.10); color: rgba(var(--warn-rgb),0.92); }
-        .pill.fail{ border-color: rgba(var(--fail-rgb),0.42); background: rgba(var(--fail-rgb),0.10); color: rgba(var(--fail-rgb),0.92); }
-        /* --- Fix: long pills must be allowed to shrink inside flex headers --- */
-        .card .hd{ min-width: 0; }
-        .card .hd > *{ min-width: 0; }
-
-        /* Make pill shrinkable and clip long content */
-        .pill{
             flex: 0 1 auto;
-            max-width: 100%;
             overflow: hidden;
         }
 
-        /* Ellipsis the value part (Kernel string, etc.) */
+        .pill .k{
+            color: rgba(var(--fg-rgb),0.62);
+        }
+
         .pill .v{
+            color: rgba(var(--fg-rgb),0.92);
+            font-weight: 700;
             min-width: 0;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
         }
 
+        .pill.ok{
+            border-color: rgba(var(--fg-rgb),0.38);
+            background: rgba(var(--fg-rgb),0.08);
+        }
+
+        .pill.warn{
+            border-color: rgba(var(--warn-rgb),0.38);
+            background: rgba(var(--warn-rgb),0.10);
+            color: rgba(var(--warn-rgb),0.92);
+        }
+
+        .pill.fail{
+            border-color: rgba(var(--fail-rgb),0.42);
+            background: rgba(var(--fail-rgb),0.10);
+            color: rgba(var(--fail-rgb),0.92);
+        }
 
         .content{
-            padding: 14px;
+            padding: 14px 20px 0 20px;
             min-width: 0;
             min-height: 0;
             overflow: auto;
+            flex: 1 1 auto;
         }
 
         .grid{
@@ -336,6 +115,11 @@
             padding:12px 14px;
             border-bottom:1px solid rgba(var(--fg-rgb),0.12);
             background: linear-gradient(180deg, rgba(var(--fg-rgb),0.06), transparent);
+            min-width: 0;
+        }
+
+        .card .hd > *{
+            min-width: 0;
         }
 
         .card .hd .h{
@@ -343,10 +127,12 @@
             color: rgba(var(--fg-rgb),0.60);
             letter-spacing:0.10em;
             text-transform:uppercase;
-            font-weight: 900;
+            font-weight: 700;
         }
 
-        .card .bd{ padding:14px; }
+        .card .bd{
+            padding:14px;
+        }
 
         .kv{
             display:flex;
@@ -360,14 +146,16 @@
             margin-top: 10px;
             min-width: 0;
         }
+
         .kv .k{
             font-size: 12px;
             color: rgba(var(--fg-rgb),0.62);
             flex: 0 0 auto;
         }
+
         .kv .v{
             font-size: 12px;
-            font-weight: 900;
+            font-weight: 700;
             color: rgba(var(--fg-rgb),0.92);
             overflow: hidden;
             text-overflow: ellipsis;
@@ -384,6 +172,7 @@
             border: 1px solid rgba(var(--fg-rgb),0.12);
             overflow: hidden;
         }
+
         .bar > div{
             height: 100%;
             width: 0%;
@@ -399,45 +188,25 @@
             line-height:1.5;
         }
 
-        .mono{ font-family: var(--mono); }
-
-        .footerline{
-            padding: 10px 14px;
-            border-top: 1px solid var(--border2);
-            color: rgba(var(--fg-rgb),0.55);
-            font-size: 12px;
-            text-align: right;
-            user-select: none;
-            background: rgba(0,0,0,0.12);
+        .mono{
+            font-family: var(--mono);
         }
 
-        /* layout spans */
         .span-6{ grid-column: span 6; }
         .span-4{ grid-column: span 4; }
         .span-8{ grid-column: span 8; }
         .span-12{ grid-column: span 12; }
 
         @media (max-width: 980px){
-            .span-6,.span-4,.span-8,.span-12{ grid-column: span 12; }
-        }
-        /* Tone down “everything is 900+” */
-        .brand h1,
-        .crumbs .title{
-            font-weight: 800;
+            .content{
+                padding: 14px 16px 0 16px;
+            }
+
+            .span-6,.span-4,.span-8,.span-12{
+                grid-column: span 12;
+            }
         }
 
-        .btn{
-            font-weight: 700;
-        }
-
-        .card .hd .h{
-            font-weight: 700;
-        }
-
-        .kv .v,
-        .pill .v{
-            font-weight: 700;
-        }
         .cpuGaugeGrid{
             margin-top: 10px;
             display: grid;
@@ -474,30 +243,33 @@
             border-color: rgba(var(--warn-rgb),0.30);
             background: rgba(var(--warn-rgb),0.08);
         }
+
         .driveRow.fail{
             border-color: rgba(var(--fail-rgb),0.34);
             background: rgba(var(--fail-rgb),0.10);
         }
-        .driveNote.warn{
-            color: rgba(var(--warn-rgb),0.95);
-        }
-        .driveNote.fail{
-            color: rgba(var(--fail-rgb),0.95);
-        }
-        .statusCard > div > div{
-            font-weight: 700;
-        }
-        .driveRow.test {
+
+        .driveRow.test{
             background: rgba(var(--warn-rgb),0.12);
             border-left: 4px solid rgba(var(--warn-rgb),0.9);
         }
 
-        .driveNote.test {
+        .driveNote.warn{
             color: rgba(var(--warn-rgb),0.95);
         }
+
+        .driveNote.fail{
+            color: rgba(var(--fail-rgb),0.95);
+        }
+
+        .driveNote.test{
+            color: rgba(var(--warn-rgb),0.95);
+        }
+
+        .statusCard > div > div{
+            font-weight: 700;
+        }
     </style>
-
-
 </head>
 
 <body>
@@ -554,7 +326,7 @@
     <main class="workspace">
         <div class="topbar">
             <div class="crumbs">
-                <div class="title">PQ-NAS • System</div>
+                <div class="title">DNA-Nexus • System</div>
                 <div class="sub">CPU • Memory • Disk • Process</div>
             </div>
             <div class="actions">
@@ -579,7 +351,10 @@
                 </section>
 
                 <section class="card span-6">
-                    <div class="hd"><div class="h">CPU</div><span class="pill ok" id="cpuPill"><span class="k">Load:</span> <span class="v">—</span></span></div>
+                    <div class="hd">
+                        <div class="h">CPU</div>
+                        <span class="pill ok" id="cpuPill"><span class="k">Load:</span> <span class="v">—</span></span>
+                    </div>
                     <div class="bd">
                         <div class="note" style="margin-top:12px;">Per-core gauges</div>
                         <div id="cpuGaugeGrid" class="cpuGaugeGrid"></div>
@@ -590,12 +365,14 @@
                         <div class="kv"><div class="k">Usage (total)</div><div class="v mono" id="cpuUsageTotal">—</div></div>
                         <div class="kv"><div class="k">Per-core</div><div class="v mono" id="cpuUsageCores">—</div></div>
                         <div class="note">Load is system-wide. Usage is sampled from /proc/stat deltas.</div>
-
                     </div>
                 </section>
 
                 <section class="card span-6">
-                    <div class="hd"><div class="h">Memory</div><span class="pill ok" id="memPill"><span class="k">Used:</span> <span class="v">—</span></span></div>
+                    <div class="hd">
+                        <div class="h">Memory</div>
+                        <span class="pill ok" id="memPill"><span class="k">Used:</span> <span class="v">—</span></span>
+                    </div>
                     <div class="bd">
                         <div class="kv"><div class="k">Total</div><div class="v" id="memTotal">—</div></div>
                         <div class="kv"><div class="k">Available</div><div class="v" id="memAvail">—</div></div>
@@ -604,11 +381,10 @@
                     </div>
                 </section>
 
-
-
                 <section class="card span-6">
                     <div id="diskMulti" class="span-12"></div>
                 </section>
+
                 <section class="card span-6">
                     <div class="hd">
                         <div class="h">Storage</div>
@@ -626,6 +402,7 @@
                         </div>
                     </div>
                 </section>
+
                 <section class="card span-12">
                     <div class="hd">
                         <div class="h">Drive health</div>
@@ -639,6 +416,7 @@
                         </div>
                     </div>
                 </section>
+
                 <section class="card span-12">
                     <div class="hd">
                         <div class="h">Network</div>
@@ -649,20 +427,23 @@
                         <div class="kv"><div class="k">RX</div><div class="v" id="netRx">—</div></div>
                         <div class="kv"><div class="k">TX</div><div class="v" id="netTx">—</div></div>
 
-                        <!-- lightweight graph placeholder (we draw on canvas from system.js) -->
                         <div class="note">Live throughput (server-sampled).</div>
                         <div style="margin-top:10px; border:1px solid rgba(var(--fg-rgb),0.12); border-radius:14px; background: rgba(0,0,0,0.18); padding:10px; overflow:hidden;">
                             <canvas id="netCanvas" width="1100" height="180" style="width:100%; height:180px; display:block;"></canvas>
                         </div>
                     </div>
                 </section>
+
                 <section class="card span-12">
-                    <div class="hd"><div class="h">Process</div><span class="pill ok" id="procPill"><span class="k">PID:</span> <span class="v">—</span></span></div>
+                    <div class="hd">
+                        <div class="h">Process</div>
+                        <span class="pill ok" id="procPill"><span class="k">PID:</span> <span class="v">—</span></span>
+                    </div>
                     <div class="bd">
                         <div class="kv"><div class="k">Executable</div><div class="v mono" id="procExe">—</div></div>
                         <div class="kv"><div class="k">RSS</div><div class="v" id="procRss">—</div></div>
                         <div class="kv"><div class="k">Started</div><div class="v" id="procStart">—</div></div>
-                        <div class="note">This is the pq-nas server process. No admin rights needed to view.</div>
+                        <div class="note">This is the DNA-Nexus server process. No admin rights needed to view.</div>
                     </div>
                 </section>
             </div>
@@ -671,6 +452,7 @@
         <div class="footerline">© CPUNK 2026</div>
     </main>
 </div>
+
 <script src="/static/admin_badges.js"></script>
 <script src="/static/system.js?v=9"></script>
 </body>

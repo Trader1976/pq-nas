@@ -5,239 +5,25 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>DNA-Nexus NAS • Admin Settings</title>
 
+    <link rel="stylesheet" href="/static/theme.css">
+    <link rel="stylesheet" href="/static/shell_menu.css">
+    <script src="/static/theme.js"></script>
+
     <style>
-        *{ box-sizing:border-box; }
-        html,body{ height:100%; }
-
+        /* Settings page needs full-page scrolling */
         body{
-            margin:0;
-            font-family:var(--sans);
-            background:
-                    radial-gradient(1200px 700px at 18% 8%, rgba(var(--fg-rgb),0.11), transparent 55%),
-                    radial-gradient(1000px 700px at 82% 12%, rgba(var(--fg-rgb),0.07), transparent 60%),
-                    linear-gradient(180deg, #04050f, var(--bg));
-            color:var(--fg);
+            overflow: auto;
         }
-
-        a{ color:var(--fg); text-decoration:none; }
-        a:hover{ text-shadow: 0 0 10px rgba(var(--fg-rgb),0.25); }
 
         .desktop{
-            min-height: 100%;
-            display: grid;
-            grid-template-columns: 280px 1fr;
-            gap: 14px;
-            padding: 14px;
+            height: auto;
+            min-height: 100dvh;
+            overflow: visible;
             align-items: start;
         }
-        @media (max-width: 980px){
-            body{ overflow:auto; }
-            .desktop{ grid-template-columns: 1fr; overflow: visible; }
-        }
 
-        /* Sidebar */
-        .sidebar{
-            border: 1px solid var(--border);
-            border-radius: var(--radius2);
-            background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.24));
-            box-shadow: var(--shadow);
-            padding: 14px;
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-        }
-
-        .brand{
-            display:flex;
-            gap: 10px;
-            align-items: center;
-            padding: 10px 10px 14px;
-            border-bottom: 1px solid var(--border2);
-            margin-bottom: 12px;
-        }
-
-        .brand .logoDot{
-            width: 14px; height: 14px;
-            border-radius: 50%;
-            background: var(--fg);
-            box-shadow: 0 0 18px rgba(var(--fg-rgb),0.38);
-            flex: 0 0 auto;
-        }
-
-        .brand h1{
-            margin: 0;
-            font-size: 16px;
-            font-weight: 950;
-            letter-spacing: 0.2px;
-        }
-
-        .brand .sub{
-            margin-top: 2px;
-            font-size: 12px;
-            color: var(--fg-dim);
-        }
-
-        .nav{
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            padding: 10px 6px;
-            overflow: auto;
-            min-height: 0;
-        }
-
-        /* Approvals attention badge */
-        .navAlertBadge {
-            margin-left: 10px;
-            width: 18px;
-            height: 18px;
-            border-radius: 999px;
-            display: none; /* toggled by JS */
-            align-items: center;
-            justify-content: center;
-            font-weight: 950;
-            font-size: 12px;
-            line-height: 1;
-            color: rgba(255, 255, 255, 0.98);
-            border: 1px solid rgba(var(--fail-rgb), 0.75);
-            background: rgba(var(--fail-rgb), 0.22);
-            box-shadow: 0 0 18px rgba(var(--fail-rgb), 0.25);
-        }
-
-        .navbtn.needs-attn{
-            border-color: rgba(var(--fail-rgb),0.55);
-            background: rgba(var(--fail-rgb),0.08);
-            box-shadow: 0 0 18px rgba(var(--fail-rgb),0.18);
-        }
-        .navbtn.needs-attn:hover {
-            border-color: rgba(var(--fail-rgb), 0.70);
-            background: rgba(var(--fail-rgb), 0.12);
-        }
-
-        .nav .sectionLabel{
-            margin: 10px 6px 2px;
-            font-size: 11px;
-            color: rgba(var(--fg-rgb),0.55);
-            letter-spacing: 0.6px;
-            text-transform: uppercase;
-        }
-
-        .navbtn{
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            gap: 10px;
-            padding: 10px 12px;
-            border-radius: 14px;
-            border: 1px solid var(--border2);
-            background: rgba(0,0,0,0.22);
-            color: var(--fg);
-            cursor: pointer;
-            user-select:none;
-            text-decoration:none;
-            transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
-        }
-
-        .navbtn:hover{
-            transform: translateY(-1px);
-            background: rgba(var(--fg-rgb),0.06);
-            border-color: rgba(var(--fg-rgb),0.30);
-        }
-
-        .navbtn.active{
-            background: rgba(var(--fg-rgb),0.10);
-            border-color: rgba(var(--fg-rgb),0.38);
-            box-shadow: 0 0 18px rgba(var(--fg-rgb),0.12);
-        }
-
-        .navbtn .k{
-            font-size: 12px;
-            color: rgba(var(--fg-rgb),0.55);
-            border: 1px solid rgba(var(--fg-rgb),0.16);
-            border-radius: 10px;
-            padding: 2px 8px;
-            background: rgba(0,0,0,0.22);
-        }
-
-        .bottom{
-            border-top: 1px solid var(--border2);
-            margin-top: auto;
-            padding-top: 12px;
-            display:flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .statusCard{
-            border: 1px solid var(--border2);
-            border-radius: 16px;
-            background: rgba(0,0,0,0.22);
-            padding: 10px 12px;
-        }
-
-        .mini{
-            margin-top: 8px;
-            font-size: 12px;
-            color: var(--fg-dim);
-            line-height: 1.35;
-            white-space: pre-wrap;
-            overflow-wrap: anywhere;
-        }
-
-        /* Workspace */
-            .workspace{
-                border: 1px solid var(--border);
-                border-radius: var(--radius2);
-                background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
-                box-shadow: var(--shadow);
-                display:flex;
-                flex-direction: column;
-                min-width: 0;
-                min-height: 0;
-                overflow: visible;
-            }
-
-        .topbar{
-            display:flex;
-            align-items:center;
-            justify-content: space-between;
-            gap: 12px;
-            padding: 12px 14px;
-            border-bottom: 1px solid var(--border2);
-            background: rgba(0,0,0,0.18);
-        }
-
-        .crumbs{
-            display:flex;
-            flex-direction: column;
-            min-width: 0;
-        }
-
-        .crumbs .title{
-            font-weight: 950;
-            letter-spacing: 0.2px;
-            font-size: 14px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .crumbs .sub{
-            margin-top: 2px;
-            font-size: 12px;
-            color: var(--fg-dim);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-
-        .actions{
-            display:flex;
-            align-items:center;
-            gap: 10px;
-            flex: 0 0 auto;
-            flex-wrap: wrap;
-            justify-content: flex-end;
+        .workspace{
+            overflow: visible;
         }
 
         .btn{
@@ -257,16 +43,20 @@
             justify-content:center;
             gap: 10px;
         }
+
         .btn:hover{
             transform: translateY(-1px);
             border-color: rgba(var(--fg-rgb),0.42);
             background: rgba(var(--fg-rgb),0.07);
         }
+
         .btn:active{ transform: translateY(0px); }
+
         .btn.primary{
             border-color: rgba(var(--fg-rgb),0.45);
             box-shadow: 0 0 0 1px rgba(var(--fg-rgb),0.08) inset;
         }
+
         .btn:disabled{
             opacity: 0.65;
             cursor: not-allowed;
@@ -286,27 +76,37 @@
             white-space:nowrap;
             max-width: 100%;
         }
+
         .pill .k{ color: rgba(var(--fg-rgb),0.62); }
         .pill .v{ color: rgba(var(--fg-rgb),0.92); font-weight: 900; }
-        .pill.ok{ border-color: rgba(var(--fg-rgb),0.38); background: rgba(var(--fg-rgb),0.08); color: rgba(var(--fg-rgb),0.95); }
-        .pill.fail{ border-color: rgba(var(--fail-rgb),0.42); background: rgba(var(--fail-rgb),0.10); color: rgba(var(--fail-rgb),0.92); }
-        .pill.warn{ border-color: rgba(var(--warn-rgb),0.38); background: rgba(var(--warn-rgb),0.10); color: rgba(var(--warn-rgb),0.92); }
-        .pill.info{ border-color: rgba(var(--info-rgb),0.38); background: rgba(var(--info-rgb),0.08); color: rgba(var(--info-rgb),0.92); }
+
+        .pill.ok{
+            border-color: rgba(var(--fg-rgb),0.38);
+            background: rgba(var(--fg-rgb),0.08);
+            color: rgba(var(--fg-rgb),0.95);
+        }
+
+        .pill.fail{
+            border-color: rgba(var(--fail-rgb),0.42);
+            background: rgba(var(--fail-rgb),0.10);
+            color: rgba(var(--fail-rgb),0.92);
+        }
+
+        .pill.warn{
+            border-color: rgba(var(--warn-rgb),0.38);
+            background: rgba(var(--warn-rgb),0.10);
+            color: rgba(var(--warn-rgb),0.92);
+        }
+
+        .pill.info{
+            border-color: rgba(var(--info-rgb),0.38);
+            background: rgba(var(--info-rgb),0.08);
+            color: rgba(var(--info-rgb),0.92);
+        }
+
         #dnaAlertsPill{
             max-width: 100%;
             min-width: 0;
-        }
-
-        #dnaAlertsPill .v{
-            display: inline-block;
-            min-width: 0;
-            max-width: min(760px, 70vw);
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-            vertical-align: bottom;
-        }
-        #dnaAlertsPill{
             display: inline-flex;
             align-items: center;
             gap: 8px;
@@ -319,7 +119,15 @@
 
         #dnaAlertsPill .v{
             flex: 1 1 auto;
+            display: inline-block;
+            min-width: 0;
+            max-width: min(760px, 70vw);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            vertical-align: bottom;
         }
+
         .input, select{
             border:1px solid rgba(var(--fg-rgb),0.18);
             background:rgba(0,0,0,0.24);
@@ -330,7 +138,9 @@
             min-width: 220px;
             font-family: var(--sans);
         }
+
         select{ cursor:pointer; }
+
         .input:focus, select:focus{
             border-color:rgba(var(--fg-rgb),0.38);
             box-shadow:0 0 0 3px rgba(var(--fg-rgb),0.08);
@@ -338,13 +148,13 @@
 
         .mono{ font-family: var(--mono); }
 
-            .content{
-                padding: 14px;
-                min-width: 0;
-                display:flex;
-                flex-direction:column;
-                gap: 14px;
-            }
+        .content{
+            padding: 14px 20px 12px 20px;
+            min-width: 0;
+            display:flex;
+            flex-direction:column;
+            gap: 14px;
+        }
 
         .card{
             border:1px solid rgba(var(--fg-rgb),0.12);
@@ -374,7 +184,13 @@
 
         .card .bd{ padding:14px; }
 
-        .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+        .row{
+            display:flex;
+            gap:10px;
+            flex-wrap:wrap;
+            align-items:center;
+        }
+
         .row + .row{ margin-top:12px; }
 
         .note{
@@ -382,9 +198,11 @@
             color:var(--fg-dim);
             font-size:12px;
             line-height:1.5;
+            white-space: normal;
+            overflow-wrap: anywhere;
+            word-break: break-word;
         }
 
-        /* Tables */
         .tableWrap{
             border:1px solid rgba(var(--fg-rgb),0.12);
             border-radius: 16px;
@@ -392,12 +210,14 @@
             background:rgba(0,0,0,0.18);
             width:100%;
         }
+
         table{
             width:100%;
             border-collapse:collapse;
             table-layout:fixed;
             font-size:13px;
         }
+
         thead th{
             text-align:left;
             padding:10px 12px;
@@ -411,6 +231,7 @@
             top: 0;
             z-index: 5;
         }
+
         tbody td{
             padding:10px 12px;
             border-bottom:1px solid rgba(var(--fg-rgb),0.08);
@@ -420,7 +241,6 @@
             white-space:nowrap;
         }
 
-        /* Toast */
         .toast{
             display:none;
             position:fixed;
@@ -434,12 +254,23 @@
             max-width: min(540px, calc(100vw - 32px));
             z-index:999;
         }
+
         .toast.show{ display:block; }
         .toast.ok{ border-color:rgba(var(--fg-rgb),0.45); }
         .toast.fail{ border-color: rgba(var(--fail-rgb),0.55); }
-        .toast .t{ font-weight:950; margin-bottom:2px; }
-        .toast .m{ font-size:12px; color:var(--fg-dim); white-space: pre-wrap; overflow-wrap:anywhere; }
-        /* Light themes: toast should look like a light panel (matches admin_users feel) */
+
+        .toast .t{
+            font-weight:950;
+            margin-bottom:2px;
+        }
+
+        .toast .m{
+            font-size:12px;
+            color:var(--fg-dim);
+            white-space: pre-wrap;
+            overflow-wrap:anywhere;
+        }
+
         html[data-theme="bright"] .toast,
         html[data-theme="win_classic"] .toast{
             background: rgba(255,255,255,0.92);
@@ -457,26 +288,27 @@
             color: rgba(0,0,0,0.70);
         }
 
-        /* Keep semantic borders readable in light themes */
         html[data-theme="bright"] .toast.ok,
         html[data-theme="win_classic"] .toast.ok{
             border-color: rgba(0,0,0,0.26);
         }
+
         html[data-theme="bright"] .toast.fail,
         html[data-theme="win_classic"] .toast.fail{
             border-color: rgba(var(--fail-rgb),0.55);
         }
 
-        /* Accordion */
         .card.accordion .hd{
             cursor: pointer;
             user-select: none;
         }
+
         .card.accordion .hd:focus{
             outline: none;
             box-shadow: 0 0 0 3px rgba(var(--fg-rgb),0.10);
             border-radius: 12px;
         }
+
         .card.accordion .bd{ display: none; }
         .card.accordion.open .bd{ display: block; }
         .card.accordion:not(.open) .hd{ border-bottom: none; }
@@ -489,6 +321,7 @@
             transition: transform 120ms ease, opacity 120ms ease;
             flex: 0 0 auto;
         }
+
         .card.accordion.open .chev{
             transform: rotate(90deg);
             opacity: 0.95;
@@ -506,15 +339,10 @@
             filter: grayscale(0.2);
         }
 
-        .note {
-            white-space: normal;
-            overflow-wrap: anywhere;
-            word-break: break-word;
-        }
-        /* Upload tiering selector when disabled */
         #tieringLandingPool:disabled {
             opacity: 0.6;
         }
+
         #tieringMountPill,
         #tieringSpacePill,
         #tieringEligibilityPill,
@@ -522,10 +350,9 @@
             margin-right: 6px;
         }
 
-
         .hidden { display:none !important; }
         #uploadSoftMax { max-width: 360px; }
-            /* Help modal */
+
         .modalBackdrop{
             position: fixed;
             inset: 0;
@@ -561,14 +388,13 @@
             background: inherit;
             z-index: 1;
         }
-        /* Dark-ish themes: fully opaque modal */
+
         html[data-theme="dark"] .modalCard,
         html[data-theme="cpunk_orange"] .modalCard{
             background: #0b1220;
             color: rgba(255,255,255,0.94);
         }
 
-        /* Bright / classic themes: light opaque modal */
         html[data-theme="bright"] .modalCard,
         html[data-theme="win_classic"] .modalCard{
             background: rgba(255,255,255,0.98);
@@ -582,19 +408,21 @@
             background: rgba(0,0,0,0.28);
         }
 
-        /* Keep note text readable inside modal */
         .modalCard .note{
             color: inherit;
             opacity: 0.95;
         }
+
         .modalBd{
             padding: 14px;
         }
+
         #dnaIdentityModalBody{
             white-space: pre-wrap;
             overflow-wrap: anywhere;
             word-break: break-word;
         }
+
         .uploadsCardBody{
             position: relative;
         }
@@ -610,21 +438,7 @@
             font-weight: 950;
             z-index: 2;
         }
-            .modalHd{
-                display:flex;
-                align-items:center;
-                justify-content:space-between;
-                gap:12px;
-                padding:12px 14px;
-                border-bottom:1px solid var(--border2);
-                position: sticky;
-                top: 0;
-                background: inherit;
-            }
 
-            .modalBd{
-                padding: 14px;
-            }
         .tierField{
             display:flex;
             flex-direction:column;
@@ -639,9 +453,6 @@
             letter-spacing:0.02em;
         }
     </style>
-
-    <link rel="stylesheet" href="/static/theme.css">
-    <script src="/static/theme.js"></script>
 </head>
 
 <body>
@@ -693,7 +504,6 @@
 
         <div class="content">
 
-            <!-- Audit verbosity -->
             <div class="card accordion open" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="true">
                     <div class="h">Audit verbosity</div>
@@ -718,7 +528,6 @@
                 </div>
             </div>
 
-            <!-- Audit rotation -->
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">Audit rotation</div>
@@ -736,7 +545,6 @@
                 </div>
             </div>
 
-            <!-- Audit rotation policy -->
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">Audit rotation policy</div>
@@ -770,7 +578,6 @@
                 </div>
             </div>
 
-            <!-- Audit retention -->
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">Audit retention</div>
@@ -833,7 +640,6 @@
                 </div>
             </div>
 
-            <!-- Snapshots (FIXED: only one snapVolTbody) -->
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">Snapshots (Btrfs)</div>
@@ -904,7 +710,6 @@
                 </div>
             </div>
 
-            <!-- Upload limits -->
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">Uploads</div>
@@ -998,6 +803,7 @@
                         <span class="pill info" id="tieringEligibilityPill"><span class="k">Eligibility:</span> <span class="v">—</span></span>
                         <span class="pill warn" id="tieringWarnPill"><span class="k">Warnings:</span> <span class="v">—</span></span>
                     </div>
+
                     <div class="note">
                         These values control how often the migration worker runs and how aggressively it drains landing storage.
                     </div>
@@ -1018,15 +824,14 @@
                     </div>
 
                     <div class="note">
-                        <b>Soft cap</b> is admin-controlled (saved in <span class="mono">admin_settings.json</span>).
-                        <b>Hard cap</b> is compiled into the server (<span class="mono">set_payload_max_length</span>) and uploads above it never reach PQ-NAS handlers.
+                        <b>Soft cap</b> is admin-configured.
+                        <b>Hard cap</b> is compiled into the server.
                         <br>
                         Effective cap = min(soft, hard).
                     </div>
                 </div>
             </div>
 
-            <!-- DNA Connect alerts -->
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">DNA Connect alerts</div>
@@ -1055,6 +860,7 @@
                         <button id="btnDnaAlertsReload" class="btn" type="button">Reload</button>
                         <button id="btnDnaAlertsTest" class="btn" type="button">Send test alert</button>
                     </div>
+
                     <div class="row">
                         <button id="btnDnaAlertsCreateId" class="btn" type="button">Create PQ-NAS ID</button>
                         <button id="btnDnaAlertsShowId" class="btn" type="button">Show ID info</button>
@@ -1065,6 +871,7 @@
                             <span class="v">—</span>
                         </span>
                     </div>
+
                     <div class="row">
                         <input id="dnaAlertsRecipient"
                                class="input mono"
@@ -1111,7 +918,7 @@
                     </div>
                 </div>
             </div>
-            <!-- Theme -->
+
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">UI Theme</div>
@@ -1135,8 +942,8 @@
                     </div>
 
                     <div class="note">
-                        Theme is saved in <span class="mono">admin_settings.json</span> (server) and also cached in your browser
-                        (<span class="mono">localStorage</span>) so all pages can apply it instantly.
+                        Theme is saved in <span class="mono">admin_settings.json</span> and also cached in your browser
+                        so all pages can apply it instantly.
                     </div>
                 </div>
             </div>
@@ -1148,6 +955,7 @@
         </div>
     </main>
 </div>
+
 <div id="dnaIdentityModalBackdrop" class="modalBackdrop hidden">
     <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="dnaIdentityModalTitle">
         <div class="modalHd">
@@ -1159,7 +967,7 @@
         </div>
     </div>
 </div>
-<!-- Upload help modal -->
+
 <div id="helpModalBackdrop" class="modalBackdrop hidden">
     <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
         <div class="modalHd">
