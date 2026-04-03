@@ -530,7 +530,175 @@
             border-radius: 0;
             background: transparent;
         }
+        /* =========================
+           Frameless / Nextcloud-like shell
+           ========================= */
 
+        html, body {
+            height: 100%;
+        }
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: var(--bg);
+        }
+
+        /* Use the viewport itself as the shell */
+        .desktop{
+            height: 100dvh;
+            grid-template-columns: 260px 1fr;
+            gap: 0;
+            padding: 0;
+        }
+
+        /* Sidebar becomes part of the shell, not a floating card */
+        .sidebar{
+            border: 0;
+            border-radius: 0;
+            box-shadow: none;
+            background: rgba(0,0,0,0.10);
+            padding: 0;
+        }
+
+        /* Brand area */
+        .brand {
+            margin: 0;
+            padding: 20px 18px 16px;
+            border-bottom: 0;
+        }
+
+        /* Navigation spacing */
+        .nav {
+            gap: 2px;
+            padding: 8px 10px 12px;
+        }
+
+        /* Section labels can stay, but softer */
+        .nav .sectionLabel {
+            margin: 14px 10px 6px;
+            font-size: 11px;
+            color: rgba(var(--fg-rgb), 0.45);
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+        }
+
+        /* Turn left menu buttons into flat rows */
+        .navbtn {
+            min-height: 40px;
+            border: 0;
+            border-radius: 10px;
+            background: transparent;
+            padding: 10px 12px;
+            box-shadow: none;
+        }
+
+        .navbtn:hover {
+            transform: none;
+            background: rgba(var(--fg-rgb), 0.06);
+            border-color: transparent;
+        }
+
+        .navbtn.active {
+            background: rgba(var(--fg-rgb), 0.12);
+            border: 0;
+            box-shadow: none;
+        }
+
+        .navbtn .k {
+            border: 0;
+            background: rgba(255,255,255,0.08);
+        }
+
+        /* Bottom block also flat */
+        .bottom {
+            border-top: 0;
+            padding: 10px;
+            gap: 8px;
+        }
+
+        .statusCard {
+            border: 0;
+            border-radius: 12px;
+            background: rgba(0,0,0,0.14);
+        }
+
+        /* Workspace must not look like a second window */
+        .workspace{
+            border: 0;
+            border-radius: 0;
+            box-shadow: none;
+            background: transparent;
+        }
+
+        /* Topbar becomes flat */
+        .topbar{
+            border-bottom: 0;
+            background: transparent;
+            padding: 16px 20px 10px;
+        }
+
+        /* Remove extra framed spacing */
+        .content{
+            gap: 0;
+            padding: 10px 20px 0 20px;
+        }
+
+        /* Main content must not sit inside a card */
+        .pane{
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            padding: 0;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        /* Keep embedded app host fully flush */
+        .pane.appHost,
+        .pane.homeHost {
+            padding: 0;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+        }
+
+        /* Home desktop surface: no extra frame */
+        .desktopSurface {
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+        }
+
+        /* Footer should not look like a panel edge */
+        .footerline{
+            border-top: 0;
+            background: transparent;
+            padding: 8px 20px 12px;
+        }
+
+        /* Inspector can stay as the only intentionally separated area */
+        #inspectorPane {
+            margin-left: 24px;
+            padding-left: 20px;
+            border-left: 1px solid rgba(var(--fg-rgb), 0.10);
+        }
+        .mainArea{
+            min-width: 0;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            overflow: hidden;
+            border: 0;
+            border-radius: 0;
+            background: transparent;
+            padding: 0;
+        }
     </style>
     <link rel="stylesheet" href="/static/theme.css">
     <script src="/static/theme.js"></script>
@@ -587,20 +755,9 @@
 
     <!-- Right workspace area -->
     <main class="workspace">
-        <div class="topbar">
-            <div class="crumbs">
-                <div class="title" id="wsTitle">Home</div>
-                <div class="sub" id="wsSubtitle">Session, role, and access status</div>
-            </div>
-
-            <div class="actions">
-                <button class="btn" id="refreshBtn" type="button">Refresh</button>
-            </div>
-        </div>
-
         <div class="content" id="contentGrid">
             <!-- Large primary pane (future file manager / apps) -->
-            <section class="pane" aria-label="Main pane">
+            <section class="pane mainArea" data-main-host aria-label="Main pane">
                 <h2 id="mainPaneTitle" style="display:none"></h2>
 
 
@@ -623,7 +780,7 @@
                     </div>
                 </div>
 
-                <div class="mono" id="homeBlurb" style="color: var(--fg-dim); line-height: 1.5; margin-top: 10px;">
+                <div class="mono" id="homeBlurb" style="color: var(--fg-dim); line-height: 1.5;">
                     <div id="desktopSurface" class="desktopSurface" aria-label="Desktop"></div>
                 </div>
 

@@ -207,6 +207,19 @@ static std::string apps_root_dir() {
     return (std::filesystem::path(REPO_ROOT) / "apps").string();
 }
 
+static std::string config_root_dir() {
+    const std::string env = getenv_str("PQNAS_CONFIG_ROOT");
+    if (!env.empty()) return env;
+
+    const std::string srv = "/srv/pqnas/config";
+    if (dir_exists(srv)) return srv;
+
+    return (std::filesystem::path(REPO_ROOT) / "config").string();
+}
+
+static std::string app_launch_policy_path() {
+    return (std::filesystem::path(config_root_dir()) / "app_launch_policy.json").string();
+}
 
 static std::string static_path(const char* rel) {
     return (std::filesystem::path(static_root_dir()) / rel).string();
@@ -303,7 +316,124 @@ static bool pending_get(const std::string& sid, PendingEntry& out) {
     return true;
 }
 
+static json app_launch_policy_defaults_json() {
+    return json{
+        {"default_launch", "embedded"},
+        {"window_profile", "auto"},
+        {"allow_user_override", true}
+    };
+}
 
+static bool app_launch_value_ok(const std::string& v) {
+    return v == "auto" || v == "embedded" || v == "detached";
+}
+
+static bool app_window_profile_ok(const std::string& v) {
+    return v == "auto" || v == "small" || v == "normal" || v == "large" || v == "full";
+}
+
+static json normalize_app_launch_policy_entry(const json& in) {
+    json out = json::object();
+
+    const std::string default_launch =
+        (in.is_object() && in.contains("default_launch") && in["default_launch"].is_string())
+            ? in["default_launch"].get<std::string>()
+            : "";
+
+    const std::string window_profile =
+        (in.is_object() && in.contains("window_profile") && in["window_profile"].is_string())
+            ? in["window_profile"].get<std::string>()
+            : "";
+
+    const bool allow_user_override =
+        (in.is_object() && in.contains("allow_user_override") && in["allow_user_override"].is_boolean())
+            ? in["allow_user_override"].get<bool>()
+            : true;
+
+    if (app_launch_value_ok(default_launch)) out["default_launch"] = default_launch;
+    if (app_window_profile_ok(window_profile)) out["window_profile"] = window_profile;
+    out["allow_user_override"] = allow_user_override;
+
+    return out;
+}
+
+static json normalize_app_launch_policy_json(const json& in) {
+    json out = json::object();
+    out["schema"] = 1;
+    out["defaults"] = app_launch_policy_defaults_json();
+    out["by_app_id"] = json::object();
+
+    if (!in.is_object()) return out;
+
+    if (in.contains("defaults") && in["defaults"].is_object()) {
+        json d = normalize_app_launch_policy_entry(in["defaults"]);
+        json merged = app_launch_policy_defaults_json();
+        for (auto it = d.begin(); it != d.end(); ++it) {
+            merged[it.key()] = it.value();
+        }
+        out["defaults"] = merged;
+    }
+
+    if (in.contains("by_app_id") && in["by_app_id"].is_object()) {
+        for (auto it = in["by_app_id"].begin(); it != in["by_app_id"].end(); ++it) {
+            if (!it.value().is_object()) continue;
+            out["by_app_id"][it.key()] = normalize_app_launch_policy_entry(it.value());
+        }
+    }
+
+    return out;
+}
+
+static json load_app_launch_policy_json() {
+    const std::string path = app_launch_policy_path();
+    std::ifstream f(path);
+    if (!f.good()) {
+        return normalize_app_launch_policy_json(json::object());
+    }
+
+    try {
+        json j;
+        f >> j;
+        return normalize_app_launch_policy_json(j);
+    } catch (...) {
+        return normalize_app_launch_policy_json(json::object());
+    }
+}
+
+static bool save_app_launch_policy_json(const json& j) {
+    namespace fs = std::filesystem;
+
+    std::error_code ec;
+    fs::path p(app_launch_policy_path());
+    fs::create_directories(p.parent_path(), ec);
+
+    const fs::path tmp = p.string() + ".tmp";
+
+    try {
+        {
+            std::ofstream f(tmp);
+            if (!f.good()) return false;
+            f << normalize_app_launch_policy_json(j).dump(2);
+            f.flush();
+            if (!f.good()) return false;
+        }
+
+        fs::rename(tmp, p, ec);
+        if (ec) {
+            fs::remove(p, ec);
+            ec.clear();
+            fs::rename(tmp, p, ec);
+            if (ec) {
+                fs::remove(tmp, ec);
+                return false;
+            }
+        }
+        return true;
+    } catch (...) {
+        fs::remove(tmp, ec);
+        return false;
+    }
+}
 
 
 // ===================== Network sampling helpers (/proc/net/dev) =====================
@@ -8182,6 +8312,7 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
     out["ok"] = true;
     out["bundled"] = json::array();
     out["installed"] = json::array();
+    out["launch_policy_by_app_id"] = json::object();
     const bool isAdmin = is_admin_cookie(req, COOKIE_KEY, &allowlist);
 
     // Bundled: apps/bundled/<id>/*.zip
@@ -8247,7 +8378,12 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
             }
         }
     }
-
+        {
+        json pol = load_app_launch_policy_json();
+        if (pol.contains("by_app_id") && pol["by_app_id"].is_object()) {
+            out["launch_policy_by_app_id"] = pol["by_app_id"];
+        }
+    }
     res.set_header("Cache-Control", "no-store");
     res.set_content(out.dump(2), "application/json; charset=utf-8");
 });
@@ -27994,6 +28130,109 @@ srv.Post("/api/v4/apps/install_bundled", [&](const httplib::Request& req, httpli
     reply(200, {{"ok", true}, {"id", id}, {"version", ver}, {"root", rel_to_repo(dst.string())}});
 });
 
+srv.Post("/api/v4/apps/launch_policy", [&](const httplib::Request& req, httplib::Response& res) {
+    auto reply = [&](int status, const json& j) {
+        res.status = status;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(j.dump(2), "application/json; charset=utf-8");
+    };
+
+    if (!is_admin_cookie(req, COOKIE_KEY, &allowlist)) {
+        reply(403, {
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "Admin access required"}
+        });
+        return;
+    }
+
+    json body = json::object();
+    try {
+        if (!req.body.empty()) body = json::parse(req.body);
+    } catch (...) {
+        reply(400, {
+            {"ok", false},
+            {"error", "bad_json"},
+            {"message", "Request body must be valid JSON"}
+        });
+        return;
+    }
+
+    const std::string appId =
+        (body.contains("id") && body["id"].is_string())
+            ? body["id"].get<std::string>()
+            : std::string{};
+
+    const std::string defaultLaunch =
+        (body.contains("default_launch") && body["default_launch"].is_string())
+            ? body["default_launch"].get<std::string>()
+            : std::string{};
+
+    const std::string windowProfile =
+        (body.contains("window_profile") && body["window_profile"].is_string())
+            ? body["window_profile"].get<std::string>()
+            : std::string{};
+
+    const bool allowUserOverride =
+        (body.contains("allow_user_override") && body["allow_user_override"].is_boolean())
+            ? body["allow_user_override"].get<bool>()
+            : true;
+
+    if (appId.empty()) {
+        reply(400, {
+            {"ok", false},
+            {"error", "missing_id"},
+            {"message", "App id is required"}
+        });
+        return;
+    }
+
+    if (!app_launch_value_ok(defaultLaunch)) {
+        reply(400, {
+            {"ok", false},
+            {"error", "invalid_default_launch"},
+            {"message", "default_launch must be one of: auto, embedded, detached"}
+        });
+        return;
+    }
+
+    if (!app_window_profile_ok(windowProfile)) {
+        reply(400, {
+            {"ok", false},
+            {"error", "invalid_window_profile"},
+            {"message", "window_profile must be one of: auto, small, normal, large, full"}
+        });
+        return;
+    }
+
+    json pol = load_app_launch_policy_json();
+    if (!pol.contains("by_app_id") || !pol["by_app_id"].is_object()) {
+        pol["by_app_id"] = json::object();
+    }
+
+    pol["by_app_id"][appId] = json{
+        {"default_launch", defaultLaunch},
+        {"window_profile", windowProfile},
+        {"allow_user_override", allowUserOverride}
+    };
+
+    pol = normalize_app_launch_policy_json(pol);
+
+    if (!save_app_launch_policy_json(pol)) {
+        reply(500, {
+            {"ok", false},
+            {"error", "save_failed"},
+            {"message", "Failed to save launch policy"}
+        });
+        return;
+    }
+
+    reply(200, {
+        {"ok", true},
+        {"id", appId},
+        {"policy", pol["by_app_id"][appId]}
+    });
+});
 
 srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Response& res) {
     auto reply = [&](int status, const json& j) {

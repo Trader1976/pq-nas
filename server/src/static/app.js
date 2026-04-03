@@ -29,11 +29,31 @@
     const contentGrid = document.getElementById("contentGrid");
 
     const appsList = document.getElementById("appsList");
+    function getMainHost() {
+        return document.querySelector("[data-main-host]")
+            || (homeBlurb ? homeBlurb.closest(".mainArea") : null)
+            || (homeBlurb ? homeBlurb.closest(".pane") : null);
+    }
+
+    function setMainHostMode(mode) {
+        const mainHost = getMainHost();
+        if (!mainHost) return;
+
+        mainHost.classList.remove("appHost", "homeHost");
+
+        if (mode === "app") {
+            mainHost.classList.add("appHost");
+            mainHost.style.overflow = "hidden";
+        } else {
+            mainHost.classList.add("homeHost");
+            mainHost.style.overflow = "auto";
+        }
+    }
 
     // app state
     let installedApps = [];     // [{id, ver, name?, title?, ...}, ...]
     let meFpHex = "";           // fingerprint_hex from /api/v4/me (for desktop layout storage)
-
+    let launchPolicyByAppId = {}; // { [appId]: { default_launch, window_profile, allow_user_override } }
 
     // desktop state (icon layout + manifests)
 
@@ -362,6 +382,75 @@
         return base + "www/icon.png" + bust;
     }
 
+    function appUrl(app, hostMode = "") {
+        const base = `/apps/${encodeURIComponent(app.id)}/${encodeURIComponent(app.ver)}/www/index.html`;
+        if (!hostMode) return base;
+        return `${base}?host=${encodeURIComponent(hostMode)}`;
+    }
+
+    function launchPolicyForAppId(appId) {
+        const p = launchPolicyByAppId && launchPolicyByAppId[appId];
+        return {
+            default_launch: (p && p.default_launch) || "auto",
+            window_profile: (p && p.window_profile) || "auto",
+            allow_user_override: !!(p && p.allow_user_override)
+        };
+    }
+
+    function resolveLaunchMode(app) {
+        const pol = launchPolicyForAppId(app.id);
+        if (pol.default_launch === "detached") return "detached";
+        if (pol.default_launch === "embedded") return "embedded";
+        return "embedded"; // auto for now
+    }
+
+    function popupFeaturesForProfile(profile) {
+        const sw = Math.max(1024, window.screen?.availWidth || 1400);
+        const sh = Math.max(700, window.screen?.availHeight || 900);
+
+        let w = 1100;
+        let h = 800;
+
+        if (profile === "small") {
+            w = Math.min(900, sw - 80);
+            h = Math.min(700, sh - 80);
+        } else if (profile === "large") {
+            w = Math.min(1280, sw - 40);
+            h = Math.min(920, sh - 60);
+        } else if (profile === "full") {
+            w = Math.max(1000, sw - 24);
+            h = Math.max(700, sh - 40);
+        } else {
+            // auto + normal
+            w = Math.min(1100, sw - 60);
+            h = Math.min(800, sh - 80);
+        }
+
+        const left = Math.max(0, Math.round((sw - w) / 2));
+        const top = Math.max(0, Math.round((sh - h) / 2));
+
+        return [
+            `width=${w}`,
+            `height=${h}`,
+            `left=${left}`,
+            `top=${top}`,
+            "resizable=yes",
+            "scrollbars=yes"
+        ].join(",");
+    }
+
+    function openAppDetached(app) {
+        const pol = launchPolicyForAppId(app.id);
+        const url = appUrl(app, "window");
+        const name = `pqnas_app_${app.id}`;
+        const features = popupFeaturesForProfile(pol.window_profile || "auto");
+
+        const win = window.open(url, name, features);
+        if (!win) return false;
+
+        try { win.focus(); } catch {}
+        return true;
+    }
 
     async function loadTrustedDevices() {
         try {
@@ -757,11 +846,7 @@
 
         if (!homeBlurb) return;
 
-        const mainPane = homeBlurb.closest(".pane");
-        if (mainPane) {
-            mainPane.classList.remove("appHost");
-            mainPane.classList.add("homeHost");
-        }
+        setMainHostMode("home");
         homeBlurb.classList.remove("appHostBlurb");
 
         const qrBlock = currentPairing ? `
@@ -903,16 +988,8 @@
 
         // Home should be frameless too (avoid border-within-border)
         if (homeBlurb) {
-            const mainPane = homeBlurb.closest(".pane");
-            if (mainPane) {
-                mainPane.classList.remove("appHost");
-                mainPane.classListadd?.("homeHost"); // safety for older paste? (see next line)
-                mainPane.classList.add("homeHost");
-            }
+            setMainHostMode("home");
             homeBlurb.classList.remove("appHostBlurb");
-            if (mainPane) {
-                mainPane.style.overflow = "auto";
-            }
             homeBlurb.style.overflowY = "auto";
             homeBlurb.style.maxHeight = "100%";
         }
@@ -927,7 +1004,6 @@
             if (!surface) {
                 homeBlurb.innerHTML = `
                 <div id="desktopHint" style="margin-bottom:10px;">
-                    Drag icons to arrange your desktop. Double-click an icon to open the app.
                 </div>
                 <div id="desktopSurface" class="desktopSurface" aria-label="Desktop"></div>
             `;
@@ -955,19 +1031,14 @@
 
         if (!homeBlurb) return;
 
-        const mainPane = homeBlurb.closest(".pane");
-        if (mainPane) {
-            mainPane.classList.remove("homeHost");
-            mainPane.classList.add("appHost");
-        }
-
+        setMainHostMode("app");
         homeBlurb.classList.add("appHostBlurb");
 
         homeBlurb.innerHTML = "";
 
         const frame = document.createElement("iframe");
         frame.className = "appFrame";
-        frame.src = `/apps/${encodeURIComponent(app.id)}/${encodeURIComponent(app.ver)}/www/index.html`;
+        frame.src = appUrl(app, "embedded");
 
         const frameWrap = document.createElement("div");
         frameWrap.className = "appFrameWrap";
@@ -986,19 +1057,39 @@
             renderHome();
             return;
         }
-        renderApp({ id: a.id, ver: a.ver, name: a.name || a.title });
 
+        const app = { id: a.id, ver: a.ver, name: a.name || a.title };
+        const mode = resolveLaunchMode(app);
 
+        if (mode === "detached") {
+            const opened = openAppDetached(app);
+            if (opened) return;
+
+            // popup blocked -> fallback to embedded
+        }
+
+        renderApp(app);
     }
     async function loadApps() {
         if (!appsList) return;
 
         try {
-            const r = await fetch("/api/v4/apps/list", { credentials: "include", cache: "no-store" });
-            const j = await r.json().catch(() => null);
-            if (!r.ok || !j || !j.ok) return;
+            const [rList, rApps] = await Promise.all([
+                fetch("/api/v4/apps/list", { credentials: "include", cache: "no-store" }),
+                fetch("/api/v4/apps", { credentials: "include", cache: "no-store" })
+            ]);
 
-            const installed = Array.isArray(j.installed) ? j.installed : [];
+            const jList = await rList.json().catch(() => null);
+            const jApps = await rApps.json().catch(() => null);
+
+            if (!rList.ok || !jList || !jList.ok) return;
+
+            launchPolicyByAppId =
+                (jApps && jApps.launch_policy_by_app_id && typeof jApps.launch_policy_by_app_id === "object")
+                    ? jApps.launch_policy_by_app_id
+                    : {};
+
+            const installed = Array.isArray(jList.installed) ? jList.installed : [];
 
             // server uses: {id, ver, name?, title? ...}
             let usable = installed.filter(x => x && x.id && x.ver);
@@ -1014,24 +1105,21 @@
                 return String(a.ver || "").localeCompare(String(b.ver || ""));
             });
 
-            // include name/title so UI updates when only name changes
             const key = JSON.stringify(usable.map(x => [x.id, x.ver, x.name || x.title || ""]));
+            installedApps = usable;
+
             if (key === lastAppsKey) return;
             lastAppsKey = key;
 
-            installedApps = usable;
-            // If we're on Home, refresh desktop icons too
             if (currentView === "home") renderDesktopIcons();
 
             clearAppsList();
             for (const a of usable) {
-                const label = a.name || a.title || a.id; // name from manifest.json
-
-                const href = `/apps/${encodeURIComponent(a.id)}/${encodeURIComponent(a.ver)}/www/index.html`;
+                const label = a.name || a.title || a.id;
+                const href = appUrl(a, "embedded");
                 addAppNavButton(a.id, label, href);
             }
 
-            // keep current view alive if app still exists and is allowed; otherwise go home
             if (currentApp) {
                 if (!isAdmin && currentApp.id === "snapshotmgr") {
                     renderHome();
@@ -1040,7 +1128,6 @@
                     if (!still) {
                         renderHome();
                     } else {
-                        // refresh titles + keep highlight (uses name/title)
                         renderApp({ id: still.id, ver: still.ver, name: still.name || still.title });
                     }
                 }

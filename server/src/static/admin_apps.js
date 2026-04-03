@@ -7,6 +7,7 @@
     const zipFile = document.getElementById("zipFile");
     const installBtn = document.getElementById("installBtn");
     const installOut = document.getElementById("installOut");
+    let launchPolicyByAppId = {};
 
     function setBadge(kind, text){
         stateBadge.className = `badge ${kind}`;
@@ -14,6 +15,37 @@
     }
 
     function esc(s){ return String(s ?? "").replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+    function policyForApp(appId){
+        const p = launchPolicyByAppId && launchPolicyByAppId[appId];
+        return {
+            default_launch: (p && p.default_launch) || "auto",
+            window_profile: (p && p.window_profile) || "auto",
+            allow_user_override: !!(p && p.allow_user_override)
+        };
+    }
+
+    async function saveLaunchPolicy(id, policy){
+        const r = await fetch("/api/v4/apps/launch_policy", {
+            method: "POST",
+            credentials: "include",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({
+                id,
+                default_launch: policy.default_launch,
+                window_profile: policy.window_profile,
+                allow_user_override: !!policy.allow_user_override
+            })
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            throw new Error((j && (j.message || j.error))
+                ? `${j.error || ""} ${j.message || ""}`.trim()
+                : `save failed (${r.status})`);
+        }
+        return j;
+    }
 
     function renderInstalled(items){
         installedList.innerHTML = "";
@@ -48,8 +80,97 @@
             left.appendChild(name);
             left.appendChild(meta);
 
+            const pol = policyForApp(it.id);
+
+            const launchMeta = document.createElement("div");
+            launchMeta.className = "meta";
+            launchMeta.textContent =
+                `Launch: ${pol.default_launch} · Window: ${pol.window_profile} · User override: ${pol.allow_user_override ? "yes" : "no"}`;
+
+            left.appendChild(launchMeta);
+
+            const right = document.createElement("div");
+            right.className = "appPolicyRight";
+
+            const policyGrid = document.createElement("div");
+            policyGrid.className = "policyGrid";
+
+            const launchField = document.createElement("div");
+            launchField.className = "policyField";
+            launchField.innerHTML = `
+    <label class="policyLbl">Default launch</label>
+    <select class="policySel">
+        <option value="auto">Auto</option>
+        <option value="embedded">Embedded</option>
+        <option value="detached">Detached</option>
+    </select>
+`;
+
+            const windowField = document.createElement("div");
+            windowField.className = "policyField";
+            windowField.innerHTML = `
+    <label class="policyLbl">Window profile</label>
+    <select class="policySel">
+        <option value="auto">Auto</option>
+        <option value="small">Small</option>
+        <option value="normal">Normal</option>
+        <option value="large">Large</option>
+        <option value="full">Full</option>
+    </select>
+`;
+
+            const overrideField = document.createElement("div");
+            overrideField.className = "policyField";
+            overrideField.innerHTML = `
+    <label class="policyLbl">User override</label>
+    <label class="policyChk">
+        <input type="checkbox" />
+        <span>Allow user override</span>
+    </label>
+`;
+
+            const launchSel = launchField.querySelector("select");
+            const windowSel = windowField.querySelector("select");
+            const overrideChk = overrideField.querySelector("input");
+
+            launchSel.value = pol.default_launch;
+            windowSel.value = pol.window_profile;
+            overrideChk.checked = !!pol.allow_user_override;
+
+            policyGrid.appendChild(launchField);
+            policyGrid.appendChild(windowField);
+            policyGrid.appendChild(overrideField);
+
             const actions = document.createElement("div");
             actions.className = "row";
+
+            const saveBtn = document.createElement("button");
+            saveBtn.className = "btn secondary";
+            saveBtn.type = "button";
+            saveBtn.textContent = "Save launch policy";
+            saveBtn.addEventListener("click", async () => {
+                try {
+                    saveBtn.disabled = true;
+                    setBadge("warn", "saving…");
+                    statusLine.textContent = `Saving launch policy for ${it.id}…`;
+
+                    await saveLaunchPolicy(it.id, {
+                        default_launch: launchSel.value,
+                        window_profile: windowSel.value,
+                        allow_user_override: overrideChk.checked
+                    });
+
+                    await load();
+                    setBadge("ok", "ready");
+                    statusLine.textContent = `Saved launch policy for ${it.id}`;
+                } catch (e) {
+                    setBadge("err", "error");
+                    statusLine.textContent = String(e && e.message ? e.message : e);
+                    alert(String(e && e.message ? e.message : e));
+                } finally {
+                    saveBtn.disabled = false;
+                }
+            });
 
             const openBtn = document.createElement("a");
             openBtn.className = "btn secondary";
@@ -57,7 +178,6 @@
             openBtn.href = `/apps/${encodeURIComponent(it.id)}/${encodeURIComponent(it.version)}/www/index.html`;
             openBtn.target = "_blank";
             openBtn.rel = "noopener";
-            actions.appendChild(openBtn);
 
             const btn = document.createElement("button");
             btn.className = "btn danger";
@@ -91,10 +211,15 @@
                 }
             });
 
+            actions.appendChild(saveBtn);
+            actions.appendChild(openBtn);
             actions.appendChild(btn);
 
+            right.appendChild(policyGrid);
+            right.appendChild(actions);
+
             row.appendChild(left);
-            row.appendChild(actions);
+            row.appendChild(right);
             installedList.appendChild(row);
         }
     }
@@ -114,6 +239,10 @@
             }
 
             const installed = Array.isArray(j.installed) ? j.installed : [];
+            launchPolicyByAppId = (j.launch_policy_by_app_id && typeof j.launch_policy_by_app_id === "object")
+                ? j.launch_policy_by_app_id
+                : {};
+
             setBadge("ok", "ready");
             statusLine.textContent = `Installed: ${installed.length}`;
             renderInstalled(installed);
