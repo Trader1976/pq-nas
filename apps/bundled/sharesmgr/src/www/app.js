@@ -184,6 +184,14 @@
 
     function pqStateOf(s) {
         const st = String(s?.pq_state || s?.state || "").trim().toLowerCase();
+
+        // Keep terminal backend states.
+        if (st === "revoked") return "revoked";
+        if (st === "expired") return "expired";
+
+        // Frontend safety: if expiry time is in the past, show expired.
+        if (isExpired(s)) return "expired";
+
         if (!st) {
             if (s?.invite_url) return "pending";
             return "active";
