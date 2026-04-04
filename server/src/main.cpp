@@ -8751,7 +8751,6 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
         rtrim_inplace(root_fstype);
         if (ec_rootfs != 0) root_fstype.clear();
     }
-    const bool pools_supported = (root_fstype == "btrfs");
 
     // Load lsblk once so btrfs_show_parsed_to_json can derive parent_disk reliably.
     std::string raw_lsblk;
@@ -8767,7 +8766,11 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
     cap_string(mounts_out, 1024 * 1024);
     rtrim_inplace(mounts_out);
 
-    if (rc != 0) {
+    // findmnt returns non-zero when there are no matches.
+    // That is valid on systems with no mounted Btrfs pools.
+    const bool no_btrfs_matches = (rc != 0 && trim_copy(mounts_out).empty());
+
+    if (rc != 0 && !no_btrfs_matches) {
         reply_json(res, 500, json{
             {"ok", false},
             {"error", "findmnt_failed"}
@@ -8982,8 +8985,8 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
 
     reply_json(res, 200, json{
         {"ok", true},
-        {"storage_backend", root_fstype.empty() ? "unknown" : root_fstype},
-        {"pools_supported", pools_supported},
+        {"storage_root_fstype", root_fstype.empty() ? "unknown" : root_fstype},
+        {"has_runtime_btrfs_pools", !runtime_by_mount.empty()},
         {"pools", arr}
     }.dump());
 });

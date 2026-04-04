@@ -525,7 +525,12 @@
             return { ok: false, http, error: "bad_payload", txt: q.txt || "", j: q.j || null };
         }
 
-        return { ok: true, http, pools: q.j.pools };
+        return {
+            ok: true,
+            http,
+            pools: q.j.pools,
+            meta: q.j
+        };
     }
 
     async function refreshTieringCard() {
@@ -4835,7 +4840,38 @@ ${esc(JSON.stringify({ http: lp.http, error: lp.error, json: lp.j || null, txt: 
         } else {
             g_selectedMount = "";
         }
+        if (lp.ok && Array.isArray(lp.pools) && lp.pools.length === 0) {
+            g_pools = [];
+            g_selectedMount = "";
 
+            const rootFs = String(lp.meta?.storage_root_fstype || lp.meta?.storage_backend || "unknown");
+
+            if (poolsOut) {
+                poolsOut.innerHTML = `
+            <div class="card" style="margin-top:10px;">
+              <div style="font-weight:950; margin-bottom:8px;">No managed Btrfs pools found</div>
+            
+              <div class="v" style="opacity:.88;">
+                Storage Manager has nothing to manage on this server right now.
+              </div>
+            
+              <div class="v" style="opacity:.78; margin-top:10px; line-height:1.45;">
+                This usually means DNA-Nexus server is currently using a single storage volume,
+                or Btrfs pool mounts have not been created / mounted yet.
+              </div>
+            
+              <div class="v" style="opacity:.78; margin-top:10px; line-height:1.45;">
+                System storage may still be <span class="mono">${esc(rootFs)}</span>, and that is fine.
+                What matters here is whether DNA-Nexus server has managed Btrfs pools available.
+              </div>
+            
+              <div class="v" style="opacity:.72; margin-top:10px;">
+                When Btrfs pools exist, they will appear here automatically.
+              </div>
+            </div>`;
+            }
+            return;
+        }
         await renderPoolsTab();
         applyDevModeToUi();
     }
