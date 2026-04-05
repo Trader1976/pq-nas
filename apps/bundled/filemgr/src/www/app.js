@@ -2808,6 +2808,9 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     const rel = currentRelPathFor(item);
     const share = existingShareFor(rel, item.type === "dir" ? "dir" : "file");
+    const shareLabel = share
+        ? (isShareExpired(share) ? "Manage share link… (expired)" : "Manage share link…")
+        : "Create share link…";
 
     const fav = isFavoriteItem(item);
     const favLabel = fav ? "Remove from favorites" : "Add to favorites";
