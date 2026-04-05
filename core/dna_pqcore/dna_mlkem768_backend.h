@@ -14,6 +14,16 @@ namespace dnanexus::pq {
 // The current implementation may use a vendored provider internally, but
 // callers must depend only on the contract documented here.
 
+enum class MlKem768Status {
+    ok = 0,
+    output_null,
+    bad_public_key_len,
+    bad_secret_key_len,
+    bad_ciphertext_len,
+    random_failed,
+    provider_failed,
+};
+
 struct MlKem768Keypair {
     std::vector<std::uint8_t> public_key;
     std::vector<std::uint8_t> secret_key;
@@ -32,32 +42,20 @@ bool mlkem768_available();
 // This is not part of the cryptographic contract.
 std::string mlkem768_backend_name();
 
+// Stable status-returning API.
+//
+// On any non-ok result, secret-bearing outputs are wiped/cleared.
+
 // Generate an ML-KEM-768 keypair.
-//
-// On success:
-//   - returns true
-//   - out->public_key and out->secret_key are fully populated
-//
-// On failure:
-//   - returns false
-//   - out contents are wiped/cleared
-bool mlkem768_keygen(MlKem768Keypair* out, std::string* err);
+MlKem768Status mlkem768_keygen_status(MlKem768Keypair* out);
 
 // Encapsulate to an ML-KEM-768 public key.
 //
 // Requirements:
 //   - public_key must be exactly the ML-KEM-768 public-key length
-//
-// On success:
-//   - returns true
-//   - out->ciphertext and out->shared_secret are fully populated
-//
-// On failure:
-//   - returns false
-//   - out contents are wiped/cleared
-bool mlkem768_encapsulate(const std::vector<std::uint8_t>& public_key,
-                          MlKem768EncapResult* out,
-                          std::string* err);
+MlKem768Status mlkem768_encapsulate_status(
+    const std::vector<std::uint8_t>& public_key,
+    MlKem768EncapResult* out);
 
 // Decapsulate an ML-KEM-768 ciphertext with a recipient secret key.
 //
@@ -66,17 +64,35 @@ bool mlkem768_encapsulate(const std::vector<std::uint8_t>& public_key,
 //   - ciphertext must be exactly the ML-KEM-768 ciphertext length
 //
 // Contract:
-//   - Wrong input lengths are API failures and return false.
+//   - Wrong input lengths are API failures.
 //   - A structurally invalid/corrupted secret key detected by the provider
-//     is an API failure and returns false.
+//     is an API failure.
 //   - A correctly sized but invalid/adversarial ciphertext is NOT an API
-//     failure. The provider performs implicit rejection internally and
-//     still returns a shared secret; this function returns true in that case.
-//   - False is reserved for argument/length/provider failure, not ordinary
+//     failure. The provider performs implicit rejection internally and still
+//     returns a shared secret; this function returns MlKem768Status::ok in
+//     that case.
+//   - Non-ok is reserved for argument/length/provider failure, not ordinary
 //     invalid ciphertext of correct length.
+MlKem768Status mlkem768_decapsulate_status(
+    const std::vector<std::uint8_t>& secret_key,
+    const std::vector<std::uint8_t>& ciphertext,
+    std::vector<std::uint8_t>* out_shared_secret);
+
+// Compatibility API.
+//
+// These wrappers preserve the current bool + err surface while delegating to
+// the stable status-returning entry points above.
 //
 // On failure:
-//   - out_shared_secret is wiped/cleared
+//   - returns false
+//   - outputs are wiped/cleared
+//   - err receives a stable coarse error string if non-null
+bool mlkem768_keygen(MlKem768Keypair* out, std::string* err);
+
+bool mlkem768_encapsulate(const std::vector<std::uint8_t>& public_key,
+                          MlKem768EncapResult* out,
+                          std::string* err);
+
 bool mlkem768_decapsulate(const std::vector<std::uint8_t>& secret_key,
                           const std::vector<std::uint8_t>& ciphertext,
                           std::vector<std::uint8_t>* out_shared_secret,

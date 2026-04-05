@@ -47,6 +47,26 @@ static bool random_bytes_local(std::size_t n, std::vector<std::uint8_t>* out) {
                       static_cast<int>(out->size())) == 1;
 }
 
+static const char* status_string(MlKem768Status st) {
+    switch (st) {
+        case MlKem768Status::ok:
+            return "ok";
+        case MlKem768Status::output_null:
+            return "output_null";
+        case MlKem768Status::bad_public_key_len:
+            return "bad_public_key_len";
+        case MlKem768Status::bad_secret_key_len:
+            return "bad_secret_key_len";
+        case MlKem768Status::bad_ciphertext_len:
+            return "bad_ciphertext_len";
+        case MlKem768Status::random_failed:
+            return "random_failed";
+        case MlKem768Status::provider_failed:
+            return "provider_failed";
+    }
+    return "provider_failed";
+}
+
 } // namespace
 
 // Native ML-KEM provider is compiled in for this target, so availability is constant.
@@ -61,11 +81,9 @@ std::string mlkem768_backend_name() {
 
 // Generate an ML-KEM-768 keypair using wrapper-owned randomness and the
 // provider's derandomized entry point.
-bool mlkem768_keygen(MlKem768Keypair* out, std::string* err) {
-    if (err) err->clear();
+MlKem768Status mlkem768_keygen_status(MlKem768Keypair* out) {
     if (!out) {
-        if (err) *err = "output_null";
-        return false;
+        return MlKem768Status::output_null;
     }
 
     wipe_bytes(&out->public_key);
@@ -75,8 +93,7 @@ bool mlkem768_keygen(MlKem768Keypair* out, std::string* err) {
     std::vector<std::uint8_t> coins(2 * MLKEM_SYMBYTES, 0);
     if (!random_bytes_local(coins.size(), &coins)) {
         wipe_bytes(&coins);
-        if (err) *err = "random_coins_failed";
-        return false;
+        return MlKem768Status::random_failed;
     }
 
     out->public_key.assign(MLKEM768_PUBLICKEYBYTES, 0);
@@ -92,38 +109,33 @@ bool mlkem768_keygen(MlKem768Keypair* out, std::string* err) {
     if (rc != 0) {
         wipe_bytes(&out->public_key);
         wipe_bytes(&out->secret_key);
-        if (err) *err = "mlkem768_keypair_derand_failed";
-        return false;
+        return MlKem768Status::provider_failed;
     }
 
-    return true;
+    return MlKem768Status::ok;
 }
 
 // Encapsulate to a recipient ML-KEM-768 public key using wrapper-owned
 // randomness and the provider's derandomized entry point.
-bool mlkem768_encapsulate(const std::vector<std::uint8_t>& public_key,
-                          MlKem768EncapResult* out,
-                          std::string* err) {
-    if (err) err->clear();
+MlKem768Status mlkem768_encapsulate_status(
+    const std::vector<std::uint8_t>& public_key,
+    MlKem768EncapResult* out) {
     if (!out) {
-        if (err) *err = "output_null";
-        return false;
+        return MlKem768Status::output_null;
     }
 
     wipe_bytes(&out->ciphertext);
     wipe_bytes(&out->shared_secret);
 
     if (public_key.size() != MLKEM768_PUBLICKEYBYTES) {
-        if (err) *err = "mlkem768_bad_public_key_len";
-        return false;
+        return MlKem768Status::bad_public_key_len;
     }
 
     // ML-KEM encapsulation consumes MLKEM_SYMBYTES of randomness.
     std::vector<std::uint8_t> coins(MLKEM_SYMBYTES, 0);
     if (!random_bytes_local(coins.size(), &coins)) {
         wipe_bytes(&coins);
-        if (err) *err = "random_coins_failed";
-        return false;
+        return MlKem768Status::random_failed;
     }
 
     out->ciphertext.assign(MLKEM768_CIPHERTEXTBYTES, 0);
@@ -140,11 +152,10 @@ bool mlkem768_encapsulate(const std::vector<std::uint8_t>& public_key,
     if (rc != 0) {
         wipe_bytes(&out->ciphertext);
         wipe_bytes(&out->shared_secret);
-        if (err) *err = "mlkem768_enc_derand_failed";
-        return false;
+        return MlKem768Status::provider_failed;
     }
 
-    return true;
+    return MlKem768Status::ok;
 }
 
 // Decapsulate an ML-KEM-768 ciphertext with recipient secret key.
@@ -155,26 +166,22 @@ bool mlkem768_encapsulate(const std::vector<std::uint8_t>& public_key,
 // - The wrapper must remain thin here and must not recreate those internals.
 // - A nonzero provider return is treated as provider failure or secret-key
 //   integrity failure, not as ordinary invalid-ciphertext rejection.
-bool mlkem768_decapsulate(const std::vector<std::uint8_t>& secret_key,
-                          const std::vector<std::uint8_t>& ciphertext,
-                          std::vector<std::uint8_t>* out_shared_secret,
-                          std::string* err) {
-    if (err) err->clear();
+MlKem768Status mlkem768_decapsulate_status(
+    const std::vector<std::uint8_t>& secret_key,
+    const std::vector<std::uint8_t>& ciphertext,
+    std::vector<std::uint8_t>* out_shared_secret) {
     if (!out_shared_secret) {
-        if (err) *err = "output_null";
-        return false;
+        return MlKem768Status::output_null;
     }
 
     wipe_bytes(out_shared_secret);
 
     if (secret_key.size() != MLKEM768_SECRETKEYBYTES) {
-        if (err) *err = "mlkem768_bad_secret_key_len";
-        return false;
+        return MlKem768Status::bad_secret_key_len;
     }
 
     if (ciphertext.size() != MLKEM768_CIPHERTEXTBYTES) {
-        if (err) *err = "mlkem768_bad_ciphertext_len";
-        return false;
+        return MlKem768Status::bad_ciphertext_len;
     }
 
     out_shared_secret->assign(MLKEM_BYTES, 0);
@@ -186,10 +193,48 @@ bool mlkem768_decapsulate(const std::vector<std::uint8_t>& secret_key,
 
     if (rc != 0) {
         wipe_bytes(out_shared_secret);
-        if (err) *err = "mlkem768_dec_failed";
-        return false;
+        return MlKem768Status::provider_failed;
     }
 
+    return MlKem768Status::ok;
+}
+
+// Compatibility wrapper around mlkem768_keygen_status().
+bool mlkem768_keygen(MlKem768Keypair* out, std::string* err) {
+    if (err) err->clear();
+    const MlKem768Status st = mlkem768_keygen_status(out);
+    if (st != MlKem768Status::ok) {
+        if (err) *err = status_string(st);
+        return false;
+    }
+    return true;
+}
+
+// Compatibility wrapper around mlkem768_encapsulate_status().
+bool mlkem768_encapsulate(const std::vector<std::uint8_t>& public_key,
+                          MlKem768EncapResult* out,
+                          std::string* err) {
+    if (err) err->clear();
+    const MlKem768Status st = mlkem768_encapsulate_status(public_key, out);
+    if (st != MlKem768Status::ok) {
+        if (err) *err = status_string(st);
+        return false;
+    }
+    return true;
+}
+
+// Compatibility wrapper around mlkem768_decapsulate_status().
+bool mlkem768_decapsulate(const std::vector<std::uint8_t>& secret_key,
+                          const std::vector<std::uint8_t>& ciphertext,
+                          std::vector<std::uint8_t>* out_shared_secret,
+                          std::string* err) {
+    if (err) err->clear();
+    const MlKem768Status st =
+        mlkem768_decapsulate_status(secret_key, ciphertext, out_shared_secret);
+    if (st != MlKem768Status::ok) {
+        if (err) *err = status_string(st);
+        return false;
+    }
     return true;
 }
 
@@ -201,7 +246,6 @@ bool mlkem768_selftest(std::string* err) {
     MlKem768Keypair kp;
     MlKem768EncapResult enc;
     std::vector<std::uint8_t> dec_ss;
-    std::string step_err;
 
     const auto cleanup = [&]() {
         wipe_bytes(&kp.secret_key);
@@ -213,21 +257,25 @@ bool mlkem768_selftest(std::string* err) {
         wipe_bytes(&enc.ciphertext);
     };
 
-    if (!mlkem768_keygen(&kp, &step_err)) {
+    const MlKem768Status st_keygen = mlkem768_keygen_status(&kp);
+    if (st_keygen != MlKem768Status::ok) {
         cleanup();
-        if (err) *err = "selftest:keygen:" + step_err;
+        if (err) *err = "selftest:keygen:" + std::string(status_string(st_keygen));
         return false;
     }
 
-    if (!mlkem768_encapsulate(kp.public_key, &enc, &step_err)) {
+    const MlKem768Status st_enc = mlkem768_encapsulate_status(kp.public_key, &enc);
+    if (st_enc != MlKem768Status::ok) {
         cleanup();
-        if (err) *err = "selftest:encapsulate:" + step_err;
+        if (err) *err = "selftest:encapsulate:" + std::string(status_string(st_enc));
         return false;
     }
 
-    if (!mlkem768_decapsulate(kp.secret_key, enc.ciphertext, &dec_ss, &step_err)) {
+    const MlKem768Status st_dec =
+        mlkem768_decapsulate_status(kp.secret_key, enc.ciphertext, &dec_ss);
+    if (st_dec != MlKem768Status::ok) {
         cleanup();
-        if (err) *err = "selftest:decapsulate:" + step_err;
+        if (err) *err = "selftest:decapsulate:" + std::string(status_string(st_dec));
         return false;
     }
 
