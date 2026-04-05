@@ -106,6 +106,9 @@ target_compile_definitions(dnanexus_mlkem_native_obj PRIVATE
 # -----------------------------------------------------------------------------
 add_library(dna_pqcore_mlkem STATIC
         "${REPO_ROOT}/core/dna_pqcore/dna_mlkem768_backend.cpp"
+        "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_native.cpp"
+        "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_stub.cpp"
+        "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_select.cpp"
         "${REPO_ROOT}/core/dna_pqcore/dna_mlkem768_backend.h"
         $<TARGET_OBJECTS:dnanexus_mlkem_native_obj>
 )
@@ -121,6 +124,21 @@ target_include_directories(dna_pqcore_mlkem PRIVATE
 target_link_libraries(dna_pqcore_mlkem PRIVATE
         OpenSSL::Crypto
 )
+
+# -----------------------------------------------------------------------------
+# Backend wrapper provider-identity test
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_provider_identity
+        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_provider_identity.cpp"
+)
+
+target_link_libraries(test_dna_mlkem768_provider_identity PRIVATE
+        dna_pqcore_mlkem
+)
+
+mlkem_lab_set_bin_output(test_dna_mlkem768_provider_identity)
+mlkem_lab_add_run_target(test_dna_mlkem768_provider_identity)
+
 
 # -----------------------------------------------------------------------------
 # Learn-track source bundles
@@ -250,6 +268,48 @@ mlkem_lab_set_bin_output(test_dna_mlkem768_backend)
 mlkem_lab_add_run_target(test_dna_mlkem768_backend)
 
 # -----------------------------------------------------------------------------
+# Backend wrapper boundary test
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_boundary
+        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_boundary.cpp"
+)
+
+target_link_libraries(test_dna_mlkem768_boundary PRIVATE
+        dna_pqcore_mlkem
+)
+
+mlkem_lab_set_bin_output(test_dna_mlkem768_boundary)
+mlkem_lab_add_run_target(test_dna_mlkem768_boundary)
+
+# -----------------------------------------------------------------------------
+# Backend wrapper secret lifecycle test
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_secret_lifecycle
+        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_secret_lifecycle.cpp"
+)
+
+target_link_libraries(test_dna_mlkem768_secret_lifecycle PRIVATE
+        dna_pqcore_mlkem
+)
+
+mlkem_lab_set_bin_output(test_dna_mlkem768_secret_lifecycle)
+mlkem_lab_add_run_target(test_dna_mlkem768_secret_lifecycle)
+
+# -----------------------------------------------------------------------------
+# Backend wrapper compatibility-surface test
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_compat
+        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_compat.cpp"
+)
+
+target_link_libraries(test_dna_mlkem768_compat PRIVATE
+        dna_pqcore_mlkem
+)
+
+mlkem_lab_set_bin_output(test_dna_mlkem768_compat)
+mlkem_lab_add_run_target(test_dna_mlkem768_compat)
+
+# -----------------------------------------------------------------------------
 # High-value learn-track tests
 # -----------------------------------------------------------------------------
 mlkem_lab_add_test(test_mlkem_message
@@ -315,6 +375,10 @@ mlkem_lab_add_test(test_mlkem_kem_diff_fuzz
 # -----------------------------------------------------------------------------
 add_custom_target(run_mlkem_lab_freeze_tests
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_backend"
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_boundary"
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_secret_lifecycle"
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_compat"
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_provider_identity"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_message"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_indcpa_packed"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_cpapke"
@@ -326,6 +390,10 @@ add_custom_target(run_mlkem_lab_freeze_tests
         WORKING_DIRECTORY "${REPO_ROOT}"
         DEPENDS
         test_dna_mlkem768_backend
+        test_dna_mlkem768_boundary
+        test_dna_mlkem768_secret_lifecycle
+        test_dna_mlkem768_compat
+        test_dna_mlkem768_provider_identity
         test_mlkem_message
         test_mlkem_indcpa_packed
         test_mlkem_cpapke
