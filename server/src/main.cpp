@@ -30650,8 +30650,6 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
         }
     }
 
-    // Resolve to disk
-    const std::filesystem::path user_dir = user_dir_for_fp(users, s.owner_fp); // still needed for legacy dir zip path below
 
     pqnas::ResolvedExistingPath rp;
     std::string rerr;
@@ -30664,6 +30662,32 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
     }
 
     const std::filesystem::path abs = rp.abs_path;
+
+    std::error_code ec_abs;
+    auto st_abs = std::filesystem::symlink_status(abs, ec_abs);
+    if (ec_abs || !std::filesystem::exists(st_abs) || std::filesystem::is_symlink(st_abs)) {
+        audit_event("share_download", "fail", &s, "not_found", 404);
+        res.status = 404;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Not found\n", "text/plain; charset=utf-8");
+        return;
+    }
+
+    if (s.type == "file" && !std::filesystem::is_regular_file(st_abs)) {
+        audit_event("share_download", "fail", &s, "type_mismatch", 404);
+        res.status = 404;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Not found\n", "text/plain; charset=utf-8");
+        return;
+    }
+
+    if (s.type == "dir" && !std::filesystem::is_directory(st_abs)) {
+        audit_event("share_download", "fail", &s, "type_mismatch", 404);
+        res.status = 404;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Not found\n", "text/plain; charset=utf-8");
+        return;
+    }
 
     if (is_pq_share) {
         std::error_code ec;
@@ -30810,19 +30834,45 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
         return;
     }
 
-    // s.type == "dir" -> zip directory (reuse your existing in-memory zip style)
-    // For v1, we zip the directory root as "<dirname>/..." like your /api/v4/files/zip does.
-    // We also reject symlinks inside, same rule as your zip endpoints.
+    // s.type == "dir" -> zip directory using the already-resolved physical path.
+    // This avoids legacy assumptions about user_dir + s.path and works with pools,
+    // migration, landing tier, and other metadata-aware storage locations.
 
-    // Pre-walk: check symlinks + count bytes (reuse your helper pqnas::file_size_u64_safe)
-    std::uint64_t input_bytes = 0;
-    std::uint64_t files = 0, dirs = 0;
+    {
+        std::error_code ec_dir;
+        auto st_dir = std::filesystem::symlink_status(abs, ec_dir);
+        if (ec_dir || !std::filesystem::exists(st_dir)) {
+            audit_event("share_download", "fail", &s, "not_found", 404);
+            res.status = 404;
+            res.set_header("Cache-Control", "no-store");
+            res.set_content("Not found\n", "text/plain; charset=utf-8");
+            return;
+        }
+        if (std::filesystem::is_symlink(st_dir)) {
+            audit_event("share_download", "fail", &s, "symlink_not_supported", 400, "shared root is symlink");
+            res.status = 400;
+            res.set_header("Cache-Control", "no-store");
+            res.set_content("Bad request\n", "text/plain; charset=utf-8");
+            return;
+        }
+        if (!std::filesystem::is_directory(st_dir)) {
+            audit_event("share_download", "fail", &s, "type_mismatch", 404);
+            res.status = 404;
+            res.set_header("Cache-Control", "no-store");
+            res.set_content("Not found\n", "text/plain; charset=utf-8");
+            return;
+        }
+    }
+
+    [[maybe_unused]] std::uint64_t input_bytes = 0;
+    [[maybe_unused]] std::uint64_t files = 0, dirs = 0;
 
     dirs = 1;
     {
         std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
         std::error_code ec;
         ec.clear();
+
         for (auto it = std::filesystem::recursive_directory_iterator(abs, opts, ec);
              it != std::filesystem::recursive_directory_iterator();
              it.increment(ec)) {
@@ -30847,7 +30897,11 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
                 return;
             }
 
-            if (std::filesystem::is_directory(st2)) { dirs += 1; continue; }
+            if (std::filesystem::is_directory(st2)) {
+                dirs += 1;
+                continue;
+            }
+
             if (std::filesystem::is_regular_file(st2)) {
                 files += 1;
                 input_bytes += pqnas::file_size_u64_safe(it->path());
@@ -30858,7 +30912,17 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
         }
     }
 
-    // Run: zip -r -q - <dirname> in cwd=user_dir, referencing relpath (s.path)
+    const std::filesystem::path zip_parent = abs.parent_path();
+    const std::string zip_arg = abs.filename().string();
+
+    if (zip_parent.empty() || zip_arg.empty()) {
+        audit_event("share_download", "fail", &s, "zip_failed", 500, "empty zip parent/name");
+        res.status = 500;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Server error\n", "text/plain; charset=utf-8");
+        return;
+    }
+
     int pipefd[2];
     if (::pipe(pipefd) != 0) {
         audit_event("share_download", "fail", &s, "pipe_failed", 500, "pipe()");
@@ -30870,7 +30934,8 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
 
     pid_t pid = ::fork();
     if (pid < 0) {
-        ::close(pipefd[0]); ::close(pipefd[1]);
+        ::close(pipefd[0]);
+        ::close(pipefd[1]);
         audit_event("share_download", "fail", &s, "fork_failed", 500, "fork()");
         res.status = 500;
         res.set_header("Cache-Control", "no-store");
@@ -30883,14 +30948,14 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
         ::close(pipefd[0]);
         ::close(pipefd[1]);
 
-        if (::chdir(user_dir.c_str()) != 0) _exit(127);
+        if (::chdir(zip_parent.c_str()) != 0) _exit(127);
 
         const char* argv[] = {
             "zip",
             "-r",
             "-q",
             "-",
-            s.path.c_str(),
+            zip_arg.c_str(),
             nullptr
         };
         ::execvp("zip", (char* const*)argv);
@@ -30919,9 +30984,9 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
     }
     ::close(pipefd[0]);
 
-    int status = 0;
-    ::waitpid(pid, &status, 0);
-    if (!(WIFEXITED(status) && WEXITSTATUS(status) == 0)) {
+    int child_status = 0;
+    ::waitpid(pid, &child_status, 0);
+    if (!(WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0)) {
         audit_event("share_download", "fail", &s, "zip_failed", 500, "zip exit nonzero");
         res.status = 500;
         res.set_header("Cache-Control", "no-store");
@@ -30933,6 +30998,7 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
     (void)shares.increment_downloads(token, &err); // best effort
 
     std::string base = std::filesystem::path(s.path).filename().string();
+    if (base.empty()) base = zip_arg;
     if (base.empty()) base = "download";
     std::string fname = base + ".zip";
 
