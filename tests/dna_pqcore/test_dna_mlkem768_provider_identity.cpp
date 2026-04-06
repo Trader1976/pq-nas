@@ -20,6 +20,11 @@ bool expect_true(const char* label, bool cond) {
 } // namespace
 
 int main() {
+    if (!expect_true("no selector override by default",
+                     !internal::mlkem768_has_selected_provider_override())) {
+        return 1;
+    }
+
     if (!expect_true("provider available", mlkem768_available())) {
         return 1;
     }
@@ -77,8 +82,8 @@ int main() {
         return 1;
     }
 
-    if (!expect_true("dna provider unavailable",
-                     !internal::mlkem768_dna_provider_available())) {
+    if (!expect_true("dna provider available",
+                     internal::mlkem768_dna_provider_available())) {
         return 1;
     }
 

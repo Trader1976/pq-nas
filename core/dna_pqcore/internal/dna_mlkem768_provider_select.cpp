@@ -1,10 +1,70 @@
 #include "internal/dna_mlkem768_provider_select.h"
 #include "internal/dna_mlkem768_provider.h"
 
+#include <cstdlib>
+#include <cstring>
+
 namespace dnanexus::pq::internal {
+namespace {
+
+bool g_has_selected_provider_override = false;
+MlKem768ProviderId g_selected_provider_override = MlKem768ProviderId::native;
+
+bool mlkem768_selected_provider_from_env(MlKem768ProviderId* out) {
+    if (!out) return false;
+
+    const char* v = std::getenv("DNA_MLKEM_SELECTED_PROVIDER");
+    if (!v || !*v) return false;
+
+    if (std::strcmp(v, "native") == 0) {
+        *out = MlKem768ProviderId::native;
+        return true;
+    }
+
+    if (std::strcmp(v, "dna") == 0) {
+        *out = MlKem768ProviderId::dna;
+        return true;
+    }
+
+    // Ignore unsupported/unknown values, including "stub".
+    return false;
+}
+
+} // namespace
 
 MlKem768ProviderId mlkem768_selected_provider_id() {
+    MlKem768ProviderId env_id = MlKem768ProviderId::native;
+    if (mlkem768_selected_provider_from_env(&env_id)) {
+        return env_id;
+    }
+
+    if (g_has_selected_provider_override) {
+        return g_selected_provider_override;
+    }
+
     return mlkem768_active_provider_id();
+}
+
+bool mlkem768_set_selected_provider_override(MlKem768ProviderId id) {
+    switch (id) {
+        case MlKem768ProviderId::native:
+        case MlKem768ProviderId::dna:
+            g_selected_provider_override = id;
+            g_has_selected_provider_override = true;
+            return true;
+        case MlKem768ProviderId::stub:
+            return false;
+    }
+    return false;
+}
+
+void mlkem768_clear_selected_provider_override() {
+    g_selected_provider_override = MlKem768ProviderId::native;
+    g_has_selected_provider_override = false;
+}
+
+bool mlkem768_has_selected_provider_override() {
+    return g_has_selected_provider_override;
 }
 
 bool mlkem768_provider_available_by_id(MlKem768ProviderId id) {

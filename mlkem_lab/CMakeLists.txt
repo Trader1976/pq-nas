@@ -247,6 +247,93 @@ target_link_libraries(dna_pqcore_learn_backend_oracle PUBLIC
 )
 
 # -----------------------------------------------------------------------------
+# DNA provider encaps interop test
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_dna_encaps_interop
+        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_dna_encaps_interop.cpp"
+)
+
+target_link_libraries(test_dna_mlkem768_dna_encaps_interop PRIVATE
+        dna_pqcore_mlkem
+)
+
+mlkem_lab_set_bin_output(test_dna_mlkem768_dna_encaps_interop)
+mlkem_lab_add_run_target(test_dna_mlkem768_dna_encaps_interop)
+
+# -----------------------------------------------------------------------------
+# DNA provider decaps interop test
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_dna_decaps_interop
+        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_dna_decaps_interop.cpp"
+)
+
+target_link_libraries(test_dna_mlkem768_dna_decaps_interop PRIVATE
+        dna_pqcore_mlkem
+)
+
+mlkem_lab_set_bin_output(test_dna_mlkem768_dna_decaps_interop)
+mlkem_lab_add_run_target(test_dna_mlkem768_dna_decaps_interop)
+
+# -----------------------------------------------------------------------------
+# Provider confidence matrix test
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_provider_matrix
+        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_provider_matrix.cpp"
+)
+
+target_link_libraries(test_dna_mlkem768_provider_matrix PRIVATE
+        dna_pqcore_mlkem
+)
+
+mlkem_lab_set_bin_output(test_dna_mlkem768_provider_matrix)
+mlkem_lab_add_run_target(test_dna_mlkem768_provider_matrix)
+
+# -----------------------------------------------------------------------------
+# Selected-provider override test
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_selected_provider_override
+        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_selected_provider_override.cpp"
+)
+
+target_link_libraries(test_dna_mlkem768_selected_provider_override PRIVATE
+        dna_pqcore_mlkem
+)
+
+mlkem_lab_set_bin_output(test_dna_mlkem768_selected_provider_override)
+mlkem_lab_add_run_target(test_dna_mlkem768_selected_provider_override)
+
+# -----------------------------------------------------------------------------
+# DNA-selected freeze sanity test
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_freeze_prefer_dna
+        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_freeze_prefer_dna.cpp"
+)
+
+target_link_libraries(test_dna_mlkem768_freeze_prefer_dna PRIVATE
+        dna_pqcore_mlkem
+)
+
+mlkem_lab_set_bin_output(test_dna_mlkem768_freeze_prefer_dna)
+
+# -----------------------------------------------------------------------------
+# Convenience target: public-path freeze lane with selected provider forced to dna
+# -----------------------------------------------------------------------------
+add_custom_target(run_mlkem_lab_freeze_tests_dna_selected
+        COMMAND "${CMAKE_COMMAND}" -E env DNA_MLKEM_SELECTED_PROVIDER=dna "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_freeze_prefer_dna"
+        COMMAND "${CMAKE_COMMAND}" -E env DNA_MLKEM_SELECTED_PROVIDER=dna "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_backend"
+        COMMAND "${CMAKE_COMMAND}" -E env DNA_MLKEM_SELECTED_PROVIDER=dna "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_boundary"
+        COMMAND "${CMAKE_COMMAND}" -E env DNA_MLKEM_SELECTED_PROVIDER=dna "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_secret_lifecycle"
+        COMMAND "${CMAKE_COMMAND}" -E env DNA_MLKEM_SELECTED_PROVIDER=dna "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_compat"
+        WORKING_DIRECTORY "${REPO_ROOT}"
+        DEPENDS
+        test_dna_mlkem768_freeze_prefer_dna
+        test_dna_mlkem768_backend
+        test_dna_mlkem768_boundary
+        test_dna_mlkem768_secret_lifecycle
+        test_dna_mlkem768_compat
+)
+
+# -----------------------------------------------------------------------------
 # Experimental DNA PQ core backend wrapper
 # -----------------------------------------------------------------------------
 add_library(dna_pqcore_mlkem STATIC
@@ -443,6 +530,10 @@ add_custom_target(run_mlkem_lab_freeze_tests
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_provider_identity"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_provider_by_id"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_dna_keygen_interop"
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_dna_encaps_interop"
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_dna_decaps_interop"
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_provider_matrix"
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_selected_provider_override"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_message"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_indcpa_packed"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_cpapke"
@@ -460,6 +551,10 @@ add_custom_target(run_mlkem_lab_freeze_tests
         test_dna_mlkem768_provider_identity
         test_dna_mlkem768_provider_by_id
         test_dna_mlkem768_dna_keygen_interop
+        test_dna_mlkem768_dna_encaps_interop
+        test_dna_mlkem768_dna_decaps_interop
+        test_dna_mlkem768_provider_matrix
+        test_dna_mlkem768_selected_provider_override
         test_mlkem_message
         test_mlkem_indcpa_packed
         test_mlkem_cpapke

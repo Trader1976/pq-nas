@@ -28,6 +28,17 @@ namespace dnanexus::pq::internal {
         const std::vector<std::uint8_t>& ciphertext,
         std::vector<std::uint8_t>* out_shared_secret);
 
+    // Internal-only selector override for tests/dev.
+    // Supported overrides:
+    // - native
+    // - dna
+    //
+    // Unsupported:
+    // - stub
+    bool mlkem768_set_selected_provider_override(MlKem768ProviderId id);
+    void mlkem768_clear_selected_provider_override();
+    bool mlkem768_has_selected_provider_override();
+
     MlKem768Status mlkem768_selected_provider_keygen(MlKem768Keypair* out);
 
     MlKem768Status mlkem768_selected_provider_encapsulate(

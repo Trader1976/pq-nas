@@ -57,7 +57,6 @@ bool expect_status(const char* label, MlKem768Status got, MlKem768Status want) {
 int main() {
     using internal::MlKem768ProviderId;
 
-    // Native provider by-id: happy path.
     if (!expect_true("native available",
                      internal::mlkem768_provider_available_by_id(MlKem768ProviderId::native))) {
         return 1;
@@ -119,7 +118,6 @@ int main() {
         }
     }
 
-    // Stub provider by-id: unavailable and failing, with output wipe discipline.
     if (!expect_true("stub unavailable",
                      !internal::mlkem768_provider_available_by_id(MlKem768ProviderId::stub))) {
         return 1;
@@ -180,9 +178,8 @@ int main() {
         }
     }
 
-    // DNA provider by-id: keygen-only slice.
-    if (!expect_true("dna unavailable until full provider exists",
-                     !internal::mlkem768_provider_available_by_id(MlKem768ProviderId::dna))) {
+    if (!expect_true("dna available",
+                     internal::mlkem768_provider_available_by_id(MlKem768ProviderId::dna))) {
         return 1;
     }
 
@@ -192,9 +189,8 @@ int main() {
         return 1;
     }
 
+    MlKem768Keypair dna_kp;
     {
-        MlKem768Keypair dna_kp;
-
         const MlKem768Status st =
             internal::mlkem768_provider_keygen_by_id(MlKem768ProviderId::dna, &dna_kp);
         if (!expect_status("dna keygen", st, MlKem768Status::ok)) {
@@ -210,38 +206,67 @@ int main() {
         }
     }
 
+    MlKem768EncapResult dna_enc;
     {
-        MlKem768EncapResult dna_enc;
-        dna_enc.ciphertext.assign(7, 0xC3);
-        dna_enc.shared_secret.assign(7, 0xD4);
-
         const MlKem768Status st = internal::mlkem768_provider_encapsulate_by_id(
-            MlKem768ProviderId::dna, kp.public_key, &dna_enc);
-        if (!expect_status("dna encapsulate", st, MlKem768Status::provider_failed)) {
+            MlKem768ProviderId::dna, dna_kp.public_key, &dna_enc);
+        if (!expect_status("dna encapsulate", st, MlKem768Status::ok)) {
             return 1;
         }
-        if (!expect_true("dna encaps clears ct", dna_enc.ciphertext.empty())) {
+        if (!expect_true("dna encaps ct size",
+                         dna_enc.ciphertext.size() == kMlKem768CiphertextBytes)) {
             return 1;
         }
-        if (!expect_true("dna encaps clears ss", dna_enc.shared_secret.empty())) {
+        if (!expect_true("dna encaps ss size",
+                         dna_enc.shared_secret.size() == kMlKem768SharedSecretBytes)) {
             return 1;
         }
     }
 
     {
-        std::vector<std::uint8_t> dna_ss(9, 0xF5);
-
+        std::vector<std::uint8_t> dna_ss;
         const MlKem768Status st = internal::mlkem768_provider_decapsulate_by_id(
-            MlKem768ProviderId::dna, kp.secret_key, enc.ciphertext, &dna_ss);
-        if (!expect_status("dna decapsulate", st, MlKem768Status::provider_failed)) {
+            MlKem768ProviderId::dna, dna_kp.secret_key, dna_enc.ciphertext, &dna_ss);
+        if (!expect_status("dna decapsulate", st, MlKem768Status::ok)) {
             return 1;
         }
-        if (!expect_true("dna decaps clears ss", dna_ss.empty())) {
+        if (!expect_true("dna decaps ss size",
+                         dna_ss.size() == kMlKem768SharedSecretBytes)) {
+            return 1;
+        }
+        if (!expect_true("dna enc/dec match", dna_ss == dna_enc.shared_secret)) {
             return 1;
         }
     }
 
-    // Null-output consistency checks on stub path.
+    {
+        std::vector<std::uint8_t> bad_ss(5, 0x11);
+        std::vector<std::uint8_t> bad_sk = dna_kp.secret_key;
+        bad_sk.pop_back();
+        const MlKem768Status st = internal::mlkem768_provider_decapsulate_by_id(
+            MlKem768ProviderId::dna, bad_sk, dna_enc.ciphertext, &bad_ss);
+        if (!expect_status("dna bad sk len", st, MlKem768Status::bad_secret_key_len)) {
+            return 1;
+        }
+        if (!expect_true("dna bad sk clears ss", bad_ss.empty())) {
+            return 1;
+        }
+    }
+
+    {
+        std::vector<std::uint8_t> bad_ss(5, 0x22);
+        std::vector<std::uint8_t> bad_ct = dna_enc.ciphertext;
+        bad_ct.pop_back();
+        const MlKem768Status st = internal::mlkem768_provider_decapsulate_by_id(
+            MlKem768ProviderId::dna, dna_kp.secret_key, bad_ct, &bad_ss);
+        if (!expect_status("dna bad ct len", st, MlKem768Status::bad_ciphertext_len)) {
+            return 1;
+        }
+        if (!expect_true("dna bad ct clears ss", bad_ss.empty())) {
+            return 1;
+        }
+    }
+
     {
         const MlKem768Status st =
             internal::mlkem768_provider_keygen_by_id(MlKem768ProviderId::stub, nullptr);
@@ -264,7 +289,6 @@ int main() {
         }
     }
 
-    // Null-output consistency checks on dna path.
     {
         const MlKem768Status st =
             internal::mlkem768_provider_keygen_by_id(MlKem768ProviderId::dna, nullptr);
@@ -274,14 +298,14 @@ int main() {
     }
     {
         const MlKem768Status st = internal::mlkem768_provider_encapsulate_by_id(
-            MlKem768ProviderId::dna, kp.public_key, nullptr);
+            MlKem768ProviderId::dna, dna_kp.public_key, nullptr);
         if (!expect_status("dna encapsulate nullptr", st, MlKem768Status::output_null)) {
             return 1;
         }
     }
     {
         const MlKem768Status st = internal::mlkem768_provider_decapsulate_by_id(
-            MlKem768ProviderId::dna, kp.secret_key, enc.ciphertext, nullptr);
+            MlKem768ProviderId::dna, dna_kp.secret_key, dna_enc.ciphertext, nullptr);
         if (!expect_status("dna decapsulate nullptr", st, MlKem768Status::output_null)) {
             return 1;
         }
