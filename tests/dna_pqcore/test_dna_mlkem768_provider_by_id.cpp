@@ -180,8 +180,8 @@ int main() {
         }
     }
 
-    // DNA provider by-id: unavailable and failing, with output wipe discipline.
-    if (!expect_true("dna unavailable",
+    // DNA provider by-id: keygen-only slice.
+    if (!expect_true("dna unavailable until full provider exists",
                      !internal::mlkem768_provider_available_by_id(MlKem768ProviderId::dna))) {
         return 1;
     }
@@ -194,18 +194,18 @@ int main() {
 
     {
         MlKem768Keypair dna_kp;
-        dna_kp.public_key.assign(7, 0xA1);
-        dna_kp.secret_key.assign(7, 0xB2);
 
         const MlKem768Status st =
             internal::mlkem768_provider_keygen_by_id(MlKem768ProviderId::dna, &dna_kp);
-        if (!expect_status("dna keygen", st, MlKem768Status::provider_failed)) {
+        if (!expect_status("dna keygen", st, MlKem768Status::ok)) {
             return 1;
         }
-        if (!expect_true("dna keygen clears pk", dna_kp.public_key.empty())) {
+        if (!expect_true("dna keygen pk size",
+                         dna_kp.public_key.size() == kMlKem768PublicKeyBytes)) {
             return 1;
         }
-        if (!expect_true("dna keygen clears sk", dna_kp.secret_key.empty())) {
+        if (!expect_true("dna keygen sk size",
+                         dna_kp.secret_key.size() == kMlKem768SecretKeyBytes)) {
             return 1;
         }
     }

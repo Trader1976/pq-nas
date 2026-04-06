@@ -102,60 +102,6 @@ target_compile_definitions(dnanexus_mlkem_native_obj PRIVATE
 )
 
 # -----------------------------------------------------------------------------
-# Backend wrapper provider-by-id test
-# -----------------------------------------------------------------------------
-add_executable(test_dna_mlkem768_provider_by_id
-        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_provider_by_id.cpp"
-)
-
-target_link_libraries(test_dna_mlkem768_provider_by_id PRIVATE
-        dna_pqcore_mlkem
-)
-
-mlkem_lab_set_bin_output(test_dna_mlkem768_provider_by_id)
-mlkem_lab_add_run_target(test_dna_mlkem768_provider_by_id)
-
-# -----------------------------------------------------------------------------
-# Experimental DNA PQ core backend wrapper
-# -----------------------------------------------------------------------------
-add_library(dna_pqcore_mlkem STATIC
-        "${REPO_ROOT}/core/dna_pqcore/dna_mlkem768_backend.cpp"
-        "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_native.cpp"
-        "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_stub.cpp"
-        "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_dna.cpp"
-        "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_select.cpp"
-        "${REPO_ROOT}/core/dna_pqcore/dna_mlkem768_backend.h"
-        $<TARGET_OBJECTS:dnanexus_mlkem_native_obj>
-)
-
-target_include_directories(dna_pqcore_mlkem PUBLIC
-        "${REPO_ROOT}/core/dna_pqcore"
-)
-
-target_include_directories(dna_pqcore_mlkem PRIVATE
-        "${REPO_ROOT}/server/third_party/mlkem-native"
-)
-
-target_link_libraries(dna_pqcore_mlkem PRIVATE
-        OpenSSL::Crypto
-)
-
-# -----------------------------------------------------------------------------
-# Backend wrapper provider-identity test
-# -----------------------------------------------------------------------------
-add_executable(test_dna_mlkem768_provider_identity
-        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_provider_identity.cpp"
-)
-
-target_link_libraries(test_dna_mlkem768_provider_identity PRIVATE
-        dna_pqcore_mlkem
-)
-
-mlkem_lab_set_bin_output(test_dna_mlkem768_provider_identity)
-mlkem_lab_add_run_target(test_dna_mlkem768_provider_identity)
-
-
-# -----------------------------------------------------------------------------
 # Learn-track source bundles
 # -----------------------------------------------------------------------------
 set(MLK_LEARN_FIELD_SRCS
@@ -269,6 +215,65 @@ set(MLK_LEARN_BACKEND_PARITY_SRCS
 )
 
 # -----------------------------------------------------------------------------
+# Frozen learn-track KEM library (shared internal use)
+# -----------------------------------------------------------------------------
+add_library(dna_pqcore_learn_kem STATIC
+        ${MLK_LEARN_KEM_SRCS}
+)
+
+target_include_directories(dna_pqcore_learn_kem PUBLIC
+        "${REPO_ROOT}/core/dna_pqcore_learn"
+)
+
+target_link_libraries(dna_pqcore_learn_kem PRIVATE
+        OpenSSL::Crypto
+)
+
+# -----------------------------------------------------------------------------
+# Frozen learn-track backend-oracle adapter library
+# -----------------------------------------------------------------------------
+add_library(dna_pqcore_learn_backend_oracle STATIC
+        "${REPO_ROOT}/core/dna_pqcore_learn/dna_mlkem_backend_oracle.cpp"
+)
+
+target_include_directories(dna_pqcore_learn_backend_oracle PUBLIC
+        "${REPO_ROOT}/core/dna_pqcore_learn"
+        "${REPO_ROOT}/core/dna_pqcore"
+)
+
+target_link_libraries(dna_pqcore_learn_backend_oracle PUBLIC
+        dna_pqcore_learn_kem
+        dna_pqcore_mlkem
+)
+
+# -----------------------------------------------------------------------------
+# Experimental DNA PQ core backend wrapper
+# -----------------------------------------------------------------------------
+add_library(dna_pqcore_mlkem STATIC
+        "${REPO_ROOT}/core/dna_pqcore/dna_mlkem768_backend.cpp"
+        "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_native.cpp"
+        "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_stub.cpp"
+        "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_dna.cpp"
+        "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_select.cpp"
+        "${REPO_ROOT}/core/dna_pqcore/dna_mlkem768_backend.h"
+        $<TARGET_OBJECTS:dnanexus_mlkem_native_obj>
+)
+
+target_include_directories(dna_pqcore_mlkem PUBLIC
+        "${REPO_ROOT}/core/dna_pqcore"
+)
+
+target_include_directories(dna_pqcore_mlkem PRIVATE
+        "${REPO_ROOT}/server/third_party/mlkem-native"
+        "${REPO_ROOT}/core/dna_pqcore_learn"
+)
+
+target_link_libraries(dna_pqcore_mlkem PRIVATE
+        OpenSSL::Crypto
+        dna_pqcore_learn_kem
+)
+
+# -----------------------------------------------------------------------------
 # Backend wrapper smoke test
 # -----------------------------------------------------------------------------
 add_executable(test_dna_mlkem768_backend
@@ -325,6 +330,48 @@ mlkem_lab_set_bin_output(test_dna_mlkem768_compat)
 mlkem_lab_add_run_target(test_dna_mlkem768_compat)
 
 # -----------------------------------------------------------------------------
+# Backend wrapper provider-identity test
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_provider_identity
+        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_provider_identity.cpp"
+)
+
+target_link_libraries(test_dna_mlkem768_provider_identity PRIVATE
+        dna_pqcore_mlkem
+)
+
+mlkem_lab_set_bin_output(test_dna_mlkem768_provider_identity)
+mlkem_lab_add_run_target(test_dna_mlkem768_provider_identity)
+
+# -----------------------------------------------------------------------------
+# Backend wrapper provider-by-id test
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_provider_by_id
+        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_provider_by_id.cpp"
+)
+
+target_link_libraries(test_dna_mlkem768_provider_by_id PRIVATE
+        dna_pqcore_mlkem
+)
+
+mlkem_lab_set_bin_output(test_dna_mlkem768_provider_by_id)
+mlkem_lab_add_run_target(test_dna_mlkem768_provider_by_id)
+
+# -----------------------------------------------------------------------------
+# DNA provider keygen interop test
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_dna_keygen_interop
+        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_dna_keygen_interop.cpp"
+)
+
+target_link_libraries(test_dna_mlkem768_dna_keygen_interop PRIVATE
+        dna_pqcore_mlkem
+)
+
+mlkem_lab_set_bin_output(test_dna_mlkem768_dna_keygen_interop)
+mlkem_lab_add_run_target(test_dna_mlkem768_dna_keygen_interop)
+
+# -----------------------------------------------------------------------------
 # High-value learn-track tests
 # -----------------------------------------------------------------------------
 mlkem_lab_add_test(test_mlkem_message
@@ -364,25 +411,25 @@ mlkem_lab_add_test(test_mlkem_kem_random
 mlkem_lab_add_test(test_mlkem_kem_vs_backend
         OPENSSL
         ORACLE
+        LIBS dna_pqcore_learn_backend_oracle
         SRCS
         "${REPO_ROOT}/tests/dna_pqcore_learn/test_mlkem_kem_vs_backend.cpp"
-        ${MLK_LEARN_BACKEND_PARITY_SRCS}
 )
 
 mlkem_lab_add_test(test_mlkem_kem_diff_many
         OPENSSL
         ORACLE
+        LIBS dna_pqcore_learn_backend_oracle
         SRCS
         "${REPO_ROOT}/tests/dna_pqcore_learn/test_mlkem_kem_diff_many.cpp"
-        ${MLK_LEARN_BACKEND_PARITY_SRCS}
 )
 
 mlkem_lab_add_test(test_mlkem_kem_diff_fuzz
         OPENSSL
         ORACLE
+        LIBS dna_pqcore_learn_backend_oracle
         SRCS
         "${REPO_ROOT}/tests/dna_pqcore_learn/test_mlkem_kem_diff_fuzz.cpp"
-        ${MLK_LEARN_BACKEND_PARITY_SRCS}
 )
 
 # -----------------------------------------------------------------------------
@@ -395,6 +442,7 @@ add_custom_target(run_mlkem_lab_freeze_tests
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_compat"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_provider_identity"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_provider_by_id"
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_dna_keygen_interop"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_message"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_indcpa_packed"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_cpapke"
@@ -411,6 +459,7 @@ add_custom_target(run_mlkem_lab_freeze_tests
         test_dna_mlkem768_compat
         test_dna_mlkem768_provider_identity
         test_dna_mlkem768_provider_by_id
+        test_dna_mlkem768_dna_keygen_interop
         test_mlkem_message
         test_mlkem_indcpa_packed
         test_mlkem_cpapke
