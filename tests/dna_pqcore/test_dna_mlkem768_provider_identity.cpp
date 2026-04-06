@@ -38,6 +38,7 @@ int main() {
 
     const std::string internal_name = internal::mlkem768_provider_name();
     const std::string stub_name = internal::mlkem768_stub_provider_name();
+    const std::string dna_name = internal::mlkem768_dna_provider_name();
     const std::string selected_name = internal::mlkem768_selected_provider_name();
     const std::string public_name = mlkem768_backend_name();
 
@@ -48,6 +49,11 @@ int main() {
 
     if (!expect_true("stub provider name is stub-unavailable",
                      stub_name == "stub-unavailable")) {
+        return 1;
+    }
+
+    if (!expect_true("dna provider name is dna-internal-wip",
+                     dna_name == "dna-internal-wip")) {
         return 1;
     }
 
@@ -71,8 +77,20 @@ int main() {
         return 1;
     }
 
-    if (!expect_true("native and stub names differ",
-                     internal_name != stub_name)) {
+    if (!expect_true("dna provider unavailable",
+                     !internal::mlkem768_dna_provider_available())) {
+        return 1;
+    }
+
+    if (!expect_true("native and stub names differ", internal_name != stub_name)) {
+        return 1;
+    }
+
+    if (!expect_true("native and dna names differ", internal_name != dna_name)) {
+        return 1;
+    }
+
+    if (!expect_true("stub and dna names differ", stub_name != dna_name)) {
         return 1;
     }
 

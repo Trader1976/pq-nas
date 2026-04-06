@@ -102,12 +102,27 @@ target_compile_definitions(dnanexus_mlkem_native_obj PRIVATE
 )
 
 # -----------------------------------------------------------------------------
+# Backend wrapper provider-by-id test
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_provider_by_id
+        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_provider_by_id.cpp"
+)
+
+target_link_libraries(test_dna_mlkem768_provider_by_id PRIVATE
+        dna_pqcore_mlkem
+)
+
+mlkem_lab_set_bin_output(test_dna_mlkem768_provider_by_id)
+mlkem_lab_add_run_target(test_dna_mlkem768_provider_by_id)
+
+# -----------------------------------------------------------------------------
 # Experimental DNA PQ core backend wrapper
 # -----------------------------------------------------------------------------
 add_library(dna_pqcore_mlkem STATIC
         "${REPO_ROOT}/core/dna_pqcore/dna_mlkem768_backend.cpp"
         "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_native.cpp"
         "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_stub.cpp"
+        "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_dna.cpp"
         "${REPO_ROOT}/core/dna_pqcore/internal/dna_mlkem768_provider_select.cpp"
         "${REPO_ROOT}/core/dna_pqcore/dna_mlkem768_backend.h"
         $<TARGET_OBJECTS:dnanexus_mlkem_native_obj>
@@ -379,6 +394,7 @@ add_custom_target(run_mlkem_lab_freeze_tests
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_secret_lifecycle"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_compat"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_provider_identity"
+        COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_provider_by_id"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_message"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_indcpa_packed"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_mlkem_cpapke"
@@ -394,6 +410,7 @@ add_custom_target(run_mlkem_lab_freeze_tests
         test_dna_mlkem768_secret_lifecycle
         test_dna_mlkem768_compat
         test_dna_mlkem768_provider_identity
+        test_dna_mlkem768_provider_by_id
         test_mlkem_message
         test_mlkem_indcpa_packed
         test_mlkem_cpapke
