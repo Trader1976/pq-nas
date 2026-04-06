@@ -38,20 +38,20 @@ int main() {
         return 1;
     }
 
-    if (!expect_true("selected provider is dna",
+    if (!expect_true("selected provider is native",
                      dnanexus::pq::internal::mlkem768_selected_provider_id() ==
-                         MlKem768ProviderId::dna)) {
+                         MlKem768ProviderId::native)) {
         return 1;
     }
 
-    if (!expect_true("backend name reflects dna selection",
-                     mlkem768_backend_name() == "dna-internal-wip")) {
+    if (!expect_true("backend name reflects native selection",
+                     mlkem768_backend_name() == "mlkem-native-c")) {
         return 1;
     }
 
     MlKem768Keypair kp;
     const MlKem768Status st_keygen = mlkem768_keygen_status(&kp);
-    if (!expect_status("public keygen via dna-selected lane",
+    if (!expect_status("public keygen via native-selected lane",
                        st_keygen, MlKem768Status::ok)) {
         return 1;
     }
@@ -68,7 +68,7 @@ int main() {
 
     MlKem768EncapResult enc;
     const MlKem768Status st_enc = mlkem768_encapsulate_status(kp.public_key, &enc);
-    if (!expect_status("public encaps via dna-selected lane",
+    if (!expect_status("public encaps via native-selected lane",
                        st_enc, MlKem768Status::ok)) {
         return 1;
     }
@@ -86,7 +86,7 @@ int main() {
     std::vector<std::uint8_t> dec_ss;
     const MlKem768Status st_dec =
         mlkem768_decapsulate_status(kp.secret_key, enc.ciphertext, &dec_ss);
-    if (!expect_status("public decaps via dna-selected lane",
+    if (!expect_status("public decaps via native-selected lane",
                        st_dec, MlKem768Status::ok)) {
         return 1;
     }
@@ -101,7 +101,7 @@ int main() {
         return 1;
     }
 
-    std::cout << "[dna-pqcore] freeze prefer dna ok"
+    std::cout << "[dna-pqcore] freeze prefer native ok"
               << " provider=" << mlkem768_backend_name()
               << " pk=" << kMlKem768PublicKeyBytes
               << " sk=" << kMlKem768SecretKeyBytes

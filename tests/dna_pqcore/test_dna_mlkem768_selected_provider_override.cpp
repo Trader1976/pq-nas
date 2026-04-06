@@ -34,20 +34,20 @@ bool expect_status(const char* label, MlKem768Status got, MlKem768Status want) {
 int main() {
     using dnanexus::pq::internal::MlKem768ProviderId;
 
-    // Section A: default state.
+    // Section A: default state is now DNA.
     if (!expect_true("default no override",
                      !dnanexus::pq::internal::mlkem768_has_selected_provider_override())) {
         return 1;
     }
 
-    if (!expect_true("default selected provider native",
+    if (!expect_true("default selected provider dna",
                      dnanexus::pq::internal::mlkem768_selected_provider_id() ==
-                         MlKem768ProviderId::native)) {
+                         MlKem768ProviderId::dna)) {
         return 1;
     }
 
-    if (!expect_true("default backend name native",
-                     mlkem768_backend_name() == "mlkem-native-c")) {
+    if (!expect_true("default backend name dna",
+                     mlkem768_backend_name() == "dna-internal-wip")) {
         return 1;
     }
 
@@ -63,16 +63,16 @@ int main() {
         return 1;
     }
 
-    if (!expect_true("still selected native after rejecting stub",
+    if (!expect_true("still selected dna after rejecting stub",
                      dnanexus::pq::internal::mlkem768_selected_provider_id() ==
-                         MlKem768ProviderId::native)) {
+                         MlKem768ProviderId::dna)) {
         return 1;
     }
 
-    // Section C: force DNA and exercise the public selected-provider path.
-    if (!expect_true("set dna override",
+    // Section C: force native and exercise the public selected-provider path.
+    if (!expect_true("set native override",
                      dnanexus::pq::internal::mlkem768_set_selected_provider_override(
-                         MlKem768ProviderId::dna))) {
+                         MlKem768ProviderId::native))) {
         return 1;
     }
 
@@ -81,37 +81,37 @@ int main() {
         return 1;
     }
 
-    if (!expect_true("selected provider now dna",
+    if (!expect_true("selected provider now native",
                      dnanexus::pq::internal::mlkem768_selected_provider_id() ==
-                         MlKem768ProviderId::dna)) {
+                         MlKem768ProviderId::native)) {
         return 1;
     }
 
-    if (!expect_true("selected provider name dna",
+    if (!expect_true("selected provider name native",
                      dnanexus::pq::internal::mlkem768_selected_provider_name() ==
-                         "dna-internal-wip")) {
+                         "mlkem-native-c")) {
         return 1;
     }
 
-    if (!expect_true("public backend name reflects dna override",
-                     mlkem768_backend_name() == "dna-internal-wip")) {
+    if (!expect_true("public backend name reflects native override",
+                     mlkem768_backend_name() == "mlkem-native-c")) {
         return 1;
     }
 
     MlKem768Keypair kp;
     const MlKem768Status st_keygen = mlkem768_keygen_status(&kp);
-    if (!expect_status("public keygen via selected dna", st_keygen, MlKem768Status::ok)) {
+    if (!expect_status("public keygen via selected native", st_keygen, MlKem768Status::ok)) {
         dnanexus::pq::internal::mlkem768_clear_selected_provider_override();
         return 1;
     }
 
-    if (!expect_true("public dna keygen pk size",
+    if (!expect_true("public native keygen pk size",
                      kp.public_key.size() == kMlKem768PublicKeyBytes)) {
         dnanexus::pq::internal::mlkem768_clear_selected_provider_override();
         return 1;
     }
 
-    if (!expect_true("public dna keygen sk size",
+    if (!expect_true("public native keygen sk size",
                      kp.secret_key.size() == kMlKem768SecretKeyBytes)) {
         dnanexus::pq::internal::mlkem768_clear_selected_provider_override();
         return 1;
@@ -119,18 +119,18 @@ int main() {
 
     MlKem768EncapResult enc;
     const MlKem768Status st_enc = mlkem768_encapsulate_status(kp.public_key, &enc);
-    if (!expect_status("public encaps via selected dna", st_enc, MlKem768Status::ok)) {
+    if (!expect_status("public encaps via selected native", st_enc, MlKem768Status::ok)) {
         dnanexus::pq::internal::mlkem768_clear_selected_provider_override();
         return 1;
     }
 
-    if (!expect_true("public dna encaps ct size",
+    if (!expect_true("public native encaps ct size",
                      enc.ciphertext.size() == kMlKem768CiphertextBytes)) {
         dnanexus::pq::internal::mlkem768_clear_selected_provider_override();
         return 1;
     }
 
-    if (!expect_true("public dna encaps ss size",
+    if (!expect_true("public native encaps ss size",
                      enc.shared_secret.size() == kMlKem768SharedSecretBytes)) {
         dnanexus::pq::internal::mlkem768_clear_selected_provider_override();
         return 1;
@@ -139,18 +139,18 @@ int main() {
     std::vector<std::uint8_t> dec_ss;
     const MlKem768Status st_dec = mlkem768_decapsulate_status(
         kp.secret_key, enc.ciphertext, &dec_ss);
-    if (!expect_status("public decaps via selected dna", st_dec, MlKem768Status::ok)) {
+    if (!expect_status("public decaps via selected native", st_dec, MlKem768Status::ok)) {
         dnanexus::pq::internal::mlkem768_clear_selected_provider_override();
         return 1;
     }
 
-    if (!expect_true("public dna decaps ss size",
+    if (!expect_true("public native decaps ss size",
                      dec_ss.size() == kMlKem768SharedSecretBytes)) {
         dnanexus::pq::internal::mlkem768_clear_selected_provider_override();
         return 1;
     }
 
-    if (!expect_true("public dna enc/dec match", dec_ss == enc.shared_secret)) {
+    if (!expect_true("public native enc/dec match", dec_ss == enc.shared_secret)) {
         dnanexus::pq::internal::mlkem768_clear_selected_provider_override();
         return 1;
     }
@@ -163,21 +163,21 @@ int main() {
         return 1;
     }
 
-    if (!expect_true("selected provider returned to native",
+    if (!expect_true("selected provider returned to dna",
                      dnanexus::pq::internal::mlkem768_selected_provider_id() ==
-                         MlKem768ProviderId::native)) {
+                         MlKem768ProviderId::dna)) {
         return 1;
     }
 
-    if (!expect_true("public backend name returned to native",
-                     mlkem768_backend_name() == "mlkem-native-c")) {
+    if (!expect_true("public backend name returned to dna",
+                     mlkem768_backend_name() == "dna-internal-wip")) {
         return 1;
     }
 
     std::cout << "[dna-pqcore] selected provider override ok"
-              << " default=native"
-              << " override=dna"
-              << " restored=native"
+              << " default=dna"
+              << " override=native"
+              << " restored=dna"
               << "\n";
 
     return 0;

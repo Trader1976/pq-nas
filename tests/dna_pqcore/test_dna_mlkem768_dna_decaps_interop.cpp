@@ -32,11 +32,11 @@ bool expect_status(const char* label, MlKem768Status got, MlKem768Status want) {
 int main() {
     using internal::MlKem768ProviderId;
 
-    if (!expect_true("selected provider remains native",
+    if (!expect_true("selected provider defaults to dna",
                      internal::mlkem768_selected_provider_id() ==
-                         MlKem768ProviderId::native)) {
+                         MlKem768ProviderId::dna)) {
         return 1;
-    }
+                         }
 
     constexpr int kIters = 8;
 

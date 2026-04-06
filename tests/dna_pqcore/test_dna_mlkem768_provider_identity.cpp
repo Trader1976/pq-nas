@@ -29,15 +29,15 @@ int main() {
         return 1;
     }
 
-    if (!expect_true("internal active provider is native",
+    if (!expect_true("internal active provider is dna",
                      internal::mlkem768_active_provider_id() ==
-                         internal::MlKem768ProviderId::native)) {
+                         internal::MlKem768ProviderId::dna)) {
         return 1;
     }
 
-    if (!expect_true("selected provider is native",
+    if (!expect_true("selected provider is dna",
                      internal::mlkem768_selected_provider_id() ==
-                         internal::MlKem768ProviderId::native)) {
+                         internal::MlKem768ProviderId::dna)) {
         return 1;
     }
 
@@ -62,8 +62,8 @@ int main() {
         return 1;
     }
 
-    if (!expect_true("selected provider name is mlkem-native-c",
-                     selected_name == "mlkem-native-c")) {
+    if (!expect_true("selected provider name is dna-internal-wip",
+                     selected_name == "dna-internal-wip")) {
         return 1;
     }
 
@@ -100,7 +100,7 @@ int main() {
     }
 
     std::cout << "[dna-pqcore] provider identity ok"
-              << " id=native"
+              << " id=dna"
               << " name=" << public_name
               << "\n";
 

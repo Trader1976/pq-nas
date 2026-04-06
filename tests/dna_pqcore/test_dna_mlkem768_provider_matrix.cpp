@@ -72,11 +72,11 @@ std::string combo_label(const ProviderDesc& kg,
 int main() {
     using dnanexus::pq::internal::MlKem768ProviderId;
 
-    if (!expect_true("selected provider remains native",
+    if (!expect_true("selected provider defaults to dna",
                      dnanexus::pq::internal::mlkem768_selected_provider_id() ==
-                         MlKem768ProviderId::native)) {
+                         MlKem768ProviderId::dna)) {
         return 1;
-    }
+                         }
 
     const ProviderDesc providers[] = {
         {MlKem768ProviderId::native, "native"},

@@ -334,6 +334,37 @@ add_custom_target(run_mlkem_lab_freeze_tests_dna_selected
 )
 
 # -----------------------------------------------------------------------------
+# Native-selected freeze sanity test
+# -----------------------------------------------------------------------------
+add_executable(test_dna_mlkem768_freeze_prefer_native
+        "${REPO_ROOT}/tests/dna_pqcore/test_dna_mlkem768_freeze_prefer_native.cpp"
+)
+
+target_link_libraries(test_dna_mlkem768_freeze_prefer_native PRIVATE
+        dna_pqcore_mlkem
+)
+
+mlkem_lab_set_bin_output(test_dna_mlkem768_freeze_prefer_native)
+
+# -----------------------------------------------------------------------------
+# Convenience target: public-path freeze lane with selected provider forced to native
+# -----------------------------------------------------------------------------
+add_custom_target(run_mlkem_lab_freeze_tests_native_selected
+        COMMAND "${CMAKE_COMMAND}" -E env DNA_MLKEM_SELECTED_PROVIDER=native "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_freeze_prefer_native"
+        COMMAND "${CMAKE_COMMAND}" -E env DNA_MLKEM_SELECTED_PROVIDER=native "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_backend"
+        COMMAND "${CMAKE_COMMAND}" -E env DNA_MLKEM_SELECTED_PROVIDER=native "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_boundary"
+        COMMAND "${CMAKE_COMMAND}" -E env DNA_MLKEM_SELECTED_PROVIDER=native "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_secret_lifecycle"
+        COMMAND "${CMAKE_COMMAND}" -E env DNA_MLKEM_SELECTED_PROVIDER=native "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_compat"
+        WORKING_DIRECTORY "${REPO_ROOT}"
+        DEPENDS
+        test_dna_mlkem768_freeze_prefer_native
+        test_dna_mlkem768_backend
+        test_dna_mlkem768_boundary
+        test_dna_mlkem768_secret_lifecycle
+        test_dna_mlkem768_compat
+)
+
+# -----------------------------------------------------------------------------
 # Experimental DNA PQ core backend wrapper
 # -----------------------------------------------------------------------------
 add_library(dna_pqcore_mlkem STATIC
