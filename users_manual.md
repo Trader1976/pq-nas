@@ -1,860 +1,859 @@
-## ![](C:\Users\a200889\AppData\Roaming\marktext\images\2026-02-28-02-26-26-image.png)
+# PQ-NAS Users Manual
 
-## PQ-NAS Users Manual
+**PQ-NAS** is a modular, quantum-resistant Network Attached Storage (NAS) orchestration layer designed for Linux systems. It provides multi-user support, multi-storage-pool management, application-based extensibility, and a straightforward installation process.
 
-**PQ-NAS** is a modular, quantum-resistant Network Attached Storage (NAS) orchestration layer designed for Linux systems. It provides multi-user support, multi-storage-pool management, and an easy-to-use installation process. PQ-NAS is designed to work seamlessly with Nginx and Cloudflare-based deployments.
+Unlike many traditional NAS solutions, PQ-NAS does not replace or take over the host operating system. Instead, it runs on top of Linux, allowing the same host to continue running other applications and containers in parallel.
 
-Unlike many traditional NAS solutions, PQ-NAS does not replace or take over the host operating system. Instead, it runs independently on top of Linux, allowing users to continue running other applications and containers in parallel.
+PQ-NAS is designed to work together with the **CPUNK DNA-Messenger** application, where user identity (fingerprint) is derived from post-quantum cryptographic keys.
 
-PQ-NAS is intended to be used together with the CPUNK DNA-Messenger application, where user identity (fingerprint) is derived from post-quantum cryptographic keys.
+PQ-NAS currently has two important security contexts:
 
-## 1. System requirements
+1. **Authentication and session access**
+2. **Post-quantum file sharing**
 
-    For the best user experience, it is recommended to install PQ-NAS on a **Btrfs** file     system. This enables full utilization of advanced features such as snapshots and RAID     functionality.
+Authentication remains device-mediated through DNA-Messenger.  
+PQ file sharing uses local browser-side decryption for protected share opening.
 
-    PQ-NAS can also be installed on an **Ext4** file system and even operated with a single     SSD or HDD. However, this configuration comes with certain limitations, particularly     regarding snapshot support and advanced storage features.
+---
 
-###### Recommended Storage Configuration
+## 1. System requirements
 
-- One dedicated **system drive** where the operating system and PQ-NAS are installed (Ext4 or Btrfs).
+For the best user experience, it is recommended to install PQ-NAS on a **Btrfs** filesystem. This enables full use of advanced features such as:
 
-- One or more **separate SSDs/HDDs** dedicated to user data storage.
+- snapshots
+- RAID pool management
+- volume restore workflows
 
-- For RAID data mirroring, at least **two data SSDs/HDDs** are required.
+PQ-NAS can also be installed on an **Ext4** filesystem and even operated with a single SSD or HDD. However, this configuration comes with limitations, especially regarding snapshots and advanced storage features.
 
-    Separating the system drive from the data drives improves reliability, maintainability,     and upgrade flexibility.
+### Recommended storage configuration
 
-###### Memory Requirements
+- One dedicated **system drive** where the operating system and PQ-NAS are installed (Ext4 or Btrfs)
+- One or more **separate SSDs/HDDs** dedicated to user data storage
+- For RAID data mirroring, at least **two data SSDs/HDDs**
+
+Separating the system drive from the data drives improves:
+
+- reliability
+- maintainability
+- upgrade flexibility
+
+### Memory requirements
 
 - **Minimum:** 8 GB RAM
+- **Recommended:** 16 GB RAM for smoother operation, especially in multi-user or multi-pool environments
 
-- **Recommended:** 16 GB RAM for smoother operation, especially in multi-user or multi-pool environments.
+---
 
 ## 2. Installation
 
-    Download the Linux tarball package to your NAS server. Extracting the package will     create a `pqnas` directory containing all required files.
+Download the Linux tarball package to your NAS server. Extracting the package will create a `pqnas` directory containing all required files.
 
-    Navigate to the extracted directory and run: sudo ./install.sh
+Navigate to the extracted directory and run:
 
-    This command starts the installation procedure.
+```bash
+sudo ./install.sh
+```
 
-    After installation is complete and PQ-NAS is accessible in your web browser, a QR     code will be displayed on the screen.
+This command starts the installation procedure.
 
-    Using the QR scanner in the DNA-Messenger application, scan the QR code and     approve the authentication request. After successful verification, you will be     redirected to the main page of PQ-NAS.
+After installation is complete and PQ-NAS is accessible in your web browser, a QR code will be displayed.
 
-    Your cryptographic fingerprint will automatically be registered in the PQ-NAS user     registry.
+Using the QR scanner in the DNA-Messenger application, scan the QR code and approve the authentication request. After successful verification, you will be redirected to the main page of PQ-NAS.
 
-    If you are the first user to authenticate, you will automatically be granted     administrator privileges. Administrators have full permission to configure system     settings and manage users.
+Your cryptographic fingerprint will automatically be registered in the PQ-NAS user registry.
 
-###### 2.1 Initial Configuration
+If you are the first user to authenticate, you will automatically be granted administrator privileges. Administrators have full permission to configure system settings and manage users.
 
-    PQ-NAS is designed as a modular NAS orchestration framework. By default, a fresh     installation does not include any functional apps. To begin using the system, you     must install at least one application.
+---
 
-    At minimum, it is recommended to install the **File Manager** application. For a     complete user experience, the following applications are recommended:
+## 2.1 Initial configuration
+
+PQ-NAS is designed as a modular NAS orchestration framework. By default, a fresh installation does not include functional apps for everyday use. To begin using the system, you should install at least one application.
+
+At minimum, it is recommended to install:
 
 - **File Manager**
 
+For a more complete user experience, the following applications are recommended:
+
+- **File Manager**
 - **Share Manager**
-
 - **Storage Manager**
+- **Snapshot Manager** (when using Btrfs snapshots)
 
-    These applications provide essential file access, sharing capabilities, and storage     administration features.
+These applications provide essential file access, sharing, storage administration, and recovery features.
 
-###### File System Requirements
+### File system requirements
 
-    To fully utilize advanced features such as **snapshots** and **RAID**, your data drives     must use the **Btrfs** file system.
+To fully utilize advanced features such as **snapshots** and **RAID**, your data drives should use **Btrfs**.
 
-    PQ-NAS can also operate on systems using **Ext4**, but certain features will be limited.     A common and supported configuration is:
+PQ-NAS can also operate on systems using **Ext4**, but certain features will be limited.
 
-- The system drive (where the operating system and PQ-NAS are installed) using Ext4.
+A common and supported configuration is:
 
-- Separate data drives formatted with Btrfs to enable RAID and snapshot functionality.
-
-###### Storage Allocation
-
-    After installing the File Manager application, you may see the message:
-
->     “Storage not allocated yet”
-
-    This is expected behavior. Every user — including administrators — must have  
-    storage space explicitly allocated before accessing file services.
-
-    To allocate storage:
-
-1. Navigate to **Admin → User Profiles**.
-
-2. Open your user account entry.
-
-3. Click **Allocate**.
-
-4. Select the **storage pool** and specify the **quota** (in gigabytes).
-
-    After confirming the allocation, PQ-NAS will create the user’s personal data  
-    directory inside the selected storage pool and reserve the requested storage  
-    quota.
-
-    Please note:
-
-- For administrator accounts, the options **Enable**, **Disable**, **Revoke**, and **Delete** are disabled for the currently logged-in administrator.
-
-- An administrator cannot demote, disable, or delete their own account.
-
-- Storage allocation must be performed before the user can access file services.
+- The system drive (where the operating system and PQ-NAS are installed) uses Ext4
+- Separate data drives use Btrfs to enable RAID and snapshot functionality
 
 ---
 
-###### Storage Pools and Migration
+## 2.2 Storage allocation
 
-    PQ-NAS may contain multiple storage pools. Each user’s data resides in exactly  
-    one active pool at a time.
+After installing the File Manager application, you may see the message:
 
-    If storage hardware is added or reorganized, user data can be moved safely  
-    between pools.
+> “Storage not allocated yet”
 
-    To migrate a user’s storage:
+This is expected behavior. Every user — including administrators — must have storage space explicitly allocated before accessing file services.
 
-1. Navigate to **Admin → User Profiles**.
+To allocate storage:
 
-2. Open the desired user entry.
+1. Navigate to **Admin → User Profiles**
+2. Open your user account entry
+3. Click **Allocate**
+4. Select the **storage pool** and specify the **quota** in gigabytes
 
-3. Click **Migrate**.
+After confirming the allocation, PQ-NAS will create the user’s personal data directory inside the selected storage pool and reserve the requested quota.
 
-4. Select the destination storage pool.
+### Important notes
 
-    The migration runs as an asynchronous background job. PQ-NAS will:
-
-- Copy the user’s data to the destination pool.
-
-- Verify the copied data.
-
-- Switch the user’s storage mapping to the new pool.
-
-    During migration the system remains operational, and the process can be  
-    monitored through the status messages displayed in the interface.
+- For administrator accounts, the options **Enable**, **Disable**, **Revoke**, and **Delete** are disabled for the currently logged-in administrator
+- An administrator cannot demote, disable, or delete their own account
+- Storage allocation must be performed before the user can access file services
 
 ---
 
-###### Cleaning Up Old Storage Copies
+## 2.3 Storage pools and migration
 
-    After a successful migration, the original storage location may still contain  
-    a copy of the user’s data.
+PQ-NAS may contain multiple storage pools. Each user’s data resides in exactly one active pool at a time.
 
-    This copy is preserved temporarily as a safety measure.
+If storage hardware is added or reorganized, user data can be moved safely between pools.
 
-    Once the administrator has confirmed that the migration completed successfully,  
-    the obsolete copy can be removed.
+To migrate a user’s storage:
 
-    To remove the old storage copy:
+1. Navigate to **Admin → User Profiles**
+2. Open the desired user entry
+3. Click **Migrate**
+4. Select the destination storage pool
 
-1. Navigate to **Admin → User Profiles**.
+The migration runs as an asynchronous background job. PQ-NAS will:
 
-2. Open the user entry.
+- copy the user’s data to the destination pool
+- verify the copied data
+- switch the user’s storage mapping to the new pool
 
-3. Click **Cleanup old copy**.
-
-4. Confirm the storage pool containing the obsolete data.
-
-    PQ-NAS will verify that the user is actively mapped to the current storage pool  
-    before removing the old directory. This prevents accidental deletion of active data.
+During migration the system remains operational, and the process can be monitored through status messages displayed in the interface.
 
 ---
 
-###### Profile Settings
+## 2.4 Cleaning up old storage copies
 
-    From the same user profile screen, you may also:
+After a successful migration, the original storage location may still contain a copy of the user’s data.
 
-- Change your avatar image.
+This copy is preserved temporarily as a safety measure.
 
-- Update optional profile information (such as name, notes, and email).
+Once the administrator has confirmed that the migration completed successfully, the obsolete copy can be removed.
 
-- Review storage usage and quota information.
+To remove the old storage copy:
 
----
+1. Navigate to **Admin → User Profiles**
+2. Open the user entry
+3. Click **Cleanup old copy**
+4. Confirm the storage pool containing the obsolete data
 
-###### 2.2 User Approvals
-
-    When configuring PQ-NAS for a multi-user environment, additional users may  
-    access the system by opening PQ-NAS in their web browser and scanning the  
-    displayed QR code using the DNA-Messenger application.
-
-    After successful authentication, each user’s cryptographic fingerprint will  
-    appear in the **Admin → Approvals** page.
-
-    From this page, an administrator can review pending authentication requests  
-    and decide which users are granted access to the system.
+PQ-NAS will verify that the user is actively mapped to the current storage pool before removing the old directory. This prevents accidental deletion of active data.
 
 ---
 
-###### Granting Access
+## 2.5 Profile settings
 
-1. Open **Admin → Approvals**.
+From the same user profile screen, you may also:
 
-2. Approve the desired user.
+- change your avatar image
+- update optional profile information such as name, notes, and email
+- review storage usage and quota information
 
-3. Navigate to **Admin → User Profiles**.
+---
 
-4. Allocate storage space for the approved user.
+## 2.6 User approvals
 
-    Once storage has been allocated, the user can begin using PQ-NAS normally.
-###### 2.3. Applications
+When configuring PQ-NAS for a multi-user environment, additional users may access the system by opening PQ-NAS in their web browser and scanning the displayed QR code using DNA-Messenger.
 
-    PQ-NAS is a modular Network Attached Storage (NAS) system that supports     extensible functionality through installable applications. Administrators can install     and manage applications to customize the user experience.
+After successful authentication, each user’s cryptographic fingerprint will appear in the **Admin → Approvals** page.
 
-    To install an application:
+From this page, an administrator can review pending authentication requests and decide which users are granted access.
 
-1. Navigate to **Admin → Apps**.
+### Granting access
 
-2. Select **Install App from ZIP**.
+1. Open **Admin → Approvals**
+2. Approve the desired user
+3. Navigate to **Admin → User Profiles**
+4. Allocate storage space for the approved user
 
-3. Choose the application ZIP package from your local computer.
+Once storage has been allocated, the user can begin using PQ-NAS normally.
 
-4. Click **Install**.
+---
+
+## 2.7 Applications
+
+PQ-NAS is a modular NAS system that supports extensible functionality through installable applications. Administrators can install and manage applications to customize the user experience.
+
+To install an application:
+
+1. Navigate to **Admin → Apps**
+2. Select **Install App from ZIP**
+3. Choose the application ZIP package from your local computer
+4. Click **Install**
 
 After successful installation, the application will appear in the list of installed apps.
 
-###### Application Validation
+### Application validation
 
-    PQ-NAS enforces strict application validation. Only application packages that meet     the required structural and security criteria can be installed. If the ZIP package is     missing any mandatory files or does not conform to the required format, the     installation will be rejected.
+PQ-NAS enforces strict application validation. Only application packages that meet the required structural and security criteria can be installed.
 
-    This validation mechanism helps ensure system integrity and security.
+If the ZIP package is missing mandatory files or does not conform to the required format, installation will be rejected.
 
-###### Accessing Installed Applications
+This validation mechanism helps preserve system integrity and security.
 
-    Once successfully installed, the application will appear in the main screen’s left     navigation panel and can be accessed normally by authorized users.
+### Accessing installed applications
 
+Once successfully installed, the application will appear in the main screen’s left navigation panel and can be accessed by authorized users.
 
+---
+
+## 2.8 File sharing
+
+PQ-NAS supports both standard file sharing and post-quantum protected sharing, depending on the application flow and share type.
+
+### Standard shares
+
+Standard shares are suitable for simple browser-based download scenarios. The server generates and validates the share according to the configured rules.
+
+### Post-quantum shares
+
+PQ shares are intended for stronger recipient-bound protection.
+
+In the current PQ share model:
+
+- the file content encryption key is wrapped for the intended recipient
+- unwrap and payload decryption happen locally in the browser
+- the downloaded file is verified before final save
+
+This means PQ share opening has a different trust model from login authentication:
+
+- the browser is **not** trusted for authentication
+- the browser **is** the local decryption endpoint for PQ share opening
+
+### Practical implications
+
+For PQ share opening:
+
+- the server delivers encrypted payloads and share metadata
+- the browser unwraps the file key and decrypts the content locally
+- the plaintext file is then downloaded by the browser
+
+Because of this, browser compromise can affect **share confidentiality**, even though authentication still remains device-mediated and server-verified.
+
+### User guidance for PQ shares
+
+When opening a PQ share:
+
+- use a browser session you trust
+- prefer an up-to-date browser
+- avoid unnecessary browser extensions during sensitive share opening
+- if opening a highly sensitive share, use a clean browser session or private/incognito session
+
+---
 
 ## 3. Advanced settings
 
-![](C:\Users\a200889\AppData\Roaming\marktext\images\2026-02-28-23-37-23-image.png)
+## 3.1 Audit logging
 
-###### 3.1 Audit logging
+PQ-NAS records security-relevant activity in an audit log. The log is tamper-evident (hash chained) and designed for forensic review and compliance use.
 
-    PQ-NAS records security-relevant activity in an audit log. The log is tamper-evident     (hash chained) and designed for forensic review and compliance use.  Once written,     entries are never changed.
+Once written, entries are never changed.
 
-    Instead of editing old logs, PQ-NAS:
+Instead of editing old logs, PQ-NAS:
 
-- Rotates logs into archives
-- Keeps or deletes old archives according to retention rules
+- rotates logs into archives
+- keeps or deletes old archives according to retention rules
 
-###### 3.2  Audit Verbosity
+---
 
-    This controls how much information is written into the audit log going forward.
+## 3.2 Audit verbosity
 
-###### What the levels mean
+This controls how much information is written into the audit log going forward.
 
-- DEBUG — everything, including internal operations
-- INFO — normal system activity
-- ADMIN — configuration and administrative actions
-- SECURITY — only security-relevant events
+### What the levels mean
 
-###### What you see
+- **DEBUG** — everything, including internal operations
+- **INFO** — normal system activity
+- **ADMIN** — configuration and administrative actions
+- **SECURITY** — only security-relevant events
 
-- Persisted — the level that will survive restarts
-- Runtime — what is currently active inside the server
+### What you see
 
-###### Buttons
+- **Persisted** — the level that will survive restarts
+- **Runtime** — what is currently active inside the server
 
-    Save  
-    Stores the selected level and activates it immediately.
+### Buttons
 
-    Reload  
-    Reloads the values currently in use.
+**Save**  
+Stores the selected level and activates it immediately.
 
-###### 3.3  Audit Rotation (Manual)
+**Reload**  
+Reloads the values currently in use.
 
-    The Rotate now button immediately closes the current audit log and starts a new     one.
+---
 
-    Use this when:
+## 3.3 Audit rotation (manual)
 
-- Performing maintenance
-- Preparing for backups
-- Segmenting logs for investigation
-- Testing rotation policies
+The **Rotate now** button immediately closes the current audit log and starts a new one.
 
-    Rotation does not delete anything — it only archives the current file.
+Use this when:
 
-###### 3.4 Automatic Audit Rotation
+- performing maintenance
+- preparing for backups
+- segmenting logs for investigation
+- testing rotation policies
 
-    This section controls when PQ-NAS should rotate logs by itself.
+Rotation does not delete anything — it only archives the current file.
 
-###### Rotation modes
+---
 
-- Off — logs grow until rotated manually
-- Daily — rotate once per day
-- When size exceeds N MB — rotate when the active log becomes large
-- Size OR daily — whichever happens first
+## 3.4 Automatic audit rotation
 
-###### Fields
+This section controls when PQ-NAS should rotate logs automatically.
 
-- Rotate MB — size limit for automatic rotation
+### Rotation modes
 
-    Save policy stores the automatic rotation rules and activates them immediately.
+- **Off** — logs grow until rotated manually
+- **Daily** — rotate once per day
+- **When size exceeds N MB** — rotate when the active log becomes large
+- **Size OR daily** — whichever happens first
 
-![](C:\Users\a200889\AppData\Roaming\marktext\images\2026-03-01-02-29-54-image.png)
+### Fields
 
-###### 3.5 Audit Retention
+- **Rotate MB** — size limit for automatic rotation
 
-    Retention decides how long rotated audit logs are kept. The active audit log is never     removed by retention rules.  Only archived logs are affected.
+**Save policy** stores the automatic rotation rules and activates them immediately.
 
-###### Retention modes
+---
 
-- Never delete automatically — archives are kept forever
-- Keep last N days — deletes older archives
-- Keep last N files — keeps only the newest archives
-- Keep up to N MB total — limits total disk usage of archives
+## 3.5 Audit retention
 
-###### Buttons
+Retention decides how long rotated audit logs are kept. The active audit log is never removed by retention rules. Only archived logs are affected.
 
-    Save policy - Stores the retention rules.
+### Retention modes
 
-    Preview prune - Shows what would be deleted without removing anything.
+- **Never delete automatically** — archives are kept forever
+- **Keep last N days** — deletes older archives
+- **Keep last N files** — keeps only the newest archives
+- **Keep up to N MB total** — limits total disk usage of archives
 
-        Use this before running prune in production.
+### Buttons
 
-    Run prune now - Deletes archived audit logs according to the saved rules.
+**Save policy**  
+Stores the retention rules.
 
-        A confirmation prompt is always shown first.
+**Preview prune**  
+Shows what would be deleted without removing anything.
 
-###### Preview Table
+Use this before running prune in production.
 
-    When previewing retention, the table lists:
+**Run prune now**  
+Deletes archived audit logs according to the saved rules.
 
-- File name
-- Size
-- Modification time
-- Reason it would be deleted
+A confirmation prompt is always shown first.
 
-    A summary pill shows how much disk space would be freed.
+### Preview table
 
-###### Active Log Status
+When previewing retention, the table lists:
 
-    The Settings page also displays:
+- file name
+- size
+- modification time
+- reason it would be deleted
 
-- The current audit log size
+A summary pill shows how much disk space would be freed.
 
-    This is useful for:
+### Active log status
 
-- Testing size-based rotation
-- Capacity planning
-- Verifying automatic rotation works
+The Settings page also displays:
 
-###### Safe Operation Principles
+- the current audit log size
 
-    PQ-NAS is designed so that administrators can operate these controls safely:
+This is useful for:
 
-- Active audit logs are never deleted automatically
-- Preview always runs before deletion
-- All changes are audited
-- Admin confirmation required for destructive actions
-- Rotation never alters existing records
-- Retention only affects archived logs
+- testing size-based rotation
+- capacity planning
+- verifying automatic rotation works
 
-###### When to Use What
+### Safe operation principles
 
-    Rotate now  
-    Use when you want to start a fresh audit log immediately.
+PQ-NAS is designed so that administrators can operate these controls safely:
 
-    Automatic rotation  
-    Enable to avoid oversized logs and to keep investigations cleanly separated.
+- active audit logs are never deleted automatically
+- preview always runs before deletion
+- all changes are audited
+- admin confirmation is required for destructive actions
+- rotation never alters existing records
+- retention only affects archived logs
 
-    Preview prune  
-    Always run before pruning in production.
+### When to use what
 
-    Run prune now  
-    Use only after verifying the preview.
+**Rotate now**  
+Use when you want to start a fresh audit log immediately.
 
-###### 3.6 Snapshots
+**Automatic rotation**  
+Enable to avoid oversized logs and to keep investigations cleanly separated.
 
-    PQ-NAS supports automatic filesystem snapshots using Btrfs read-only subvolume     snapshots. Snapshots provide point-in-time copies of your data that can be used for:
+**Preview prune**  
+Always run before pruning in production.
 
-- Recovering accidentally deleted files
-- Rolling back after ransomware or corruption
-- Inspecting historical states
-- Creating backups or replication targets
+**Run prune now**  
+Use only after verifying the preview.
 
+---
 
+## 3.6 Snapshots
 
-    Snapshots are read-only, lightweight, and space-efficient because Btrfs stores only     changed blocks.
+PQ-NAS supports automatic filesystem snapshots using Btrfs read-only subvolume snapshots. Snapshots provide point-in-time copies of your data that can be used for:
 
-###### How Snapshot Scheduling Works
+- recovering accidentally deleted files
+- rolling back after ransomware or corruption
+- inspecting historical states
+- creating backups or replication targets
 
-    Snapshots run periodically according to a schedule.
+Snapshots are read-only, lightweight, and space-efficient because Btrfs stores only changed blocks.
 
-###### Times per day
+### How snapshot scheduling works
 
-    Controls how many snapshots are taken in 24 hours.
+Snapshots run periodically according to a schedule.
 
-    Examples:
+### Times per day
 
-    1 = once per day  
-    2 = every 12 hours  
-    6 = every 4 hours  
-    24 = every hour
+Controls how many snapshots are taken in 24 hours.
 
-###### Jitter (seconds)
+Examples:
 
-    Jitter adds a random delay before each scheduled run.
+- `1` = once per day
+- `2` = every 12 hours
+- `6` = every 4 hours
+- `24` = every hour
 
-    Why this matters:
+### Jitter (seconds)
 
-- Prevents multiple systems from snapshotting at exactly the same second
-- Avoids disk I/O spikes at fixed times
-- Reduces contention when many services run on the same host
+Jitter adds a random delay before each scheduled run.
 
-    Example:
+Why this matters:
 
-    Times/day = 6  
-    Jitter = 120 seconds
+- prevents multiple systems from snapshotting at exactly the same second
+- avoids disk I/O spikes at fixed times
+- reduces contention when many services run on the same host
 
-    Each snapshot will run roughly every 4 hours, plus a random delay of up to 2     minutes.
+Example:
 
-###### Snapshot Retention Policy
+- `Times/day = 6`
+- `Jitter = 120 seconds`
 
-    Retention controls how many old snapshots are kept:
+Each snapshot will run roughly every 4 hours, plus a random delay of up to 2 minutes.
 
-- keep_days — minimum age to keep
-- keep_min — minimum number always preserved
-- keep_max — maximum allowed snapshots
+### Snapshot retention policy
 
-    After every successful snapshot, PQ-NAS automatically prunes old ones while     respecting these limits.
+Retention controls how many old snapshots are kept:
 
-###### Snapshot Volumes
+- `keep_days` — minimum age to keep
+- `keep_min` — minimum number always preserved
+- `keep_max` — maximum allowed snapshots
 
-    Each snapshot entry contains:
+After every successful snapshot, PQ-NAS automatically prunes old ones while respecting these limits.
 
-- Volume name
-- Source subvolume
-- Snapshot root
+### Snapshot volumes
 
-    Example:
+Each snapshot entry contains:
 
-    { "name": "data", "source_subvolume": "/srv/pqnas/data", "snap_root":     "/srv/pqnas/.snapshots/data" }
+- volume name
+- source subvolume
+- snapshot root
 
-    Snapshots are created inside the snapshot root as timestamped directories.
+Example:
 
-###### Admin UI — Snapshot Controls
+```json
+{ "name": "data", "source_subvolume": "/srv/pqnas/data", "snap_root": "/srv/pqnas/.snapshots/data" }
+```
 
-    The Admin → Settings → Snapshots (Btrfs) panel allows runtime configuration.
+Snapshots are created inside the snapshot root as timestamped directories.
 
-    Enabled  
-    Turns snapshotting on or off globally.
+### Admin UI — snapshot controls
 
-    When disabled: No snapshots run, settings remain visible but Inputs are greyed out.
+The **Admin → Settings → Snapshots (Btrfs)** panel allows runtime configuration.
 
-    When enabled: Scheduler is active and snapshots run automatically.
+#### Enabled
 
-    Per-volume schedule  
-    When enabled, each volume can override the global schedule.
+Turns snapshotting on or off globally.
 
-    Each volume row gets its own:
+When disabled:
+
+- no snapshots run
+- settings remain visible but inputs are greyed out
+
+When enabled:
+
+- the scheduler is active
+- snapshots run automatically
+
+#### Per-volume schedule
+
+When enabled, each volume can override the global schedule.
+
+Each volume row gets its own:
 
 - Times/day
 - Jitter
 
-    When disabled:
+When disabled:
 
-- All volumes use the global schedule.
+- all volumes use the global schedule
 
-    Global Times / Day  
-    The default snapshot frequency applied to all volumes unless per-volume scheduling     is enabled.
+#### Global Times / Day
 
-    Global Jitter  
-    Default jitter applied to all volumes unless per-volume scheduling is enabled.
+The default snapshot frequency applied to all volumes unless per-volume scheduling is enabled.
 
-    Snapshot Root Path  
-    Shows where snapshots are written for the primary volume.
+#### Global Jitter
 
-    This must:
+Default jitter applied to all volumes unless per-volume scheduling is enabled.
 
-- Be an absolute path
-- Be empty or non-existent before creation
-- Reside on the same Btrfs filesystem as the source subvolume
+#### Snapshot root path
 
-    PQ-NAS will automatically create the directory if missing.
+Shows where snapshots are written for the primary volume.
 
-    Save snapshots  
-    Writes the current snapshot configuration to disk and activates it.
+This must:
 
-    This:
+- be an absolute path
+- be empty or non-existent before creation
+- reside on the same Btrfs filesystem as the source subvolume
 
-- Updates /etc/pqnas/admin_settings.json
-- Reloads the scheduler
-- Applies new timing immediately
+PQ-NAS will automatically create the directory if missing.
 
-    Reload  
-    Reloads snapshot settings from the server.
+#### Save snapshots
 
-    Useful if:
+Writes the current snapshot configuration to disk and activates it.
 
-- Another admin changed settings
-- You edited configuration files manually
-- You want to discard unsaved UI changes
+This:
 
-###### Locking and Safety
+- updates `/etc/pqnas/admin_settings.json`
+- reloads the scheduler
+- applies new timing immediately
 
-    Only one snapshot runner executes at a time.
+#### Reload
 
-    PQ-NAS uses a lock file:
+Reloads snapshot settings from the server.
 
-    /run/pqnas_snapshot.lock
+Useful if:
 
-    (or /tmp as fallback)
+- another admin changed settings
+- you edited configuration files manually
+- you want to discard unsaved UI changes
 
-    This prevents overlapping snapshot jobs.
+### Locking and safety
 
-###### Notes and Best Practices
+Only one snapshot runner executes at a time.
 
-    Recommended Defaults for home / small office:
+PQ-NAS uses a lock file:
 
-    Times/day: 6  
-    Jitter: 120
+- `/run/pqnas_snapshot.lock`
 
-    Retention: keep_days: 7  
-    keep_min: 12  
-    keep_max: 500
+(or `/tmp` as fallback)
 
-    Snapshot Storage
+This prevents overlapping snapshot jobs.
 
-    Snapshot directories can grow large.  
-    Make sure:
+### Notes and best practices
 
-- The snapshot root has enough free space
-- Your backup strategy includes snapshot replication or cleanup
+Recommended defaults for home / small office:
 
-    Snapshots Are Not Backups
+- `Times/day: 6`
+- `Jitter: 120`
 
-    Snapshots protect against:
+Retention:
 
-- Accidental deletion
-- Local corruption
+- `keep_days: 7`
+- `keep_min: 12`
+- `keep_max: 500`
 
-    They do not protect against:
+### Snapshot storage
 
-- Disk failure
-- Filesystem destruction
-- Fire or theft
+Snapshot directories can grow large. Make sure:
 
-    For full protection, replicate snapshots to another machine or off-site backup target.
+- the snapshot root has enough free space
+- your backup strategy includes snapshot replication or cleanup
 
-###### Advanced Usage
+### Snapshots are not backups
 
-    Administrators may:
+Snapshots protect against:
 
-- Add multiple volumes
-- Use different schedules per volume
-- Disable snapshotting temporarily during maintenance
+- accidental deletion
+- local corruption
 
-###### Snapshot Manager — Restore and Manual Snapshots
+They do not protect against:
 
-    The Snapshot Manager allows administrators to:
+- disk failure
+- filesystem destruction
+- fire or theft
 
-- View all snapshots for each volume
-- Inspect snapshot details
-- Restore any snapshot safely
-- Create a new snapshot manually ("Snapshot now")
+For full protection, replicate snapshots to another machine or off-site backup target.
 
-    Automatic snapshot scheduling is configured separately in:
+### Advanced usage
 
-    Admin → Settings → Snapshots (Btrfs)
+Administrators may:
 
-    Snapshot Manager is used for manual operations and recovery.
+- add multiple volumes
+- use different schedules per volume
+- disable snapshotting temporarily during maintenance
 
-###### Opening Snapshot Manager
+---
 
-    Open:
+## 3.7 Snapshot Manager — restore and manual snapshots
 
-    Admin → Snapshot Manager
+The Snapshot Manager allows administrators to:
 
-    The page contains two main columns:
+- view all snapshots for each volume
+- inspect snapshot details
+- restore any snapshot safely
+- create a new snapshot manually (**Snapshot now**)
 
-    Left column — Volumes  
-    Right column — Snapshots for the selected volume
+Automatic snapshot scheduling is configured separately in:
 
-    Top bar contains:
+- **Admin → Settings → Snapshots (Btrfs)**
 
-    Refresh — reload volumes and snapshots  
-    Details — show detailed snapshot information  
-    Restore — restore the selected snapshot  
-    Snapshot now — create a new snapshot immediately
+Snapshot Manager is used for manual operations and recovery.
 
-###### Volume List (Left Side)
+### Opening Snapshot Manager
 
-    Each row represents a configured snapshot volume.
+Open:
 
-    Example row:
+- **Admin → Snapshot Manager**
 
-    data enabled  
-    /srv/pqnas/data | /srv/pqnas/.snapshots/data
+The page contains two main columns:
 
-    Fields:
+- **Left column** — Volumes
+- **Right column** — Snapshots for the selected volume
 
-    Volume name  
-    Logical volume identifier.
+Top bar contains:
 
-    enabled / disabled  
-    Whether automatic snapshots are enabled for that volume.
+- **Refresh** — reload volumes and snapshots
+- **Details** — show detailed snapshot information
+- **Restore** — restore the selected snapshot
+- **Snapshot now** — create a new snapshot immediately
 
-    source_subvolume  
-    The live data location.
+### Volume list (left side)
 
-    snap_root  
-    Directory where snapshots are stored.
+Each row represents a configured snapshot volume.
 
-    Selecting a volume loads its snapshots.
+Example row:
 
+- `data enabled`
+- `/srv/pqnas/data | /srv/pqnas/.snapshots/data`
 
+Fields:
 
-###### Snapshot List (Right Side)
+- **Volume name** — logical volume identifier
+- **enabled / disabled** — whether automatic snapshots are enabled for that volume
+- **source_subvolume** — the live data location
+- **snap_root** — directory where snapshots are stored
 
-    Each row represents one snapshot.
+Selecting a volume loads its snapshots.
 
-    Example:
+### Snapshot list (right side)
 
-    2026-02-14T11-21-40.805Z ro
+Each row represents one snapshot.
 
-    Fields:
+Example:
 
-    Snapshot ID  
-    Timestamp-based identifier.
+- `2026-02-14T11-21-40.805Z ro`
 
-    Status label (right side)
+Fields:
 
-    Possible values:
+- **Snapshot ID** — timestamp-based identifier
+- **Status label**
+- **Creation time**
 
-    latest  
-    Newest snapshot available.
+Snapshots are sorted newest first.
 
-    ro  
-    Read-only snapshot (normal and expected).
+### Status labels
 
-    rw  
-    Read-write snapshot (unusual; typically indicates a manual or non-standard     snapshot).
+- **latest** — newest snapshot available
+- **ro** — read-only snapshot (normal and expected)
+- **rw** — read-write snapshot (unusual; typically indicates a manual or non-standard snapshot)
+- **⚠** — snapshot could not be verified due to missing sudo permissions
+- **junk** — directory exists but is not a valid Btrfs snapshot subvolume
 
-    ⚠  
-    Snapshot could not be verified due to missing sudo permissions.
+### What ro and rw mean
 
-    junk  
-    Directory exists but is not a valid Btrfs snapshot subvolume.
+**ro — Read-only snapshot**
 
-    Creation time  
-    Displayed below the snapshot ID.
+This is the normal and safe snapshot type.
 
-    Snapshots are sorted newest first.
+Properties:
 
+- cannot be modified
+- safe for restore
+- created using read-only snapshot semantics
 
+**rw — Read-write snapshot**
 
-###### What ro and rw Mean
+This is not normally created by PQ-NAS.
 
-    ro — Read-only snapshot  
-    This is the normal and safe snapshot type.
+May indicate:
 
-    Properties:
+- manual test snapshot
+- external tool snapshot
+- improper snapshot
 
-    Cannot be modified  
-    Fully safe for restore  
-    Created using:
+PQ-NAS restore still works, but read-only snapshots are recommended.
 
-    btrfs subvolume snapshot -r
+### Snapshot now button
 
-    rw — Read-write snapshot  
-    This is not normally created by PQ-NAS.
+**Snapshot now** creates a new snapshot immediately.
 
-    May indicate:
+This is useful:
 
-    Manual test snapshot  
-    External tool snapshot  
-    Improper snapshot
+- before software upgrades
+- before risky changes
+- before deleting or moving large files
+- before maintenance
 
-    PQ-NAS restore still works, but read-only snapshots are recommended.
+The new snapshot appears in the list within seconds.
 
+This does not affect automatic scheduling.
 
+### Restore button
 
-###### Snapshot now Button
+**Restore** replaces the live volume with the selected snapshot.
 
-    Snapshot now creates a new snapshot immediately.
-
-    This is useful when:
-
-    Before software upgrades  
-    Before risky changes  
-    Before deleting or moving large files  
-    Before maintenance
-
-    When clicked, PQ-NAS runs:
-
-    btrfs subvolume snapshot -r <source_subvolume> <snap_root>/
-
-    The new snapshot appears in the list within seconds.
-
-    This does not affect automatic scheduling.
-
-
-
-###### Restore Button
-
-    Restore replaces the live volume with the selected snapshot.
-
-    Steps:
+Steps:
 
 1. Select a snapshot
-2. Click Restore
+2. Click **Restore**
 3. Confirm the action
 4. Type the confirmation phrase exactly
 5. Confirm restore plan
 
-    PQ-NAS will:
+PQ-NAS will:
 
-    Stop pqnas.service briefly  
-    Preserve current data as backup  
-    Replace live data with snapshot  
-    Restart pqnas.service
+- stop `pqnas.service` briefly
+- preserve current data as backup
+- replace live data with snapshot
+- restart `pqnas.service`
 
-    Downtime is typically less than a few seconds.
+Downtime is typically only a few seconds.
 
+### Backup safety during restore
 
+Before restore, PQ-NAS automatically creates a backup of the current live volume.
 
-###### Backup Safety During Restore
+Example:
 
-    Before restore, PQ-NAS automatically creates a backup of the current live volume.
+- `/srv/pqnas/data.pre_restore.2026-02-14T11-28-08.838Z`
 
-    Example:
+This allows recovery if needed.
 
-    /srv/pqnas/data.pre_restore.2026-02-14T11-28-08.838Z
+Backups can be removed manually after verification.
 
-    This allows recovery if needed.
+### Details button
 
-    Backups can be removed manually after verification.
+Shows technical information about the selected snapshot.
 
+Includes:
 
+- full filesystem path
+- verification result
+- internal metadata
+- Btrfs subvolume information
 
-###### Details Button
+This is useful for troubleshooting.
 
-    Shows technical information about the selected snapshot.
+### Refresh button
 
-    Includes:
+Reloads volumes and snapshots from the server.
 
-    Full filesystem path  
-    Verification result  
-    Internal metadata  
-    Btrfs subvolume information
+Use this when:
 
-    This is useful for troubleshooting.
+- a new snapshot was created
+- another admin performed changes
+- you want the latest status
 
+### Restore safety model
 
+Restore uses atomic subvolume swap.
 
-###### Refresh Button
+This means:
 
-    Reloads volumes and snapshots from the server.
+- no partial restores
+- no inconsistent state
+- instant rollback capability
 
-    Use this when:
+PQ-NAS guarantees either:
 
-    A new snapshot was created  
-    Another admin performed changes  
-    You want the latest status
+- restore fully succeeds
 
+or
 
+- system remains unchanged
 
-###### Status Labels and Meaning
+### Recommended usage
 
-    latest  
-    Newest snapshot available.
+Create **Snapshot now** before:
 
-    ro  
-    Safe read-only snapshot.
+- system upgrades
+- configuration changes
+- file deletions
+- testing
 
-    rw  
-    Writable snapshot (not standard).
+Restore a snapshot when:
 
-    ⚠  
-    Verification failed due to missing sudo permission.
+- files were deleted accidentally
+- data became corrupted
+- ransomware or unwanted changes occurred
 
-    junk  
-    Directory is not a valid snapshot.
+### Relationship with automatic snapshots
 
-    Only valid Btrfs snapshots can be restored.
+Snapshot Manager does not control automatic snapshot schedules.
 
+Scheduling is configured in:
 
+- **Admin → Settings → Snapshots**
 
-###### Restore Safety Model
+Snapshot Manager is used for:
 
-    Restore uses atomic subvolume swap.
+- manual snapshots
+- restore operations
+- inspection
 
-    This means:
+### Safety and permissions
 
-    No partial restores  
-    No inconsistent state  
-    Instant rollback capability
+- all Snapshot Manager operations require administrator privileges
+- all actions are audited
+- restore operations require explicit confirmation
+- snapshots are always created inside configured `snap_root` directories
 
-    PQ-NAS guarantees either:
+### Summary
 
-    Restore fully succeeds  
-    or  
-    System remains unchanged
+Snapshot Manager provides safe and reliable recovery.
 
+Key capabilities:
 
+- view snapshots
+- create snapshots manually
+- restore any snapshot
+- inspect snapshot details
 
-###### Recommended Usage
+Snapshots are fast, space-efficient, and safe.
 
-    Create snapshot now before:
+---
 
-    System upgrades  
-    Configuration changes  
-    File deletions  
-    Testing
+## 4. Troubleshooting
 
-    Restore snapshot when:
-
-    Files were deleted accidentally  
-    Data became corrupted  
-    Ransomware or unwanted changes occurred
-
-
-
-###### Relationship with Automatic Snapshots
-
-    Snapshot Manager does not control automatic snapshot schedules.
-
-    Scheduling is configured in:
-
-    Admin → Settings → Snapshots
-
-    Snapshot Manager is used for:
-
-    Manual snapshots  
-    Restore operations  
-    Inspection
-
-
-
-###### Safety and Permissions
-
-    All Snapshot Manager operations require administrator privileges.
-
-    All actions are audited.
-
-    Restore operations require explicit confirmation.
-
-    Snapshots are always created inside configured snap_root directories.
-
-
-
-###### Summary
-
-    Snapshot Manager provides safe and reliable recovery.
-
-    Key capabilities:
-
-    View snapshots  
-    Create snapshots manually  
-    Restore any snapshot  
-    Inspect snapshot details
-
-    Snapshots are fast, space-efficient, and safe.
-
-## Troubleshooting
-
-###### DNA-Messenger shows: Authentication Failed — Server returned 301
+### DNA-Messenger shows: Authentication Failed — Server returned 301
 
 This error usually indicates a mismatch between the login URL presented by the PQ-NAS server and the value configured in the server environment file.
 
@@ -862,24 +861,122 @@ In most cases, the server is running with an HTTPS certificate but the configura
 
 Check the PQ-NAS configuration file:
 
-    /etc/pqnas/pqnas.env
+- `/etc/pqnas/pqnas.env`
 
 Open the file:
 
-    sudo nano /etc/pqnas/pqnas.env
+```bash
+sudo nano /etc/pqnas/pqnas.env
+```
 
 Locate the following line:
 
-    PQNAS_ORIGIN=http://...
+```bash
+PQNAS_ORIGIN=http://...
+```
 
 If your server is using HTTPS, update it to:
 
-    PQNAS_ORIGIN=https://...
+```bash
+PQNAS_ORIGIN=https://...
+```
 
 Save the file and restart the PQ-NAS service:
 
-    sudo systemctl restart pqnas.service
+```bash
+sudo systemctl restart pqnas.service
+```
 
 After restarting the service, refresh the PQ-NAS web interface and try scanning the login QR code again.
+
+---
+
+### PQ share opens but browser cannot decrypt the file
+
+If a PQ share page opens but decryption fails:
+
+- make sure JavaScript is enabled
+- make sure the browser session still has the required local share-opening identity material
+- try reopening the link in the same browser profile that previously enrolled or claimed the recipient device
+- if testing in a private/incognito session, remember that browser-local share data may not persist after the session closes
+
+If you are testing a newly updated PQ-NAS server:
+
+- refresh the page fully
+- retry with a freshly generated PQ share
+- verify the server startup log shows ML-KEM available and selftest passing
+
+A healthy startup log currently looks like:
+
+```text
+[pq/mlkem] backend=dna-internal-wip available=yes selftest=ok
+[pq/mlkem-envelope] selftest=ok
+```
+
+---
+
+### Storage not allocated yet
+
+If a user successfully logs in but cannot access File Manager and sees:
+
+> “Storage not allocated yet”
+
+this means the account has been approved, but no storage allocation has been created yet.
+
+Fix:
+
+1. Open **Admin → User Profiles**
+2. Select the user
+3. Click **Allocate**
+4. Choose a storage pool and quota
+5. Save
+
+After allocation, the user can access file services.
+
+---
+
+### Snapshot restore or snapshot verification problems
+
+If Snapshot Manager shows warnings such as `⚠`, the most common cause is missing or incomplete sudo permission for required filesystem inspection commands.
+
+Check:
+
+- snapshot helper permissions
+- configured sudo rules
+- whether the snapshot root and source subvolume are on the same Btrfs filesystem
+
+---
+
+## 5. Notes for administrators
+
+### Current ML-KEM provider path
+
+In the current lab/dev path, PQ-NAS uses the DNA-owned ML-KEM wrapper boundary for PQ share server-side operations.
+
+The default selected provider is currently the DNA provider, while the native implementation remains available as a tested fallback.
+
+A healthy startup message may therefore show:
+
+```text
+[pq/mlkem] backend=dna-internal-wip available=yes selftest=ok
+```
+
+This is expected in the current development checkpoint.
+
+### Security reminder
+
+For login authentication:
+
+- the browser is not the trust anchor
+- authentication remains device-mediated through DNA-Messenger
+
+For PQ share opening:
+
+- the browser performs local unwrap and decryption
+- browser compromise can affect share confidentiality
+
+Administrators should explain this difference clearly to users handling sensitive shared files.
+
+---
 
 © CPUNK 2026 — PQ-NAS Security Platform
