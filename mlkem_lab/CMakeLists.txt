@@ -365,7 +365,7 @@ add_custom_target(run_mlkem_lab_freeze_tests_native_selected
 )
 
 # -----------------------------------------------------------------------------
-# Experimental DNA PQ core backend wrapper
+# DNA PQ core backend wrapper (default lab/dev provider = dna)
 # -----------------------------------------------------------------------------
 add_library(dna_pqcore_mlkem STATIC
         "${REPO_ROOT}/core/dna_pqcore/dna_mlkem768_backend.cpp"
@@ -551,8 +551,9 @@ mlkem_lab_add_test(test_mlkem_kem_diff_fuzz
 )
 
 # -----------------------------------------------------------------------------
-# Convenience target: frozen ML-KEM lab test set
+# Convenience target: default lab/dev ML-KEM freeze lane (default selected provider = dna)
 # -----------------------------------------------------------------------------
+
 add_custom_target(run_mlkem_lab_freeze_tests
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_backend"
         COMMAND "${CMAKE_BINARY_DIR}/bin/test_dna_mlkem768_boundary"
