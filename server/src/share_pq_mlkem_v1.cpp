@@ -1,22 +1,19 @@
 #include "share_pq_mlkem_v1.h"
 
-#include <openssl/rand.h>
+#include "dna_mlkem768_backend.h"
+#include "internal/dna_mlkem768_backend_diag.h"
 
 #include <algorithm>
+#include <utility>
 #include <vector>
-
-extern "C" {
-#define MLK_CONFIG_API_PARAMETER_SET 768
-#define MLK_CONFIG_API_NAMESPACE_PREFIX pqnas_mlkem768
-#define MLK_CONFIG_API_NO_SUPERCOP
-#include "mlkem/mlkem_native.h"
-}
 
 namespace pqnas {
 namespace {
 
+namespace dna = dnanexus::pq;
+
 // Best-effort wipe helper for temporary sensitive byte buffers.
-// Used for random coins and shared-secret material owned by std::vector.
+// Used for V1 adapter-owned std::vector material.
 static void wipe_bytes(std::vector<std::uint8_t>* v) {
     if (!v) return;
     std::fill(v->begin(), v->end(), 0);
@@ -24,28 +21,40 @@ static void wipe_bytes(std::vector<std::uint8_t>* v) {
     v->shrink_to_fit();
 }
 
-// Fill `out` with `n` cryptographically random bytes.
-static bool random_bytes_local(std::size_t n, std::vector<std::uint8_t>* out) {
-    if (!out) return false;
-    out->assign(n, 0);
-    if (n == 0) return true;
-    return RAND_bytes(reinterpret_cast<unsigned char*>(out->data()),
-                      static_cast<int>(out->size())) == 1;
+static std::string status_to_err_string(dna::MlKem768Status st, const char* op) {
+    switch (st) {
+        case dna::MlKem768Status::ok:
+            return "";
+        case dna::MlKem768Status::output_null:
+            return "output_null";
+        case dna::MlKem768Status::bad_public_key_len:
+            return "mlkem768_bad_public_key_len";
+        case dna::MlKem768Status::bad_secret_key_len:
+            return "mlkem768_bad_secret_key_len";
+        case dna::MlKem768Status::bad_ciphertext_len:
+            return "mlkem768_bad_ciphertext_len";
+        case dna::MlKem768Status::invalid_public_key:
+            return "mlkem768_invalid_public_key";
+        case dna::MlKem768Status::invalid_secret_key:
+            return "mlkem768_invalid_secret_key";
+        case dna::MlKem768Status::random_failed:
+            return "random_coins_failed";
+        case dna::MlKem768Status::provider_failed:
+            return std::string("mlkem768_") + op + "_failed";
+    }
+    return std::string("mlkem768_") + op + "_failed";
 }
 
 } // namespace
 
-// Vendored native ML-KEM backend is compiled in, so availability is constant.
 bool mlkem768_available_v1() {
-    return true;
+    return dna::mlkem768_available();
 }
 
-// Human-readable backend label for startup logs / diagnostics.
 std::string mlkem768_backend_name_v1() {
-    return "mlkem-native-c";
+    return dna::mlkem768_backend_name();
 }
 
-// Generate an ML-KEM-768 keypair using the vendored native implementation.
 bool mlkem768_keygen_v1(MlKem768KeypairV1* out, std::string* err) {
     if (err) err->clear();
     if (!out) {
@@ -56,35 +65,19 @@ bool mlkem768_keygen_v1(MlKem768KeypairV1* out, std::string* err) {
     wipe_bytes(&out->public_key);
     wipe_bytes(&out->secret_key);
 
-    // ML-KEM key generation consumes 2 * MLKEM_SYMBYTES of randomness.
-    std::vector<std::uint8_t> coins(2 * MLKEM_SYMBYTES, 0);
-    if (!random_bytes_local(coins.size(), &coins)) {
-        if (err) *err = "random_coins_failed";
+    dna::MlKem768Keypair kp;
+    const dna::MlKem768Status st = dna::mlkem768_keygen_status(&kp);
+    if (st != dna::MlKem768Status::ok) {
+        dna::mlkem768_wipe_keypair(&kp);
+        if (err) *err = status_to_err_string(st, "keygen");
         return false;
     }
 
-    out->public_key.assign(MLKEM768_PUBLICKEYBYTES, 0);
-    out->secret_key.assign(MLKEM768_SECRETKEYBYTES, 0);
-
-    const int rc = pqnas_mlkem768_keypair_derand(
-        reinterpret_cast<uint8_t*>(out->public_key.data()),
-        reinterpret_cast<uint8_t*>(out->secret_key.data()),
-        reinterpret_cast<const uint8_t*>(coins.data()));
-
-    wipe_bytes(&coins);
-
-    if (rc != 0) {
-        wipe_bytes(&out->public_key);
-        wipe_bytes(&out->secret_key);
-        if (err) *err = "mlkem768_keypair_derand_failed";
-        return false;
-    }
-
+    out->public_key = std::move(kp.public_key);
+    out->secret_key = std::move(kp.secret_key);
     return true;
 }
 
-// Encapsulate to a recipient ML-KEM-768 public key.
-// Produces both the KEM ciphertext and the derived shared secret.
 bool mlkem768_encapsulate_v1(const std::vector<std::uint8_t>& public_key,
                              MlKem768EncapResultV1* out,
                              std::string* err) {
@@ -97,41 +90,19 @@ bool mlkem768_encapsulate_v1(const std::vector<std::uint8_t>& public_key,
     wipe_bytes(&out->ciphertext);
     wipe_bytes(&out->shared_secret);
 
-    if (public_key.size() != MLKEM768_PUBLICKEYBYTES) {
-        if (err) *err = "mlkem768_bad_public_key_len";
+    dna::MlKem768EncapResult enc;
+    const dna::MlKem768Status st = dna::mlkem768_encapsulate_status(public_key, &enc);
+    if (st != dna::MlKem768Status::ok) {
+        dna::mlkem768_wipe_encap_result(&enc);
+        if (err) *err = status_to_err_string(st, "encapsulate");
         return false;
     }
 
-    // ML-KEM encapsulation consumes MLKEM_SYMBYTES of randomness.
-    std::vector<std::uint8_t> coins(MLKEM_SYMBYTES, 0);
-    if (!random_bytes_local(coins.size(), &coins)) {
-        if (err) *err = "random_coins_failed";
-        return false;
-    }
-
-    out->ciphertext.assign(MLKEM768_CIPHERTEXTBYTES, 0);
-    out->shared_secret.assign(MLKEM_BYTES, 0);
-
-    const int rc = pqnas_mlkem768_enc_derand(
-        reinterpret_cast<uint8_t*>(out->ciphertext.data()),
-        reinterpret_cast<uint8_t*>(out->shared_secret.data()),
-        reinterpret_cast<const uint8_t*>(public_key.data()),
-        reinterpret_cast<const uint8_t*>(coins.data()));
-
-    wipe_bytes(&coins);
-
-    if (rc != 0) {
-        wipe_bytes(&out->ciphertext);
-        wipe_bytes(&out->shared_secret);
-        if (err) *err = "mlkem768_enc_derand_failed";
-        return false;
-    }
-
+    out->ciphertext = std::move(enc.ciphertext);
+    out->shared_secret = std::move(enc.shared_secret);
     return true;
 }
 
-// Decapsulate an ML-KEM-768 ciphertext using the recipient secret key.
-// Recovers the same shared secret produced during encapsulation.
 bool mlkem768_decapsulate_v1(const std::vector<std::uint8_t>& secret_key,
                              const std::vector<std::uint8_t>& ciphertext,
                              std::vector<std::uint8_t>* out_shared_secret,
@@ -144,34 +115,20 @@ bool mlkem768_decapsulate_v1(const std::vector<std::uint8_t>& secret_key,
 
     wipe_bytes(out_shared_secret);
 
-    if (secret_key.size() != MLKEM768_SECRETKEYBYTES) {
-        if (err) *err = "mlkem768_bad_secret_key_len";
+    std::vector<std::uint8_t> shared_secret;
+    const dna::MlKem768Status st =
+        dna::mlkem768_decapsulate_status(secret_key, ciphertext, &shared_secret);
+
+    if (st != dna::MlKem768Status::ok) {
+        dna::mlkem768_wipe_shared_secret(&shared_secret);
+        if (err) *err = status_to_err_string(st, "decapsulate");
         return false;
     }
 
-    if (ciphertext.size() != MLKEM768_CIPHERTEXTBYTES) {
-        if (err) *err = "mlkem768_bad_ciphertext_len";
-        return false;
-    }
-
-    out_shared_secret->assign(MLKEM_BYTES, 0);
-
-    const int rc = pqnas_mlkem768_dec(
-        reinterpret_cast<uint8_t*>(out_shared_secret->data()),
-        reinterpret_cast<const uint8_t*>(ciphertext.data()),
-        reinterpret_cast<const uint8_t*>(secret_key.data()));
-
-    if (rc != 0) {
-        wipe_bytes(out_shared_secret);
-        if (err) *err = "mlkem768_dec_failed";
-        return false;
-    }
-
+    *out_shared_secret = std::move(shared_secret);
     return true;
 }
 
-// End-to-end ML-KEM self-test:
-// keygen -> encapsulate -> decapsulate -> shared-secret equality check.
 bool mlkem768_selftest_v1(std::string* err) {
     if (err) err->clear();
 

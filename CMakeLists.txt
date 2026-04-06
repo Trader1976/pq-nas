@@ -22,7 +22,7 @@ if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 # -----------------------------------------------------------------------------
-# Dependencies (MUST come before targets that use them)
+# Dependencies 
 # -----------------------------------------------------------------------------
 find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
@@ -122,19 +122,125 @@ target_link_libraries(pqnas_verify_v4 PUBLIC
 )
 
 # -----------------------------------------------------------------------------
-# Vendored ML-KEM-768 backend used by pqnas_server
+# Vendored ML-KEM-768 backend used by DNA pqcore wrapper inside pqnas_server
 # -----------------------------------------------------------------------------
-add_library(pqnas_mlkem_native_obj OBJECT
+add_library(dnanexus_mlkem_native_obj OBJECT
         server/third_party/mlkem-native/mlkem/mlkem_native.c
 )
 
-target_include_directories(pqnas_mlkem_native_obj PRIVATE
+target_include_directories(dnanexus_mlkem_native_obj PRIVATE
         ${CMAKE_SOURCE_DIR}/server/third_party/mlkem-native
-        ${CMAKE_SOURCE_DIR}/server/src
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore
 )
 
-target_compile_definitions(pqnas_mlkem_native_obj PRIVATE
-        MLK_CONFIG_FILE=\"pqnas_mlkem_native_config_768.h\"
+target_compile_definitions(dnanexus_mlkem_native_obj PRIVATE
+        MLK_CONFIG_FILE=\"dna_mlkem_native_config_768.h\"
+)
+
+# -----------------------------------------------------------------------------
+# Frozen learn-track source bundles needed by DNA ML-KEM provider
+# -----------------------------------------------------------------------------
+set(MLK_LEARN_FIELD_SRCS
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_field.cpp
+)
+
+set(MLK_LEARN_POLY_SRCS
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_poly.cpp
+)
+
+set(MLK_LEARN_SAMPLING_SRCS
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_cbd.cpp
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_prf.cpp
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_getnoise.cpp
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_noisevec.cpp
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_uniform.cpp
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
+)
+
+set(MLK_LEARN_NTT_ONLY_SRCS
+        ${MLK_LEARN_FIELD_SRCS}
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_ntt.cpp
+)
+
+set(MLK_LEARN_MATRIX_SRCS
+        ${MLK_LEARN_SAMPLING_SRCS}
+        ${MLK_LEARN_NTT_ONLY_SRCS}
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_matrix_gen.cpp
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_matvec.cpp
+)
+
+set(MLK_LEARN_INDCPA_CORE_SRCS
+        ${MLK_LEARN_MATRIX_SRCS}
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_tomont.cpp
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_indcpa_keygen_skeleton.cpp
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_indcpa_encrypt_skeleton.cpp
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_indcpa_decrypt_skeleton.cpp
+)
+
+set(MLK_LEARN_MESSAGE_SRCS
+        ${MLK_LEARN_FIELD_SRCS}
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_message.cpp
+)
+
+set(MLK_LEARN_PACKED_SRCS
+        ${MLK_LEARN_INDCPA_CORE_SRCS}
+        ${MLK_LEARN_MESSAGE_SRCS}
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_indcpa_packed.cpp
+)
+
+set(MLK_LEARN_CPAPKE_SRCS
+        ${MLK_LEARN_PACKED_SRCS}
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_cpapke.cpp
+)
+
+set(MLK_LEARN_KEM_SRCS
+        ${MLK_LEARN_CPAPKE_SRCS}
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_kem.cpp
+)
+
+# -----------------------------------------------------------------------------
+# Frozen learn-track KEM library used by DNA provider
+# -----------------------------------------------------------------------------
+add_library(pqnas_dna_pqcore_learn_kem STATIC
+        ${MLK_LEARN_KEM_SRCS}
+)
+
+target_include_directories(pqnas_dna_pqcore_learn_kem PUBLIC
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+target_link_libraries(pqnas_dna_pqcore_learn_kem PRIVATE
+        OpenSSL::Crypto
+)
+
+# -----------------------------------------------------------------------------
+# DNA-owned ML-KEM wrapper library used by pqnas_server share code
+# -----------------------------------------------------------------------------
+add_library(pqnas_dna_pqcore_mlkem STATIC
+        core/dna_pqcore/dna_mlkem768_backend.cpp
+        core/dna_pqcore/internal/dna_mlkem768_provider_native.cpp
+        core/dna_pqcore/internal/dna_mlkem768_provider_stub.cpp
+        core/dna_pqcore/internal/dna_mlkem768_provider_dna.cpp
+        core/dna_pqcore/internal/dna_mlkem768_provider_select.cpp
+        core/dna_pqcore/dna_mlkem768_backend.h
+        $<TARGET_OBJECTS:dnanexus_mlkem_native_obj>
+)
+
+target_include_directories(pqnas_dna_pqcore_mlkem PUBLIC
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore
+)
+
+target_include_directories(pqnas_dna_pqcore_mlkem PRIVATE
+        ${CMAKE_SOURCE_DIR}/server/third_party/mlkem-native
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
+)
+
+target_link_libraries(pqnas_dna_pqcore_mlkem PUBLIC
+        pqnas_dna_pqcore_learn_kem
+)
+
+target_link_libraries(pqnas_dna_pqcore_mlkem PRIVATE
+        OpenSSL::Crypto
 )
 
 # -----------------------------------------------------------------------------
@@ -173,7 +279,6 @@ add_executable(pqnas_server
         server/src/share_pq_crypto_v1.cpp
         server/src/share_pq_mlkem_v1.cpp
         server/src/share_pq_mlkem_v1.h
-        $<TARGET_OBJECTS:pqnas_mlkem_native_obj>
 )
 
 # Treat warnings as errors for the server (security-sensitive)
@@ -183,6 +288,7 @@ endif()
 
 target_include_directories(pqnas_server PRIVATE
         ${CMAKE_SOURCE_DIR}/core
+        ${CMAKE_SOURCE_DIR}/core/dna_pqcore
         ${CMAKE_SOURCE_DIR}/server/include
         ${CMAKE_SOURCE_DIR}/server/third_party
         ${CMAKE_SOURCE_DIR}/server/third_party/mlkem-native
@@ -197,6 +303,7 @@ target_compile_options(pqnas_server PRIVATE
 
 target_link_libraries(pqnas_server PRIVATE
         pqnas_verify_v4
+        pqnas_dna_pqcore_mlkem
         ${QRENCODE_LIBRARIES}
         OpenSSL::Crypto
         SQLite::SQLite3
