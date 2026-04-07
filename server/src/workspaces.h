@@ -16,13 +16,15 @@ namespace pqnas {
 
 using json = nlohmann::json;
 
-struct WorkspaceMemberRec {
-    std::string fingerprint;
-    std::string role;      // owner | editor | viewer
-    std::string status;    // enabled | disabled
-    std::string added_at;
-    std::string added_by;
-};
+    struct WorkspaceMemberRec {
+        std::string fingerprint;
+        std::string role;      // owner | editor | viewer
+        std::string status;    // invited | enabled | disabled
+        std::string added_at;
+        std::string added_by;
+        std::string responded_at;
+        std::string responded_by;
+    };
 
 struct WorkspaceRec {
     std::string workspace_id;
@@ -70,6 +72,12 @@ public:
                          const std::string& fingerprint,
                          const std::string& role);
 
+    bool set_member_status(const std::string& workspace_id,
+                           const std::string& fingerprint,
+                           const std::string& status,
+                           const std::string& responded_at,
+                           const std::string& responded_by);
+    
     bool has_enabled_owner(const std::string& workspace_id) const;
     std::size_t enabled_member_count(const std::string& workspace_id) const;
 

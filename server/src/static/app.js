@@ -10,6 +10,8 @@
 
     const navHome = document.getElementById("nav_home");
     const navTrustedDevices = document.getElementById("nav_trusted_devices");
+    const navWorkspaceInvites = document.getElementById("nav_workspace_invites");
+    const navWorkspaceInvitesCount = document.getElementById("nav_workspace_invites_count");
 
     const navAdmin = document.getElementById("nav_admin");
     const navUsers = document.getElementById("nav_users");
@@ -68,7 +70,7 @@
     let selectionActive = false;
 
 
-    let currentView = "home";   // "home" or "app:<id>@<ver>"
+    let currentView = "home";   // "home" | "trusted_devices" | "workspace_invites" | "app:<id>@<ver>"
     let currentApp = null;      // {id, ver} or null
     let lastAppsKey = "";
     let authed = false;
@@ -81,6 +83,9 @@
     let versionShown = false;
     let trustedDevices = [];
     let trustedDevicesError = "";
+
+    let workspaceInvites = [];
+    let workspaceInvitesError = "";
 
     function show(el, on) {
         if (!el) return;
@@ -137,7 +142,7 @@
     }
 
     function setActiveNav(activeId) {
-        const ids = ["nav_home", "nav_trusted_devices"];
+        const ids = ["nav_home", "nav_trusted_devices", "nav_workspace_invites"];
         for (const id of ids) {
             const b = document.getElementById(id);
             if (!b) continue;
@@ -148,6 +153,19 @@
     function clearAppsList() {
         if (!appsList) return;
         appsList.innerHTML = "";
+    }
+    function updateWorkspaceInvitesNav() {
+        const count = Array.isArray(workspaceInvites) ? workspaceInvites.length : 0;
+
+        if (navWorkspaceInvitesCount) {
+            navWorkspaceInvitesCount.textContent = count > 99 ? "99+" : String(count);
+            navWorkspaceInvitesCount.style.display = count > 0 ? "inline-flex" : "none";
+            navWorkspaceInvitesCount.setAttribute("aria-hidden", count > 0 ? "false" : "true");
+        }
+
+        if (navWorkspaceInvites) {
+            navWorkspaceInvites.classList.toggle("needs-attn", count > 0 && currentView !== "workspace_invites");
+        }
     }
     function stopPairPolling() {
         if (pairPollTimer) {
@@ -498,6 +516,83 @@
         if (!r.ok || !j || !j.ok) {
             throw new Error((j && j.message) ? j.message : `HTTP ${r.status}`);
         }
+    }
+    async function loadWorkspaceInvites() {
+        if (!authed) {
+            workspaceInvites = [];
+            workspaceInvitesError = "";
+            updateWorkspaceInvitesNav();
+            updateHomeInvitesHint();
+            return;
+        }
+
+        try {
+            const r = await fetch("/api/v4/workspaces/invitations", {
+                credentials: "include",
+                cache: "no-store"
+            });
+
+            const j = await r.json().catch(() => null);
+            if (!r.ok || !j || !j.ok) {
+                throw new Error((j && (j.message || j.error)) ? (j.message || j.error) : `HTTP ${r.status}`);
+            }
+
+            workspaceInvites = Array.isArray(j.invitations) ? j.invitations : [];
+            workspaceInvitesError = "";
+        } catch (e) {
+            workspaceInvites = [];
+            workspaceInvitesError = String(e && e.message ? e.message : e);
+        }
+
+        updateWorkspaceInvitesNav();
+
+        if (currentView === "workspace_invites") {
+            renderWorkspaceInvites();
+        } else if (currentView === "home") {
+            updateHomeInvitesHint();
+        }
+    }
+
+    async function acceptWorkspaceInvite(workspaceId) {
+        const r = await fetch("/api/v4/workspaces/invitations/accept", {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workspace_id: workspaceId })
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            throw new Error((j && (j.message || j.error)) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`);
+        }
+
+        return j;
+    }
+
+    async function declineWorkspaceInvite(workspaceId) {
+        const r = await fetch("/api/v4/workspaces/invitations/decline", {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workspace_id: workspaceId })
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            throw new Error((j && (j.message || j.error)) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`);
+        }
+
+        return j;
+    }
+    function escapeHtml(s) {
+        return String(s == null ? "" : s)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll("\"", "&quot;")
+            .replaceAll("'", "&#39;");
     }
 
     function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
@@ -973,6 +1068,52 @@
             });
         }
     }
+
+    function updateHomeInvitesHint() {
+        const desktopHint = document.getElementById("desktopHint");
+        if (!desktopHint) return;
+
+        if (!authed) {
+            desktopHint.innerHTML = "";
+            return;
+        }
+
+        if (workspaceInvitesError) {
+            desktopHint.innerHTML = `
+            <div class="bigState" style="display:block; margin-bottom:10px;">
+                <h3>Workspace invites unavailable</h3>
+                <p>${escapeHtml(workspaceInvitesError)}</p>
+            </div>
+        `;
+            return;
+        }
+
+        const count = Array.isArray(workspaceInvites) ? workspaceInvites.length : 0;
+        if (!count) {
+            desktopHint.innerHTML = "";
+            return;
+        }
+
+        desktopHint.innerHTML = `
+        <div class="bigState" style="display:block; margin-bottom:10px;">
+            <h3>You have ${count} workspace invitation${count === 1 ? "" : "s"}</h3>
+            <p>
+                Accept or decline pending workspace access requests before they appear in File Manager.
+            </p>
+            <div style="margin-top:10px;">
+                <button class="btn" id="homeOpenWorkspaceInvitesBtn" type="button">Open Workspace Invites</button>
+            </div>
+        </div>
+    `;
+
+        const btn = document.getElementById("homeOpenWorkspaceInvitesBtn");
+        if (btn) {
+            btn.addEventListener("click", () => {
+                renderWorkspaceInvites();
+            });
+        }
+    }
+
     function renderHome() {
         stopPairPolling();
 
@@ -1003,15 +1144,130 @@
             let surface = document.getElementById("desktopSurface");
             if (!surface) {
                 homeBlurb.innerHTML = `
-                <div id="desktopHint" style="margin-bottom:10px;">
-                </div>
+                <div id="desktopHint" style="margin-bottom:10px;"></div>
                 <div id="desktopSurface" class="desktopSurface" aria-label="Desktop"></div>
             `;
             }
         }
 
-        // Render desktop icons on Home
+        updateHomeInvitesHint();
+
+// Render desktop icons on Home
         renderDesktopIcons();
+    }
+
+    function renderWorkspaceInvites(messageText = "", messageKind = "") {
+        stopPairPolling();
+
+        currentView = "workspace_invites";
+        currentApp = null;
+
+        setActiveNav("nav_workspace_invites");
+        setActiveApp("");
+
+        if (wsTitle) wsTitle.textContent = "Workspace Invites";
+        if (wsSubtitle) wsSubtitle.textContent = "Accept or decline pending workspace invitations";
+        if (mainPaneTitle) mainPaneTitle.textContent = "Workspace Invites";
+
+        if (!homeBlurb) return;
+
+        setMainHostMode("home");
+        homeBlurb.classList.remove("appHostBlurb");
+
+        const cards = (workspaceInvites || []).map((inv) => {
+            const notes = inv.notes ? `
+            <div class="mini" style="margin-top:8px;">${escapeHtml(inv.notes)}</div>
+        ` : "";
+
+            const addedBy = inv.added_by ? `
+            <div class="mini">Invited by: ${escapeHtml(inv.added_by)}</div>
+        ` : "";
+
+            const addedAt = inv.added_at ? `
+            <div class="mini">Invited at: ${escapeHtml(inv.added_at)}</div>
+        ` : "";
+
+            return `
+            <div class="card" style="padding:14px; margin-top:10px; border:1px solid rgba(255,255,255,0.10); border-radius:16px; background:rgba(0,0,0,0.20);">
+                <div style="font-weight:900; font-size:16px;">${escapeHtml(inv.name || inv.workspace_id || "Workspace")}</div>
+                <div class="mini">Role: ${escapeHtml(inv.role || "viewer")}</div>
+                ${addedBy}
+                ${addedAt}
+                ${notes}
+                <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+                    <button class="btn workspaceInviteAcceptBtn" type="button" data-workspace-id="${escapeHtml(inv.workspace_id || "")}">
+                        Accept
+                    </button>
+                    <button class="btn secondary workspaceInviteDeclineBtn" type="button" data-workspace-id="${escapeHtml(inv.workspace_id || "")}">
+                        Decline
+                    </button>
+                </div>
+            </div>
+        `;
+        }).join("");
+
+        homeBlurb.innerHTML = `
+        <div style="max-width:760px; font-family:var(--sans);">
+            <h3 style="margin:0 0 8px 0; font-size:18px; font-family:inherit;">Pending workspace invitations</h3>
+            <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:14px; font-family:inherit;">
+                Accepted workspaces will appear in the File Manager location switcher. Declined invites stay hidden.
+            </div>
+
+            ${messageText ? `
+                <div class="bigState" style="display:block; margin-top:8px;">
+                    <h3>${messageKind === "ok" ? "Success" : "Workspace invite"}</h3>
+                    <p>${escapeHtml(messageText)}</p>
+                </div>
+            ` : ""}
+
+            ${workspaceInvitesError ? `
+                <div class="bigState" style="display:block; margin-top:8px;">
+                    <h3>Could not load invitations</h3>
+                    <p>${escapeHtml(workspaceInvitesError)}</p>
+                </div>
+            ` : ""}
+
+            ${(workspaceInvites && workspaceInvites.length)
+            ? cards
+            : `<div class="mini">No pending workspace invitations.</div>`}
+        </div>
+    `;
+
+        for (const btn of homeBlurb.querySelectorAll(".workspaceInviteAcceptBtn")) {
+            btn.addEventListener("click", async () => {
+                const workspaceId = btn.dataset.workspaceId || "";
+                if (!workspaceId) return;
+
+                btn.disabled = true;
+                btn.textContent = "Accepting…";
+
+                try {
+                    await acceptWorkspaceInvite(workspaceId);
+                    await loadWorkspaceInvites();
+                    renderWorkspaceInvites(`Accepted workspace invitation: ${workspaceId}`, "ok");
+                } catch (e) {
+                    renderWorkspaceInvites(`Accept failed: ${String(e && e.message ? e.message : e)}`, "err");
+                }
+            });
+        }
+
+        for (const btn of homeBlurb.querySelectorAll(".workspaceInviteDeclineBtn")) {
+            btn.addEventListener("click", async () => {
+                const workspaceId = btn.dataset.workspaceId || "";
+                if (!workspaceId) return;
+
+                btn.disabled = true;
+                btn.textContent = "Declining…";
+
+                try {
+                    await declineWorkspaceInvite(workspaceId);
+                    await loadWorkspaceInvites();
+                    renderWorkspaceInvites(`Declined workspace invitation: ${workspaceId}`, "ok");
+                } catch (e) {
+                    renderWorkspaceInvites(`Decline failed: ${String(e && e.message ? e.message : e)}`, "err");
+                }
+            });
+        }
     }
 
     function renderApp(app) {
@@ -1179,6 +1435,11 @@
 
                     if (!r.ok || !ok) {
                         authed = false;
+                        workspaceInvites = [];
+                        workspaceInvitesError = "";
+                        updateWorkspaceInvitesNav();
+                        updateHomeInvitesHint();
+
                         const err = String(j.error || "").toLowerCase();
                         const msg = String(j.message || "");
 
@@ -1205,12 +1466,18 @@
                     // Update installed apps list (only when signed in ok)
                     // NOTE: don't await; keep UI snappy and avoid blocking auth render
                     loadApps();
+                    loadWorkspaceInvites();
 
                     return;
                 }
 
                 // Non-JSON body
                 authed = false;
+                workspaceInvites = [];
+                workspaceInvitesError = "";
+                updateWorkspaceInvitesNav();
+                updateHomeInvitesHint();
+
                 show(navAdmin, false);
                 show(navUsers, false);
                 show(navAudit, false);
@@ -1226,6 +1493,11 @@
                 }
             } catch (e) {
                 authed = false;
+                workspaceInvites = [];
+                workspaceInvitesError = "";
+                updateWorkspaceInvitesNav();
+                updateHomeInvitesHint();
+
                 show(navAdmin, false);
                 show(navUsers, false);
                 show(navAudit, false);
@@ -1274,7 +1546,11 @@
     if (navTrustedDevices) navTrustedDevices.addEventListener("click", () => {
         openTrustedDevices();
     });
-    // Default view
+    if (navWorkspaceInvites) navWorkspaceInvites.addEventListener("click", () => {
+        renderWorkspaceInvites();
+    });
+
+// Default view
     renderHome();
 
     // Load once immediately

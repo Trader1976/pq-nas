@@ -1011,20 +1011,8 @@
           <span id="scopeRole" class="scopeRole hidden"></span>
 
           <div id="workspaceActions" class="scopeActions">
-            <button id="workspaceNewBtn" class="btn secondary" type="button" title="Create workspace">
-              <span class="btnTxt">New workspace</span>
-            </button>
-
-            <button id="workspaceRenameBtn" class="btn secondary hidden" type="button" title="Rename workspace">
-              <span class="btnTxt">Rename</span>
-            </button>
-
-            <button id="workspaceMembersBtn" class="btn secondary hidden" type="button" title="Manage members">
+            <button id="workspaceMembersBtn" class="btn secondary hidden" type="button" title="List workspace members">
               <span class="btnTxt">Members</span>
-            </button>
-
-            <button id="workspaceDeleteBtn" class="btn secondary hidden" type="button" title="Delete workspace">
-              <span class="btnTxt">Delete</span>
             </button>
           </div>
         </div>
@@ -1282,25 +1270,10 @@
 
         <div id="workspaceMembersList" style="display:grid; gap:10px;"></div>
 
-        <div style="margin-top:16px; padding-top:16px; border-top:1px solid var(--border2); display:grid; gap:10px;">
-          <div class="k">Add member</div>
-
-          <input id="workspaceMemberUserInput"
-                 class="mono"
-                 type="text"
-                 placeholder="Fingerprint or username"
-                 style="width:100%; padding:10px 12px; border-radius:12px; border:1px solid var(--border2); background:rgba(0,0,0,0.22); color:var(--fg);" />
-
-          <select id="workspaceMemberRoleSelect"
-                  class="mono"
-                  style="width:100%; padding:10px 12px; border-radius:12px; border:1px solid var(--border2); background:rgba(0,0,0,0.22); color:var(--fg);">
-            <option value="viewer">viewer</option>
-            <option value="editor">editor</option>
-            <option value="owner">owner</option>
-          </select>
-
-          <div style="display:flex; gap:10px; flex-wrap:wrap;">
-            <button id="workspaceMemberAddBtn" class="btn" type="button">Add member</button>
+        <div style="margin-top:16px; padding-top:16px; border-top:1px solid var(--border2);">
+          <div class="k">Management</div>
+          <div class="v" style="margin-top:8px;">
+            Workspace member changes are managed from the Admin → Workspaces page.
           </div>
         </div>
       </div>

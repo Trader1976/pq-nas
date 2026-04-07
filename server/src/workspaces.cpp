@@ -106,9 +106,11 @@ std::string normalize_workspace_role_copy(const std::string& s) {
     return "viewer";
 }
 
-std::string normalize_workspace_member_status_copy(const std::string& s) {
+    std::string normalize_workspace_member_status_copy(const std::string& s) {
     const std::string v = lower_ascii_copy(trim_copy_safe(s));
-    return (v == "disabled") ? "disabled" : "enabled";
+    if (v == "invited")  return "invited";
+    if (v == "disabled") return "disabled";
+    return "enabled";
 }
 
 std::string normalize_workspace_storage_state_copy(const std::string& s) {
@@ -116,7 +118,7 @@ std::string normalize_workspace_storage_state_copy(const std::string& s) {
     return (v == "allocated") ? "allocated" : "unallocated";
 }
 
-void normalize_workspace_member_v1(WorkspaceMemberRec* m) {
+    void normalize_workspace_member_v1(WorkspaceMemberRec* m) {
     if (!m) return;
 
     m->fingerprint = trim_copy_safe(m->fingerprint);
@@ -124,8 +126,9 @@ void normalize_workspace_member_v1(WorkspaceMemberRec* m) {
     m->status = normalize_workspace_member_status_copy(m->status);
     m->added_at = trim_copy_safe(m->added_at);
     m->added_by = trim_copy_safe(m->added_by);
+    m->responded_at = trim_copy_safe(m->responded_at);
+    m->responded_by = trim_copy_safe(m->responded_by);
 }
-
 bool is_valid_workspace_id(const std::string& workspace_id) {
     const std::string v = trim_copy_safe(workspace_id);
     if (v.size() < 6 || v.size() > 128) return false;
@@ -195,6 +198,8 @@ WorkspaceMemberRec workspace_member_from_json_v1(const json& j) {
     m.status = j.value("status", "enabled");
     m.added_at = j.value("added_at", "");
     m.added_by = j.value("added_by", "");
+    m.responded_at = j.value("responded_at", "");
+    m.responded_by = j.value("responded_by", "");
 
     normalize_workspace_member_v1(&m);
     return m;
@@ -209,7 +214,9 @@ json workspace_member_to_json_v1(const WorkspaceMemberRec& in_m) {
         {"role", m.role},
         {"status", m.status},
         {"added_at", m.added_at},
-        {"added_by", m.added_by}
+        {"added_by", m.added_by},
+        {"responded_at", m.responded_at},
+        {"responded_by", m.responded_by}
     };
 }
 
@@ -454,6 +461,8 @@ bool WorkspacesRegistry::add_or_update_member(const std::string& workspace_id,
         if (cur.fingerprint == m.fingerprint) {
             if (m.added_at.empty()) m.added_at = cur.added_at;
             if (m.added_by.empty()) m.added_by = cur.added_by;
+            if (m.responded_at.empty()) m.responded_at = cur.responded_at;
+            if (m.responded_by.empty()) m.responded_by = cur.responded_by;
             cur = std::move(m);
             std::sort(members.begin(), members.end(), member_fingerprint_less);
             return true;
@@ -492,6 +501,27 @@ bool WorkspacesRegistry::set_member_role(const std::string& workspace_id,
     for (auto& m : it->second.members) {
         if (m.fingerprint == fp) {
             m.role = normalize_workspace_role_copy(role);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+    bool WorkspacesRegistry::set_member_status(const std::string& workspace_id,
+                                               const std::string& fingerprint,
+                                               const std::string& status,
+                                               const std::string& responded_at,
+                                               const std::string& responded_by) {
+    auto it = by_id_.find(workspace_id);
+    if (it == by_id_.end()) return false;
+
+    const std::string fp = trim_copy_safe(fingerprint);
+    for (auto& m : it->second.members) {
+        if (m.fingerprint == fp) {
+            m.status = normalize_workspace_member_status_copy(status);
+            m.responded_at = trim_copy_safe(responded_at);
+            m.responded_by = trim_copy_safe(responded_by);
             return true;
         }
     }

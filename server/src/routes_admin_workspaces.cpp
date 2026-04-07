@@ -160,7 +160,9 @@ json workspace_to_admin_json(const WorkspaceRec& w,
             {"role", m.role},
             {"status", m.status},
             {"added_at", m.added_at},
-            {"added_by", m.added_by}
+            {"added_by", m.added_by},
+            {"responded_at", m.responded_at},
+            {"responded_by", m.responded_by}
         });
     }
     out["members"] = std::move(members);
@@ -186,6 +188,18 @@ json workspace_to_admin_json(const WorkspaceRec& w,
     return n;
 }
 
+    bool has_single_enabled_owner_only(const WorkspaceRec& w) {
+    std::size_t enabled_count = 0;
+    std::size_t enabled_owner_count = 0;
+
+    for (const auto& m : w.members) {
+        if (m.status != "enabled") continue;
+        ++enabled_count;
+        if (m.role == "owner") ++enabled_owner_count;
+    }
+
+    return enabled_count == 1 && enabled_owner_count == 1;
+}
     bool workspace_member_exists(const WorkspaceRec& w, const std::string& fp) {
     for (const auto& m : w.members) {
         if (m.fingerprint == fp) return true;
@@ -478,6 +492,253 @@ void register_admin_workspace_routes(httplib::Server& srv,
             {"workspace", workspace_to_admin_json(w, deps.users_path)}
         }.dump());
     });
+
+    srv.Post("/api/v4/admin/workspaces/delete",
+         [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!deps.require_admin_cookie_users_actor ||
+        !deps.require_admin_cookie_users_actor(
+            req, res, deps.cookie_key, deps.users_path, deps.users, &actor_fp)) {
+        return;
+    }
+
+    res.set_header("Cache-Control", "no-store");
+
+    if (!reload_workspaces_or_500(deps, res)) return;
+
+    json j;
+    try {
+        j = json::parse(req.body);
+    } catch (...) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    const std::string workspace_id = trim_copy_safe(j.value("workspace_id", ""));
+    if (workspace_id.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing workspace_id"}
+        }.dump());
+        return;
+    }
+
+    auto wopt = deps.workspaces->get(workspace_id);
+    if (!wopt.has_value()) {
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "workspace not found"}
+        }.dump());
+        return;
+    }
+
+    const WorkspaceRec w = *wopt;
+
+    if (!has_single_enabled_owner_only(w)) {
+        audit_workspace_event(deps, "admin.workspace_delete_refused", "fail", {
+            {"reason", "not_sole_enabled_owner_state"},
+            {"workspace_id", workspace_id},
+            {"actor_fp", actor_fp}
+        });
+
+        deps.reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "workspace_not_deletable"},
+            {"message", "workspace can be deleted only when one enabled owner is the last active member"}
+        }.dump());
+        return;
+    }
+
+    if (!w.storage_pool_id.empty()) {
+        audit_workspace_event(deps, "admin.workspace_delete_refused", "fail", {
+            {"reason", "pool_not_supported_yet"},
+            {"workspace_id", workspace_id},
+            {"pool_id", w.storage_pool_id},
+            {"actor_fp", actor_fp}
+        });
+
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "pool_not_supported_yet"},
+            {"message", "workspace delete currently supports default pool only"}
+        }.dump());
+        return;
+    }
+
+    std::filesystem::path ws_dir;
+    if (w.storage_state == "allocated" && !w.root_rel.empty()) {
+        ws_dir = default_data_root_from_users_path(deps.users_path) / w.root_rel;
+    }
+
+    std::uintmax_t removed_entries = 0;
+    if (!ws_dir.empty()) {
+        std::error_code ec;
+        removed_entries = std::filesystem::remove_all(ws_dir, ec);
+        if (ec) {
+            audit_workspace_event(deps, "admin.workspace_delete_fail", "fail", {
+                {"reason", "remove_all_failed"},
+                {"workspace_id", workspace_id},
+                {"path", ws_dir.string()},
+                {"detail", ec.message()},
+                {"actor_fp", actor_fp}
+            });
+
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to delete workspace directory"},
+                {"detail", ec.message()}
+            }.dump());
+            return;
+        }
+    }
+
+    if (!deps.workspaces->erase(workspace_id)) {
+        audit_workspace_event(deps, "admin.workspace_delete_fail", "fail", {
+            {"reason", "erase_failed"},
+            {"workspace_id", workspace_id},
+            {"actor_fp", actor_fp}
+        });
+
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to erase workspace registry entry"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->save(deps.workspaces_path)) {
+        // best-effort rollback of registry entry because filesystem content is already gone
+        deps.workspaces->upsert(w);
+        deps.workspaces->save(deps.workspaces_path);
+
+        audit_workspace_event(deps, "admin.workspace_delete_fail", "fail", {
+            {"reason", "save_failed"},
+            {"workspace_id", workspace_id},
+            {"actor_fp", actor_fp}
+        });
+
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to save workspaces after delete"}
+        }.dump());
+        return;
+    }
+
+    audit_workspace_event(deps, "admin.workspace_deleted", "ok", {
+        {"workspace_id", workspace_id},
+        {"name", w.name},
+        {"root_rel", w.root_rel},
+        {"removed_entries", std::to_string(static_cast<unsigned long long>(removed_entries))},
+        {"actor_fp", actor_fp}
+    });
+
+    deps.reply_json(res, 200, json{
+        {"ok", true},
+        {"workspace_id", workspace_id}
+    }.dump());
+});
+    
+srv.Post("/api/v4/admin/workspaces/rename",
+         [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!deps.require_admin_cookie_users_actor ||
+        !deps.require_admin_cookie_users_actor(
+            req, res, deps.cookie_key, deps.users_path, deps.users, &actor_fp)) {
+        return;
+    }
+
+    res.set_header("Cache-Control", "no-store");
+
+    if (!reload_workspaces_or_500(deps, res)) return;
+
+    json j;
+    try {
+        j = json::parse(req.body);
+    } catch (...) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    const std::string workspace_id = trim_copy_safe(j.value("workspace_id", ""));
+    const std::string new_name = trim_copy_safe(j.value("name", ""));
+
+    if (workspace_id.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing workspace_id"}
+        }.dump());
+        return;
+    }
+
+    if (new_name.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing name"}
+        }.dump());
+        return;
+    }
+
+    auto wopt = deps.workspaces->get(workspace_id);
+    if (!wopt.has_value()) {
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "workspace not found"}
+        }.dump());
+        return;
+    }
+
+    WorkspaceRec w = *wopt;
+    const std::string old_name = w.name;
+
+    w.name = new_name;
+
+    if (!deps.workspaces->upsert(w)) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to update workspace"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->save(deps.workspaces_path)) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to save workspaces"}
+        }.dump());
+        return;
+    }
+
+    audit_workspace_event(deps, "admin.workspace_renamed", "ok", {
+        {"workspace_id", workspace_id},
+        {"old_name", old_name},
+        {"new_name", new_name},
+        {"actor_fp", actor_fp}
+    });
+
+    deps.reply_json(res, 200, json{
+        {"ok", true},
+        {"workspace", workspace_to_admin_json(w, deps.users_path)}
+    }.dump());
+});
+
         srv.Post("/api/v4/admin/workspaces/members/add",
              [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
@@ -551,18 +812,42 @@ void register_admin_workspace_routes(httplib::Server& srv,
             return;
         }
 
-        const std::string now_iso = deps.now_iso_utc ? deps.now_iso_utc() : "";
+                 const std::string now_iso = deps.now_iso_utc ? deps.now_iso_utc() : "";
 
-        WorkspaceMemberRec member;
-        member.fingerprint = fp;
-        member.role = role;
-        member.status = "enabled";
-        member.added_at = now_iso;
-        member.added_by = actor_fp;
+         auto existing = workspace_member_get(*wopt, fp);
+         [[maybe_unused]] const bool existed = existing.has_value();
 
-        const bool existed = workspace_member_exists(*wopt, fp);
+         WorkspaceMemberRec member;
+         member.fingerprint = fp;
+         member.role = role;
 
-        if (!deps.workspaces->add_or_update_member(workspace_id, member)) {
+         if (!existing.has_value()) {
+             member.status = "invited";
+             member.added_at = now_iso;
+             member.added_by = actor_fp;
+             member.responded_at.clear();
+             member.responded_by.clear();
+         } else if (existing->status == "enabled") {
+             member.status = "enabled";
+             member.added_at = existing->added_at;
+             member.added_by = existing->added_by;
+             member.responded_at = existing->responded_at;
+             member.responded_by = existing->responded_by;
+         } else if (existing->status == "invited") {
+             member.status = "invited";
+             member.added_at = existing->added_at;
+             member.added_by = existing->added_by;
+             member.responded_at.clear();
+             member.responded_by.clear();
+         } else {
+             member.status = "invited";
+             member.added_at = now_iso;
+             member.added_by = actor_fp;
+             member.responded_at.clear();
+             member.responded_by.clear();
+         }
+
+         if (!deps.workspaces->add_or_update_member(workspace_id, member)) {
             deps.reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "server_error"},
@@ -581,12 +866,22 @@ void register_admin_workspace_routes(httplib::Server& srv,
             return;
         }
 
-        audit_workspace_event(deps, existed ? "admin.workspace_member_updated" : "admin.workspace_member_added", "ok", {
-            {"workspace_id", workspace_id},
-            {"target_fp", fp},
-            {"role", role},
-            {"actor_fp", actor_fp}
-        });
+                 std::string audit_event = "admin.workspace_member_invited";
+                 if (existing.has_value() && existing->status == "enabled") {
+                     audit_event = "admin.workspace_member_updated";
+                 } else if (existing.has_value() && existing->status == "invited") {
+                     audit_event = "admin.workspace_member_invite_updated";
+                 } else if (existing.has_value() && existing->status == "disabled") {
+                     audit_event = "admin.workspace_member_reinvited";
+                 }
+
+                 audit_workspace_event(deps, audit_event, "ok", {
+                     {"workspace_id", workspace_id},
+                     {"target_fp", fp},
+                     {"role", role},
+                     {"status", member.status},
+                     {"actor_fp", actor_fp}
+                 });
 
         deps.reply_json(res, 200, json{
             {"ok", true},

@@ -12,11 +12,14 @@
     const uploadBtn = document.getElementById("uploadBtn");
     const uploadFolderBtn = document.getElementById("uploadFolderBtn");
 
-    const workspaceNewBtn = document.getElementById("workspaceNewBtn");
-    const workspaceRenameBtn = document.getElementById("workspaceRenameBtn");
     const workspaceMembersBtn = document.getElementById("workspaceMembersBtn");
-    const workspaceDeleteBtn = document.getElementById("workspaceDeleteBtn");
 
+    const workspaceMembersModal = document.getElementById("workspaceMembersModal");
+    const workspaceMembersTitle = document.getElementById("workspaceMembersTitle");
+    const workspaceMembersSub = document.getElementById("workspaceMembersSub");
+    const workspaceMembersStatus = document.getElementById("workspaceMembersStatus");
+    const workspaceMembersList = document.getElementById("workspaceMembersList");
+    const workspaceMembersClose = document.getElementById("workspaceMembersClose");
     const SCOPE_KEY = "pqnas_filemgr_scope_v1";
 
     FM.scope = FM.scope || {
@@ -189,20 +192,8 @@
         if (uploadBtn) uploadBtn.disabled = !writeOk;
         if (uploadFolderBtn) uploadFolderBtn.disabled = !writeOk;
 
-        if (workspaceNewBtn) {
-            workspaceNewBtn.classList.toggle("hidden", inWorkspace);
-        }
-
-        if (workspaceRenameBtn) {
-            workspaceRenameBtn.classList.toggle("hidden", !inWorkspace);
-        }
-
         if (workspaceMembersBtn) {
             workspaceMembersBtn.classList.toggle("hidden", !inWorkspace);
-        }
-
-        if (workspaceDeleteBtn) {
-            workspaceDeleteBtn.classList.toggle("hidden", !inWorkspace);
         }
     }
     function statUrl(path) {
@@ -279,7 +270,20 @@
         }
         return j.workspaces;
     }
+    async function fetchWorkspaceMembers(workspaceId) {
+        const r = await fetch(`/api/v4/workspaces/members?workspace_id=${encodeURIComponent(workspaceId)}`, {
+            method: "GET",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Accept": "application/json" }
+        });
 
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok || !Array.isArray(j.members)) {
+            throw new Error((j && (j.message || j.error)) || `HTTP ${r.status}`);
+        }
+        return j;
+    }
     function populateScopeSelect(workspaces) {
         if (!scopeSelect) return;
 
@@ -310,23 +314,106 @@
         }
     }
 
-    workspaceNewBtn?.addEventListener("click", async () => {
-        alert("Next step: create workspace modal / API call");
-    });
+    function closeWorkspaceMembersModal() {
+        if (!workspaceMembersModal) return;
+        workspaceMembersModal.classList.remove("show");
+        workspaceMembersModal.setAttribute("aria-hidden", "true");
+    }
 
-    workspaceRenameBtn?.addEventListener("click", async () => {
+    function memberStatusClass(status) {
+        const s = String(status || "").toLowerCase();
+        if (s === "enabled") return "ok";
+        if (s === "invited") return "warn";
+        if (s === "disabled") return "err";
+        return "";
+    }
+
+    function renderWorkspaceMembers(items) {
+        if (!workspaceMembersList) return;
+
+        if (!Array.isArray(items) || !items.length) {
+            workspaceMembersList.innerHTML = `<div class="mono" style="opacity:.8;">No members.</div>`;
+            return;
+        }
+
+        workspaceMembersList.innerHTML = items.map((m) => {
+            const fp = String(m.fingerprint || "");
+            const role = String(m.role || "");
+            const status = String(m.status || "");
+            const addedAt = String(m.added_at || "");
+            const addedBy = String(m.added_by || "");
+            const respondedAt = String(m.responded_at || "");
+            const respondedBy = String(m.responded_by || "");
+
+            const respondedBits = [];
+            if (respondedAt) respondedBits.push(`responded ${respondedAt}`);
+            if (respondedBy) respondedBits.push(`by ${respondedBy}`);
+
+            return `
+            <div style="border:1px solid rgba(var(--fg-rgb),0.12); border-radius:14px; background:rgba(0,0,0,0.16); padding:12px;">
+              <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:space-between;">
+                <div class="mono" style="font-weight:900; overflow-wrap:anywhere;">${fp}</div>
+                <span class="badge ${memberStatusClass(status)}">${status || "?"}</span>
+              </div>
+
+              <div style="margin-top:8px; display:grid; gap:4px;">
+                <div><span class="k">Role</span> <span class="v">${role || "—"}</span></div>
+                <div><span class="k">Added</span> <span class="v">${addedAt || "—"}${addedBy ? ` by ${addedBy}` : ""}</span></div>
+                ${respondedBits.length ? `<div><span class="k">Response</span> <span class="v">${respondedBits.join(" ")}</span></div>` : ""}
+              </div>
+            </div>
+        `;
+        }).join("");
+    }
+
+    async function openWorkspaceMembersModal() {
         if (!isWorkspaceScope()) return;
-        alert(`Next step: rename workspace ${FM.scope.workspaceName || FM.scope.workspaceId}`);
-    });
+        if (!workspaceMembersModal) return;
 
+        workspaceMembersModal.classList.add("show");
+        workspaceMembersModal.setAttribute("aria-hidden", "false");
+
+        if (workspaceMembersTitle) {
+            workspaceMembersTitle.textContent = "Workspace members";
+        }
+        if (workspaceMembersSub) {
+            workspaceMembersSub.textContent = `${FM.scope.workspaceName || FM.scope.workspaceId}`;
+        }
+        if (workspaceMembersStatus) {
+            workspaceMembersStatus.textContent = "Loading members…";
+        }
+        if (workspaceMembersList) {
+            workspaceMembersList.innerHTML = "";
+        }
+
+        try {
+            const j = await fetchWorkspaceMembers(FM.scope.workspaceId);
+            renderWorkspaceMembers(j.members || []);
+            if (workspaceMembersStatus) {
+                workspaceMembersStatus.textContent = `${Array.isArray(j.members) ? j.members.length : 0} member(s)`;
+            }
+        } catch (e) {
+            if (workspaceMembersStatus) {
+                workspaceMembersStatus.textContent = `Failed to load members: ${String(e && e.message ? e.message : e)}`;
+            }
+            if (workspaceMembersList) {
+                workspaceMembersList.innerHTML = "";
+            }
+        }
+    }
     workspaceMembersBtn?.addEventListener("click", async () => {
         if (!isWorkspaceScope()) return;
-        alert(`Next step: manage members for ${FM.scope.workspaceName || FM.scope.workspaceId}`);
+        await openWorkspaceMembersModal();
     });
 
-    workspaceDeleteBtn?.addEventListener("click", async () => {
-        if (!isWorkspaceScope()) return;
-        alert(`Next step: delete workspace ${FM.scope.workspaceName || FM.scope.workspaceId}`);
+    workspaceMembersClose?.addEventListener("click", () => {
+        closeWorkspaceMembersModal();
+    });
+
+    workspaceMembersModal?.addEventListener("click", (ev) => {
+        if (ev.target === workspaceMembersModal) {
+            closeWorkspaceMembersModal();
+        }
     });
 
     async function initWorkspaces() {

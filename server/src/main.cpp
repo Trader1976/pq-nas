@@ -237,6 +237,8 @@ const std::string STATIC_ADMIN_APPS_JS       = static_path("admin_apps.js");
 const std::string STATIC_APP_HTML            = static_path("app.html");
 const std::string STATIC_APP_JS              = static_path("app.js");
 const std::string STATIC_USERS_HTML          = static_path("admin_users.html");
+const std::string STATIC_ADMIN_WORKSPACES_HTML = static_path("admin_workspaces.html");
+const std::string STATIC_ADMIN_WORKSPACES_JS   = static_path("admin_workspaces.js");
 const std::string STATIC_USERS_JS            = static_path("admin_users.js");
 const std::string STATIC_WAIT_APPROVAL_HTML  = static_path("wait_approval.html");
 const std::string STATIC_WAIT_APPROVAL_JS    = static_path("wait_approval.js");
@@ -17469,6 +17471,16 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
     srv.Get("/wait-approval", [&](const httplib::Request&, httplib::Response& res) {
         const std::string body = slurp_file(STATIC_WAIT_APPROVAL_HTML);
         if (body.empty()) { res.status = 404; res.set_content("missing wait_approval.html","text/plain"); return; }
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(body, "text/html; charset=utf-8");
+    });
+
+    srv.Get("/admin/workspaces", [&](const httplib::Request& req, httplib::Response& res) {
+        std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+        const std::string body = slurp_file(STATIC_ADMIN_WORKSPACES_HTML);
+        if (body.empty()) { res.status = 404; res.set_content("missing admin_workspaces.html","text/plain"); return; }
         res.set_header("Cache-Control", "no-store");
         res.set_content(body, "text/html; charset=utf-8");
     });
