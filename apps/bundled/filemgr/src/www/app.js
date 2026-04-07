@@ -2898,7 +2898,7 @@ function pickFolder() {
         load();
       }));
 
-      if (caps.zipCurrent !== false) {
+      if (caps.zipFolder !== false) {
         ctxEl.appendChild(menuItem("Download folder (zip)", "", () => {
           const relDir = joinPath(curPath, item.name);
           downloadFolderZip(relDir);
@@ -2938,17 +2938,19 @@ function pickFolder() {
         ctxEl.appendChild(menuSep());
         ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
       }
-      if (!(selectedKeys && selectedKeys.size > 1)) {
-        ctxEl.appendChild(menuSep());
-        ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
-      }
     } else {
-      if (window.PQNAS_FILEMGR && window.PQNAS_FILEMGR.imagePreview && isProbablyImagePreviewableName(item.name)) {
+      if (caps.imagePreview !== false &&
+          window.PQNAS_FILEMGR &&
+          window.PQNAS_FILEMGR.imagePreview &&
+          isProbablyImagePreviewableName(item.name)) {
         ctxEl.appendChild(menuItem("Open preview", "", () => window.PQNAS_FILEMGR.imagePreview.open(item)));
         ctxEl.appendChild(menuItem("Open original", "", () => doOpenOriginal(item)));
       }
 
-      if (window.PQNAS_FILEMGR && window.PQNAS_FILEMGR.textEdit && isProbablyTextEditableName(item.name)) {
+      if (caps.textEdit !== false &&
+          window.PQNAS_FILEMGR &&
+          window.PQNAS_FILEMGR.textEdit &&
+          isProbablyTextEditableName(item.name)) {
         ctxEl.appendChild(menuItem("Open / edit text…", "", () => window.PQNAS_FILEMGR.textEdit.open(item)));
       }
 
@@ -2970,6 +2972,9 @@ function pickFolder() {
 
       if (caps.shares !== false) {
         ctxEl.appendChild(menuItem("Standard share link…", "", () => openShareDialogFor(item)));
+      }
+
+      if (caps.pqShares !== false) {
         ctxEl.appendChild(menuItem("PQ recipient-enrolled share…", "", () => openShareDialogFor(item, {
           forceMode: "pq_recipient_enrolled_v1"
         })));
@@ -3051,7 +3056,7 @@ function pickFolder() {
       ctxEl.appendChild(menuSep());
     }
 
-    if (caps.zipCurrent !== false) {
+    if (caps.zipFolder !== false) {
       ctxEl.appendChild(menuItem("Download current folder (zip)", "", () => downloadFolderZip(curPath)));
     }
 
@@ -3354,9 +3359,15 @@ function pickFolder() {
         clearSelection();
         load();
       } else if (item.type === "file") {
-        if (window.PQNAS_FILEMGR && window.PQNAS_FILEMGR.imagePreview && isProbablyImagePreviewableName(item.name)) {
+        if (caps.imagePreview !== false &&
+            window.PQNAS_FILEMGR &&
+            window.PQNAS_FILEMGR.imagePreview &&
+            isProbablyImagePreviewableName(item.name)) {
           window.PQNAS_FILEMGR.imagePreview.open(item);
-        } else if (window.PQNAS_FILEMGR && window.PQNAS_FILEMGR.textEdit && isProbablyTextEditableName(item.name)) {
+        } else if (caps.textEdit !== false &&
+            window.PQNAS_FILEMGR &&
+            window.PQNAS_FILEMGR.textEdit &&
+            isProbablyTextEditableName(item.name)) {
           window.PQNAS_FILEMGR.textEdit.open(item);
         } else {
           doDownload(item);
@@ -3843,6 +3854,8 @@ function pickFolder() {
 
     const sharesPromise = refreshSharesCache();
     const quotaPromise = refreshQuotaInfoIfNeeded(false);
+    const caps = fmCaps();
+    const favoritesEnabled = caps.favorites !== false;
 
     try {
       const url = apiListUrl(curPath);
@@ -3879,12 +3892,12 @@ function pickFolder() {
         return String(a.name || "").localeCompare(String(b.name || ""));
       });
 
-      const items = favoritesOnly
+      const items = (favoritesEnabled && favoritesOnly)
           ? allItems.filter((it) => isFavoriteRelPath(currentRelPathFor(it), it.type))
           : allItems;
       lastListedItems = items.slice();
       setBadge("ok", "ready");
-      status.textContent = favoritesOnly
+      status.textContent = (favoritesEnabled && favoritesOnly)
           ? `Favorites: ${items.length} / ${allItems.length}`
           : `Items: ${items.length}`;
 
@@ -3892,7 +3905,7 @@ function pickFolder() {
         const empty = document.createElement("div");
         empty.className = "tile mono";
         empty.style.cursor = "default";
-        empty.textContent = favoritesOnly
+        empty.textContent = (favoritesEnabled && favoritesOnly)
             ? "(no favorites in this folder)\n\nTip: click ☆ on any item or use the context menu."
             : "(empty)\n\nTip: drag & drop files/folders here to upload.";
         gridEl.appendChild(empty);
@@ -3978,6 +3991,5 @@ function pickFolder() {
     } catch (e) {
       console.warn("Favorites load failed:", e);
     }
-    await load();
   })();
 })();
