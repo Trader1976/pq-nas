@@ -943,7 +943,47 @@
       background: rgba(var(--fg-rgb),0.10);
       box-shadow: 0 0 18px rgba(var(--fg-rgb),0.10);
     }
+    .scopeBar{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      min-width:0;
+      flex-wrap:wrap;
+    }
 
+    .scopeLbl{
+      font-size:12px;
+      font-weight:800;
+      color:var(--fg-dim);
+    }
+
+    .scopeSelect{
+      min-width:180px;
+      max-width:340px;
+      padding:6px 10px;
+      border-radius:10px;
+      border:1px solid var(--border2);
+      background:rgba(0,0,0,0.22);
+      color:var(--fg);
+      font-family:var(--sans);
+      font-size:12px;
+      font-weight:800;
+    }
+
+    .scopeRole{
+      padding:4px 8px;
+      border-radius:999px;
+      border:1px solid rgba(var(--fg-rgb),0.18);
+      background:rgba(var(--fg-rgb),0.06);
+      font-size:11px;
+      font-weight:900;
+      color:var(--fg-dim);
+    }
+
+    html[data-theme="bright"] .scopeSelect{
+      background:rgba(255,255,255,0.96);
+      border-color:rgba(0,0,0,0.12);
+    }
     .hidden{ display:none !important; }
   </style>
 </head>
@@ -954,6 +994,15 @@
     <div class="bar">
       <div class="left">
         <div class="title" id="titleLine">File Manager</div>
+
+        <div id="scopeBar" class="scopeBar hidden" aria-live="polite">
+          <label for="scopeSelect" class="scopeLbl">Location</label>
+          <select id="scopeSelect" class="scopeSelect">
+            <option value="user">My files</option>
+          </select>
+          <span id="scopeRole" class="scopeRole hidden"></span>
+        </div>
+
         <div id="pathLine" aria-label="Breadcrumb path">path: (loading)</div>
       </div>
 
@@ -1196,6 +1245,7 @@
 
 <script src="./filetype_icons.js"></script>
 <script src="./app.js"></script>
+<script src="./filemgr_workspaces.js"></script>
 <script src="./textedit.js"></script>
 <script src="./imagepreview.js"></script>
 

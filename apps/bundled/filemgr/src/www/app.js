@@ -567,6 +567,75 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return p.slice(0, i);
   }
 
+  function fmApi() {
+    return (window.PQNAS_FILEMGR && window.PQNAS_FILEMGR.api) ? window.PQNAS_FILEMGR.api : null;
+  }
+
+  function fmCaps() {
+    if (window.PQNAS_FILEMGR && typeof window.PQNAS_FILEMGR.getCapabilities === "function") {
+      return window.PQNAS_FILEMGR.getCapabilities() || {};
+    }
+    return {};
+  }
+
+  function canWriteCurrentScope() {
+    if (window.PQNAS_FILEMGR && typeof window.PQNAS_FILEMGR.canCurrentScopeWrite === "function") {
+      return !!window.PQNAS_FILEMGR.canCurrentScopeWrite();
+    }
+    return true;
+  }
+
+  function requireWritableScopeOrExplain(actionLabel) {
+    if (!canWriteCurrentScope()) {
+      setBadge("warn", "read-only");
+      status.textContent = actionLabel
+          ? `${actionLabel} not available: current workspace is read-only.`
+          : "Current workspace is read-only.";
+      return false;
+    }
+    return requireStorageOrExplain(actionLabel);
+  }
+
+  function apiListUrl(path) {
+    const api = fmApi();
+    if (api && typeof api.listUrl === "function") return api.listUrl(path || "");
+    return path ? `/api/v4/files/list?path=${encodeURIComponent(path)}` : `/api/v4/files/list`;
+  }
+
+  function apiMkdirUrl(path) {
+    const api = fmApi();
+    if (api && typeof api.mkdirUrl === "function") return api.mkdirUrl(path || "");
+    return `/api/v4/files/mkdir?path=${encodeURIComponent(path || "")}`;
+  }
+
+  function apiPutUrl(path, overwrite) {
+    const api = fmApi();
+    if (api && typeof api.putUrl === "function") return api.putUrl(path || "", !!overwrite);
+
+    const qs = new URLSearchParams();
+    qs.set("path", path || "");
+    if (overwrite) qs.set("overwrite", "1");
+    return `/api/v4/files/put?${qs.toString()}`;
+  }
+
+  function apiGetUrl(path) {
+    const api = fmApi();
+    if (api && typeof api.getUrl === "function") return api.getUrl(path || "");
+    return `/api/v4/files/get?path=${encodeURIComponent(path || "")}`;
+  }
+
+  function apiDeleteUrl(path) {
+    const api = fmApi();
+    if (api && typeof api.deleteUrl === "function") return api.deleteUrl(path || "");
+    return `/api/v4/files/delete?path=${encodeURIComponent(path || "")}`;
+  }
+
+  function apiMoveUrl(from, to) {
+    const api = fmApi();
+    if (api && typeof api.moveUrl === "function") return api.moveUrl(from || "", to || "");
+    return `/api/v4/files/move?from=${encodeURIComponent(from || "")}&to=${encodeURIComponent(to || "")}`;
+  }
+
   function fmtSize(n) {
     const u = ["B", "KiB", "MiB", "GiB", "TiB"];
     let v = Number(n || 0);
@@ -1072,7 +1141,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   }
 
   async function deleteSelection() {
-    if (!requireStorageOrExplain("Delete")) return;
+    if (!requireWritableScopeOrExplain("Delete")) return;
     const paths = selectedRelPaths();
     if (!paths.length) {
       status.textContent = "Nothing selected.";
@@ -1094,7 +1163,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         const key = Array.from(selectedKeys).find((k) => keyToItemRelPath(k) === rel);
         const type = key && String(key).startsWith("dir:") ? "dir" : "file";
 
-        const url = `/api/v4/files/delete?path=${encodeURIComponent(rel)}`;
+        const url = apiDeleteUrl(rel);
         const r = await fetch(url, {
           method: "POST",
           credentials: "include",
@@ -1308,7 +1377,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       const full = curPath ? `${curPath}/${acc}` : acc;
       if (created.has(full)) continue;
 
-      const url = `/api/v4/files/mkdir?path=${encodeURIComponent(full)}`;
+      const url = apiMkdirUrl(full);
       const r = await fetch(url, { method: "POST", credentials: "include", cache: "no-store" });
       const j = await r.json().catch(() => null);
       created.add(full);
@@ -1318,11 +1387,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   function xhrPutFileTo(relPath, file, onProgress, opts = {}) {
     return new Promise((resolve, reject) => {
       const full = curPath ? `${curPath}/${relPath}` : relPath;
-      const qs = new URLSearchParams();
-      qs.set("path", full);
-      if (opts && opts.overwrite) qs.set("overwrite", "1");
-
-      const url = `/api/v4/files/put?${qs.toString()}`;
+      const url = apiPutUrl(full, !!(opts && opts.overwrite));
 
       const xhr = new XMLHttpRequest();
       activeUploadXhr = xhr;
@@ -1773,28 +1838,18 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   }
 
   function pickFiles() {
-    if (storageBlocked) {
-      setBadge("warn", "storage");
-      status.textContent = "Storage not allocated yet. Ask an admin to allocate quota.";
-      return;
-    }
-
+    if (!requireWritableScopeOrExplain("Upload")) return;
     if (!filePick) return;
     filePick.value = "";
     filePick.click();
   }
 
-  function pickFolder() {
-    if (storageBlocked) {
-      setBadge("warn", "storage");
-      status.textContent = "Storage not allocated yet. Ask an admin to allocate quota.";
-      return;
-    }
-
-    if (!folderPick) return;
-    folderPick.value = "";
-    folderPick.click();
-  }
+function pickFolder() {
+  if (!requireWritableScopeOrExplain("Upload folder")) return;
+  if (!folderPick) return;
+  folderPick.value = "";
+  folderPick.click();
+}
 
   filePick?.addEventListener("change", async () => {
     const files = Array.from(filePick.files || []);
@@ -1899,7 +1954,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     e.preventDefault();
     showDropOverlay(false);
 
-    if (!requireStorageOrExplain("Upload")) return;
+    if (!requireWritableScopeOrExplain("Upload")) return;
 
     try {
       const dt = e.dataTransfer;
@@ -1990,18 +2045,29 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (!ctxEl) return;
 
     const stats = selectedFavoriteStats();
+    const caps = fmCaps();
     const allFav = stats.total > 0 && stats.fav === stats.total;
     const someFav = stats.fav > 0 && stats.fav < stats.total;
 
     ctxEl.innerHTML = "";
-    ctxEl.appendChild(menuItem(`Properties (selection)…`, "", () => showSelectionProperties()));
-    ctxEl.appendChild(menuSep());
+    if (caps.properties !== false) {
+      ctxEl.appendChild(menuItem(`Properties (selection)…`, "", () => showSelectionProperties()));
+      ctxEl.appendChild(menuSep());
+    }
 
-    if (!allFav) ctxEl.appendChild(menuItem(`Add selection to favorites (${stats.total})`, "", async () => await addSelectionToFavorites()));
-    if (someFav || allFav) ctxEl.appendChild(menuItem(`Remove selection from favorites (${stats.fav})`, "", async () => await removeSelectionFromFavorites()));
-    ctxEl.appendChild(menuSep());
-    ctxEl.appendChild(menuItem(`Download selection (zip) (${selectedKeys.size})`, "", () => downloadSelectionZip()));
-    ctxEl.appendChild(menuItem(`Delete selection (${selectedKeys.size})…`, "", () => deleteSelection(), { danger: true }));
+    if (caps.favorites !== false) {
+      if (!allFav) ctxEl.appendChild(menuItem(`Add selection to favorites (${stats.total})`, "", async () => await addSelectionToFavorites()));
+      if (someFav || allFav) ctxEl.appendChild(menuItem(`Remove selection from favorites (${stats.fav})`, "", async () => await removeSelectionFromFavorites()));
+      ctxEl.appendChild(menuSep());
+    }
+
+    if (caps.zipSelection !== false) {
+      ctxEl.appendChild(menuItem(`Download selection (zip) (${selectedKeys.size})`, "", () => downloadSelectionZip()));
+    }
+
+    if (canWriteCurrentScope()) {
+      ctxEl.appendChild(menuItem(`Delete selection (${selectedKeys.size})…`, "", () => deleteSelection(), { danger: true }));
+    }
   }
 
   function currentRelPathFor(item) {
@@ -2010,11 +2076,11 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
   function doDownload(item) {
     const p = currentRelPathFor(item);
-    window.location.href = `/api/v4/files/get?path=${encodeURIComponent(p)}`;
+    window.location.href = apiGetUrl(p);
   }
   function doOpenOriginal(item) {
     const p = currentRelPathFor(item);
-    window.open(`/api/v4/files/get?path=${encodeURIComponent(p)}`, "_blank", "noopener");
+    window.open(apiGetUrl(p), "_blank", "noopener");
   }
   function downloadFolderZip(relDir) {
     const p = relDir || "";
@@ -2220,7 +2286,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   }
 
   async function doRename(item) {
-    if (!requireStorageOrExplain("Rename")) return;
+    if (!requireWritableScopeOrExplain("Rename")) return;
     const oldRel = currentRelPathFor(item);
     const oldName = String(item.name || "");
     const newName = prompt("Rename to:", oldName);
@@ -2238,7 +2304,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     setBadge("warn", "working…");
     status.textContent = "Renaming…";
 
-    const url = `/api/v4/files/move?from=${encodeURIComponent(oldRel)}&to=${encodeURIComponent(newRel)}`;
+    const url = apiMoveUrl(oldRel, newRel);
     const r = await fetch(url, { method: "POST", credentials: "include", cache: "no-store" });
     const j = await r.json().catch(() => null);
 
@@ -2263,7 +2329,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   }
 
   async function doDelete(item) {
-    if (!requireStorageOrExplain("Delete")) return;
+    if (!requireWritableScopeOrExplain("Delete")) return;
     const rel = currentRelPathFor(item);
     const isDir = item.type === "dir";
 
@@ -2273,7 +2339,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     setBadge("warn", "working…");
     status.textContent = "Deleting…";
 
-    const url = `/api/v4/files/delete?path=${encodeURIComponent(rel)}`;
+    const url = apiDeleteUrl(rel);
     const r = await fetch(url, {
       method: "POST",
       credentials: "include",
@@ -2303,7 +2369,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   }
 
   async function doMkdirAt(relDir) {
-    if (!requireStorageOrExplain("Create folder")) return;
+    if (!requireWritableScopeOrExplain("Create folder")) return;
     const baseShown = relDir ? `/${relDir}` : curPath ? `/${curPath}` : "/";
     const name = prompt(`New folder name in ${baseShown}:`, "New Folder");
     if (!name) return;
@@ -2319,7 +2385,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     setBadge("warn", "working…");
     status.textContent = "Creating folder…";
 
-    const url = `/api/v4/files/mkdir?path=${encodeURIComponent(newRel)}`;
+    const url = apiMkdirUrl(newRel);
     const r = await fetch(url, { method: "POST", credentials: "include", cache: "no-store" });
     const j = await r.json().catch(() => null);
 
@@ -2807,6 +2873,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     ctxOpenForKey = key;
 
     const rel = currentRelPathFor(item);
+    const caps = fmCaps();
+    const canWrite = canWriteCurrentScope();
     const share = existingShareFor(rel, item.type === "dir" ? "dir" : "file");
     const shareLabel = share
         ? (isShareExpired(share) ? "Manage share link… (expired)" : "Manage share link…")
@@ -2830,33 +2898,46 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         load();
       }));
 
-      ctxEl.appendChild(menuItem("Download folder (zip)", "", () => {
-        const relDir = joinPath(curPath, item.name);
-        downloadFolderZip(relDir);
-      }));
+      if (caps.zipCurrent !== false) {
+        ctxEl.appendChild(menuItem("Download folder (zip)", "", () => {
+          const relDir = joinPath(curPath, item.name);
+          downloadFolderZip(relDir);
+        }));
+      }
 
-      ctxEl.appendChild(menuItem(favLabel, "", async () => {
-        try {
-          const on = await toggleFavoriteRelPath(rel, item.type);
-          setBadge("ok", "ready");
-          status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
-          await load();
-        } catch (err) {
-          setBadge("err", "error");
-          status.textContent = `Favorites update failed: ${String(err && err.message ? err.message : err)}`;
-        }
-      }));
+      if (caps.favorites !== false) {
+        ctxEl.appendChild(menuItem(favLabel, "", async () => {
+          try {
+            const on = await toggleFavoriteRelPath(rel, item.type);
+            setBadge("ok", "ready");
+            status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
+            await load();
+          } catch (err) {
+            setBadge("err", "error");
+            status.textContent = `Favorites update failed: ${String(err && err.message ? err.message : err)}`;
+          }
+        }));
+      }
 
-      ctxEl.appendChild(menuItem(shareLabel, "", () => openShareDialogFor(item)));
-      ctxEl.appendChild(menuItem("New folder here…", "", () => {
-        const relDir = joinPath(curPath, item.name);
-        doMkdirAt(relDir);
-      }));
+      if (caps.shares !== false) {
+        ctxEl.appendChild(menuItem(shareLabel, "", () => openShareDialogFor(item)));
+      }
 
-      ctxEl.appendChild(menuSep());
-      ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
-      ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
+      if (canWrite) {
+        ctxEl.appendChild(menuItem("New folder here…", "", () => {
+          const relDir = joinPath(curPath, item.name);
+          doMkdirAt(relDir);
+        }));
 
+        ctxEl.appendChild(menuSep());
+        ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
+        ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
+      }
+
+      if (caps.properties !== false && !(selectedKeys && selectedKeys.size > 1)) {
+        ctxEl.appendChild(menuSep());
+        ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
+      }
       if (!(selectedKeys && selectedKeys.size > 1)) {
         ctxEl.appendChild(menuSep());
         ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
@@ -2872,28 +2953,35 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       }
 
       ctxEl.appendChild(menuItem("Download", "⤓", () => doDownload(item)));
-      ctxEl.appendChild(menuItem(favLabel, "", async () => {
-        try {
-          const on = await toggleFavoriteRelPath(rel, item.type);
-          setBadge("ok", "ready");
-          status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
-          await load();
-        } catch (err) {
-          setBadge("err", "error");
-          status.textContent = `Favorites update failed: ${String(err && err.message ? err.message : err)}`;
-        }
-      }));
 
-      ctxEl.appendChild(menuItem("Standard share link…", "", () => openShareDialogFor(item)));
-      ctxEl.appendChild(menuItem("PQ recipient-enrolled share…", "", () => openShareDialogFor(item, {
-        forceMode: "pq_recipient_enrolled_v1"
-      })));
+      if (caps.favorites !== false) {
+        ctxEl.appendChild(menuItem(favLabel, "", async () => {
+          try {
+            const on = await toggleFavoriteRelPath(rel, item.type);
+            setBadge("ok", "ready");
+            status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
+            await load();
+          } catch (err) {
+            setBadge("err", "error");
+            status.textContent = `Favorites update failed: ${String(err && err.message ? err.message : err)}`;
+          }
+        }));
+      }
 
-      ctxEl.appendChild(menuSep());
-      ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
-      ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
+      if (caps.shares !== false) {
+        ctxEl.appendChild(menuItem("Standard share link…", "", () => openShareDialogFor(item)));
+        ctxEl.appendChild(menuItem("PQ recipient-enrolled share…", "", () => openShareDialogFor(item, {
+          forceMode: "pq_recipient_enrolled_v1"
+        })));
+      }
 
-      if (!(selectedKeys && selectedKeys.size > 1)) {
+      if (canWrite) {
+        ctxEl.appendChild(menuSep());
+        ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
+        ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
+      }
+
+      if (caps.properties !== false && !(selectedKeys && selectedKeys.size > 1)) {
         ctxEl.appendChild(menuSep());
         ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
       }
@@ -2915,6 +3003,9 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     ctxEl.innerHTML = "";
     ctxOpenForKey = key;
+
+    const caps = fmCaps();
+    const canWrite = canWriteCurrentScope();
 
     if (selectedKeys && selectedKeys.size > 0) {
       if (selectedKeys.size > 1) {
@@ -2949,14 +3040,26 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       return;
     }
 
-    ctxEl.appendChild(menuItem("Upload files…", "", () => pickFiles()));
-    ctxEl.appendChild(menuItem("Upload folder…", "", () => pickFolder()));
-    ctxEl.appendChild(menuSep());
-    ctxEl.appendChild(menuItem(favoritesOnly ? "Show all items" : "Show favorites only", "", () => toggleFavoritesOnly()));
-    ctxEl.appendChild(menuSep());
-    ctxEl.appendChild(menuItem("Download current folder (zip)", "", () => downloadFolderZip(curPath)));
-    ctxEl.appendChild(menuItem("New folder…", "", () => doMkdirAt(curPath)));
-    ctxEl.appendChild(menuSep());
+    if (canWrite) {
+      ctxEl.appendChild(menuItem("Upload files…", "", () => pickFiles()));
+      ctxEl.appendChild(menuItem("Upload folder…", "", () => pickFolder()));
+      ctxEl.appendChild(menuSep());
+    }
+
+    if (caps.favorites !== false) {
+      ctxEl.appendChild(menuItem(favoritesOnly ? "Show all items" : "Show favorites only", "", () => toggleFavoritesOnly()));
+      ctxEl.appendChild(menuSep());
+    }
+
+    if (caps.zipCurrent !== false) {
+      ctxEl.appendChild(menuItem("Download current folder (zip)", "", () => downloadFolderZip(curPath)));
+    }
+
+    if (canWrite) {
+      ctxEl.appendChild(menuItem("New folder…", "", () => doMkdirAt(curPath)));
+      ctxEl.appendChild(menuSep());
+    }
+
     ctxEl.appendChild(menuItem("Refresh", "", () => load()));
 
     ctxEl.setAttribute("aria-hidden", "false");
@@ -3197,7 +3300,10 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     meta.appendChild(left);
     meta.appendChild(right);
 
-    t.appendChild(makeFavoriteButton(item));
+    const caps = fmCaps();
+    if (caps.favorites !== false) {
+      t.appendChild(makeFavoriteButton(item));
+    }
     t.appendChild(icoWrap);
     t.appendChild(nm);
     t.appendChild(meta);
@@ -3739,9 +3845,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const quotaPromise = refreshQuotaInfoIfNeeded(false);
 
     try {
-      const url = curPath
-          ? `/api/v4/files/list?path=${encodeURIComponent(curPath)}`
-          : `/api/v4/files/list`;
+      const url = apiListUrl(curPath);
 
       const r = await fetch(url, { credentials: "include", cache: "no-store" });
       const j = await r.json().catch(() => null);
@@ -3857,6 +3961,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   const FM = window.PQNAS_FILEMGR;
   FM.getCurPath = () => curPath;
   FM.getLastListedItems = () => lastListedItems.slice();
+  FM.setPathAndLoad = setPathAndLoad;
+  FM.clearSelection = clearSelection;
   FM.currentRelPathFor = currentRelPathFor;
   FM.joinPath = joinPath;
   FM.fmtSize = fmtSize;
