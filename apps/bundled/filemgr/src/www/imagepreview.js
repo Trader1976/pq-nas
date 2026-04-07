@@ -36,6 +36,13 @@
             FM.isProbablyImagePreviewableName(item.name));
     }
 
+    function imageGetUrl(relPath) {
+        if (FM.api && typeof FM.api.getUrl === "function") {
+            return FM.api.getUrl(relPath || "");
+        }
+        return `/api/v4/files/get?path=${encodeURIComponent(relPath || "")}`;
+    }
+
     function getImageItemsInView() {
         const items = FM.getLastListedItems ? FM.getLastListedItems() : [];
         return items.filter(isImageItem);
@@ -142,7 +149,7 @@
         if (!item || item.type !== "file") return;
 
         const rel = FM.currentRelPathFor(item);
-        const src = `/api/v4/files/get?path=${encodeURIComponent(rel)}`;
+        const src = imageGetUrl(rel);
 
         state.relPath = rel;
 

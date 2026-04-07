@@ -979,11 +979,17 @@
       font-weight:900;
       color:var(--fg-dim);
     }
-
+    .scopeActions{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      flex-wrap:wrap;
+    }
     html[data-theme="bright"] .scopeSelect{
       background:rgba(255,255,255,0.96);
       border-color:rgba(0,0,0,0.12);
     }
+
     .hidden{ display:none !important; }
   </style>
 </head>
@@ -997,10 +1003,30 @@
 
         <div id="scopeBar" class="scopeBar hidden" aria-live="polite">
           <label for="scopeSelect" class="scopeLbl">Location</label>
+
           <select id="scopeSelect" class="scopeSelect">
             <option value="user">My files</option>
           </select>
+
           <span id="scopeRole" class="scopeRole hidden"></span>
+
+          <div id="workspaceActions" class="scopeActions">
+            <button id="workspaceNewBtn" class="btn secondary" type="button" title="Create workspace">
+              <span class="btnTxt">New workspace</span>
+            </button>
+
+            <button id="workspaceRenameBtn" class="btn secondary hidden" type="button" title="Rename workspace">
+              <span class="btnTxt">Rename</span>
+            </button>
+
+            <button id="workspaceMembersBtn" class="btn secondary hidden" type="button" title="Manage members">
+              <span class="btnTxt">Members</span>
+            </button>
+
+            <button id="workspaceDeleteBtn" class="btn secondary hidden" type="button" title="Delete workspace">
+              <span class="btnTxt">Delete</span>
+            </button>
+          </div>
         </div>
 
         <div id="pathLine" aria-label="Breadcrumb path">path: (loading)</div>
@@ -1013,6 +1039,7 @@
           <img class="btnIco" id="upIcon" src="./icons/updir_small.png" alt="">
           <span class="btnTxt">Up</span>
         </button>
+
         <button class="btn secondary" id="viewToggleBtn" type="button" title="Toggle list/grid view">
           <span class="btnTxt" id="viewToggleTxt">List</span>
         </button>
@@ -1025,7 +1052,6 @@
           <span class="btnTxt">Refresh</span>
         </button>
 
-        <!-- hidden pickers -->
         <input id="filePick" type="file" multiple style="display:none" />
         <input id="folderPick" type="file" webkitdirectory multiple style="display:none" />
       </div>
@@ -1241,6 +1267,45 @@
     </div>
   </div>
 </div>
+  <div id="workspaceMembersModal" class="modal" aria-hidden="true">
+    <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="workspaceMembersTitle">
+      <div class="modalHead">
+        <div>
+          <div id="workspaceMembersTitle" class="modalTitle">Workspace members</div>
+          <div id="workspaceMembersSub" class="modalSub mono"></div>
+        </div>
+        <button id="workspaceMembersClose" class="btn secondary" type="button">Close</button>
+      </div>
+
+      <div class="modalBody" style="display:block;">
+        <div id="workspaceMembersStatus" class="mono" style="margin-bottom:12px; opacity:.85;"></div>
+
+        <div id="workspaceMembersList" style="display:grid; gap:10px;"></div>
+
+        <div style="margin-top:16px; padding-top:16px; border-top:1px solid var(--border2); display:grid; gap:10px;">
+          <div class="k">Add member</div>
+
+          <input id="workspaceMemberUserInput"
+                 class="mono"
+                 type="text"
+                 placeholder="Fingerprint or username"
+                 style="width:100%; padding:10px 12px; border-radius:12px; border:1px solid var(--border2); background:rgba(0,0,0,0.22); color:var(--fg);" />
+
+          <select id="workspaceMemberRoleSelect"
+                  class="mono"
+                  style="width:100%; padding:10px 12px; border-radius:12px; border:1px solid var(--border2); background:rgba(0,0,0,0.22); color:var(--fg);">
+            <option value="viewer">viewer</option>
+            <option value="editor">editor</option>
+            <option value="owner">owner</option>
+          </select>
+
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button id="workspaceMemberAddBtn" class="btn" type="button">Add member</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 <div id="ctxMenu" class="ctxMenu" role="menu" aria-hidden="true"></div>
 
 <script src="./filetype_icons.js"></script>

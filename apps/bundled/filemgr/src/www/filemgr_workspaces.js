@@ -12,6 +12,11 @@
     const uploadBtn = document.getElementById("uploadBtn");
     const uploadFolderBtn = document.getElementById("uploadFolderBtn");
 
+    const workspaceNewBtn = document.getElementById("workspaceNewBtn");
+    const workspaceRenameBtn = document.getElementById("workspaceRenameBtn");
+    const workspaceMembersBtn = document.getElementById("workspaceMembersBtn");
+    const workspaceDeleteBtn = document.getElementById("workspaceDeleteBtn");
+
     const SCOPE_KEY = "pqnas_filemgr_scope_v1";
 
     FM.scope = FM.scope || {
@@ -81,9 +86,9 @@
             favorites: false,
             shares: false,
             pqShares: false,
-            textEdit: false,
-            imagePreview: false,
-            properties: false,
+            textEdit: true,
+            imagePreview: true,
+            properties: true,
             zipFolder: false,
             zipSelection: false
         };
@@ -165,9 +170,10 @@
     function applyScopeUi() {
         const caps = getCapabilities();
         const writeOk = canCurrentScopeWrite();
+        const inWorkspace = isWorkspaceScope();
 
         if (scopeRole) {
-            if (isWorkspaceScope()) {
+            if (inWorkspace) {
                 scopeRole.textContent = FM.scope.workspaceRole || "";
                 scopeRole.classList.toggle("hidden", !FM.scope.workspaceRole);
             } else {
@@ -182,8 +188,83 @@
 
         if (uploadBtn) uploadBtn.disabled = !writeOk;
         if (uploadFolderBtn) uploadFolderBtn.disabled = !writeOk;
+
+        if (workspaceNewBtn) {
+            workspaceNewBtn.classList.toggle("hidden", inWorkspace);
+        }
+
+        if (workspaceRenameBtn) {
+            workspaceRenameBtn.classList.toggle("hidden", !inWorkspace);
+        }
+
+        if (workspaceMembersBtn) {
+            workspaceMembersBtn.classList.toggle("hidden", !inWorkspace);
+        }
+
+        if (workspaceDeleteBtn) {
+            workspaceDeleteBtn.classList.toggle("hidden", !inWorkspace);
+        }
+    }
+    function statUrl(path) {
+        if (!isWorkspaceScope()) {
+            const qs = new URLSearchParams();
+            qs.set("path", path || ".");
+            return `/api/v4/files/stat?${qs.toString()}`;
+        }
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", FM.scope.workspaceId);
+        qs.set("path", path || ".");
+        return `/api/v4/workspaces/files/stat?${qs.toString()}`;
     }
 
+    function statSelUrl() {
+        if (!isWorkspaceScope()) {
+            return `/api/v4/files/stat_sel`;
+        }
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", FM.scope.workspaceId);
+        return `/api/v4/workspaces/files/stat_sel?${qs.toString()}`;
+    }
+
+    function hashUrl(path, algo) {
+        if (!isWorkspaceScope()) {
+            const qs = new URLSearchParams();
+            qs.set("path", path || "");
+            qs.set("algo", algo || "sha256");
+            return `/api/v4/files/hash?${qs.toString()}`;
+        }
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", FM.scope.workspaceId);
+        qs.set("path", path || "");
+        qs.set("algo", algo || "sha256");
+        return `/api/v4/workspaces/files/hash?${qs.toString()}`;
+    }
+
+    function readTextUrl(path) {
+        if (!isWorkspaceScope()) {
+            const qs = new URLSearchParams();
+            qs.set("path", path || "");
+            return `/api/v4/files/read_text?${qs.toString()}`;
+        }
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", FM.scope.workspaceId);
+        qs.set("path", path || "");
+        return `/api/v4/workspaces/files/read_text?${qs.toString()}`;
+    }
+
+    function writeTextUrl() {
+        if (!isWorkspaceScope()) {
+            return `/api/v4/files/write_text`;
+        }
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", FM.scope.workspaceId);
+        return `/api/v4/workspaces/files/write_text?${qs.toString()}`;
+    }
     async function fetchWorkspaces() {
         const r = await fetch("/api/v4/workspaces", {
             method: "GET",
@@ -228,6 +309,25 @@
             scopeSelect.value = "user";
         }
     }
+
+    workspaceNewBtn?.addEventListener("click", async () => {
+        alert("Next step: create workspace modal / API call");
+    });
+
+    workspaceRenameBtn?.addEventListener("click", async () => {
+        if (!isWorkspaceScope()) return;
+        alert(`Next step: rename workspace ${FM.scope.workspaceName || FM.scope.workspaceId}`);
+    });
+
+    workspaceMembersBtn?.addEventListener("click", async () => {
+        if (!isWorkspaceScope()) return;
+        alert(`Next step: manage members for ${FM.scope.workspaceName || FM.scope.workspaceId}`);
+    });
+
+    workspaceDeleteBtn?.addEventListener("click", async () => {
+        if (!isWorkspaceScope()) return;
+        alert(`Next step: delete workspace ${FM.scope.workspaceName || FM.scope.workspaceId}`);
+    });
 
     async function initWorkspaces() {
         loadSavedScope();
@@ -288,7 +388,12 @@
         putUrl,
         getUrl,
         deleteUrl,
-        moveUrl
+        moveUrl,
+        statUrl,
+        statSelUrl,
+        hashUrl,
+        readTextUrl,
+        writeTextUrl
     };
 
     initWorkspaces();

@@ -636,6 +636,29 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return `/api/v4/files/move?from=${encodeURIComponent(from || "")}&to=${encodeURIComponent(to || "")}`;
   }
 
+  function apiStatUrl(path) {
+    const api = fmApi();
+    if (api && typeof api.statUrl === "function") return api.statUrl(path || ".");
+    const qs = new URLSearchParams();
+    qs.set("path", path || ".");
+    return `/api/v4/files/stat?${qs.toString()}`;
+  }
+
+  function apiStatSelUrl() {
+    const api = fmApi();
+    if (api && typeof api.statSelUrl === "function") return api.statSelUrl();
+    return `/api/v4/files/stat_sel`;
+  }
+
+  function apiHashUrl(path, algo) {
+    const api = fmApi();
+    if (api && typeof api.hashUrl === "function") return api.hashUrl(path || "", algo || "sha256");
+    const qs = new URLSearchParams();
+    qs.set("path", path || "");
+    qs.set("algo", algo || "sha256");
+    return `/api/v4/files/hash?${qs.toString()}`;
+  }
+
   function fmtSize(n) {
     const u = ["B", "KiB", "MiB", "GiB", "TiB"];
     let v = Number(n || 0);
@@ -2119,7 +2142,7 @@ function pickFolder() {
 
     let st = null;
     try {
-      const r = await fetch("/api/v4/files/stat_sel", {
+      const r = await fetch(apiStatSelUrl(), {
         method: "POST",
         credentials: "include",
         cache: "no-store",
@@ -2768,11 +2791,7 @@ function pickFolder() {
     const p = String(relPath || "").replace(/^\/+/, "").trim();
     if (!p) throw new Error("hash requires a file path");
 
-    const qs = new URLSearchParams();
-    qs.set("path", p);
-    qs.set("algo", "sha256");
-
-    const r = await fetch(`/api/v4/files/hash?${qs.toString()}`, {
+    const r = await fetch(apiHashUrl(p, "sha256"), {
       method: "POST",
       credentials: "include",
       cache: "no-store",
@@ -3416,6 +3435,10 @@ function pickFolder() {
 
     const rel = joinPath(curPath, item.name || "");
     const isDirHint = item.type === "dir";
+    const caps = fmCaps();
+    const favoritesEnabled = caps.favorites !== false;
+    const sharesEnabled = caps.shares !== false;
+    const pqSharesEnabled = caps.pqShares !== false;
 
     if (propsTitle) propsTitle.textContent = isDirHint ? "Folder properties" : "File properties";
     if (propsPath) propsPath.textContent = "/" + (rel || "");
@@ -3473,7 +3496,9 @@ function pickFolder() {
     const rows = [];
     pushRow(rows, "Name", item.name || "");
     pushRow(rows, "Type", isDirHint ? "Folder" : "File");
-    pushRow(rows, "Favorite", isFavoriteItem(item) ? "Yes" : "No");
+    if (favoritesEnabled) {
+      pushRow(rows, "Favorite", isFavoriteItem(item) ? "Yes" : "No");
+    }
     pushRow(rows, "Path", "/" + (rel || ""));
 
     if (!isDirHint && item.size_bytes != null) pushRow(rows, "Size", fmtSize(item.size_bytes || 0));
@@ -3490,9 +3515,7 @@ function pickFolder() {
 
     let st = null;
     try {
-      const qs = new URLSearchParams();
-      qs.set("path", rel ? rel : ".");
-      const r = await fetch(`/api/v4/files/stat?${qs.toString()}`, {
+      const r = await fetch(apiStatUrl(rel ? rel : "."), {
         method: "POST",
         credentials: "include",
         headers: { "Accept": "application/json" }
@@ -3530,7 +3553,9 @@ function pickFolder() {
     const rows2 = [];
     pushRow(rows2, "Name", st.name || "");
     pushRow(rows2, "Type", st.type === "dir" ? "Folder" : (st.type === "file" ? "File" : "Other"));
-    pushRow(rows2, "Favorite", isFavoriteItem(item) ? "Yes" : "No");
+    if (favoritesEnabled) {
+      pushRow(rows2, "Favorite", isFavoriteItem(item) ? "Yes" : "No");
+    }
     pushRow(rows2, "Path", st.path_norm || ("/" + (rel || "")));
 
     if (st.mode_octal) {
@@ -3566,7 +3591,7 @@ function pickFolder() {
       propsBody.appendChild(vEl);
     }
 
-    {
+    if (favoritesEnabled) {
       const [kEl, vEl] = kvRow("Favorite", "");
       vEl.classList.remove("mono");
       vEl.innerHTML = "";
@@ -3649,7 +3674,7 @@ function pickFolder() {
       }
     }
 
-    {
+    if (sharesEnabled || pqSharesEnabled) {
       const type = (item.type === "dir") ? "dir" : "file";
       const share = existingShareFor(rel, type);
 
@@ -3780,13 +3805,15 @@ function pickFolder() {
         rowBtns.style.gap = "8px";
         rowBtns.style.flexWrap = "wrap";
 
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.textContent = "Create share link…";
-        btn.onclick = () => openShareDialogFor(item);
-        rowBtns.appendChild(btn);
+        if (sharesEnabled) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = "Create share link…";
+          btn.onclick = () => openShareDialogFor(item);
+          rowBtns.appendChild(btn);
+        }
 
-        if (st.type === "file") {
+        if (st.type === "file" && pqSharesEnabled) {
           const btnPq = document.createElement("button");
           btnPq.type = "button";
           btnPq.textContent = "Create PQ invite…";
@@ -3985,11 +4012,11 @@ function pickFolder() {
   FM.getLoadFn = () => load;
   FM.isProbablyTextEditableName = isProbablyTextEditableName;
   FM.isProbablyImagePreviewableName = isProbablyImagePreviewableName;
-  (async () => {
-    try {
-      await fetchFavoritesFromServer();
-    } catch (e) {
-      console.warn("Favorites load failed:", e);
-    }
-  })();
+  load().catch((e) => {
+    console.warn("Initial load failed:", e);
+  });
+
+  fetchFavoritesFromServer().catch((e) => {
+    console.warn("Favorites load failed:", e);
+  });
 })();

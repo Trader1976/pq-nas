@@ -4,6 +4,23 @@
     const FM = window.PQNAS_FILEMGR;
     if (!FM) return;
 
+    function fmApi() {
+        return (FM && FM.api) ? FM.api : null;
+    }
+
+    function apiReadTextUrl(path) {
+        const api = fmApi();
+        if (api && typeof api.readTextUrl === "function") return api.readTextUrl(path || "");
+        const qs = new URLSearchParams();
+        qs.set("path", path || "");
+        return `/api/v4/files/read_text?${qs.toString()}`;
+    }
+
+    function apiWriteTextUrl() {
+        const api = fmApi();
+        if (api && typeof api.writeTextUrl === "function") return api.writeTextUrl();
+        return `/api/v4/files/write_text`;
+    }
     const textEditModal = document.getElementById("textEditModal");
     const textEditClose = document.getElementById("textEditClose");
     const textEditTitle = document.getElementById("textEditTitle");
@@ -282,7 +299,7 @@
         updateFindStatusForSelection(matches, query, selStart);
     }
     async function fetchTextFile(relPath) {
-        const r = await fetch(`/api/v4/files/read_text?path=${encodeURIComponent(relPath)}`, {
+        const r = await fetch(apiReadTextUrl(relPath), {
             method: "GET",
             credentials: "include",
             cache: "no-store",
@@ -300,7 +317,7 @@
     }
 
     async function saveTextFile(relPath, text, expectedMtimeEpoch, expectedSha256) {
-        const r = await fetch("/api/v4/files/write_text", {
+        const r = await fetch(apiWriteTextUrl(), {
             method: "POST",
             credentials: "include",
             cache: "no-store",
@@ -577,8 +594,7 @@
     function endDrag() {
         dragState.active = false;
     }
-    console.log("textEditCard", textEditCard);
-    console.log("textEditHead", textEditHead);
+
     document.addEventListener("pointerup", endDrag);
     document.addEventListener("pointercancel", endDrag);
     window.addEventListener("resize", () => {
