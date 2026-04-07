@@ -103,7 +103,9 @@ extern "C" {
 #include "user_quota.h"
 #include "storage_resolver.h"
 #include "file_location_index.h"
-
+#include "workspaces.h"
+#include "routes_admin_workspaces.h"
+#include "routes_workspaces_files.h"
 //storage health
 #include "drive_health.h"
 #include "drive_health_monitor.h"
@@ -7775,6 +7777,11 @@ auto maybe_auto_rotate_before_append = [&]() {
         std::cerr << "[users] FATAL: failed to load users registry: " << users_path << std::endl;
         return 4;
     }
+
+    pqnas::WorkspacesRegistry workspaces;
+    const std::string workspaces_path =
+        (std::filesystem::path(users_path).parent_path() / "workspaces.json").string();
+    (void)workspaces.load(workspaces_path);
 
     std::cerr << "[cfg] users_path=" << users_path << std::endl;
 
@@ -17546,7 +17553,80 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
     	res.set_header("Cache-Control", "no-store");
 	    res.set_content(body, "application/javascript; charset=utf-8");
 	});
+    pqnas::AdminWorkspaceRouteDeps admin_ws_deps;
+    admin_ws_deps.users = &users;
+    admin_ws_deps.workspaces = &workspaces;
+    admin_ws_deps.users_path = users_path;
+    admin_ws_deps.workspaces_path = workspaces_path;
+    admin_ws_deps.cookie_key = COOKIE_KEY;
+    admin_ws_deps.reply_json =
+        [](httplib::Response& res, int status, const std::string& body) {
+            reply_json(res, status, body);
+        };
+    admin_ws_deps.require_admin_cookie_users_actor =
+        [&](const httplib::Request& req,
+            httplib::Response& res,
+            const unsigned char* cookie_key,
+            const std::string& users_path_arg,
+            pqnas::UsersRegistry* users_arg,
+            std::string* out_actor_fp) -> bool {
+            return require_admin_cookie_users_actor(
+                req, res, cookie_key, users_path_arg, users_arg, out_actor_fp);
+        };
+    admin_ws_deps.audit_emit =
+        [&](const std::string& event,
+            const std::string& outcome,
+            const std::map<std::string, std::string>& fields) {
+            pqnas::AuditEvent ev;
+            ev.event = event;
+            ev.outcome = outcome;
+            ev.f = fields;
+            audit_append(ev);
+        };
+    admin_ws_deps.now_iso_utc = []() {
+        return pqnas::now_iso_utc();
+    };
 
+    pqnas::register_admin_workspace_routes(srv, admin_ws_deps);
+
+    pqnas::WorkspaceFileRouteDeps ws_file_deps;
+    ws_file_deps.users = &users;
+    ws_file_deps.workspaces = &workspaces;
+    ws_file_deps.users_path = users_path;
+    ws_file_deps.workspaces_path = workspaces_path;
+    ws_file_deps.cookie_key = COOKIE_KEY;
+    ws_file_deps.transport_max_upload_bytes =
+        (g_transport_max_upload_bytes ? g_transport_max_upload_bytes : k_payload_max_upload_bytes);
+    ws_file_deps.payload_max_upload_bytes = k_payload_max_upload_bytes;
+    ws_file_deps.reply_json =
+        [](httplib::Response& res, int status, const std::string& body) {
+            reply_json(res, status, body);
+        };
+    ws_file_deps.require_user_auth_users_actor =
+        [&](const httplib::Request& req,
+            httplib::Response& res,
+            const unsigned char* cookie_key,
+            pqnas::UsersRegistry* users_arg,
+            std::string* out_fp_hex,
+            std::string* out_role) -> bool {
+            return require_user_auth_users_actor(
+                req, res, cookie_key, users_arg, out_fp_hex, out_role);
+        };
+    ws_file_deps.audit_emit =
+        [&](const std::string& event,
+            const std::string& outcome,
+            const std::map<std::string, std::string>& fields) {
+            pqnas::AuditEvent ev;
+            ev.event = event;
+            ev.outcome = outcome;
+            ev.f = fields;
+            audit_append(ev);
+        };
+    ws_file_deps.now_epoch_sec = []() {
+        return now_epoch_sec();
+    };
+
+    pqnas::register_workspace_file_routes(srv, ws_file_deps);
 	srv.Get("/api/v4/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
     	std::string actor_fp;
     	if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
