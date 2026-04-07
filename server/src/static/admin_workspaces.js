@@ -16,6 +16,7 @@
     const workspaceList = document.getElementById("workspaceList");
 
     let workspaces = [];
+    let actorFp = "";
 
     function setMsg(t) {
         if (msg) msg.textContent = t || "";
@@ -53,10 +54,19 @@
         return i === 0 ? `${v | 0} ${u[i]}` : `${v.toFixed(1)} ${u[i]}`;
     }
 
+    function displayMemberStatus(m) {
+        const s = String(m && m.status || "").toLowerCase();
+        const respondedAt = String(m && m.responded_at || "").trim();
+
+        if (s === "disabled" && respondedAt) return "declined";
+        if (s === "enabled" && respondedAt) return "accepted";
+        return s || "";
+    }
+
     function pillStatusClass(status) {
         const s = String(status || "").toLowerCase();
-        if (s === "enabled") return "enabled";
-        if (s === "disabled") return "disabled";
+        if (s === "enabled" || s === "accepted") return "enabled";
+        if (s === "disabled" || s === "declined") return "disabled";
         if (s === "invited") return "invited";
         return "";
     }
@@ -74,7 +84,7 @@
         if (!r.ok || !j || !j.ok) {
             throw new Error((j && (j.message || j.error)) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`);
         }
-        return Array.isArray(j.workspaces) ? j.workspaces : [];
+        return j;
     }
 
     async function apiCreateWorkspace(payload) {
@@ -195,13 +205,20 @@
     function memberRowHtml(ws, m) {
         const fp = escapeHtml(m.fingerprint || "");
         const role = escapeHtml(m.role || "viewer");
-        const status = escapeHtml(m.status || "");
-        const statusCls = pillStatusClass(m.status);
+
+        const displayStatusRaw = displayMemberStatus(m);
+        const status = escapeHtml(displayStatusRaw || m.status || "");
+        const statusCls = pillStatusClass(displayStatusRaw || m.status);
 
         const respondedBits = [];
-        if (m.responded_at) respondedBits.push(`responded ${escapeHtml(m.responded_at)}`);
+        if (displayStatusRaw === "declined" && m.responded_at) {
+            respondedBits.push(`declined ${escapeHtml(m.responded_at)}`);
+        } else if (displayStatusRaw === "accepted" && m.responded_at) {
+            respondedBits.push(`accepted ${escapeHtml(m.responded_at)}`);
+        } else if (m.responded_at) {
+            respondedBits.push(`responded ${escapeHtml(m.responded_at)}`);
+        }
         if (m.responded_by) respondedBits.push(`by ${escapeHtml(m.responded_by)}`);
-
         return `
             <div class="memberRow">
                 <div class="memberFp">
@@ -487,6 +504,16 @@
         }
     }
 
+    function applyDefaultOwnerFingerprint() {
+        if (!wsOwnerFp) return;
+        if (!actorFp) return;
+
+        const cur = String(wsOwnerFp.value || "").trim();
+        if (!cur) {
+            wsOwnerFp.value = actorFp;
+        }
+    }
+
     function render() {
         if (!workspaceList) return;
 
@@ -502,10 +529,14 @@
     async function load() {
         setMsg("Loading workspaces…");
         try {
-            workspaces = await apiGetWorkspaces();
+            const j = await apiGetWorkspaces();
+            actorFp = String(j.actor_fp || "").trim();
+            workspaces = Array.isArray(j.workspaces) ? j.workspaces : [];
+            applyDefaultOwnerFingerprint();
             render();
             setMsg(`Loaded ${workspaces.length} workspace(s).`);
         } catch (e) {
+            actorFp = "";
             workspaces = [];
             render();
             setMsg(`Load failed: ${String(e && e.message ? e.message : e)}`);
@@ -539,7 +570,7 @@
             const j = await apiCreateWorkspace(payload);
             showOk(createOk, `Workspace created: ${(j.workspace && j.workspace.name) || payload.name}`);
             if (wsName) wsName.value = "";
-            if (wsOwnerFp) wsOwnerFp.value = "";
+            if (wsOwnerFp) wsOwnerFp.value = actorFp || "";
             if (wsQuotaGb) wsQuotaGb.value = "";
             if (wsNotes) wsNotes.value = "";
             await load();

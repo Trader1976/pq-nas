@@ -595,6 +595,13 @@
             .replaceAll("'", "&#39;");
     }
 
+    function middleEllipsis(s, keepLeft = 20, keepRight = 18) {
+        const v = String(s == null ? "" : s);
+        if (!v) return "";
+        if (v.length <= keepLeft + keepRight + 3) return v;
+        return `${v.slice(0, keepLeft)}...${v.slice(v.length - keepRight)}`;
+    }
+
     function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
 
     function layoutKeyFor(app) {
@@ -1156,7 +1163,7 @@
         renderDesktopIcons();
     }
 
-    function renderWorkspaceInvites(messageText = "", messageKind = "") {
+    function renderWorkspaceInvites(messageText = "", messageKind = "", inviteNotice = null) {
         stopPairPolling();
 
         currentView = "workspace_invites";
@@ -1170,6 +1177,7 @@
         if (mainPaneTitle) mainPaneTitle.textContent = "Workspace Invites";
 
         if (!homeBlurb) return;
+        const hasFileMgr = Array.isArray(installedApps) && installedApps.some(a => a && a.id === "filemgr");
 
         setMainHostMode("home");
         homeBlurb.classList.remove("appHostBlurb");
@@ -1180,8 +1188,10 @@
         ` : "";
 
             const addedBy = inv.added_by ? `
-            <div class="mini">Invited by: ${escapeHtml(inv.added_by)}</div>
-        ` : "";
+                <div class="mini" title="${escapeHtml(inv.added_by)}">
+                    Invited by: ${escapeHtml(middleEllipsis(inv.added_by, 20, 18))}
+                </div>
+            ` : "";
 
             const addedAt = inv.added_at ? `
             <div class="mini">Invited at: ${escapeHtml(inv.added_at)}</div>
@@ -1213,12 +1223,29 @@
                 Accepted workspaces will appear in the File Manager location switcher. Declined invites stay hidden.
             </div>
 
-            ${messageText ? `
-                <div class="bigState" style="display:block; margin-top:8px;">
-                    <h3>${messageKind === "ok" ? "Success" : "Workspace invite"}</h3>
-                    <p>${escapeHtml(messageText)}</p>
-                </div>
-            ` : ""}
+        ${(messageKind === "ok" && inviteNotice && inviteNotice.action === "accepted") ? `
+            <div class="bigState" style="display:block; margin-top:8px;">
+                <h3>Workspace accepted</h3>
+                <p>
+                    You now have access to
+                    <strong>${escapeHtml(inviteNotice.workspaceName || inviteNotice.workspaceId || "this workspace")}</strong>.
+                </p>
+                <p style="margin-top:8px;">
+                    Open File Manager and use the <strong>Location</strong> dropdown in the top bar to switch from
+                    <strong>My files</strong> to this workspace.
+                </p>
+                ${hasFileMgr ? `
+                    <div style="margin-top:10px;">
+                        <button class="btn" id="workspaceInviteOpenFilemgrBtn" type="button">Open File Manager</button>
+                    </div>
+                ` : ""}
+            </div>
+        ` : (messageText ? `
+            <div class="bigState" style="display:block; margin-top:8px;">
+                <h3>${messageKind === "ok" ? "Success" : "Workspace invite"}</h3>
+                <p>${escapeHtml(messageText)}</p>
+            </div>
+        ` : "")}
 
             ${workspaceInvitesError ? `
                 <div class="bigState" style="display:block; margin-top:8px;">
@@ -1242,9 +1269,15 @@
                 btn.textContent = "Accepting…";
 
                 try {
-                    await acceptWorkspaceInvite(workspaceId);
+                    const j = await acceptWorkspaceInvite(workspaceId);
                     await loadWorkspaceInvites();
-                    renderWorkspaceInvites(`Accepted workspace invitation: ${workspaceId}`, "ok");
+
+                    const ws = j && j.workspace ? j.workspace : null;
+                    renderWorkspaceInvites("", "ok", {
+                        action: "accepted",
+                        workspaceId: workspaceId,
+                        workspaceName: ws ? (ws.name || ws.workspace_id || workspaceId) : workspaceId
+                    });
                 } catch (e) {
                     renderWorkspaceInvites(`Accept failed: ${String(e && e.message ? e.message : e)}`, "err");
                 }
@@ -1266,6 +1299,12 @@
                 } catch (e) {
                     renderWorkspaceInvites(`Decline failed: ${String(e && e.message ? e.message : e)}`, "err");
                 }
+            });
+        }
+        const openFileMgrBtn = document.getElementById("workspaceInviteOpenFilemgrBtn");
+        if (openFileMgrBtn) {
+            openFileMgrBtn.addEventListener("click", () => {
+                openAppById("filemgr");
             });
         }
     }
