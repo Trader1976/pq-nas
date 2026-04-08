@@ -13,7 +13,7 @@
     const uploadFolderBtn = document.getElementById("uploadFolderBtn");
 
     const workspaceMembersBtn = document.getElementById("workspaceMembersBtn");
-
+    const workspaceLeaveBtn = document.getElementById("workspaceLeaveBtn");
     const workspaceMembersModal = document.getElementById("workspaceMembersModal");
     const workspaceMembersTitle = document.getElementById("workspaceMembersTitle");
     const workspaceMembersSub = document.getElementById("workspaceMembersSub");
@@ -28,6 +28,11 @@
         workspaceName: "",
         workspaceRole: ""
     };
+
+    const workspaceEditorSessionId =
+        (window.crypto && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : ("wsedit-" + Date.now() + "-" + Math.random().toString(16).slice(2));
 
     function loadSavedScope() {
         try {
@@ -196,6 +201,7 @@
             workspaceMembersBtn.classList.toggle("hidden", !inWorkspace);
         }
     }
+
     function statUrl(path) {
         if (!isWorkspaceScope()) {
             const qs = new URLSearchParams();
@@ -235,6 +241,9 @@
     }
 
     function readTextUrl(path) {
+        console.log("[workspaces.readTextUrl] workspaceScope =", isWorkspaceScope());
+        console.log("[workspaces.readTextUrl] workspaceId =", FM.scope.workspaceId);
+        console.log("[workspaces.readTextUrl] path =", path);
         if (!isWorkspaceScope()) {
             const qs = new URLSearchParams();
             qs.set("path", path || "");
@@ -244,18 +253,146 @@
         const qs = new URLSearchParams();
         qs.set("workspace_id", FM.scope.workspaceId);
         qs.set("path", path || "");
+        qs.set("session_id", workspaceEditorSessionId);
         return `/api/v4/workspaces/files/read_text?${qs.toString()}`;
+    }
+
+    function workspaceEditLeaseAcquireUrl(workspaceId) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        return `/api/v4/workspaces/files/edit_lease/acquire?${qs.toString()}`;
+    }
+
+    function workspaceEditLeaseRefreshUrl(workspaceId) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        return `/api/v4/workspaces/files/edit_lease/refresh?${qs.toString()}`;
+    }
+
+    function workspaceEditLeaseReleaseUrl(workspaceId) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        return `/api/v4/workspaces/files/edit_lease/release?${qs.toString()}`;
     }
 
     function writeTextUrl() {
         if (!isWorkspaceScope()) {
             return `/api/v4/files/write_text`;
         }
-
-        const qs = new URLSearchParams();
-        qs.set("workspace_id", FM.scope.workspaceId);
-        return `/api/v4/workspaces/files/write_text?${qs.toString()}`;
+        return `/api/v4/workspaces/files/write_text`;
     }
+
+    function buildWriteTextBody(path, text, expectedMtimeEpoch, expectedSha256) {
+        const body = {
+            path: path || "",
+            text: typeof text === "string" ? text : String(text ?? "")
+        };
+
+        if (expectedMtimeEpoch != null && expectedMtimeEpoch !== 0) {
+            body.expected_mtime_epoch = expectedMtimeEpoch;
+        }
+        if (expectedSha256) {
+            body.expected_sha256 = expectedSha256;
+        }
+
+        if (isWorkspaceScope()) {
+            body.workspace_id = FM.scope.workspaceId;
+            body.session_id = workspaceEditorSessionId;
+        }
+
+        return body;
+    }
+
+    async function acquireEditLease(path, leaseSeconds = 60) {
+        if (!isWorkspaceScope()) {
+            return {
+                ok: true,
+                edit: {
+                    can_edit: true,
+                    read_only: false,
+                    locked_by_other: false
+                }
+            };
+        }
+
+        const r = await fetch(workspaceEditLeaseAcquireUrl(FM.scope.workspaceId), {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                workspace_id: FM.scope.workspaceId,
+                path: path || "",
+                session_id: workspaceEditorSessionId,
+                lease_seconds: leaseSeconds
+            })
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            const err = new Error((j && (j.message || j.error)) || `HTTP ${r.status}`);
+            err.status = r.status;
+            err.response = j;
+            throw err;
+        }
+        return j;
+    }
+
+    async function refreshEditLease(path, leaseSeconds = 60) {
+        if (!isWorkspaceScope()) {
+            return { ok: true };
+        }
+
+        const r = await fetch(workspaceEditLeaseRefreshUrl(FM.scope.workspaceId), {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                workspace_id: FM.scope.workspaceId,
+                path: path || "",
+                session_id: workspaceEditorSessionId,
+                lease_seconds: leaseSeconds
+            })
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            const err = new Error((j && (j.message || j.error)) || `HTTP ${r.status}`);
+            err.status = r.status;
+            err.response = j;
+            throw err;
+        }
+        return j;
+    }
+
+    async function releaseEditLease(path) {
+        if (!isWorkspaceScope()) {
+            return { ok: true, released: false };
+        }
+
+        const r = await fetch(workspaceEditLeaseReleaseUrl(FM.scope.workspaceId), {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                workspace_id: FM.scope.workspaceId,
+                path: path || "",
+                session_id: workspaceEditorSessionId
+            })
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            const err = new Error((j && (j.message || j.error)) || `HTTP ${r.status}`);
+            err.status = r.status;
+            err.response = j;
+            throw err;
+        }
+        return j;
+    }
+
     async function fetchWorkspaces() {
         const r = await fetch("/api/v4/workspaces", {
             method: "GET",
@@ -270,6 +407,7 @@
         }
         return j.workspaces;
     }
+
     async function fetchWorkspaceMembers(workspaceId) {
         const r = await fetch(`/api/v4/workspaces/members?workspace_id=${encodeURIComponent(workspaceId)}`, {
             method: "GET",
@@ -284,6 +422,23 @@
         }
         return j;
     }
+
+    async function apiLeaveWorkspace(workspaceId) {
+        const r = await fetch("/api/v4/workspaces/leave", {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workspace_id: workspaceId })
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            throw new Error((j && (j.message || j.error)) || `HTTP ${r.status}`);
+        }
+        return j;
+    }
+
     function populateScopeSelect(workspaces) {
         if (!scopeSelect) return;
 
@@ -311,6 +466,23 @@
             if (!found) resetToUserScope();
         } else {
             scopeSelect.value = "user";
+        }
+    }
+
+    async function refreshWorkspaceChoices() {
+        try {
+            const workspaces = await fetchWorkspaces();
+
+            if (scopeBar) {
+                scopeBar.classList.toggle("hidden", workspaces.length === 0);
+            }
+
+            populateScopeSelect(workspaces);
+            applyScopeUi();
+        } catch (e) {
+            console.warn("Workspace refresh failed:", e);
+            resetToUserScope();
+            applyScopeUi();
         }
     }
 
@@ -357,8 +529,8 @@
               </div>
 
               <div style="margin-top:8px; display:grid; gap:4px;">
-                <div><span class="k">Role</span> <span class="v">${role || "—"}</span></div>
-                <div><span class="k">Added</span> <span class="v">${addedAt || "—"}${addedBy ? ` by ${addedBy}` : ""}</span></div>
+                <div><span class="k">Role</span> <span class="v">${role || "?"}</span></div>
+                <div><span class="k">Added</span> <span class="v">${addedAt || "?"}${addedBy ? ` by ${addedBy}` : ""}</span></div>
                 ${respondedBits.length ? `<div><span class="k">Response</span> <span class="v">${respondedBits.join(" ")}</span></div>` : ""}
               </div>
             </div>
@@ -380,7 +552,7 @@
             workspaceMembersSub.textContent = `${FM.scope.workspaceName || FM.scope.workspaceId}`;
         }
         if (workspaceMembersStatus) {
-            workspaceMembersStatus.textContent = "Loading members…";
+            workspaceMembersStatus.textContent = "Loading members?";
         }
         if (workspaceMembersList) {
             workspaceMembersList.innerHTML = "";
@@ -401,6 +573,7 @@
             }
         }
     }
+
     workspaceMembersBtn?.addEventListener("click", async () => {
         if (!isWorkspaceScope()) return;
         await openWorkspaceMembersModal();
@@ -413,6 +586,46 @@
     workspaceMembersModal?.addEventListener("click", (ev) => {
         if (ev.target === workspaceMembersModal) {
             closeWorkspaceMembersModal();
+        }
+    });
+
+    workspaceLeaveBtn?.addEventListener("click", async () => {
+        if (!isWorkspaceScope()) return;
+
+        const workspaceId = FM.scope.workspaceId || "";
+        const workspaceName = FM.scope.workspaceName || workspaceId;
+        if (!workspaceId) return;
+
+        const ok = confirm(
+            `Leave workspace?\n\n` +
+            `Workspace: ${workspaceName}\n\n` +
+            `After leaving, it will disappear from the Location dropdown.`
+        );
+        if (!ok) return;
+
+        const old = workspaceLeaveBtn.textContent;
+        workspaceLeaveBtn.disabled = true;
+        workspaceLeaveBtn.textContent = "Leaving?";
+
+        try {
+            await apiLeaveWorkspace(workspaceId);
+
+            closeWorkspaceMembersModal();
+            resetToUserScope();
+            await refreshWorkspaceChoices();
+
+            if (FM.clearSelection) FM.clearSelection();
+            if (FM.setPathAndLoad) FM.setPathAndLoad("");
+
+            alert(`You left workspace: ${workspaceName}`);
+        } catch (e) {
+            if (workspaceMembersStatus) {
+                workspaceMembersStatus.textContent =
+                    `Leave failed: ${String(e && e.message ? e.message : e)}`;
+            }
+        } finally {
+            workspaceLeaveBtn.disabled = false;
+            workspaceLeaveBtn.textContent = old;
         }
     });
 
@@ -462,12 +675,13 @@
             applyScopeUi();
         }
     }
-
     FM.isWorkspaceScope = isWorkspaceScope;
     FM.getWorkspaceId = () => FM.scope.workspaceId || "";
     FM.getWorkspaceRole = () => FM.scope.workspaceRole || "";
     FM.canCurrentScopeWrite = canCurrentScopeWrite;
     FM.getCapabilities = getCapabilities;
+    FM.getWorkspaceEditorSessionId = () => workspaceEditorSessionId;
+    FM.workspaceEditorSessionId = workspaceEditorSessionId; // keep for compatibility
 
     FM.api = {
         listUrl,
@@ -480,7 +694,14 @@
         statSelUrl,
         hashUrl,
         readTextUrl,
-        writeTextUrl
+        writeTextUrl,
+        buildWriteTextBody,
+        workspaceEditLeaseAcquireUrl,
+        workspaceEditLeaseRefreshUrl,
+        workspaceEditLeaseReleaseUrl,
+        acquireEditLease,
+        refreshEditLease,
+        releaseEditLease
     };
 
     initWorkspaces();

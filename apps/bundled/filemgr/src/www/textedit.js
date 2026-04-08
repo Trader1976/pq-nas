@@ -21,6 +21,45 @@
         if (api && typeof api.writeTextUrl === "function") return api.writeTextUrl();
         return `/api/v4/files/write_text`;
     }
+    function isWorkspaceScope() {
+        return !!(FM && typeof FM.isWorkspaceScope === "function" && FM.isWorkspaceScope());
+    }
+
+    function currentWorkspaceId() {
+        return (FM && typeof FM.getWorkspaceId === "function")
+            ? String(FM.getWorkspaceId() || "")
+            : "";
+    }
+
+    function currentWorkspaceSessionId() {
+        return (FM && typeof FM.getWorkspaceEditorSessionId === "function")
+            ? String(FM.getWorkspaceEditorSessionId() || "")
+            : "";
+    }
+
+    function apiEditLeaseAcquireUrl() {
+        const api = fmApi();
+        if (api && typeof api.workspaceEditLeaseAcquireUrl === "function") {
+            return api.workspaceEditLeaseAcquireUrl(currentWorkspaceId() || "");
+        }
+        return `/api/v4/workspaces/files/edit_lease/acquire`;
+    }
+
+    function apiEditLeaseRefreshUrl() {
+        const api = fmApi();
+        if (api && typeof api.workspaceEditLeaseRefreshUrl === "function") {
+            return api.workspaceEditLeaseRefreshUrl(currentWorkspaceId() || "");
+        }
+        return `/api/v4/workspaces/files/edit_lease/refresh`;
+    }
+
+    function apiEditLeaseReleaseUrl() {
+        const api = fmApi();
+        if (api && typeof api.workspaceEditLeaseReleaseUrl === "function") {
+            return api.workspaceEditLeaseReleaseUrl(currentWorkspaceId() || "");
+        }
+        return `/api/v4/workspaces/files/edit_lease/release`;
+    }
     const textEditModal = document.getElementById("textEditModal");
     const textEditClose = document.getElementById("textEditClose");
     const textEditTitle = document.getElementById("textEditTitle");
@@ -49,7 +88,10 @@
         encoding: "utf-8",
         dirty: false,
         loading: false,
-        saving: false
+        saving: false,
+        readOnly: false,
+        lease: null,
+        leaseTimer: 0
     };
     let dragState = {
         active: false,
@@ -95,11 +137,24 @@
     function isFindBarOpen() {
         return !!(textEditFindBar && !textEditFindBar.classList.contains("hidden"));
     }
+    function refreshSaveButton() {
+        if (textEditSaveBtn) {
+            textEditSaveBtn.disabled =
+                !!state.readOnly || !state.dirty || state.loading || state.saving;
+        }
+    }
+
     function setDirty(on) {
         state.dirty = !!on;
-        if (textEditSaveBtn) {
-            textEditSaveBtn.disabled = !state.dirty || state.loading || state.saving;
+        refreshSaveButton();
+    }
+
+    function setReadOnly(on) {
+        state.readOnly = !!on;
+        if (textEditArea) {
+            textEditArea.readOnly = !!on || !!state.loading;
         }
+        refreshSaveButton();
     }
 
     function setStatus(msg) {
@@ -108,6 +163,151 @@
 
     function setInfo(msg) {
         if (textEditInfo) textEditInfo.textContent = String(msg || "");
+    }
+
+    function clearLeaseTimer() {
+        if (state.leaseTimer) {
+            clearInterval(state.leaseTimer);
+            state.leaseTimer = 0;
+        }
+    }
+
+    function shortLeaseHolder(fp) {
+        const s = String(fp || "").trim();
+        if (!s) return "another user";
+        if (s.length <= 24) return s;
+        return `${s.slice(0, 10)}…${s.slice(-8)}`;
+    }
+
+    function leaseSummaryFrom(details) {
+        const lease = details && details.lease ? details.lease : null;
+        if (!lease) {
+            return "This file can only be opened in read-only mode right now.";
+        }
+
+        const holder =
+            lease.holder_fp
+                ? ` by ${String(lease.holder_fp).slice(0, 12)}…`
+                : " by another session";
+
+        const until =
+            lease.expires_at
+                ? ` It should become editable again after ${lease.expires_at}.`
+                : "";
+
+        return `This file is currently being edited${holder}. Opened in read-only mode.${until}`;
+    }
+
+    async function acquireWorkspaceLease(relPath) {
+        const workspaceId = currentWorkspaceId();
+        const sessionId = currentWorkspaceSessionId();
+
+        if (!workspaceId || !sessionId) {
+            throw new Error("missing workspace editor session");
+        }
+
+        const r = await fetch(apiEditLeaseAcquireUrl(), {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({
+                workspace_id: workspaceId,
+                path: relPath,
+                session_id: sessionId,
+                lease_seconds: 60
+            })
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            const msg = j && (j.message || j.error)
+                ? `${j.error || ""} ${j.message || ""}`.trim()
+                : `HTTP ${r.status}`;
+            const err = new Error(msg || "edit lease acquire failed");
+            err.code = j && j.error ? String(j.error) : "";
+            err.details = j;
+            throw err;
+        }
+
+        state.lease = {
+            workspaceId,
+            relPath,
+            sessionId,
+            lease: j.lease || null
+        };
+        return j;
+    }
+
+    async function refreshWorkspaceLease() {
+        if (!state.lease) return null;
+
+        const r = await fetch(apiEditLeaseRefreshUrl(), {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({
+                workspace_id: state.lease.workspaceId,
+                path: state.lease.relPath,
+                session_id: state.lease.sessionId,
+                lease_seconds: 60
+            })
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            const msg = j && (j.message || j.error)
+                ? `${j.error || ""} ${j.message || ""}`.trim()
+                : `HTTP ${r.status}`;
+            const err = new Error(msg || "edit lease refresh failed");
+            err.code = j && j.error ? String(j.error) : "";
+            err.details = j;
+            throw err;
+        }
+
+        state.lease.lease = j.lease || state.lease.lease || null;
+        return j;
+    }
+
+    async function releaseWorkspaceLeaseBestEffort() {
+        if (!state.lease) return;
+
+        const lease = state.lease;
+        state.lease = null;
+        clearLeaseTimer();
+
+        try {
+            await fetch(apiEditLeaseReleaseUrl(), {
+                method: "POST",
+                credentials: "include",
+                cache: "no-store",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body: JSON.stringify({
+                    workspace_id: lease.workspaceId,
+                    path: lease.relPath,
+                    session_id: lease.sessionId
+                })
+            });
+        } catch (_) {}
+    }
+
+    function startLeaseTimer() {
+        clearLeaseTimer();
+        if (!state.lease) return;
+
+        state.leaseTimer = window.setInterval(async () => {
+            if (!textEditModal || !textEditModal.classList.contains("show")) return;
+
+            try {
+                await refreshWorkspaceLease();
+            } catch (e) {
+                clearLeaseTimer();
+                state.lease = null;
+                setReadOnly(true);
+                setStatus(`${leaseSummaryFrom(e && e.details ? e.details : null)} Reload to try editing again.`);
+            }
+        }, 20000);
     }
     function clamp(n, lo, hi) {
         return Math.max(lo, Math.min(hi, n));
@@ -317,17 +517,24 @@
     }
 
     async function saveTextFile(relPath, text, expectedMtimeEpoch, expectedSha256) {
+        const body = {
+            path: relPath,
+            text,
+            expected_mtime_epoch: expectedMtimeEpoch || 0,
+            expected_sha256: expectedSha256 || ""
+        };
+
+        if (isWorkspaceScope()) {
+            body.workspace_id = currentWorkspaceId();
+            body.session_id = currentWorkspaceSessionId();
+        }
+
         const r = await fetch(apiWriteTextUrl(), {
             method: "POST",
             credentials: "include",
             cache: "no-store",
             headers: { "Content-Type": "application/json", "Accept": "application/json" },
-            body: JSON.stringify({
-                path: relPath,
-                text,
-                expected_mtime_epoch: expectedMtimeEpoch || 0,
-                expected_sha256: expectedSha256 || ""
-            })
+            body: JSON.stringify(body)
         });
 
         const j = await r.json().catch(() => null);
@@ -343,10 +550,22 @@
         return j;
     }
 
-    async function openEditorFor(item) {
-        if (!item || item.type !== "file") return;
+    async function openEditorFor(itemOrRelPath) {
+        console.log("[textedit.open] arg =", itemOrRelPath);
+        console.log("[textedit.open] typeof =", typeof itemOrRelPath);
+        const rel = (typeof itemOrRelPath === "string")
+            ? String(itemOrRelPath || "")
+            : (itemOrRelPath && itemOrRelPath.type === "file"
+                ? FM.currentRelPathFor(itemOrRelPath)
+                : "");
+        console.log("[textedit.open] rel =", rel);
+        console.log("[textedit.open] readTextUrl =", apiReadTextUrl(rel));
+        console.log("[textedit.open] workspace? =", FM.isWorkspaceScope ? FM.isWorkspaceScope() : "(no fn)");
+        console.log("[textedit.open] workspaceId =", FM.getWorkspaceId ? FM.getWorkspaceId() : "(no fn)");
+        console.log("[textedit.open] FM.api =", FM.api);
+        if (!rel) return;
 
-        const rel = FM.currentRelPathFor(item);
+        clearLeaseTimer();
 
         state = {
             relPath: rel,
@@ -356,7 +575,10 @@
             encoding: "utf-8",
             dirty: false,
             loading: true,
-            saving: false
+            saving: false,
+            readOnly: true,
+            lease: null,
+            leaseTimer: 0
         };
 
         if (textEditTitle) textEditTitle.textContent = "Edit text file";
@@ -366,7 +588,7 @@
             textEditArea.readOnly = true;
         }
 
-        setInfo("Loading…");
+        setInfo("Loading?");
         setStatus("");
         setDirty(false);
         placeCardCentered();
@@ -390,18 +612,52 @@
 
             if (textEditArea) {
                 textEditArea.value = state.originalText;
-                textEditArea.readOnly = false;
+                textEditArea.readOnly = true;
                 textEditArea.focus();
             }
 
             const bytes = new Blob([state.originalText]).size;
-            setInfo(`Encoding: ${state.encoding} • ${FM.fmtSize(bytes)}`);
-            setStatus("");
+            let info = `Encoding: ${state.encoding} • ${FM.fmtSize(bytes)}`;
+
+            if (isWorkspaceScope()) {
+                const canWrite = !!(FM && typeof FM.canCurrentScopeWrite === "function" && FM.canCurrentScopeWrite());
+
+                if (!canWrite) {
+                    setReadOnly(true);
+                    setStatus("This file can only be opened in read-only mode because your workspace role does not allow editing.");
+                } else {
+                    try {
+                        const leasej = await acquireWorkspaceLease(rel);
+                        setReadOnly(false);
+                        setStatus("");
+                        startLeaseTimer();
+
+                        if (leasej && leasej.lease && leasej.lease.expires_at) {
+                            info += ` • edit lock until ${leasej.lease.expires_at}`;
+                        }
+                    } catch (e) {
+                        setReadOnly(true);
+                        if (e && e.code === "edit_locked") {
+                            setStatus(leaseSummaryFrom(e.details));
+                        } else {
+                            console.warn("[textedit] lease acquire failed:", e);
+                            setStatus("This file can only be opened in read-only mode right now.");
+                        }
+                    }
+                }
+            } else {
+                setReadOnly(false);
+                setStatus("");
+            }
+
+            setInfo(info);
             setDirty(false);
+            refreshFindStatus();
         } catch (e) {
             state.loading = false;
             setInfo("Failed to load");
             setStatus(String(e && e.message ? e.message : e));
+            setReadOnly(true);
         }
     }
 
@@ -409,9 +665,30 @@
         if (!textEditArea || !state.relPath) return;
         if (state.loading || state.saving) return;
 
+        if (state.readOnly) {
+            setStatus("Read-only: cannot save.");
+            return;
+        }
+
+        if (isWorkspaceScope()) {
+            if (!state.lease) {
+                setReadOnly(true);
+                setStatus("This file is currently open in read-only mode. Reload to try acquiring edit access again.");
+                return;
+            }
+
+            try {
+                await refreshWorkspaceLease();
+            } catch (e) {
+                setReadOnly(true);
+                setStatus(`${leaseSummaryFrom(e && e.details ? e.details : null)} Reload to try editing again.`);
+                return;
+            }
+        }
+
         state.saving = true;
         setDirty(false);
-        setStatus("Saving…");
+        setStatus("Saving?");
 
         try {
             const newText = String(textEditArea.value || "");
@@ -442,6 +719,9 @@
 
             if (e && (e.code === "changed_on_server" || (e.details && e.details.error === "changed_on_server"))) {
                 setStatus("File changed on server. Reload and review before saving again.");
+            } else if (e && (e.code === "edit_locked" || e.code === "edit_lock_missing")) {
+                setReadOnly(true);
+                setStatus(`${leaseSummaryFrom(e && e.details ? e.details : null)} Reload to try editing again.`);
             } else {
                 setStatus(String(e && e.message ? e.message : e));
             }
@@ -460,23 +740,22 @@
             if (!ok) return;
         }
 
-        const fakeItem = {
-            type: "file",
-            name: state.relPath.split("/").pop() || ""
-        };
-
-        await openEditorFor(fakeItem);
+        await openEditorFor(state.relPath);
     }
 
-    function tryClose() {
+    async function tryClose() {
         if (state.dirty) {
             const ok = confirm("Discard unsaved changes?");
             if (!ok) return;
         }
+
+        await releaseWorkspaceLeaseBestEffort();
         closeModal();
     }
 
-    textEditClose?.addEventListener("click", tryClose);
+    textEditClose?.addEventListener("click", () => {
+        void tryClose();
+    });
 
     textEditFindNextBtn?.addEventListener("click", () => findNext(true));
     textEditFindPrevBtn?.addEventListener("click", () => findPrev(true));
@@ -509,7 +788,9 @@
             dragState.moved = false;
             return;
         }
-        if (e.target === textEditModal) tryClose();
+        if (e.target === textEditModal) {
+            void tryClose();
+        }
     });
 
     textEditArea?.addEventListener("input", () => {
@@ -524,9 +805,14 @@
     document.addEventListener("keydown", (e) => {
         if (!textEditModal || !textEditModal.classList.contains("show")) return;
 
+        if (e.key === "Escape" && isFindBarOpen() && document.activeElement === textEditFindInput) {
+            e.preventDefault();
+            closeFindBar();
+            return;
+        }
         if (e.key === "Escape") {
             e.preventDefault();
-            tryClose();
+            void tryClose();
             return;
         }
         if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === "f") {
@@ -536,12 +822,7 @@
         }
         if ((e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === "s") {
             e.preventDefault();
-            saveCurrent();
-        }
-        if (e.key === "Escape" && isFindBarOpen() && document.activeElement === textEditFindInput) {
-            e.preventDefault();
-            closeFindBar();
-            return;
+            void saveCurrent();
         }
     });
     textEditHead?.addEventListener("pointerdown", (e) => {

@@ -172,9 +172,18 @@
       background: var(--fm_textedit_foot_bg);
     }
 
-    #textEditArea{
+    #textEditArea,
+    #textEditArea:read-only{
       background: var(--fm_textedit_area_bg) !important;
       border-color: var(--fm_textedit_border) !important;
+      color: var(--fg) !important;
+      -webkit-text-fill-color: var(--fg);
+      opacity: 1;
+      font-family: var(--mono);
+      font-size: 14px;
+      line-height: 1.45;
+      tab-size: 4;
+      caret-color: var(--fg);
     }
     .actions{
       display:flex;
@@ -1106,7 +1115,7 @@
 
     <div style="padding:12px 16px 0 16px;">
       <div id="textEditInfo" style="opacity:.8; font-size:12px;">Ready.</div>
-      <div id="textEditStatus" style="margin-top:6px; min-height:18px; font-size:12px;"></div>
+      <div id="textEditStatus" style="margin-top:6px; min-height:18px; font-size:12px; line-height:1.35; opacity:.9;"></div>
     </div>
 
     <div style="padding:12px 16px; flex:1 1 auto; min-height:0; display:flex;">
@@ -1270,10 +1279,19 @@
 
         <div id="workspaceMembersList" style="display:grid; gap:10px;"></div>
 
-        <div style="margin-top:16px; padding-top:16px; border-top:1px solid var(--border2);">
+        <div style="margin-top:16px; padding-top:16px; border-top:1px solid var(--border2); display:grid; gap:10px;">
           <div class="k">Management</div>
-          <div class="v" style="margin-top:8px;">
-            Workspace member changes are managed from the Admin → Workspaces page.
+
+          <div class="v">
+            Workspace member changes are managed outside File Manager.
+          </div>
+
+          <div class="v">
+            You can leave this workspace yourself. After leaving, it will disappear from the Location dropdown.
+          </div>
+
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
+            <button id="workspaceLeaveBtn" class="btn secondary" type="button">Leave workspace</button>
           </div>
         </div>
       </div>

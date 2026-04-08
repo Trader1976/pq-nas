@@ -2970,7 +2970,11 @@ function pickFolder() {
           window.PQNAS_FILEMGR &&
           window.PQNAS_FILEMGR.textEdit &&
           isProbablyTextEditableName(item.name)) {
-        ctxEl.appendChild(menuItem("Open / edit text…", "", () => window.PQNAS_FILEMGR.textEdit.open(item)));
+        ctxEl.appendChild(menuItem("Open / edit text?", "", () => {
+          console.log("[app.ctx.textedit] item =", item);
+          console.log("[app.ctx.textedit] rel =", currentRelPathFor(item));
+          window.PQNAS_FILEMGR.textEdit.open(item);
+        }));
       }
 
       ctxEl.appendChild(menuItem("Download", "⤓", () => doDownload(item)));
@@ -3387,6 +3391,8 @@ function pickFolder() {
             window.PQNAS_FILEMGR &&
             window.PQNAS_FILEMGR.textEdit &&
             isProbablyTextEditableName(item.name)) {
+          console.log("[app.dblclick.textedit] item =", item);
+          console.log("[app.dblclick.textedit] rel =", currentRelPathFor(item));
           window.PQNAS_FILEMGR.textEdit.open(item);
         } else {
           doDownload(item);
