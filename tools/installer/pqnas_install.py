@@ -57,7 +57,6 @@ def log_line(logw: Log, msg: str) -> None:
     logw.write(msg.rstrip("\n") + "\n")
 
 
-
 def looks_like_ip(host: str) -> bool:
     host = (host or "").strip()
     if not host:
@@ -1124,6 +1123,7 @@ def ensure_pqnas_ownership(root: str, log: Optional[Log] = None) -> None:
 def enable_letsencrypt_nginx(domain: str, email: str, redirect: bool, logw=None) -> bool:
     """
     Returns True on success, False on failure (installer should continue with HTTP if False).
+    Certbot output is suppressed from the TUI; users can inspect the letsencrypt log if needed.
     """
     try:
         apt_install(["certbot", "python3-certbot-nginx"], log=logw)
@@ -1140,16 +1140,38 @@ def enable_letsencrypt_nginx(domain: str, email: str, redirect: bool, logw=None)
         else:
             cmd.append("--no-redirect")
 
-        if logw: logw.write("Running: " + " ".join(cmd))
-        subprocess.run(cmd, check=True)
+        if logw:
+            log_line(logw, "[*] Requesting/renewing Let's Encrypt certificate ...")
 
-        # nginx should already be reloaded by certbot, but this is harmless
-        subprocess.run(["systemctl", "reload", "nginx"], check=False)
+        p = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+
+        if p.returncode != 0:
+            raise RuntimeError("certbot failed")
+
+        subprocess.run(
+            ["systemctl", "reload", "nginx"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            text=True,
+        )
+
+        if logw:
+            log_line(logw, "[OK] Let's Encrypt HTTPS enabled.")
         return True
-    except Exception as e:
-        if logw: logw.write(f"[WARN] HTTPS setup failed: {e}")
-        return False
 
+    except Exception:
+        if logw:
+            log_line(
+                logw,
+                "[WARN] HTTPS setup failed. See /var/log/letsencrypt/letsencrypt.log"
+            )
+        return False
 
 def run_systemctl(args: List[str]) -> str:
     p = subprocess.run(["systemctl", *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -2254,17 +2276,77 @@ class ExecuteScreen(Screen):
             return
 
         mode = st.install_mode
-        plan = st.plan or []
 
-        self.logw.write(f"Mode: {mode}")
-        self.logw.write(f"Mountpoint: {st.mountpoint}")
-        self.logw.write("")
-
-        self.logw.write(
+        log_line(self.logw, "Installing... please wait.")
+        log_line(self.logw, f"Mode: {mode}")
+        log_line(self.logw, f"Mountpoint: {st.mountpoint}")
+        log_line(self.logw, "")
+        log_line(
+            self.logw,
             "NOTE: If this is an upgrade and the new version fails to start,\n"
             "you can use the Rollback screen to restore previous binaries\n"
             "from /usr/local/bin/*.bak and restart the service.\n"
         )
+
+        self.set_timer(0.05, self._run_install)
+
+    def _run_install(self) -> None:
+        app: InstallerApp = self.app  # type: ignore
+        st = app.state
+
+        if not st.disk:
+            self.done.update("No disk selected.")
+            return
+
+        mode = st.install_mode
+        plan = st.plan or []
+
+class ExecuteScreen(Screen):
+    BINDINGS = [("q", "quit", "Quit")]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        with Vertical():
+            yield Static("[b]Step 6/6[/b] Executing… (live log)\n", classes="muted")
+            self.logw = Log()
+            yield self.logw
+            self.done = Static("", classes="muted")
+            yield self.done
+        yield Footer()
+
+    def on_mount(self) -> None:
+        app: InstallerApp = self.app  # type: ignore
+        st = app.state
+
+        if not st.disk:
+            self.done.update("No disk selected.")
+            return
+
+        mode = st.install_mode
+
+        log_line(self.logw, "Installing... please wait.")
+        log_line(self.logw, f"Mode: {mode}")
+        log_line(self.logw, f"Mountpoint: {st.mountpoint}")
+        log_line(self.logw, "")
+        log_line(
+            self.logw,
+            "NOTE: If this is an upgrade and the new version fails to start,\n"
+            "you can use the Rollback screen to restore previous binaries\n"
+            "from /usr/local/bin/*.bak and restart the service.\n"
+        )
+
+        self.set_timer(0.05, self._run_install)
+
+    def _run_install(self) -> None:
+        app: InstallerApp = self.app  # type: ignore
+        st = app.state
+
+        if not st.disk:
+            self.done.update("No disk selected.")
+            return
+
+        mode = st.install_mode
+        plan = st.plan or []
 
         # 1) Execute destructive plan only in disk mode
         if mode == "disk":
@@ -2358,7 +2440,6 @@ class ExecuteScreen(Screen):
 
             self.logw.write(f"DNA lib installed: {dst_dna}  (from {src_dna})")
 
-
             self.logw.write(f"Installing bundled apps to {mp}/apps/bundled …")
             install_bundled_apps(asset_root, os.path.join(mp, "apps", "bundled"))
 
@@ -2373,7 +2454,7 @@ class ExecuteScreen(Screen):
 
             self.logw.write("Seeding DNA alert defaults into admin settings …")
             seed_dna_connect_alert_defaults(
-            "/etc/pqnas/admin_settings.json",
+                "/etc/pqnas/admin_settings.json",
                 cli_path=dna_alert_cli_path,
                 data_dir=dna_alert_data_dir,
                 log=self.logw,
@@ -2389,18 +2470,15 @@ class ExecuteScreen(Screen):
 
             dna_path = "/opt/pqnas/lib/dna/libdna_lib.so"
 
-            # Decide origin/rp_id from your nginx hostname if enabled
             origin = None
             rp_id = None
 
             if st.nginx_enabled and st.nginx_hostname:
-                # If certbot/letsencrypt cert exists, prefer https; otherwise http
                 if have_letsencrypt_cert(st.nginx_hostname):
                     origin = f"https://{st.nginx_hostname}"
                 else:
                     origin = f"http://{st.nginx_hostname}"
                 rp_id = st.nginx_hostname
-
 
             write_env_file(
                 mp,
@@ -2410,8 +2488,6 @@ class ExecuteScreen(Screen):
                 auth_mode=st.auth_mode,
             )
 
-
-            # Make canonical URL handling impossible to miss
             if origin and rp_id:
                 self.logw.write("")
                 self.logw.write("🔒 Public URL locked to: " + origin)
@@ -2430,9 +2506,7 @@ class ExecuteScreen(Screen):
             self.logw.write("")
             self.logw.write("== systemd ==")
 
-            # Snapshot restore service + helper script (btrfs/zfs only)
             install_snapshot_restore_assets(asset_root, backend, log=self.logw)
-
 
             self.logw.write("Stopping pqnas.service (if running) …")
             if systemd_unit_exists("pqnas.service"):
@@ -2476,7 +2550,6 @@ class ExecuteScreen(Screen):
             self.logw.write("Checking required external tools …")
             ensure_external_tools(log=self.logw)
 
-
             self.logw.write("Generating /etc/pqnas/keys.env …")
             write_keys_env(asset_root, "/etc/pqnas/keys.env")
             self.logw.write("keys.env written (mode 600).")
@@ -2513,7 +2586,6 @@ class ExecuteScreen(Screen):
             )
             self.logw.write((status.stdout or "").strip())
 
-            # Optional: nginx reverse proxy (HTTP-only)
             if st.nginx_enabled:
                 self.logw.write("")
                 self.logw.write("== nginx reverse proxy ==")
@@ -2538,7 +2610,7 @@ class ExecuteScreen(Screen):
 
                 self.logw.write("Testing + reloading nginx …")
                 nginx_test_reload(log=self.logw)
-                # Let's Encrypt HTTPS (only if user enabled it)
+
                 ok = False
                 if st.https_enabled:
                     self.logw.write("")
@@ -2549,7 +2621,6 @@ class ExecuteScreen(Screen):
                         redirect=st.https_redirect,
                         logw=self.logw,
                     )
-                    # Update PQNAS_ORIGIN/PQNAS_RP_ID to https now that TLS exists
                     self.logw.write("Updating /etc/pqnas/pqnas.env to use https origin …")
                     write_env_file(
                         mp,
@@ -2582,8 +2653,6 @@ class ExecuteScreen(Screen):
                     self.logw.write(f"✅ nginx ready: http://{st.nginx_hostname}/  (no TLS cert detected)")
                     self.logw.write("Tip: after you add TLS (certbot), PQNAS_ORIGIN should be https://… and HTTP should redirect with 308.")
 
-
-                # DNS note (only meaningful for hostnames, not IPs)
                 if not looks_like_ip(st.nginx_hostname):
                     self.logw.write("Note: if you used a hostname, ensure it resolves to this server (DNS/router/hosts).")
                 else:
@@ -2614,7 +2683,6 @@ class ExecuteScreen(Screen):
                     auth_mode=st.auth_mode,
                 )
             )
-
             return
 
         except Exception as e:
@@ -2624,8 +2692,6 @@ class ExecuteScreen(Screen):
                 "Check log above.\n"
             )
             return
-
-
 # -----------------------------------------------------------------------------
 # App
 # -----------------------------------------------------------------------------
