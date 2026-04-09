@@ -5,6 +5,7 @@
 #include <limits>
 #include <sys/statvfs.h>
 #include <system_error>
+#include <cstdlib>
 
 namespace pqnas {
 
@@ -31,8 +32,16 @@ std::string normalize_pool_id_copy(const std::string& s) {
     return v;
 }
 
-std::filesystem::path default_data_root_from_users_path(const std::string& users_path) {
-    // users_path is expected to be .../config/users.json
+    std::filesystem::path default_data_root_from_users_path(const std::string& users_path) {
+    if (const char* p = std::getenv("PQNAS_DATA_ROOT")) {
+        if (*p) return std::filesystem::path(p);
+    }
+
+    if (const char* p = std::getenv("PQNAS_STORAGE_ROOT")) {
+        if (*p) return std::filesystem::path(p) / "data";
+    }
+
+    // Legacy fallback only.
     const std::filesystem::path up(users_path);
     return up.parent_path().parent_path() / "data";
 }
@@ -93,6 +102,20 @@ std::uint64_t dir_size_bytes_best_effort_local(const std::filesystem::path& root
     return true;
 }
 
+    std::string nearest_existing_path_for_statvfs(const std::filesystem::path& p) {
+    std::error_code ec;
+    std::filesystem::path cur = p;
+
+    while (!cur.empty()) {
+        if (std::filesystem::exists(cur, ec) && !ec) {
+            return cur.string();
+        }
+        ec.clear();
+        cur = cur.parent_path();
+    }
+
+    return "/";
+}
     std::uint64_t sum_allocated_user_quota_on_pool_local(const UsersRegistry& users,
                                                          const std::string& want_pool_id,
                                                          const std::string& exclude_fp) {
@@ -307,316 +330,325 @@ void register_admin_workspace_routes(httplib::Server& srv,
         deps.reply_json(res, 200, out.dump());
     });
 
-    srv.Post("/api/v4/admin/workspaces/create",
-             [&](const httplib::Request& req, httplib::Response& res) {
-        std::string actor_fp;
-        if (!deps.require_admin_cookie_users_actor ||
-            !deps.require_admin_cookie_users_actor(
-                req, res, deps.cookie_key, deps.users_path, deps.users, &actor_fp)) {
-            return;
-        }
+srv.Post("/api/v4/admin/workspaces/create",
+         [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!deps.require_admin_cookie_users_actor ||
+        !deps.require_admin_cookie_users_actor(
+            req, res, deps.cookie_key, deps.users_path, deps.users, &actor_fp)) {
+        return;
+    }
 
-        res.set_header("Cache-Control", "no-store");
+    res.set_header("Cache-Control", "no-store");
 
-        json j;
-        try {
-            j = json::parse(req.body);
-        } catch (...) {
-            deps.reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "bad_request"},
-                {"message", "invalid json"}
-            }.dump());
-            return;
-        }
+    json j;
+    try {
+        j = json::parse(req.body);
+    } catch (...) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
 
-        const std::string name = trim_copy_safe(j.value("name", ""));
-        const std::string notes = trim_copy_safe(j.value("notes", ""));
-        const std::string owner_fp = trim_copy_safe(j.value("owner_fingerprint", ""));
-        const std::string pool_id_norm = normalize_pool_id_copy(j.value("pool_id", ""));
+    const std::string name = trim_copy_safe(j.value("name", ""));
+    const std::string notes = trim_copy_safe(j.value("notes", ""));
+    const std::string owner_fp = trim_copy_safe(j.value("owner_fingerprint", ""));
+    const std::string pool_id_norm = normalize_pool_id_copy(j.value("pool_id", ""));
 
-        if (name.empty()) {
-            deps.reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "bad_request"},
-                {"message", "missing name"}
-            }.dump());
-            return;
-        }
+    if (name.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing name"}
+        }.dump());
+        return;
+    }
 
-        if (owner_fp.empty()) {
-            deps.reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "bad_request"},
-                {"message", "missing owner_fingerprint"}
-            }.dump());
-            return;
-        }
+    if (owner_fp.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing owner_fingerprint"}
+        }.dump());
+        return;
+    }
 
-        std::uint64_t quota_bytes = 0;
-        std::string quota_err;
-        if (!quota_gb_json_to_bytes(j, &quota_bytes, &quota_err)) {
-            deps.reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "bad_request"},
-                {"message", quota_err}
-            }.dump());
-            return;
-        }
+    std::uint64_t quota_bytes = 0;
+    std::string quota_err;
+    if (!quota_gb_json_to_bytes(j, &quota_bytes, &quota_err)) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", quota_err}
+        }.dump());
+        return;
+    }
 
-        if (!is_enabled_user_for_workspace_owner(*deps.users, owner_fp)) {
-            audit_workspace_event(deps, "admin.workspace_create_refused", "fail", {
-                {"reason", "owner_not_enabled"},
-                {"owner_fp", owner_fp},
-                {"actor_fp", actor_fp}
-            });
-
-            deps.reply_json(res, 403, json{
-                {"ok", false},
-                {"error", "owner_not_enabled"},
-                {"message", "owner_fingerprint must refer to an enabled user"}
-            }.dump());
-            return;
-        }
-
-        // v1 minimal: support default pool only until pool root resolution is moved
-        // out of main.cpp into reusable helpers.
-        if (!pool_id_norm.empty()) {
-            audit_workspace_event(deps, "admin.workspace_create_refused", "fail", {
-                {"reason", "pool_not_supported_yet"},
-                {"pool_id", pool_id_norm},
-                {"actor_fp", actor_fp}
-            });
-
-            deps.reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "pool_not_supported_yet"},
-                {"message", "workspace create currently supports default pool only"}
-            }.dump());
-            return;
-        }
-
-        std::string workspace_id;
-        for (int i = 0; i < 16; ++i) {
-            workspace_id = new_workspace_id();
-            if (!deps.workspaces->exists(workspace_id)) break;
-            workspace_id.clear();
-        }
-
-        if (workspace_id.empty()) {
-            deps.reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "server_error"},
-                {"message", "failed to generate unique workspace_id"}
-            }.dump());
-            return;
-        }
-        // Workspace storage currently uses the default pool/data_root only.
-        // Keep it outside tiering for now, but still enforce committed-quota
-        // admission against the backing filesystem capacity.
-        {
-            const std::string effective_pool_id = ""; // default pool
-            const std::filesystem::path data_root =
-                default_data_root_from_users_path(deps.users_path);
-
-            std::uint64_t pool_total_bytes = 0;
-            std::uint64_t pool_free_bytes = 0;
-
-            if (!statvfs_path_local(data_root.string(), &pool_total_bytes, &pool_free_bytes)) {
-                audit_workspace_event(deps, "admin.workspace_create_refused", "fail", {
-                    {"reason", "pool_statvfs_failed"},
-                    {"pool_id", "default"},
-                    {"path", data_root.string()},
-                    {"actor_fp", actor_fp}
-                });
-
-                deps.reply_json(res, 500, json{
-                    {"ok", false},
-                    {"error", "pool_statvfs_failed"},
-                    {"message", "failed to read default pool capacity"},
-                    {"pool_id", "default"},
-                    {"path", data_root.string()}
-                }.dump());
-                return;
-            }
-
-            const std::uint64_t allocated_user_bytes =
-                sum_allocated_user_quota_on_pool_local(*deps.users, effective_pool_id, "");
-
-            const std::uint64_t allocated_workspace_bytes =
-                sum_allocated_workspace_quota_on_pool(*deps.workspaces, effective_pool_id, "");
-
-            std::uint64_t allocated_other_bytes = allocated_user_bytes;
-            if (std::numeric_limits<std::uint64_t>::max() - allocated_other_bytes < allocated_workspace_bytes) {
-                allocated_other_bytes = std::numeric_limits<std::uint64_t>::max();
-            } else {
-                allocated_other_bytes += allocated_workspace_bytes;
-            }
-
-            std::uint64_t would_total_bytes = allocated_other_bytes;
-            if (std::numeric_limits<std::uint64_t>::max() - would_total_bytes < quota_bytes) {
-                would_total_bytes = std::numeric_limits<std::uint64_t>::max();
-            } else {
-                would_total_bytes += quota_bytes;
-            }
-
-            if (would_total_bytes > pool_total_bytes) {
-                audit_workspace_event(deps, "admin.workspace_create_refused", "fail", {
-                    {"reason", "pool_quota_overcommit"},
-                    {"pool_id", "default"},
-                    {"requested_quota_bytes", std::to_string(static_cast<unsigned long long>(quota_bytes))},
-                    {"allocated_user_bytes", std::to_string(static_cast<unsigned long long>(allocated_user_bytes))},
-                    {"allocated_workspace_bytes", std::to_string(static_cast<unsigned long long>(allocated_workspace_bytes))},
-                    {"allocated_other_bytes", std::to_string(static_cast<unsigned long long>(allocated_other_bytes))},
-                    {"would_total_bytes", std::to_string(static_cast<unsigned long long>(would_total_bytes))},
-                    {"pool_total_bytes", std::to_string(static_cast<unsigned long long>(pool_total_bytes))},
-                    {"pool_free_bytes", std::to_string(static_cast<unsigned long long>(pool_free_bytes))},
-                    {"actor_fp", actor_fp}
-                });
-
-                deps.reply_json(res, 409, json{
-                    {"ok", false},
-                    {"error", "pool_quota_overcommit"},
-                    {"message", "requested workspace quota would exceed default pool capacity"},
-                    {"pool_id", "default"},
-                    {"requested_quota_bytes", quota_bytes},
-                    {"allocated_user_bytes", allocated_user_bytes},
-                    {"allocated_workspace_bytes", allocated_workspace_bytes},
-                    {"allocated_other_bytes", allocated_other_bytes},
-                    {"would_total_bytes", would_total_bytes},
-                    {"pool_total_bytes", pool_total_bytes},
-                    {"pool_free_bytes", pool_free_bytes}
-                }.dump());
-                return;
-            }
-        }
-        const std::string root_rel = default_workspace_root_rel_for_id(workspace_id);
-        if (root_rel.empty()) {
-            deps.reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "server_error"},
-                {"message", "failed to derive workspace root_rel"}
-            }.dump());
-            return;
-        }
-
-        const std::filesystem::path data_root = default_data_root_from_users_path(deps.users_path);
-        const std::filesystem::path ws_dir = data_root / root_rel;
-
-        {
-            std::string fs_err;
-            if (!ensure_dir_exists_local(ws_dir.parent_path(), &fs_err)) {
-                audit_workspace_event(deps, "admin.workspace_create_fail", "fail", {
-                    {"reason", "mkdir_parent_failed"},
-                    {"workspace_id", workspace_id},
-                    {"path", ws_dir.parent_path().string()},
-                    {"detail", fs_err},
-                    {"actor_fp", actor_fp}
-                });
-
-                deps.reply_json(res, 500, json{
-                    {"ok", false},
-                    {"error", "server_error"},
-                    {"message", "failed to create workspace parent directory"},
-                    {"detail", fs_err}
-                }.dump());
-                return;
-            }
-        }
-
-        {
-            std::string fs_err;
-            if (!ensure_dir_exists_local(ws_dir, &fs_err)) {
-                audit_workspace_event(deps, "admin.workspace_create_fail", "fail", {
-                    {"reason", "mkdir_workspace_failed"},
-                    {"workspace_id", workspace_id},
-                    {"path", ws_dir.string()},
-                    {"detail", fs_err},
-                    {"actor_fp", actor_fp}
-                });
-
-                deps.reply_json(res, 500, json{
-                    {"ok", false},
-                    {"error", "server_error"},
-                    {"message", "failed to create workspace directory"},
-                    {"detail", fs_err}
-                }.dump());
-                return;
-            }
-        }
-
-        const std::string now_iso = deps.now_iso_utc ? deps.now_iso_utc() : "";
-
-        WorkspaceRec w;
-        w.workspace_id = workspace_id;
-        w.name = name;
-        w.status = "enabled";
-        w.notes = notes;
-
-        w.created_at = now_iso;
-        w.created_by = actor_fp;
-
-        w.storage_state = "allocated";
-        w.storage_pool_id = "";
-        w.root_rel = root_rel;
-        w.quota_bytes = quota_bytes;
-        w.storage_set_at = now_iso;
-        w.storage_set_by = actor_fp;
-
-        WorkspaceMemberRec owner;
-        owner.fingerprint = owner_fp;
-        owner.role = "owner";
-        owner.status = "enabled";
-        owner.added_at = now_iso;
-        owner.added_by = actor_fp;
-        w.members.push_back(owner);
-
-        if (!deps.workspaces->upsert(w)) {
-            audit_workspace_event(deps, "admin.workspace_create_fail", "fail", {
-                {"reason", "upsert_failed"},
-                {"workspace_id", workspace_id},
-                {"actor_fp", actor_fp}
-            });
-
-            deps.reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "server_error"},
-                {"message", "workspace upsert failed"}
-            }.dump());
-            return;
-        }
-
-        if (!deps.workspaces->save(deps.workspaces_path)) {
-            audit_workspace_event(deps, "admin.workspace_create_fail", "fail", {
-                {"reason", "save_failed"},
-                {"workspace_id", workspace_id},
-                {"actor_fp", actor_fp}
-            });
-
-            deps.reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "server_error"},
-                {"message", "workspaces save failed"}
-            }.dump());
-            return;
-        }
-
-        audit_workspace_event(deps, "admin.workspace_created", "ok", {
-            {"workspace_id", workspace_id},
-            {"name", name},
+    if (!is_enabled_user_for_workspace_owner(*deps.users, owner_fp)) {
+        audit_workspace_event(deps, "admin.workspace_create_refused", "fail", {
+            {"reason", "owner_not_enabled"},
             {"owner_fp", owner_fp},
-            {"quota_bytes", std::to_string(static_cast<unsigned long long>(quota_bytes))},
-            {"root_rel", root_rel},
-            {"pool_id", "default"},
             {"actor_fp", actor_fp}
         });
 
-        deps.reply_json(res, 200, json{
-            {"ok", true},
-            {"workspace", workspace_to_admin_json(w, deps.users_path)}
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "owner_not_enabled"},
+            {"message", "owner_fingerprint must refer to an enabled user"}
         }.dump());
+        return;
+    }
+
+    // v1 minimal: support default pool only until pool root resolution is moved
+    // out of main.cpp into reusable helpers.
+    if (!pool_id_norm.empty()) {
+        audit_workspace_event(deps, "admin.workspace_create_refused", "fail", {
+            {"reason", "pool_not_supported_yet"},
+            {"pool_id", pool_id_norm},
+            {"actor_fp", actor_fp}
+        });
+
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "pool_not_supported_yet"},
+            {"message", "workspace create currently supports default pool only"}
+        }.dump());
+        return;
+    }
+
+    std::string workspace_id;
+    for (int i = 0; i < 16; ++i) {
+        workspace_id = new_workspace_id();
+        if (!deps.workspaces->exists(workspace_id)) break;
+        workspace_id.clear();
+    }
+
+    if (workspace_id.empty()) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to generate unique workspace_id"}
+        }.dump());
+        return;
+    }
+
+    // Workspace storage currently uses the default pool/data_root only.
+    // Keep it outside tiering for now, but still enforce committed-quota
+    // admission against the backing filesystem capacity.
+    {
+        const std::string effective_pool_id = ""; // default pool
+        const std::filesystem::path data_root =
+            default_data_root_from_users_path(deps.users_path);
+
+        const std::string stat_path =
+            nearest_existing_path_for_statvfs(data_root);
+
+        std::uint64_t pool_total_bytes = 0;
+        std::uint64_t pool_free_bytes = 0;
+
+        if (!statvfs_path_local(stat_path, &pool_total_bytes, &pool_free_bytes)) {
+            audit_workspace_event(deps, "admin.workspace_create_refused", "fail", {
+                {"reason", "pool_statvfs_failed"},
+                {"pool_id", "default"},
+                {"path", stat_path},
+                {"data_root", data_root.string()},
+                {"actor_fp", actor_fp}
+            });
+
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "pool_statvfs_failed"},
+                {"message", "failed to read default pool capacity"},
+                {"pool_id", "default"},
+                {"path", stat_path},
+                {"data_root", data_root.string()}
+            }.dump());
+            return;
+        }
+
+        const std::uint64_t allocated_user_bytes =
+            sum_allocated_user_quota_on_pool_local(*deps.users, effective_pool_id, "");
+
+        const std::uint64_t allocated_workspace_bytes =
+            sum_allocated_workspace_quota_on_pool(*deps.workspaces, effective_pool_id, "");
+
+        std::uint64_t allocated_other_bytes = allocated_user_bytes;
+        if (std::numeric_limits<std::uint64_t>::max() - allocated_other_bytes < allocated_workspace_bytes) {
+            allocated_other_bytes = std::numeric_limits<std::uint64_t>::max();
+        } else {
+            allocated_other_bytes += allocated_workspace_bytes;
+        }
+
+        std::uint64_t would_total_bytes = allocated_other_bytes;
+        if (std::numeric_limits<std::uint64_t>::max() - would_total_bytes < quota_bytes) {
+            would_total_bytes = std::numeric_limits<std::uint64_t>::max();
+        } else {
+            would_total_bytes += quota_bytes;
+        }
+
+        if (would_total_bytes > pool_total_bytes) {
+            audit_workspace_event(deps, "admin.workspace_create_refused", "fail", {
+                {"reason", "pool_quota_overcommit"},
+                {"pool_id", "default"},
+                {"requested_quota_bytes", std::to_string(static_cast<unsigned long long>(quota_bytes))},
+                {"allocated_user_bytes", std::to_string(static_cast<unsigned long long>(allocated_user_bytes))},
+                {"allocated_workspace_bytes", std::to_string(static_cast<unsigned long long>(allocated_workspace_bytes))},
+                {"allocated_other_bytes", std::to_string(static_cast<unsigned long long>(allocated_other_bytes))},
+                {"would_total_bytes", std::to_string(static_cast<unsigned long long>(would_total_bytes))},
+                {"pool_total_bytes", std::to_string(static_cast<unsigned long long>(pool_total_bytes))},
+                {"pool_free_bytes", std::to_string(static_cast<unsigned long long>(pool_free_bytes))},
+                {"actor_fp", actor_fp}
+            });
+
+            deps.reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "pool_quota_overcommit"},
+                {"message", "requested workspace quota would exceed default pool capacity"},
+                {"pool_id", "default"},
+                {"requested_quota_bytes", quota_bytes},
+                {"allocated_user_bytes", allocated_user_bytes},
+                {"allocated_workspace_bytes", allocated_workspace_bytes},
+                {"allocated_other_bytes", allocated_other_bytes},
+                {"would_total_bytes", would_total_bytes},
+                {"pool_total_bytes", pool_total_bytes},
+                {"pool_free_bytes", pool_free_bytes}
+            }.dump());
+            return;
+        }
+    }
+
+    const std::string root_rel = default_workspace_root_rel_for_id(workspace_id);
+    if (root_rel.empty()) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to derive workspace root_rel"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path data_root = default_data_root_from_users_path(deps.users_path);
+    const std::filesystem::path ws_dir = data_root / root_rel;
+
+    {
+        std::string fs_err;
+        if (!ensure_dir_exists_local(ws_dir.parent_path(), &fs_err)) {
+            audit_workspace_event(deps, "admin.workspace_create_fail", "fail", {
+                {"reason", "mkdir_parent_failed"},
+                {"workspace_id", workspace_id},
+                {"path", ws_dir.parent_path().string()},
+                {"detail", fs_err},
+                {"actor_fp", actor_fp}
+            });
+
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to create workspace parent directory"},
+                {"path", ws_dir.parent_path().string()},
+                {"detail", fs_err}
+            }.dump());
+            return;
+        }
+    }
+
+    {
+        std::string fs_err;
+        if (!ensure_dir_exists_local(ws_dir, &fs_err)) {
+            audit_workspace_event(deps, "admin.workspace_create_fail", "fail", {
+                {"reason", "mkdir_workspace_failed"},
+                {"workspace_id", workspace_id},
+                {"path", ws_dir.string()},
+                {"detail", fs_err},
+                {"actor_fp", actor_fp}
+            });
+
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to create workspace directory"},
+                {"path", ws_dir.string()},
+                {"detail", fs_err}
+            }.dump());
+            return;
+        }
+    }
+
+    const std::string now_iso = deps.now_iso_utc ? deps.now_iso_utc() : "";
+
+    WorkspaceRec w;
+    w.workspace_id = workspace_id;
+    w.name = name;
+    w.status = "enabled";
+    w.notes = notes;
+
+    w.created_at = now_iso;
+    w.created_by = actor_fp;
+
+    w.storage_state = "allocated";
+    w.storage_pool_id = "";
+    w.root_rel = root_rel;
+    w.quota_bytes = quota_bytes;
+    w.storage_set_at = now_iso;
+    w.storage_set_by = actor_fp;
+
+    WorkspaceMemberRec owner;
+    owner.fingerprint = owner_fp;
+    owner.role = "owner";
+    owner.status = "enabled";
+    owner.added_at = now_iso;
+    owner.added_by = actor_fp;
+    w.members.push_back(owner);
+
+    if (!deps.workspaces->upsert(w)) {
+        audit_workspace_event(deps, "admin.workspace_create_fail", "fail", {
+            {"reason", "upsert_failed"},
+            {"workspace_id", workspace_id},
+            {"actor_fp", actor_fp}
+        });
+
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "workspace upsert failed"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->save(deps.workspaces_path)) {
+        audit_workspace_event(deps, "admin.workspace_create_fail", "fail", {
+            {"reason", "save_failed"},
+            {"workspace_id", workspace_id},
+            {"actor_fp", actor_fp}
+        });
+
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "workspaces save failed"}
+        }.dump());
+        return;
+    }
+
+    audit_workspace_event(deps, "admin.workspace_created", "ok", {
+        {"workspace_id", workspace_id},
+        {"name", name},
+        {"owner_fp", owner_fp},
+        {"quota_bytes", std::to_string(static_cast<unsigned long long>(quota_bytes))},
+        {"root_rel", root_rel},
+        {"pool_id", "default"},
+        {"actor_fp", actor_fp}
     });
 
+    deps.reply_json(res, 200, json{
+        {"ok", true},
+        {"workspace", workspace_to_admin_json(w, deps.users_path)}
+    }.dump());
+});
+    
     srv.Post("/api/v4/admin/workspaces/delete",
          [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp;
