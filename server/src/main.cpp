@@ -8728,6 +8728,89 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
 
     json pools_cfg = pqnas::load_or_init_pools_cfg_v3(users_path);
 
+    if (!workspaces.load(workspaces_path)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "workspaces_load_failed"},
+            {"message", "failed to reload workspaces"}
+        }.dump());
+        return;
+    }
+
+    auto sum_allocated_user_quota_on_pool_local =
+    [&](const std::string& want_pool_id) -> std::uint64_t
+{
+    const std::string want_pool = normalize_storage_pool_id(want_pool_id);
+    std::uint64_t total = 0;
+
+    for (const auto& kv : users.snapshot()) {
+        const auto& u = kv.second;
+        if (u.storage_state != "allocated") continue;
+
+        const std::string user_pool = normalize_storage_pool_id(u.storage_pool_id);
+        if (user_pool != want_pool) continue;
+
+        const std::uint64_t q = static_cast<std::uint64_t>(u.quota_bytes);
+        if (std::numeric_limits<std::uint64_t>::max() - total < q) {
+            return std::numeric_limits<std::uint64_t>::max();
+        }
+        total += q;
+    }
+
+    return total;
+};
+        auto attach_pool_accounting = [&](json* pj) {
+        if (!pj || !pj->is_object()) return;
+
+        const std::string mount = pj->value("mount", "");
+        const bool is_editable_pool = pj->value("is_editable_pool", false);
+
+        // Editable pool cards map to named pools.
+        // Non-editable system-volume card represents the default pool.
+        const std::string effective_pool_id =
+            is_editable_pool
+                ? normalize_storage_pool_id(pj->value("pool_id", ""))
+                : std::string{};
+
+        const std::uint64_t allocated_user_quota_bytes =
+            sum_allocated_user_quota_on_pool_local(effective_pool_id);
+
+        const std::uint64_t allocated_workspace_quota_bytes =
+            pqnas::sum_allocated_workspace_quota_on_pool(workspaces, effective_pool_id, "");
+
+        std::uint64_t allocated_total_quota_bytes = allocated_user_quota_bytes;
+        if (std::numeric_limits<std::uint64_t>::max() - allocated_total_quota_bytes < allocated_workspace_quota_bytes) {
+            allocated_total_quota_bytes = std::numeric_limits<std::uint64_t>::max();
+        } else {
+            allocated_total_quota_bytes += allocated_workspace_quota_bytes;
+        }
+
+        std::uint64_t accounting_pool_total_bytes = 0;
+        std::uint64_t accounting_pool_free_bytes = 0;
+
+        const std::string stat_path =
+            is_editable_pool
+                ? mount
+                : data_root_dir();
+
+        if (!statvfs_path(stat_path, &accounting_pool_total_bytes, &accounting_pool_free_bytes)) {
+            accounting_pool_total_bytes = 0;
+            accounting_pool_free_bytes = 0;
+        }
+
+        const std::uint64_t remaining_allocatable_bytes =
+            (accounting_pool_total_bytes > allocated_total_quota_bytes)
+                ? (accounting_pool_total_bytes - allocated_total_quota_bytes)
+                : 0;
+
+        (*pj)["accounting_pool_id"] = effective_pool_id.empty() ? "default" : effective_pool_id;
+        (*pj)["allocated_user_quota_bytes"] = allocated_user_quota_bytes;
+        (*pj)["allocated_workspace_quota_bytes"] = allocated_workspace_quota_bytes;
+        (*pj)["allocated_total_quota_bytes"] = allocated_total_quota_bytes;
+        (*pj)["remaining_allocatable_bytes"] = remaining_allocatable_bytes;
+        (*pj)["accounting_pool_total_bytes"] = accounting_pool_total_bytes;
+        (*pj)["accounting_pool_free_bytes"] = accounting_pool_free_bytes;
+    };
     std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
     if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
 
@@ -8932,8 +9015,10 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
             busy_lock
         );
 
-		const std::string pools_root = allowed_prefix + "/pools/";
-		merged["is_editable_pool"] = starts_with(target, pools_root);
+        const std::string pools_root = allowed_prefix + "/pools/";
+        merged["is_editable_pool"] = starts_with(target, pools_root);
+
+        attach_pool_accounting(&merged);
 
         runtime_by_mount[target] = merged;
     }
@@ -8980,8 +9065,10 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
                 busy_lock
             );
 
-			const std::string pools_root = allowed_prefix + "/pools/";
-			merged["is_editable_pool"] = starts_with(mount, pools_root);
+            const std::string pools_root = allowed_prefix + "/pools/";
+            merged["is_editable_pool"] = starts_with(mount, pools_root);
+
+            attach_pool_accounting(&merged);
 
             arr.push_back(merged);
         }
@@ -17890,6 +17977,15 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
 
     res.set_header("Cache-Control", "no-store");
 
+    if (!workspaces.load(workspaces_path)) {
+        reply_json(res, 500, json({
+            {"ok", false},
+            {"error", "workspaces_load_failed"},
+            {"message", "failed to reload workspaces"}
+        }).dump());
+        return;
+    }
+
     json j;
     try { j = json::parse(req.body); }
     catch (...) {
@@ -18106,8 +18202,18 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
             return;
         }
 
-		const std::uint64_t allocated_other_bytes =
-    		sum_allocated_quota_on_pool_local(effective_pool_id, fp);
+        const std::uint64_t allocated_user_bytes =
+            sum_allocated_quota_on_pool_local(effective_pool_id, fp);
+
+        const std::uint64_t allocated_workspace_bytes =
+            pqnas::sum_allocated_workspace_quota_on_pool(workspaces, effective_pool_id, "");
+
+        std::uint64_t allocated_other_bytes = allocated_user_bytes;
+        if (std::numeric_limits<std::uint64_t>::max() - allocated_other_bytes < allocated_workspace_bytes) {
+            allocated_other_bytes = std::numeric_limits<std::uint64_t>::max();
+        } else {
+            allocated_other_bytes += allocated_workspace_bytes;
+        }
 
         std::uint64_t would_total_bytes = allocated_other_bytes;
         if (std::numeric_limits<std::uint64_t>::max() - would_total_bytes < quota_bytes) {
@@ -18129,6 +18235,8 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
                 ev.f["would_total_bytes"] = std::to_string((unsigned long long)would_total_bytes);
                 ev.f["pool_total_bytes"] = std::to_string((unsigned long long)pool_total_bytes);
                 ev.f["pool_free_bytes"] = std::to_string((unsigned long long)pool_free_bytes);
+                ev.f["allocated_user_bytes"] = std::to_string((unsigned long long)allocated_user_bytes);
+                ev.f["allocated_workspace_bytes"] = std::to_string((unsigned long long)allocated_workspace_bytes);
                 ev.f["ts"] = now_iso;
                 ev.f["actor_fp"] = actor_fp;
                 ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
@@ -18144,6 +18252,8 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
                 {"allocated_other_bytes", allocated_other_bytes},
                 {"would_total_bytes", would_total_bytes},
                 {"pool_total_bytes", pool_total_bytes},
+                {"allocated_user_bytes", allocated_user_bytes},
+                {"allocated_workspace_bytes", allocated_workspace_bytes},
                 {"pool_free_bytes", pool_free_bytes}
             }).dump());
             return;
@@ -18372,6 +18482,15 @@ srv.Get("/api/v4/admin/users/storage_preview", [&](const httplib::Request& req, 
 
     res.set_header("Cache-Control", "no-store");
 
+    if (!workspaces.load(workspaces_path)) {
+        reply_json(res, 500, json({
+            {"ok", false},
+            {"error", "workspaces_load_failed"},
+            {"message", "failed to reload workspaces"}
+        }).dump());
+        return;
+    }
+
     const std::string fp = trim_copy(req.get_param_value("fingerprint"));
     if (fp.empty() || !is_valid_fingerprint_hex(fp)) {
         reply_json(res, 400, json({
@@ -18480,8 +18599,18 @@ srv.Get("/api/v4/admin/users/storage_preview", [&](const httplib::Request& req, 
         }
     }
 
-    const std::uint64_t allocated_other_bytes =
+    const std::uint64_t allocated_user_bytes =
         sum_allocated_quota_on_pool_local(pool_id, fp);
+
+    const std::uint64_t allocated_workspace_bytes =
+        pqnas::sum_allocated_workspace_quota_on_pool(workspaces, pool_id, "");
+
+    std::uint64_t allocated_other_bytes = allocated_user_bytes;
+    if (std::numeric_limits<std::uint64_t>::max() - allocated_other_bytes < allocated_workspace_bytes) {
+        allocated_other_bytes = std::numeric_limits<std::uint64_t>::max();
+    } else {
+        allocated_other_bytes += allocated_workspace_bytes;
+    }
 
     const std::uint64_t current_quota_bytes =
         (u.storage_state == "allocated") ? static_cast<std::uint64_t>(u.quota_bytes) : 0;
@@ -18511,6 +18640,8 @@ srv.Get("/api/v4/admin/users/storage_preview", [&](const httplib::Request& req, 
         {"pool_free_bytes", pool_free_bytes},
         {"allocated_other_bytes", allocated_other_bytes},
         {"allocated_total_bytes", allocated_total_bytes},
+        {"allocated_user_bytes", allocated_user_bytes},
+        {"allocated_workspace_bytes", allocated_workspace_bytes},
         {"remaining_allocatable_bytes", remaining_allocatable_bytes}
     }).dump());
 });

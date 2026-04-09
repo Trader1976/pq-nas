@@ -3,6 +3,7 @@
 #include <cmath>
 #include <filesystem>
 #include <limits>
+#include <sys/statvfs.h>
 #include <system_error>
 
 namespace pqnas {
@@ -70,7 +71,52 @@ std::uint64_t dir_size_bytes_best_effort_local(const std::filesystem::path& root
 
     return total;
 }
+    bool statvfs_path_local(const std::string& path,
+                            std::uint64_t* out_total_bytes,
+                            std::uint64_t* out_free_bytes) {
+    if (out_total_bytes) *out_total_bytes = 0;
+    if (out_free_bytes) *out_free_bytes = 0;
 
+    struct statvfs st {};
+    if (::statvfs(path.c_str(), &st) != 0) return false;
+
+    const unsigned long long total =
+        static_cast<unsigned long long>(st.f_blocks) *
+        static_cast<unsigned long long>(st.f_frsize);
+
+    const unsigned long long freeb =
+        static_cast<unsigned long long>(st.f_bavail) *
+        static_cast<unsigned long long>(st.f_frsize);
+
+    if (out_total_bytes) *out_total_bytes = static_cast<std::uint64_t>(total);
+    if (out_free_bytes) *out_free_bytes = static_cast<std::uint64_t>(freeb);
+    return true;
+}
+
+    std::uint64_t sum_allocated_user_quota_on_pool_local(const UsersRegistry& users,
+                                                         const std::string& want_pool_id,
+                                                         const std::string& exclude_fp) {
+    const std::string want_pool = normalize_pool_id_copy(want_pool_id);
+    std::uint64_t total = 0;
+
+    for (const auto& kv : users.snapshot()) {
+        const auto& u = kv.second;
+
+        if (!exclude_fp.empty() && u.fingerprint == exclude_fp) continue;
+        if (u.storage_state != "allocated") continue;
+
+        const std::string user_pool = normalize_pool_id_copy(u.storage_pool_id);
+        if (user_pool != want_pool) continue;
+
+        const std::uint64_t q = static_cast<std::uint64_t>(u.quota_bytes);
+        if (std::numeric_limits<std::uint64_t>::max() - total < q) {
+            return std::numeric_limits<std::uint64_t>::max();
+        }
+        total += q;
+    }
+
+    return total;
+}
 bool quota_gb_json_to_bytes(const json& j,
                             std::uint64_t* out_quota_bytes,
                             std::string* out_err) {
@@ -365,7 +411,85 @@ void register_admin_workspace_routes(httplib::Server& srv,
             }.dump());
             return;
         }
+        // Workspace storage currently uses the default pool/data_root only.
+        // Keep it outside tiering for now, but still enforce committed-quota
+        // admission against the backing filesystem capacity.
+        {
+            const std::string effective_pool_id = ""; // default pool
+            const std::filesystem::path data_root =
+                default_data_root_from_users_path(deps.users_path);
 
+            std::uint64_t pool_total_bytes = 0;
+            std::uint64_t pool_free_bytes = 0;
+
+            if (!statvfs_path_local(data_root.string(), &pool_total_bytes, &pool_free_bytes)) {
+                audit_workspace_event(deps, "admin.workspace_create_refused", "fail", {
+                    {"reason", "pool_statvfs_failed"},
+                    {"pool_id", "default"},
+                    {"path", data_root.string()},
+                    {"actor_fp", actor_fp}
+                });
+
+                deps.reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "pool_statvfs_failed"},
+                    {"message", "failed to read default pool capacity"},
+                    {"pool_id", "default"},
+                    {"path", data_root.string()}
+                }.dump());
+                return;
+            }
+
+            const std::uint64_t allocated_user_bytes =
+                sum_allocated_user_quota_on_pool_local(*deps.users, effective_pool_id, "");
+
+            const std::uint64_t allocated_workspace_bytes =
+                sum_allocated_workspace_quota_on_pool(*deps.workspaces, effective_pool_id, "");
+
+            std::uint64_t allocated_other_bytes = allocated_user_bytes;
+            if (std::numeric_limits<std::uint64_t>::max() - allocated_other_bytes < allocated_workspace_bytes) {
+                allocated_other_bytes = std::numeric_limits<std::uint64_t>::max();
+            } else {
+                allocated_other_bytes += allocated_workspace_bytes;
+            }
+
+            std::uint64_t would_total_bytes = allocated_other_bytes;
+            if (std::numeric_limits<std::uint64_t>::max() - would_total_bytes < quota_bytes) {
+                would_total_bytes = std::numeric_limits<std::uint64_t>::max();
+            } else {
+                would_total_bytes += quota_bytes;
+            }
+
+            if (would_total_bytes > pool_total_bytes) {
+                audit_workspace_event(deps, "admin.workspace_create_refused", "fail", {
+                    {"reason", "pool_quota_overcommit"},
+                    {"pool_id", "default"},
+                    {"requested_quota_bytes", std::to_string(static_cast<unsigned long long>(quota_bytes))},
+                    {"allocated_user_bytes", std::to_string(static_cast<unsigned long long>(allocated_user_bytes))},
+                    {"allocated_workspace_bytes", std::to_string(static_cast<unsigned long long>(allocated_workspace_bytes))},
+                    {"allocated_other_bytes", std::to_string(static_cast<unsigned long long>(allocated_other_bytes))},
+                    {"would_total_bytes", std::to_string(static_cast<unsigned long long>(would_total_bytes))},
+                    {"pool_total_bytes", std::to_string(static_cast<unsigned long long>(pool_total_bytes))},
+                    {"pool_free_bytes", std::to_string(static_cast<unsigned long long>(pool_free_bytes))},
+                    {"actor_fp", actor_fp}
+                });
+
+                deps.reply_json(res, 409, json{
+                    {"ok", false},
+                    {"error", "pool_quota_overcommit"},
+                    {"message", "requested workspace quota would exceed default pool capacity"},
+                    {"pool_id", "default"},
+                    {"requested_quota_bytes", quota_bytes},
+                    {"allocated_user_bytes", allocated_user_bytes},
+                    {"allocated_workspace_bytes", allocated_workspace_bytes},
+                    {"allocated_other_bytes", allocated_other_bytes},
+                    {"would_total_bytes", would_total_bytes},
+                    {"pool_total_bytes", pool_total_bytes},
+                    {"pool_free_bytes", pool_free_bytes}
+                }.dump());
+                return;
+            }
+        }
         const std::string root_rel = default_workspace_root_rel_for_id(workspace_id);
         if (root_rel.empty()) {
             deps.reply_json(res, 500, json{

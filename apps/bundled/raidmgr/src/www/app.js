@@ -634,9 +634,9 @@
                     flowStatusEl.textContent =
                         `Migrating ${migratingFiles} file${migratingFiles === 1 ? "" : "s"} at ${fmtBytes(rate)}/s`;
                 } else if (landingBytes > 0) {
-                    flowStatusEl.textContent = `Waiting in landing: ${fmtBytes(landingBytes)}`;
+                    flowStatusEl.textContent = `Waiting in landing tier: ${fmtBytes(landingBytes)}`;
                 } else {
-                    flowStatusEl.textContent = "No landing backlog";
+                    flowStatusEl.textContent = "No landing-tier backlog";
                 }
             }
         } catch (_) {}
@@ -2838,11 +2838,15 @@
         function poolSummaryHtml(p) {
             const used = Number(p?.used_bytes || 0);
             const freeEstimated = Number(p?.free_estimated_bytes || 0);
-            const usableTotal = Number(p?.usable_total_bytes || 0);
 
             const free = freeEstimated > 0
                 ? freeEstimated
                 : Math.max(0, Number(p?.size_bytes || 0) - used);
+
+            const allocatedUsers = Number(p?.allocated_user_quota_bytes || 0);
+            const allocatedWorkspaces = Number(p?.allocated_workspace_quota_bytes || 0);
+            const allocatedTotal = Number(p?.allocated_total_quota_bytes || 0);
+            const remainingAllocatable = Number(p?.remaining_allocatable_bytes || 0);
 
             return `
 <div class="pqPoolSummaryGrid">
@@ -2855,12 +2859,28 @@
     <div class="pqPoolStatValue">${esc(String(p?.devices ?? 0))}</div>
   </div>
   <div class="pqPoolStat">
-    <div class="k">Used</div>
+    <div class="k">Used (fs)</div>
     <div class="pqPoolStatValue">${esc(fmtBytes(used))}</div>
   </div>
   <div class="pqPoolStat">
-    <div class="k">Free</div>
+    <div class="k">Free (fs)</div>
     <div class="pqPoolStatValue">${esc(fmtBytes(free))}</div>
+  </div>
+  <div class="pqPoolStat">
+    <div class="k">Committed users</div>
+    <div class="pqPoolStatValue">${esc(fmtBytes(allocatedUsers))}</div>
+  </div>
+  <div class="pqPoolStat">
+    <div class="k">Committed workspaces</div>
+    <div class="pqPoolStatValue">${esc(fmtBytes(allocatedWorkspaces))}</div>
+  </div>
+  <div class="pqPoolStat">
+    <div class="k">Committed total</div>
+    <div class="pqPoolStatValue">${esc(fmtBytes(allocatedTotal))}</div>
+  </div>
+  <div class="pqPoolStat">
+    <div class="k">Remaining allocatable</div>
+    <div class="pqPoolStatValue">${esc(fmtBytes(remainingAllocatable))}</div>
   </div>
 </div>`;
         }
@@ -3284,10 +3304,13 @@ Tip: these are the Btrfs member devices that form this pool.
 <div class="card" style="margin-top:12px;">
   <div class="row" style="align-items:flex-start; justify-content:space-between; gap:12px;">
     <div style="min-width:260px;">
-      <div style="font-weight:950;">Tiering</div>
+      <div style="font-weight:950;">Tiering-managed files</div>
       <div class="v" style="opacity:.8; margin-top:2px;">
         Landing pool: ${esc(String(d.landing_pool_id || "-"))}
       </div>
+          <div class="v" style="opacity:.72; margin-top:6px;">
+      Shows tiering-managed files only. Workspace files are currently excluded.
+    </div>
       <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
         ${tierPill(`enabled: ${yesNo(!!d.tiering_enabled)}`, !!d.tiering_enabled ? "pqTierOk" : "pqTierWarn")}
         ${tierPill(`worker: ${yesNo(!!worker.enabled)}`, !!worker.enabled ? "pqTierOk" : "pqTierWarn")}
@@ -3318,7 +3341,7 @@ Tip: these are the Btrfs member devices that form this pool.
       </div>
 
       <div class="card pqTierStat pqTierNeutral">
-        <div class="k">Total</div>
+        <div class="k">Tiering total</div>
         <div id="tierTotalFiles" class="pqTierStatValue">${Number(counts.total_files || 0)} files</div>
         <div id="tierTotalBytes" class="v pqTierStatSub">${fmtBytes(Number(bytes.total_bytes || 0))}</div>
       </div>
@@ -3337,9 +3360,9 @@ Tip: these are the Btrfs member devices that form this pool.
     </div>
 
     <div id="tierFlowStatus" class="pqTierFlowStatus">
-      ${Number(bytes.landing_bytes || 0) > 0
-                ? `Waiting in landing: ${fmtBytes(Number(bytes.landing_bytes || 0))}`
-                : `No landing backlog`}
+        ${Number(bytes.landing_bytes || 0) > 0
+                ? `Waiting in landing tier: ${fmtBytes(Number(bytes.landing_bytes || 0))}`
+                : `No landing-tier backlog`}
     </div>
   </div>
 </div>`;
@@ -3426,8 +3449,13 @@ Tip: these are the Btrfs member devices that form this pool.
         poolsOut.innerHTML = `
 <style>
 .pqPill{
+  display:inline-flex;
+  align-items:center;
+  padding:4px 10px;
   border:1px solid var(--border2);
   background: var(--panel);
+  border-radius:999px;
+  line-height:1.2;
 }
   .pqDriveGrid{
     display:grid;
