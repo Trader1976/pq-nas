@@ -83,13 +83,16 @@ def ensure_external_tools(log: Optional[Log] = None) -> None:
     if not os.path.isfile("/usr/sbin/smartctl") and not shutil.which("smartctl"):
         pkgs.append("smartmontools")
 
+    if not shutil.which("unzip"):
+        pkgs.append("unzip")
+
     if not pkgs:
         if log:
             log.write("[*] External tools: OK")
         return
 
     if log:
-        log.write("[*] Installing external tools: " + ", ".join(pkgs))
+        log.write("[*] Installing external tools: " + ", ".join(sorted(set(pkgs))))
     apt_install(sorted(set(pkgs)), log=log)
 
 def install_sudoers_rule(name: str, content: str, log: Optional[Log] = None) -> str:
@@ -2254,52 +2257,6 @@ class HealthScreen(Screen):
             self.out.write(run_cmd_capture(["ip", "-br", "addr"]) or "(no output)")
             return
 
-class ExecuteScreen(Screen):
-    BINDINGS = [("q", "quit", "Quit")]
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        with Vertical():
-            yield Static("[b]Step 6/6[/b] Executing… (live log)\n", classes="muted")
-            self.logw = Log()
-            yield self.logw
-            self.done = Static("", classes="muted")
-            yield self.done
-        yield Footer()
-
-    def on_mount(self) -> None:
-        app: InstallerApp = self.app  # type: ignore
-        st = app.state
-
-        if not st.disk:
-            self.done.update("No disk selected.")
-            return
-
-        mode = st.install_mode
-
-        log_line(self.logw, "Installing... please wait.")
-        log_line(self.logw, f"Mode: {mode}")
-        log_line(self.logw, f"Mountpoint: {st.mountpoint}")
-        log_line(self.logw, "")
-        log_line(
-            self.logw,
-            "NOTE: If this is an upgrade and the new version fails to start,\n"
-            "you can use the Rollback screen to restore previous binaries\n"
-            "from /usr/local/bin/*.bak and restart the service.\n"
-        )
-
-        self.set_timer(0.05, self._run_install)
-
-    def _run_install(self) -> None:
-        app: InstallerApp = self.app  # type: ignore
-        st = app.state
-
-        if not st.disk:
-            self.done.update("No disk selected.")
-            return
-
-        mode = st.install_mode
-        plan = st.plan or []
 
 class ExecuteScreen(Screen):
     BINDINGS = [("q", "quit", "Quit")]
@@ -2549,6 +2506,22 @@ class ExecuteScreen(Screen):
 
             self.logw.write("Checking required external tools …")
             ensure_external_tools(log=self.logw)
+
+            self.logw.write("Installing smartctl sudoers rule for pqnas …")
+            install_pqnas_smartctl_sudoers(log=self.logw)
+
+            self.logw.write("Validating smartctl sudo access for pqnas …")
+            p = subprocess.run(
+                ["sudo", "-u", "pqnas", "sudo", "-n", "/usr/sbin/smartctl", "--version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            if p.returncode != 0:
+                raise RuntimeError(
+                    "smartctl sudo validation failed for pqnas:\n" + (p.stdout or "").strip()
+                )
+            self.logw.write("[*] smartctl sudo access validated for pqnas.")
 
             self.logw.write("Generating /etc/pqnas/keys.env …")
             write_keys_env(asset_root, "/etc/pqnas/keys.env")
