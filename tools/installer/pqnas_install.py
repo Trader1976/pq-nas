@@ -1860,10 +1860,14 @@ class ReverseProxyScreen(Screen):
 
     def _sync(self) -> None:
         enabled = any(btn.value and btn.id == "on" for btn in self.enable.query(RadioButton))
-        self.host_in.disabled = not enabled
+        self.host_in.disabled = False
 
         https_on = enabled and any(btn.value and btn.id == "https_on" for btn in self.https_enable.query(RadioButton))
         self.email_in.disabled = not https_on
+
+        if not https_on:
+            for btn in self.redirect_btn.query(RadioButton):
+                btn.value = (btn.id == "redir_off")
 
         for btn in self.redirect_btn.query(RadioButton):
             btn.disabled = not https_on
@@ -1894,15 +1898,15 @@ class ReverseProxyScreen(Screen):
         enabled = any(btn.value and btn.id == "on" for btn in self.enable.query(RadioButton))
         host = (self.host_in.value or "").strip()
 
+        if host and (" " in host or "/" in host):
+            self.err.update("Enter a hostname or IP (no spaces, no slashes).")
+            return
+
+        st.nginx_enabled = enabled
+        st.nginx_hostname = host
+        st.nginx_listen_port = 80
+
         if enabled:
-            if not host or " " in host or "/" in host:
-                self.err.update("Enter a hostname or IP (no spaces, no slashes).")
-                return
-
-            st.nginx_enabled = True
-            st.nginx_hostname = host
-            st.nginx_listen_port = 80
-
             st.https_enabled = any(btn.value and btn.id == "https_on" for btn in self.https_enable.query(RadioButton))
             st.https_email = (self.email_in.value or "").strip()
             st.https_redirect = any(btn.value and btn.id == "redir_on" for btn in self.redirect_btn.query(RadioButton))
@@ -1912,14 +1916,12 @@ class ReverseProxyScreen(Screen):
                     self.err.update("HTTPS enabled: please enter a valid email for Let’s Encrypt.")
                     return
         else:
-            st.nginx_enabled = False
-            st.nginx_hostname = ""
-            st.nginx_listen_port = 80
             st.https_enabled = False
             st.https_email = ""
-            st.https_redirect = True
+            st.https_redirect = False
 
         st.auth_mode = "v5"
+        app.push_screen(ConfirmScreen())
         app.push_screen(ConfirmScreen())
 
 class ConfirmScreen(Screen):
@@ -2430,11 +2432,16 @@ class ExecuteScreen(Screen):
             origin = None
             rp_id = None
 
-            if st.nginx_enabled and st.nginx_hostname:
-                if have_letsencrypt_cert(st.nginx_hostname):
-                    origin = f"https://{st.nginx_hostname}"
+            if st.nginx_hostname:
+                if st.nginx_enabled:
+                    if have_letsencrypt_cert(st.nginx_hostname):
+                        origin = f"https://{st.nginx_hostname}"
+                    else:
+                        origin = f"http://{st.nginx_hostname}"
                 else:
-                    origin = f"http://{st.nginx_hostname}"
+                    # External HTTPS handled elsewhere (e.g. Cloudflare Tunnel / external reverse proxy)
+                    origin = f"https://{st.nginx_hostname}"
+
                 rp_id = st.nginx_hostname
 
             write_env_file(

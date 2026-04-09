@@ -10,10 +10,33 @@
 #include <string>
 #include <vector>
 
+// Drive health v1
+//
+// This module does three things:
+//
+// 1) Enumerates candidate physical disks via lsblk.
+// 2) Probes each disk with smartctl JSON output.
+// 3) Normalizes health / warning / self-test state into DriveHealthInfo.
+//
+// Design notes:
+// - lsblk is used only for inventory / basic identity (name, path, model,
+//   serial, transport hint, size, rotational flag).
+// - smartctl JSON is the source of truth for SMART health and self-test data.
+// - Bus classification intentionally prefers smartctl-reported device type over
+//   lsblk TRAN, because some real SATA drives expose a blank TRAN field.
+// - v1 intentionally ignores removable / virtual / USB devices and focuses on
+//   internal NVMe and ATA/SATA disks.
+
 namespace pqnas {
 namespace {
 
 using json = nlohmann::json;
+
+// Small local helpers used throughout this file.
+//
+// These are intentionally tiny and dependency-light because this module shells
+// out to system tools (lsblk / smartctl) and then performs straightforward JSON
+// parsing and normalization on the results.
 
 static std::string trim_ws(const std::string& s) {
     size_t a = 0, b = s.size();
@@ -22,6 +45,13 @@ static std::string trim_ws(const std::string& s) {
     return s.substr(a, b - a);
 }
 
+// Execute a shell command and capture stdout as a single string.
+//
+// Notes:
+// - stderr redirection is controlled by the caller in the command string.
+// - rc_out receives the raw pclose() result as used elsewhere in this file.
+// - This helper is intentionally simple because the surrounding code already
+//   handles command-specific validation and error messaging.
 static bool run_command_capture(const std::string& cmd, std::string* out, int* rc_out) {
     if (out) out->clear();
     if (rc_out) *rc_out = -1;
@@ -41,6 +71,11 @@ static bool run_command_capture(const std::string& cmd, std::string* out, int* r
     return true;
 }
 
+// Very small single-quote shell escaping helper.
+//
+// We only use this for device paths and similar values when building commands
+// for popen(). The goal is to keep shell use narrowly scoped and avoid obvious
+// quoting bugs when passing /dev/... paths to smartctl.
 static std::string shell_quote(const std::string& s) {
     std::string out = "'";
     for (char c : s) {
@@ -51,6 +86,11 @@ static std::string shell_quote(const std::string& s) {
     return out;
 }
 
+// JSON path helpers.
+//
+// smartctl JSON is nested and not every field exists on every drive / bus type.
+// These helpers walk a fixed object path and return a typed default if any part
+// of the path is missing or of the wrong type.
 static std::string j_str(const json& j, std::initializer_list<const char*> path) {
     const json* cur = &j;
     for (const char* k : path) {
@@ -86,6 +126,11 @@ static bool j_bool(const json& j, std::initializer_list<const char*> path, bool 
     return cur->is_boolean() ? cur->get<bool>() : def;
 }
 
+// Extract raw ATA SMART attribute values by attribute ID.
+//
+// We use raw values for health/warning heuristics because the normalized VALUE /
+// WORST / THRESH fields are vendor-specific and less useful for the user-facing
+// summary we want to present.
 static long long ata_attr_raw_value(const json& j, int attr_id, long long def = -1) {
     auto it = j.find("ata_smart_attributes");
     if (it == j.end() || !it->is_object()) return def;
@@ -118,6 +163,8 @@ static bool starts_with(const std::string& s, const std::string& p) {
     return s.size() >= p.size() && s.compare(0, p.size(), p) == 0;
 }
 
+// Filter out pseudo / virtual block devices that should not appear in the
+// internal drive-health UI.
 static bool should_skip_disk_name(const std::string& name) {
     if (name.empty()) return true;
     if (starts_with(name, "loop")) return true;
@@ -128,6 +175,10 @@ static bool should_skip_disk_name(const std::string& name) {
     return false;
 }
 
+// Minimal inventory record gathered from lsblk before probing with smartctl.
+//
+// lsblk gives us stable device identity and a few hints (transport, rotational,
+// size), but it is not authoritative for SMART support or bus classification.
 struct LsblkDisk {
     std::string name;
     std::string path;
@@ -138,6 +189,10 @@ struct LsblkDisk {
     bool rota = false;
 };
 
+// Build the candidate disk inventory from lsblk.
+//
+// We intentionally request only top-level disks (-d) and skip known virtual /
+// removable devices. v1 also excludes USB so the UI focuses on internal drives.
 static bool collect_lsblk_disks(std::vector<LsblkDisk>* out, std::string* err) {
     if (!out) {
         if (err) *err = "null out";
@@ -174,11 +229,11 @@ static bool collect_lsblk_disks(std::vector<LsblkDisk>* out, std::string* err) {
         if (type != "disk") continue;
 
         LsblkDisk x;
-        x.name  = d.contains("name")  && d["name"].is_string()  ? d["name"].get<std::string>()  : "";
-        x.path  = d.contains("path")  && d["path"].is_string()  ? d["path"].get<std::string>()  : "";
-        x.model = d.contains("model") && d["model"].is_string() ? trim_ws(d["model"].get<std::string>()) : "";
-        x.serial= d.contains("serial")&& d["serial"].is_string()? trim_ws(d["serial"].get<std::string>()) : "";
-        x.tran  = d.contains("tran")  && d["tran"].is_string()  ? trim_ws(d["tran"].get<std::string>()) : "";
+        x.name   = d.contains("name")   && d["name"].is_string()   ? d["name"].get<std::string>() : "";
+        x.path   = d.contains("path")   && d["path"].is_string()   ? d["path"].get<std::string>() : "";
+        x.model  = d.contains("model")  && d["model"].is_string()  ? trim_ws(d["model"].get<std::string>()) : "";
+        x.serial = d.contains("serial") && d["serial"].is_string() ? trim_ws(d["serial"].get<std::string>()) : "";
+        x.tran   = d.contains("tran")   && d["tran"].is_string()   ? trim_ws(d["tran"].get<std::string>()) : "";
 
         if (should_skip_disk_name(x.name)) continue;
         if (x.tran == "usb") continue; // v1: internal disks only
@@ -200,6 +255,8 @@ static bool collect_lsblk_disks(std::vector<LsblkDisk>* out, std::string* err) {
     return true;
 }
 
+// Preserve human-readable smartctl messages so the UI / API can expose extra
+// context beyond the normalized health fields.
 static void collect_smart_messages(const json& j, DriveHealthInfo* d) {
     if (!d) return;
     auto it_sc = j.find("smartctl");
@@ -217,6 +274,11 @@ static void collect_smart_messages(const json& j, DriveHealthInfo* d) {
     }
 }
 
+// Parse smartctl JSON for NVMe devices.
+//
+// This normalizes the NVMe-specific health model (critical warnings, spare,
+// percentage used, media errors, self-test log, etc.) into the shared
+// DriveHealthInfo structure used by the rest of PQ-NAS.
 static void parse_nvme_smart_json(const json& j, const LsblkDisk& inv, DriveHealthInfo* d) {
     if (!d) return;
 
@@ -257,14 +319,15 @@ static void parse_nvme_smart_json(const json& j, const LsblkDisk& inv, DriveHeal
     d->media_errors              = j_i64(j, {"nvme_smart_health_information_log", "media_errors"}, -1);
     d->unsafe_shutdowns          = j_i64(j, {"nvme_smart_health_information_log", "unsafe_shutdowns"}, -1);
     d->num_err_log_entries       = j_i64(j, {"nvme_smart_health_information_log", "num_err_log_entries"}, -1);
-    d->data_units_read        = j_i64(j, {"nvme_smart_health_information_log", "data_units_read"}, -1);
-    d->data_units_written     = j_i64(j, {"nvme_smart_health_information_log", "data_units_written"}, -1);
-    d->host_reads             = j_i64(j, {"nvme_smart_health_information_log", "host_reads"}, -1);
-    d->host_writes            = j_i64(j, {"nvme_smart_health_information_log", "host_writes"}, -1);
-
+    d->data_units_read           = j_i64(j, {"nvme_smart_health_information_log", "data_units_read"}, -1);
+    d->data_units_written        = j_i64(j, {"nvme_smart_health_information_log", "data_units_written"}, -1);
+    d->host_reads                = j_i64(j, {"nvme_smart_health_information_log", "host_reads"}, -1);
+    d->host_writes               = j_i64(j, {"nvme_smart_health_information_log", "host_writes"}, -1);
 
     collect_smart_messages(j, d);
 
+    // NVMe self-test status is reported through nvme_self_test_log. We normalize
+    // it into a simple status/text/progress model for the UI.
     if (j.contains("nvme_self_test_log") && j["nvme_self_test_log"].is_object()) {
         d->selftest_supported = true;
         d->selftest_progress_pct = -1;
@@ -280,6 +343,7 @@ static void parse_nvme_smart_json(const json& j, const LsblkDisk& inv, DriveHeal
             d->selftest_status = "idle";
             d->selftest_text = "No self-test in progress";
 
+            // If available, summarize the latest completed self-test result.
             if (st.contains("table") && st["table"].is_array() &&
                 !st["table"].empty() && st["table"][0].is_object()) {
                 const auto& row = st["table"][0];
@@ -341,6 +405,10 @@ static void parse_nvme_smart_json(const json& j, const LsblkDisk& inv, DriveHeal
         d->selftest_progress_pct = -1;
     }
 
+    // Health policy for NVMe:
+    // - fail for explicit SMART failure, critical warnings, media errors, or
+    //   severe wear / spare thresholds
+    // - warn for elevated temperature or notable wear
     d->health_status = "ok";
     d->health_text = "Healthy";
 
@@ -357,14 +425,14 @@ static void parse_nvme_smart_json(const json& j, const LsblkDisk& inv, DriveHeal
         d->health_status = "fail";
         d->health_text = "Drive temperature too high";
     } else if ((d->percentage_used >= 90) ||
-           (d->available_spare >= 0 && d->available_spare <= 10)) {
+               (d->available_spare >= 0 && d->available_spare <= 10)) {
         d->health_status = "fail";
         d->health_text = "Drive health degraded";
     } else if ((d->temperature_c >= 55) ||
-           (d->percentage_used >= 80) ||
-           (d->available_spare >= 0 && d->available_spare <= 15)) {
-       d->health_status = "warn";
-       d->health_text = "Warning";
+               (d->percentage_used >= 80) ||
+               (d->available_spare >= 0 && d->available_spare <= 15)) {
+        d->health_status = "warn";
+        d->health_text = "Warning";
     }
 
     d->warning.clear();
@@ -387,7 +455,11 @@ static void parse_nvme_smart_json(const json& j, const LsblkDisk& inv, DriveHeal
     }
 }
 
-
+// Parse smartctl JSON for ATA / SATA devices.
+//
+// ATA devices rely heavily on per-attribute raw values (pending sectors,
+// offline uncorrectable, reallocated sectors, etc.), so the health policy here
+// focuses on those signals rather than vendor-normalized scores.
 static void parse_ata_smart_json(const json& j, const LsblkDisk& inv, DriveHealthInfo* d) {
     if (!d) return;
 
@@ -413,15 +485,16 @@ static void parse_ata_smart_json(const json& j, const LsblkDisk& inv, DriveHealt
     d->temperature_c = static_cast<int>(j_i64(j, {"temperature", "current"}, -1));
     d->power_on_hours = j_i64(j, {"power_on_time", "hours"}, -1);
 
-    d->reallocated_sectors      = ata_attr_raw_value(j, 5, -1);
-    d->reported_uncorrect       = ata_attr_raw_value(j, 187, -1);
-    d->current_pending_sectors  = ata_attr_raw_value(j, 197, -1);
-    d->offline_uncorrectable    = ata_attr_raw_value(j, 198, -1);
-    d->udma_crc_errors          = ata_attr_raw_value(j, 199, -1);
+    d->reallocated_sectors     = ata_attr_raw_value(j, 5, -1);
+    d->reported_uncorrect      = ata_attr_raw_value(j, 187, -1);
+    d->current_pending_sectors = ata_attr_raw_value(j, 197, -1);
+    d->offline_uncorrectable   = ata_attr_raw_value(j, 198, -1);
+    d->udma_crc_errors         = ata_attr_raw_value(j, 199, -1);
 
     collect_smart_messages(j, d);
 
-    // ATA SMART self-test state
+    // ATA SMART self-test state. We prefer current state from ata_smart_data and
+    // then enrich idle/completed state from the self-test log when available.
     d->selftest_supported = false;
     d->selftest_status = "unknown";
     d->selftest_text = "Self-test state unavailable";
@@ -429,7 +502,7 @@ static void parse_ata_smart_json(const json& j, const LsblkDisk& inv, DriveHealt
 
     if (j.contains("ata_smart_data") && j["ata_smart_data"].is_object()) {
         const auto& ata = j["ata_smart_data"];
-                const bool selftests_supported =
+        const bool selftests_supported =
             j_bool(j, {"ata_smart_data", "capabilities", "self_tests_supported"}, false);
 
         if (ata.contains("self_test") && ata["self_test"].is_object()) {
@@ -494,7 +567,8 @@ static void parse_ata_smart_json(const json& j, const LsblkDisk& inv, DriveHealt
         }
     }
 
-    // Prefer explicit self-test log last entry if available
+    // Prefer explicit self-test log last entry if available, unless a test is
+    // currently running and that live state would be overwritten.
     if (j.contains("ata_smart_self_test_log") &&
         j["ata_smart_self_test_log"].is_object()) {
         const auto& log = j["ata_smart_self_test_log"];
@@ -545,6 +619,10 @@ static void parse_ata_smart_json(const json& j, const LsblkDisk& inv, DriveHealt
         }
     }
 
+    // Health policy for ATA / SATA:
+    // - fail for explicit SMART failure, pending sectors, offline uncorrectable,
+    //   or reported uncorrectable errors
+    // - warn for reallocated sectors or elevated temperature
     d->health_status = "ok";
     d->health_text = "Healthy";
 
@@ -587,10 +665,15 @@ static void parse_ata_smart_json(const json& j, const LsblkDisk& inv, DriveHealt
     }
 }
 
+// Only expose self-test types that the current API / UI understands.
 static bool is_supported_selftest_type(const std::string& type) {
     return type == "short" || type == "extended";
 }
 
+// Start a SMART self-test with smartctl.
+//
+// We return the captured smartctl text on failure because for start commands the
+// textual error is usually more actionable than the raw exit code.
 static bool start_smartctl_selftest(const std::string& dev,
                                     const std::string& type,
                                     std::string* err) {
@@ -609,7 +692,6 @@ static bool start_smartctl_selftest(const std::string& dev,
         return false;
     }
 
-    // For the start command, smartctl output text is often more useful than rc.
     if (rc != 0) {
         std::string preview = trim_ws(txt);
         if (preview.size() > 400) preview = preview.substr(0, 400);
@@ -624,6 +706,40 @@ static bool start_smartctl_selftest(const std::string& dev,
     return true;
 }
 
+// Normalize drive bus classification from a combination of lsblk inventory and
+// smartctl JSON.
+//
+// Why both?
+// - lsblk TRAN is fast and useful, but can be blank on some real SATA systems.
+// - smartctl device.type is usually more reliable once probe data exists.
+// Using both keeps display and self-test-start paths consistent.
+static void classify_drive_bus(const LsblkDisk& inv,
+                               const json& j,
+                               bool* is_nvme,
+                               bool* is_sata) {
+    if (is_nvme) *is_nvme = false;
+    if (is_sata) *is_sata = false;
+
+    const std::string dev_type = j_str(j, {"device", "type"});
+
+    if (is_nvme) {
+        *is_nvme = (dev_type == "nvme") ||
+                   (inv.tran == "nvme") ||
+                   starts_with(inv.name, "nvme");
+    }
+
+    if (is_sata) {
+        *is_sata = (dev_type == "ata") ||
+                   (dev_type == "sat") ||
+                   (inv.tran == "sata");
+    }
+}
+
+// Probe a single disk with smartctl JSON and dispatch to the correct parser.
+//
+// If the bus is not one of the currently normalized types, we still return a
+// partially filled DriveHealthInfo so the caller can display "unsupported" data
+// instead of silently dropping the device.
 static bool probe_one_drive(const LsblkDisk& inv, DriveHealthInfo* out, std::string* err) {
     if (!out) {
         if (err) *err = "null out";
@@ -653,18 +769,22 @@ static bool probe_one_drive(const LsblkDisk& inv, DriveHealthInfo* out, std::str
         return false;
     }
 
-    const std::string dev_type = j_str(j, {"device", "type"});
-    if (dev_type == "nvme" || inv.tran == "nvme" || starts_with(inv.name, "nvme")) {
+    bool is_nvme = false;
+    bool is_sata = false;
+    classify_drive_bus(inv, j, &is_nvme, &is_sata);
+
+    if (is_nvme) {
         parse_nvme_smart_json(j, inv, out);
         return true;
     }
 
-    if (dev_type == "ata" || dev_type == "sat" || inv.tran == "sata") {
+    if (is_sata) {
         parse_ata_smart_json(j, inv, out);
         return true;
     }
 
-    // fallback for unsupported buses / virtual disks
+    // Fallback for buses we do not fully normalize yet. This keeps the device
+    // visible and preserves whatever basic SMART state is available.
     out->name = inv.name;
     out->dev = inv.path;
     out->transport = inv.tran;
@@ -689,9 +809,14 @@ static bool probe_one_drive(const LsblkDisk& inv, DriveHealthInfo* out, std::str
 
 } // namespace
 
+// Start a manual drive self-test.
+//
+// The device path is validated against the current lsblk inventory first so we
+// only allow tests on known whole-disk devices. Bus support is then determined
+// using smartctl JSON classification, not lsblk TRAN alone.
 bool start_drive_selftest(const std::string& dev,
-                              const std::string& type,
-                              std::string* err) {
+                          const std::string& type,
+                          std::string* err) {
     if (err) err->clear();
 
     if (dev.empty()) {
@@ -727,8 +852,39 @@ bool start_drive_selftest(const std::string& dev,
         return false;
     }
 
-    const bool is_nvme = (found->tran == "nvme") || starts_with(found->name, "nvme");
-    const bool is_sata = (found->tran == "sata");
+    // Fetch only enough smartctl JSON to classify the bus consistently with the
+    // main probe path before attempting the self-test start command.
+    std::string txt;
+    int rc = -1;
+    const std::string info_cmd =
+        "sudo -n /usr/sbin/smartctl -i -j " + shell_quote(found->path) + " 2>&1";
+
+    if (!run_command_capture(info_cmd, &txt, &rc)) {
+        if (err) *err = "failed to execute smartctl identify for self-test";
+        return false;
+    }
+    if (rc != 0) {
+        std::string preview = trim_ws(txt);
+        if (preview.size() > 400) preview = preview.substr(0, 400);
+        if (err) {
+            *err = preview.empty()
+                ? ("smartctl identify failed rc=" + std::to_string(rc))
+                : preview;
+        }
+        return false;
+    }
+
+    json j;
+    try {
+        j = json::parse(txt);
+    } catch (const std::exception& e) {
+        if (err) *err = std::string("failed to parse smartctl identify JSON: ") + e.what();
+        return false;
+    }
+
+    bool is_nvme = false;
+    bool is_sata = false;
+    classify_drive_bus(*found, j, &is_nvme, &is_sata);
 
     if (!is_nvme && !is_sata) {
         if (err) *err = "manual self-test start is currently implemented for NVMe and SATA drives only";
@@ -738,6 +894,13 @@ bool start_drive_selftest(const std::string& dev,
     return start_smartctl_selftest(dev, type, err);
 }
 
+// Probe all candidate internal drives and return normalized health information.
+//
+// Partial success is allowed:
+// - if at least one probe succeeds, we return true and include the successful
+//   entries
+// - if inventory exists but all probes fail, we return false and surface the
+//   first captured error for debugging / UI reporting
 bool probe_drive_health(std::vector<DriveHealthInfo>* out, std::string* err) {
     if (!out) {
         if (err) *err = "null out";
