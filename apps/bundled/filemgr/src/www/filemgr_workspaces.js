@@ -97,8 +97,8 @@
             textEdit: true,
             imagePreview: true,
             properties: true,
-            zipFolder: false,
-            zipSelection: false
+            zipFolder: true,
+            zipSelection: true
         };
     }
 
@@ -140,7 +140,34 @@
         if (overwrite) qs.set("overwrite", "1");
         return `/api/v4/workspaces/files/put?${qs.toString()}`;
     }
+    function zipUrl(path, maxBytes) {
+        if (!isWorkspaceScope()) {
+            const qs = new URLSearchParams();
+            qs.set("path", path || "");
+            if (maxBytes != null && Number(maxBytes) > 0) {
+                qs.set("max_bytes", String(maxBytes));
+            }
+            return `/api/v4/files/zip?${qs.toString()}`;
+        }
 
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", FM.scope.workspaceId);
+        qs.set("path", path || "");
+        if (maxBytes != null && Number(maxBytes) > 0) {
+            qs.set("max_bytes", String(maxBytes));
+        }
+        return `/api/v4/workspaces/files/zip?${qs.toString()}`;
+    }
+
+    function zipSelUrl() {
+        if (!isWorkspaceScope()) {
+            return `/api/v4/files/zip_sel`;
+        }
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", FM.scope.workspaceId);
+        return `/api/v4/workspaces/files/zip_sel?${qs.toString()}`;
+    }
     function getUrl(path) {
         if (!isWorkspaceScope()) {
             return `/api/v4/files/get?path=${encodeURIComponent(path)}`;
@@ -693,6 +720,8 @@
         statUrl,
         statSelUrl,
         hashUrl,
+        zipUrl,
+        zipSelUrl,
         readTextUrl,
         writeTextUrl,
         buildWriteTextBody,

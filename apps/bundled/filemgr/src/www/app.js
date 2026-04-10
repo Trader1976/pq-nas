@@ -658,7 +658,21 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     qs.set("algo", algo || "sha256");
     return `/api/v4/files/hash?${qs.toString()}`;
   }
+  function apiZipUrl(path, maxBytes) {
+    const api = fmApi();
+    if (api && typeof api.zipUrl === "function") return api.zipUrl(path || "", maxBytes || 0);
 
+    const qs = new URLSearchParams();
+    qs.set("path", path || "");
+    if (maxBytes && Number(maxBytes) > 0) qs.set("max_bytes", String(maxBytes));
+    return `/api/v4/files/zip?${qs.toString()}`;
+  }
+
+  function apiZipSelUrl() {
+    const api = fmApi();
+    if (api && typeof api.zipSelUrl === "function") return api.zipSelUrl();
+    return `/api/v4/files/zip_sel`;
+  }
   function fmtSize(n) {
     const u = ["B", "KiB", "MiB", "GiB", "TiB"];
     let v = Number(n || 0);
@@ -1062,7 +1076,27 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   function rectIntersects(a, b) {
     return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
   }
+  function apiZipUrl(path, maxBytes) {
+    const api = fmApi();
+    if (api && typeof api.zipUrl === "function") {
+      return api.zipUrl(path || "", maxBytes);
+    }
 
+    const qs = new URLSearchParams();
+    qs.set("path", path || "");
+    if (maxBytes != null && Number(maxBytes) > 0) {
+      qs.set("max_bytes", String(maxBytes));
+    }
+    return `/api/v4/files/zip?${qs.toString()}`;
+  }
+
+  function apiZipSelUrl() {
+    const api = fmApi();
+    if (api && typeof api.zipSelUrl === "function") {
+      return api.zipSelUrl();
+    }
+    return `/api/v4/files/zip_sel`;
+  }
   function endMarquee() {
     if (!marqueeOn) return;
     marqueeOn = false;
@@ -2107,9 +2141,8 @@ function pickFolder() {
   }
   function downloadFolderZip(relDir) {
     const p = relDir || "";
-    window.location.href = `/api/v4/files/zip?path=${encodeURIComponent(p)}`;
+    window.location.href = apiZipUrl(p);
   }
-
   function keyToItemRelPath(key) {
     const s = String(key || "");
     const i = s.indexOf(":");
@@ -2273,7 +2306,7 @@ function pickFolder() {
     setBadge("warn", "zip…");
     status.textContent = `Preparing zip (${paths.length} items)…`;
 
-    const r = await fetch("/api/v4/files/zip_sel", {
+    const r = await fetch(apiZipSelUrl(), {
       method: "POST",
       credentials: "include",
       cache: "no-store",

@@ -11,7 +11,11 @@
 #include <array>
 #include <openssl/evp.h>
 #include <vector>
+#include <csignal>
+#include <sys/wait.h>
+#include <unistd.h>
 
+#include "audit_fields.h"
 #include "storage_resolver.h"
 #include "user_quota.h"
 
@@ -1557,56 +1561,61 @@ void register_workspace_file_routes(httplib::Server& srv,
         bool dir_ok = false;
         {
             std::error_code ec;
-            auto st = std::filesystem::status(abs_dir, ec);
-
-            if (!ec && std::filesystem::exists(st) && std::filesystem::is_directory(st)) {
+            auto st = std::filesystem::symlink_status(abs_dir, ec);
+            if (!ec &&
+                std::filesystem::exists(st) &&
+                !std::filesystem::is_symlink(st) &&
+                std::filesystem::is_directory(st)) {
                 dir_ok = true;
 
                 for (std::filesystem::directory_iterator it(abs_dir, ec), end; it != end && !ec; it.increment(ec)) {
-                    std::error_code ec2;
+                const auto name = it->path().filename().string();
+                if (name == "." || name == ".." || name.empty()) continue;
+                if (name == ".pqnas") continue;
 
-                    const auto name = it->path().filename().string();
-                    if (name == "." || name == ".." || name.empty()) continue;
-                    if (name == ".pqnas") continue;
+                std::error_code ec2;
+                auto st2 = it->symlink_status(ec2);
+                if (ec2) continue;
 
-                    std::string type = "other";
-                    if (it->is_directory(ec2) && !ec2) {
-                        type = "dir";
-                    } else {
-                        ec2.clear();
-                        if (it->is_regular_file(ec2) && !ec2) {
-                            type = "file";
-                        } else {
-                            continue;
-                        }
-                    }
-
-                    std::uint64_t size_bytes = 0;
-                    if (type == "file") {
-                        ec2.clear();
-                        auto sz = it->file_size(ec2);
-                        if (!ec2) size_bytes = static_cast<std::uint64_t>(sz);
-                    }
-
-                    long long mtime_unix = 0;
-                    ec2.clear();
-                    auto ft = it->last_write_time(ec2);
-                    if (!ec2) {
-                        using namespace std::chrono;
-                        auto sctp = time_point_cast<system_clock::duration>(
-                            ft - decltype(ft)::clock::now() + system_clock::now()
-                        );
-                        mtime_unix = static_cast<long long>(
-                            duration_cast<seconds>(sctp.time_since_epoch()).count());
-                    }
-
-                    merged[name] = ListedItem{
-                        name,
-                        type,
-                        size_bytes,
-                        mtime_unix
-                    };
+                if (std::filesystem::is_symlink(st2)) {
+                    continue; // unsupported in workspace v1; hide from listing
                 }
+
+                std::string type = "other";
+                if (std::filesystem::is_directory(st2)) {
+                    type = "dir";
+                } else if (std::filesystem::is_regular_file(st2)) {
+                    type = "file";
+                } else {
+                    continue;
+                }
+
+                std::uint64_t size_bytes = 0;
+                if (type == "file") {
+                    ec2.clear();
+                    auto sz = it->file_size(ec2);
+                    if (!ec2) size_bytes = static_cast<std::uint64_t>(sz);
+                }
+
+                long long mtime_unix = 0;
+                ec2.clear();
+                auto ft = it->last_write_time(ec2);
+                if (!ec2) {
+                    using namespace std::chrono;
+                    auto sctp = time_point_cast<system_clock::duration>(
+                        ft - decltype(ft)::clock::now() + system_clock::now()
+                    );
+                    mtime_unix = static_cast<long long>(
+                        duration_cast<seconds>(sctp.time_since_epoch()).count());
+                }
+
+                merged[name] = ListedItem{
+                    name,
+                    type,
+                    size_bytes,
+                    mtime_unix
+                };
+            }
             }
         }
 
@@ -2247,18 +2256,37 @@ void register_workspace_file_routes(httplib::Server& srv,
             return;
         }
 
-        std::error_code ec;
-        auto st = std::filesystem::status(path_abs, ec);
-        if (ec || !std::filesystem::exists(st) || !std::filesystem::is_regular_file(st)) {
-            audit_fail(workspace_id, "not_found", 404, "", rel_norm, algo);
-            deps.reply_json(res, 404, json{
-                {"ok", false},
-                {"error", "not_found"},
-                {"message", "file not found"}
-            }.dump());
-            return;
-        }
+         std::error_code ec;
+         auto st = std::filesystem::symlink_status(path_abs, ec);
+         if (ec || !std::filesystem::exists(st)) {
+             audit_fail(workspace_id, "not_found", 404, "", rel_norm, algo);
+             deps.reply_json(res, 404, json{
+                 {"ok", false},
+                 {"error", "not_found"},
+                 {"message", "file not found"}
+             }.dump());
+             return;
+         }
 
+         if (std::filesystem::is_symlink(st)) {
+             audit_fail(workspace_id, "symlink_not_supported", 400, "", rel_norm, algo);
+             deps.reply_json(res, 400, json{
+                 {"ok", false},
+                 {"error", "bad_request"},
+                 {"message", "symlinks not supported"}
+             }.dump());
+             return;
+         }
+
+         if (!std::filesystem::is_regular_file(st)) {
+             audit_fail(workspace_id, "not_found", 404, "", rel_norm, algo);
+             deps.reply_json(res, 404, json{
+                 {"ok", false},
+                 {"error", "not_found"},
+                 {"message", "file not found"}
+             }.dump());
+             return;
+         }
         const std::uint64_t bytes = pqnas::file_size_u64_safe(path_abs);
 
         std::string digest_hex, herr;
@@ -4372,7 +4400,7 @@ void register_workspace_file_routes(httplib::Server& srv,
 
         {
             std::error_code ec;
-            physical_exists = std::filesystem::exists(out_abs, ec);
+            auto st_existing = std::filesystem::symlink_status(out_abs, ec);
             if (ec) {
                 audit_fail(workspace_id, "target_exists_check_failed", 500, ec.message());
                 deps.reply_json(res, 500, json{
@@ -4384,20 +4412,21 @@ void register_workspace_file_routes(httplib::Server& srv,
                 return;
             }
 
+            physical_exists = std::filesystem::exists(st_existing);
+
             if (physical_exists) {
-                const bool is_reg = std::filesystem::is_regular_file(out_abs, ec);
-                if (ec) {
-                    audit_fail(workspace_id, "target_stat_failed", 500, ec.message());
-                    deps.reply_json(res, 500, json{
+                if (std::filesystem::is_symlink(st_existing)) {
+                    audit_fail(workspace_id, "target_is_symlink", 409, out_abs.string());
+                    deps.reply_json(res, 409, json{
                         {"ok", false},
-                        {"error", "server_error"},
-                        {"message", "target stat failed"},
-                        {"detail", ec.message()}
+                        {"error", "path_conflict"},
+                        {"message", "target path exists and is a symlink"},
+                        {"path", rel_norm}
                     }.dump());
                     return;
                 }
 
-                if (!is_reg) {
+                if (!std::filesystem::is_regular_file(st_existing)) {
                     audit_fail(workspace_id, "target_not_regular_file", 409, out_abs.string());
                     deps.reply_json(res, 409, json{
                         {"ok", false},
@@ -4744,7 +4773,7 @@ void register_workspace_file_routes(httplib::Server& srv,
         }
 
         std::error_code ec;
-        const bool exists = std::filesystem::exists(abs_path, ec);
+        auto st = std::filesystem::symlink_status(abs_path, ec);
         if (ec) {
             audit_fail(workspace_id, "stat_failed", 500, ec.message());
             deps.reply_json(res, 500, json{
@@ -4756,7 +4785,7 @@ void register_workspace_file_routes(httplib::Server& srv,
             return;
         }
 
-        if (!exists) {
+        if (!std::filesystem::exists(st)) {
             audit_fail(workspace_id, "not_found", 404, rel_norm);
             deps.reply_json(res, 404, json{
                 {"ok", false},
@@ -4766,19 +4795,17 @@ void register_workspace_file_routes(httplib::Server& srv,
             return;
         }
 
-        const bool is_reg = std::filesystem::is_regular_file(abs_path, ec);
-        if (ec) {
-            audit_fail(workspace_id, "stat_failed", 500, ec.message());
-            deps.reply_json(res, 500, json{
+        if (std::filesystem::is_symlink(st)) {
+            audit_fail(workspace_id, "symlink_not_supported", 400, rel_norm);
+            deps.reply_json(res, 400, json{
                 {"ok", false},
-                {"error", "server_error"},
-                {"message", "target stat failed"},
-                {"detail", ec.message()}
+                {"error", "bad_request"},
+                {"message", "symlinks not supported"}
             }.dump());
             return;
         }
 
-        if (!is_reg) {
+        if (!std::filesystem::is_regular_file(st)) {
             audit_fail(workspace_id, "not_regular_file", 409, rel_norm);
             deps.reply_json(res, 409, json{
                 {"ok", false},
@@ -4819,6 +4846,1123 @@ void register_workspace_file_routes(httplib::Server& srv,
 
         audit_ok(workspace_id, rel_norm, static_cast<std::uint64_t>(body.size()));
     });
+
+        // GET/POST /api/v4/workspaces/files/zip?workspace_id=...&path=relative/path&max_bytes=52428800
+    // v1: default pool only, in-memory zip response, read-only member access
+    auto workspace_files_zip_handler = [&](const httplib::Request& req, httplib::Response& res) {
+        std::string actor_fp, actor_role;
+        if (!deps.require_user_auth_users_actor ||
+            !deps.require_user_auth_users_actor(
+                req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+            return;
+        }
+
+        (void)actor_role;
+        res.set_header("Cache-Control", "no-store");
+
+        auto audit_fail = [&](const std::string& workspace_id,
+                              const std::string& reason,
+                              int http,
+                              const std::string& detail = "",
+                              const std::string& path_rel = "",
+                              std::uint64_t max_bytes = 0) {
+            if (!deps.audit_emit) return;
+            std::map<std::string, std::string> f;
+            f["actor_fp"] = actor_fp;
+            if (!workspace_id.empty()) f["workspace_id"] = workspace_id;
+            f["reason"] = reason;
+            f["http"] = std::to_string(http);
+            if (!path_rel.empty()) f["path"] = pqnas::shorten(path_rel, 200);
+            if (max_bytes) f["max_bytes"] = std::to_string((unsigned long long)max_bytes);
+            if (!detail.empty()) f["detail"] = pqnas::shorten(detail, 180);
+            f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            auto it_cf = req.headers.find("CF-Connecting-IP");
+            if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+            auto it_xff = req.headers.find("X-Forwarded-For");
+            if (it_xff != req.headers.end()) f["xff"] = pqnas::shorten(it_xff->second, 120);
+            deps.audit_emit("workspace.files_zip_fail", "fail", f);
+        };
+
+        auto audit_ok = [&](const std::string& workspace_id,
+                            const std::string& path_rel,
+                            const std::string& type,
+                            std::uint64_t max_bytes,
+                            std::uint64_t input_bytes,
+                            std::uint64_t zip_bytes,
+                            std::uint64_t files,
+                            std::uint64_t dirs) {
+            if (!deps.audit_emit) return;
+            std::map<std::string, std::string> f;
+            f["actor_fp"] = actor_fp;
+            f["workspace_id"] = workspace_id;
+            f["path"] = pqnas::shorten(path_rel, 200);
+            f["type"] = type;
+            f["max_bytes"] = std::to_string((unsigned long long)max_bytes);
+            f["input_bytes"] = std::to_string((unsigned long long)input_bytes);
+            f["zip_bytes"] = std::to_string((unsigned long long)zip_bytes);
+            f["files"] = std::to_string((unsigned long long)files);
+            f["dirs"] = std::to_string((unsigned long long)dirs);
+            f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            auto it_cf = req.headers.find("CF-Connecting-IP");
+            if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+            auto it_xff = req.headers.find("X-Forwarded-For");
+            if (it_xff != req.headers.end()) f["xff"] = pqnas::shorten(it_xff->second, 120);
+            deps.audit_emit("workspace.files_zip_ok", "ok", f);
+        };
+
+        if (!deps.workspaces->load(deps.workspaces_path)) {
+            audit_fail("", "workspaces_reload_failed", 500);
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "workspaces_reload_failed"},
+                {"message", "failed to reload workspaces"}
+            }.dump());
+            return;
+        }
+
+        const std::string workspace_id =
+            req.has_param("workspace_id") ? trim_copy_safe(req.get_param_value("workspace_id")) : "";
+
+        if (workspace_id.empty()) {
+            audit_fail("", "missing_workspace_id", 400);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "missing workspace_id"}
+            }.dump());
+            return;
+        }
+
+        auto wopt = deps.workspaces->get(workspace_id);
+        if (!wopt.has_value()) {
+            audit_fail(workspace_id, "workspace_not_found", 404);
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "workspace not found"}
+            }.dump());
+            return;
+        }
+
+        const WorkspaceRec& w = *wopt;
+
+        if (w.status != "enabled") {
+            audit_fail(workspace_id, "workspace_disabled", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace disabled"}
+            }.dump());
+            return;
+        }
+
+        auto mopt = enabled_member_for_actor(w, actor_fp);
+        if (!mopt.has_value()) {
+            audit_fail(workspace_id, "workspace_access_denied", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace access denied"}
+            }.dump());
+            return;
+        }
+
+        if (w.storage_state != "allocated") {
+            audit_fail(workspace_id, "storage_unallocated", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Workspace storage not allocated"},
+                {"workspace_id", workspace_id},
+                {"quota_bytes", w.quota_bytes}
+            }.dump());
+            return;
+        }
+
+        if (!w.storage_pool_id.empty()) {
+            audit_fail(workspace_id, "pool_not_supported_yet", 400, w.storage_pool_id);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "pool_not_supported_yet"},
+                {"message", "workspace zip currently supports default pool only"}
+            }.dump());
+            return;
+        }
+
+        std::string path_rel;
+        if (req.has_param("path")) path_rel = req.get_param_value("path");
+
+        if (path_rel == "." || path_rel == "./" || path_rel == "/") path_rel.clear();
+
+        if (!path_rel.empty() && path_rel[0] == '-') {
+            audit_fail(workspace_id, "invalid_path", 400, "leading '-' refused", path_rel);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            }.dump());
+            return;
+        }
+
+        std::uint64_t max_bytes = 50ull * 1024 * 1024;
+        if (req.has_param("max_bytes")) {
+            try {
+                long long v = std::stoll(req.get_param_value("max_bytes"));
+                if (v > 0) max_bytes = static_cast<std::uint64_t>(v);
+            } catch (...) {}
+        }
+        const std::uint64_t MINB = 1ull * 1024 * 1024;
+        const std::uint64_t MAXB = 250ull * 1024 * 1024;
+        if (max_bytes < MINB) max_bytes = MINB;
+        if (max_bytes > MAXB) max_bytes = MAXB;
+
+        const std::filesystem::path ws_root =
+            workspace_dir_for_default_pool_only(deps.users_path, w);
+
+        std::string rel_norm;
+        std::filesystem::path path_abs = ws_root;
+
+        if (!path_rel.empty()) {
+            std::string nerr;
+            if (!pqnas::normalize_user_rel_path_strict(path_rel, &rel_norm, &nerr)) {
+                audit_fail(workspace_id, "invalid_path", 400, nerr, path_rel, max_bytes);
+                deps.reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "invalid path"}
+                }.dump());
+                return;
+            }
+
+            std::string perr;
+            if (!pqnas::resolve_user_path_strict(ws_root, rel_norm, &path_abs, &perr)) {
+                audit_fail(workspace_id, "invalid_path", 400, perr, path_rel, max_bytes);
+                deps.reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "invalid path"}
+                }.dump());
+                return;
+            }
+        }
+
+        std::error_code ec;
+        auto st = std::filesystem::symlink_status(path_abs, ec);
+        if (ec || !std::filesystem::exists(st)) {
+            audit_fail(workspace_id, "not_found", 404, "", rel_norm.empty() ? "." : rel_norm, max_bytes);
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "path not found"}
+            }.dump());
+            return;
+        }
+
+        if (std::filesystem::is_symlink(st)) {
+            audit_fail(workspace_id, "symlink_not_supported", 400, "", rel_norm.empty() ? "." : rel_norm, max_bytes);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "symlinks not supported for zip download"}
+            }.dump());
+            return;
+        }
+
+        const bool is_file = std::filesystem::is_regular_file(st);
+        const bool is_dir = std::filesystem::is_directory(st);
+        const std::string type = is_dir ? "dir" : (is_file ? "file" : "other");
+
+        std::uint64_t files = 0, dirs = 0, input_bytes = 0;
+
+        if (is_file) {
+            files = 1;
+            input_bytes = pqnas::file_size_u64_safe(path_abs);
+        } else if (is_dir) {
+            dirs = 1;
+
+            std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
+            ec.clear();
+            for (auto it = std::filesystem::recursive_directory_iterator(path_abs, opts, ec);
+                 it != std::filesystem::recursive_directory_iterator();
+                 it.increment(ec)) {
+
+                if (ec) {
+                    audit_fail(workspace_id, "walk_failed", 500, ec.message(), rel_norm.empty() ? "." : rel_norm, max_bytes);
+                    deps.reply_json(res, 500, json{
+                        {"ok", false},
+                        {"error", "server_error"},
+                        {"message", "directory walk failed"},
+                        {"detail", pqnas::shorten(ec.message(), 180)}
+                    }.dump());
+                    return;
+                }
+
+                std::error_code ec2;
+                auto st2 = it->symlink_status(ec2);
+                if (ec2) continue;
+
+                if (std::filesystem::is_symlink(st2)) {
+                    audit_fail(workspace_id, "symlink_not_supported", 400, "symlink inside tree", rel_norm.empty() ? "." : rel_norm, max_bytes);
+                    deps.reply_json(res, 400, json{
+                        {"ok", false},
+                        {"error", "bad_request"},
+                        {"message", "symlinks inside directory are not supported for zip download"}
+                    }.dump());
+                    return;
+                }
+
+                if (std::filesystem::is_directory(st2)) {
+                    dirs += 1;
+                    continue;
+                }
+
+                if (std::filesystem::is_regular_file(st2)) {
+                    files += 1;
+                    input_bytes += pqnas::file_size_u64_safe(it->path());
+                    if (input_bytes > max_bytes) break;
+                    continue;
+                }
+
+                files += 1;
+            }
+        } else {
+            audit_fail(workspace_id, "unsupported_type", 400, "", rel_norm.empty() ? "." : rel_norm, max_bytes);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "unsupported path type for zip download"}
+            }.dump());
+            return;
+        }
+
+        if (input_bytes > max_bytes) {
+            audit_fail(workspace_id, "too_large", 413, "input exceeds max_bytes", rel_norm.empty() ? "." : rel_norm, max_bytes);
+            deps.reply_json(res, 413, json{
+                {"ok", false},
+                {"error", "too_large"},
+                {"message", "selected content exceeds max_bytes"}
+            }.dump());
+            return;
+        }
+
+        int pipefd[2];
+        if (::pipe(pipefd) != 0) {
+            audit_fail(workspace_id, "pipe_failed", 500, "pipe()", rel_norm.empty() ? "." : rel_norm, max_bytes);
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "zip failed"}
+            }.dump());
+            return;
+        }
+
+        pid_t pid = ::fork();
+        if (pid < 0) {
+            ::close(pipefd[0]);
+            ::close(pipefd[1]);
+            audit_fail(workspace_id, "fork_failed", 500, "fork()", rel_norm.empty() ? "." : rel_norm, max_bytes);
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "zip failed"}
+            }.dump());
+            return;
+        }
+
+        if (pid == 0) {
+            ::dup2(pipefd[1], STDOUT_FILENO);
+            ::close(pipefd[0]);
+            ::close(pipefd[1]);
+
+            if (::chdir(ws_root.c_str()) != 0) _exit(127);
+
+            const std::string zip_target = rel_norm.empty() ? "." : rel_norm;
+
+            const char* argv[] = {
+                "zip",
+                "-r",
+                "-q",
+                "-",
+                zip_target.c_str(),
+                nullptr
+            };
+            ::execvp("zip", (char* const*)argv);
+            _exit(127);
+        }
+
+        ::close(pipefd[1]);
+
+        std::string zip_data;
+        zip_data.reserve((size_t)std::min<std::uint64_t>(max_bytes, 4ull * 1024 * 1024));
+
+        const std::uint64_t zip_limit = max_bytes + 8ull * 1024 * 1024;
+        std::array<char, 64 * 1024> buf{};
+
+        while (true) {
+            ssize_t n = ::read(pipefd[0], buf.data(), (ssize_t)buf.size());
+            if (n == 0) break;
+            if (n < 0) {
+                ::close(pipefd[0]);
+                ::kill(pid, SIGKILL);
+                audit_fail(workspace_id, "read_failed", 500, "read()", rel_norm.empty() ? "." : rel_norm, max_bytes);
+                deps.reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "zip failed"}
+                }.dump());
+                return;
+            }
+
+            if (zip_data.size() + (size_t)n > (size_t)zip_limit) {
+                ::close(pipefd[0]);
+                ::kill(pid, SIGKILL);
+                audit_fail(workspace_id, "zip_too_large", 413, "zip output exceeds limit", rel_norm.empty() ? "." : rel_norm, max_bytes);
+                deps.reply_json(res, 413, json{
+                    {"ok", false},
+                    {"error", "too_large"},
+                    {"message", "zip output too large"}
+                }.dump());
+                return;
+            }
+
+            zip_data.append(buf.data(), (size_t)n);
+        }
+
+        ::close(pipefd[0]);
+
+        int child_status = 0;
+        ::waitpid(pid, &child_status, 0);
+        if (!(WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0)) {
+            audit_fail(workspace_id, "zip_failed", 500, "zip exit nonzero", rel_norm.empty() ? "." : rel_norm, max_bytes);
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "zip failed"}
+            }.dump());
+            return;
+        }
+
+        std::string base = rel_norm.empty()
+            ? (w.name.empty() ? workspace_id : w.name)
+            : std::filesystem::path(rel_norm).filename().string();
+        if (base.empty()) base = "workspace";
+        std::string fname = base + ".zip";
+
+        audit_ok(
+            workspace_id,
+            rel_norm.empty() ? "." : rel_norm,
+            type,
+            max_bytes,
+            input_bytes,
+            (std::uint64_t)zip_data.size(),
+            files,
+            dirs);
+
+        res.status = 200;
+        res.set_header("Cache-Control", "no-store");
+        res.set_header("Content-Type", "application/zip");
+        res.set_header("Content-Disposition", ("attachment; filename=\"" + fname + "\"").c_str());
+        res.body = std::move(zip_data);
+    };
+
+    srv.Get("/api/v4/workspaces/files/zip", workspace_files_zip_handler);
+    srv.Post("/api/v4/workspaces/files/zip", workspace_files_zip_handler);
+
+        // POST /api/v4/workspaces/files/zip_sel?workspace_id=...
+    // Body JSON: { "paths": ["rel/a.txt", "rel/dir"], "max_bytes": 52428800, "base": "rel/base" }
+    srv.Post("/api/v4/workspaces/files/zip_sel",
+             [&](const httplib::Request& req, httplib::Response& res) {
+        std::string actor_fp, actor_role;
+        if (!deps.require_user_auth_users_actor ||
+            !deps.require_user_auth_users_actor(
+                req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+            return;
+        }
+
+        (void)actor_role;
+        res.set_header("Cache-Control", "no-store");
+
+        auto audit_fail = [&](const std::string& workspace_id,
+                              const std::string& reason,
+                              int http,
+                              const std::string& detail = "",
+                              std::uint64_t max_bytes = 0,
+                              std::uint64_t paths_n = 0) {
+            if (!deps.audit_emit) return;
+            std::map<std::string, std::string> f;
+            f["actor_fp"] = actor_fp;
+            if (!workspace_id.empty()) f["workspace_id"] = workspace_id;
+            f["reason"] = reason;
+            f["http"] = std::to_string(http);
+            if (max_bytes) f["max_bytes"] = std::to_string((unsigned long long)max_bytes);
+            if (paths_n) f["paths_n"] = std::to_string((unsigned long long)paths_n);
+            if (!detail.empty()) f["detail"] = pqnas::shorten(detail, 180);
+            f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            auto it_cf = req.headers.find("CF-Connecting-IP");
+            if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+            auto it_xff = req.headers.find("X-Forwarded-For");
+            if (it_xff != req.headers.end()) f["xff"] = pqnas::shorten(it_xff->second, 120);
+            deps.audit_emit("workspace.files_zip_sel_fail", "fail", f);
+        };
+
+        auto audit_ok = [&](const std::string& workspace_id,
+                            std::uint64_t max_bytes,
+                            std::uint64_t input_bytes,
+                            std::uint64_t zip_bytes,
+                            std::uint64_t files,
+                            std::uint64_t dirs,
+                            std::uint64_t paths_n,
+                            const std::string& base_rel) {
+            if (!deps.audit_emit) return;
+            std::map<std::string, std::string> f;
+            f["actor_fp"] = actor_fp;
+            f["workspace_id"] = workspace_id;
+            f["max_bytes"] = std::to_string((unsigned long long)max_bytes);
+            f["input_bytes"] = std::to_string((unsigned long long)input_bytes);
+            f["zip_bytes"] = std::to_string((unsigned long long)zip_bytes);
+            f["files"] = std::to_string((unsigned long long)files);
+            f["dirs"] = std::to_string((unsigned long long)dirs);
+            f["paths_n"] = std::to_string((unsigned long long)paths_n);
+            if (!base_rel.empty()) f["base"] = pqnas::shorten(base_rel, 200);
+            f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+            auto it_cf = req.headers.find("CF-Connecting-IP");
+            if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+            auto it_xff = req.headers.find("X-Forwarded-For");
+            if (it_xff != req.headers.end()) f["xff"] = pqnas::shorten(it_xff->second, 120);
+            deps.audit_emit("workspace.files_zip_sel_ok", "ok", f);
+        };
+
+        if (!deps.workspaces->load(deps.workspaces_path)) {
+            audit_fail("", "workspaces_reload_failed", 500);
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "workspaces_reload_failed"},
+                {"message", "failed to reload workspaces"}
+            }.dump());
+            return;
+        }
+
+        const std::string workspace_id =
+            req.has_param("workspace_id") ? trim_copy_safe(req.get_param_value("workspace_id")) : "";
+
+        if (workspace_id.empty()) {
+            audit_fail("", "missing_workspace_id", 400);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "missing workspace_id"}
+            }.dump());
+            return;
+        }
+
+        auto wopt = deps.workspaces->get(workspace_id);
+        if (!wopt.has_value()) {
+            audit_fail(workspace_id, "workspace_not_found", 404);
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "workspace not found"}
+            }.dump());
+            return;
+        }
+
+        const WorkspaceRec& w = *wopt;
+
+        if (w.status != "enabled") {
+            audit_fail(workspace_id, "workspace_disabled", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace disabled"}
+            }.dump());
+            return;
+        }
+
+        auto mopt = enabled_member_for_actor(w, actor_fp);
+        if (!mopt.has_value()) {
+            audit_fail(workspace_id, "workspace_access_denied", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace access denied"}
+            }.dump());
+            return;
+        }
+
+        if (w.storage_state != "allocated") {
+            audit_fail(workspace_id, "storage_unallocated", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Workspace storage not allocated"},
+                {"workspace_id", workspace_id},
+                {"quota_bytes", w.quota_bytes}
+            }.dump());
+            return;
+        }
+
+        if (!w.storage_pool_id.empty()) {
+            audit_fail(workspace_id, "pool_not_supported_yet", 400, w.storage_pool_id);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "pool_not_supported_yet"},
+                {"message", "workspace zip_sel currently supports default pool only"}
+            }.dump());
+            return;
+        }
+
+        json body;
+        try {
+            body = json::parse(req.body.empty() ? "{}" : req.body);
+        } catch (const std::exception& e) {
+            audit_fail(workspace_id, "json_parse", 400, e.what());
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid json"}
+            }.dump());
+            return;
+        }
+
+        if (!body.is_object() || !body.contains("paths") || !body["paths"].is_array()) {
+            audit_fail(workspace_id, "missing_paths", 400);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "missing paths[]"}
+            }.dump());
+            return;
+        }
+
+        const std::filesystem::path ws_root =
+            workspace_dir_for_default_pool_only(deps.users_path, w);
+
+        std::string base_rel;
+        if (body.contains("base") && body["base"].is_string()) {
+            base_rel = body["base"].get<std::string>();
+            if (base_rel == "." || base_rel == "./" || base_rel == "/") base_rel.clear();
+
+            for (char& c : base_rel) if (c == '\\') c = '/';
+            while (!base_rel.empty() && base_rel[0] == '/') base_rel.erase(base_rel.begin());
+
+            {
+                std::string tmp;
+                tmp.reserve(base_rel.size());
+                bool prev_slash = false;
+                for (char c : base_rel) {
+                    if (c == '/') {
+                        if (prev_slash) continue;
+                        prev_slash = true;
+                        tmp.push_back(c);
+                    } else {
+                        prev_slash = false;
+                        tmp.push_back(c);
+                    }
+                }
+                base_rel.swap(tmp);
+            }
+
+            while (!base_rel.empty() && base_rel.back() == '/') base_rel.pop_back();
+
+            bool bad = false;
+            if (!base_rel.empty() && base_rel[0] == '-') bad = true;
+            if (base_rel.find('\n') != std::string::npos || base_rel.find('\r') != std::string::npos) bad = true;
+
+            if (!bad && !base_rel.empty()) {
+                size_t start = 0;
+                while (start < base_rel.size()) {
+                    size_t end = base_rel.find('/', start);
+                    if (end == std::string::npos) end = base_rel.size();
+                    std::string seg = base_rel.substr(start, end - start);
+                    if (seg == "." || seg == ".." || seg.empty()) { bad = true; break; }
+                    start = end + 1;
+                }
+            }
+
+            if (bad) base_rel.clear();
+        }
+
+        std::uint64_t max_bytes = 50ull * 1024 * 1024;
+        if (body.contains("max_bytes")) {
+            try {
+                long long v = 0;
+                if (body["max_bytes"].is_number_integer()) v = body["max_bytes"].get<long long>();
+                else if (body["max_bytes"].is_string()) v = std::stoll(body["max_bytes"].get<std::string>());
+                if (v > 0) max_bytes = (std::uint64_t)v;
+            } catch (...) {}
+        }
+
+        const std::uint64_t MINB = 1ull * 1024 * 1024;
+        const std::uint64_t MAXB = 250ull * 1024 * 1024;
+        if (max_bytes < MINB) max_bytes = MINB;
+        if (max_bytes > MAXB) max_bytes = MAXB;
+
+        std::vector<std::string> paths_in;
+        paths_in.reserve(body["paths"].size());
+
+        for (const auto& it : body["paths"]) {
+            if (!it.is_string()) continue;
+
+            std::string p = it.get<std::string>();
+            if (p == "." || p == "./" || p == "/") p.clear();
+
+            for (char& c : p) if (c == '\\') c = '/';
+            while (!p.empty() && p[0] == '/') p.erase(p.begin());
+
+            {
+                std::string tmp;
+                tmp.reserve(p.size());
+                bool prev_slash = false;
+                for (char c : p) {
+                    if (c == '/') {
+                        if (prev_slash) continue;
+                        prev_slash = true;
+                        tmp.push_back(c);
+                    } else {
+                        prev_slash = false;
+                        tmp.push_back(c);
+                    }
+                }
+                p.swap(tmp);
+            }
+
+            while (p.size() > 1 && p.back() == '/') p.pop_back();
+
+            if (!p.empty() && p[0] == '-') continue;
+
+            bool bad = false;
+            if (p.find('\n') != std::string::npos || p.find('\r') != std::string::npos) bad = true;
+
+            if (!bad && !p.empty()) {
+                size_t start = 0;
+                while (start < p.size()) {
+                    size_t end = p.find('/', start);
+                    if (end == std::string::npos) end = p.size();
+                    std::string seg = p.substr(start, end - start);
+                    if (seg == "." || seg == ".." || seg.empty()) { bad = true; break; }
+                    start = end + 1;
+                }
+            }
+
+            if (bad) continue;
+
+            paths_in.push_back(std::move(p));
+        }
+
+        const std::size_t MAX_PATHS = 500;
+        if (paths_in.empty() && body["paths"].size() > 0) {
+            paths_in.push_back("");
+        }
+
+        if (paths_in.empty()) {
+            audit_fail(workspace_id, "no_valid_paths", 400, "", max_bytes, 0);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "no valid paths"}
+            }.dump());
+            return;
+        }
+
+        if (paths_in.size() > MAX_PATHS) {
+            audit_fail(workspace_id, "too_many_paths", 413, "paths[] too large", max_bytes, (std::uint64_t)paths_in.size());
+            deps.reply_json(res, 413, json{
+                {"ok", false},
+                {"error", "too_large"},
+                {"message", "too many selected paths"}
+            }.dump());
+            return;
+        }
+
+        std::sort(paths_in.begin(), paths_in.end());
+        paths_in.erase(std::unique(paths_in.begin(), paths_in.end()), paths_in.end());
+
+        std::vector<std::string> paths_rel;
+        paths_rel.reserve(paths_in.size());
+
+        auto is_child_of = [&](const std::string& child, const std::string& parent) -> bool {
+            if (parent.empty()) return false;
+            if (child.size() <= parent.size()) return false;
+            if (child.compare(0, parent.size(), parent) != 0) return false;
+            return child[parent.size()] == '/';
+        };
+
+        for (const auto& p : paths_in) {
+            if (paths_rel.empty()) {
+                paths_rel.push_back(p);
+                continue;
+            }
+
+            bool covered = false;
+            for (const auto& sel : paths_rel) {
+                if (sel.empty()) {
+                    covered = true;
+                    break;
+                }
+                if (!p.empty() && is_child_of(p, sel)) {
+                    covered = true;
+                    break;
+                }
+            }
+            if (!covered) paths_rel.push_back(p);
+        }
+
+        std::filesystem::path base_abs = ws_root;
+        if (!base_rel.empty()) {
+            std::string berr;
+            if (!pqnas::resolve_user_path_strict(ws_root, base_rel, &base_abs, &berr)) {
+                audit_fail(workspace_id, "invalid_base", 400, berr, max_bytes, (std::uint64_t)paths_rel.size());
+                deps.reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "invalid base"}
+                }.dump());
+                return;
+            }
+
+            std::error_code bec;
+            auto bst = std::filesystem::symlink_status(base_abs, bec);
+            if (bec || !std::filesystem::exists(bst) || !std::filesystem::is_directory(bst) || std::filesystem::is_symlink(bst)) {
+                audit_fail(workspace_id, "invalid_base", 400, "base must be an existing directory", max_bytes, (std::uint64_t)paths_rel.size());
+                deps.reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "invalid base"}
+                }.dump());
+                return;
+            }
+        }
+
+        if (!base_rel.empty()) {
+            for (const auto& p : paths_rel) {
+                if (p.empty()) {
+                    audit_fail(workspace_id, "path_outside_base", 400, ".", max_bytes, (std::uint64_t)paths_rel.size());
+                    deps.reply_json(res, 400, json{
+                        {"ok", false},
+                        {"error", "bad_request"},
+                        {"message", "selected path outside base"}
+                    }.dump());
+                    return;
+                }
+
+                if (p == base_rel) continue;
+                if (!is_child_of(p, base_rel)) {
+                    audit_fail(workspace_id, "path_outside_base", 400, pqnas::shorten(p, 180), max_bytes, (std::uint64_t)paths_rel.size());
+                    deps.reply_json(res, 400, json{
+                        {"ok", false},
+                        {"error", "bad_request"},
+                        {"message", "selected path outside base"}
+                    }.dump());
+                    return;
+                }
+            }
+        }
+
+        std::uint64_t files = 0, dirs = 0, input_bytes = 0;
+
+        for (const auto& path_rel : paths_rel) {
+            std::filesystem::path path_abs = ws_root;
+
+            if (!path_rel.empty()) {
+                std::string err;
+                if (!pqnas::resolve_user_path_strict(ws_root, path_rel, &path_abs, &err)) {
+                    audit_fail(workspace_id, "invalid_path", 400, err, max_bytes, (std::uint64_t)paths_rel.size());
+                    deps.reply_json(res, 400, json{
+                        {"ok", false},
+                        {"error", "bad_request"},
+                        {"message", "invalid path"}
+                    }.dump());
+                    return;
+                }
+            }
+
+            std::error_code ec;
+            auto st = std::filesystem::symlink_status(path_abs, ec);
+            if (ec || !std::filesystem::exists(st)) {
+                audit_fail(workspace_id, "not_found", 404, path_rel.empty() ? "." : path_rel, max_bytes, (std::uint64_t)paths_rel.size());
+                deps.reply_json(res, 404, json{
+                    {"ok", false},
+                    {"error", "not_found"},
+                    {"message", "path not found"}
+                }.dump());
+                return;
+            }
+
+            if (std::filesystem::is_symlink(st)) {
+                audit_fail(workspace_id, "symlink_not_supported", 400, "symlink selected", max_bytes, (std::uint64_t)paths_rel.size());
+                deps.reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "symlinks not supported for zip download"}
+                }.dump());
+                return;
+            }
+
+            const bool is_file = std::filesystem::is_regular_file(st);
+            const bool is_dir = std::filesystem::is_directory(st);
+
+            if (is_file) {
+                files += 1;
+                input_bytes += pqnas::file_size_u64_safe(path_abs);
+                if (input_bytes > max_bytes) break;
+                continue;
+            }
+
+            if (is_dir) {
+                dirs += 1;
+
+                std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
+                ec.clear();
+                for (auto it = std::filesystem::recursive_directory_iterator(path_abs, opts, ec);
+                     it != std::filesystem::recursive_directory_iterator();
+                     it.increment(ec)) {
+
+                    if (ec) {
+                        audit_fail(workspace_id, "walk_failed", 500, ec.message(), max_bytes, (std::uint64_t)paths_rel.size());
+                        deps.reply_json(res, 500, json{
+                            {"ok", false},
+                            {"error", "server_error"},
+                            {"message", "directory walk failed"},
+                            {"detail", pqnas::shorten(ec.message(), 180)}
+                        }.dump());
+                        return;
+                    }
+
+                    std::error_code ec2;
+                    auto st2 = it->symlink_status(ec2);
+                    if (ec2) continue;
+
+                    if (std::filesystem::is_symlink(st2)) {
+                        audit_fail(workspace_id, "symlink_not_supported", 400, "symlink inside tree", max_bytes, (std::uint64_t)paths_rel.size());
+                        deps.reply_json(res, 400, json{
+                            {"ok", false},
+                            {"error", "bad_request"},
+                            {"message", "symlinks inside directory are not supported for zip download"}
+                        }.dump());
+                        return;
+                    }
+
+                    if (std::filesystem::is_directory(st2)) {
+                        dirs += 1;
+                        continue;
+                    }
+
+                    if (std::filesystem::is_regular_file(st2)) {
+                        files += 1;
+                        input_bytes += pqnas::file_size_u64_safe(it->path());
+                        if (input_bytes > max_bytes) break;
+                        continue;
+                    }
+
+                    files += 1;
+                }
+
+                if (input_bytes > max_bytes) break;
+                continue;
+            }
+
+            audit_fail(workspace_id, "unsupported_type", 400, path_rel, max_bytes, (std::uint64_t)paths_rel.size());
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "unsupported path type for zip download"}
+            }.dump());
+            return;
+        }
+
+        if (input_bytes > max_bytes) {
+            audit_fail(workspace_id, "too_large", 413, "input exceeds max_bytes", max_bytes, (std::uint64_t)paths_rel.size());
+            deps.reply_json(res, 413, json{
+                {"ok", false},
+                {"error", "too_large"},
+                {"message", "selected content exceeds max_bytes"}
+            }.dump());
+            return;
+        }
+
+        int out_pipe[2] = {-1, -1};
+        int in_pipe[2] = {-1, -1};
+        if (::pipe(out_pipe) != 0 || ::pipe(in_pipe) != 0) {
+            if (out_pipe[0] >= 0) { ::close(out_pipe[0]); ::close(out_pipe[1]); }
+            if (in_pipe[0] >= 0) { ::close(in_pipe[0]); ::close(in_pipe[1]); }
+            audit_fail(workspace_id, "pipe_failed", 500, "pipe()", max_bytes, (std::uint64_t)paths_rel.size());
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "zip failed"}
+            }.dump());
+            return;
+        }
+
+        pid_t pid = ::fork();
+        if (pid < 0) {
+            ::close(out_pipe[0]); ::close(out_pipe[1]);
+            ::close(in_pipe[0]); ::close(in_pipe[1]);
+            audit_fail(workspace_id, "fork_failed", 500, "fork()", max_bytes, (std::uint64_t)paths_rel.size());
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "zip failed"}
+            }.dump());
+            return;
+        }
+
+        if (pid == 0) {
+            ::dup2(in_pipe[0], STDIN_FILENO);
+            ::dup2(out_pipe[1], STDOUT_FILENO);
+
+            ::close(out_pipe[0]);
+            ::close(out_pipe[1]);
+            ::close(in_pipe[0]);
+            ::close(in_pipe[1]);
+
+            if (!base_rel.empty()) {
+                std::filesystem::path cd = ws_root / base_rel;
+                if (::chdir(cd.c_str()) != 0) _exit(127);
+            } else {
+                if (::chdir(ws_root.c_str()) != 0) _exit(127);
+            }
+
+            const char* argv[] = {
+                "zip",
+                "-r",
+                "-q",
+                "-",
+                "-@",
+                nullptr
+            };
+            ::execvp("zip", (char* const*)argv);
+            _exit(127);
+        }
+
+        ::close(out_pipe[1]);
+        ::close(in_pipe[0]);
+
+        {
+            auto starts_with_dir = [](const std::string& p, const std::string& base) -> bool {
+                if (base.empty()) return false;
+                if (p.size() <= base.size()) return false;
+                if (p.compare(0, base.size(), base) != 0) return false;
+                return p[base.size()] == '/';
+            };
+
+            bool write_ok = true;
+            for (const auto& p0 : paths_rel) {
+                std::string p = p0;
+
+                if (!base_rel.empty()) {
+                    if (p0 == base_rel) {
+                        p = ".";
+                    } else if (starts_with_dir(p0, base_rel)) {
+                        p = p0.substr(base_rel.size() + 1);
+                    } else {
+                        write_ok = false;
+                    }
+                } else if (p.empty()) {
+                    p = ".";
+                }
+
+                if (!write_ok) break;
+                if (p.empty()) p = ".";
+
+                std::string line = p;
+                line.push_back('\n');
+
+                const char* data = line.data();
+                size_t left = line.size();
+                while (left > 0) {
+                    ssize_t n = ::write(in_pipe[1], data, (ssize_t)left);
+                    if (n <= 0) { write_ok = false; break; }
+                    data += n;
+                    left -= (size_t)n;
+                }
+                if (!write_ok) break;
+            }
+
+            ::close(in_pipe[1]);
+
+            if (!write_ok) {
+                ::close(out_pipe[0]);
+                ::kill(pid, SIGKILL);
+                audit_fail(workspace_id, "write_failed", 500, "write(stdin)", max_bytes, (std::uint64_t)paths_rel.size());
+                deps.reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "zip failed"}
+                }.dump());
+                return;
+            }
+        }
+
+        std::string zip_data;
+        zip_data.reserve((size_t)std::min<std::uint64_t>(max_bytes, 4ull * 1024 * 1024));
+
+        const std::uint64_t zip_limit = max_bytes + 8ull * 1024 * 1024;
+        std::array<char, 64 * 1024> buf{};
+
+        while (true) {
+            ssize_t n = ::read(out_pipe[0], buf.data(), (ssize_t)buf.size());
+            if (n == 0) break;
+            if (n < 0) {
+                ::close(out_pipe[0]);
+                ::kill(pid, SIGKILL);
+                audit_fail(workspace_id, "read_failed", 500, "read(zip)", max_bytes, (std::uint64_t)paths_rel.size());
+                deps.reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "zip failed"}
+                }.dump());
+                return;
+            }
+
+            if (zip_data.size() + (size_t)n > (size_t)zip_limit) {
+                ::close(out_pipe[0]);
+                ::kill(pid, SIGKILL);
+                audit_fail(workspace_id, "zip_too_large", 413, "zip output exceeds limit", max_bytes, (std::uint64_t)paths_rel.size());
+                deps.reply_json(res, 413, json{
+                    {"ok", false},
+                    {"error", "too_large"},
+                    {"message", "zip output too large"}
+                }.dump());
+                return;
+            }
+
+            zip_data.append(buf.data(), (size_t)n);
+        }
+
+        ::close(out_pipe[0]);
+
+        int child_status = 0;
+        ::waitpid(pid, &child_status, 0);
+        if (!(WIFEXITED(child_status) && WEXITSTATUS(child_status) == 0)) {
+            audit_fail(workspace_id, "zip_failed", 500, "zip exit nonzero", max_bytes, (std::uint64_t)paths_rel.size());
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "zip failed"}
+            }.dump());
+            return;
+        }
+
+        const std::string fname = "selection.zip";
+
+        audit_ok(
+            workspace_id,
+            max_bytes,
+            input_bytes,
+            (std::uint64_t)zip_data.size(),
+            files,
+            dirs,
+            (std::uint64_t)paths_rel.size(),
+            base_rel);
+
+        res.status = 200;
+        res.set_header("Cache-Control", "no-store");
+        res.set_header("Content-Type", "application/zip");
+        res.set_header("Content-Disposition", ("attachment; filename=\"" + fname + "\"").c_str());
+        res.body = std::move(zip_data);
+    });
+
         // POST /api/v4/workspaces/files/delete?workspace_id=...&path=relative/path
     // v1: physical filesystem only, allows file delete and recursive directory delete
     srv.Post("/api/v4/workspaces/files/delete",
@@ -5335,7 +6479,7 @@ void register_workspace_file_routes(httplib::Server& srv,
 
         std::error_code ec;
 
-        const bool from_exists = std::filesystem::exists(from_abs, ec);
+        auto from_st = std::filesystem::symlink_status(from_abs, ec);
         if (ec) {
             audit_fail(workspace_id, "source_stat_failed", 500, ec.message(), from_rel, to_rel);
             deps.reply_json(res, 500, json{
@@ -5347,6 +6491,7 @@ void register_workspace_file_routes(httplib::Server& srv,
             return;
         }
 
+        const bool from_exists = std::filesystem::exists(from_st);
         if (!from_exists) {
             audit_fail(workspace_id, "not_found", 404, "", from_rel, to_rel);
             deps.reply_json(res, 404, json{
@@ -5357,7 +6502,17 @@ void register_workspace_file_routes(httplib::Server& srv,
             return;
         }
 
-        const bool to_exists = std::filesystem::exists(to_abs, ec);
+        if (std::filesystem::is_symlink(from_st)) {
+            audit_fail(workspace_id, "source_is_symlink", 400, "", from_rel, to_rel);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "symlinks not supported"}
+            }.dump());
+            return;
+        }
+
+        auto to_st = std::filesystem::symlink_status(to_abs, ec);
         if (ec) {
             audit_fail(workspace_id, "dest_stat_failed", 500, ec.message(), from_rel, to_rel);
             deps.reply_json(res, 500, json{
@@ -5369,7 +6524,18 @@ void register_workspace_file_routes(httplib::Server& srv,
             return;
         }
 
+        const bool to_exists = std::filesystem::exists(to_st);
         if (to_exists) {
+            if (std::filesystem::is_symlink(to_st)) {
+                audit_fail(workspace_id, "dest_is_symlink", 409, "", from_rel, to_rel);
+                deps.reply_json(res, 409, json{
+                    {"ok", false},
+                    {"error", "path_conflict"},
+                    {"message", "destination already exists and is a symlink"}
+                }.dump());
+                return;
+            }
+
             audit_fail(workspace_id, "dest_exists", 409, "", from_rel, to_rel);
             deps.reply_json(res, 409, json{
                 {"ok", false},
@@ -5379,29 +6545,8 @@ void register_workspace_file_routes(httplib::Server& srv,
             return;
         }
 
-        const bool src_is_dir = std::filesystem::is_directory(from_abs, ec);
-        if (ec) {
-            audit_fail(workspace_id, "source_stat_failed", 500, ec.message(), from_rel, to_rel);
-            deps.reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "server_error"},
-                {"message", "source stat failed"},
-                {"detail", ec.message()}
-            }.dump());
-            return;
-        }
-
-        const bool src_is_file = std::filesystem::is_regular_file(from_abs, ec);
-        if (ec) {
-            audit_fail(workspace_id, "source_stat_failed", 500, ec.message(), from_rel, to_rel);
-            deps.reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "server_error"},
-                {"message", "source stat failed"},
-                {"detail", ec.message()}
-            }.dump());
-            return;
-        }
+        const bool src_is_dir = std::filesystem::is_directory(from_st);
+        const bool src_is_file = std::filesystem::is_regular_file(from_st);
 
         if (!src_is_dir && !src_is_file) {
             audit_fail(workspace_id, "unsupported_type", 400, "", from_rel, to_rel);
