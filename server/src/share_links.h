@@ -10,6 +10,8 @@ namespace pqnas {
 struct ShareLink {
     std::string token;      // b64url
     std::string owner_fp;   // fingerprint hex
+    std::string scope_kind; // "user" | "workspace"
+    std::string workspace_id; // "" for user-scoped shares
     std::string path;       // rel path under user's storage root
     std::string type;       // "file" | "dir"
     std::string created_at; // ISO8601 UTC string
@@ -34,6 +36,15 @@ public:
                 long long expires_sec,
                 ShareLink* out,
                 std::string* err);
+
+    bool create_scoped(const std::string& owner_fp,
+                   const std::string& scope_kind,
+                   const std::string& workspace_id,
+                   const std::string& path_rel,
+                   const std::string& type,
+                   long long expires_sec,
+                   ShareLink* out,
+                   std::string* err);
 
     // Revoke token. Returns true if removed.
     bool revoke(const std::string& token, std::string* err);

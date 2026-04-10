@@ -254,6 +254,20 @@ bool ShareRegistry::load(std::string* err) {
         ShareLink s;
         if (it.contains("token") && it["token"].is_string()) s.token = it["token"].get<std::string>();
         if (it.contains("owner_fp") && it["owner_fp"].is_string()) s.owner_fp = it["owner_fp"].get<std::string>();
+
+        s.scope_kind = "user";
+        s.workspace_id.clear();
+        if (it.contains("scope_kind") && it["scope_kind"].is_string()) {
+            s.scope_kind = it["scope_kind"].get<std::string>();
+        }
+        if (it.contains("workspace_id") && it["workspace_id"].is_string()) {
+            s.workspace_id = it["workspace_id"].get<std::string>();
+        }
+        if (s.scope_kind != "workspace") {
+            s.scope_kind = "user";
+            s.workspace_id.clear();
+        }
+
         if (it.contains("path") && it["path"].is_string()) s.path = it["path"].get<std::string>();
         if (it.contains("type") && it["type"].is_string()) s.type = it["type"].get<std::string>();
         if (it.contains("created_at") && it["created_at"].is_string()) s.created_at = it["created_at"].get<std::string>();
@@ -271,6 +285,7 @@ bool ShareRegistry::load(std::string* err) {
         // Enforce minimal validity & type whitelist.
         if (s.token.empty() || s.owner_fp.empty() || s.path.empty() || s.type.empty()) continue;
         if (s.type != "file" && s.type != "dir") continue;
+        if (s.scope_kind == "workspace" && s.workspace_id.empty()) continue;
 
         shares_.push_back(std::move(s));
     }
@@ -334,6 +349,8 @@ bool ShareRegistry::save_atomic(std::string* err) {
         json it;
         it["token"] = s.token;
         it["owner_fp"] = s.owner_fp;
+        it["scope_kind"] = s.scope_kind.empty() ? "user" : s.scope_kind;
+        it["workspace_id"] = s.workspace_id;
         it["path"] = s.path;
         it["type"] = s.type;
         it["created_at"] = s.created_at;
@@ -460,26 +477,56 @@ bool ShareRegistry::create(const std::string& owner_fp,
                            long long expires_sec,
                            ShareLink* out,
                            std::string* err) {
+    return create_scoped(owner_fp,
+                         "user",
+                         "",
+                         path_rel,
+                         type,
+                         expires_sec,
+                         out,
+                         err);
+}
+
+bool ShareRegistry::create_scoped(const std::string& owner_fp,
+                                  const std::string& scope_kind,
+                                  const std::string& workspace_id,
+                                  const std::string& path_rel,
+                                  const std::string& type,
+                                  long long expires_sec,
+                                  ShareLink* out,
+                                  std::string* err) {
     std::lock_guard<std::mutex> lk(mu_);
+
     if (owner_fp.empty() || path_rel.empty()) {
         if (err) *err = "missing owner_fp/path";
         return false;
     }
+
     if (type != "file" && type != "dir") {
         if (err) *err = "invalid type";
         return false;
     }
 
-    // Token uniqueness:
-    // Extremely likely to succeed on first attempt, but we still enforce
-    // uniqueness in the current registry to avoid accidental collisions.
+    std::string scope = scope_kind;
+    if (scope.empty()) scope = "user";
+    if (scope != "user" && scope != "workspace") {
+        if (err) *err = "invalid scope_kind";
+        return false;
+    }
+    if (scope == "workspace" && workspace_id.empty()) {
+        if (err) *err = "missing workspace_id";
+        return false;
+    }
+
     std::string token;
     for (int i = 0; i < 10; i++) {
         token = gen_token_b64url_32();
-        auto it = std::find_if(shares_.begin(), shares_.end(), [&](const ShareLink& s){ return s.token == token; });
+        auto it = std::find_if(shares_.begin(), shares_.end(),
+                               [&](const ShareLink& s){ return s.token == token; });
         if (it == shares_.end()) break;
         token.clear();
     }
+
     if (token.empty()) {
         if (err) *err = "failed to generate unique token";
         return false;
@@ -488,6 +535,8 @@ bool ShareRegistry::create(const std::string& owner_fp,
     ShareLink s;
     s.token = token;
     s.owner_fp = owner_fp;
+    s.scope_kind = scope;
+    s.workspace_id = (scope == "workspace") ? workspace_id : "";
     s.path = path_rel;
     s.type = type;
     s.created_at = now_utc_iso8601();
@@ -497,7 +546,6 @@ bool ShareRegistry::create(const std::string& owner_fp,
     shares_.push_back(s);
 
     if (!save_atomic(err)) {
-        // Rollback in-memory state if persistence fails.
         shares_.pop_back();
         return false;
     }

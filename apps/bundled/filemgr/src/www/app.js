@@ -2443,6 +2443,14 @@ function pickFolder() {
     if (opts.inviteExpiresSec != null) body.invite_expires_sec = opts.inviteExpiresSec;
     if (opts.recipientLabelHint) body.recipient_label_hint = opts.recipientLabelHint;
 
+    if (window.PQNAS_FILEMGR &&
+        typeof window.PQNAS_FILEMGR.isWorkspaceScope === "function" &&
+        window.PQNAS_FILEMGR.isWorkspaceScope() &&
+        typeof window.PQNAS_FILEMGR.getWorkspaceId === "function") {
+      const workspaceId = String(window.PQNAS_FILEMGR.getWorkspaceId() || "").trim();
+      if (workspaceId) body.workspace_id = workspaceId;
+    }
+
     const r = await fetch("/api/v4/shares/create", {
       method: "POST",
       credentials: "include",
@@ -2826,7 +2834,13 @@ function pickFolder() {
 
   async function refreshSharesCache() {
     try {
-      const r = await fetch("/api/v4/shares/list", {
+      const api = fmApi();
+      const sharesListUrl =
+          (api && typeof api.sharesListUrl === "function")
+              ? api.sharesListUrl()
+              : "/api/v4/shares/list";
+
+      const r = await fetch(sharesListUrl, {
         method: "GET",
         credentials: "include",
         cache: "no-store",
@@ -2994,7 +3008,7 @@ function pickFolder() {
       }
 
       if (caps.shares !== false) {
-        ctxEl.appendChild(menuItem("Standard share link…", "", () => openShareDialogFor(item)));
+        ctxEl.appendChild(menuItem(shareLabel, "", () => openShareDialogFor(item)));
       }
 
       if (caps.pqShares !== false) {

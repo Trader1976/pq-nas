@@ -283,6 +283,7 @@ add_executable(pqnas_server
         server/src/routes_workspaces_files.cpp
         server/src/workspaces.cpp
         server/src/routes_workspaces_files.cpp
+        server/src/workspace_access_shared.cpp
 )
 
 # Treat warnings as errors for the server (security-sensitive)

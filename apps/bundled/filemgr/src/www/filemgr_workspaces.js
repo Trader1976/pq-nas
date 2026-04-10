@@ -92,7 +92,7 @@
 
         return {
             favorites: false,
-            shares: false,
+            shares: canCurrentScopeWrite(),
             pqShares: false,
             textEdit: true,
             imagePreview: true,
@@ -701,7 +701,22 @@
         workspaceEditLeaseReleaseUrl,
         acquireEditLease,
         refreshEditLease,
-        releaseEditLease
+        releaseEditLease,
+
+        sharesListUrl() {
+            if (!isWorkspaceScope()) return "/api/v4/shares/list";
+            return `/api/v4/shares/list?workspace_id=${encodeURIComponent(FM.scope.workspaceId)}`;
+        },
+
+        applyShareCreateScope(body) {
+            const out = (body && typeof body === "object") ? { ...body } : {};
+            if (isWorkspaceScope()) {
+                out.workspace_id = FM.scope.workspaceId;
+            } else {
+                delete out.workspace_id;
+            }
+            return out;
+        }
     };
 
     initWorkspaces();

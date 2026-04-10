@@ -116,6 +116,7 @@ extern "C" {
 #include "share_pq_crypto_v1.h"
 #include "share_pq_mlkem_v1.h"
 #include <openssl/rand.h>
+#include "workspace_access_shared.h"
 
 //pool migration
 #include "user_storage_migration.h"
@@ -29877,6 +29878,91 @@ srv.Post("/api/v4/shares/pq/recipient/update", [&](const httplib::Request& req, 
     });
 });
 
+    auto share_scope_kind_normalized_local = [](const pqnas::ShareLink& s) -> std::string {
+    return (s.scope_kind == "workspace") ? "workspace" : "user";
+};
+
+auto resolve_share_abs_path_local =
+    [&](const pqnas::ShareLink& s,
+        std::filesystem::path* out_abs,
+        std::string* out_err) -> bool {
+
+    if (out_abs) *out_abs = std::filesystem::path{};
+    if (out_err) out_err->clear();
+
+    const std::string scope_kind = share_scope_kind_normalized_local(s);
+
+    if (scope_kind == "user") {
+        pqnas::ResolvedExistingPath rp;
+        std::string rerr;
+        if (!pqnas::resolve_existing_user_file_path(users, s.owner_fp, s.path, &rp, &rerr)) {
+            if (out_err) *out_err = rerr.empty() ? "share_not_found" : rerr;
+            return false;
+        }
+        if (out_abs) *out_abs = rp.abs_path;
+        return true;
+    }
+
+    if (!workspaces.load(workspaces_path)) {
+        if (out_err) *out_err = "failed to reload workspaces";
+        return false;
+    }
+
+    auto wopt = workspaces.get(s.workspace_id);
+    if (!wopt.has_value()) {
+        if (out_err) *out_err = "workspace not found";
+        return false;
+    }
+
+    pqnas::WorkspaceResolvedTarget tgt;
+    std::string terr;
+    if (!pqnas::resolve_workspace_target_default_pool_only(
+            users_path,
+            *wopt,
+            s.path,
+            &tgt,
+            &terr)) {
+        if (out_err) *out_err = terr.empty() ? "share_not_found" : terr;
+        return false;
+    }
+
+    if (out_abs) *out_abs = tgt.abs_path;
+    return true;
+};
+
+auto require_workspace_share_member_local =
+    [&](const std::string& actor_fp,
+        const std::string& workspace_id,
+        bool require_write,
+        std::string* out_err) -> bool {
+
+    if (out_err) out_err->clear();
+
+    if (!workspaces.load(workspaces_path)) {
+        if (out_err) *out_err = "failed to reload workspaces";
+        return false;
+    }
+
+    auto wopt = workspaces.get(workspace_id);
+    if (!wopt.has_value()) {
+        if (out_err) *out_err = "workspace not found";
+        return false;
+    }
+
+    auto mopt = pqnas::workspace_enabled_member_for_actor(*wopt, actor_fp);
+    if (!mopt.has_value()) {
+        if (out_err) *out_err = "workspace access denied";
+        return false;
+    }
+
+    if (require_write && !pqnas::workspace_member_can_write(*mopt)) {
+        if (out_err) *out_err = "workspace write access denied";
+        return false;
+    }
+
+    return true;
+};
+
 srv.Post("/api/v4/shares/create", [&](const httplib::Request& req, httplib::Response& res) {
     auto reply = [&](int status, const json& j) {
         res.status = status;
@@ -29998,35 +30084,72 @@ srv.Post("/api/v4/shares/create", [&](const httplib::Request& req, httplib::Resp
         recipient_label_hint = body["recipient_label_hint"].get<std::string>();
     }
 
+    std::string workspace_id;
+    if (body.contains("workspace_id") && body["workspace_id"].is_string()) {
+        workspace_id = body["workspace_id"].get<std::string>();
+    }
+
+    const bool workspace_scope = !workspace_id.empty();
+    const std::string scope_kind = workspace_scope ? "workspace" : "user";
     const bool pq_recipient_enrolled = (share_mode == "pq_recipient_enrolled_v1");
 
-    // must have allocated storage (owner is the current user in v1)
-    auto uopt = users.get(fp_hex);
-    if (!uopt.has_value() || uopt->storage_state != "allocated") {
-        audit_fail("storage_unallocated", 403, "", path_rel);
-        reply(403, json{{"ok", false}, {"error", "storage_unallocated"}, {"message", "Storage not allocated"}});
+    if (workspace_scope && pq_recipient_enrolled) {
+        audit_fail("workspace_pq_not_supported", 400, "", path_rel);
+        reply(400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "PQ recipient-enrolled shares are not supported for workspaces"}
+        });
         return;
     }
 
-        // Resolve logical item via metadata-aware resolver so share creation works
-        // during landing/migration as well as in simple installs.
+    std::string resolved_path_rel = path_rel;
+    std::filesystem::path resolved_abs_path;
+    std::string type;
+
+    if (!workspace_scope) {
+        // ---- user-scoped share ----
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value() || uopt->storage_state != "allocated") {
+            audit_fail("storage_unallocated", 403, "", path_rel);
+            reply(403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"}
+            });
+            return;
+        }
+
         pqnas::ResolvedLogicalItem item;
         std::string rerr;
         if (!pqnas::resolve_existing_user_item(users, fp_hex, path_rel, &item, &rerr) || !item.exists) {
-            if (rerr == "empty path" || rerr == "invalid path" || rerr == "absolute path not allowed" || rerr == "reserved path") {
+            if (rerr == "empty path" || rerr == "invalid path" ||
+                rerr == "absolute path not allowed" || rerr == "reserved path") {
                 audit_fail("invalid_path", 400, rerr, path_rel);
-                reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid path"}});
+                reply(400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "invalid path"}
+                });
                 return;
             }
 
             audit_fail("not_found", 404, rerr, path_rel);
-            reply(404, json{{"ok", false}, {"error", "not_found"}, {"message", "path not found"}});
+            reply(404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "path not found"}
+            });
             return;
         }
 
         if (!item.has_physical_anchor) {
             audit_fail("missing_physical_anchor", 404, "", path_rel);
-            reply(404, json{{"ok", false}, {"error", "not_found"}, {"message", "path not found"}});
+            reply(404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "path not found"}
+            });
             return;
         }
 
@@ -30034,66 +30157,173 @@ srv.Post("/api/v4/shares/create", [&](const httplib::Request& req, httplib::Resp
         auto st = std::filesystem::symlink_status(item.abs_path, ec);
         if (ec || !std::filesystem::exists(st)) {
             audit_fail("not_found", 404, "", path_rel);
-            reply(404, json{{"ok", false}, {"error", "not_found"}, {"message", "path not found"}});
-            return;
-        }
-        if (std::filesystem::is_symlink(st)) {
-            audit_fail("symlink_not_supported", 400, "", path_rel);
-            reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "symlinks not supported"}});
+            reply(404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "path not found"}
+            });
             return;
         }
 
-        std::string type = item.is_dir ? "dir" : (item.is_file ? "file" : "");
-        if (type.empty()) {
-            audit_fail("unsupported_type", 400, "", path_rel);
-            reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "unsupported path type"}});
+        if (std::filesystem::is_symlink(st)) {
+            audit_fail("symlink_not_supported", 400, "", path_rel);
+            reply(400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "symlinks not supported"}
+            });
             return;
         }
-        if (pq_recipient_enrolled) {
-            if (type != "file" || !item.is_file) {
-                audit_fail("pq_share_requires_file", 400, "", path_rel);
-                reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "PQ recipient-enrolled shares currently support files only"}});
-                return;
-            }
-            if (!item.has_physical_anchor) {
-                audit_fail("pq_share_missing_anchor", 409, "", path_rel);
-                reply(409, json{{"ok", false}, {"error", "not_found"}, {"message", "path not found"}});
-                return;
-            }
+
+        type = item.is_dir ? "dir" : (item.is_file ? "file" : "");
+        if (type.empty()) {
+            audit_fail("unsupported_type", 400, "", path_rel);
+            reply(400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "unsupported path type"}
+            });
+            return;
         }
+
+        resolved_path_rel = path_rel;
+        resolved_abs_path = item.abs_path;
+    } else {
+        // ---- workspace-scoped share ----
+        if (!workspaces.load(workspaces_path)) {
+            audit_fail("workspaces_reload_failed", 500, "", path_rel);
+            reply(500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to reload workspaces"}
+            });
+            return;
+        }
+
+        auto wopt = workspaces.get(workspace_id);
+        if (!wopt.has_value()) {
+            audit_fail("workspace_not_found", 404, workspace_id, path_rel);
+            reply(404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "workspace not found"}
+            });
+            return;
+        }
+
+        pqnas::WorkspaceResolvedTarget ws_target;
+        std::string ws_err;
+        if (!pqnas::resolve_workspace_member_target_default_pool_only(
+                users_path,
+                *wopt,
+                fp_hex,
+                true,
+                path_rel,
+                &ws_target,
+                &ws_err)) {
+
+            if (ws_err == "workspace access denied" ||
+                ws_err == "workspace write access denied" ||
+                ws_err == "workspace disabled" ||
+                ws_err == "workspace storage not allocated") {
+                audit_fail("workspace_forbidden", 403, ws_err, path_rel);
+                reply(403, json{
+                    {"ok", false},
+                    {"error", "forbidden"},
+                    {"message", ws_err}
+                });
+                return;
+            }
+
+            if (ws_err == "workspace not found" || ws_err == "path not found") {
+                audit_fail("not_found", 404, ws_err, path_rel);
+                reply(404, json{
+                    {"ok", false},
+                    {"error", "not_found"},
+                    {"message", "path not found"}
+                });
+                return;
+            }
+
+            if (ws_err == "pool not supported yet") {
+                audit_fail("pool_not_supported_yet", 400, ws_err, path_rel);
+                reply(400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", ws_err}
+                });
+                return;
+            }
+
+            audit_fail("invalid_workspace_path", 400, ws_err, path_rel);
+            reply(400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", ws_err.empty() ? "invalid path" : ws_err}
+            });
+            return;
+        }
+
+        resolved_path_rel = ws_target.rel_norm;
+        resolved_abs_path = ws_target.abs_path;
+        type = ws_target.is_dir ? "dir" : (ws_target.is_file ? "file" : "");
+
+        if (type.empty()) {
+            audit_fail("unsupported_type", 400, "", path_rel);
+            reply(400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "unsupported path type"}
+            });
+            return;
+        }
+    }
+
+    if (pq_recipient_enrolled) {
+        if (type != "file") {
+            audit_fail("pq_share_requires_file", 400, "", resolved_path_rel);
+            reply(400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "PQ recipient-enrolled shares currently support files only"}
+            });
+            return;
+        }
+    }
 
     pqnas::ShareLink out;
     std::string err;
-{
-    pqnas::AuditEvent ev;
-    ev.event = "share_create_attempt";
-    ev.outcome = "ok";
-    ev.f["fingerprint"] = fp_hex;
-    ev.f["path"] = pqnas::shorten(path_rel, 200);
-    ev.f["type"] = pqnas::shorten(type, 32);
-    ev.f["expires_sec"] = std::to_string((long long)expires_sec);
-    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-    audit_append(ev);
-}
-if (!shares.create(fp_hex, path_rel, type, expires_sec, &out, &err)) {
-    reply(500, json{
-        {"ok", false},
-        {"error", "server_error"},
-        {"message", "share create failed"},
-        {"detail", err}
-    });
-    return;
-}
+
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "share_create_attempt";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(resolved_path_rel, 200);
+        ev.f["type"] = pqnas::shorten(type, 32);
+        ev.f["expires_sec"] = std::to_string((long long)expires_sec);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit_append(ev);
+    }
+    if (!shares.create_scoped(fp_hex, scope_kind, workspace_id, resolved_path_rel, type, expires_sec, &out, &err)) {
+        reply(500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "share create failed"},
+            {"detail", err}
+        });
+        return;
+    }
         pqnas::PqShareCreateResultV1 pq_out;
         if (pq_recipient_enrolled) {
             std::string pq_err;
             if (!share_pq.create_recipient_enrolled_share(
                     out.token,
                     fp_hex,
-                    path_rel,
+                    resolved_path_rel,
                     out.created_at,
                     out.expires_at,
-                    item.abs_path,
+                    resolved_abs_path,
                     invite_expires_sec,
                     recipient_label_hint,
                     &pq_out,
@@ -30107,7 +30337,7 @@ if (!shares.create(fp_hex, path_rel, type, expires_sec, &out, &err)) {
                 ev.outcome = "fail";
                 ev.f["fingerprint"] = fp_hex;
                 ev.f["token"] = pqnas::shorten(out.token, 32);
-                ev.f["path"] = pqnas::shorten(path_rel, 200);
+                ev.f["path"] = pqnas::shorten(resolved_path_rel, 200);
                 ev.f["reason"] = "pq_sidecar_create_failed";
                 ev.f["detail"] = pqnas::shorten(pq_err, 180);
                 add_ip_headers(ev);
@@ -30126,7 +30356,7 @@ if (!shares.create(fp_hex, path_rel, type, expires_sec, &out, &err)) {
             ev.outcome = "ok";
             ev.f["fingerprint"] = fp_hex;
             ev.f["token"] = pqnas::shorten(out.token, 32);
-            ev.f["path"] = pqnas::shorten(path_rel, 200);
+            ev.f["path"] = pqnas::shorten(resolved_path_rel, 200);
             ev.f["mode"] = "pq_recipient_enrolled_v1";
             ev.f["invite_id"] = pqnas::shorten(pq_out.invite.invite_id, 32);
             add_ip_headers(ev);
@@ -30134,22 +30364,24 @@ if (!shares.create(fp_hex, path_rel, type, expires_sec, &out, &err)) {
         }
     audit_ok(out);
 
-        json resp = {
-            {"ok", true},
-            {"token", out.token},
-            {"url", std::string("/s/") + out.token},
-            {"expires_at", out.expires_at.empty() ? json() : json(out.expires_at)},
-            {"type", out.type},
-            {"path", out.path}
-        };
+    json resp = {
+        {"ok", true},
+        {"token", out.token},
+        {"url", std::string("/s/") + out.token},
+        {"expires_at", out.expires_at.empty() ? json() : json(out.expires_at)},
+        {"type", out.type},
+        {"path", out.path},
+        {"scope_kind", out.scope_kind.empty() ? "user" : out.scope_kind},
+        {"workspace_id", out.workspace_id}
+    };
 
-        if (pq_recipient_enrolled) {
-            resp["pq_mode"] = "pq_recipient_enrolled_v1";
-            resp["pq_state"] = "pending_enrollment";
-            resp["invite_url"] = share_pq.invite_url_path(pq_out.invite.invite_id);
-        }
+    if (pq_recipient_enrolled) {
+        resp["pq_mode"] = "pq_recipient_enrolled_v1";
+        resp["pq_state"] = "pending_enrollment";
+        resp["invite_url"] = share_pq.invite_url_path(pq_out.invite.invite_id);
+    }
 
-        reply(200, resp);
+    reply(200, resp);
 });
 
 
@@ -30223,6 +30455,22 @@ if (!shares.create(fp_hex, path_rel, type, expires_sec, &out, &err)) {
     std::string token = body["token"].get<std::string>();
     std::string token_short = pqnas::shorten(token, 32);
 
+    auto sopt = shares.find(token);
+    if (!sopt.has_value() || sopt->owner_fp != fp_hex) {
+        audit_fail("not_found", 404, "", token_short);
+        reply(404, json{{"ok", false}, {"error", "not_found"}, {"message", "token not found"}});
+        return;
+    }
+
+    if ((sopt->scope_kind == "workspace") && !sopt->workspace_id.empty()) {
+        std::string werr;
+        if (!require_workspace_share_member_local(fp_hex, sopt->workspace_id, true, &werr)) {
+            audit_fail("workspace_access_denied", 403, werr, token_short);
+            reply(403, json{{"ok", false}, {"error", "forbidden"}, {"message", werr}});
+            return;
+        }
+    }
+
     std::string err;
     bool removed = shares.revoke_owner(fp_hex, token, &err);
     if (!removed) {
@@ -30250,7 +30498,37 @@ srv.Get("/api/v4/shares/list", [&](const httplib::Request& req, httplib::Respons
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
 
+    const std::string workspace_id =
+    req.has_param("workspace_id") ? req.get_param_value("workspace_id") : std::string{};
+
+    if (!workspace_id.empty()) {
+        std::string werr;
+        if (!require_workspace_share_member_local(fp_hex, workspace_id, false, &werr)) {
+            res.status = (werr == "workspace not found") ? 404 : ((werr == "failed to reload workspaces") ? 500 : 403);
+            res.set_header("Cache-Control", "no-store");
+            res.set_content(json{
+                {"ok", false},
+                {"error", (res.status == 404) ? "not_found" : ((res.status == 500) ? "server_error" : "forbidden")},
+                {"message", werr}
+            }.dump(2), "application/json; charset=utf-8");
+            return;
+        }
+    }
+
     const auto v = shares.list();
+
+    bool workspaces_loaded_for_names = false;
+    std::string workspaces_names_err;
+
+    auto ensure_workspaces_loaded_for_names = [&]() -> bool {
+        if (workspaces_loaded_for_names) return true;
+        if (!workspaces.load(workspaces_path)) {
+            workspaces_names_err = "failed to reload workspaces";
+            return false;
+        }
+        workspaces_loaded_for_names = true;
+        return true;
+    };
 
     json out = {
         {"ok", true},
@@ -30260,14 +30538,34 @@ srv.Get("/api/v4/shares/list", [&](const httplib::Request& req, httplib::Respons
     for (const auto& s : v) {
         if (s.owner_fp != fp_hex) continue;
 
+        const std::string scope_kind = (s.scope_kind == "workspace") ? "workspace" : "user";
+
+        // No workspace_id => return all shares owned by this user.
+        // workspace_id present => return only shares from that workspace.
+        if (!workspace_id.empty()) {
+            if (scope_kind != "workspace") continue;
+            if (s.workspace_id != workspace_id) continue;
+        }
+
         json it;
         it["token"] = s.token;
         it["url"] = std::string("/s/") + s.token;
         it["path"] = s.path;
         it["type"] = s.type;
         it["created_at"] = s.created_at;
+        it["scope_kind"] = s.scope_kind.empty() ? "user" : s.scope_kind;
+        if (!s.workspace_id.empty()) it["workspace_id"] = s.workspace_id;
         if (!s.expires_at.empty()) it["expires_at"] = s.expires_at;
         it["downloads"] = s.downloads;
+
+        if ((s.scope_kind == "workspace") && !s.workspace_id.empty()) {
+            if (ensure_workspaces_loaded_for_names()) {
+                auto wopt = workspaces.get(s.workspace_id);
+                if (wopt.has_value() && !wopt->name.empty()) {
+                    it["workspace_name"] = wopt->name;
+                }
+            }
+        }
 
         pqnas::PqShareManifestV1 mf;
         std::string mf_err;
@@ -30874,17 +31172,15 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
     }
 
 
-    pqnas::ResolvedExistingPath rp;
+    std::filesystem::path abs;
     std::string rerr;
-    if (!pqnas::resolve_existing_user_file_path(users, s.owner_fp, s.path, &rp, &rerr)) {
+    if (!resolve_share_abs_path_local(s, &abs, &rerr)) {
         audit_event("share_download", "fail", &s, "invalid_path", 400, rerr);
         res.status = 404; // safer: do not leak
         res.set_header("Cache-Control", "no-store");
         res.set_content("Not found\n", "text/plain; charset=utf-8");
         return;
     }
-
-    const std::filesystem::path abs = rp.abs_path;
 
     std::error_code ec_abs;
     auto st_abs = std::filesystem::symlink_status(abs, ec_abs);

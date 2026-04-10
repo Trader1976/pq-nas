@@ -18,20 +18,27 @@
     const showToken = $("showToken");
 
     const standardCard = $("standardCard");
+    const workspaceCard = $("workspaceCard");
     const pqCard = $("pqCard");
+
     const btnToggleStandard = $("btnToggleStandard");
+    const btnToggleWorkspace = $("btnToggleWorkspace");
     const btnTogglePq = $("btnTogglePq");
 
     const countPillStandard = $("countPillStandard");
+    const countPillWorkspace = $("countPillWorkspace");
     const countPillPq = $("countPillPq");
 
     const thTokenStandard = $("thTokenStandard");
+    const thTokenWorkspace = $("thTokenWorkspace");
     const thTokenPq = $("thTokenPq");
 
     const tbodyStandard = $("tbodyStandard");
+    const tbodyWorkspace = $("tbodyWorkspace");
     const tbodyPq = $("tbodyPq");
 
     const OPEN_STD_KEY = "sharesmgr_standard_open_v1";
+    const OPEN_WS_KEY = "sharesmgr_workspace_open_v1";
     const OPEN_PQ_KEY = "sharesmgr_pq_open_v1";
 
     let shares = [];
@@ -169,17 +176,27 @@
         if (Array.isArray(s?.recipient_device_ids)) return true;
         return false;
     }
-
+    function isWorkspaceShare(s) {
+        if (!s || isPqShare(s)) return false;
+        const scope = String(s.scope_kind || "").trim().toLowerCase();
+        return scope === "workspace" || !!s.workspace_id;
+    }
     function splitShares(list) {
         const standard = [];
+        const workspace = [];
         const pq = [];
 
         for (const s of (list || [])) {
-            if (isPqShare(s)) pq.push(s);
-            else standard.push(s);
+            if (isPqShare(s)) {
+                pq.push(s);
+            } else if (isWorkspaceShare(s)) {
+                workspace.push(s);
+            } else {
+                standard.push(s);
+            }
         }
 
-        return { standard, pq };
+        return { standard, workspace, pq };
     }
 
     function pqStateOf(s) {
@@ -307,14 +324,21 @@
 
     function initSectionToggles() {
         const stdOpen = getStoredBool(OPEN_STD_KEY, true);
+        const wsOpen = getStoredBool(OPEN_WS_KEY, true);
         const pqOpen = getStoredBool(OPEN_PQ_KEY, true);
 
         setSectionOpen(standardCard, btnToggleStandard, stdOpen, null);
+        setSectionOpen(workspaceCard, btnToggleWorkspace, wsOpen, null);
         setSectionOpen(pqCard, btnTogglePq, pqOpen, null);
 
         btnToggleStandard?.addEventListener("click", () => {
             const nowOpen = standardCard && !standardCard.classList.contains("collapsed");
             setSectionOpen(standardCard, btnToggleStandard, !nowOpen, OPEN_STD_KEY);
+        });
+
+        btnToggleWorkspace?.addEventListener("click", () => {
+            const nowOpen = workspaceCard && !workspaceCard.classList.contains("collapsed");
+            setSectionOpen(workspaceCard, btnToggleWorkspace, !nowOpen, OPEN_WS_KEY);
         });
 
         btnTogglePq?.addEventListener("click", () => {
@@ -451,6 +475,9 @@
                     s.mode || "",
                     s.pq_mode || "",
                     s.kind || "",
+                    s.scope_kind || "",
+                    s.workspace_id || "",
+                    s.workspace_name || "",
                     recipientParts
                 ].join("\n").toLowerCase();
                 return parts.includes(qq);
@@ -592,7 +619,86 @@
             tbodyStandard.appendChild(tr);
         }
     }
+    function renderWorkspaceRows(list, showTok) {
+        if (!tbodyWorkspace) return;
 
+        tbodyWorkspace.innerHTML = "";
+
+        if (!list.length) {
+            renderEmpty(
+                tbodyWorkspace,
+                shares.some(isWorkspaceShare)
+                    ? "No workspace shares match the current filter."
+                    : "No workspace shares.",
+                showTok ? 8 : 7
+            );
+            return;
+        }
+
+        for (const s of list) {
+            const tr = document.createElement("tr");
+
+            const wsName = String(s.workspace_name || "").trim();
+
+            const pathHtml =
+                `${escapeHtml(s.path || "")}` +
+                `<div style="margin-top:6px">` +
+                `<span class="badge badgeWarn">workspace</span>` +
+                (wsName ? ` <span class="badge">${escapeHtml(wsName)}</span>` : "") +
+                ` ${normalStateBadgeHtml(s)}` +
+                `</div>`;
+
+            tr.appendChild(tdHtml(pathHtml, "colPath"));
+            tr.appendChild(td((s.type || "—"), "colType"));
+            tr.appendChild(td(fmtTsMaybe(s.expires_at), "colExp"));
+            tr.appendChild(td(String(s.downloads ?? 0), "colDl"));
+            tr.appendChild(td(fmtTsMaybe(s.created_at), "colCreated"));
+
+            const urlAbs = shareUrlAbs(s);
+            tr.appendChild(
+                tdHtml(
+                    `<a class="a mono" href="${escapeAttr(urlAbs)}" target="_blank" rel="noreferrer">
+                    ${escapeHtml(s.url || ("/s/" + s.token))}
+                 </a>`,
+                    "colUrl"
+                )
+            );
+
+            if (showTok) {
+                tr.appendChild(td((s.token || ""), "colToken mono"));
+            }
+
+            const act = document.createElement("td");
+            act.className = "colAct";
+
+            const wrap = document.createElement("div");
+            wrap.className = "actions";
+
+            wrap.appendChild(makeActionButton("Copy link", "btn", async () => {
+                const ok = await copyText(urlAbs);
+                toast(ok ? "ok" : "err", ok ? "Copied link." : "Copy failed.");
+            }));
+
+            wrap.appendChild(makeActionButton("Revoke", "btn btnDanger", async (e) => {
+                const btn = e.currentTarget;
+                btn.disabled = true;
+                try {
+                    await revokeShare(s.token);
+                    toast("ok", "Revoked.");
+                    await loadShares();
+                } catch (err) {
+                    toast("err", String(err && err.message ? err.message : err));
+                } finally {
+                    btn.disabled = false;
+                }
+            }));
+
+            act.appendChild(wrap);
+            tr.appendChild(act);
+
+            tbodyWorkspace.appendChild(tr);
+        }
+    }
     function renderPqRows(list, showTok) {
         if (!tbodyPq) return;
 
@@ -714,14 +820,23 @@
         const filteredAll = applySort(applyFilters(shares));
         const groups = splitShares(filteredAll);
 
+        const hasWorkspaceShares = shares.some(isWorkspaceShare);
+
+        if (workspaceCard) {
+            workspaceCard.classList.toggle("hidden", !hasWorkspaceShares);
+        }
+
         const showTok = !!showToken?.checked;
         if (thTokenStandard) thTokenStandard.classList.toggle("hidden", !showTok);
+        if (thTokenWorkspace) thTokenWorkspace.classList.toggle("hidden", !showTok);
         if (thTokenPq) thTokenPq.classList.toggle("hidden", !showTok);
 
         if (countPillStandard) countPillStandard.textContent = String(groups.standard.length);
+        if (countPillWorkspace) countPillWorkspace.textContent = String(groups.workspace.length);
         if (countPillPq) countPillPq.textContent = String(groups.pq.length);
 
         renderStandardRows(groups.standard, showTok);
+        renderWorkspaceRows(groups.workspace, showTok);
         renderPqRows(groups.pq, showTok);
 
         if (btnRevokeExpired) {
@@ -733,8 +848,8 @@
         if (lastLoadedAt && statusLine) {
             const ageSec = Math.round((Date.now() - lastLoadedAt) / 1000);
             statusLine.textContent =
-                `Showing ${groups.standard.length + groups.pq.length}/${shares.length}. ` +
-                `My shares ${groups.standard.length}. Post-Quantum shares ${groups.pq.length}. ` +
+                `Showing ${groups.standard.length + groups.workspace.length + groups.pq.length}/${shares.length}. ` +
+                `My shares ${groups.standard.length}. Workspace shares ${groups.workspace.length}. PQ shares ${groups.pq.length}. ` +
                 `Last refresh ${ageSec}s ago.`;
         }
     }
