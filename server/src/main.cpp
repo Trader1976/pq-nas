@@ -19091,9 +19091,41 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         if (move_err) move_err->clear();
 
         std::error_code mec;
+
+        {
+            std::string serr;
+            if (!ensure_no_symlink_in_existing_path_prefix(dst_path.parent_path(), &serr)) {
+                if (move_err) *move_err = "destination parent invalid: " + serr;
+                return false;
+            }
+        }
+
         std::filesystem::create_directories(dst_path.parent_path(), mec);
         if (mec) {
             if (move_err) *move_err = "mkdir failed: " + mec.message();
+            return false;
+        }
+
+        {
+            std::string serr;
+            if (!ensure_no_symlink_in_existing_path_prefix(dst_path.parent_path(), &serr)) {
+                if (move_err) *move_err = "destination parent invalid: " + serr;
+                return false;
+            }
+        }
+
+        mec.clear();
+        auto dst_st = std::filesystem::symlink_status(dst_path, mec);
+        if (!mec && std::filesystem::exists(dst_st)) {
+            if (std::filesystem::is_symlink(dst_st)) {
+                if (move_err) *move_err = "destination exists as symlink";
+                return false;
+            }
+            if (move_err) *move_err = "destination appeared before move";
+            return false;
+        }
+        if (mec && mec != std::make_error_code(std::errc::no_such_file_or_directory)) {
+            if (move_err) *move_err = "destination check failed: " + mec.message();
             return false;
         }
 
@@ -19124,36 +19156,7 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
                 }
 
                 std::error_code ec2;
-                auto st2 = it->symlink_status(ec2);
-                if (ec2) {
-                    if (move_err) *move_err = "symlink scan failed: " + ec2.message();
-                    return false;
-                }
-
-                if (std::filesystem::is_symlink(st2)) {
-                    if (move_err) *move_err =
-                        "copy fallback refused: symlink in source tree: " + it->path().string();
-                    return false;
-                }
-            }
-        }
-
-        if (src_is_dir) {
-            std::error_code sec;
-            for (std::filesystem::recursive_directory_iterator it(
-                     src_path,
-                     std::filesystem::directory_options::skip_permission_denied,
-                     sec), end;
-                 it != end;
-                 it.increment(sec)) {
-
-                if (sec) {
-                    if (move_err) *move_err = "symlink scan failed: " + sec.message();
-                    return false;
-                }
-
-                std::error_code ec2;
-                auto st2 = it->symlink_status(ec2);
+                auto st2 = std::filesystem::symlink_status(it->path(), ec2);
                 if (ec2) {
                     if (move_err) *move_err = "symlink scan failed: " + ec2.message();
                     return false;
@@ -19237,6 +19240,7 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         }
 
         const std::filesystem::path to_abs = physical_root / std::filesystem::path(to_rel_norm);
+
         {
             std::string serr;
             if (!ensure_no_symlink_in_existing_path_prefix(from_abs, &serr)) {
@@ -19252,7 +19256,7 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
 
         {
             std::string serr;
-            if (!ensure_no_symlink_in_existing_path_prefix(to_abs, &serr)) {
+            if (!ensure_no_symlink_in_existing_path_prefix(to_abs.parent_path(), &serr)) {
                 audit_fail("symlink_not_supported", 400, serr, from_rel, to_rel);
                 reply_json(res, 400, json{
                     {"ok", false},
@@ -19262,14 +19266,35 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
                 return;
             }
         }
+
         std::error_code ec;
         auto st = std::filesystem::symlink_status(from_abs, ec);
-        if (ec || !std::filesystem::exists(st) || !std::filesystem::is_regular_file(st)) {
+        if (ec || !std::filesystem::exists(st)) {
             audit_fail("not_found", 404, "", from_rel, to_rel);
             reply_json(res, 404, json{
                 {"ok", false},
                 {"error", "not_found"},
                 {"message", "source not found"}
+            }.dump());
+            return;
+        }
+
+        if (std::filesystem::is_symlink(st)) {
+            audit_fail("symlink_not_supported", 400, "", from_rel, to_rel);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "symlinks not supported"}
+            }.dump());
+            return;
+        }
+
+        if (!std::filesystem::is_regular_file(st)) {
+            audit_fail("src_not_file", 400, "", from_rel, to_rel);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "source must be a file"}
             }.dump());
             return;
         }
@@ -19289,6 +19314,7 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         }
 
         const std::uint64_t bytes = pqnas::file_size_u64_safe(from_abs);
+
 
         std::string move_err;
         if (!move_one_path(from_abs, to_abs, false, &move_err)) {
@@ -19425,6 +19451,7 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
             physical_root = physical_root.parent_path();
         }
         const std::filesystem::path to_abs = physical_root / std::filesystem::path(to_rel_norm);
+
         {
             std::string serr;
             if (!ensure_no_symlink_in_existing_path_prefix(from_abs, &serr)) {
@@ -19440,7 +19467,7 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
 
         {
             std::string serr;
-            if (!ensure_no_symlink_in_existing_path_prefix(to_abs, &serr)) {
+            if (!ensure_no_symlink_in_existing_path_prefix(to_abs.parent_path(), &serr)) {
                 audit_fail("symlink_not_supported", 400, serr, from_rel, to_rel);
                 reply_json(res, 400, json{
                     {"ok", false},
@@ -19450,6 +19477,7 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
                 return;
             }
         }
+
         {
             std::error_code dec;
             auto dst_st = std::filesystem::symlink_status(to_abs, dec);
@@ -19467,12 +19495,32 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         {
             std::error_code sec;
             auto src_st = std::filesystem::symlink_status(from_abs, sec);
-            if (sec || !std::filesystem::exists(src_st) || !std::filesystem::is_directory(src_st)) {
+            if (sec || !std::filesystem::exists(src_st)) {
                 audit_fail("not_found", 404, "", from_rel, to_rel);
                 reply_json(res, 404, json{
                     {"ok", false},
                     {"error", "not_found"},
                     {"message", "source not found"}
+                }.dump());
+                return;
+            }
+
+            if (std::filesystem::is_symlink(src_st)) {
+                audit_fail("symlink_not_supported", 400, "", from_rel, to_rel);
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "symlinks not supported"}
+                }.dump());
+                return;
+            }
+
+            if (!std::filesystem::is_directory(src_st)) {
+                audit_fail("src_not_dir", 400, "", from_rel, to_rel);
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "source must be a directory"}
                 }.dump());
                 return;
             }
@@ -20318,14 +20366,37 @@ srv.Post("/api/v4/files/tree", [&](const httplib::Request& req, httplib::Respons
         return;
     }
 
+    {
+        std::string serr;
+        if (!ensure_no_symlink_in_existing_path_prefix(path_abs, &serr)) {
+            audit_fail("symlink_not_supported", 400, serr, path_rel, max_entries);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "symlinks not supported for tree base"}
+            }.dump());
+            return;
+        }
+    }
+
     std::error_code ec;
-    auto st = std::filesystem::status(path_abs, ec);
+    auto st = std::filesystem::symlink_status(path_abs, ec);
     if (ec || !std::filesystem::exists(st)) {
         audit_fail("not_found", 404, "", path_rel, max_entries);
         reply_json(res, 404, json{
             {"ok", false},
             {"error", "not_found"},
             {"message", "path not found"}
+        }.dump());
+        return;
+    }
+
+    if (std::filesystem::is_symlink(st)) {
+        audit_fail("symlink_not_supported", 400, "", path_rel, max_entries);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "symlinks not supported for tree base"}
         }.dump());
         return;
     }
@@ -20394,23 +20465,16 @@ srv.Post("/api/v4/files/tree", [&](const httplib::Request& req, httplib::Respons
             for (auto& de : kids) {
                 if ((int)entries >= max_entries) { truncated = true; break; }
 
-                // Count entry (dir or file) when we *include* it
                 std::error_code ec4;
-                auto stc = de.symlink_status(ec4);
+                auto stc = std::filesystem::symlink_status(de.path(), ec4);
                 if (ec4) continue;
 
-                // Skip symlinks entirely (or keep as leaf). Here: keep as leaf.
-                // That still doesn't follow them.
-                entries++;
-
+                // Skip symlink children entirely.
                 if (std::filesystem::is_symlink(stc)) {
-                    node["children"].push_back(json{
-                        {"name", de.path().filename().string()},
-                        {"path", to_rel_from_user_dir(de.path())},
-                        {"type", "symlink"}
-                    });
                     continue;
                 }
+
+                entries++;
 
                 if (std::filesystem::is_directory(stc)) {
                     dirs++;
@@ -23757,7 +23821,18 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
             return;
         }
     }
-
+    {
+        std::string serr;
+        if (!ensure_no_symlink_in_existing_path_prefix(base_abs, &serr)) {
+            audit_fail("symlink_not_supported", 400, serr, path_rel, q, max);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "symlinks not supported for search base"}
+            }.dump());
+            return;
+        }
+    }
     std::error_code ec;
     auto st = std::filesystem::symlink_status(base_abs, ec);
     if (ec || !std::filesystem::exists(st)) {
@@ -23816,11 +23891,11 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
             break;
         }
 
-        // Do not follow symlinks; also do not recurse into symlink dirs
+        // Do not follow symlinks and do not include them in results.
         std::error_code ec2;
-        auto st2 = it->symlink_status(ec2);
-        if (!ec2 && std::filesystem::is_symlink(st2)) {
-            if (it->is_directory(ec2)) it.disable_recursion_pending();
+        auto st2 = std::filesystem::symlink_status(it->path(), ec2);
+        if (ec2) continue;
+        if (std::filesystem::is_symlink(st2)) {
             continue;
         }
 
@@ -24711,14 +24786,37 @@ srv.Post("/api/v4/files/du", [&](const httplib::Request& req, httplib::Response&
         return;
     }
 
+    {
+        std::string serr;
+        if (!ensure_no_symlink_in_existing_path_prefix(path_abs.parent_path(), &serr)) {
+            audit_fail("symlink_not_supported", 400, serr, path_rel);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "symlinks not supported"}
+            }.dump());
+            return;
+        }
+    }
+
     std::error_code ec;
-    auto st = std::filesystem::status(path_abs, ec);
+    auto st = std::filesystem::symlink_status(path_abs, ec);
     if (ec || !std::filesystem::exists(st)) {
         audit_fail("not_found", 404, "", path_rel);
         reply_json(res, 404, json{
             {"ok", false},
             {"error", "not_found"},
             {"message", "path not found"}
+        }.dump());
+        return;
+    }
+
+    if (std::filesystem::is_symlink(st)) {
+        audit_fail("symlink_not_supported", 400, "", path_rel);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "symlinks not supported"}
         }.dump());
         return;
     }
@@ -24774,12 +24872,11 @@ srv.Post("/api/v4/files/du", [&](const httplib::Request& req, httplib::Response&
         }
 
         std::error_code ec2;
-        auto st2 = it->symlink_status(ec2);
+        auto st2 = std::filesystem::symlink_status(it->path(), ec2);
         if (ec2) continue;
 
-        // Do not follow symlinks: if entry is symlink, skip it (and don’t descend)
+        // Do not follow or count symlinks
         if (std::filesystem::is_symlink(st2)) {
-            if (it->is_directory(ec2)) it.disable_recursion_pending();
             continue;
         }
 
