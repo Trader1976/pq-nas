@@ -4401,18 +4401,28 @@ void register_workspace_file_routes(httplib::Server& srv,
         {
             std::error_code ec;
             auto st_existing = std::filesystem::symlink_status(out_abs, ec);
-            if (ec) {
-                audit_fail(workspace_id, "target_exists_check_failed", 500, ec.message());
-                deps.reply_json(res, 500, json{
-                    {"ok", false},
-                    {"error", "server_error"},
-                    {"message", "target existence check failed"},
-                    {"detail", ec.message()}
-                }.dump());
-                return;
-            }
 
-            physical_exists = std::filesystem::exists(st_existing);
+            // Important:
+            // A brand new upload target may live under parent directories that do not
+            // exist yet. That is not a fatal error here, because we create parent
+            // directories later with create_directories(out_abs.parent_path()).
+            if (ec) {
+                if (ec == std::make_error_code(std::errc::no_such_file_or_directory)) {
+                    ec.clear();
+                    physical_exists = false;
+                } else {
+                    audit_fail(workspace_id, "target_exists_check_failed", 500, ec.message());
+                    deps.reply_json(res, 500, json{
+                        {"ok", false},
+                        {"error", "server_error"},
+                        {"message", "target existence check failed"},
+                        {"detail", ec.message()}
+                    }.dump());
+                    return;
+                }
+            } else {
+                physical_exists = std::filesystem::exists(st_existing);
+            }
 
             if (physical_exists) {
                 if (std::filesystem::is_symlink(st_existing)) {
@@ -4438,8 +4448,10 @@ void register_workspace_file_routes(httplib::Server& srv,
                 }
 
                 physical_existing_size = pqnas::file_size_u64_safe(out_abs);
-                auto ft = std::filesystem::last_write_time(out_abs, ec);
-                if (!ec) {
+
+                std::error_code ec_mtime;
+                auto ft = std::filesystem::last_write_time(out_abs, ec_mtime);
+                if (!ec_mtime) {
                     physical_existing_mtime = file_time_to_epoch_sec(ft);
                 }
             }
