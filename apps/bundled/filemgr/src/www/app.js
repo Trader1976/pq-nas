@@ -1099,27 +1099,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   function rectIntersects(a, b) {
     return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
   }
-  function apiZipUrl(path, maxBytes) {
-    const api = fmApi();
-    if (api && typeof api.zipUrl === "function") {
-      return api.zipUrl(path || "", maxBytes);
-    }
 
-    const qs = new URLSearchParams();
-    qs.set("path", path || "");
-    if (maxBytes != null && Number(maxBytes) > 0) {
-      qs.set("max_bytes", String(maxBytes));
-    }
-    return `/api/v4/files/zip?${qs.toString()}`;
-  }
-
-  function apiZipSelUrl() {
-    const api = fmApi();
-    if (api && typeof api.zipSelUrl === "function") {
-      return api.zipSelUrl();
-    }
-    return `/api/v4/files/zip_sel`;
-  }
   function endMarquee() {
     if (!marqueeOn) return;
     marqueeOn = false;
