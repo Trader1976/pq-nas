@@ -92,6 +92,7 @@ extern "C" {
 #include "pqnas_util.h"
 #include "authz.h"
 #include "session_cookie.h"
+#include "runtime_paths.h"
 #include "policy.h"
 
 // header-only HTTP server
@@ -456,19 +457,6 @@ static long long file_size_bytes_safe(const std::string& path) {
     return (long long)sz;
 }
 
-// ===================== User storage filesystem (Phase 1A) =====================
-// Root where PQ-NAS stores user data on disk (real filesystem).
-// Default: <exe_dir()>/data  (self-contained next to binary).
-static std::string data_root_dir() {
-    const std::string env = getenv_str("PQNAS_DATA_ROOT");
-    if (!env.empty()) return env;
-
-    const std::string srv = "/srv/pqnas/data";
-    if (dir_exists(srv)) return srv;
-
-    return exe_dir() + "/data";
-}
-
 
 static bool is_hex_lower_or_upper(char c) {
     return (c >= '0' && c <= '9') ||
@@ -590,7 +578,7 @@ static std::string& default_pool_id() {
 static std::filesystem::path data_root_for_pool_id(const std::string& pool_id) {
     // default / legacy pool
     if (pool_id.empty() || pool_id == "default") {
-        return std::filesystem::path(data_root_dir());
+        return std::filesystem::path(pqnas::data_root_dir());
     }
 
     std::string pool_mount;
@@ -603,7 +591,7 @@ static std::filesystem::path data_root_for_pool_id(const std::string& pool_id) {
 
     // named pool missing from runtime map -> safest compatibility fallback
     if (pool_mount.empty()) {
-        return std::filesystem::path(data_root_dir());
+        return std::filesystem::path(pqnas::data_root_dir());
     }
 
     // canonical PQ-NAS data root inside pool
@@ -627,7 +615,7 @@ static std::string effective_root_rel_for_user(const pqnas::UserRec& u,
     auto uopt = users.get(fp_hex);
 
     if (!uopt.has_value()) {
-        return std::filesystem::path(data_root_dir()) / default_root_rel_for_fp(fp_hex);
+        return std::filesystem::path(pqnas::data_root_dir()) / default_root_rel_for_fp(fp_hex);
     }
 
     const auto& u = *uopt;
@@ -645,7 +633,7 @@ static std::filesystem::path user_dir_for_fp(pqnas::UsersRegistry& users, const 
     auto uopt = users.get(fp_hex);
 
     // Default/simple install root.
-    std::filesystem::path data_root = std::filesystem::path(data_root_dir());
+    std::filesystem::path data_root = std::filesystem::path(pqnas::data_root_dir());
 
     if (uopt.has_value()) {
         const auto& u = *uopt;
@@ -667,7 +655,7 @@ static std::filesystem::path user_dir_for_fp(pqnas::UsersRegistry& users, const 
             if (pool_mount.empty()) {
                 try {
                     const std::filesystem::path pools_path =
-                        std::filesystem::path(data_root_dir()).parent_path() / "config" / "pools.json";
+                        std::filesystem::path(pqnas::data_root_dir()).parent_path() / "config" / "pools.json";
 
                     std::ifstream f(pools_path);
                     if (f.good()) {
@@ -2509,7 +2497,7 @@ static void pool_mounts_init_default_only() {
     std::lock_guard<std::mutex> lk(pool_mu());
     auto& m = pool_mount_by_id();
     m.clear();
-    m[default_pool_id()] = data_root_dir();
+    m[default_pool_id()] = pqnas::data_root_dir();
 }
 
 static std::string pool_id_from_mount_best_effort(const std::string& mount) {
@@ -6402,7 +6390,7 @@ static json build_upload_tiering_candidates_json() {
 
     // default pool first
     {
-        auto c = inspect_landing_pool_candidate("default", data_root_dir());
+        auto c = inspect_landing_pool_candidate("default", pqnas::data_root_dir());
         arr.push_back(landing_pool_candidate_to_json(c));
     }
 
@@ -6672,7 +6660,7 @@ static bool landing_root_for_pool_id(const std::string& pool_id,
 
     // Default / non-pooled landing area is still allowed.
     if (pool_id.empty() || pool_id == "default") {
-        *out = std::filesystem::path(data_root_dir()).parent_path() / "landing";
+        *out = std::filesystem::path(pqnas::data_root_dir()).parent_path() / "landing";
         return true;
     }
 
@@ -7411,7 +7399,7 @@ int main()
 	}
 
     const std::filesystem::path storage_meta_db =
-        std::filesystem::path(data_root_dir()).parent_path() / "config" / "storage_meta.db";
+        std::filesystem::path(pqnas::data_root_dir()).parent_path() / "config" / "storage_meta.db";
 
     pqnas::FileLocationIndex file_location_index(storage_meta_db);
     {
@@ -8826,7 +8814,7 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
         const std::string stat_path =
             is_editable_pool
                 ? mount
-                : data_root_dir();
+                : pqnas::data_root_dir();
 
         if (!statvfs_path(stat_path, &accounting_pool_total_bytes, &accounting_pool_free_bytes)) {
             accounting_pool_total_bytes = 0;
@@ -15790,7 +15778,7 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 		}
 
 	json storage_roots = json::object();
-	storage_roots["data_root"] = data_root_dir();
+	storage_roots["data_root"] = pqnas::data_root_dir();
 
 	// Expose pools for admin UI dropdown: [{pool_id,mount}, ...]
 	{
@@ -15799,7 +15787,7 @@ srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::
 	    // default pool
     	pools.push_back(json{
         	{"pool_id", "default"},
-	        {"mount", data_root_dir()}
+	        {"mount", pqnas::data_root_dir()}
     	});
 
 	    // runtime-managed pools
@@ -17018,13 +17006,13 @@ auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
         const long long active_bytes = file_size_bytes_safe(audit_jsonl_path);
         const std::uint64_t tmax = compute_transport_max(persisted);
 		json storage_roots = json::object();
-		storage_roots["data_root"] = data_root_dir();
+		storage_roots["data_root"] = pqnas::data_root_dir();
 
 		{
 		    json pools = json::array();
 		    pools.push_back(json{
         		{"pool_id", "default"},
-		        {"mount", data_root_dir()}
+		        {"mount", pqnas::data_root_dir()}
     		});
 
 		    {
@@ -18176,7 +18164,7 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
         return;
     }
 
-    std::filesystem::path data_root = std::filesystem::path(data_root_dir());
+    std::filesystem::path data_root = std::filesystem::path(pqnas::data_root_dir());
     std::string pool_mount;
 
     if (pool_id != "default") {
@@ -18575,7 +18563,7 @@ srv.Get("/api/v4/admin/users/storage_preview", [&](const httplib::Request& req, 
         return total;
     };
 
-    std::filesystem::path data_root = std::filesystem::path(data_root_dir());
+    std::filesystem::path data_root = std::filesystem::path(pqnas::data_root_dir());
     std::string pool_mount;
 
     if (pool_id != "default") {
@@ -18705,7 +18693,7 @@ srv.Get("/api/v4/system/storage", [&](const httplib::Request& req, httplib::Resp
     std::string actor_fp, role;
     if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &role)) return;
 
-    const std::string data_root = data_root_dir();
+    const std::string data_root = pqnas::data_root_dir();
 
     pqnas::StorageInfo si;
     std::string err;
@@ -29496,7 +29484,7 @@ srv.Post("/api/v4/admin/users/avatar_upload", [&](const httplib::Request& req, h
         return;
     }
 
-    std::filesystem::path dir = std::filesystem::path(data_root_dir()) / "avatars";
+    std::filesystem::path dir = std::filesystem::path(pqnas::data_root_dir()) / "avatars";
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
     if (ec) {
@@ -29534,7 +29522,7 @@ srv.Post("/api/v4/admin/users/avatar_upload", [&](const httplib::Request& req, h
         }
 
         // Serve from data_root_dir()/avatars/<fp>.<ext>
-        const std::filesystem::path dir = std::filesystem::path(data_root_dir()) / "avatars";
+        const std::filesystem::path dir = std::filesystem::path(pqnas::data_root_dir()) / "avatars";
         const std::filesystem::path p_png  = dir / (fp + ".png");
         const std::filesystem::path p_jpg  = dir / (fp + ".jpg");
         const std::filesystem::path p_webp = dir / (fp + ".webp");
@@ -29585,7 +29573,7 @@ srv.Post("/api/v4/admin/users/avatar_upload", [&](const httplib::Request& req, h
         }
 
         // delete any avatar files (best-effort)
-        const std::filesystem::path dir = std::filesystem::path(data_root_dir()) / "avatars";
+        const std::filesystem::path dir = std::filesystem::path(pqnas::data_root_dir()) / "avatars";
         std::error_code ec;
         std::filesystem::remove(dir / (fp + ".png"), ec);
         std::filesystem::remove(dir / (fp + ".jpg"), ec);

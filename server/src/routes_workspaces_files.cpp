@@ -14,9 +14,9 @@
 #include <csignal>
 #include <sys/wait.h>
 #include <unistd.h>
-
 #include "audit_fields.h"
 #include "storage_resolver.h"
+#include "runtime_paths.h"
 #include "user_quota.h"
 
 namespace pqnas {
@@ -520,9 +520,8 @@ std::string trim_copy_safe(const std::string& s) {
     return s.substr(a, b - a);
 }
 
-std::filesystem::path default_data_root_from_users_path(const std::string& users_path) {
-    const std::filesystem::path up(users_path);
-    return up.parent_path().parent_path() / "data";
+std::filesystem::path default_data_root_from_users_path(const std::string& /*users_path*/) {
+    return std::filesystem::path(pqnas::data_root_dir());
 }
 
 std::uint64_t dir_size_bytes_best_effort_local(const std::filesystem::path& root) {
@@ -4475,9 +4474,48 @@ void register_workspace_file_routes(httplib::Server& srv,
         }
 
         {
+            std::cerr
+            << "[ws.put.debug] workspace_id=" << workspace_id
+            << " w.root_rel=" << w.root_rel
+            << " ws_root=" << ws_root.string()
+            << " rel_norm=" << rel_norm
+            << " out_abs=" << out_abs.string()
+            << " parent=" << out_abs.parent_path().string()
+            << std::endl;
+
             std::error_code ec;
+
+            {
+                std::error_code ec_ws;
+                auto ws_st = std::filesystem::symlink_status(ws_root, ec_ws);
+                std::cerr
+                    << "[ws.put.debug] ws_root_exists=" << (!ec_ws && std::filesystem::exists(ws_st))
+                    << " ws_root_is_dir=" << (!ec_ws && std::filesystem::is_directory(ws_st))
+                    << " ws_root_is_symlink=" << (!ec_ws && std::filesystem::is_symlink(ws_st))
+                    << " ws_root_ec=" << (ec_ws ? ec_ws.message() : "")
+                    << std::endl;
+            }
+
+            {
+                std::error_code ec_parent;
+                auto parent_st = std::filesystem::symlink_status(out_abs.parent_path(), ec_parent);
+                std::cerr
+                    << "[ws.put.debug] parent_exists=" << (!ec_parent && std::filesystem::exists(parent_st))
+                    << " parent_is_dir=" << (!ec_parent && std::filesystem::is_directory(parent_st))
+                    << " parent_is_file=" << (!ec_parent && std::filesystem::is_regular_file(parent_st))
+                    << " parent_is_symlink=" << (!ec_parent && std::filesystem::is_symlink(parent_st))
+                    << " parent_ec=" << (ec_parent ? ec_parent.message() : "")
+                    << std::endl;
+            }
+
             std::filesystem::create_directories(out_abs.parent_path(), ec);
             if (ec) {
+                std::cerr
+                    << "[ws.put.debug] create_directories failed"
+                    << " parent=" << out_abs.parent_path().string()
+                    << " ec=" << ec.message()
+                    << std::endl;
+
                 audit_fail(workspace_id, "mkdir_failed", 500, ec.message());
                 deps.reply_json(res, 500, json{
                     {"ok", false},
