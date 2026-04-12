@@ -27,6 +27,10 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   const viewToggleBtn = document.getElementById("viewToggleBtn");
   const viewToggleTxt = document.getElementById("viewToggleTxt");
 
+  const sortBtn = document.getElementById("sortBtn");
+  const sortTxt = document.getElementById("sortTxt");
+  const sortIcon = document.getElementById("sortIcon");
+
   // OPTIONAL: add these later in HTML if you want a toolbar favorite filter button
   const favoritesToggleBtn = document.getElementById("favoritesToggleBtn");
   const favoritesToggleTxt = document.getElementById("favoritesToggleTxt");
@@ -266,7 +270,17 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     applyViewModeToDom();
     applySelectionToDom();
   }
+  function sortApi() {
+    return (window.PQNAS_FILEMGR && window.PQNAS_FILEMGR.sort)
+        ? window.PQNAS_FILEMGR.sort
+        : null;
+  }
 
+  function applySortUi() {
+    const s = sortApi();
+    if (!s) return;
+    s.applyButtonUi(sortBtn, sortTxt, sortIcon);
+  }
   loadViewMode();
 
   // ---- Favorites ------------------------------------------------------------
@@ -494,6 +508,15 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       loadFavoritesOnly();
       applyFavoritesFilterUi();
       load();
+      return;
+    }
+
+    const s = sortApi();
+    if (s && e.key === s.STORAGE_KEY) {
+      s.loadMode();
+      applySortUi();
+      load();
+      return;
     }
   });
 
@@ -3931,11 +3954,13 @@ function pickFolder() {
     if (gridEl) gridEl.classList.remove("hidden");
     applyViewModeToDom();
     applyFavoritesFilterUi();
+    applySortUi();
 
     const sharesPromise = refreshSharesCache();
     const quotaPromise = refreshQuotaInfoIfNeeded(false);
     const caps = fmCaps();
     const favoritesEnabled = caps.favorites !== false;
+    const sorter = sortApi();
 
     try {
       const url = apiListUrl(curPath);
@@ -3966,20 +3991,40 @@ function pickFolder() {
       curPath = (typeof j.path === "string") ? j.path : curPath;
       renderBreadcrumb();
 
-      const allItems = Array.isArray(j.items) ? j.items.slice() : [];
-      allItems.sort((a, b) => {
-        if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
-        return String(a.name || "").localeCompare(String(b.name || ""));
-      });
+      const sortMode = sorter ? sorter.getMode() : null;
+      const needsFavoritesReady =
+          favoritesEnabled &&
+          (favoritesOnly || (sortMode && sortMode.id === "favorites_first"));
+
+      if (needsFavoritesReady) {
+        await favoritesPromise;
+      }
+
+      const allItemsRaw = Array.isArray(j.items) ? j.items.slice() : [];
+
+      const allItems = sorter
+          ? sorter.sortItems(allItemsRaw, {
+            currentRelPathFor,
+            isFavoriteRelPath,
+            isFavoriteItem
+          })
+          : allItemsRaw.sort((a, b) => {
+            if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
+            return String(a.name || "").localeCompare(String(b.name || ""));
+          });
 
       const items = (favoritesEnabled && favoritesOnly)
           ? allItems.filter((it) => isFavoriteRelPath(currentRelPathFor(it), it.type))
           : allItems;
+
       lastListedItems = items.slice();
       setBadge("ok", "ready");
+
+      const sortSuffix = sortMode ? ` • Sort: ${sortMode.shortLabel}` : "";
+
       status.textContent = (favoritesEnabled && favoritesOnly)
-          ? `Favorites: ${items.length} / ${allItems.length}`
-          : `Items: ${items.length}`;
+          ? `Favorites: ${items.length} / ${allItems.length}${sortSuffix}`
+          : `Items: ${items.length}${sortSuffix}`;
 
       if (!items.length) {
         const empty = document.createElement("div");
@@ -4045,12 +4090,26 @@ function pickFolder() {
     setViewMode(viewMode === "grid" ? "list" : "grid");
   });
 
+  sortBtn?.addEventListener("click", () => {
+    const s = sortApi();
+    if (!s) return;
+
+    const mode = s.cycleMode();
+    applySortUi();
+    clearSelection();
+    setBadge("ok", "ready");
+    status.textContent = `Sort: ${mode.title}`;
+    load();
+  });
+
   favoritesToggleBtn?.addEventListener("click", () => {
     toggleFavoritesOnly();
   });
 
   applyViewModeToDom();
   applyFavoritesFilterUi();
+  applySortUi();
+
   const FM = window.PQNAS_FILEMGR;
   FM.getCurPath = () => curPath;
   FM.getLastListedItems = () => lastListedItems.slice();
