@@ -3029,6 +3029,16 @@ function pickFolder() {
 
       ctxEl.appendChild(menuItem("Download", "⤓", () => doDownload(item)));
 
+      if (caps.versions !== false &&
+          window.PQNAS_FILEMGR &&
+          window.PQNAS_FILEMGR.fileVersions &&
+          typeof window.PQNAS_FILEMGR.fileVersions.canOpenFor === "function" &&
+          window.PQNAS_FILEMGR.fileVersions.canOpenFor(item)) {
+        ctxEl.appendChild(menuItem("Versions…", "", () => {
+          window.PQNAS_FILEMGR.fileVersions.open(item);
+        }));
+      }
+
       if (caps.favorites !== false) {
         ctxEl.appendChild(menuItem(favLabel, "", async () => {
           try {
@@ -3729,7 +3739,37 @@ function pickFolder() {
             });
       }
     }
+    if (st.type === "file" &&
+        window.PQNAS_FILEMGR &&
+        window.PQNAS_FILEMGR.fileVersions &&
+        typeof window.PQNAS_FILEMGR.fileVersions.canOpenFor === "function" &&
+        window.PQNAS_FILEMGR.fileVersions.canOpenFor(item)) {
 
+      const [kEl, vEl] = kvRow("Versions", "");
+      vEl.classList.remove("mono");
+      vEl.innerHTML = "";
+      vEl.style.display = "flex";
+      vEl.style.alignItems = "center";
+      vEl.style.gap = "10px";
+      vEl.style.flexWrap = "wrap";
+
+      const txt = document.createElement("div");
+      txt.textContent = "Open preserved versions for this file and restore an older one.";
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "Open versions…";
+      btn.onclick = () => {
+        closePropsModal();
+        window.PQNAS_FILEMGR.fileVersions.open(item);
+      };
+
+      vEl.appendChild(txt);
+      vEl.appendChild(btn);
+
+      propsBody.appendChild(kEl);
+      propsBody.appendChild(vEl);
+    }
     if (sharesEnabled || pqSharesEnabled) {
       const type = (item.type === "dir") ? "dir" : "file";
       const share = existingShareFor(rel, type);
