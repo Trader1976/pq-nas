@@ -9,6 +9,7 @@
 
 #include "users_registry.h"
 #include "workspaces.h"
+#include "file_versions.h"
 
 namespace pqnas {
 
@@ -42,6 +43,7 @@ namespace pqnas {
 
         std::uint64_t transport_max_upload_bytes = 0;
         std::uint64_t payload_max_upload_bytes = 0;
+        pqnas::FileVersionsIndex* file_versions = nullptr;
 
         ReplyJsonFn reply_json;
         RequireUserAuthUsersActorFn require_user_auth_users_actor;

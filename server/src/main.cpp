@@ -125,6 +125,9 @@ extern "C" {
 
 // snapshots
 #include "storage/snapshots/snapshot_scheduler.h"
+#include "file_versions.h"
+#include "file_versions_present.h"
+#include "file_versions_restore.h"
 
 //favorites
 #include "file_favorites.h"
@@ -7410,6 +7413,18 @@ int main()
         }
     }
     pqnas::set_file_location_index(&file_location_index);
+
+    const std::filesystem::path file_versions_db =
+    std::filesystem::path(pqnas::data_root_dir()).parent_path() / "config" / "file_versions.db";
+
+    pqnas::FileVersionsIndex file_versions_index(file_versions_db);
+    {
+        std::string verr;
+        if (!file_versions_index.open(&verr) || !file_versions_index.init_schema(&verr)) {
+            std::cerr << "file versions init failed: " << verr << std::endl;
+            return 1;
+        }
+    }
 
     // ---- Audit log (hash-chained JSONL) ----
     std::string audit_dir = exe_dir() + "/audit";
@@ -17720,10 +17735,11 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
     ws_file_deps.transport_max_upload_bytes =
         (g_transport_max_upload_bytes ? g_transport_max_upload_bytes : k_payload_max_upload_bytes);
     ws_file_deps.payload_max_upload_bytes = k_payload_max_upload_bytes;
+    ws_file_deps.file_versions = &file_versions_index;
     ws_file_deps.reply_json =
         [](httplib::Response& res, int status, const std::string& body) {
             reply_json(res, status, body);
-        };
+    };
     ws_file_deps.require_user_auth_users_actor =
         [&](const httplib::Request& req,
             httplib::Response& res,
@@ -17733,7 +17749,7 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
             std::string* out_role) -> bool {
             return require_user_auth_users_actor(
                 req, res, cookie_key, users_arg, out_fp_hex, out_role);
-        };
+    };
     ws_file_deps.audit_emit =
         [&](const std::string& event,
             const std::string& outcome,
@@ -17743,7 +17759,7 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
             ev.outcome = outcome;
             ev.f = fields;
             audit_append(ev);
-        };
+    };
     ws_file_deps.now_epoch_sec = []() {
         return now_epoch_sec();
     };
@@ -25298,7 +25314,30 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             }.dump());
             return;
         }
+        {
+            pqnas::PreserveLiveFileVersionParams vp;
+            vp.scope_type = "user";
+            vp.scope_id = fp_hex;
+            vp.scope_root = user_dir;
+            vp.logical_rel_path = rel_norm;
+            vp.live_abs_path = abs_path;
+            vp.event_kind = "delete_preserve";
+            vp.actor_fp = fp_hex;
+            vp.users = &users;
 
+            pqnas::FileVersionRec vrec;
+            std::string verr;
+            if (!file_versions_index.preserve_live_file_version(vp, &vrec, &verr)) {
+                audit_fail("version_preserve_failed", 500, verr);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "failed to preserve previous version"},
+                    {"detail", pqnas::shorten(verr, 180)}
+                }.dump());
+                return;
+            }
+        }
         bool removed = std::filesystem::remove(abs_path, ec);
         if (ec || !removed) {
             audit_fail("remove_failed", 500, ec.message());
@@ -27419,7 +27458,7 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
 // PUT /api/v4/files/put?path=relative/path.bin[&overwrite=1]
 // Body: raw bytes (streamed to temp file, then renamed atomically)
 srv.Put("/api/v4/files/put",
-[&](const httplib::Request& req,
+    [&](const httplib::Request& req,
     httplib::Response& res,
     const httplib::ContentReader& content_reader) {
     std::string fp_hex, role;
@@ -28073,7 +28112,36 @@ srv.Put("/api/v4/files/put",
             }
         }
     }
+        if (overwrite && (existing_rec.has_value() || physical_exists_at_target)) {
+            const std::filesystem::path live_abs_to_preserve =
+                !old_physical_path.empty() ? std::filesystem::path(old_physical_path) : out_abs;
 
+            pqnas::PreserveLiveFileVersionParams vp;
+            vp.scope_type = "user";
+            vp.scope_id = fp_hex;
+            vp.scope_root = user_dir;
+            vp.logical_rel_path = rel_norm;
+            vp.live_abs_path = live_abs_to_preserve;
+            vp.event_kind = "overwrite_preserve";
+            vp.actor_fp = fp_hex;
+            vp.users = &users;
+
+            pqnas::FileVersionRec vrec;
+            std::string verr;
+            if (!file_versions_index.preserve_live_file_version(vp, &vrec, &verr)) {
+                std::error_code rm_ec;
+                std::filesystem::remove(tmp, rm_ec);
+
+                audit_fail("version_preserve_failed", 500, verr);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "failed to preserve previous version"},
+                    {"detail", pqnas::shorten(verr, 180)}
+                }.dump());
+                return;
+            }
+        }
         std::error_code rename_ec;
         std::filesystem::rename(tmp, out_abs, rename_ec);
         if (rename_ec) {
@@ -28178,6 +28246,229 @@ srv.Put("/api/v4/files/put",
         }.dump());
         return;
     }
+});
+
+
+srv.Get("/api/v4/files/versions/list", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto* vix = &file_versions_index;
+
+    std::string path_rel;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+    if (path_rel.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm, nerr;
+    if (!pqnas::normalize_user_rel_path_strict(path_rel, &rel_norm, &nerr)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    std::size_t limit = 100;
+    if (req.has_param("limit")) {
+        try {
+            long long v = std::stoll(req.get_param_value("limit"));
+            if (v > 0) limit = static_cast<std::size_t>(std::min<long long>(v, 500));
+        } catch (...) {}
+    }
+
+    std::string verr;
+    auto rows = vix->list_versions_for_path("user", fp_hex, rel_norm, limit, &verr);
+    if (!verr.empty()) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to list file versions"},
+            {"detail", pqnas::shorten(verr, 180)}
+        }.dump());
+        return;
+    }
+
+    json out;
+    out["ok"] = true;
+    out["scope_type"] = "user";
+    out["scope_id"] = fp_hex;
+    out["path"] = rel_norm;
+    out["versions"] = json::array();
+
+    for (const auto& r : rows) {
+        json item = json::object();
+        item["version_id"] = r.version_id;
+        item["logical_rel_path"] = r.logical_rel_path;
+        item["event_kind"] = r.event_kind;
+        item["created_at"] = r.created_at;
+        item["created_epoch"] = r.created_epoch;
+        item["actor_fp"] = r.actor_fp;
+        item["actor_name_snapshot"] = r.actor_name_snapshot;
+        item["actor_display"] = pqnas::version_actor_display(r.actor_name_snapshot, r.actor_fp);
+        item["bytes"] = r.bytes;
+        item["sha256_hex"] = r.sha256_hex;
+        item["is_deleted_event"] = (r.is_deleted_event != 0);
+
+        out["versions"].push_back(std::move(item));
+    }
+
+    reply_json(res, 200, out.dump());
+});
+
+srv.Post("/api/v4/files/restore_version", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    json body = json::parse(req.body, nullptr, false);
+    if (body.is_discarded() || !body.is_object()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    const std::string path_rel = body.value("path", "");
+    const std::string version_id = body.value("version_id", "");
+
+    if (path_rel.empty() || version_id.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path or version_id"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm, nerr;
+    if (!pqnas::normalize_user_rel_path_strict(path_rel, &rel_norm, &nerr)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+
+    std::filesystem::path abs_path;
+    std::string perr;
+    if (!pqnas::resolve_user_path_strict(user_dir, rel_norm, &abs_path, &perr)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+    std::string found_ancestor;
+    std::string ancestor_err;
+    if (pqnas::any_file_ancestor_exists(users, fp_hex, rel_norm, &found_ancestor, &ancestor_err)) {
+        reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "path_conflict"},
+            {"message", "a parent path is an existing file"},
+            {"ancestor", found_ancestor}
+        }.dump());
+        return;
+    }
+    {
+        std::string ancestor_err;
+        if (pqnas::any_file_ancestor_exists(users, fp_hex, rel_norm, &found_ancestor, &ancestor_err)) {
+            reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "path_conflict"},
+                {"message", "a parent path is an existing file"},
+                {"ancestor", found_ancestor}
+            }.dump());
+            return;
+        }
+    }
+
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    auto* vix = &file_versions_index;
+
+    std::error_code ec;
+    auto live_st = std::filesystem::symlink_status(abs_path, ec);
+    if (!ec && std::filesystem::exists(live_st) && !std::filesystem::is_symlink(live_st) && std::filesystem::is_regular_file(live_st)) {
+        pqnas::PreserveCurrentVersionParams vp;
+        vp.scope_type = "user";
+        vp.scope_id = fp_hex;
+        vp.scope_root = user_dir;
+        vp.logical_rel_path = rel_norm;
+        vp.live_abs_path = abs_path;
+        vp.event_kind = "restore_preserve";
+        vp.actor_fp = fp_hex;
+        vp.users = &users;
+        vp.file_versions = vix;
+
+        std::string preserve_err;
+        std::string ignored_version_id;
+        if (!pqnas::preserve_current_file_version(vp, &ignored_version_id, &preserve_err)) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to preserve current file before restore"},
+                {"detail", pqnas::shorten(preserve_err, 180)}
+            }.dump());
+            return;
+        }
+    } else {
+        std::filesystem::create_directories(abs_path.parent_path(), ec);
+        if (ec) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to create destination directory"},
+                {"detail", ec.message()}
+            }.dump());
+            return;
+        }
+    }
+
+    auto rr = pqnas::restore_version_blob_to_path(vix, "user", fp_hex, rel_norm, version_id, abs_path);
+    if (!rr.ok) {
+        reply_json(res,
+                   rr.error == "not_found" ? 404 : 500,
+                   json{
+                       {"ok", false},
+                       {"error", rr.error.empty() ? "server_error" : rr.error},
+                       {"message", rr.message.empty() ? "restore failed" : rr.message},
+                       {"detail", pqnas::shorten(rr.detail, 180)}
+                   }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"scope_type", "user"},
+        {"scope_id", fp_hex},
+        {"path", rel_norm},
+        {"restored_version_id", version_id},
+        {"bytes", rr.bytes},
+        {"mtime_epoch", rr.mtime_epoch},
+        {"sha256_hex", rr.sha256_hex}
+    }.dump());
 });
 //
 // ---- Snapshots API (admin-only, v1) ----

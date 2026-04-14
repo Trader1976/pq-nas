@@ -18,7 +18,9 @@
 #include "storage_resolver.h"
 #include "runtime_paths.h"
 #include "user_quota.h"
-
+#include "file_versions.h"
+#include "file_versions_present.h"
+#include "file_versions_restore.h"
 namespace pqnas {
     static std::string hex_encode_lower_local(const unsigned char* data, std::size_t len) {
         static constexpr char kHex[] = "0123456789abcdef";
@@ -2629,10 +2631,10 @@ void register_workspace_file_routes(httplib::Server& srv,
             {"text", text},
             {"edit", edit}
         }.dump());
-    });
+});
 
         // POST /api/v4/workspaces/files/write_text
-    srv.Post("/api/v4/workspaces/files/write_text",
+srv.Post("/api/v4/workspaces/files/write_text",
              [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp, actor_role;
         if (!deps.require_user_auth_users_actor ||
@@ -3039,7 +3041,40 @@ void register_workspace_file_routes(httplib::Server& srv,
             }.dump());
             return;
         }
+         if (!deps.file_versions) {
+             audit_fail(workspace_id, "file_versions_missing", 500, "", rel_norm);
+             deps.reply_json(res, 500, json{
+                 {"ok", false},
+                 {"error", "server_error"},
+                 {"message", "file versions service missing"}
+             }.dump());
+             return;
+         }
 
+         {
+             pqnas::PreserveLiveFileVersionParams vp;
+             vp.scope_type = "workspace";
+             vp.scope_id = workspace_id;
+             vp.scope_root = ws_root;
+             vp.logical_rel_path = rel_norm;
+             vp.live_abs_path = path_abs;
+             vp.event_kind = "overwrite_preserve";
+             vp.actor_fp = actor_fp;
+             vp.users = deps.users;
+
+             pqnas::FileVersionRec vrec;
+             std::string verr;
+             if (!deps.file_versions->preserve_live_file_version(vp, &vrec, &verr)) {
+                 audit_fail(workspace_id, "version_preserve_failed", 500, verr, rel_norm);
+                 deps.reply_json(res, 500, json{
+                     {"ok", false},
+                     {"error", "server_error"},
+                     {"message", "failed to preserve previous version"},
+                     {"detail", verr}
+                 }.dump());
+                 return;
+             }
+         }
         if (!write_text_file_atomic_utf8_local(path_abs, text, &perr)) {
             audit_fail(workspace_id, "write_failed", 500, perr, rel_norm);
             deps.reply_json(res, 500, json{
@@ -4617,7 +4652,46 @@ void register_workspace_file_routes(httplib::Server& srv,
                 }.dump());
                 return;
             }
+            if (!deps.file_versions) {
+                std::error_code rm_ec;
+                std::filesystem::remove(tmp, rm_ec);
 
+                audit_fail(workspace_id, "file_versions_missing", 500);
+                deps.reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "file versions service missing"}
+                }.dump());
+                return;
+            }
+
+            if (overwrite && physical_exists) {
+                pqnas::PreserveLiveFileVersionParams vp;
+                vp.scope_type = "workspace";
+                vp.scope_id = workspace_id;
+                vp.scope_root = ws_root;
+                vp.logical_rel_path = rel_norm;
+                vp.live_abs_path = out_abs;
+                vp.event_kind = "overwrite_preserve";
+                vp.actor_fp = actor_fp;
+                vp.users = deps.users;
+
+                pqnas::FileVersionRec vrec;
+                std::string verr;
+                if (!deps.file_versions->preserve_live_file_version(vp, &vrec, &verr)) {
+                    std::error_code rm_ec;
+                    std::filesystem::remove(tmp, rm_ec);
+
+                    audit_fail(workspace_id, "version_preserve_failed", 500, verr);
+                    deps.reply_json(res, 500, json{
+                        {"ok", false},
+                        {"error", "server_error"},
+                        {"message", "failed to preserve previous version"},
+                        {"detail", verr}
+                    }.dump());
+                    return;
+                }
+            }
             std::error_code rename_ec;
             std::filesystem::rename(tmp, out_abs, rename_ec);
             if (rename_ec) {
@@ -6073,30 +6147,49 @@ void register_workspace_file_routes(httplib::Server& srv,
             return;
         }
 
-        const std::string workspace_id =
-            req.has_param("workspace_id") ? trim_copy_safe(req.get_param_value("workspace_id")) : "";
+         json in = json::object();
+         if (!req.body.empty()) {
+             in = json::parse(req.body, nullptr, false);
+             if (in.is_discarded() || !in.is_object()) {
+                 audit_fail("", "bad_json", 400);
+                 deps.reply_json(res, 400, json{
+                     {"ok", false},
+                     {"error", "bad_request"},
+                     {"message", "invalid json"}
+                 }.dump());
+                 return;
+             }
+         }
 
-        if (workspace_id.empty()) {
-            audit_fail("", "missing_workspace_id", 400);
-            deps.reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "bad_request"},
-                {"message", "missing workspace_id"}
-            }.dump());
-            return;
-        }
+         const std::string workspace_id =
+             req.has_param("workspace_id")
+                 ? trim_copy_safe(req.get_param_value("workspace_id"))
+                 : trim_copy_safe(in.value("workspace_id", ""));
 
-        std::string rel_path;
-        if (req.has_param("path")) rel_path = req.get_param_value("path");
-        if (rel_path.empty()) {
-            audit_fail(workspace_id, "missing_path", 400);
-            deps.reply_json(res, 400, json{
-                {"ok", false},
-                {"error", "bad_request"},
-                {"message", "missing path"}
-            }.dump());
-            return;
-        }
+         if (workspace_id.empty()) {
+             audit_fail("", "missing_workspace_id", 400);
+             deps.reply_json(res, 400, json{
+                 {"ok", false},
+                 {"error", "bad_request"},
+                 {"message", "missing workspace_id"}
+             }.dump());
+             return;
+         }
+
+         std::string rel_path =
+             req.has_param("path")
+                 ? req.get_param_value("path")
+                 : in.value("path", "");
+
+         if (rel_path.empty()) {
+             audit_fail(workspace_id, "missing_path", 400);
+             deps.reply_json(res, 400, json{
+                 {"ok", false},
+                 {"error", "bad_request"},
+                 {"message", "missing path"}
+             }.dump());
+             return;
+         }
 
         auto wopt = deps.workspaces->get(workspace_id);
         if (!wopt.has_value()) {
@@ -6257,6 +6350,40 @@ void register_workspace_file_routes(httplib::Server& srv,
             }
             removed_count = static_cast<std::uint64_t>(removed);
         } else {
+            if (!deps.file_versions) {
+                audit_fail(workspace_id, "file_versions_missing", 500);
+                deps.reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "file versions service missing"}
+                }.dump());
+                return;
+            }
+
+            {
+                pqnas::PreserveLiveFileVersionParams vp;
+                vp.scope_type = "workspace";
+                vp.scope_id = workspace_id;
+                vp.scope_root = ws_root;
+                vp.logical_rel_path = rel_norm;
+                vp.live_abs_path = abs_path;
+                vp.event_kind = "delete_preserve";
+                vp.actor_fp = actor_fp;
+                vp.users = deps.users;
+
+                pqnas::FileVersionRec vrec;
+                std::string verr;
+                if (!deps.file_versions->preserve_live_file_version(vp, &vrec, &verr)) {
+                    audit_fail(workspace_id, "version_preserve_failed", 500, verr);
+                    deps.reply_json(res, 500, json{
+                        {"ok", false},
+                        {"error", "server_error"},
+                        {"message", "failed to preserve previous version"},
+                        {"detail", verr}
+                    }.dump());
+                    return;
+                }
+            }
             const bool removed = std::filesystem::remove(abs_path, ec);
             if (ec) {
                 audit_fail(workspace_id, "remove_failed", 500, ec.message());
@@ -6288,10 +6415,371 @@ void register_workspace_file_routes(httplib::Server& srv,
             {"path", rel_norm},
             {"removed_count", removed_count}
         }.dump());
-    });
-        // POST /api/v4/workspaces/files/move?workspace_id=...&from=old/path&to=new/path
-    // v1: physical filesystem only, same workspace only
-    srv.Post("/api/v4/workspaces/files/move",
+});
+
+srv.Get("/api/v4/workspaces/files/versions/list",
+        [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+    if (!deps.require_user_auth_users_actor ||
+        !deps.require_user_auth_users_actor(
+            req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+        return;
+    }
+
+    (void)actor_role;
+    res.set_header("Cache-Control", "no-store");
+
+    auto* vix = deps.file_versions;
+    if (!vix) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "file versions index missing"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->load(deps.workspaces_path)) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "workspaces_reload_failed"},
+            {"message", "failed to reload workspaces"}
+        }.dump());
+        return;
+    }
+
+    const std::string workspace_id =
+        req.has_param("workspace_id") ? trim_copy_safe(req.get_param_value("workspace_id")) : "";
+    if (workspace_id.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing workspace_id"}
+        }.dump());
+        return;
+    }
+
+    auto wopt = deps.workspaces->get(workspace_id);
+    if (!wopt.has_value()) {
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "workspace not found"}
+        }.dump());
+        return;
+    }
+
+    const WorkspaceRec& w = *wopt;
+    if (w.status != "enabled") {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace disabled"}
+        }.dump());
+        return;
+    }
+
+    auto mopt = enabled_member_for_actor(w, actor_fp);
+    if (!mopt.has_value()) {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace access denied"}
+        }.dump());
+        return;
+    }
+
+    std::string path_rel;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+    if (path_rel.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm, nerr;
+    if (!pqnas::normalize_user_rel_path_strict(path_rel, &rel_norm, &nerr)) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    std::size_t limit = 100;
+    if (req.has_param("limit")) {
+        try {
+            long long v = std::stoll(req.get_param_value("limit"));
+            if (v > 0) limit = static_cast<std::size_t>(std::min<long long>(v, 500));
+        } catch (...) {}
+    }
+
+    std::string verr;
+    auto rows = vix->list_versions_for_path("workspace", workspace_id, rel_norm, limit, &verr);
+    if (!verr.empty()) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to list file versions"},
+            {"detail", pqnas::shorten(verr, 180)}
+        }.dump());
+        return;
+    }
+
+    json out;
+    out["ok"] = true;
+    out["scope_type"] = "workspace";
+    out["scope_id"] = workspace_id;
+    out["workspace_id"] = workspace_id;
+    out["path"] = rel_norm;
+    out["versions"] = json::array();
+
+    for (const auto& r : rows) {
+        json item = json::object();
+        item["version_id"] = r.version_id;
+        item["scope_type"] = r.scope_type;
+        item["scope_id"] = r.scope_id;
+        item["logical_rel_path"] = r.logical_rel_path;
+        item["event_kind"] = r.event_kind;
+        item["created_at"] = r.created_at;
+        item["created_epoch"] = r.created_epoch;
+        item["actor_fp"] = r.actor_fp;
+        item["actor_name_snapshot"] = r.actor_name_snapshot;
+        item["actor_display"] = pqnas::version_actor_display(r.actor_name_snapshot, r.actor_fp);
+        item["bytes"] = r.bytes;
+        item["sha256_hex"] = r.sha256_hex;
+        item["blob_rel_path"] = r.blob_rel_path;
+        item["is_deleted_event"] = (r.is_deleted_event != 0);
+
+        out["versions"].push_back(std::move(item));
+    }
+
+    deps.reply_json(res, 200, out.dump());
+});
+
+srv.Post("/api/v4/workspaces/files/restore_version",
+         [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+    if (!deps.require_user_auth_users_actor ||
+        !deps.require_user_auth_users_actor(
+            req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+        return;
+    }
+
+    (void)actor_role;
+    res.set_header("Cache-Control", "no-store");
+
+    json body = json::parse(req.body, nullptr, false);
+    if (body.is_discarded() || !body.is_object()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    const std::string workspace_id = trim_copy_safe(body.value("workspace_id", ""));
+    const std::string path_rel = body.value("path", "");
+    const std::string version_id = body.value("version_id", "");
+
+    if (workspace_id.empty() || path_rel.empty() || version_id.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing workspace_id, path or version_id"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->load(deps.workspaces_path)) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "workspaces_reload_failed"},
+            {"message", "failed to reload workspaces"}
+        }.dump());
+        return;
+    }
+
+    auto wopt = deps.workspaces->get(workspace_id);
+    if (!wopt.has_value()) {
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "workspace not found"}
+        }.dump());
+        return;
+    }
+
+    const WorkspaceRec& w = *wopt;
+
+    if (w.status != "enabled") {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace disabled"}
+        }.dump());
+        return;
+    }
+
+    auto mopt = enabled_member_for_actor(w, actor_fp);
+    if (!mopt.has_value()) {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace access denied"}
+        }.dump());
+        return;
+    }
+
+    if (!(mopt->role == "owner" || mopt->role == "editor")) {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace write access denied"}
+        }.dump());
+        return;
+    }
+
+    if (w.storage_state != "allocated") {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Workspace storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    if (!w.storage_pool_id.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "pool_not_supported_yet"},
+            {"message", "workspace restore currently supports default pool only"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm, nerr;
+    if (!pqnas::normalize_user_rel_path_strict(path_rel, &rel_norm, &nerr)) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path ws_root =
+        workspace_dir_for_default_pool_only(deps.users_path, w);
+
+    std::filesystem::path abs_path;
+    std::string perr;
+    if (!pqnas::resolve_user_path_strict(ws_root, rel_norm, &abs_path, &perr)) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    {
+        std::string found_ancestor;
+        if (any_file_ancestor_exists_physical(ws_root, rel_norm, &found_ancestor)) {
+            deps.reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "path_conflict"},
+                {"message", "a parent path is an existing file"},
+                {"ancestor", found_ancestor}
+            }.dump());
+            return;
+        }
+    }
+
+    auto* vix = deps.file_versions;
+    if (!vix) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "file versions index unavailable"}
+        }.dump());
+        return;
+    }
+
+    std::error_code ec;
+    auto live_st = std::filesystem::symlink_status(abs_path, ec);
+    if (!ec &&
+        std::filesystem::exists(live_st) &&
+        !std::filesystem::is_symlink(live_st) &&
+        std::filesystem::is_regular_file(live_st)) {
+
+        std::string preserve_err;
+
+        pqnas::PreserveLiveFileVersionParams vp;
+        vp.scope_type = "workspace";
+        vp.scope_id = workspace_id;
+        vp.scope_root = ws_root;
+        vp.logical_rel_path = rel_norm;
+        vp.live_abs_path = abs_path;
+        vp.event_kind = "overwrite_preserve";
+        vp.actor_fp = actor_fp;
+        vp.users = deps.users;
+
+        pqnas::FileVersionRec ignored_preserved;
+        if (!vix->preserve_live_file_version(vp, &ignored_preserved, &preserve_err)) {
+            json j = json::object();
+            j["ok"] = false;
+            j["error"] = "server_error";
+            j["message"] = "failed to preserve current file before restore";
+            if (!preserve_err.empty()) j["detail"] = pqnas::shorten(preserve_err, 180);
+            deps.reply_json(res, 500, j.dump());
+            return;
+        }
+    }
+
+    auto rr = pqnas::restore_version_blob_to_path(
+        vix,
+        "workspace",
+        workspace_id,
+        rel_norm,
+        version_id,
+        abs_path
+    );
+
+    if (!rr.ok) {
+        json j = json::object();
+        j["ok"] = false;
+        j["error"] = rr.error.empty() ? "server_error" : rr.error;
+        j["message"] = rr.message.empty() ? "failed to restore version" : rr.message;
+        if (!rr.detail.empty()) j["detail"] = pqnas::shorten(rr.detail, 180);
+
+        const int http =
+            (rr.error == "not_found") ? 404 :
+            (rr.error == "bad_request") ? 400 : 500;
+
+        deps.reply_json(res, http, j.dump());
+        return;
+    }
+
+    json out = json::object();
+    out["ok"] = true;
+    out["workspace_id"] = workspace_id;
+    out["path"] = rel_norm;
+    out["restored_version_id"] = version_id;
+    out["bytes"] = rr.bytes;
+    out["mtime_epoch"] = rr.mtime_epoch;
+    out["sha256_hex"] = rr.sha256_hex;
+
+    deps.reply_json(res, 200, out.dump());
+});
+
+// POST /api/v4/workspaces/files/move?workspace_id=...&from=old/path&to=new/path
+// v1: physical filesystem only, same workspace only
+srv.Post("/api/v4/workspaces/files/move",
              [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp, actor_role;
         if (!deps.require_user_auth_users_actor ||
@@ -6700,10 +7188,7 @@ void register_workspace_file_routes(httplib::Server& srv,
             {"bytes", bytes}
         }.dump());
     });
-    // ---- Files API (user storage) ----
 
-    // GET  /api/v4/workspaces/files/get
-    // POST /api/v4/workspaces/files/delete
     
 }
 
