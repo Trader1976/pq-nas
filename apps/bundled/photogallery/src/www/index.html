@@ -532,7 +532,142 @@
             object-fit:contain;
             display:block;
         }
+        .ctxMenu{
+            position: fixed;
+            z-index: 12000;
+            min-width: 190px;
+            max-width: min(360px, calc(100vw - 24px));
+            border: 1px solid var(--border2);
+            border-radius: 14px;
+            background: rgba(0,0,0,0.78);
+            box-shadow: var(--shadow);
+            padding: 6px;
+            display: none;
+            backdrop-filter: blur(8px);
+        }
 
+        .ctxMenu.show{
+            display:block;
+        }
+
+        .ctxItem{
+            width: 100%;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:10px;
+            padding:10px 10px;
+            border-radius:10px;
+            border:1px solid transparent;
+            background:transparent;
+            color:var(--fg);
+            cursor:pointer;
+            font-weight:800;
+            text-align:left;
+        }
+
+        .ctxItem:hover{
+            background: rgba(var(--fg-rgb),0.07);
+            border-color: rgba(var(--fg-rgb),0.18);
+        }
+
+        .ctxItem.danger{
+            color: rgba(255,190,190,0.98);
+        }
+
+        .ctxItem.danger:hover{
+            background: rgba(255,90,90,0.14);
+            border-color: rgba(255,90,90,0.25);
+        }
+
+        .ctxSep{
+            height:1px;
+            background: rgba(var(--fg-rgb),0.10);
+            margin:6px 4px;
+        }
+        .embeddedDetails{
+            border:1px solid var(--border2);
+            border-radius:14px;
+            background: rgba(0,0,0,0.16);
+            overflow:hidden;
+        }
+
+        .embeddedDetails summary{
+            list-style:none;
+            cursor:pointer;
+            user-select:none;
+            padding:12px 14px;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            font-weight:850;
+        }
+
+        .embeddedDetails summary::-webkit-details-marker{
+            display:none;
+        }
+
+        .embeddedState{
+            font-family: var(--mono);
+            font-size:12px;
+            opacity:.75;
+            font-weight:700;
+        }
+
+        .embeddedBody{
+            padding:0 14px 14px 14px;
+            border-top:1px solid var(--border2);
+        }
+
+        .embeddedGroup{
+            margin-top:12px;
+        }
+
+        .embeddedGroupTitle{
+            font-weight:900;
+            margin-bottom:8px;
+            color: rgba(var(--fg-rgb),0.92);
+        }
+
+        .embeddedKv{
+            display:grid;
+            grid-template-columns: 160px 1fr;
+            gap:8px 12px;
+            align-items:start;
+        }
+
+        @media (max-width: 640px){
+            .embeddedKv{
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .embeddedK{
+            font-size:12px;
+            font-weight:800;
+            color: rgba(var(--fg-rgb),0.70);
+        }
+
+        .embeddedV{
+            font-size:12px;
+            color: rgba(var(--fg-rgb),0.94);
+            overflow-wrap:anywhere;
+        }
+
+        .embeddedPre{
+            margin:0;
+            padding:10px 12px;
+            border:1px solid var(--border2);
+            border-radius:12px;
+            background: rgba(0,0,0,0.18);
+            white-space:pre-wrap;
+            word-break:break-word;
+            font-size:12px;
+            line-height:1.4;
+            max-height:280px;
+            overflow:auto;
+        }
         body.embedded .wrap{ padding:0; }
         body.embedded .panel{
             border:0;
@@ -605,6 +740,21 @@
                 <div class="label">Info</div>
                 <div id="metaInfo" class="mono" style="opacity:.84;"></div>
             </div>
+            <div class="label">Embedded</div>
+            <div>
+                <details id="metaEmbeddedDetails" class="embeddedDetails">
+                    <summary>
+                        <span>Embedded image metadata (EXIF / IPTC / XMP)</span>
+                        <span id="metaEmbeddedState" class="embeddedState">Hidden</span>
+                    </summary>
+
+                    <div id="metaEmbeddedBody" class="embeddedBody">
+                        <div class="mono" style="opacity:.75;">
+                            Open this section to load metadata stored inside the image file itself.
+                        </div>
+                    </div>
+                </details>
+            </div>
         </div>
 
         <div class="modalFoot">
@@ -641,7 +791,8 @@
         </div>
     </div>
 </div>
-
+<div id="ctxMenu" class="ctxMenu" role="menu" aria-hidden="true"></div>
+<script src="./gallery_embedded_meta.js"></script>
 <script src="./app.js"></script>
 </body>
 </html>

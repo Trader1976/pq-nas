@@ -17,6 +17,7 @@
     const refreshBtn = el("refreshBtn");
     const upBtn = el("upBtn");
     const gridEl = el("grid");
+    const ctxMenu = el("ctxMenu");
 
     const metaModal = el("metaModal");
     const metaClose = el("metaClose");
@@ -172,6 +173,262 @@
                 ...payload
             })
         });
+    }
+    function closeContextMenu() {
+        if (!ctxMenu) return;
+        ctxMenu.classList.remove("show");
+        ctxMenu.setAttribute("aria-hidden", "true");
+        ctxMenu.innerHTML = "";
+    }
+
+    function clamp(n, lo, hi) {
+        return Math.max(lo, Math.min(hi, n));
+    }
+
+    function placeContextMenu(x, y) {
+        if (!ctxMenu) return;
+
+        ctxMenu.style.left = "0px";
+        ctxMenu.style.top = "0px";
+        ctxMenu.classList.add("show");
+
+        const rect = ctxMenu.getBoundingClientRect();
+        const pad = 8;
+
+        const nx = clamp(x, pad, window.innerWidth - rect.width - pad);
+        const ny = clamp(y, pad, window.innerHeight - rect.height - pad);
+
+        ctxMenu.style.left = `${nx}px`;
+        ctxMenu.style.top = `${ny}px`;
+        ctxMenu.setAttribute("aria-hidden", "false");
+    }
+
+    function menuItem(label, onClick, opts = {}) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = `ctxItem${opts.danger ? " danger" : ""}`;
+        b.textContent = label;
+        b.addEventListener("click", () => {
+            closeContextMenu();
+            onClick();
+        });
+        return b;
+    }
+
+    function menuSep() {
+        const d = document.createElement("div");
+        d.className = "ctxSep";
+        return d;
+    }
+
+    async function renameImage(item) {
+        if (!item || item.type !== "file") return;
+
+        const oldRel = currentRelPathFor(item);
+        const oldName = String(item.name || "");
+        const newName = prompt("Rename image to:", oldName);
+
+        if (!newName) return;
+        if (newName === oldName) return;
+
+        if (newName.includes("/") || newName.includes("\\")) {
+            alert("Name cannot contain '/' or '\\'.");
+            return;
+        }
+
+        const base = parentPath(oldRel);
+        const newRel = base ? `${base}/${newName}` : newName;
+
+        setBadge("warn", "working…");
+        setStatus(`Renaming ${oldName}…`);
+
+        try {
+            const r = await fetch(
+                `/api/v4/files/move?from=${encodeURIComponent(oldRel)}&to=${encodeURIComponent(newRel)}`,
+                {
+                    method: "POST",
+                    credentials: "include",
+                    cache: "no-store"
+                }
+            );
+
+            const j = await r.json().catch(() => null);
+            if (!r.ok || !j || !j.ok) {
+                const msg = j && (j.message || j.error)
+                    ? `${j.error || ""} ${j.message || ""}`.trim()
+                    : `HTTP ${r.status}`;
+                throw new Error(msg || `HTTP ${r.status}`);
+            }
+
+            if (state.previewPath === oldRel) {
+                closePreviewModal();
+            }
+            if (state.editingPath === oldRel) {
+                closeMetaModal();
+            }
+
+            setBadge("ok", "ready");
+            setStatus(`Renamed: ${oldName} → ${newName}`);
+            await load();
+        } catch (e) {
+            setBadge("err", "error");
+            setStatus(`Rename failed: ${String(e && e.message ? e.message : e)}`);
+        }
+    }
+
+    async function deleteImage(item) {
+        if (!item || item.type !== "file") return;
+
+        const rel = currentRelPathFor(item);
+        const ok = confirm(`Delete image?\n\n${rel}\n\nThis cannot be undone.`);
+        if (!ok) return;
+
+        setBadge("warn", "working…");
+        setStatus(`Deleting ${item.name}…`);
+
+        try {
+            const r = await fetch(
+                `/api/v4/files/delete?path=${encodeURIComponent(rel)}`,
+                {
+                    method: "POST",
+                    credentials: "include",
+                    cache: "no-store"
+                }
+            );
+
+            const j = await r.json().catch(() => null);
+            if (!r.ok || !j || !j.ok) {
+                const msg = j && (j.message || j.error)
+                    ? `${j.error || ""} ${j.message || ""}`.trim()
+                    : `HTTP ${r.status}`;
+                throw new Error(msg || `HTTP ${r.status}`);
+            }
+
+            if (state.previewPath === rel) {
+                closePreviewModal();
+            }
+            if (state.editingPath === rel) {
+                closeMetaModal();
+            }
+
+            setBadge("ok", "ready");
+            setStatus(`Deleted: ${item.name}`);
+            await load();
+        } catch (e) {
+            setBadge("err", "error");
+            setStatus(`Delete failed: ${String(e && e.message ? e.message : e)}`);
+        }
+    }
+    async function renameFolder(item) {
+        if (!item || item.type !== "dir") return;
+
+        const oldRel = currentRelPathFor(item);
+        const oldName = String(item.name || "");
+        const newName = prompt("Rename folder to:", oldName);
+
+        if (!newName) return;
+        if (newName === oldName) return;
+
+        if (newName.includes("/") || newName.includes("\\")) {
+            alert("Name cannot contain '/' or '\\'.");
+            return;
+        }
+
+        const base = parentPath(oldRel);
+        const newRel = base ? `${base}/${newName}` : newName;
+
+        setBadge("warn", "working…");
+        setStatus(`Renaming folder ${oldName}…`);
+
+        try {
+            const r = await fetch(
+                `/api/v4/files/move?from=${encodeURIComponent(oldRel)}&to=${encodeURIComponent(newRel)}`,
+                {
+                    method: "POST",
+                    credentials: "include",
+                    cache: "no-store"
+                }
+            );
+
+            const j = await r.json().catch(() => null);
+            if (!r.ok || !j || !j.ok) {
+                const msg = j && (j.message || j.error)
+                    ? `${j.error || ""} ${j.message || ""}`.trim()
+                    : `HTTP ${r.status}`;
+                throw new Error(msg || `HTTP ${r.status}`);
+            }
+
+            setBadge("ok", "ready");
+            setStatus(`Renamed folder: ${oldName} → ${newName}`);
+            await load();
+        } catch (e) {
+            setBadge("err", "error");
+            setStatus(`Folder rename failed: ${String(e && e.message ? e.message : e)}`);
+        }
+    }
+
+    async function deleteFolder(item) {
+        if (!item || item.type !== "dir") return;
+
+        const rel = currentRelPathFor(item);
+        const ok = confirm(`Delete folder?\n\n${rel}\n\nThis removes the folder recursively and cannot be undone.`);
+        if (!ok) return;
+
+        setBadge("warn", "working…");
+        setStatus(`Deleting folder ${item.name}…`);
+
+        try {
+            const r = await fetch(
+                `/api/v4/files/delete?path=${encodeURIComponent(rel)}`,
+                {
+                    method: "POST",
+                    credentials: "include",
+                    cache: "no-store"
+                }
+            );
+
+            const j = await r.json().catch(() => null);
+            if (!r.ok || !j || !j.ok) {
+                const msg = j && (j.message || j.error)
+                    ? `${j.error || ""} ${j.message || ""}`.trim()
+                    : `HTTP ${r.status}`;
+                throw new Error(msg || `HTTP ${r.status}`);
+            }
+
+            setBadge("ok", "ready");
+            setStatus(`Deleted folder: ${item.name}`);
+            await load();
+        } catch (e) {
+            setBadge("err", "error");
+            setStatus(`Folder delete failed: ${String(e && e.message ? e.message : e)}`);
+        }
+    }
+
+    function openFolderContextMenu(x, y, item) {
+        if (!ctxMenu || !item || item.type !== "dir") return;
+
+        ctxMenu.innerHTML = "";
+        ctxMenu.appendChild(menuItem("Open", () => {
+            state.curPath = currentRelPathFor(item);
+            load();
+        }));
+        ctxMenu.appendChild(menuSep());
+        ctxMenu.appendChild(menuItem("Rename…", () => renameFolder(item)));
+        ctxMenu.appendChild(menuItem("Delete…", () => deleteFolder(item), { danger: true }));
+
+        placeContextMenu(x, y);
+    }
+    function openImageContextMenu(x, y, item) {
+        if (!ctxMenu || !item || item.type !== "file") return;
+
+        ctxMenu.innerHTML = "";
+        ctxMenu.appendChild(menuItem("Open preview", () => openPreviewFor(item)));
+        ctxMenu.appendChild(menuItem("Edit metadata…", () => openMetaFor(item)));
+        ctxMenu.appendChild(menuSep());
+        ctxMenu.appendChild(menuItem("Rename…", () => renameImage(item)));
+        ctxMenu.appendChild(menuItem("Delete…", () => deleteImage(item), { danger: true }));
+
+        placeContextMenu(x, y);
     }
     function placeMetaCentered() {
         if (!metaCard) return;
@@ -374,9 +631,6 @@
         previewCard.style.top = "80px";
     }
 
-    function clamp(n, lo, hi) {
-        return Math.max(lo, Math.min(hi, n));
-    }
 
     function clampPreviewIntoViewport() {
         if (!previewCard) return;
@@ -469,6 +723,7 @@
             : currentRelPathFor(itemOrPath);
 
         state.editingPath = rel;
+        window.PQNAS_PHOTOGALLERY_EMBEDDED_META?.reset(rel);
         state.editingRating = 0;
 
         if (metaPath) metaPath.textContent = "/" + rel;
@@ -627,7 +882,16 @@
 
         tile.appendChild(thumbWrap);
         tile.appendChild(body);
+        tile.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
 
+            if (item.type === "file") {
+                openImageContextMenu(e.clientX, e.clientY, item);
+            } else if (item.type === "dir") {
+                openFolderContextMenu(e.clientX, e.clientY, item);
+            }
+        });
         tile.addEventListener("dblclick", () => {
             if (item.type === "dir") {
                 state.curPath = currentRelPathFor(item);
@@ -671,6 +935,7 @@
     }
 
     async function load() {
+        closeContextMenu();
         setBadge("warn", "loading…");
         setStatus("Loading gallery…");
 
@@ -890,7 +1155,20 @@
             clampMetaIntoViewport();
         }
     });
+    document.addEventListener("click", (e) => {
+        if (!ctxMenu || !ctxMenu.classList.contains("show")) return;
+        if (e.target === ctxMenu || ctxMenu.contains(e.target)) return;
+        closeContextMenu();
+    });
 
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+            closeContextMenu();
+        }
+    });
+
+    window.addEventListener("scroll", closeContextMenu, true);
+    window.addEventListener("resize", closeContextMenu);
     titleLine.textContent = "Photo Gallery";
     renderBreadcrumb();
     load();

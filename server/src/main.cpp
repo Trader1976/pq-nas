@@ -149,6 +149,7 @@ extern "C" {
 #include "app_pairing.h"
 
 #include "gallery_meta.h"
+#include "image_embedded_meta.h"
 
 using json = nlohmann::json;
 
@@ -34569,6 +34570,298 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
     res.body = std::move(zip_data);
 });
 
+// POST /api/v4/gallery/meta/embedded_get
+// Body:
+// {
+//   "path": "photos/cat.jpg"
+// }
+srv.Post("/api/v4/gallery/meta/embedded_get", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http,
+                          const std::string& detail = "",
+                          const std::string& rel_path = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.gallery_meta_embedded_get_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!rel_path.empty()) ev.f["path"] = pqnas::shorten(rel_path, 200);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        add_ip_headers(ev);
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& rel_path,
+                        bool has_exif,
+                        bool has_iptc,
+                        bool has_xmp) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.gallery_meta_embedded_get_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_path, 200);
+        ev.f["has_exif"] = has_exif ? "1" : "0";
+        ev.f["has_iptc"] = has_iptc ? "1" : "0";
+        ev.f["has_xmp"] = has_xmp ? "1" : "0";
+        add_ip_headers(ev);
+        audit_append(ev);
+    };
+
+    auto lower_ascii_local = [](std::string s) -> std::string {
+        for (char& c : s) c = (char)std::tolower((unsigned char)c);
+        return s;
+    };
+
+    auto file_ext_lower = [&](const std::string& name) -> std::string {
+        std::string n = name;
+        const auto slash = n.find_last_of("/\\");
+        if (slash != std::string::npos) n = n.substr(slash + 1);
+        auto lower = lower_ascii_local(n);
+        const auto dot = lower.rfind('.');
+        if (dot == std::string::npos || dot == 0 || dot + 1 >= lower.size()) return "";
+        return lower.substr(dot + 1);
+    };
+
+    auto is_gallery_image_name = [&](const std::string& name) -> bool {
+        const std::string ext = file_ext_lower(name);
+        return ext == "png"  ||
+               ext == "jpg"  ||
+               ext == "jpeg" ||
+               ext == "gif"  ||
+               ext == "webp" ||
+               ext == "svg"  ||
+               ext == "bmp"  ||
+               ext == "ico"  ||
+               ext == "tif"  ||
+               ext == "tiff" ||
+               ext == "heic" ||
+               ext == "heif";
+    };
+
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value()) {
+            audit_fail("user_missing", 403);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "policy denied"}
+            }.dump());
+            return;
+        }
+
+        const auto& u = *uopt;
+        if (u.storage_state != "allocated") {
+            audit_fail("storage_unallocated", 403);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"},
+                {"fingerprint_hex", fp_hex},
+                {"quota_bytes", u.quota_bytes}
+            }.dump());
+            return;
+        }
+    }
+
+    json in = json::parse(req.body, nullptr, false);
+    if (in.is_discarded() || !in.is_object()) {
+        audit_fail("bad_json", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json body"}
+        }.dump());
+        return;
+    }
+
+    const std::string path_in = in.value("path", "");
+    if (path_in.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm;
+    std::string nerr;
+    if (!pqnas::normalize_user_rel_path_strict(path_in, &rel_norm, &nerr)) {
+        audit_fail("invalid_path", 400, nerr, path_in);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    pqnas::ResolvedLogicalItem item;
+    std::string rerr;
+    if (!pqnas::resolve_existing_user_item(users, fp_hex, rel_norm, &item, &rerr) || !item.exists) {
+        audit_fail("not_found", 404, rerr, rel_norm);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "path not found"}
+        }.dump());
+        return;
+    }
+
+    if (!item.is_file) {
+        audit_fail("not_file", 400, "", rel_norm);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "embedded metadata is only available for files"}
+        }.dump());
+        return;
+    }
+
+    if (!is_gallery_image_name(std::filesystem::path(rel_norm).filename().string())) {
+        audit_fail("not_supported_image", 400, "", rel_norm);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "file is not a supported gallery image"}
+        }.dump());
+        return;
+    }
+
+    std::filesystem::path abs_path;
+    bool have_abs = false;
+
+    // Prefer file_locations physical path if present.
+    if (auto* idx = pqnas::get_file_location_index()) {
+        std::string lerr;
+        auto rec = idx->get(fp_hex, rel_norm, &lerr);
+        if (!lerr.empty()) {
+            audit_fail("file_location_lookup_failed", 500, lerr, rel_norm);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "file metadata lookup failed"},
+                {"detail", pqnas::shorten(lerr, 180)}
+            }.dump());
+            return;
+        }
+
+        if (rec.has_value() && !rec->physical_path.empty()) {
+            abs_path = std::filesystem::path(rec->physical_path);
+            have_abs = true;
+        }
+    }
+
+    if (!have_abs && item.has_physical_anchor) {
+        abs_path = item.abs_path;
+        have_abs = true;
+    }
+
+    if (!have_abs) {
+        audit_fail("file_missing_physical_anchor", 500, "", rel_norm);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "file missing physical anchor"}
+        }.dump());
+        return;
+    }
+
+    {
+        std::error_code ec;
+        auto st = std::filesystem::symlink_status(abs_path, ec);
+        if (ec || !std::filesystem::exists(st)) {
+            audit_fail("not_found", 404, "", rel_norm);
+            reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "file not found"}
+            }.dump());
+            return;
+        }
+
+        if (std::filesystem::is_symlink(st)) {
+            audit_fail("symlink_not_supported", 400, "", rel_norm);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "symlinks not supported"}
+            }.dump());
+            return;
+        }
+
+        if (!std::filesystem::is_regular_file(st)) {
+            audit_fail("not_regular_file", 400, "", rel_norm);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "not a regular file"}
+            }.dump());
+            return;
+        }
+    }
+
+    pqnas::json summary = pqnas::json::object();
+    pqnas::json embedded = pqnas::json{
+        {"exif", pqnas::json::object()},
+        {"iptc", pqnas::json::object()},
+        {"xmp", pqnas::json::object()}
+    };
+
+    std::string merr;
+    if (!pqnas::read_embedded_image_metadata_exiftool(abs_path, &summary, &embedded, &merr)) {
+        const int http = (merr == "tool_unavailable") ? 503 : 500;
+        const std::string error_code = (merr == "tool_unavailable") ? "service_unavailable" : "server_error";
+        const std::string message =
+            (merr == "tool_unavailable")
+                ? "embedded metadata reader not available"
+                : "failed to read embedded image metadata";
+
+        audit_fail("embedded_meta_read_failed", http, merr, rel_norm);
+        reply_json(res, http, json{
+            {"ok", false},
+            {"error", error_code},
+            {"message", message},
+            {"detail", merr}
+        }.dump());
+        return;
+    }
+
+    const bool has_exif = embedded.contains("exif") && embedded["exif"].is_object() && !embedded["exif"].empty();
+    const bool has_iptc = embedded.contains("iptc") && embedded["iptc"].is_object() && !embedded["iptc"].empty();
+    const bool has_xmp  = embedded.contains("xmp")  && embedded["xmp"].is_object()  && !embedded["xmp"].empty();
+
+    audit_ok(rel_norm, has_exif, has_iptc, has_xmp);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", rel_norm},
+        {"summary", summary},
+        {"embedded", embedded}
+    }.dump());
+});
 
 srv.Get(R"(/pq/invite/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Response& res) {
         const std::string invite_id = req.matches[1].str();
