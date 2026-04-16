@@ -157,6 +157,14 @@
         return `/api/v4/files/get?path=${encodeURIComponent(relPath || "")}`;
     }
 
+    function galleryThumbUrl(relPath, size = 320, mtimeUnix = 0) {
+        const qs = new URLSearchParams();
+        qs.set("path", relPath || "");
+        qs.set("size", String(size));
+        if (mtimeUnix) qs.set("v", String(mtimeUnix));
+        return `/api/v4/gallery/thumb?${qs.toString()}`;
+    }
+
     function galleryListUrl(relPath) {
         if (!relPath) return "/api/v4/gallery/list";
         return `/api/v4/gallery/list?path=${encodeURIComponent(relPath)}`;
@@ -908,8 +916,16 @@
             const img = document.createElement("img");
             img.className = "thumb";
             img.loading = "lazy";
+            img.decoding = "async";
             img.alt = item.name || "image";
-            img.src = fileGetUrl(currentRelPathFor(item));
+
+            const rel = currentRelPathFor(item);
+            img.src = galleryThumbUrl(rel, 320, item.mtime_unix || 0);
+            img.onerror = () => {
+                img.onerror = null;
+                img.src = fileGetUrl(rel);
+            };
+
             thumbWrap.appendChild(img);
         }
 

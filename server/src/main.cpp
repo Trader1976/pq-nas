@@ -78,6 +78,8 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include <condition_variable>
 #include <set>
 #include <map>
+#include <csignal>
+#include <sys/wait.h>
 
 
 extern "C" {
@@ -27862,6 +27864,439 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
     const std::string out_path = rel_dir_norm.empty() ? rel_dir : rel_dir_norm;
     audit_ok(out_path, count);
     reply_json(res, 200, out.dump());
+});
+
+srv.Get("/api/v4/gallery/thumb", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.gallery_thumb_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& rel_path_norm, bool cached, std::uint64_t bytes) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.gallery_thumb_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_path_norm, 200);
+        ev.f["cached"] = cached ? "1" : "0";
+        ev.f["bytes"] = std::to_string((unsigned long long)bytes);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        audit_append(ev);
+    };
+
+    auto fnv1a64 = [&](const std::string& s) -> std::uint64_t {
+        std::uint64_t h = 1469598103934665603ULL;
+        for (unsigned char c : s) {
+            h ^= static_cast<std::uint64_t>(c);
+            h *= 1099511628211ULL;
+        }
+        return h;
+    };
+
+    auto hex_u64 = [&](std::uint64_t v) -> std::string {
+        std::ostringstream oss;
+        oss << std::hex << std::nouppercase << v;
+        return oss.str();
+    };
+
+    auto lower_ascii = [&](std::string s) -> std::string {
+        for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+
+    auto is_supported_gallery_thumb_ext = [&](const std::string& name) -> bool {
+        const std::string n = lower_ascii(name);
+        const auto dot = n.rfind('.');
+        if (dot == std::string::npos) return false;
+        const std::string ext = n.substr(dot + 1);
+
+        return ext == "jpg"  || ext == "jpeg" ||
+               ext == "png"  || ext == "webp" ||
+               ext == "bmp"  || ext == "gif"  ||
+               ext == "tif"  || ext == "tiff" ||
+               ext == "heic" || ext == "heif";
+    };
+
+    auto file_mtime_epoch = [&](const std::filesystem::path& p) -> std::int64_t {
+        std::error_code ec;
+        auto ft = std::filesystem::last_write_time(p, ec);
+        if (ec) return 0;
+
+        using namespace std::chrono;
+        auto sctp = time_point_cast<system_clock::duration>(
+            ft - std::filesystem::file_time_type::clock::now() + system_clock::now()
+        );
+        return static_cast<std::int64_t>(duration_cast<seconds>(sctp.time_since_epoch()).count());
+    };
+
+    auto read_small_file = [&](const std::filesystem::path& p, std::string* out, std::string* err) -> bool {
+        if (out) out->clear();
+        if (err) err->clear();
+
+        std::ifstream f(p, std::ios::binary);
+        if (!f.good()) {
+            if (err) *err = "open failed";
+            return false;
+        }
+
+        std::ostringstream oss;
+        oss << f.rdbuf();
+
+        if (!f.good() && !f.eof()) {
+            if (err) *err = "read failed";
+            return false;
+        }
+
+        if (out) *out = oss.str();
+        return true;
+    };
+
+    auto spawn_wait = [&](const std::vector<std::string>& args) -> int {
+        if (args.empty()) return 127;
+
+        std::vector<char*> argv;
+        argv.reserve(args.size() + 1);
+        for (const auto& s : args) argv.push_back(const_cast<char*>(s.c_str()));
+        argv.push_back(nullptr);
+
+        pid_t pid = fork();
+        if (pid < 0) return 127;
+
+        if (pid == 0) {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) {
+                dup2(devnull, STDOUT_FILENO);
+                dup2(devnull, STDERR_FILENO);
+                close(devnull);
+            }
+            execvp(argv[0], argv.data());
+            _exit(127);
+        }
+
+        int st = 0;
+        while (waitpid(pid, &st, 0) < 0) {
+            if (errno == EINTR) continue;
+            return 127;
+        }
+
+        if (WIFEXITED(st)) return WEXITSTATUS(st);
+        if (WIFSIGNALED(st)) return 128 + WTERMSIG(st);
+        return 127;
+    };
+
+    auto generate_gallery_thumb = [&](const std::filesystem::path& src_abs,
+                                      const std::filesystem::path& dst_abs,
+                                      int size,
+                                      std::string* err) -> bool {
+        if (err) err->clear();
+
+        const std::string size_arg = std::to_string(size) + "x" + std::to_string(size) + ">";
+        std::vector<std::string> attempts;
+
+        auto try_cmd = [&](const std::string& exe) -> bool {
+            std::vector<std::string> args = {
+                exe,
+                src_abs.string(),
+                "-auto-orient",
+                "-thumbnail", size_arg,
+                "-strip",
+                "-quality", "82",
+                dst_abs.string()
+            };
+
+            const int rc = spawn_wait(args);
+            attempts.push_back(exe + "=" + std::to_string(rc));
+
+            if (rc != 0) return false;
+
+            std::error_code ec;
+            auto st = std::filesystem::symlink_status(dst_abs, ec);
+            return !ec && std::filesystem::exists(st) &&
+                   !std::filesystem::is_symlink(st) &&
+                   std::filesystem::is_regular_file(st);
+        };
+
+        if (try_cmd("/usr/bin/magick")) return true;
+        if (try_cmd("/usr/local/bin/magick")) return true;
+        if (try_cmd("magick")) return true;
+        if (try_cmd("/usr/bin/convert")) return true;
+        if (try_cmd("/usr/local/bin/convert")) return true;
+        if (try_cmd("convert")) return true;
+
+        if (err) {
+            std::string joined;
+            for (size_t i = 0; i < attempts.size(); ++i) {
+                if (i) joined += ", ";
+                joined += attempts[i];
+            }
+            *err = "thumbnail generator failed: " + joined;
+        }
+        return false;
+    };
+
+    auto cache_root = [&]() -> std::filesystem::path {
+        return std::filesystem::path(pqnas::data_root_dir()).parent_path() / "cache" / "gallery_thumbs";
+    };
+
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value() || uopt->storage_state != "allocated") {
+            audit_fail("storage_unallocated", 403);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"}
+            }.dump());
+            return;
+        }
+    }
+
+    std::string rel_path;
+    if (req.has_param("path")) rel_path = req.get_param_value("path");
+    if (rel_path.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm;
+    {
+        std::string nerr;
+        if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
+            audit_fail("invalid_path", 400, nerr);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            }.dump());
+            return;
+        }
+    }
+
+    int thumb_size = 320;
+    if (req.has_param("size")) {
+        try {
+            thumb_size = std::stoi(req.get_param_value("size"));
+        } catch (...) {
+            thumb_size = 320;
+        }
+    }
+    if (thumb_size < 64) thumb_size = 64;
+    if (thumb_size > 1024) thumb_size = 1024;
+
+    pqnas::ResolvedExistingPath rp;
+    std::string perr;
+    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, rel_path, &rp, &perr)) {
+        audit_fail("invalid_path", 400, perr);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path abs = rp.abs_path;
+
+    {
+        std::string serr;
+        if (!ensure_no_symlink_in_existing_path_prefix(abs, &serr)) {
+            audit_fail("symlink_not_supported", 400, serr);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "symlinks not supported"}
+            }.dump());
+            return;
+        }
+    }
+
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "file not found"}
+        }.dump());
+        return;
+    }
+
+    if (std::filesystem::is_symlink(st)) {
+        audit_fail("symlink_not_supported", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "symlinks not supported"}
+        }.dump());
+        return;
+    }
+
+    if (!std::filesystem::is_regular_file(st)) {
+        audit_fail("not_regular_file", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "not a regular file"}
+        }.dump());
+        return;
+    }
+
+    if (!is_supported_gallery_thumb_ext(abs.filename().string())) {
+        audit_fail("unsupported_image_type", 415, abs.filename().string());
+        reply_json(res, 415, json{
+            {"ok", false},
+            {"error", "unsupported_media_type"},
+            {"message", "unsupported image type"}
+        }.dump());
+        return;
+    }
+
+    const std::uint64_t src_bytes = pqnas::file_size_u64_safe(abs);
+    const std::int64_t src_mtime = file_mtime_epoch(abs);
+
+    const std::string key_material =
+        fp_hex + "\n" +
+        rel_norm + "\n" +
+        std::to_string(thumb_size) + "\n" +
+        std::to_string((unsigned long long)src_bytes) + "\n" +
+        std::to_string((long long)src_mtime);
+
+    const std::string thumb_key = hex_u64(fnv1a64(key_material));
+
+    const std::filesystem::path cache_dir =
+        cache_root() / fp_hex / std::to_string(thumb_size);
+    const std::filesystem::path cache_abs = cache_dir / (thumb_key + ".jpg");
+
+    auto serve_thumb = [&](bool cached) {
+        std::string buf;
+        std::string rerr;
+        if (!read_small_file(cache_abs, &buf, &rerr)) {
+            audit_fail("thumb_read_failed", 500, rerr);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to read thumbnail"},
+                {"detail", pqnas::shorten(rerr, 180)}
+            }.dump());
+            return;
+        }
+
+        const std::uint64_t out_bytes = static_cast<std::uint64_t>(buf.size());
+        res.set_header("Cache-Control", "private, max-age=86400");
+        res.set_content(std::move(buf), "image/jpeg");
+        audit_ok(rel_norm, cached, out_bytes);
+    };
+
+    {
+        std::error_code cec;
+        auto cst = std::filesystem::symlink_status(cache_abs, cec);
+        if (!cec &&
+            std::filesystem::exists(cst) &&
+            !std::filesystem::is_symlink(cst) &&
+            std::filesystem::is_regular_file(cst)) {
+            serve_thumb(true);
+            return;
+        }
+    }
+
+    ec.clear();
+    std::filesystem::create_directories(cache_dir, ec);
+    if (ec) {
+        audit_fail("cache_mkdir_failed", 500, ec.message());
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to create thumbnail cache directory"},
+            {"detail", pqnas::shorten(ec.message(), 180)}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path tmp_abs =
+        cache_dir / (thumb_key + ".tmp." + random_b64url(8) + ".jpg");
+
+    std::string terr;
+    if (!generate_gallery_thumb(abs, tmp_abs, thumb_size, &terr)) {
+        std::error_code rm_ec;
+        std::filesystem::remove(tmp_abs, rm_ec);
+
+        audit_fail("thumb_generate_failed", 500, terr);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to generate thumbnail"},
+            {"detail", pqnas::shorten(terr, 180)}
+        }.dump());
+        return;
+    }
+
+    {
+        std::error_code ren_ec;
+        std::filesystem::rename(tmp_abs, cache_abs, ren_ec);
+        if (ren_ec) {
+            std::error_code cec;
+            auto cst = std::filesystem::symlink_status(cache_abs, cec);
+
+            if (!cec &&
+                std::filesystem::exists(cst) &&
+                !std::filesystem::is_symlink(cst) &&
+                std::filesystem::is_regular_file(cst)) {
+                std::error_code rm_ec;
+                std::filesystem::remove(tmp_abs, rm_ec);
+            } else {
+                std::error_code rm_ec;
+                std::filesystem::remove(tmp_abs, rm_ec);
+
+                audit_fail("thumb_rename_failed", 500, ren_ec.message());
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "failed to finalize thumbnail"},
+                    {"detail", pqnas::shorten(ren_ec.message(), 180)}
+                }.dump());
+                return;
+            }
+        }
+    }
+
+    serve_thumb(false);
 });
 
 // POST /api/v4/gallery/meta/set
