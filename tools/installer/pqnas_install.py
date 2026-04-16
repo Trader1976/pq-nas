@@ -80,20 +80,55 @@ def ensure_external_tools(log: Optional[Log] = None) -> None:
     """
     pkgs: List[str] = []
 
+    # SMART / drive health
     if not os.path.isfile("/usr/sbin/smartctl") and not shutil.which("smartctl"):
         pkgs.append("smartmontools")
 
+    # ZIP support
     if not shutil.which("unzip"):
         pkgs.append("unzip")
+
+    # Embedded image metadata (EXIF / IPTC / XMP)
+    # Debian/Ubuntu package that provides /usr/bin/exiftool
+    if not shutil.which("exiftool"):
+        pkgs.append("libimage-exiftool-perl")
+
+    # Gallery thumbnail generation
+    # On your system this provides /usr/bin/convert
+    if not shutil.which("convert") and not shutil.which("magick"):
+        pkgs.append("imagemagick")
 
     if not pkgs:
         if log:
             log.write("[*] External tools: OK")
         return
 
+    pkgs = sorted(set(pkgs))
+
     if log:
-        log.write("[*] Installing external tools: " + ", ".join(sorted(set(pkgs))))
-    apt_install(sorted(set(pkgs)), log=log)
+        log.write("[*] Installing external tools: " + ", ".join(pkgs))
+    apt_install(pkgs, log=log)
+
+    # Post-check so installer fails clearly instead of later at runtime
+    missing_after: List[str] = []
+
+    if not os.path.isfile("/usr/sbin/smartctl") and not shutil.which("smartctl"):
+        missing_after.append("smartctl")
+    if not shutil.which("unzip"):
+        missing_after.append("unzip")
+    if not shutil.which("exiftool"):
+        missing_after.append("exiftool")
+    if not shutil.which("convert") and not shutil.which("magick"):
+        missing_after.append("convert/magick")
+
+    if missing_after:
+        raise RuntimeError(
+            "Required external tools still missing after install: "
+            + ", ".join(missing_after)
+        )
+
+    if log:
+        log.write("[*] External tools installed and validated.")
 
 def install_sudoers_rule(name: str, content: str, log: Optional[Log] = None) -> str:
     if not shutil.which("visudo"):
@@ -1921,7 +1956,6 @@ class ReverseProxyScreen(Screen):
             st.https_redirect = False
 
         st.auth_mode = "v5"
-        app.push_screen(ConfirmScreen())
         app.push_screen(ConfirmScreen())
 
 class ConfirmScreen(Screen):
