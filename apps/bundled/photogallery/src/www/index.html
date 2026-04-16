@@ -760,7 +760,7 @@
         <div class="modalFoot">
             <div id="metaStatus" class="mono" style="opacity:.84;">Ready.</div>
             <div style="flex:1 1 auto;"></div>
-            <button id="metaSaveBtn" class="btn" type="button">Save</button>
+            <button id="metaSaveBtn" class="btn" type="button" title="Save metadata (Ctrl+S / Cmd+S)">Save</button>
         </div>
     </div>
 </div>
@@ -778,6 +778,33 @@
                 <button id="previewFitBtn" class="btn secondary" type="button">Fit</button>
                 <button id="previewActualBtn" class="btn secondary" type="button">100%</button>
                 <button id="previewMetaBtn" class="btn secondary" type="button">Metadata</button>
+
+                <button id="previewSlideToggleBtn" class="btn secondary" type="button" title="Start slideshow">
+                    Slideshow
+                </button>
+
+                <select
+                        id="previewSlideInterval"
+                        class="mono"
+                        title="Slideshow interval"
+                        style="padding:8px 10px; border-radius:12px; border:1px solid var(--border2); background:rgba(0,0,0,0.22); color:var(--fg);"
+                >
+                    <option value="2000">2s</option>
+                    <option value="3000">3s</option>
+                    <option value="5000" selected>5s</option>
+                    <option value="10000">10s</option>
+                </select>
+
+                <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; opacity:.92;">
+                    <input id="previewSlideShuffle" type="checkbox">
+                    <span>Shuffle</span>
+                </label>
+
+                <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; opacity:.92;">
+                    <input id="previewSlideLoop" type="checkbox" checked>
+                    <span>Loop</span>
+                </label>
+
                 <button id="previewClose" class="btn secondary" type="button">Close</button>
             </div>
         </div>
@@ -794,5 +821,6 @@
 <div id="ctxMenu" class="ctxMenu" role="menu" aria-hidden="true"></div>
 <script src="./gallery_embedded_meta.js"></script>
 <script src="./app.js"></script>
+<script src="./gallery_slideshow.js"></script>
 </body>
 </html>
