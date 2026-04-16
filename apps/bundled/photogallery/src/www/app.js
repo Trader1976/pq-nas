@@ -60,7 +60,8 @@
         editingPath: "",
         editingRating: 0,
         previewPath: "",
-        previewMode: "fit"
+        previewMode: "fit",
+        activeTilePath: ""
     };
 
     const dragState = {
@@ -589,7 +590,205 @@
     function filteredImageItems() {
         return filteredItems().filter((it) => it.type === "file");
     }
+    function isTypingTarget(target) {
+        if (!target || !(target instanceof Element)) return false;
+        return !!target.closest("input, textarea, select, button, [contenteditable='true']");
+    }
 
+    function getRenderedTiles() {
+        return gridEl ? Array.from(gridEl.querySelectorAll(".tile")) : [];
+    }
+
+    function findTileByRelPath(relPath) {
+        return getRenderedTiles().find((tile) => tile.dataset.relPath === relPath) || null;
+    }
+
+    function updateTileSelection() {
+        for (const tile of getRenderedTiles()) {
+            const active = !!state.activeTilePath && tile.dataset.relPath === state.activeTilePath;
+            tile.classList.toggle("kbdActive", active);
+            tile.tabIndex = active ? 0 : -1;
+            tile.setAttribute("aria-selected", active ? "true" : "false");
+        }
+    }
+
+    function setActiveTileRelPath(relPath, opts = {}) {
+        const scroll = opts.scroll !== false;
+        const focus = opts.focus === true;
+
+        state.activeTilePath = String(relPath || "");
+
+        const tile = findTileByRelPath(state.activeTilePath);
+        updateTileSelection();
+
+        if (!tile) return null;
+
+        if (scroll) {
+            tile.scrollIntoView({
+                block: "nearest",
+                inline: "nearest"
+            });
+        }
+
+        if (focus) {
+            try {
+                tile.focus({ preventScroll: true });
+            } catch (_) {
+                try { tile.focus(); } catch (_) {}
+            }
+        }
+
+        return tile;
+    }
+
+    function ensureActiveTile() {
+        const tiles = getRenderedTiles();
+        if (!tiles.length) {
+            state.activeTilePath = "";
+            return null;
+        }
+
+        const existing = findTileByRelPath(state.activeTilePath);
+        if (existing) {
+            updateTileSelection();
+            return existing;
+        }
+
+        return setActiveTileRelPath(tiles[0].dataset.relPath || "", {
+            scroll: false,
+            focus: false
+        });
+    }
+
+    function moveLinear(delta) {
+        const tiles = getRenderedTiles();
+        if (!tiles.length) return;
+
+        const current = ensureActiveTile();
+        const idx = Math.max(0, tiles.indexOf(current));
+        const nextIdx = clamp(idx + delta, 0, tiles.length - 1);
+
+        setActiveTileRelPath(tiles[nextIdx].dataset.relPath || "", {
+            scroll: true,
+            focus: true
+        });
+    }
+
+    function buildTileRows() {
+        const tiles = getRenderedTiles().map((tile) => {
+            const rect = tile.getBoundingClientRect();
+            return {
+                tile,
+                relPath: tile.dataset.relPath || "",
+                left: rect.left,
+                top: rect.top,
+                width: rect.width,
+                height: rect.height,
+                centerX: rect.left + rect.width / 2
+            };
+        });
+
+        tiles.sort((a, b) => {
+            const dy = a.top - b.top;
+            if (Math.abs(dy) > 24) return dy;
+            return a.left - b.left;
+        });
+
+        const rows = [];
+        for (const entry of tiles) {
+            const lastRow = rows[rows.length - 1];
+            if (!lastRow || Math.abs(entry.top - lastRow[0].top) > 24) {
+                rows.push([entry]);
+            } else {
+                lastRow.push(entry);
+            }
+        }
+
+        return rows;
+    }
+
+    function getActiveRowPos(rows) {
+        for (let r = 0; r < rows.length; r++) {
+            for (let c = 0; c < rows[r].length; c++) {
+                if (rows[r][c].relPath === state.activeTilePath) {
+                    return { row: r, col: c, entry: rows[r][c] };
+                }
+            }
+        }
+
+        if (rows.length && rows[0].length) {
+            return { row: 0, col: 0, entry: rows[0][0] };
+        }
+
+        return null;
+    }
+
+    function closestIndexByX(row, targetX) {
+        let bestIdx = 0;
+        let bestDist = Infinity;
+
+        for (let i = 0; i < row.length; i++) {
+            const d = Math.abs(row[i].centerX - targetX);
+            if (d < bestDist) {
+                bestDist = d;
+                bestIdx = i;
+            }
+        }
+
+        return bestIdx;
+    }
+
+    function moveVertical(deltaRows) {
+        const rows = buildTileRows();
+        const pos = getActiveRowPos(rows);
+        if (!pos) return;
+
+        const targetRow = clamp(pos.row + deltaRows, 0, rows.length - 1);
+        if (targetRow === pos.row) return;
+
+        const targetCol = closestIndexByX(rows[targetRow], pos.entry.centerX);
+        setActiveTileRelPath(rows[targetRow][targetCol].relPath, {
+            scroll: true,
+            focus: true
+        });
+    }
+
+    function moveByPage(deltaPages) {
+        const rows = buildTileRows();
+        const pos = getActiveRowPos(rows);
+        if (!pos) return;
+
+        const viewportH = gridEl ? gridEl.clientHeight : window.innerHeight;
+        const rowHeight = Math.max(1, pos.entry.height);
+        const stepRows = Math.max(1, Math.floor(viewportH / rowHeight) - 1);
+
+        const targetRow = clamp(pos.row + (deltaPages * stepRows), 0, rows.length - 1);
+        const targetCol = closestIndexByX(rows[targetRow], pos.entry.centerX);
+
+        setActiveTileRelPath(rows[targetRow][targetCol].relPath, {
+            scroll: true,
+            focus: true
+        });
+    }
+
+    function activateSelectedTile() {
+        const tile = ensureActiveTile();
+        if (!tile) return;
+        tile.click();
+    }
+    function openSelectedTileMetadata() {
+        const tile = ensureActiveTile();
+        if (!tile) return;
+
+        if ((tile.dataset.itemType || "") !== "file") {
+            return;
+        }
+
+        const relPath = tile.dataset.relPath || "";
+        if (!relPath) return;
+
+        openMetaFor(relPath);
+    }
     function currentPreviewIndex() {
         const items = filteredImageItems();
         const idx = items.findIndex((it) => currentRelPathFor(it) === state.previewPath);
@@ -907,6 +1106,10 @@
         tile.dataset.relPath = currentRelPathFor(item);
         tile.dataset.itemType = item.type;
 
+        tile.tabIndex = -1;
+        tile.setAttribute("role", "button");
+        tile.setAttribute("aria-selected", "false");
+
         const thumbWrap = document.createElement("div");
         thumbWrap.className = "thumbWrap";
 
@@ -1009,6 +1212,7 @@
         });
 
         tile.addEventListener("click", () => {
+            setActiveTileRelPath(currentRelPathFor(item), { scroll: false, focus: false });
             if (item.type === "dir") {
                 state.curPath = currentRelPathFor(item);
                 load();
@@ -1039,6 +1243,7 @@
         for (const item of items) {
             gridEl.appendChild(makeTile(item));
         }
+        ensureActiveTile();
     }
 
     async function load() {
@@ -1299,7 +1504,72 @@
         if (e.target === ctxMenu || ctxMenu.contains(e.target)) return;
         closeContextMenu();
     });
+    document.addEventListener("keydown", (e) => {
+        const anyModalOpen = !!document.querySelector(".modal.show");
+        if (anyModalOpen) return;
+        if (isTypingTarget(e.target)) return;
 
+        const tiles = getRenderedTiles();
+        if (!tiles.length) return;
+        
+        if (e.code === "Space") {
+            e.preventDefault(); // prevents page scroll
+            openSelectedTileMetadata();
+            return;
+        }
+        switch (e.key) {
+            case "ArrowLeft":
+                e.preventDefault();
+                moveLinear(-1);
+                return;
+
+            case "ArrowRight":
+                e.preventDefault();
+                moveLinear(1);
+                return;
+
+            case "ArrowUp":
+                e.preventDefault();
+                moveVertical(-1);
+                return;
+
+            case "ArrowDown":
+                e.preventDefault();
+                moveVertical(1);
+                return;
+
+            case "PageUp":
+                e.preventDefault();
+                moveByPage(-1);
+                return;
+
+            case "PageDown":
+                e.preventDefault();
+                moveByPage(1);
+                return;
+
+            case "Home":
+                e.preventDefault();
+                setActiveTileRelPath(tiles[0].dataset.relPath || "", {
+                    scroll: true,
+                    focus: true
+                });
+                return;
+
+            case "End":
+                e.preventDefault();
+                setActiveTileRelPath(tiles[tiles.length - 1].dataset.relPath || "", {
+                    scroll: true,
+                    focus: true
+                });
+                return;
+
+            case "Enter":
+                e.preventDefault();
+                activateSelectedTile();
+                return;
+        }
+    });
     document.addEventListener("keydown", (e) => {
         const isSaveHotkey = (e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === "s";
         if (!isSaveHotkey) return;

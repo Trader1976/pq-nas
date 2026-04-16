@@ -657,7 +657,21 @@
             backdrop-filter: blur(6px);
             z-index: 2;
         }
+        .tile.kbdActive{
+            border-color: rgba(var(--fg-rgb),0.72);
+            background: rgba(var(--fg-rgb),0.09);
+            box-shadow:
+                    0 0 0 2px rgba(var(--fg-rgb),0.28),
+                    0 12px 36px rgba(0,0,0,0.24);
+        }
 
+        .tile.kbdActive .name{
+            color: rgba(var(--fg-rgb),1);
+        }
+
+        .tile:focus{
+            outline: none;
+        }
         .shareBadge.expired{
             background: rgba(255,70,70,0.18);
             border-color: rgba(255,70,70,0.55);
