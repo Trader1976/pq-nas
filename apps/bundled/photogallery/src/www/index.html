@@ -1,0 +1,647 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>DNA-Nexus • Photo Gallery</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+
+    <link rel="stylesheet" href="/static/theme.css">
+    <script src="/static/theme.js"></script>
+
+    <style>
+        :root{
+            --pg_surface: var(--panel);
+            --pg_surface2: var(--panel2);
+            --pg_overlay: rgba(0,0,0,0.56);
+        }
+
+        html[data-theme="bright"]{
+            --pg_overlay: rgba(255,255,255,0.34);
+            --pg_surface: rgba(255,255,255,0.97);
+            --pg_surface2: rgba(255,255,255,0.995);
+        }
+
+        html:not([data-theme]){
+            --bg: #050712;
+            --fg: #00f0f8;
+            --fg-rgb: 0,240,248;
+            --fg-dim: rgba(var(--fg-rgb),0.74);
+            --border: rgba(var(--fg-rgb),0.22);
+            --border2: rgba(var(--fg-rgb),0.12);
+            --shadow: 0 18px 70px rgba(0,0,0,0.55);
+            --radius: 18px;
+            --radius2: 22px;
+        }
+
+        *{ box-sizing:border-box; }
+        html,body{ height:100%; }
+
+        body{
+            margin:0;
+            color:var(--fg);
+            font-family: var(--sans);
+            background:
+                    radial-gradient(1200px 700px at 18% 8%, rgba(var(--fg-rgb),0.11), transparent 55%),
+                    radial-gradient(1000px 700px at 82% 12%, rgba(var(--fg-rgb),0.07), transparent 60%),
+                    linear-gradient(180deg, #04050f, var(--bg));
+            overflow:hidden;
+        }
+
+        .wrap{
+            height:100%;
+            display:flex;
+            flex-direction:column;
+            padding:14px;
+            gap:14px;
+        }
+
+        .panel{
+            flex:1 1 auto;
+            min-height:0;
+            border:1px solid var(--border);
+            border-radius: var(--radius2);
+            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.30));
+            box-shadow: var(--shadow);
+            overflow:hidden;
+            display:flex;
+            flex-direction:column;
+        }
+
+        .bar{
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:14px;
+            padding:12px 14px;
+            border-bottom:1px solid var(--border2);
+            background: rgba(0,0,0,0.18);
+            flex-wrap:wrap;
+        }
+
+        .left{
+            min-width:0;
+            display:flex;
+            flex-direction:column;
+            gap:4px;
+            flex:1 1 420px;
+        }
+
+        .title{
+            font-weight:900;
+            letter-spacing:0.2px;
+            font-size:14px;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }
+
+        #pathLine{
+            display:flex;
+            align-items:center;
+            gap:8px;
+            min-width:0;
+            white-space:nowrap;
+            overflow:hidden;
+            max-width: 70vw;
+            font-family: var(--mono);
+            color: var(--fg-dim);
+            font-size: 12px;
+        }
+
+        #pathLine .crumb{
+            cursor:pointer;
+            font-weight:850;
+            opacity:.86;
+            user-select:none;
+            color: rgba(var(--fg-rgb),0.92);
+        }
+        #pathLine .crumb:hover{
+            text-decoration: underline;
+            opacity:1;
+        }
+        #pathLine .crumb.active{
+            cursor:default;
+            text-decoration:none;
+            opacity:1;
+        }
+        #pathLine .crumbSep{
+            opacity:.35;
+            font-weight:900;
+            flex:0 0 auto;
+        }
+        #pathLine .crumbText{
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+            max-width:22ch;
+            display:inline-block;
+            vertical-align:bottom;
+        }
+
+        .actions{
+            display:flex;
+            gap:10px;
+            align-items:center;
+            flex-wrap:wrap;
+            justify-content:flex-end;
+        }
+
+        .btn,
+        .input{
+            border-radius:14px;
+            border:1px solid rgba(var(--fg-rgb),0.28);
+            background: rgba(0,0,0,0.26);
+            color:var(--fg);
+            font-weight:850;
+            font-family: var(--sans);
+        }
+
+        .btn{
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            gap:8px;
+            padding:10px 12px;
+            cursor:pointer;
+            text-decoration:none;
+            user-select:none;
+            transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+        }
+        .btn:hover{
+            transform:translateY(-1px);
+            border-color: rgba(var(--fg-rgb),0.42);
+            background: rgba(var(--fg-rgb),0.07);
+        }
+        .btn.secondary{
+            border-color: rgba(255,255,255,0.12);
+            color: rgba(var(--fg-rgb),0.82);
+        }
+        .btn.secondary:hover{
+            border-color: rgba(255,255,255,0.22);
+            background: rgba(255,255,255,0.05);
+        }
+
+        .input{
+            padding:10px 12px;
+            min-width:220px;
+            width:280px;
+        }
+
+        html[data-theme="bright"] .input{
+            background: rgba(255,255,255,1);
+            border-color: rgba(0,0,0,0.12);
+        }
+
+        .badge{
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 800;
+            border: 1px solid var(--border2);
+            background: rgba(0,0,0,0.28);
+            color: var(--fg);
+            white-space: nowrap;
+        }
+        .badge.ok{ border-color: rgba(var(--fg-rgb),0.30); background: rgba(var(--fg-rgb),0.08); }
+        .badge.warn{ border-color: rgba(255,190,0,0.25); background: rgba(255,190,0,0.10); color: rgba(255,225,170,0.95); }
+        .badge.err{ border-color: rgba(255,90,90,0.25); background: rgba(255,90,90,0.10); color: rgba(255,190,190,0.95); }
+
+        .gridWrap{
+            flex:1 1 auto;
+            min-height:0;
+            overflow:auto;
+            padding:14px;
+            position:relative;
+        }
+
+        .grid{
+            display:grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap:14px;
+            align-content:start;
+        }
+
+        .tile{
+            position:relative;
+            border:1px solid var(--border2);
+            border-radius:18px;
+            background: rgba(0,0,0,0.22);
+            overflow:hidden;
+            transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
+            cursor:pointer;
+            display:flex;
+            flex-direction:column;
+            min-height:220px;
+        }
+        .tile:hover{
+            transform:translateY(-1px);
+            background: rgba(var(--fg-rgb),0.05);
+            border-color: rgba(var(--fg-rgb),0.28);
+        }
+
+        .thumbWrap{
+            position:relative;
+            aspect-ratio: 1 / 1;
+            background:
+                    linear-gradient(135deg, rgba(var(--fg-rgb),0.05), rgba(255,255,255,0.02)),
+                    rgba(0,0,0,0.20);
+            overflow:hidden;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+        }
+
+        .thumb{
+            width:100%;
+            height:100%;
+            object-fit:cover;
+            display:block;
+        }
+
+        .folderGlyph{
+            width:72px;
+            height:72px;
+            opacity:.94;
+            filter: drop-shadow(0 0 14px rgba(var(--fg-rgb),0.12));
+        }
+
+        .tileBody{
+            display:flex;
+            flex-direction:column;
+            gap:8px;
+            padding:12px;
+            min-height:0;
+            flex:1 1 auto;
+        }
+
+        .name{
+            font-weight:900;
+            font-size:13px;
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }
+
+        .meta{
+            display:flex;
+            justify-content:space-between;
+            gap:10px;
+            font-size:12px;
+            color: var(--fg-dim);
+            font-family: var(--mono);
+        }
+
+        .tagLine{
+            font-size:12px;
+            color: var(--fg-dim);
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            min-height:18px;
+        }
+
+        .starRow{
+            display:flex;
+            align-items:center;
+            gap:2px;
+            flex-wrap:wrap;
+        }
+
+        .starBtn{
+            appearance:none;
+            border:0;
+            background:transparent;
+            color: rgba(255,255,255,0.35);
+            cursor:pointer;
+            font-size:18px;
+            line-height:1;
+            padding:2px;
+        }
+        .starBtn.on{
+            color: #ffd54f;
+            text-shadow: 0 0 10px rgba(255,213,79,0.28);
+        }
+
+        .tileTools{
+            position:absolute;
+            top:10px;
+            right:10px;
+            display:flex;
+            gap:8px;
+            z-index:3;
+        }
+
+        .miniBtn{
+            width:32px;
+            height:32px;
+            border-radius:999px;
+            border:1px solid rgba(255,255,255,0.14);
+            background: rgba(0,0,0,0.46);
+            color:var(--fg);
+            cursor:pointer;
+            font-size:15px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            backdrop-filter: blur(4px);
+        }
+
+        .miniBtn:hover{
+            background: rgba(var(--fg-rgb),0.10);
+            border-color: rgba(var(--fg-rgb),0.26);
+        }
+
+        .emptyState{
+            border:1px solid var(--border2);
+            border-radius:18px;
+            background: rgba(0,0,0,0.22);
+            padding:16px;
+            box-shadow: 0 0 18px rgba(var(--fg-rgb),0.06);
+        }
+        .emptyState .h{
+            font-weight:950;
+            font-size:16px;
+            margin-bottom:6px;
+        }
+        .emptyState .p{
+            color: var(--fg-dim);
+            line-height:1.45;
+        }
+
+        .footer{
+            padding:10px 12px;
+            border-top:1px solid var(--border2);
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            color: rgba(var(--fg-rgb),0.55);
+            font-size:12px;
+            flex-wrap:wrap;
+        }
+
+        .mono{ font-family: var(--mono); }
+
+        .modal{
+            position:fixed;
+            inset:0;
+            display:none;
+            align-items:center;
+            justify-content:center;
+            padding:18px;
+            z-index:10000;
+            background: var(--pg_overlay);
+            backdrop-filter: blur(6px);
+        }
+        .modal.show{ display:flex; }
+
+        #previewModal{
+            z-index: 10000;
+        }
+
+        #metaModal{
+            z-index: 10020;
+        }
+
+        .modalCard{
+            width:min(760px, calc(100vw - 24px));
+            max-height:min(90vh, 920px);
+            display:flex;
+            flex-direction:column;
+            border:1px solid var(--border2);
+            border-radius:18px;
+            background: linear-gradient(180deg, var(--pg_surface2), var(--pg_surface));
+            box-shadow: var(--shadow);
+            overflow:hidden;
+        }
+
+        .modalHead{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            padding:12px 14px;
+            border-bottom:1px solid var(--border2);
+            background: rgba(0,0,0,0.18);
+            flex:0 0 auto;
+        }
+
+        .modalTitle{
+            font-weight:950;
+            letter-spacing:.2px;
+        }
+
+        .modalSub{
+            margin-top:2px;
+            font-size:12px;
+            color: var(--fg-dim);
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            max-width:58ch;
+            font-family: var(--mono);
+        }
+
+        .modalBody{
+            padding:14px;
+            flex:1 1 auto;
+            min-height:0;
+            overflow:auto;
+        }
+
+        .modalFoot{
+            display:flex;
+            align-items:center;
+            gap:12px;
+            padding:12px 14px;
+            border-top:1px solid var(--border2);
+            background: rgba(0,0,0,0.14);
+            flex:0 0 auto;
+            flex-wrap:wrap;
+        }
+
+        .formGrid{
+            display:grid;
+            grid-template-columns: 130px 1fr;
+            gap:12px 14px;
+            align-items:start;
+        }
+        @media (max-width: 640px){
+            .formGrid{ grid-template-columns: 1fr; }
+        }
+
+        .label{
+            color: rgba(var(--fg-rgb),0.72);
+            font-weight:850;
+            font-size:13px;
+        }
+
+        .field,
+        .textarea{
+            width:100%;
+            padding:10px 12px;
+            border-radius:12px;
+            border:1px solid var(--border2);
+            background: rgba(0,0,0,0.22);
+            color: var(--fg);
+            font-family: var(--sans);
+        }
+
+        html[data-theme="bright"] .field,
+        html[data-theme="bright"] .textarea{
+            background: rgba(255,255,255,1);
+            border-color: rgba(0,0,0,0.12);
+        }
+
+        .textarea{
+            min-height:120px;
+            resize:vertical;
+        }
+
+        .previewCard{
+            width:min(1200px,96vw);
+            max-height:92vh;
+            position:absolute;
+            left:50%;
+            top:80px;
+            transform:translateX(-50%);
+        }
+
+        .previewHead{
+            cursor:move;
+            user-select:none;
+        }
+
+        .previewBody{
+            flex:1 1 auto;
+            min-height:0;
+            overflow:auto;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            padding:14px;
+            background: rgba(0,0,0,0.10);
+        }
+
+        .previewImg{
+            max-width:100%;
+            max-height:100%;
+            object-fit:contain;
+            display:block;
+        }
+
+        body.embedded .wrap{ padding:0; }
+        body.embedded .panel{
+            border:0;
+            border-radius:0;
+            box-shadow:none;
+            background:transparent;
+        }
+        body.embedded .bar{
+            border-radius:0;
+            border-left:0;
+            border-right:0;
+            border-top:0;
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="panel">
+        <div class="bar">
+            <div class="left">
+                <div class="title" id="titleLine">Photo Gallery</div>
+                <div id="pathLine" aria-label="Breadcrumb path">/</div>
+            </div>
+
+            <div class="actions">
+                <span class="badge warn" id="badge">loading…</span>
+                <input id="filterInput" class="input" type="text" placeholder="Filter current folder">
+                <button class="btn secondary" id="upBtn" type="button">Up</button>
+                <button class="btn" id="refreshBtn" type="button">Refresh</button>
+            </div>
+        </div>
+
+        <div class="gridWrap">
+            <div id="grid" class="grid"></div>
+        </div>
+
+        <div class="footer">
+            <div id="status" class="mono">Ready.</div>
+            <div class="mono">DNA-Nexus bundled app • photogallery 1.0.0</div>
+        </div>
+    </div>
+</div>
+
+<div id="metaModal" class="modal" aria-hidden="true">
+    <div id="metaCard" class="modalCard" role="dialog" aria-modal="true" aria-labelledby="metaTitle"
+         style="width:min(760px, calc(100vw - 24px)); position:absolute; left:50%; top:110px; transform:translateX(-50%);">
+        <div id="metaHead" class="modalHead" style="cursor:move; user-select:none;">
+            <div>
+                <div id="metaTitle" class="modalTitle">Image metadata</div>
+                <div id="metaPath" class="modalSub">/</div>
+            </div>
+            <button id="metaClose" class="btn secondary" type="button">Close</button>
+        </div>
+
+        <div class="modalBody">
+            <div class="formGrid">
+                <div class="label">Rating</div>
+                <div id="metaStars" class="starRow"></div>
+
+                <div class="label">Tags</div>
+                <div>
+                    <input id="metaTags" class="field" type="text" placeholder="cat black sofa sunset">
+                </div>
+
+                <div class="label">Notes</div>
+                <div>
+                    <textarea id="metaNotes" class="textarea" placeholder="Optional notes or caption"></textarea>
+                </div>
+
+                <div class="label">Info</div>
+                <div id="metaInfo" class="mono" style="opacity:.84;"></div>
+            </div>
+        </div>
+
+        <div class="modalFoot">
+            <div id="metaStatus" class="mono" style="opacity:.84;">Ready.</div>
+            <div style="flex:1 1 auto;"></div>
+            <button id="metaSaveBtn" class="btn" type="button">Save</button>
+        </div>
+    </div>
+</div>
+
+<div id="previewModal" class="modal" aria-hidden="true">
+    <div id="previewCard" class="modalCard previewCard">
+        <div id="previewHead" class="modalHead previewHead">
+            <div>
+                <div class="modalTitle">Image preview</div>
+                <div id="previewPath" class="modalSub">/</div>
+            </div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button id="previewPrevBtn" class="btn secondary" type="button">←</button>
+                <button id="previewNextBtn" class="btn secondary" type="button">→</button>
+                <button id="previewFitBtn" class="btn secondary" type="button">Fit</button>
+                <button id="previewActualBtn" class="btn secondary" type="button">100%</button>
+                <button id="previewMetaBtn" class="btn secondary" type="button">Metadata</button>
+                <button id="previewClose" class="btn secondary" type="button">Close</button>
+            </div>
+        </div>
+
+        <div class="modalFoot" style="border-top:0; border-bottom:1px solid var(--border2);">
+            <div id="previewInfo" class="mono" style="opacity:.84;">Loading…</div>
+        </div>
+
+        <div class="previewBody">
+            <img id="previewImg" class="previewImg" alt="">
+        </div>
+    </div>
+</div>
+
+<script src="./app.js"></script>
+</body>
+</html>

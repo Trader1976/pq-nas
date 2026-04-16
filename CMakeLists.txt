@@ -287,6 +287,7 @@ add_executable(pqnas_server
         server/src/runtime_paths.cpp
         server/src/file_versions.cpp
         server/src/file_versions_restore.cpp
+        server/src/gallery_meta.cpp
 )
 
 # Treat warnings as errors for the server (security-sensitive)

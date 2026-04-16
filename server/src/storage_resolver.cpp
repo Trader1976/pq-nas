@@ -3,6 +3,7 @@
 
 #include "file_location_index.h"
 #include "user_quota.h"
+#include "gallery_meta.h"
 
 #include <filesystem>
 
@@ -158,6 +159,16 @@ void set_file_location_index(FileLocationIndex* idx) {
 
 FileLocationIndex* get_file_location_index() {
     return g_file_location_index;
+}
+
+GalleryMetaIndex* g_gallery_meta_index = nullptr;
+
+void set_gallery_meta_index(GalleryMetaIndex* idx) {
+    g_gallery_meta_index = idx;
+}
+
+GalleryMetaIndex* get_gallery_meta_index() {
+    return g_gallery_meta_index;
 }
 
 /*

@@ -11,6 +11,11 @@ class FileLocationIndex;
 void set_file_location_index(FileLocationIndex* idx);
 FileLocationIndex* get_file_location_index();
 
+class GalleryMetaIndex;
+
+void set_gallery_meta_index(GalleryMetaIndex* idx);
+GalleryMetaIndex* get_gallery_meta_index();
+
 struct ResolvedExistingPath {
     std::string normalized_rel_path;
     std::filesystem::path abs_path;

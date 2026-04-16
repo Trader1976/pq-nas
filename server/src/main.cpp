@@ -148,6 +148,7 @@ extern "C" {
 #include "app_tokens.h"
 #include "app_pairing.h"
 
+#include "gallery_meta.h"
 
 using json = nlohmann::json;
 
@@ -7426,6 +7427,19 @@ int main()
         }
     }
 
+    const std::filesystem::path gallery_meta_db =
+        std::filesystem::path(pqnas::data_root_dir()).parent_path() / "config" / "gallery_meta.db";
+
+    pqnas::GalleryMetaIndex gallery_meta_index(gallery_meta_db);
+    {
+        std::string gerr;
+        if (!gallery_meta_index.open(&gerr) || !gallery_meta_index.init_schema(&gerr)) {
+            std::cerr << "gallery metadata init failed: " << gerr << std::endl;
+            return 1;
+        }
+    }
+
+    pqnas::set_gallery_meta_index(&gallery_meta_index);
     // ---- Audit log (hash-chained JSONL) ----
     std::string audit_dir = exe_dir() + "/audit";
 	if (const char* p = std::getenv("PQNAS_AUDIT_DIR")) {
@@ -19357,7 +19371,14 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
                 audit_warn("favorites_move_failed", ferr, from_rel, to_rel);
             }
         }
-
+        {
+            std::string gerr;
+            if (auto* gidx = pqnas::get_gallery_meta_index()) {
+                if (!gidx->rename_one("user", fp_hex, from_rel_norm, to_rel_norm, now_ts, &gerr)) {
+                    audit_warn("gallery_meta_move_failed", gerr, from_rel, to_rel);
+                }
+            }
+        }
         audit_ok(from_rel, to_rel, "file", bytes);
         reply_json(res, 200, json{
             {"ok", true},
@@ -19565,7 +19586,14 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
                 audit_warn("favorites_move_failed", ferr, from_rel, to_rel);
             }
         }
-
+        {
+            std::string gerr;
+            if (auto* gidx = pqnas::get_gallery_meta_index()) {
+                if (!gidx->rename_subtree("user", fp_hex, from_rel_norm, to_rel_norm, now_ts, &gerr)) {
+                    audit_warn("gallery_meta_move_failed", gerr, from_rel, to_rel);
+                }
+            }
+        }
         audit_ok(from_rel, to_rel, "dir", 0);
         reply_json(res, 200, json{
             {"ok", true},
@@ -25764,7 +25792,14 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
                 audit_warn("favorites_cleanup_failed", ferr, rel_norm);
             }
         }
-
+        {
+            std::string gerr;
+            if (auto* gidx = pqnas::get_gallery_meta_index()) {
+                if (!gidx->erase_subtree("user", fp_hex, rel_norm, &gerr)) {
+                    audit_warn("gallery_meta_cleanup_failed", gerr, rel_norm);
+                }
+            }
+        }
         audit_ok(rel_path, "dir", freed_bytes);
         reply_json(res, 200, json{
             {"ok", true},
@@ -27454,6 +27489,1005 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
 
     audit_ok(rel_path, sz);
 });
+
+// GET /api/v4/gallery/list?path=relative/dir
+// Lists immediate children for Photo Gallery:
+// - directories are always included
+// - files are included only if they look like supported images
+// - joins gallery metadata (rating/tags/notes) for exact child files
+srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http,
+                          const std::string& detail = "",
+                          const std::string& rel_dir = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.gallery_list_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!rel_dir.empty()) ev.f["path"] = pqnas::shorten(rel_dir, 200);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        add_ip_headers(ev);
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& rel_dir, std::size_t count) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.gallery_list_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_dir, 200);
+        ev.f["count"] = std::to_string((unsigned long long)count);
+        add_ip_headers(ev);
+        audit_append(ev);
+    };
+
+    auto lower_ascii_local = [](std::string s) -> std::string {
+        for (char& c : s) c = (char)std::tolower((unsigned char)c);
+        return s;
+    };
+
+    auto is_reserved_name = [&](const std::string& name) -> bool {
+        return name == ".pqnas";
+    };
+
+    auto file_ext_lower = [&](const std::string& name) -> std::string {
+        std::string n = name;
+        const auto slash = n.find_last_of("/\\");
+        if (slash != std::string::npos) n = n.substr(slash + 1);
+
+        auto lower = lower_ascii_local(n);
+        const auto dot = lower.rfind('.');
+        if (dot == std::string::npos || dot == 0 || dot + 1 >= lower.size()) return "";
+        return lower.substr(dot + 1);
+    };
+
+    auto is_gallery_image_name = [&](const std::string& name) -> bool {
+        const std::string ext = file_ext_lower(name);
+        return ext == "png"  ||
+               ext == "jpg"  ||
+               ext == "jpeg" ||
+               ext == "gif"  ||
+               ext == "webp" ||
+               ext == "svg"  ||
+               ext == "bmp"  ||
+               ext == "ico";
+    };
+
+    auto join_rel = [&](const std::string& base, const std::string& name) -> std::string {
+        if (base.empty()) return name;
+        return base + "/" + name;
+    };
+
+    // Storage allocated check (fail-closed)
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value()) {
+            audit_fail("user_missing", 403);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "policy denied"}
+            }.dump());
+            return;
+        }
+
+        const auto& u = *uopt;
+        if (u.storage_state != "allocated") {
+            audit_fail("storage_unallocated", 403);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"},
+                {"fingerprint_hex", fp_hex},
+                {"quota_bytes", u.quota_bytes}
+            }.dump());
+            return;
+        }
+    }
+
+    std::string rel_dir;
+    if (req.has_param("path")) rel_dir = req.get_param_value("path");
+
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+    std::filesystem::path abs_dir = user_dir;
+    std::string rel_dir_norm;
+
+    if (!rel_dir.empty()) {
+        std::string nerr;
+        if (!pqnas::normalize_user_rel_path_strict(rel_dir, &rel_dir_norm, &nerr)) {
+            audit_fail("invalid_path", 400, nerr, rel_dir);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            }.dump());
+            return;
+        }
+
+        std::string perr;
+        if (!pqnas::resolve_user_path_strict(user_dir, rel_dir_norm, &abs_dir, &perr)) {
+            // Do not fail yet: dir may exist only logically via metadata.
+            abs_dir.clear();
+        }
+    }
+
+    struct ListedItem {
+        std::string name;
+        std::string type; // "dir" | "file"
+        std::uint64_t size_bytes = 0;
+        long long mtime_unix = 0;
+
+        int rating = 0;
+        std::string tags_text;
+        std::string notes_text;
+    };
+
+    std::map<std::string, ListedItem> merged;
+
+    // 1) Legacy physical immediate children, if physical dir exists.
+    bool legacy_dir_ok = false;
+    {
+        std::error_code ec;
+        std::filesystem::path dir_to_check = abs_dir.empty() ? user_dir : abs_dir;
+        auto st = std::filesystem::symlink_status(dir_to_check, ec);
+
+        if (!ec && std::filesystem::exists(st)) {
+            if (std::filesystem::is_symlink(st)) {
+                audit_fail("symlink_not_supported", 400, "", rel_dir_norm.empty() ? rel_dir : rel_dir_norm);
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "symlinks not supported"}
+                }.dump());
+                return;
+            }
+
+            if (std::filesystem::is_directory(st)) {
+                legacy_dir_ok = true;
+
+                for (std::filesystem::directory_iterator it(dir_to_check, ec), end; it != end && !ec; it.increment(ec)) {
+                    std::error_code ec2;
+                    const auto child_path = it->path();
+                    const auto name = child_path.filename().string();
+
+                    if (name.empty() || name == "." || name == "..") continue;
+                    if (is_reserved_name(name)) continue;
+
+                    auto child_st = std::filesystem::symlink_status(child_path, ec2);
+                    if (ec2) continue;
+                    if (std::filesystem::is_symlink(child_st)) continue;
+
+                    if (std::filesystem::is_directory(child_st)) {
+                        long long mtime_unix = 0;
+                        ec2.clear();
+                        auto ft = std::filesystem::last_write_time(child_path, ec2);
+                        if (!ec2) {
+                            using namespace std::chrono;
+                            auto sctp = time_point_cast<system_clock::duration>(
+                                ft - decltype(ft)::clock::now() + system_clock::now()
+                            );
+                            mtime_unix = (long long)duration_cast<seconds>(sctp.time_since_epoch()).count();
+                        }
+
+                        merged[name] = ListedItem{
+                            name, "dir", 0, mtime_unix, 0, "", ""
+                        };
+                        continue;
+                    }
+
+                    if (std::filesystem::is_regular_file(child_st) && is_gallery_image_name(name)) {
+                        std::uint64_t size_bytes = 0;
+                        ec2.clear();
+                        auto sz = std::filesystem::file_size(child_path, ec2);
+                        if (!ec2) size_bytes = static_cast<std::uint64_t>(sz);
+
+                        long long mtime_unix = 0;
+                        ec2.clear();
+                        auto ft = std::filesystem::last_write_time(child_path, ec2);
+                        if (!ec2) {
+                            using namespace std::chrono;
+                            auto sctp = time_point_cast<system_clock::duration>(
+                                ft - decltype(ft)::clock::now() + system_clock::now()
+                            );
+                            mtime_unix = (long long)duration_cast<seconds>(sctp.time_since_epoch()).count();
+                        }
+
+                        merged[name] = ListedItem{
+                            name, "file", size_bytes, mtime_unix, 0, "", ""
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    // 2) Merge metadata-backed immediate children from file_locations.
+    bool metadata_ok = false;
+    {
+        auto* idx = pqnas::get_file_location_index();
+        if (!idx) {
+            audit_fail("metadata_index_missing", 500, "", rel_dir_norm.empty() ? rel_dir : rel_dir_norm);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "metadata index missing"}
+            }.dump());
+            return;
+        }
+
+        std::string lerr;
+        auto rows = idx->list_immediate_children(fp_hex, rel_dir_norm, &lerr);
+        if (!lerr.empty()) {
+            audit_fail("metadata_list_failed", 500, lerr, rel_dir_norm.empty() ? rel_dir : rel_dir_norm);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "metadata list failed"},
+                {"detail", pqnas::shorten(lerr, 180)}
+            }.dump());
+            return;
+        }
+
+        if (!rows.empty()) metadata_ok = true;
+
+        for (const auto& rec : rows) {
+            if (rec.name.empty()) continue;
+            if (is_reserved_name(rec.name)) continue;
+
+            const std::string t = rec.type.empty() ? "file" : rec.type;
+            if (t != "dir" && t != "file") continue;
+            if (t == "file" && !is_gallery_image_name(rec.name)) continue;
+
+            auto it = merged.find(rec.name);
+            if (it == merged.end()) {
+                merged[rec.name] = ListedItem{
+                    rec.name,
+                    t,
+                    (t == "file" ? rec.size_bytes : 0),
+                    (long long)rec.mtime_epoch,
+                    0,
+                    "",
+                    ""
+                };
+            } else {
+                it->second.type = t;
+                it->second.size_bytes = (t == "file" ? rec.size_bytes : 0);
+                it->second.mtime_unix = (long long)rec.mtime_epoch;
+            }
+        }
+    }
+
+    if (!legacy_dir_ok && !metadata_ok && !rel_dir_norm.empty()) {
+        audit_fail("not_found", 404, "", rel_dir_norm);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "directory not found"}
+        }.dump());
+        return;
+    }
+
+    // 3) Join gallery metadata for exact child files.
+    {
+        auto* gidx = pqnas::get_gallery_meta_index();
+        if (!gidx) {
+            audit_fail("gallery_meta_index_missing", 500, "", rel_dir_norm.empty() ? rel_dir : rel_dir_norm);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "gallery metadata index missing"}
+            }.dump());
+            return;
+        }
+
+        for (auto& kv : merged) {
+            auto& item = kv.second;
+            if (item.type != "file") continue;
+
+            const std::string child_rel = join_rel(rel_dir_norm, item.name);
+
+            std::string gerr;
+            auto grec = gidx->get("user", fp_hex, child_rel, &gerr);
+            if (!gerr.empty()) {
+                audit_fail("gallery_meta_lookup_failed", 500, gerr, child_rel);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "gallery metadata lookup failed"},
+                    {"detail", pqnas::shorten(gerr, 180)}
+                }.dump());
+                return;
+            }
+
+            if (grec.has_value()) {
+                item.rating = grec->rating;
+                item.tags_text = grec->tags_text;
+                item.notes_text = grec->notes_text;
+
+                // Prefer fresher gallery-cached facts only if file_locations did not provide them.
+                if (item.size_bytes == 0 && grec->size_bytes > 0) {
+                    item.size_bytes = grec->size_bytes;
+                }
+                if (item.mtime_unix == 0 && grec->mtime_epoch > 0) {
+                    item.mtime_unix = (long long)grec->mtime_epoch;
+                }
+            }
+        }
+    }
+
+    json out;
+    out["ok"] = true;
+    out["fingerprint_hex"] = fp_hex;
+    out["path"] = rel_dir_norm.empty() ? rel_dir : rel_dir_norm;
+    out["items"] = json::array();
+
+    std::size_t count = 0;
+    for (const auto& kv : merged) {
+        const auto& item = kv.second;
+        out["items"].push_back(json{
+            {"name", item.name},
+            {"type", item.type},
+            {"size_bytes", item.size_bytes},
+            {"mtime_unix", item.mtime_unix},
+            {"rating", item.rating},
+            {"tags_text", item.tags_text},
+            {"notes_text", item.notes_text}
+        });
+        count++;
+        if (count >= 5000) break;
+    }
+
+    const std::string out_path = rel_dir_norm.empty() ? rel_dir : rel_dir_norm;
+    audit_ok(out_path, count);
+    reply_json(res, 200, out.dump());
+});
+
+// POST /api/v4/gallery/meta/set
+// Body:
+// {
+//   "path": "photos/cat.jpg",
+//   "rating": 5,            // optional, clamped 0..5
+//   "tags_text": "cat sofa",// optional
+//   "notes_text": "best shot" // optional
+// }
+srv.Post("/api/v4/gallery/meta/set", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http,
+                          const std::string& detail = "",
+                          const std::string& rel_path = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.gallery_meta_set_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!rel_path.empty()) ev.f["path"] = pqnas::shorten(rel_path, 200);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        add_ip_headers(ev);
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& rel_path,
+                        bool rating_changed,
+                        bool tags_changed,
+                        bool notes_changed) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.gallery_meta_set_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_path, 200);
+        ev.f["rating_changed"] = rating_changed ? "1" : "0";
+        ev.f["tags_changed"] = tags_changed ? "1" : "0";
+        ev.f["notes_changed"] = notes_changed ? "1" : "0";
+        add_ip_headers(ev);
+        audit_append(ev);
+    };
+
+    // allocated storage required
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value()) {
+            audit_fail("user_missing", 403);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "policy denied"}
+            }.dump());
+            return;
+        }
+
+        const auto& u = *uopt;
+        if (u.storage_state != "allocated") {
+            audit_fail("storage_unallocated", 403);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"},
+                {"fingerprint_hex", fp_hex},
+                {"quota_bytes", u.quota_bytes}
+            }.dump());
+            return;
+        }
+    }
+
+    json in = json::parse(req.body, nullptr, false);
+    if (in.is_discarded() || !in.is_object()) {
+        audit_fail("bad_json", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json body"}
+        }.dump());
+        return;
+    }
+
+    const std::string path_in = in.value("path", "");
+    if (path_in.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm;
+    std::string nerr;
+    if (!pqnas::normalize_user_rel_path_strict(path_in, &rel_norm, &nerr)) {
+        audit_fail("invalid_path", 400, nerr, path_in);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    const bool has_rating = in.contains("rating");
+    const bool has_tags = in.contains("tags_text");
+    const bool has_notes = in.contains("notes_text");
+
+    if (!has_rating && !has_tags && !has_notes) {
+        audit_fail("no_fields", 400, "", rel_norm);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "nothing to update"}
+        }.dump());
+        return;
+    }
+
+    std::optional<int> rating;
+    std::optional<std::string> tags_text;
+    std::optional<std::string> notes_text;
+
+    if (has_rating) {
+        if (!in["rating"].is_number_integer()) {
+            audit_fail("bad_rating", 400, "", rel_norm);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "rating must be an integer"}
+            }.dump());
+            return;
+        }
+        int r = in["rating"].get<int>();
+        if (r < 0) r = 0;
+        if (r > 5) r = 5;
+        rating = r;
+    }
+
+    if (has_tags) {
+        if (!in["tags_text"].is_string()) {
+            audit_fail("bad_tags_text", 400, "", rel_norm);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "tags_text must be a string"}
+            }.dump());
+            return;
+        }
+        auto s = in["tags_text"].get<std::string>();
+        if (s.size() > 4000) s.resize(4000);
+        tags_text = s;
+    }
+
+    if (has_notes) {
+        if (!in["notes_text"].is_string()) {
+            audit_fail("bad_notes_text", 400, "", rel_norm);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "notes_text must be a string"}
+            }.dump());
+            return;
+        }
+        auto s = in["notes_text"].get<std::string>();
+        if (s.size() > 12000) s.resize(12000);
+        notes_text = s;
+    }
+
+    // verify target exists and is a file
+    pqnas::ResolvedLogicalItem item;
+    std::string rerr;
+    if (!pqnas::resolve_existing_user_item(users, fp_hex, rel_norm, &item, &rerr) || !item.exists) {
+        audit_fail("not_found", 404, rerr, rel_norm);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "path not found"}
+        }.dump());
+        return;
+    }
+
+    if (!item.is_file) {
+        audit_fail("not_file", 400, "", rel_norm);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "gallery metadata can only be set for files"}
+        }.dump());
+        return;
+    }
+
+    auto lower_ascii_local = [](std::string s) -> std::string {
+        for (char& c : s) c = (char)std::tolower((unsigned char)c);
+        return s;
+    };
+
+    auto file_ext_lower = [&](const std::string& name) -> std::string {
+        std::string n = name;
+        const auto slash = n.find_last_of("/\\");
+        if (slash != std::string::npos) n = n.substr(slash + 1);
+        auto lower = lower_ascii_local(n);
+        const auto dot = lower.rfind('.');
+        if (dot == std::string::npos || dot == 0 || dot + 1 >= lower.size()) return "";
+        return lower.substr(dot + 1);
+    };
+
+    auto is_gallery_image_name = [&](const std::string& name) -> bool {
+        const std::string ext = file_ext_lower(name);
+        return ext == "png"  ||
+               ext == "jpg"  ||
+               ext == "jpeg" ||
+               ext == "gif"  ||
+               ext == "webp" ||
+               ext == "svg"  ||
+               ext == "bmp"  ||
+               ext == "ico";
+    };
+
+    if (!is_gallery_image_name(std::filesystem::path(rel_norm).filename().string())) {
+        audit_fail("not_supported_image", 400, "", rel_norm);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "file is not a supported gallery image"}
+        }.dump());
+        return;
+    }
+
+    auto* gidx = pqnas::get_gallery_meta_index();
+    if (!gidx) {
+        audit_fail("gallery_meta_index_missing", 500, "", rel_norm);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "gallery metadata index missing"}
+        }.dump());
+        return;
+    }
+
+    std::uint64_t size_bytes = 0;
+    std::int64_t mtime_epoch = 0;
+
+    {
+        auto* idx = pqnas::get_file_location_index();
+        if (idx) {
+            std::string lerr;
+            auto rec = idx->get(fp_hex, rel_norm, &lerr);
+            if (!lerr.empty()) {
+                audit_fail("file_location_lookup_failed", 500, lerr, rel_norm);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "file metadata lookup failed"},
+                    {"detail", pqnas::shorten(lerr, 180)}
+                }.dump());
+                return;
+            }
+            if (rec.has_value()) {
+                size_bytes = rec->size_bytes;
+                mtime_epoch = rec->mtime_epoch;
+            }
+        }
+    }
+
+    // fallback to physical file stat if needed
+    if ((size_bytes == 0 || mtime_epoch == 0) && item.has_physical_anchor) {
+        std::error_code ec;
+        auto st = std::filesystem::symlink_status(item.abs_path, ec);
+        if (!ec && std::filesystem::exists(st) && std::filesystem::is_regular_file(st)) {
+            if (size_bytes == 0) {
+                size_bytes = pqnas::file_size_u64_safe(item.abs_path);
+            }
+            if (mtime_epoch == 0) {
+                auto ft = std::filesystem::last_write_time(item.abs_path, ec);
+                if (!ec) {
+                    using namespace std::chrono;
+                    auto sctp = time_point_cast<system_clock::duration>(
+                        ft - std::filesystem::file_time_type::clock::now() + system_clock::now()
+                    );
+                    mtime_epoch = (std::int64_t)duration_cast<seconds>(sctp.time_since_epoch()).count();
+                }
+            }
+        }
+    }
+
+    const std::int64_t now_ts = now_epoch_sec();
+
+    std::string gerr;
+    if (!gidx->patch("user", fp_hex, rel_norm, rating, tags_text, notes_text, now_ts, &gerr)) {
+        audit_fail("gallery_meta_patch_failed", 500, gerr, rel_norm);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "gallery metadata update failed"},
+            {"detail", pqnas::shorten(gerr, 180)}
+        }.dump());
+        return;
+    }
+
+    // best-effort touch so cached file facts stay current on existing/new row
+    {
+        std::string terr;
+        (void)gidx->touch_file_facts("user", fp_hex, rel_norm, size_bytes, mtime_epoch, now_ts, &terr);
+    }
+
+    std::string get_err;
+    auto out_rec = gidx->get("user", fp_hex, rel_norm, &get_err);
+    if (!get_err.empty()) {
+        audit_fail("gallery_meta_readback_failed", 500, get_err, rel_norm);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "gallery metadata readback failed"},
+            {"detail", pqnas::shorten(get_err, 180)}
+        }.dump());
+        return;
+    }
+
+    audit_ok(rel_norm, has_rating, has_tags, has_notes);
+
+    json out{
+        {"ok", true},
+        {"path", rel_norm}
+    };
+
+    if (out_rec.has_value()) {
+        out["meta"] = json{
+            {"rating", out_rec->rating},
+            {"tags_text", out_rec->tags_text},
+            {"notes_text", out_rec->notes_text},
+            {"size_bytes", out_rec->size_bytes},
+            {"mtime_epoch", out_rec->mtime_epoch},
+            {"updated_epoch", out_rec->updated_epoch}
+        };
+    } else {
+        out["meta"] = json{
+            {"rating", rating.has_value() ? *rating : 0},
+            {"tags_text", tags_text.has_value() ? *tags_text : ""},
+            {"notes_text", notes_text.has_value() ? *notes_text : ""},
+            {"size_bytes", size_bytes},
+            {"mtime_epoch", mtime_epoch},
+            {"updated_epoch", now_ts}
+        };
+    }
+
+    reply_json(res, 200, out.dump());
+});
+
+// POST /api/v4/gallery/meta/get
+// Body:
+// {
+//   "path": "photos/cat.jpg"
+// }
+srv.Post("/api/v4/gallery/meta/get", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http,
+                          const std::string& detail = "",
+                          const std::string& rel_path = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.gallery_meta_get_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!rel_path.empty()) ev.f["path"] = pqnas::shorten(rel_path, 200);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        add_ip_headers(ev);
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& rel_path, bool found_meta) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.gallery_meta_get_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_path, 200);
+        ev.f["found_meta"] = found_meta ? "1" : "0";
+        add_ip_headers(ev);
+        audit_append(ev);
+    };
+
+    auto lower_ascii_local = [](std::string s) -> std::string {
+        for (char& c : s) c = (char)std::tolower((unsigned char)c);
+        return s;
+    };
+
+    auto file_ext_lower = [&](const std::string& name) -> std::string {
+        std::string n = name;
+        const auto slash = n.find_last_of("/\\");
+        if (slash != std::string::npos) n = n.substr(slash + 1);
+        auto lower = lower_ascii_local(n);
+        const auto dot = lower.rfind('.');
+        if (dot == std::string::npos || dot == 0 || dot + 1 >= lower.size()) return "";
+        return lower.substr(dot + 1);
+    };
+
+    auto is_gallery_image_name = [&](const std::string& name) -> bool {
+        const std::string ext = file_ext_lower(name);
+        return ext == "png"  ||
+               ext == "jpg"  ||
+               ext == "jpeg" ||
+               ext == "gif"  ||
+               ext == "webp" ||
+               ext == "svg"  ||
+               ext == "bmp"  ||
+               ext == "ico";
+    };
+
+    // allocated storage required
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value()) {
+            audit_fail("user_missing", 403);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "policy denied"}
+            }.dump());
+            return;
+        }
+
+        const auto& u = *uopt;
+        if (u.storage_state != "allocated") {
+            audit_fail("storage_unallocated", 403);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"},
+                {"fingerprint_hex", fp_hex},
+                {"quota_bytes", u.quota_bytes}
+            }.dump());
+            return;
+        }
+    }
+
+    json in = json::parse(req.body, nullptr, false);
+    if (in.is_discarded() || !in.is_object()) {
+        audit_fail("bad_json", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json body"}
+        }.dump());
+        return;
+    }
+
+    const std::string path_in = in.value("path", "");
+    if (path_in.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm;
+    std::string nerr;
+    if (!pqnas::normalize_user_rel_path_strict(path_in, &rel_norm, &nerr)) {
+        audit_fail("invalid_path", 400, nerr, path_in);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    pqnas::ResolvedLogicalItem item;
+    std::string rerr;
+    if (!pqnas::resolve_existing_user_item(users, fp_hex, rel_norm, &item, &rerr) || !item.exists) {
+        audit_fail("not_found", 404, rerr, rel_norm);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "path not found"}
+        }.dump());
+        return;
+    }
+
+    if (!item.is_file) {
+        audit_fail("not_file", 400, "", rel_norm);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "gallery metadata is only available for files"}
+        }.dump());
+        return;
+    }
+
+    if (!is_gallery_image_name(std::filesystem::path(rel_norm).filename().string())) {
+        audit_fail("not_supported_image", 400, "", rel_norm);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "file is not a supported gallery image"}
+        }.dump());
+        return;
+    }
+
+    std::uint64_t size_bytes = 0;
+    std::int64_t mtime_epoch = 0;
+
+    {
+        auto* idx = pqnas::get_file_location_index();
+        if (idx) {
+            std::string lerr;
+            auto rec = idx->get(fp_hex, rel_norm, &lerr);
+            if (!lerr.empty()) {
+                audit_fail("file_location_lookup_failed", 500, lerr, rel_norm);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "file metadata lookup failed"},
+                    {"detail", pqnas::shorten(lerr, 180)}
+                }.dump());
+                return;
+            }
+            if (rec.has_value()) {
+                size_bytes = rec->size_bytes;
+                mtime_epoch = rec->mtime_epoch;
+            }
+        }
+    }
+
+    if ((size_bytes == 0 || mtime_epoch == 0) && item.has_physical_anchor) {
+        std::error_code ec;
+        auto st = std::filesystem::symlink_status(item.abs_path, ec);
+        if (!ec && std::filesystem::exists(st) && std::filesystem::is_regular_file(st)) {
+            if (size_bytes == 0) {
+                size_bytes = pqnas::file_size_u64_safe(item.abs_path);
+            }
+            if (mtime_epoch == 0) {
+                auto ft = std::filesystem::last_write_time(item.abs_path, ec);
+                if (!ec) {
+                    using namespace std::chrono;
+                    auto sctp = time_point_cast<system_clock::duration>(
+                        ft - std::filesystem::file_time_type::clock::now() + system_clock::now()
+                    );
+                    mtime_epoch = (std::int64_t)duration_cast<seconds>(sctp.time_since_epoch()).count();
+                }
+            }
+        }
+    }
+
+    auto* gidx = pqnas::get_gallery_meta_index();
+    if (!gidx) {
+        audit_fail("gallery_meta_index_missing", 500, "", rel_norm);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "gallery metadata index missing"}
+        }.dump());
+        return;
+    }
+
+    std::string gerr;
+    auto meta = gidx->get("user", fp_hex, rel_norm, &gerr);
+    if (!gerr.empty()) {
+        audit_fail("gallery_meta_lookup_failed", 500, gerr, rel_norm);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "gallery metadata lookup failed"},
+            {"detail", pqnas::shorten(gerr, 180)}
+        }.dump());
+        return;
+    }
+
+    json out{
+        {"ok", true},
+        {"path", rel_norm},
+        {"meta", json{
+            {"rating", meta.has_value() ? meta->rating : 0},
+            {"tags_text", meta.has_value() ? meta->tags_text : ""},
+            {"notes_text", meta.has_value() ? meta->notes_text : ""},
+            {"size_bytes", meta.has_value() && meta->size_bytes > 0 ? meta->size_bytes : size_bytes},
+            {"mtime_epoch", meta.has_value() && meta->mtime_epoch > 0 ? meta->mtime_epoch : mtime_epoch},
+            {"created_epoch", meta.has_value() ? meta->created_epoch : 0},
+            {"updated_epoch", meta.has_value() ? meta->updated_epoch : 0}
+        }}
+    };
+
+    audit_ok(rel_norm, meta.has_value());
+    reply_json(res, 200, out.dump());
+});
+
+
 // ---- Files API (user storage) ----
 // PUT /api/v4/files/put?path=relative/path.bin[&overwrite=1]
 // Body: raw bytes (streamed to temp file, then renamed atomically)
@@ -28191,7 +29225,14 @@ srv.Put("/api/v4/files/put",
                 std::filesystem::remove(out_abs, ec2);
                 throw std::runtime_error(std::string("metadata upsert failed: ") + merr);
             }
-
+            {
+                std::string gerr;
+                if (auto* gidx = pqnas::get_gallery_meta_index()) {
+                    if (!gidx->touch_file_facts("user", fp_hex, rel_norm, bytes_written, now_ts, now_ts, &gerr)) {
+                        // best-effort only; no hard fail
+                    }
+                }
+            }
             if (tiering_write) {
                 pqnas::AuditEvent tev;
                 tev.event = "storage.tiering_upload_landed";
