@@ -694,7 +694,11 @@
             color: rgba(var(--fg-rgb),0.94);
             overflow-wrap:anywhere;
         }
-
+        .tile.sel{
+            background: rgba(var(--fg-rgb),0.10);
+            border-color: rgba(var(--fg-rgb),0.35);
+            box-shadow: 0 0 0 2px rgba(var(--fg-rgb),0.18) inset;
+        }
         .embeddedPre{
             margin:0;
             padding:10px 12px;
@@ -751,6 +755,10 @@
                     <option value="4">4★</option>
                     <option value="5">5★</option>
                 </select>
+                <span class="badge" id="selCount" style="display:none;">0 selected</span>
+                <button class="btn secondary" id="downloadSelBtn" type="button" disabled>Download selected</button>
+                <button class="btn secondary" id="deleteSelBtn" type="button" disabled>Delete selected</button>
+                <button class="btn secondary" id="clearSelBtn" type="button" disabled>Clear</button>
 
                 <button class="btn secondary" id="upBtn" type="button">Up</button>
                 <button class="btn" id="refreshBtn" type="button">Refresh</button>

@@ -20,6 +20,13 @@
     const gridEl = el("grid");
     const ctxMenu = el("ctxMenu");
 
+    const gridWrap = gridEl ? gridEl.closest(".gridWrap") : null;
+
+    const downloadSelBtn = el("downloadSelBtn");
+    const deleteSelBtn = el("deleteSelBtn");
+    const clearSelBtn = el("clearSelBtn");
+    const selCount = el("selCount");
+
     const metaModal = el("metaModal");
     const metaClose = el("metaClose");
     const metaPath = el("metaPath");
@@ -49,6 +56,8 @@
 
     let metaSaveInFlight = false;
     let suppressBrowserSaveUntil = 0;
+    let selectedRelPaths = new Set();
+    let selectionAnchorRelPath = "";
 
     const RATING_FILTER_KEY = "pqnas_photogallery_rating_filter_v1";
 
@@ -501,6 +510,304 @@
         metaCard.style.left = `${left}px`;
         metaCard.style.top = `${top}px`;
     }
+    function updateSelectionUi() {
+        const count = selectedRelPaths.size;
+
+        if (selCount) {
+            selCount.textContent = `${count} selected`;
+            selCount.style.display = count > 0 ? "" : "none";
+        }
+
+        if (downloadSelBtn) downloadSelBtn.disabled = count === 0;
+        if (deleteSelBtn) deleteSelBtn.disabled = count === 0;
+        if (clearSelBtn) clearSelBtn.disabled = count === 0;
+    }
+
+    function clearSelectionDom() {
+        if (!gridEl) return;
+        for (const el of gridEl.querySelectorAll(".tile")) {
+            el.classList.remove("sel");
+        }
+    }
+
+    function applySelectionToDom() {
+        if (!gridEl) return;
+        for (const el of gridEl.querySelectorAll(".tile")) {
+            const rel = String(el.dataset.relPath || "");
+            el.classList.toggle("sel", selectedRelPaths.has(rel));
+        }
+        updateSelectionUi();
+    }
+
+    function visibleRelPathsInOrder() {
+        if (!gridEl) return [];
+        return Array.from(gridEl.querySelectorAll(".tile"))
+            .map((el) => String(el.dataset.relPath || ""))
+            .filter(Boolean);
+    }
+
+    function clearSelection() {
+        selectedRelPaths.clear();
+        selectionAnchorRelPath = "";
+        clearSelectionDom();
+        updateSelectionUi();
+    }
+
+    function setSingleSelection(relPath) {
+        if (!relPath) return;
+        selectedRelPaths = new Set([relPath]);
+        selectionAnchorRelPath = relPath;
+        applySelectionToDom();
+    }
+
+    function toggleSelection(relPath) {
+        if (!relPath) return;
+        if (selectedRelPaths.has(relPath)) selectedRelPaths.delete(relPath);
+        else selectedRelPaths.add(relPath);
+        applySelectionToDom();
+    }
+
+    function ensureSelected(relPath) {
+        if (!relPath) return;
+        if (!selectedRelPaths.has(relPath)) {
+            setSingleSelection(relPath);
+        }
+    }
+
+    function selectRange(fromRelPath, toRelPath, additive) {
+        const keys = visibleRelPathsInOrder();
+        const a = keys.indexOf(String(fromRelPath || ""));
+        const b = keys.indexOf(String(toRelPath || ""));
+
+        if (a < 0 || b < 0) {
+            setSingleSelection(String(toRelPath || fromRelPath || ""));
+            selectionAnchorRelPath = String(toRelPath || fromRelPath || "");
+            return;
+        }
+
+        const lo = Math.min(a, b);
+        const hi = Math.max(a, b);
+
+        const next = additive ? new Set(selectedRelPaths) : new Set();
+        for (let i = lo; i <= hi; i++) {
+            if (keys[i]) next.add(keys[i]);
+        }
+
+        selectedRelPaths = next;
+        selectionAnchorRelPath = String(toRelPath || "");
+        applySelectionToDom();
+    }
+
+    function selectedRelPathsList() {
+        return Array.from(selectedRelPaths).sort((a, b) => String(a).localeCompare(String(b)));
+    }
+
+    function getZipFilenameFromResponse(r, fallback = "gallery-selection.zip") {
+        const cd = r.headers.get("Content-Disposition") || "";
+
+        let m = cd.match(/filename\*=UTF-8''([^;]+)/i);
+        if (m && m[1]) {
+            try { return decodeURIComponent(m[1]); } catch (_) {}
+        }
+
+        m = cd.match(/filename="?([^"]+)"?/i);
+        if (m && m[1]) return m[1];
+
+        return fallback;
+    }
+
+    async function downloadSelectionZip() {
+        const paths = selectedRelPathsList();
+        if (!paths.length) {
+            setStatus("Nothing selected.");
+            return;
+        }
+
+        setBadge("warn", "zip…");
+        setStatus(`Preparing zip (${paths.length} items)…`);
+
+        try {
+            const r = await fetch("/api/v4/files/zip_sel", {
+                method: "POST",
+                credentials: "include",
+                cache: "no-store",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ paths, base: state.curPath || "" })
+            });
+
+            if (!r.ok) {
+                const t = await r.text().catch(() => "");
+                throw new Error(`HTTP ${r.status}${t ? " — " + t : ""}`);
+            }
+
+            const blob = await r.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = getZipFilenameFromResponse(r);
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1500);
+
+            setBadge("ok", "ready");
+            setStatus(`Download ready (${paths.length} items).`);
+        } catch (e) {
+            setBadge("err", "error");
+            setStatus(`Zip failed: ${String(e && e.message ? e.message : e)}`);
+        }
+    }
+
+    async function deleteSelection() {
+        const paths = selectedRelPathsList();
+        if (!paths.length) {
+            setStatus("Nothing selected.");
+            return;
+        }
+
+        const ok = confirm(
+            `Delete ${paths.length} selected item(s)?\n\nThis cannot be undone.`
+        );
+        if (!ok) return;
+
+        setBadge("warn", "working…");
+        setStatus(`Deleting ${paths.length} item(s)…`);
+
+        let done = 0;
+        const failed = [];
+
+        for (const rel of paths) {
+            try {
+                const r = await fetch(
+                    `/api/v4/files/delete?path=${encodeURIComponent(rel)}`,
+                    {
+                        method: "POST",
+                        credentials: "include",
+                        cache: "no-store"
+                    }
+                );
+
+                const j = await r.json().catch(() => null);
+                if (!r.ok || !j || !j.ok) {
+                    const msg = j && (j.message || j.error)
+                        ? `${j.error || ""} ${j.message || ""}`.trim()
+                        : `HTTP ${r.status}`;
+                    throw new Error(msg || `HTTP ${r.status}`);
+                }
+
+                done++;
+
+                if (state.previewPath === rel) closePreviewModal();
+                if (state.editingPath === rel) closeMetaModal();
+            } catch (e) {
+                failed.push(`${rel}: ${String(e && e.message ? e.message : e)}`);
+            }
+        }
+
+        clearSelection();
+        await load();
+
+        if (failed.length) {
+            setBadge("warn", "partial");
+            setStatus(`Deleted ${done}/${paths.length}. Failed: ${failed.length}`);
+            console.warn("Photo Gallery deleteSelection failures:", failed);
+        } else {
+            setBadge("ok", "ready");
+            setStatus(`Deleted ${done} item(s).`);
+        }
+    }
+    const marquee = document.createElement("div");
+    marquee.style.position = "absolute";
+    marquee.style.border = "1px solid rgba(var(--fg-rgb),0.45)";
+    marquee.style.background = "rgba(var(--fg-rgb),0.12)";
+    marquee.style.borderRadius = "10px";
+    marquee.style.pointerEvents = "none";
+    marquee.style.display = "none";
+    marquee.style.zIndex = "9999";
+    document.body.appendChild(marquee);
+
+    let marqueeOn = false;
+    let marqueeStartX = 0;
+    let marqueeStartY = 0;
+    let marqueeBaseSelection = null;
+
+    function tileRects() {
+        if (!gridEl) return [];
+        const out = [];
+        for (const tileEl of gridEl.querySelectorAll(".tile")) {
+            out.push({
+                relPath: String(tileEl.dataset.relPath || ""),
+                rect: tileEl.getBoundingClientRect()
+            });
+        }
+        return out;
+    }
+
+    function rectIntersects(a, b) {
+        return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
+    }
+
+    function endMarquee() {
+        if (!marqueeOn) return;
+        marqueeOn = false;
+        marquee.style.display = "none";
+        marqueeBaseSelection = null;
+    }
+
+    gridWrap?.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        if (e.target && e.target.closest && e.target.closest(".tile")) return;
+        if (ctxMenu && ctxMenu.classList.contains("show")) return;
+
+        marqueeOn = true;
+        marqueeStartX = e.clientX;
+        marqueeStartY = e.clientY;
+        marqueeBaseSelection = (e.ctrlKey || e.metaKey) ? new Set(selectedRelPaths) : null;
+
+        if (!marqueeBaseSelection) clearSelection();
+
+        marquee.style.left = `${marqueeStartX}px`;
+        marquee.style.top = `${marqueeStartY}px`;
+        marquee.style.width = "0px";
+        marquee.style.height = "0px";
+        marquee.style.display = "block";
+
+        try { gridWrap.setPointerCapture(e.pointerId); } catch (_) {}
+        e.preventDefault();
+    });
+
+    gridWrap?.addEventListener("pointermove", (e) => {
+        if (!marqueeOn) return;
+
+        const x = e.clientX;
+        const y = e.clientY;
+
+        const left = Math.min(marqueeStartX, x);
+        const top = Math.min(marqueeStartY, y);
+        const right = Math.max(marqueeStartX, x);
+        const bottom = Math.max(marqueeStartY, y);
+
+        marquee.style.left = `${left}px`;
+        marquee.style.top = `${top}px`;
+        marquee.style.width = `${right - left}px`;
+        marquee.style.height = `${bottom - top}px`;
+
+        const selRect = { left, top, right, bottom };
+        const rects = tileRects();
+        const next = marqueeBaseSelection ? new Set(marqueeBaseSelection) : new Set();
+
+        for (const t of rects) {
+            if (t.relPath && rectIntersects(selRect, t.rect)) {
+                next.add(t.relPath);
+            }
+        }
+
+        selectedRelPaths = next;
+        applySelectionToDom();
+    });
+
+    gridWrap?.addEventListener("pointerup", endMarquee);
+    gridWrap?.addEventListener("pointercancel", endMarquee);
     function renderBreadcrumb() {
         if (!pathLine) return;
         pathLine.replaceChildren();
@@ -511,6 +818,7 @@
         root.title = "Go to root";
         root.addEventListener("click", () => {
             state.curPath = "";
+            clearSelection();
             load();
         });
         pathLine.appendChild(root);
@@ -546,6 +854,7 @@
                 const target = acc;
                 crumb.addEventListener("click", () => {
                     state.curPath = target;
+                    clearSelection();
                     load();
                 });
             }
@@ -1196,6 +1505,19 @@
             e.preventDefault();
             e.stopPropagation();
 
+            const rel = tile.dataset.relPath || "";
+            if (!rel) return;
+
+            if (selectedRelPaths.size > 1) {
+                if (!selectedRelPaths.has(rel)) {
+                    setSingleSelection(rel);
+                    selectionAnchorRelPath = rel;
+                }
+            } else {
+                ensureSelected(rel);
+                selectionAnchorRelPath = rel;
+            }
+
             if (item.type === "file") {
                 openImageContextMenu(e.clientX, e.clientY, item);
             } else if (item.type === "dir") {
@@ -1205,19 +1527,35 @@
         tile.addEventListener("dblclick", () => {
             if (item.type === "dir") {
                 state.curPath = currentRelPathFor(item);
+                clearSelection();
                 load();
             } else {
                 openPreviewFor(item);
             }
         });
 
-        tile.addEventListener("click", () => {
-            setActiveTileRelPath(currentRelPathFor(item), { scroll: false, focus: false });
-            if (item.type === "dir") {
-                state.curPath = currentRelPathFor(item);
-                load();
+        tile.addEventListener("click", (e) => {
+            if (marqueeOn) return;
+
+            const rel = tile.dataset.relPath || "";
+            if (!rel) return;
+
+            const additive = (e.ctrlKey || e.metaKey);
+
+            if (e.shiftKey) {
+                const anchor =
+                    selectionAnchorRelPath ||
+                    (selectedRelPaths.size ? Array.from(selectedRelPaths)[0] : rel);
+                selectRange(anchor, rel, additive);
+                return;
+            }
+
+            if (additive) {
+                toggleSelection(rel);
+                if (selectedRelPaths.has(rel)) selectionAnchorRelPath = rel;
             } else {
-                openPreviewFor(item);
+                setSingleSelection(rel);
+                selectionAnchorRelPath = rel;
             }
         });
 
@@ -1243,6 +1581,7 @@
         for (const item of items) {
             gridEl.appendChild(makeTile(item));
         }
+        applySelectionToDom();
         ensureActiveTile();
     }
 
@@ -1288,6 +1627,7 @@
 
     upBtn?.addEventListener("click", () => {
         state.curPath = parentPath(state.curPath);
+        clearSelection();
         load();
     });
 
@@ -1352,6 +1692,12 @@
         if (idx >= 0) openPreviewByIndex(idx + 1);
     });
 
+    downloadSelBtn?.addEventListener("click", downloadSelectionZip);
+    deleteSelBtn?.addEventListener("click", deleteSelection);
+    clearSelBtn?.addEventListener("click", () => {
+        clearSelection();
+        setStatus("Selection cleared.");
+    });
     document.addEventListener("keydown", (e) => {
         const previewOpen = !!(previewModal && previewModal.classList.contains("show"));
         const metaOpen = !!(metaModal && metaModal.classList.contains("show"));
@@ -1511,7 +1857,7 @@
 
         const tiles = getRenderedTiles();
         if (!tiles.length) return;
-        
+
         if (e.code === "Space") {
             e.preventDefault(); // prevents page scroll
             openSelectedTileMetadata();
@@ -1607,6 +1953,8 @@
         !!(previewModal && previewModal.classList.contains("show"));
     window.PQNAS_PHOTOGALLERY.setStatus = setStatus;
     window.PQNAS_PHOTOGALLERY.setBadge = setBadge;
+    window.PQNAS_PHOTOGALLERY.getSelectedRelPaths = () => selectedRelPathsList();
+    window.PQNAS_PHOTOGALLERY.clearSelection = clearSelection;
     titleLine.textContent = "Photo Gallery";
     loadRatingFilterPref();
     renderBreadcrumb();
