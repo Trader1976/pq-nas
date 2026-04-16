@@ -42,6 +42,7 @@
     const previewActualBtn = el("previewActualBtn");
     const previewMetaBtn = el("previewMetaBtn");
     const previewClose = el("previewClose");
+    const previewShareBtn = el("previewShareBtn");
 
     const metaCard = el("metaCard");
     const metaHead = el("metaHead");
@@ -448,9 +449,17 @@
     function openImageContextMenu(x, y, item) {
         if (!ctxMenu || !item || item.type !== "file") return;
 
+        const rel = currentRelPathFor(item);
+        const shareLabel =
+            window.PQNAS_PHOTOGALLERY_SHARES?.menuLabelForRelPath(rel, "file") ||
+            "Share link…";
+
         ctxMenu.innerHTML = "";
         ctxMenu.appendChild(menuItem("Open preview", () => openPreviewFor(item)));
         ctxMenu.appendChild(menuItem("Edit metadata…", () => openMetaFor(item)));
+        ctxMenu.appendChild(menuItem(shareLabel, () => {
+            window.PQNAS_PHOTOGALLERY_SHARES?.openForItem(item);
+        }));
         ctxMenu.appendChild(menuSep());
         ctxMenu.appendChild(menuItem("Rename…", () => renameImage(item)));
         ctxMenu.appendChild(menuItem("Delete…", () => deleteImage(item), { danger: true }));
@@ -846,6 +855,7 @@
 
             if (metaStatus) metaStatus.textContent = "Saved.";
             renderGrid();
+            window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
             setBadge("ok", "ready");
             setStatus(`Saved metadata: ${rel}`);
 
@@ -874,6 +884,7 @@
             item.tags_text = String(meta.tags_text || item.tags_text || "");
             item.notes_text = String(meta.notes_text || item.notes_text || "");
             renderGrid();
+            window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
             setBadge("ok", "ready");
             setStatus(`Rated ${item.name}: ${item.rating}/5`);
         } catch (e) {
@@ -885,6 +896,8 @@
     function makeTile(item) {
         const tile = document.createElement("div");
         tile.className = "tile";
+        tile.dataset.relPath = currentRelPathFor(item);
+        tile.dataset.itemType = item.type;
 
         const thumbWrap = document.createElement("div");
         thumbWrap.className = "thumbWrap";

@@ -405,7 +405,10 @@
         #metaModal{
             z-index: 10020;
         }
-
+        
+        #shareModal{
+            z-index: 10030;
+        }
         .modalCard{
             width:min(760px, calc(100vw - 24px));
             max-height:min(90vh, 920px);
@@ -636,7 +639,30 @@
             gap:8px 12px;
             align-items:start;
         }
+        .shareBadge{
+            position:absolute;
+            top:10px;
+            left:10px;
+            width:28px;
+            height:28px;
+            border-radius:999px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            font-size:16px;
+            line-height:1;
+            background: rgba(0, 255, 180, 0.18);
+            border: 1px solid rgba(0, 255, 180, 0.45);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+            backdrop-filter: blur(6px);
+            z-index: 2;
+        }
 
+        .shareBadge.expired{
+            background: rgba(255,70,70,0.18);
+            border-color: rgba(255,70,70,0.55);
+            color: rgba(255,70,70,0.95);
+        }
         @media (max-width: 640px){
             .embeddedKv{
                 grid-template-columns: 1fr;
@@ -781,7 +807,46 @@
         </div>
     </div>
 </div>
+<div id="shareModal" class="modal" aria-hidden="true">
+    <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
+        <div class="modalHead">
+            <div>
+                <div id="shareTitle" class="modalTitle">Share link</div>
+                <div id="sharePath" class="modalSub">/</div>
+            </div>
+            <button id="shareClose" class="btn secondary" type="button">Close</button>
+        </div>
 
+        <div class="modalBody">
+            <div class="formGrid">
+                <div class="label">Expiry</div>
+                <div>
+                    <select id="shareExpiry" class="field mono">
+                        <option value="1h">1 hour</option>
+                        <option value="24h" selected>24 hours</option>
+                        <option value="7d">7 days</option>
+                        <option value="never">Never</option>
+                    </select>
+                </div>
+
+                <div class="label">Action</div>
+                <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                    <button id="shareCreateBtn" class="btn" type="button">Create link</button>
+                    <button id="shareRevokeBtn" class="btn secondary" type="button" style="display:none;">Revoke</button>
+                    <div id="shareStatus" class="mono" style="opacity:.84;">&nbsp;</div>
+                </div>
+
+                <div id="shareOutWrap" style="display:none; grid-column:1 / -1;">
+                    <div class="label" style="margin-bottom:8px;">Link</div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <input id="shareOut" class="field mono" type="text" readonly style="flex:1 1 auto; min-width:0;">
+                        <button id="shareCopyBtn" class="btn secondary" type="button">Copy</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 <div id="previewModal" class="modal" aria-hidden="true">
     <div id="previewCard" class="modalCard previewCard">
         <div id="previewHead" class="modalHead previewHead">
@@ -795,7 +860,7 @@
                 <button id="previewFitBtn" class="btn secondary" type="button">Fit</button>
                 <button id="previewActualBtn" class="btn secondary" type="button">100%</button>
                 <button id="previewMetaBtn" class="btn secondary" type="button">Metadata</button>
-
+                <button id="previewShareBtn" class="btn secondary" type="button">Share</button>
                 <button id="previewSlideToggleBtn" class="btn secondary" type="button" title="Start slideshow">
                     Slideshow
                 </button>
@@ -838,6 +903,7 @@
 <div id="ctxMenu" class="ctxMenu" role="menu" aria-hidden="true"></div>
 <script src="./gallery_embedded_meta.js"></script>
 <script src="./app.js"></script>
+<script src="./gallery_shares.js"></script>
 <script src="./gallery_slideshow.js"></script>
 </body>
 </html>
