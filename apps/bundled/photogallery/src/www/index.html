@@ -694,7 +694,24 @@
 
             <div class="actions">
                 <span class="badge warn" id="badge">loading…</span>
+
                 <input id="filterInput" class="input" type="text" placeholder="Filter current folder">
+
+                <select
+                        id="ratingFilter"
+                        class="input"
+                        title="Filter by star rating"
+                        style="min-width:150px; width:auto;"
+                >
+                    <option value="-1">All ratings</option>
+                    <option value="0">Unrated</option>
+                    <option value="1">1★</option>
+                    <option value="2">2★</option>
+                    <option value="3">3★</option>
+                    <option value="4">4★</option>
+                    <option value="5">5★</option>
+                </select>
+
                 <button class="btn secondary" id="upBtn" type="button">Up</button>
                 <button class="btn" id="refreshBtn" type="button">Refresh</button>
             </div>

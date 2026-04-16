@@ -14,6 +14,7 @@
     const badge = el("badge");
     const statusEl = el("status");
     const filterInput = el("filterInput");
+    const ratingFilter = el("ratingFilter");
     const refreshBtn = el("refreshBtn");
     const upBtn = el("upBtn");
     const gridEl = el("grid");
@@ -48,10 +49,13 @@
     let metaSaveInFlight = false;
     let suppressBrowserSaveUntil = 0;
 
+    const RATING_FILTER_KEY = "pqnas_photogallery_rating_filter_v1";
+
     const state = {
         curPath: "",
         items: [],
         filter: "",
+        ratingFilter: -1, // -1 = all, 0 = unrated, 1..5 = exact stars
         editingPath: "",
         editingRating: 0,
         previewPath: "",
@@ -74,6 +78,26 @@
         cardLeft: 0,
         cardTop: 0
     };
+    function loadRatingFilterPref() {
+        try {
+            const raw = Number(localStorage.getItem(RATING_FILTER_KEY) || "-1");
+            if (raw >= -1 && raw <= 5) {
+                state.ratingFilter = raw;
+            }
+        } catch (_) {
+            state.ratingFilter = -1;
+        }
+
+        if (ratingFilter) {
+            ratingFilter.value = String(state.ratingFilter);
+        }
+    }
+
+    function saveRatingFilterPref() {
+        try {
+            localStorage.setItem(RATING_FILTER_KEY, String(state.ratingFilter));
+        } catch (_) {}
+    }
     function setBadge(kind, text) {
         if (!badge) return;
         badge.className = `badge ${kind}`;
@@ -521,16 +545,26 @@
 
     function filteredItems() {
         const q = String(state.filter || "").trim().toLowerCase();
+        const rating = Number(state.ratingFilter);
+
         const items = sortItems(state.items);
 
-        if (!q) return items;
-
         return items.filter((it) => {
+            // Rating filter is image-only. Hide folders when active.
+            if (Number.isFinite(rating) && rating >= 0) {
+                if (it.type !== "file") return false;
+                const stars = Number(it.rating || 0) || 0;
+                if (stars !== rating) return false;
+            }
+
+            if (!q) return true;
+
             const hay = [
                 it.name || "",
                 it.tags_text || "",
                 it.notes_text || ""
             ].join(" ").toLowerCase();
+
             return hay.includes(q);
         });
     }
@@ -991,8 +1025,16 @@
             window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
 
             const count = filteredItems().length;
+            const rf = Number(state.ratingFilter);
+            const ratingTxt =
+                rf < 0 ? "" :
+                    (rf === 0 ? " • unrated only" : ` • ${rf}★ only`);
+            const textTxt =
+                state.filter ? ` • filter: ${state.filter}` : "";
+
             setBadge("ok", "ready");
-            setStatus(`Items: ${count}`);
+            setStatus(`Items: ${count}${ratingTxt}${textTxt}`);
+
         } catch (e) {
             renderBreadcrumb();
             if (gridEl) {
@@ -1019,7 +1061,29 @@
         state.filter = String(filterInput.value || "");
         renderGrid();
         window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
-        setStatus(`Items: ${filteredItems().length}`);
+        const count = filteredItems().length;
+        const rf = Number(state.ratingFilter);
+        const ratingTxt =
+            rf < 0 ? "" :
+                (rf === 0 ? " • unrated only" : ` • ${rf}★ only`);
+        const textTxt =
+            state.filter ? ` • filter: ${state.filter}` : "";
+        setStatus(`Items: ${count}${ratingTxt}${textTxt}`);
+    });
+
+    ratingFilter?.addEventListener("change", () => {
+        state.ratingFilter = Number(ratingFilter.value || "-1");
+        saveRatingFilterPref();
+        renderGrid();
+        window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
+        const count = filteredItems().length;
+        const rf = Number(state.ratingFilter);
+        const ratingTxt =
+            rf < 0 ? "" :
+                (rf === 0 ? " • unrated only" : ` • ${rf}★ only`);
+        const textTxt =
+            state.filter ? ` • filter: ${state.filter}` : "";
+        setStatus(`Items: ${count}${ratingTxt}${textTxt}`);
     });
 
     metaClose?.addEventListener("click", closeMetaModal);
@@ -1245,6 +1309,7 @@
     window.PQNAS_PHOTOGALLERY.setStatus = setStatus;
     window.PQNAS_PHOTOGALLERY.setBadge = setBadge;
     titleLine.textContent = "Photo Gallery";
+    loadRatingFilterPref();
     renderBreadcrumb();
     load();
 })();
