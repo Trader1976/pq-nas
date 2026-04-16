@@ -17,8 +17,23 @@
             --field-border2: rgba(255,255,255,0.26);
             --field-text: rgba(var(--fg-rgb),0.92);
             --field-ph: rgba(var(--fg-rgb),0.48);
+
+            /* solid modal surfaces */
+            --admin-modal-bg: rgba(20,20,24,0.98);
+            --admin-modal-bg2: rgba(255,255,255,0.04);
+            --admin-modal-border: rgba(255,255,255,0.16);
+        }
+        html[data-theme="bright"]{
+            --admin-modal-bg: rgba(255,255,255,0.985);
+            --admin-modal-bg2: rgba(0,0,0,0.03);
+            --admin-modal-border: rgba(0,0,0,0.14);
         }
 
+        html[data-theme="win_classic"]{
+            --admin-modal-bg: rgba(245,245,245,0.99);
+            --admin-modal-bg2: rgba(0,0,0,0.04);
+            --admin-modal-border: rgba(0,0,0,0.20);
+        }
         .btn{
             display:inline-flex;
             align-items:center;
@@ -447,12 +462,11 @@
             width: min(720px, calc(100vw - 36px));
             max-height: min(84vh, 900px);
             border-radius: 18px;
-            border: 1px solid var(--border);
-            background: linear-gradient(180deg, var(--panel2), var(--panel));
+            border: 1px solid var(--admin-modal-border);
+            background: var(--admin-modal-bg);
             box-shadow: var(--shadow);
             overflow: hidden;
         }
-
         .avatarModalTop{
             display:flex;
             align-items:center;
@@ -506,8 +520,8 @@
             width: min(820px, calc(100vw - 36px));
             max-height: min(86vh, 960px);
             border-radius: 18px;
-            border: 1px solid var(--border);
-            background: linear-gradient(180deg, var(--panel2), var(--panel));
+            border: 1px solid var(--admin-modal-border);
+            background: var(--admin-modal-bg);
             box-shadow: var(--shadow);
             overflow: hidden;
         }
@@ -518,8 +532,8 @@
             justify-content:space-between;
             gap:10px;
             padding:12px 14px;
-            border-bottom:1px solid var(--border);
-            background: rgba(0,0,0,0.10);
+            border-bottom:1px solid var(--admin-modal-border);
+            background: var(--admin-modal-bg2);
         }
 
         .allocTitle{ font-weight:900; font-size:14px; }
@@ -556,9 +570,9 @@
         .allocPreviewBox{
             margin-top: 12px;
             padding: 12px;
-            border: 1px solid rgba(var(--fg-rgb),0.14);
+            border: 1px solid var(--elevated-border2, rgba(var(--fg-rgb),0.14));
             border-radius: 14px;
-            background: rgba(0,0,0,0.16);
+            background: var(--elevated-soft, rgba(255,255,255,0.04));
         }
 
         .allocPreviewGrid{
@@ -578,7 +592,7 @@
             padding: 10px 12px;
             border-radius: 12px;
             border: 1px solid rgba(var(--fail-rgb),0.40);
-            background: rgba(var(--fail-rgb),0.10);
+            background: rgba(var(--fail-rgb),0.16);
             color: rgba(var(--fail-rgb),0.98);
             box-shadow: 0 0 12px rgba(var(--fail-rgb),0.12);
             font-weight: 700;

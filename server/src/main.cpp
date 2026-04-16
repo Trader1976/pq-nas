@@ -27586,11 +27586,17 @@ srv.Put("/api/v4/files/put",
         }
     }
 
-    bool overwrite = false;
-    if (req.has_param("overwrite")) {
-        const std::string ov = req.get_param_value("overwrite");
-        overwrite = (ov == "1" || ov == "true" || ov == "yes");
-    }
+        bool overwrite = false;
+        if (req.has_param("overwrite")) {
+            const std::string ov = req.get_param_value("overwrite");
+            overwrite = (ov == "1" || ov == "true" || ov == "yes");
+        }
+
+        std::cerr << "[put] rel_norm=" << rel_norm
+                  << " overwrite=" << (overwrite ? 1 : 0)
+                  << " overwrite_param="
+                  << (req.has_param("overwrite") ? req.get_param_value("overwrite") : "<missing>")
+                  << "\n";
 
     // Serialize writes on overlapping logical paths for this user.
     // This prevents PUT/MOVE/DELETE races on the same file/subtree.
@@ -27679,6 +27685,16 @@ srv.Put("/api/v4/files/put",
     }
 
     const std::uint64_t incoming_bytes = cl;
+
+    auto drain_request_body_best_effort = [&]() {
+        try {
+            content_reader([&](const char* /*data*/, size_t /*len*/) {
+                return true; // consume and discard everything
+            });
+        } catch (...) {
+            // best effort only
+        }
+    };
 
     // transport max (server-controlled, distinct from quota)
     const std::uint64_t transport_max =
@@ -27836,31 +27852,35 @@ srv.Put("/api/v4/files/put",
         }
     }
 
-    if (!overwrite && (existing_rec.has_value() || physical_exists_at_target)) {
-        json existing = json::object();
+        if (!overwrite && (existing_rec.has_value() || physical_exists_at_target)) {
+            std::cerr << "[put] early conflict file_exists rel_norm=" << rel_norm << " draining body\n";
 
-        if (existing_rec.has_value()) {
-            existing["size_bytes"] = existing_rec->size_bytes;
-            existing["mtime_epoch"] = existing_rec->mtime_epoch;
-            existing["tier_state"] = existing_rec->tier_state;
-            existing["current_pool"] = existing_rec->current_pool;
-            existing["physical_path"] = existing_rec->physical_path;
-        } else {
-            existing["size_bytes"] = physical_existing_size;
-            existing["mtime_epoch"] = physical_existing_mtime;
-            existing["physical_path"] = out_abs.string();
+            drain_request_body_best_effort();
+
+            json existing = json::object();
+
+            if (existing_rec.has_value()) {
+                existing["size_bytes"] = existing_rec->size_bytes;
+                existing["mtime_epoch"] = existing_rec->mtime_epoch;
+                existing["tier_state"] = existing_rec->tier_state;
+                existing["current_pool"] = existing_rec->current_pool;
+                existing["physical_path"] = existing_rec->physical_path;
+            } else {
+                existing["size_bytes"] = physical_existing_size;
+                existing["mtime_epoch"] = physical_existing_mtime;
+                existing["physical_path"] = out_abs.string();
+            }
+
+            audit_fail("file_exists", 409, rel_norm);
+            reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "file_exists"},
+                {"message", "file already exists"},
+                {"path", rel_norm},
+                {"existing", existing}
+            }.dump());
+            return;
         }
-
-        audit_fail("file_exists", 409, rel_norm);
-        reply_json(res, 409, json{
-            {"ok", false},
-            {"error", "file_exists"},
-            {"message", "file already exists"},
-            {"path", rel_norm},
-            {"existing", existing}
-        }.dump());
-        return;
-    }
 
     // Remember old physical path so overwrite to a different pool/path can clean it up later.
     std::string old_physical_path;

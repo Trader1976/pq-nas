@@ -277,22 +277,13 @@
         const done = state === "done" || state === "failed";
         if (done) {
             stopExecPolling();
-            if (done) {
-                stopExecPolling();
-
-                // Refresh pools list (best effort)
-                try {
-                    setTimeout(async () => {
-                        await refreshPoolsState();
-
-                        if (g_tab === "pools") await renderPoolsTab();
-                        probe();
-                    }, 350);
-                } catch (_) {}
-
-                return;
-            }// stop first (avoids progress UI lockout)
-            try { setTimeout(() => probe(), 350); } catch (_) {}
+            try {
+                setTimeout(async () => {
+                    await refreshPoolsState();
+                    if (g_tab === "pools") await renderPoolsTab();
+                    probe();
+                }, 350);
+            } catch (_) {}
             return;
         }
 
@@ -441,6 +432,47 @@
             return parts[parts.length - 1] || mount;
         }
         return "(pool)";
+    }
+
+    function poolDisplayName(p) {
+        const disp  = String(p?.display_name || "").trim();
+        const label = String(p?.label || "").trim();     // btrfs label
+        const mount = String(p?.mount || "").trim();
+
+        if (disp) return disp;   // PQ-NAS display name (user-friendly)
+        if (label) return label; // fallback to btrfs label
+        if (mount) {
+            const parts = mount.replace(/\/+$/, "").split("/");
+            return parts[parts.length - 1] || mount;
+        }
+        return "(pool)";
+    }
+
+// MOVE fmtPoolMode HERE (top-level)
+    function fmtPoolMode(p) {
+        const runtimeMode = String(p?.runtime_mode || "").trim().toLowerCase();
+        const data = String(p?.profile_data || "").trim().toLowerCase();
+        const meta = String(p?.profile_metadata || "").trim().toLowerCase();
+        const cfg = String(p?.mode || "").trim().toLowerCase();
+
+        if (runtimeMode === "raid1") return "RAID1";
+        if (runtimeMode === "single") return "Single";
+
+        if (data.includes("raid1") || meta.includes("raid1")) return "RAID1";
+        if (data.includes("single")) return "Single";
+
+        if (cfg === "raid1") return "RAID1";
+        if (cfg === "single") return "Single";
+
+        return cfg || runtimeMode || data || meta || "?";
+    }
+
+    function loadSelectedMount() {
+        try {
+            return String(localStorage.getItem(POOL_SEL_KEY) || "");
+        } catch (_) {
+            return "";
+        }
     }
 
     function loadSelectedMount() {
@@ -659,7 +691,7 @@
         return { ok: true, http, data: q.j };
     }
 
-    
+
     async function refreshPoolsState() {
         const lp = await loadPools();
         if (lp && lp.ok && Array.isArray(lp.pools)) {
@@ -704,32 +736,16 @@
 
         ov = document.createElement("div");
         ov.id = "poolConvertRaidOverlay";
-        ov.style.position = "fixed";
-        ov.style.inset = "0";
-        ov.style.display = "none";
-        ov.style.alignItems = "center";
-        ov.style.justifyContent = "center";
-        ov.style.background = isDarkThemeNow() ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.25)";
-        ov.style.zIndex = "9999";
+        ov.className = "uiOverlay";
 
         ov.innerHTML = `
-<div style="
-  width:min(860px, 94vw);
-  max-height:90vh;
-  overflow:auto;
-  border-radius:18px;
-  border:1px solid rgba(255,255,255,0.14);
-  background: var(--panel, rgba(0,0,0,0.35));
-  color: var(--fg);
-  padding:14px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
-">
-  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
+<div class="uiDialog raidDialogShell compact">
+  <div class="uiDialogHeader raidDialogHeader">
     <div id="poolConvertRaidTitle" style="font-weight:950;">Convert RAID</div>
     <button id="poolConvertRaidCloseBtn" class="btn secondary" type="button">Close</button>
   </div>
 
-  <div class="card" style="margin-top:10px;">
+  <div class="raidDialogInnerCard" style="margin-top:10px; padding:14px;">
     <div class="formGrid3">
       <div class="formField">
         <div class="k">Current mode</div>
@@ -753,7 +769,7 @@
       </div>
     </div>
 
-    <div class="card" style="margin-top:12px;">
+    <div class="raidDialogInnerCard" style="margin-top:12px; padding:12px;">
       <h3 style="margin:0 0 8px 0;">Summary</h3>
       <div id="poolConvertSummary" class="v" style="white-space:pre-line;"></div>
     </div>
@@ -763,7 +779,7 @@
       <button id="poolConvertApplyBtn" class="btn danger" type="button" disabled>Apply</button>
     </div>
 
-    <details class="card" style="margin-top:12px;">
+    <details class="raidDialogInnerCard" style="margin-top:12px; padding:10px 12px;">
       <summary style="cursor:pointer; font-weight:900;">Advanced</summary>
       <pre id="poolConvertDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
     </details>
@@ -885,7 +901,7 @@
                 mount
             };
 
-            ov.style.display = "none";
+            ov.classList.remove("show");
 
             const ok = await confirmExecute(pseudoPlan, {
                 kind: "add",
@@ -898,12 +914,7 @@
             });
 
             if (!ok) {
-                ov.style.display = "flex";
-                showToast("info", "Apply cancelled.", 1800);
-                return;
-            }
-
-            if (!ok) {
+                ov.classList.add("show");
                 showToast("info", "Apply cancelled.", 1800);
                 return;
             }
@@ -933,7 +944,7 @@
             if (pid) startExecPolling(pid);
 
             showToast("ok", "RAID conversion started ✓", 2200);
-            ov.style.display = "none";
+            ov.classList.remove("show");
         }
 
         titleEl.textContent = `Convert RAID • ${poolDisplayName(pool)}`;
@@ -941,14 +952,14 @@
         targetModeSel.value = currentMode === "raid1" ? "single" : "raid1";
         devicesInp.value = String(totalDevices);
 
-        closeBtn.onclick = () => (ov.style.display = "none");
+        closeBtn.onclick = () => ov.classList.remove("show");
         previewBtn.onclick = doPreview;
         applyBtn.onclick = doApply;
         targetModeSel.onchange = updateSummary;
 
         updateSummary();
         dbg.textContent = "(idle)";
-        ov.style.display = "flex";
+        ov.classList.add("show");
     }
     // --- Toast (non-layout-shifting notifications) ---
     let g_toastTimer = null;
@@ -1141,67 +1152,28 @@
 
         ov = document.createElement("div");
         ov.id = "confirmOverlay";
-        ov.style.position = "fixed";
-        ov.style.inset = "0";
-        ov.style.display = "none";
-        ov.style.alignItems = "center";
-        ov.style.justifyContent = "center";
-        ov.style.backdropFilter = "none";
-        ov.style.webkitBackdropFilter = "none";
-        ov.style.background = "rgba(0,0,0,0.45)";
-        ov.style.zIndex = "9999";
-
-        const dark = isDarkThemeNow();
-        ov.style.background = dark ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.25)";
-
-        ov.style.setProperty("--confirm-surface", dark ? "rgba(18,18,18,0.92)" : "rgba(255,255,255,0.92)");
-        ov.style.setProperty("--confirm-border", dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.14)");
-        ov.style.setProperty("--confirm-fg", dark ? "var(--fg, rgba(255,255,255,0.92))" : "rgba(20,20,20,0.92)");
-        ov.style.setProperty("--confirm-shadow", dark ? "0 20px 60px rgba(0,0,0,0.55)" : "0 20px 60px rgba(0,0,0,0.25)");
+        ov.className = "uiOverlay";
 
         ov.innerHTML = `
-<div style="
-  width:min(720px, 92vw);
-  max-height:90vh;
-  overflow:auto;
-  border-radius:18px;
-  border:1px solid var(--confirm-border);
-  background:var(--confirm-surface);
-  color:var(--confirm-fg);
-  padding:14px;
-  box-shadow:var(--confirm-shadow);
-">
-  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
+<div class="uiDialog raidDialogShell compact">
+  <div class="uiDialogHeader raidDialogHeader">
     <div id="confirmTitle" style="font-weight:950;">Confirm storage pool change</div>
     <button id="confirmCloseBtn" class="btn secondary" type="button">Close</button>
   </div>
 
-  <div id="confirmBody" style="
-    background: var(--panel, rgba(255,255,255,0.06));
-    border: 1px solid var(--confirm-border);
-    border-radius: 16px;
-    padding: 12px;
-  ">
+  <div id="confirmBody" class="raidDialogInnerCard" style="margin-top:10px; padding:12px;">
     <div id="confirmViz" style="margin:10px 0;"></div>
 
     <div id="confirmSummary" class="v" style="margin-bottom:10px;"></div>
 
-    <details id="confirmDetails" style="
-      margin-top:10px;
-      background: rgba(0,0,0,0.04);
-      border: 1px solid rgba(0,0,0,0.10);
-      border-radius: 14px;
-      padding: 10px 12px;
-    ">
+    <details id="confirmDetails" class="raidDialogInnerCard" style="margin-top:10px; padding:10px 12px;">
       <summary style="cursor:pointer; font-weight:900;">Advanced details (plan)</summary>
       <pre id="confirmPre" style="
         max-height:46vh;
         margin-top:10px;
-        background: var(--panel2, rgba(0,0,0,0.04));
-        border: 1px solid var(--confirm-border);
-        border-radius: 12px;
-        padding: 10px;
-        color: var(--confirm-fg);
+        border-radius:12px;
+        padding:10px;
+        color:var(--fg);
         overflow:auto;
       "></pre>
     </details>
@@ -1258,9 +1230,9 @@
             if (summaryEl) {
                 summaryEl.textContent = summary;
                 summaryEl.style.whiteSpace = "pre-line";
-                summaryEl.style.color = "var(--confirm-fg)";
-                summaryEl.style.background = "var(--panel, rgba(255,255,255,0.06))";
-                summaryEl.style.border = "1px solid var(--confirm-border)";
+                summaryEl.style.color = "var(--fg)";
+                summaryEl.style.background = "var(--elevated-soft)";
+                summaryEl.style.border = "1px solid var(--elevated-border2)";
                 summaryEl.style.borderRadius = "14px";
                 summaryEl.style.padding = "10px 12px";
             }
@@ -1331,7 +1303,7 @@
             if (preEl) preEl.textContent = JSON.stringify(summaryPlan, null, 2);
 
             const cleanup = () => {
-                ov.style.display = "none";
+                ov.classList.remove("show");
                 closeBtn?.removeEventListener("click", onCancel);
                 cancelBtn?.removeEventListener("click", onCancel);
                 okBtn?.removeEventListener("click", onOk);
@@ -1355,7 +1327,7 @@
             okBtn?.addEventListener("click", onOk);
             ov?.addEventListener("click", onBackdrop);
 
-            ov.style.display = "flex";
+            ov.classList.add("show");
         });
     }
     function kvRow(k, v) {
@@ -1559,67 +1531,6 @@
 
         if (!cands.length) {
             html += `<div class="v" style="opacity:.8;">No available drives found. (All disks are already members, or only loop devices exist.)</div>`;
-        } else {
-            html += `
-  <div class="row" style="gap:10px; align-items:flex-start;">
-    <div style="flex:1 1 520px; min-width:260px;">
-      <div class="k" style="margin-bottom:6px;">Available drive</div>
-
-      <div class="row" style="gap:10px; align-items:center; margin-bottom:8px;">
-        <label style="display:flex; gap:10px; align-items:center; padding:8px 10px; border-radius:12px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.14);">
-          <input id="showInternalChk" type="checkbox" style="transform:scale(1.1);">
-          <span class="v" style="opacity:.9;">Show internal disks (advanced)</span>
-        </label>
-
-        <label style="display:flex; gap:10px; align-items:center; padding:8px 10px; border-radius:12px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.14);">
-          <input id="usbOnlyChk" type="checkbox" style="transform:scale(1.1);">
-          <span class="v" style="opacity:.9;">USB-only (testing)</span>
-        </label>
-      </div>
-
-      <select id="addDiskSel" style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);">
-        ${cands.map((d) => `<option value="${String(d.path)}">${diskLabel(d)}</option>`).join("")}
-      </select>
-
-      <div class="row" style="margin-top:10px; gap:10px;">
-        <div style="flex:1 1 240px; min-width:220px;">
-          <div class="k" style="margin-bottom:6px;">Protection level</div>
-          <select id="modeSel" style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);">
-            <option value="single">No redundancy (Single)</option>
-            <option value="raid1">Mirror (RAID 1)</option>
-          </select>
-          <div class="v" style="opacity:.75; margin-top:6px;">
-            Single = capacity-focused. Mirror = redundancy-focused (conversion can take time).
-          </div>
-        </div>
-
-        <div style="flex:1 1 240px; min-width:220px;">
-          <div class="k" style="margin-bottom:6px;">Erase drive</div>
-          <label style="display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18);">
-            <input id="forceChk" type="checkbox" style="transform:scale(1.1);">
-            <span class="v" style="opacity:.9;">Allow destructive wipe if the drive has partitions</span>
-          </label>
-          <div class="v" id="forceWarn" style="opacity:.75; margin-top:6px;">
-            Keep OFF unless you are OK with wiping the selected drive.
-          </div>
-        </div>
-      </div>
-
-      <div class="card" style="margin-top:12px;">
-        <h3 style="margin:0 0 8px 0;">Visual preview</h3>
-        <div id="addViz"></div>
-      </div>
-
-      <div class="v" style="opacity:.75; margin-top:10px;">
-        Note: this modifies the existing storage pool. It does not create a brand-new pool from scratch.
-      </div>
-    </div>
-
-    <div style="display:flex; flex-direction:column; gap:10px; flex:0 0 auto;">
-      <button class="btn" id="planAddBtn" type="button">Preview</button>
-      <button class="btn secondary" id="execAddBtn" type="button" disabled>Apply</button>
-    </div>
-  </div>`;
         }
 
         html += `
@@ -1738,7 +1649,7 @@
             if (!actionOut) return;
             actionOut.textContent = JSON.stringify(obj, null, 2);
         }
-        
+
         function looksLikePlanMismatch(r, j, txt) {
             const st = Number(r?.status || 0);
             if (st === 409 || st === 412) return true;
@@ -2398,32 +2309,16 @@
 
             ov = document.createElement("div");
             ov.id = "poolEditSlotsOverlay";
-            ov.style.position = "fixed";
-            ov.style.inset = "0";
-            ov.style.display = "none";
-            ov.style.alignItems = "center";
-            ov.style.justifyContent = "center";
-            ov.style.background = isDarkThemeNow() ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.25)";
-            ov.style.zIndex = "9999";
+            ov.className = "uiOverlay";
 
             ov.innerHTML = `
-<div style="
-  width:min(980px, 96vw);
-  max-height:90vh;
-  overflow:auto;
-  border-radius:18px;
-  border:1px solid rgba(255,255,255,0.14);
-  background: var(--panel, rgba(0,0,0,0.35));
-  color: var(--fg);
-  padding:14px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
-">
-  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
+<div class="uiDialog raidDialogShell">
+  <div class="uiDialogHeader raidDialogHeader">
     <div id="poolEditSlotsTitle" style="font-weight:950;">Edit pool slots</div>
     <button id="poolEditSlotsCloseBtn" class="btn secondary" type="button">Close</button>
   </div>
 
-  <div class="card" style="margin-top:10px;">
+  <div class="raidDialogInnerCard" style="margin-top:10px; padding:14px;">
     <div class="formGrid3">
       <div class="formField">
         <div class="k">Display name</div>
@@ -2705,7 +2600,7 @@
                 }
 
                 showToast("ok", "Layout saved ✓", 1800);
-                ov.style.display = "none";
+                ov.classList.remove("show");
                 await refreshPoolsState();
                 await renderPoolsTab();
             }
@@ -2716,7 +2611,7 @@
             slotCountInp.value = String(slotCount);
             syncSlotValuesFromPool();
 
-            closeBtn.onclick = () => (ov.style.display = "none");
+            closeBtn.onclick = () => ov.classList.remove("show");
             refreshBtn.onclick = refreshDisks;
             applyCountBtn.onclick = () => {
                 syncSlotValuesFromDom();
@@ -2730,7 +2625,7 @@
             };
             saveBtn.onclick = saveLayout;
 
-            ov.style.display = "flex";
+            ov.classList.add("show");
             await refreshDisks();
         }
         function slotBadge(slot) {
@@ -2742,23 +2637,6 @@
             return `<span class="badge warn">missing</span>`;
         }
 
-        function fmtPoolMode(p) {
-            const runtimeMode = String(p?.runtime_mode || "").trim().toLowerCase();
-            const data = String(p?.profile_data || "").trim().toLowerCase();
-            const meta = String(p?.profile_metadata || "").trim().toLowerCase();
-            const cfg = String(p?.mode || "").trim().toLowerCase();
-
-            if (runtimeMode === "raid1") return "RAID1";
-            if (runtimeMode === "single") return "Single";
-
-            if (data.includes("raid1") || meta.includes("raid1")) return "RAID1";
-            if (data.includes("single")) return "Single";
-
-            if (cfg === "raid1") return "RAID1";
-            if (cfg === "single") return "Single";
-
-            return cfg || runtimeMode || data || meta || "?";
-        }
         function modePillOpts(p) {
             const m = String(fmtPoolMode(p) || "").toLowerCase();
             if (m.includes("raid1")) {
@@ -3060,12 +2938,10 @@
   Click Preview first to enable Apply.
 </div>
 
-<details class="card" style="margin-top:12px;">
-
-  <details class="card" style="margin-top:12px;">
-    <summary style="cursor:pointer; font-weight:900;">Advanced</summary>
-    <pre id="poolRemoveDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
-  </details>
+<details class="raidDialogInnerCard" style="margin-top:12px; padding:10px 12px;">
+  <summary style="cursor:pointer; font-weight:900;">Advanced</summary>
+  <pre id="poolRemoveDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
+</details>
 </div>
 `;
 
@@ -3790,20 +3666,6 @@ Tip: these are the Btrfs member devices that form this pool.
   border-color: rgba(var(--info-rgb,0,140,255),0.28) !important;
 }
 
-.pqSlotRowEditable{
-  border-style:dashed;
-}
-
-.pqSlotRowEditable:hover{
-  filter: brightness(1.04);
-}
-
-.pqSlotActionRow{
-  display:flex;
-  gap:8px;
-  flex-wrap:wrap;
-  margin-top:10px;
-}
 
 .pqSlotRowEditable{
   border-style:dashed;
@@ -3913,32 +3775,16 @@ ${rows}
 
             ov = document.createElement("div");
             ov.id = "poolCreateOverlay";
-            ov.style.position = "fixed";
-            ov.style.inset = "0";
-            ov.style.display = "none";
-            ov.style.alignItems = "center";
-            ov.style.justifyContent = "center";
-            ov.style.background = isDarkThemeNow() ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.25)";
-            ov.style.zIndex = "9999";
+            ov.className = "uiOverlay";
 
             ov.innerHTML = `
-<div style="
-  width:min(980px, 96vw);
-  max-height:90vh;
-  overflow:auto;
-  border-radius:18px;
-  border:1px solid rgba(255,255,255,0.14);
-  background: var(--panel, rgba(0,0,0,0.35));
-  color: var(--fg);
-  padding:14px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
-">
-  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
+<div class="uiDialog raidDialogShell">
+  <div class="uiDialogHeader raidDialogHeader">
     <div style="font-weight:950;">Create storage pool</div>
     <button id="poolCreateCloseBtn" class="btn secondary" type="button">Close</button>
   </div>
 
-  <div class="card" style="margin-top:10px;">
+  <div class="raidDialogInnerCard" style="margin-top:10px; padding:14px;">
     <div class="formGrid3">
       <div class="formField">
         <div class="k">pool_id</div>
@@ -3972,7 +3818,7 @@ ${rows}
       <button id="poolSlotsApplyBtn" class="btn secondary" type="button">Update slots</button>
       <button id="poolDevsRefreshBtn" class="btn secondary" type="button">Refresh devices</button>
 
-      <label style="display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18);">
+      <label style="display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:14px; border:1px solid var(--elevated-border2); background:var(--elevated-soft);">
         <input id="poolForceChk" type="checkbox" style="transform:scale(1.1);">
         <span class="v" style="opacity:.9;">Force wipe (destructive)</span>
       </label>
@@ -3982,13 +3828,13 @@ ${rows}
       <button id="poolCreateDoBtn" class="btn danger" type="button">Create</button>
     </div>
 
-    <div class="card" style="margin-top:12px;">
+    <div class="raidDialogInnerCard" style="margin-top:12px; padding:12px;">
       <h3 style="margin:0 0 8px 0;">Slots</h3>
       <div id="poolSlotsHost"></div>
       <div class="v" id="poolSlotHint" style="opacity:.75; margin-top:8px;"></div>
     </div>
 
-    <details class="card" style="margin-top:12px;">
+    <details class="raidDialogInnerCard" style="margin-top:12px; padding:10px 12px;">
       <summary style="cursor:pointer; font-weight:900;">Advanced</summary>
       <pre id="poolCreateDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
     </details>
@@ -4445,7 +4291,7 @@ Optionally it can wipe member disks (VERY destructive).
                 const pid = (j && j.plan_id) ? String(j.plan_id) : String(plan_id);
                 startExecPolling(pid);
 
-                ov.style.display = "none";
+                ov.classList.remove("show");
 
                 setTimeout(async () => {
                     await refreshPoolsState();
@@ -4453,7 +4299,7 @@ Optionally it can wipe member disks (VERY destructive).
                 }, 1200);
             }
 
-            closeBtn.onclick = () => (ov.style.display = "none");
+            closeBtn.onclick = () => ov.classList.remove("show");
             refreshBtn.onclick = refreshDisks;
             slotsApplyBtn.onclick = () => {
                 syncSlotValuesFromDom();
@@ -4470,7 +4316,7 @@ Optionally it can wipe member disks (VERY destructive).
             if (!slotCountInp.value) slotCountInp.value = "1";
             forceChk.checked = false;
 
-            ov.style.display = "flex";
+            ov.classList.add("show");
             await refreshDisks();
         }
         createBtn?.addEventListener("click", () => {
@@ -4727,20 +4573,6 @@ Optionally it can wipe member disks (VERY destructive).
                     return;
                 }
 
-                if (action === "edit-slots") {
-                    showToast("info", `Slot editor for ${mount} is coming next.`, 2600);
-                    return;
-                }
-
-                if (action === "add-slot") {
-                    showToast("info", `Add-slot action for ${mount} is coming next.`, 2600);
-                    return;
-                }
-
-                if (action === "remove-slot") {
-                    showToast("info", `Remove-empty-slot action for ${mount} is coming next.`, 2600);
-                    return;
-                }
 
                 if (action === "destroy") {
                     try {

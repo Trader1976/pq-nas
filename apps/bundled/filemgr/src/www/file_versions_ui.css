@@ -20,7 +20,7 @@
     flex-direction: column;
     border-radius: 18px;
     border: 1px solid rgba(255, 255, 255, 0.10);
-    background: var(--panel, #171717);
+    background: var(--elevated-bg, var(--panel, #171717));
     color: var(--fg, #f3f3f3);
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
     overflow: hidden;
@@ -71,7 +71,7 @@
 }
 
 .pqfvStatus.err {
-    color: var(--bad, #ff6b6b);
+    color: var(--err, #ff6b6b);
 }
 
 .pqfvStatus.ok {
@@ -91,7 +91,7 @@
 }
 
 .pqfvEmpty.err {
-    color: var(--bad, #ff6b6b);
+    color: var(--err, #ff6b6b);
 }
 
 .pqfvList {

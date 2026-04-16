@@ -120,14 +120,14 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         if (rootEl) return;
 
         rootEl = document.createElement("div");
-        rootEl.className = "pqfvRoot";
+        rootEl.className = "pqfvRoot uiOverlay";
         rootEl.setAttribute("aria-hidden", "true");
 
         panelEl = document.createElement("div");
-        panelEl.className = "pqfvPanel";
+        panelEl.className = "pqfvPanel uiDialog";
 
         const headEl = document.createElement("div");
-        headEl.className = "pqfvHead";
+        headEl.className = "pqfvHead uiDialogHeader";
 
         const headLeftEl = document.createElement("div");
         headLeftEl.className = "pqfvHeadLeft";

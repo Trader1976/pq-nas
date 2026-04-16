@@ -511,6 +511,268 @@ html[data-theme="win_classic"] #ctxMenu .ctxItem:hover{
 html[data-theme="win_classic"] #ctxMenu .ctxSep{
     background: rgba(0,0,0,0.14) !important;
 }
+
+/* =========================================================
+   Elevated surfaces for dialogs / sheets / menus
+   Used to stop bright/orange/dark themes from becoming
+   too transparent in file manager modals and custom dialogs
+   ========================================================= */
+
+:root{
+    --overlay-bg: rgba(0,0,0,0.52);
+
+    --elevated-bg: rgba(10,14,24,0.94);
+    --elevated-bg2: rgba(14,20,32,0.98);
+    --elevated-border: rgba(var(--fg-rgb),0.22);
+    --elevated-border2: rgba(var(--fg-rgb),0.10);
+    --elevated-shadow: 0 24px 80px rgba(0,0,0,0.58);
+
+    --menu-bg: rgba(12,16,26,0.96);
+    --menu-bg2: rgba(16,22,34,0.99);
+    --menu-border: rgba(var(--fg-rgb),0.20);
+    --menu-shadow: 0 18px 60px rgba(0,0,0,0.48);
+
+    --elevated-soft: rgba(var(--fg-rgb),0.045);
+    --elevated-soft-2: rgba(var(--fg-rgb),0.070);
+}
+
+html[data-theme="bright"]{
+    --overlay-bg: rgba(0,0,0,0.18);
+
+    --elevated-bg: rgba(255,255,255,0.96);
+    --elevated-bg2: rgba(248,250,255,0.995);
+    --elevated-border: rgba(0,0,0,0.16);
+    --elevated-border2: rgba(0,0,0,0.08);
+    --elevated-shadow: 0 20px 60px rgba(0,0,0,0.16);
+
+    --menu-bg: rgba(255,255,255,0.97);
+    --menu-bg2: rgba(250,251,255,1);
+    --menu-border: rgba(0,0,0,0.16);
+    --menu-shadow: 0 16px 44px rgba(0,0,0,0.14);
+
+    --elevated-soft: rgba(0,0,0,0.03);
+    --elevated-soft-2: rgba(0,0,0,0.05);
+}
+
+html[data-theme="cpunk_orange"]{
+    --overlay-bg: rgba(0,0,0,0.48);
+
+    --elevated-bg: rgba(24,14,8,0.95);
+    --elevated-bg2: rgba(32,18,10,0.985);
+    --elevated-border: rgba(255,122,24,0.28);
+    --elevated-border2: rgba(255,122,24,0.14);
+    --elevated-shadow: 0 24px 80px rgba(0,0,0,0.60);
+
+    --menu-bg: rgba(26,15,8,0.97);
+    --menu-bg2: rgba(34,20,11,0.99);
+    --menu-border: rgba(255,122,24,0.24);
+    --menu-shadow: 0 18px 60px rgba(0,0,0,0.52);
+
+    --elevated-soft: rgba(255,122,24,0.05);
+    --elevated-soft-2: rgba(255,122,24,0.08);
+}
+
+html[data-theme="win_classic"]{
+    --overlay-bg: rgba(0,0,0,0.18);
+
+    --elevated-bg: #e6e6e6;
+    --elevated-bg2: #f2f2f2;
+    --elevated-border: rgba(0,0,0,0.40);
+    --elevated-border2: rgba(255,255,255,0.85);
+    --elevated-shadow: 0 8px 22px rgba(0,0,0,0.12);
+
+    --menu-bg: #ececec;
+    --menu-bg2: #f6f6f6;
+    --menu-border: rgba(0,0,0,0.40);
+    --menu-shadow: 0 10px 24px rgba(0,0,0,0.14);
+
+    --elevated-soft: rgba(0,0,0,0.035);
+    --elevated-soft-2: rgba(0,0,0,0.055);
+}
+
+/* =========================================================
+   File manager dialogs + custom versions dialog
+   Use !important because file_versions_ui.css may define
+   its own surfaces
+   ========================================================= */
+
+html[data-theme] .modal,
+html[data-theme] .pqfvRoot{
+    background: var(--overlay-bg) !important;
+}
+
+html[data-theme] .modalCard,
+html[data-theme] .pqfvPanel{
+    color: var(--fg) !important;
+    background: linear-gradient(180deg, var(--elevated-bg2), var(--elevated-bg)) !important;
+    border: 1px solid var(--elevated-border) !important;
+    box-shadow: var(--elevated-shadow) !important;
+    backdrop-filter: none !important;
+}
+
+html[data-theme] .modalHead,
+html[data-theme] .pqfvHead{
+    background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--elevated-bg2) 88%, white 12%),
+            var(--elevated-bg)
+    ) !important;
+    border-bottom: 1px solid var(--elevated-border2) !important;
+    backdrop-filter: none !important;
+}
+
+html[data-theme] .ctxMenu{
+    color: var(--fg) !important;
+    background: linear-gradient(180deg, var(--menu-bg2), var(--menu-bg)) !important;
+    border: 1px solid var(--menu-border) !important;
+    box-shadow: var(--menu-shadow) !important;
+    backdrop-filter: none !important;
+}
+
+/* File versions inner blocks */
+html[data-theme] .pqfvStatus{
+    background: transparent !important;
+    color: var(--fg) !important;
+}
+
+html[data-theme] .pqfvEmpty,
+html[data-theme] .pqfvRow{
+    color: var(--fg) !important;
+    background: var(--elevated-soft) !important;
+    border: 1px solid var(--elevated-border2) !important;
+}
+
+html[data-theme] .pqfvRow:hover{
+    background: var(--elevated-soft-2) !important;
+}
+
+html[data-theme] .pqfvRow.deleted{
+    background: rgba(var(--warn-rgb),0.08) !important;
+    border-color: rgba(var(--warn-rgb),0.22) !important;
+}
+
+/* Keep classic crisp */
+html[data-theme="win_classic"] .pqfvPanel,
+html[data-theme="win_classic"] .ctxMenu,
+html[data-theme="win_classic"] .modalCard{
+    outline: 1px solid var(--elevated-border2) !important;
+    outline-offset: -2px !important;
+}
+
+/* =========================================================
+   Storage (RAID) manager dialogs + custom dialogs
+   ========================================================= */
+html[data-theme] .uiOverlay{
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: var(--overlay-bg) !important;
+    z-index: 9999;
+    backdrop-filter: none !important;
+}
+
+html[data-theme] .uiOverlay.show{
+    display: flex;
+}
+
+html[data-theme] .uiDialog{
+    color: var(--fg) !important;
+    background: linear-gradient(180deg, var(--elevated-bg2), var(--elevated-bg)) !important;
+    border: 1px solid var(--elevated-border) !important;
+    box-shadow: var(--elevated-shadow) !important;
+    backdrop-filter: none !important;
+}
+
+html[data-theme] .uiDialogHeader{
+    background: linear-gradient(
+            180deg,
+            color-mix(in srgb, var(--elevated-bg2) 88%, white 12%),
+            var(--elevated-bg)
+    ) !important;
+    border-bottom: 1px solid var(--elevated-border2) !important;
+}
+
+html[data-theme] .raidDialogShell{
+    width: min(980px, 96vw);
+    max-height: 90vh;
+    overflow: auto;
+    border-radius: 18px;
+    padding: 14px;
+}
+
+html[data-theme] .raidDialogShell.compact{
+    width: min(860px, 94vw);
+}
+
+html[data-theme] .raidDialogHeader{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+html[data-theme] .raidDialogInnerCard{
+    background: var(--elevated-soft) !important;
+    border: 1px solid var(--elevated-border2) !important;
+    border-radius: 16px;
+}
+
+html[data-theme] .uiToast{
+    border: 1px solid var(--toast-border) !important;
+    background: var(--toast-bg) !important;
+    box-shadow: var(--toast-shadow) !important;
+    color: var(--toast-fg) !important;
+    border-radius: 14px;
+}
+/* RAID dialog internals: stop page-local glass styles from showing through */
+html[data-theme] .uiDialog .card,
+html[data-theme] .uiDialog .raidDialogInnerCard,
+html[data-theme] .uiDialog details{
+    background: var(--elevated-soft) !important;
+    border: 1px solid var(--elevated-border2) !important;
+    color: var(--fg) !important;
+    backdrop-filter: none !important;
+}
+
+html[data-theme] .uiDialog pre{
+    background: linear-gradient(180deg, var(--elevated-bg2), var(--elevated-soft)) !important;
+    border: 1px solid var(--elevated-border2) !important;
+    color: var(--fg) !important;
+    backdrop-filter: none !important;
+}
+
+html[data-theme] .uiDialog input,
+html[data-theme] .uiDialog select,
+html[data-theme] .uiDialog textarea{
+    background: linear-gradient(180deg, var(--field-bg2), var(--field-bg)) !important;
+    color: var(--field-fg) !important;
+    border: 1px solid var(--field-border) !important;
+    box-shadow: none !important;
+}
+
+html[data-theme] .uiDialog input::placeholder,
+html[data-theme] .uiDialog textarea::placeholder{
+    color: var(--field-ph) !important;
+}
+
+html[data-theme] .uiDialog .pill,
+html[data-theme] .uiDialog .badge{
+    background: var(--elevated-soft) !important;
+    border-color: var(--elevated-border2) !important;
+    color: var(--fg) !important;
+}
+
+html[data-theme] .uiDialog .pbar{
+    background: var(--elevated-soft) !important;
+    border: 1px solid var(--elevated-border2) !important;
+}
+
+html[data-theme] .uiDialog label{
+    color: var(--fg) !important;
+}
 /* ==========================================================
    FORCE .btn.danger to be red in ALL themes
    (must be AFTER theme-specific .btn { ... !important } rules)
