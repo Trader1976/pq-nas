@@ -14,14 +14,31 @@
 namespace pqnas {
 namespace {
 
+// Default retention policy used when callers do not supply an explicit retention period.
+//
+// Architectural note:
+// - Retention is decided at move-to-trash time and materialized into purge_after_epoch.
+// - That means later background cleanup does not need to know the policy rules that were
+//   in effect at deletion time; it only compares "now" against the stored deadline.
 static constexpr std::int64_t k_default_trash_retention_seconds = 30LL * 24LL * 60LL * 60LL;
 
+// Returns current Unix epoch seconds.
+//
+// This file uses a small local helper rather than depending on a broader time utility so
+// the trash service remains self-contained and deterministic in its own logic.
 static std::int64_t now_epoch_local() {
     using namespace std::chrono;
     return static_cast<std::int64_t>(
         duration_cast<seconds>(system_clock::now().time_since_epoch()).count());
 }
 
+// Generates hex text used for unique-ish local ids.
+//
+// Architectural note:
+// - trash ids do not need to be globally cryptographic identifiers.
+// - They only need to be collision-resistant enough for one server instance creating
+//   trash rows over time.
+// - The final id combines timestamp + random suffix for readability and practical safety.
 static std::string random_hex_local(std::size_t nbytes) {
     static thread_local std::mt19937_64 rng(std::random_device{}());
     static const char* kHex = "0123456789abcdef";
@@ -38,6 +55,10 @@ static std::string random_hex_local(std::size_t nbytes) {
     return out;
 }
 
+// Creates the stable trash_id stored in TrashIndex.
+//
+// The id format intentionally carries a human-readable time prefix so operators can
+// inspect rows on disk or in sqlite without decoding a binary identifier.
 static std::string make_trash_id_local() {
     std::ostringstream oss;
     oss << "trash_"
@@ -47,6 +68,10 @@ static std::string make_trash_id_local() {
     return oss.str();
 }
 
+// Returns a filesystem-friendly local timestamp string used in conflict rename suffixes.
+//
+// This is deliberately "ISO-ish" rather than strict ISO-8601 so it stays compact and
+// safe for filenames while still being easy for humans to read.
 static std::string isoish_stamp_local() {
     std::time_t tt = static_cast<std::time_t>(now_epoch_local());
     std::tm tm{};
@@ -67,6 +92,10 @@ static std::string isoish_stamp_local() {
     return std::string(buf);
 }
 
+// Ensures the parent directory of a target path exists before copy/rename.
+//
+// TrashService treats parent creation as part of the move/restore operation contract
+// so callers do not have to pre-create target directories.
 static bool ensure_parent_dir_local(const std::filesystem::path& p, std::string* err) {
     if (err) err->clear();
     std::error_code ec;
@@ -78,6 +107,12 @@ static bool ensure_parent_dir_local(const std::filesystem::path& p, std::string*
     return true;
 }
 
+// Removes a file or directory tree from disk, rejecting symlinks.
+//
+// Security and safety model:
+// - Missing path is treated as success, which is useful for idempotent-ish purge cleanup.
+// - Symlinks are explicitly rejected so trash operations never traverse or delete through
+//   links outside the intended payload tree.
 static bool remove_path_recursive_local(const std::filesystem::path& p, std::string* err) {
     if (err) err->clear();
     std::error_code ec;
@@ -108,6 +143,9 @@ static bool remove_path_recursive_local(const std::filesystem::path& p, std::str
     return true;
 }
 
+// Copies one regular file from src to dst, rejecting unsupported source types.
+//
+// Used as a low-level building block for cross-device move fallback.
 static bool copy_file_local(const std::filesystem::path& src,
                             const std::filesystem::path& dst,
                             std::string* err) {
@@ -135,6 +173,12 @@ static bool copy_file_local(const std::filesystem::path& src,
     return true;
 }
 
+// Recursively copies a directory tree, rejecting symlinks and unsupported entry types.
+//
+// Design choice:
+// - The trash subsystem prefers conservative behavior over "best effort" for odd files.
+// - If the tree contains unsupported entries, the operation fails rather than silently
+//   creating a partial copy with inconsistent restore/purge semantics.
 static bool copy_tree_local(const std::filesystem::path& src,
                             const std::filesystem::path& dst,
                             std::string* err) {
@@ -212,6 +256,17 @@ static bool copy_tree_local(const std::filesystem::path& src,
     return true;
 }
 
+// Moves a file or directory from src to dst.
+//
+// Operational model:
+// - Fast path: filesystem rename()
+// - Fallback path: copy + remove source
+//
+// Why fallback exists:
+// - Trash moves and restores may cross device boundaries depending on how storage roots,
+//   landing tiers, or pools are arranged.
+// - The service hides that complexity from callers so higher layers can think in terms
+//   of "move" semantics rather than device topology.
 static bool move_path_local(const std::filesystem::path& src,
                             const std::filesystem::path& dst,
                             std::string* err) {
@@ -263,6 +318,13 @@ static bool move_path_local(const std::filesystem::path& src,
     return true;
 }
 
+// Builds a non-destructive conflict target used during restore when the original path
+// is already occupied.
+//
+// UX rationale:
+// - Restore should not overwrite an existing live file by default.
+// - The generated name preserves the original basename and adds a timestamped suffix
+//   that users can understand later in File Manager.
 static std::filesystem::path build_conflict_rename_target_local(const std::filesystem::path& dst) {
     const auto parent = dst.parent_path();
     const auto stem = dst.stem().string();
@@ -275,6 +337,16 @@ static std::filesystem::path build_conflict_rename_target_local(const std::files
     return parent / (stem + " (restored " + isoish_stamp_local() + ")" + ext);
 }
 
+// Builds the relative payload path under the internal trash root.
+//
+// Layout convention:
+// - user items live under   users/<scope_id>/<trash_id>/payload
+// - workspace items live under workspaces/<scope_id>/<trash_id>/payload
+//
+// Keeping this layout deterministic is important because:
+// - the index stores both trash_rel_path and payload_physical_path
+// - operators can inspect the trash tree on disk
+// - routes/services can reason about user vs workspace ownership consistently
 static std::string trash_rel_payload_path_local(const std::string& scope_type,
                                                 const std::string& scope_id,
                                                 const std::string& trash_id) {
@@ -292,16 +364,38 @@ static std::string trash_rel_payload_path_local(const std::string& scope_type,
 
 } // namespace
 
+// TrashService coordinates trash filesystem operations with TrashIndex metadata updates.
+//
+// Architectural boundary:
+// - TrashIndex owns sqlite persistence and lifecycle row storage.
+// - TrashService owns filesystem moves/removes/restores and the higher-level sequencing
+//   needed to keep metadata and disk state consistent enough.
 TrashService::TrashService(TrashIndex* index)
     : index_(index) {}
 
+// Hooks a caller-supplied callback that recreates live metadata after restore.
+//
+// This keeps TrashService decoupled from specific indexing implementations. The trash
+// subsystem only knows that "something" may need to rebuild live metadata once a file
+// is restored; main.cpp injects the actual policy/integration.
 void TrashService::set_restore_reindexer(RestoreReindexFn fn) {
     restore_reindexer_ = std::move(fn);
 }
 
+// Hooks a rollback callback used if final restore state transition fails after the
+// reindexer has already recreated live metadata.
 void TrashService::set_restore_unindexer(RestoreUnindexFn fn) {
     restore_unindexer_ = std::move(fn);
 }
+
+// Derives the storage root by walking upward from a concrete payload path using the
+// number of path components present in the logical relative path.
+//
+// Why this exists:
+// - Some callers know the payload absolute path and logical rel path, but not the exact
+//   storage root.
+// - The trash layout is rooted at the storage root, so that root must be reconstructed
+//   before move-to-trash can decide where the internal trash tree should live.
 bool TrashService::infer_storage_root_for_logical_path(const std::filesystem::path& payload_abs_path,
                                                        const std::string& logical_rel_path,
                                                        std::filesystem::path* out_storage_root,
@@ -333,6 +427,11 @@ bool TrashService::infer_storage_root_for_logical_path(const std::filesystem::pa
     return true;
 }
 
+// Computes file_count and size_bytes for either a single file or a whole directory tree.
+//
+// This is used when callers did not already precompute metrics at delete time.
+// The service rejects symlinks for the same reason as other trash operations: the trash
+// subsystem only manages real files/directories within controlled storage trees.
 bool TrashService::scan_payload_tree(const std::filesystem::path& abs_path,
                                      std::uint64_t* out_file_count,
                                      std::uint64_t* out_size_bytes,
@@ -416,6 +515,21 @@ bool TrashService::scan_payload_tree(const std::filesystem::path& abs_path,
     return true;
 }
 
+// Moves a live file/directory into the internal trash tree and persists a metadata row.
+//
+// High-level sequencing:
+// 1) validate caller-supplied parameters
+// 2) decide trash destination path
+// 3) compute metrics if caller did not provide them
+// 4) move payload into trash on disk
+// 5) insert metadata row into TrashIndex
+// 6) if insert fails, rollback the filesystem move
+//
+// Important architectural choice:
+// - The physical move happens before index insert.
+// - This guarantees that a committed trash row points at a payload that already exists
+//   in the trash tree.
+// - On insert failure, the service attempts to roll disk state back immediately.
 bool TrashService::move_to_trash(const MoveToTrashParams& p,
                                  MoveToTrashResult* out,
                                  std::string* err) {
@@ -525,6 +639,20 @@ bool TrashService::move_to_trash(const MoveToTrashParams& p,
     return true;
 }
 
+// Restores a trashed payload back into its live tree.
+//
+// Concurrency / race model:
+// - The row is first read, then atomically claimed via
+//   set_restore_status_if_current(trashed -> restoring).
+// - Only the actor that successfully claims the row is allowed to touch the payload.
+// - This prevents auto-purge and manual restore/purge from acting on the same trash item
+//   simultaneously.
+//
+// Failure model:
+// - If filesystem move or reindexing fails, the service attempts to roll both metadata
+//   status and payload location back to the original trashed state.
+// - If final status update to "restored" fails after reindex succeeded, the service also
+//   invokes restore_unindexer_ so live metadata does not stay orphaned.
 bool TrashService::restore_from_trash(const RestoreParams& p,
                                       RestoreResult* out,
                                       std::string* err) {
@@ -561,6 +689,21 @@ bool TrashService::restore_from_trash(const RestoreParams& p,
         return false;
     }
 
+    {
+        std::string cerr;
+        if (!index_->set_restore_status_if_current(
+                p.trash_id, "trashed", "restoring", now_epoch_local(), &cerr)) {
+            if (err) {
+                if (cerr == "set_restore_status_if_current_no_match") {
+                    *err = "trash item is not active";
+                } else {
+                    *err = "restore claim failed: " + cerr;
+                }
+            }
+            return false;
+        }
+    }
+
     const auto src_abs = std::filesystem::path(rec.payload_physical_path);
     auto dst_abs = p.restore_abs_path.lexically_normal();
 
@@ -568,6 +711,12 @@ bool TrashService::restore_from_trash(const RestoreParams& p,
     auto dst_st = std::filesystem::symlink_status(dst_abs, ec);
     if (!ec && std::filesystem::exists(dst_st)) {
         if (!p.rename_if_conflict) {
+            std::string rserr;
+            if (!index_->set_restore_status_if_current(
+                    p.trash_id, "restoring", "trashed", now_epoch_local(), &rserr)) {
+                if (err) *err = "restore destination exists; restore claim rollback failed: " + rserr;
+                return false;
+            }
             if (err) *err = "restore destination exists";
             return false;
         }
@@ -576,6 +725,12 @@ bool TrashService::restore_from_trash(const RestoreParams& p,
 
     std::string merr;
     if (!move_path_local(src_abs, dst_abs, &merr)) {
+        std::string rserr;
+        if (!index_->set_restore_status_if_current(
+                p.trash_id, "restoring", "trashed", now_epoch_local(), &rserr)) {
+            if (err) *err = merr + "; restore claim rollback failed: " + rserr;
+            return false;
+        }
         if (err) *err = merr;
         return false;
     }
@@ -589,7 +744,7 @@ bool TrashService::restore_from_trash(const RestoreParams& p,
         }
     }
 
-    // NEW: recreate live metadata before marking trash row restored
+    // Recreate live metadata before marking trash row restored.
     if (restore_reindexer_) {
         std::string rixerr;
         if (!restore_reindexer_(rec, dst_abs, restored_rel_path, &rixerr)) {
@@ -599,6 +754,15 @@ bool TrashService::restore_from_trash(const RestoreParams& p,
                                 "; rollback move failed: " + rollback_err;
                 return false;
             }
+
+            std::string rserr;
+            if (!index_->set_restore_status_if_current(
+                    p.trash_id, "restoring", "trashed", now_epoch_local(), &rserr)) {
+                if (err) *err = "restore reindex failed: " + rixerr +
+                                "; restore claim rollback failed: " + rserr;
+                return false;
+            }
+
             if (err) *err = "restore reindex failed: " + rixerr;
             return false;
         }
@@ -606,7 +770,7 @@ bool TrashService::restore_from_trash(const RestoreParams& p,
 
     const std::int64_t now_ts = now_epoch_local();
     std::string serr;
-    if (!index_->set_restore_status(p.trash_id, "restored", now_ts, &serr)) {
+    if (!index_->set_restore_status_if_current(p.trash_id, "restoring", "restored", now_ts, &serr)) {
         if (restore_unindexer_) {
             restore_unindexer_(rec, restored_rel_path);
         }
@@ -616,6 +780,15 @@ bool TrashService::restore_from_trash(const RestoreParams& p,
             if (err) *err = "restore status update failed: " + serr + "; rollback move failed: " + rerr;
             return false;
         }
+
+        std::string rserr;
+        if (!index_->set_restore_status_if_current(
+                p.trash_id, "restoring", "trashed", now_epoch_local(), &rserr)) {
+            if (err) *err = "restore status update failed: " + serr +
+                            "; restore claim rollback failed: " + rserr;
+            return false;
+        }
+
         if (err) *err = "restore status update failed: " + serr;
         return false;
     }
@@ -632,6 +805,18 @@ bool TrashService::restore_from_trash(const RestoreParams& p,
     return true;
 }
 
+// Permanently purges the trashed payload from disk and marks the row as purged.
+//
+// Concurrency model mirrors restore:
+// - read row
+// - atomically claim it via trashed -> purging
+// - remove payload from disk
+// - finalize state via purging -> purged
+//
+// Important behavior:
+// - remove_path_recursive_local() treats an already-missing payload as success.
+// - That makes purge robust in cleanup scenarios where disk state has already been
+//   partially cleaned up but the metadata row still exists.
 bool TrashService::purge_from_trash(const PurgeParams& p,
                                     PurgeResult* out,
                                     std::string* err) {
@@ -664,16 +849,37 @@ bool TrashService::purge_from_trash(const PurgeParams& p,
         return false;
     }
 
+    {
+        std::string cerr;
+        if (!index_->set_restore_status_if_current(
+                p.trash_id, "trashed", "purging", now_epoch_local(), &cerr)) {
+            if (err) {
+                if (cerr == "set_restore_status_if_current_no_match") {
+                    *err = "trash item is not active";
+                } else {
+                    *err = "purge claim failed: " + cerr;
+                }
+            }
+            return false;
+        }
+    }
+
     std::string derr;
     if (!remove_path_recursive_local(std::filesystem::path(rec.payload_physical_path), &derr)) {
+        std::string rserr;
+        if (!index_->set_restore_status_if_current(
+                p.trash_id, "purging", "trashed", now_epoch_local(), &rserr)) {
+            if (err) *err = derr + "; purge claim rollback failed: " + rserr;
+            return false;
+        }
         if (err) *err = derr;
         return false;
     }
 
     const std::int64_t now_ts = now_epoch_local();
     std::string serr;
-    if (!index_->set_restore_status(p.trash_id, "purged", now_ts, &serr)) {
-        if (err) *err = serr;
+    if (!index_->set_restore_status_if_current(p.trash_id, "purging", "purged", now_ts, &serr)) {
+        if (err) *err = "purge status update failed: " + serr;
         return false;
     }
 

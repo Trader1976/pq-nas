@@ -35592,7 +35592,78 @@ srv.Get(R"(/pq/invite/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httpl
     // ************************* END OF ROUTES *************************** //
 
 
+    constexpr std::size_t k_trash_cleanup_batch_limit = 32;
+    constexpr int k_trash_cleanup_interval_seconds = 300;
 
+    auto run_trash_cleanup_pass = [&]() {
+        const std::int64_t now_ts = now_epoch_sec();
+
+        std::string lerr;
+        const auto rows = trash_index.list_expired(now_ts, k_trash_cleanup_batch_limit, &lerr);
+        if (!lerr.empty()) {
+            std::cerr << "[trash] cleanup list_expired failed: " << lerr << std::endl;
+            return;
+        }
+
+        for (const auto& rec : rows) {
+            pqnas::TrashService::PurgeParams pp;
+            pp.trash_id = rec.trash_id;
+
+            pqnas::TrashService::PurgeResult pr;
+            std::string perr;
+            if (!trash_service.purge_from_trash(pp, &pr, &perr)) {
+                // Benign race: another actor already restored/purged/claimed it.
+                if (perr == "trash item is not active") {
+                    continue;
+                }
+
+                std::cerr << "[trash] auto purge failed"
+                          << " trash_id=" << rec.trash_id
+                          << " scope_type=" << rec.scope_type
+                          << " scope_id=" << rec.scope_id
+                          << " detail=" << perr
+                          << std::endl;
+
+                pqnas::AuditEvent ev;
+                ev.event = "trash.auto_purge";
+                ev.outcome = "fail";
+                ev.f["reason"] = "retention_expired";
+                ev.f["trash_id"] = rec.trash_id;
+                ev.f["scope_type"] = rec.scope_type;
+                ev.f["scope_id"] = rec.scope_id;
+                ev.f["item_type"] = rec.item_type;
+                ev.f["original_rel_path"] = pqnas::shorten(rec.original_rel_path, 240);
+                ev.f["origin_app"] = rec.origin_app;
+                ev.f["source_pool"] = rec.source_pool;
+                ev.f["source_tier_state"] = rec.source_tier_state;
+                ev.f["size_bytes"] = std::to_string(rec.size_bytes);
+                ev.f["file_count"] = std::to_string(rec.file_count);
+                ev.f["deleted_epoch"] = std::to_string(rec.deleted_epoch);
+                ev.f["purge_after_epoch"] = std::to_string(rec.purge_after_epoch);
+                ev.f["detail"] = pqnas::shorten(perr, 240);
+                audit_append(ev);
+                continue;
+            }
+
+            pqnas::AuditEvent ev;
+            ev.event = "trash.auto_purge";
+            ev.outcome = "ok";
+            ev.f["reason"] = "retention_expired";
+            ev.f["trash_id"] = rec.trash_id;
+            ev.f["scope_type"] = rec.scope_type;
+            ev.f["scope_id"] = rec.scope_id;
+            ev.f["item_type"] = rec.item_type;
+            ev.f["original_rel_path"] = pqnas::shorten(rec.original_rel_path, 240);
+            ev.f["origin_app"] = rec.origin_app;
+            ev.f["source_pool"] = rec.source_pool;
+            ev.f["source_tier_state"] = rec.source_tier_state;
+            ev.f["size_bytes"] = std::to_string(pr.size_bytes);
+            ev.f["file_count"] = std::to_string(pr.file_count);
+            ev.f["deleted_epoch"] = std::to_string(rec.deleted_epoch);
+            ev.f["purge_after_epoch"] = std::to_string(rec.purge_after_epoch);
+            audit_append(ev);
+        }
+    };
 
 	// ---- Start background workers ----
 
@@ -35600,6 +35671,23 @@ srv.Get(R"(/pq/invite/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httpl
 	std::thread tiering_worker([&]() {
     	tiering_worker_loop(&users, &tiering_worker_stop);
 	});
+
+    // garbage service
+    std::atomic<bool> trash_cleanup_stop{false};
+    std::thread trash_cleanup_worker([&]() {
+        std::cerr << "[trash] cleanup worker started"
+                  << " interval_s=" << k_trash_cleanup_interval_seconds
+                  << " batch_limit=" << k_trash_cleanup_batch_limit
+                  << std::endl;
+
+        while (!trash_cleanup_stop.load()) {
+            run_trash_cleanup_pass();
+
+            for (int i = 0; i < k_trash_cleanup_interval_seconds && !trash_cleanup_stop.load(); ++i) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }
+    });
 
 	// ---- Start HTTP server ----
     {
@@ -35635,11 +35723,14 @@ srv.Get(R"(/pq/invite/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httpl
 	user_cleanup_worker_stop_and_join();
 	raid_worker_stop_and_join();
 
-	tiering_worker_stop.store(true);
-	if (tiering_worker.joinable()) tiering_worker.join();
+    trash_cleanup_stop.store(true);
+    if (trash_cleanup_worker.joinable()) trash_cleanup_worker.join();
 
-	snapshots_stop.store(true);
-	if (snapshots_thread.joinable()) snapshots_thread.join();
+    tiering_worker_stop.store(true);
+    if (tiering_worker.joinable()) tiering_worker.join();
+
+    snapshots_stop.store(true);
+    if (snapshots_thread.joinable()) snapshots_thread.join();
 
 	return 0;
 }

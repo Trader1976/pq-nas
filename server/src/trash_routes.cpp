@@ -13,12 +13,22 @@ namespace {
 
 using json = nlohmann::json;
 
+// Clamps client-provided list limits to a small, predictable server-side range.
+//
+// Architectural intent:
+// - Keep trash list endpoints responsive even if a caller passes a very large limit.
+// - Avoid exposing unlimited full-table scans through the HTTP API.
+// - Keep pagination/simple "load more" behavior feasible at the route layer.
 static std::size_t clamp_limit_local(std::size_t v) {
     if (v < 1) return 1;
     if (v > 500) return 500;
     return v;
 }
 
+// Parses the optional "limit" query parameter and falls back to a route-provided default.
+//
+// Bad/malformed input is intentionally treated as "use default" rather than as a hard error.
+// That keeps the trash list endpoint tolerant of UI/client mistakes.
 static std::size_t parse_limit_local(const httplib::Request& req, std::size_t defv) {
     if (!req.has_param("limit")) return defv;
     try {
@@ -28,6 +38,10 @@ static std::size_t parse_limit_local(const httplib::Request& req, std::size_t de
     }
 }
 
+// Parses a simple boolean query-string flag.
+//
+// Accepted truthy forms are intentionally broad because these routes may be called by
+// browser code, scripts, or future clients that serialize booleans differently.
 static bool parse_bool_qs_local(const httplib::Request& req,
                                 const char* key,
                                 bool defv = false) {
@@ -37,6 +51,10 @@ static bool parse_bool_qs_local(const httplib::Request& req,
     return (v == "1" || v == "true" || v == "yes" || v == "on");
 }
 
+// Converts one TrashItemRec into the public API shape returned by trash endpoints.
+//
+// This intentionally exposes user-relevant trash metadata while keeping lower-level
+// storage details such as payload_physical_path internal to the server.
 static json trash_item_to_json_local(const TrashItemRec& rec) {
     return json{
         {"trash_id", rec.trash_id},
@@ -56,6 +74,10 @@ static json trash_item_to_json_local(const TrashItemRec& rec) {
     };
 }
 
+// Small bridge helper so route code can emit audit events without knowing whether
+// auditing is wired in this process/context.
+//
+// This keeps the route implementation decoupled from the concrete audit backend.
 static void audit_local(const TrashRoutesDeps& deps,
                         const std::string& event,
                         const std::string& outcome,
@@ -63,6 +85,20 @@ static void audit_local(const TrashRoutesDeps& deps,
     if (deps.audit_emit) deps.audit_emit(event, outcome, fields);
 }
 
+// Normalizes the "already handled elsewhere" race outcome used by restore/purge.
+//
+// Background auto-purge and manual restore/purge can legitimately race. The service layer
+// reports that as "trash item is not active"; routes convert that into a nicer API error.
+static bool is_trash_inactive_err_local(const std::string& err) {
+    return err == "trash item is not active";
+}
+
+// Resolves a logical relative path under an allowed restore root.
+//
+// Security intent:
+// - Reuse strict path normalization rules already used elsewhere in the file/storage API.
+// - Guarantee the resolved restore destination remains inside the allowed user/workspace root.
+// - Prevent path traversal via crafted original_rel_path values.
 static bool resolve_path_under_root_local(const std::filesystem::path& root,
                                           const std::string& rel_path,
                                           std::filesystem::path* out_abs,
@@ -93,6 +129,12 @@ static bool resolve_path_under_root_local(const std::filesystem::path& root,
     return true;
 }
 
+// Reloads and resolves one workspace record by id for trash routes.
+//
+// Architectural note:
+// - Workspaces are reloaded on demand here so route authorization uses the latest membership
+//   and status state rather than stale in-memory assumptions.
+// - That is especially important for restore/purge, which are write operations.
 static bool load_workspace_for_scope_local(const TrashRoutesDeps& deps,
                                            const std::string& workspace_id,
                                            WorkspaceRec* out_w,
@@ -121,12 +163,21 @@ static bool load_workspace_for_scope_local(const TrashRoutesDeps& deps,
     return true;
 }
 
+// Workspace trash is readable by any enabled workspace member.
+//
+// List access is intentionally broader than write access so regular members can inspect
+// the workspace trash even if they cannot restore or purge from it.
 static bool actor_can_read_workspace_trash_local(const WorkspaceRec& w,
                                                  const std::string& actor_fp) {
     auto mopt = workspace_enabled_member_for_actor(w, actor_fp);
     return mopt.has_value();
 }
 
+// Workspace trash restore/purge requires write-capable membership.
+//
+// Current policy:
+// - owners and editors may mutate workspace trash
+// - viewers/readers may only inspect it
 static bool actor_can_write_workspace_trash_local(const WorkspaceRec& w,
                                                   const std::string& actor_fp) {
     auto mopt = workspace_enabled_member_for_actor(w, actor_fp);
@@ -134,6 +185,11 @@ static bool actor_can_write_workspace_trash_local(const WorkspaceRec& w,
     return (mopt->role == "owner" || mopt->role == "editor");
 }
 
+// Resolves the live restore root for a user-scope trash item.
+//
+// This ensures restore only proceeds if the user's storage is currently allocated and
+// a valid user root can be resolved. Trash restore is therefore tied to live storage
+// availability, not just to the presence of the trash row.
 static bool get_user_restore_root_local(const TrashRoutesDeps& deps,
                                         const std::string& actor_fp,
                                         std::filesystem::path* out_root,
@@ -165,6 +221,11 @@ static bool get_user_restore_root_local(const TrashRoutesDeps& deps,
     return true;
 }
 
+// Resolves the live restore root for a workspace-scope trash item.
+//
+// Current implementation deliberately uses the existing "default pool only" workspace root
+// resolver dependency. That keeps trash restore aligned with current workspace storage
+// semantics without re-implementing path policy here.
 static bool get_workspace_restore_root_local(const TrashRoutesDeps& deps,
                                              const WorkspaceRec& w,
                                              std::filesystem::path* out_root,
@@ -189,7 +250,26 @@ static bool get_workspace_restore_root_local(const TrashRoutesDeps& deps,
 
 } // namespace
 
+// Registers the public trash HTTP endpoints.
+//
+// Route-layer responsibilities:
+// - authenticate the actor
+// - authorize access to the requested trash scope
+// - validate/normalize request parameters
+// - translate between JSON and TrashService/TrashIndex types
+// - emit audit events for success/failure
+//
+// Service/index responsibilities remain below this layer:
+// - TrashIndex provides metadata queries/state transitions
+// - TrashService performs restore/purge filesystem coordination safely
 void register_trash_routes(httplib::Server& srv, const TrashRoutesDeps& deps) {
+    // Lists trash entries for either the authenticated user's own trash or a specific
+    // workspace trash view.
+    //
+    // Query semantics:
+    // - scope=user      -> actor's own trash
+    // - scope=workspace -> requires workspace_id and membership checks
+    // - include_inactive=true exposes restored/purged history as well
     srv.Get("/api/v4/trash/list", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp, actor_role;
         if (!deps.require_user_auth_users_actor ||
@@ -268,6 +348,9 @@ void register_trash_routes(httplib::Server& srv, const TrashRoutesDeps& deps) {
             scope_type = "workspace";
             scope_id = workspace_id;
         } else {
+            // Any non-workspace value falls back to user scope intentionally.
+            // This keeps the endpoint simple for UI callers and avoids introducing
+            // a separate scope validation error path for stray values.
             scope_type = "user";
             scope_id = actor_fp;
         }
@@ -309,6 +392,14 @@ void register_trash_routes(httplib::Server& srv, const TrashRoutesDeps& deps) {
         }.dump());
     });
 
+    // Restores one trash entry back into its live user/workspace root.
+    //
+    // Important route-layer flow:
+    // 1) authenticate actor
+    // 2) load trash row by id
+    // 3) verify actor may write that scope
+    // 4) resolve and validate the destination path under the allowed root
+    // 5) delegate the actual restore/race-safe state transition to TrashService
     srv.Post("/api/v4/trash/restore", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp, actor_role;
         if (!deps.require_user_auth_users_actor ||
@@ -494,6 +585,17 @@ void register_trash_routes(httplib::Server& srv, const TrashRoutesDeps& deps) {
                 {"trash_id", trash_id},
                 {"detail", rerr}
             });
+
+            if (is_trash_inactive_err_local(rerr)) {
+                deps.reply_json(res, 409, json{
+                    {"ok", false},
+                    {"error", "trash_inactive"},
+                    {"message", "trash item is no longer active"},
+                    {"detail", rerr}
+                }.dump());
+                return;
+            }
+
             deps.reply_json(res, 409, json{
                 {"ok", false},
                 {"error", "path_conflict"},
@@ -503,6 +605,8 @@ void register_trash_routes(httplib::Server& srv, const TrashRoutesDeps& deps) {
             return;
         }
 
+        // The restore service may rename on conflict, so the route recomputes the final
+        // logical relative path for audit/API response purposes.
         std::string restored_rel_path = rec.original_rel_path;
         {
             std::error_code ec;
@@ -532,6 +636,13 @@ void register_trash_routes(httplib::Server& srv, const TrashRoutesDeps& deps) {
         }.dump());
     });
 
+    // Permanently purges one trash entry.
+    //
+    // Authorization mirrors restore:
+    // - user trash: actor must own the scope
+    // - workspace trash: actor must have write-capable workspace membership
+    //
+    // The actual payload removal and race-safe state claim happen inside TrashService.
     srv.Post("/api/v4/trash/purge", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp, actor_role;
         if (!deps.require_user_auth_users_actor ||
@@ -661,6 +772,17 @@ void register_trash_routes(httplib::Server& srv, const TrashRoutesDeps& deps) {
                 {"trash_id", trash_id},
                 {"detail", perr}
             });
+
+            if (is_trash_inactive_err_local(perr)) {
+                deps.reply_json(res, 409, json{
+                    {"ok", false},
+                    {"error", "trash_inactive"},
+                    {"message", "trash item is no longer active"},
+                    {"detail", perr}
+                }.dump());
+                return;
+            }
+
             deps.reply_json(res, 409, json{
                 {"ok", false},
                 {"error", "path_conflict"},
