@@ -150,8 +150,15 @@ extern "C" {
 #include "app_tokens.h"
 #include "app_pairing.h"
 
+// image gallery
 #include "gallery_meta.h"
 #include "image_embedded_meta.h"
+
+// trash
+#include "trash_index.h"
+#include "trash_service.h"
+#include "trash_routes.h"
+
 
 using json = nlohmann::json;
 
@@ -7443,6 +7450,19 @@ int main()
     }
 
     pqnas::set_gallery_meta_index(&gallery_meta_index);
+
+    const std::filesystem::path trash_db =
+    std::filesystem::path(pqnas::data_root_dir()).parent_path() / "config" / "trash.db";
+
+    pqnas::TrashIndex trash_index(trash_db);
+    {
+        std::string terr;
+        if (!trash_index.open(&terr) || !trash_index.init_schema(&terr)) {
+            std::cerr << "trash index init failed: " << terr << std::endl;
+            return 1;
+        }
+    }
+    pqnas::TrashService trash_service(&trash_index);
     // ---- Audit log (hash-chained JSONL) ----
     std::string audit_dir = exe_dir() + "/audit";
 	if (const char* p = std::getenv("PQNAS_AUDIT_DIR")) {
@@ -7839,6 +7859,15 @@ auto maybe_auto_rotate_before_append = [&]() {
     const std::string workspaces_path =
         (std::filesystem::path(users_path).parent_path() / "workspaces.json").string();
     (void)workspaces.load(workspaces_path);
+
+    pqnas::TrashRoutesDeps trash_routes_deps;
+    trash_routes_deps.users = &users;
+    trash_routes_deps.users_path = &users_path;
+    trash_routes_deps.workspaces = &workspaces;
+    trash_routes_deps.workspaces_path = &workspaces_path;
+
+    trash_routes_deps.trash_index = &trash_index;
+    trash_routes_deps.cookie_key = COOKIE_KEY;
 
     std::cerr << "[cfg] users_path=" << users_path << std::endl;
 
@@ -8256,6 +8285,54 @@ v5.app_pair_build_qr_uri =
 	// (leave v5.sign_token_v4_ed25519 unset for now; we’ll wire once v5 verify uses it)
 
 	register_routes_v5(srv, v5);
+
+    pqnas::TrashRoutesDeps trash_deps;
+    trash_deps.users = &users;
+    trash_deps.users_path = &users_path;
+    trash_deps.workspaces = &workspaces;
+    trash_deps.workspaces_path = &workspaces_path;
+
+    trash_deps.trash_index = &trash_index;
+    trash_deps.trash_service = &trash_service;
+    trash_deps.cookie_key = COOKIE_KEY;
+
+    trash_deps.require_user_auth_users_actor =
+        [&](const httplib::Request& req,
+            httplib::Response& res,
+            const unsigned char* cookie_key,
+            pqnas::UsersRegistry* users_ptr,
+            std::string* fp_hex,
+            std::string* role) -> bool {
+            return require_user_auth_users_actor(req, res, cookie_key, users_ptr, fp_hex, role);
+    };
+
+    trash_deps.reply_json =
+        [&](httplib::Response& res, int code, const std::string& body) {
+            reply_json(res, code, body);
+    };
+
+    trash_deps.audit_emit =
+        [&](const std::string& event,
+            const std::string& outcome,
+            const std::map<std::string, std::string>& f) {
+            pqnas::AuditEvent ev;
+            ev.event = event;
+            ev.outcome = outcome;
+            for (const auto& kv : f) ev.f[kv.first] = kv.second;
+            audit_append(ev);
+    };
+
+    trash_deps.user_dir_for_fp =
+        [&](pqnas::UsersRegistry& users_ref, const std::string& fp_hex) -> std::filesystem::path {
+            return user_dir_for_fp(users_ref, fp_hex);
+    };
+
+    trash_deps.workspace_dir_for_default_pool_only =
+        [&](const std::string& /*users_path_ref*/, const pqnas::WorkspaceRec& w) -> std::filesystem::path {
+            return std::filesystem::path(pqnas::data_root_dir()) / w.root_rel;
+    };
+    pqnas::register_trash_routes(srv, trash_deps);
+
 
 // GET /api/public/auth_mode
 // Returns installer-selected auth mode for login page: v4 | v5 | auto
@@ -17753,6 +17830,7 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
         (g_transport_max_upload_bytes ? g_transport_max_upload_bytes : k_payload_max_upload_bytes);
     ws_file_deps.payload_max_upload_bytes = k_payload_max_upload_bytes;
     ws_file_deps.file_versions = &file_versions_index;
+    ws_file_deps.trash_service = &trash_service;
     ws_file_deps.reply_json =
         [](httplib::Response& res, int status, const std::string& body) {
             reply_json(res, status, body);
@@ -25103,8 +25181,9 @@ srv.Post("/api/v4/files/favorites/remove", [&](const httplib::Request& req, http
         {"type", type}
     }.dump());
 });
+
 // DELETE /api/v4/files/delete?path=relative/path
-// Deletes a file or directory (recursive). Refuses empty path (won't delete user root).
+// Moves a file or directory to trash. Refuses empty path (won't delete user root).
 srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
@@ -25172,28 +25251,28 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
         audit_append(ev);
     };
 
-    {
-        auto uopt = users.get(fp_hex);
-        if (!uopt.has_value()) {
-            audit_fail("user_missing", 403);
-            reply_json(res, 403, json{
-                {"ok", false},
-                {"error", "forbidden"},
-                {"message", "policy denied"}
-            }.dump());
-            return;
-        }
-        if (uopt->storage_state != "allocated") {
-            audit_fail("storage_unallocated", 403);
-            reply_json(res, 403, json{
-                {"ok", false},
-                {"error", "storage_unallocated"},
-                {"message", "Storage not allocated"},
-                {"fingerprint_hex", fp_hex},
-                {"quota_bytes", uopt->quota_bytes}
-            }.dump());
-            return;
-        }
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value()) {
+        audit_fail("user_missing", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "policy denied"}
+        }.dump());
+        return;
+    }
+    const auto u = *uopt;
+
+    if (u.storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"},
+            {"fingerprint_hex", fp_hex},
+            {"quota_bytes", u.quota_bytes}
+        }.dump());
+        return;
     }
 
     std::string rel_path;
@@ -25220,8 +25299,6 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
         return;
     }
 
-    // Serialize writes on overlapping logical paths for this user.
-    // This prevents PUT/MOVE/DELETE races on the same file/subtree.
     auto* plm = pqnas::get_path_lock_manager();
     auto write_guard = plm->lock_paths(fp_hex, {rel_norm});
 
@@ -25313,7 +25390,6 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
 
         const std::uint64_t freed_bytes = file_size_safe(abs_path);
 
-        // Recheck right before remove so we do not delete after type swap.
         ec.clear();
         auto st2 = std::filesystem::symlink_status(abs_path, ec);
         if (ec || !std::filesystem::exists(st2)) {
@@ -25345,38 +25421,50 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             }.dump());
             return;
         }
-        {
-            pqnas::PreserveLiveFileVersionParams vp;
-            vp.scope_type = "user";
-            vp.scope_id = fp_hex;
-            vp.scope_root = user_dir;
-            vp.logical_rel_path = rel_norm;
-            vp.live_abs_path = abs_path;
-            vp.event_kind = "delete_preserve";
-            vp.actor_fp = fp_hex;
-            vp.users = &users;
 
-            pqnas::FileVersionRec vrec;
-            std::string verr;
-            if (!file_versions_index.preserve_live_file_version(vp, &vrec, &verr)) {
-                audit_fail("version_preserve_failed", 500, verr);
-                reply_json(res, 500, json{
-                    {"ok", false},
-                    {"error", "server_error"},
-                    {"message", "failed to preserve previous version"},
-                    {"detail", pqnas::shorten(verr, 180)}
-                }.dump());
-                return;
-            }
-        }
-        bool removed = std::filesystem::remove(abs_path, ec);
-        if (ec || !removed) {
-            audit_fail("remove_failed", 500, ec.message());
+        const std::string pool_id = u.storage_pool_id.empty() ? "default" : u.storage_pool_id;
+        const std::filesystem::path storage_root = data_root_for_pool_id(pool_id);
+
+        std::string merr;
+        auto mrec = idx->get(fp_hex, rel_norm, &merr);
+        if (!merr.empty()) {
+            audit_fail("metadata_lookup_failed", 500, merr);
             reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "server_error"},
-                {"message", "delete failed"},
-                {"detail", pqnas::shorten(ec.message(), 180)}
+                {"message", "failed to read metadata before trash move"},
+                {"detail", pqnas::shorten(merr, 180)}
+            }.dump());
+            return;
+        }
+
+        std::string terr;
+
+        pqnas::TrashService::MoveToTrashParams tp;
+        tp.scope_type = "user";
+        tp.scope_id = fp_hex;
+        tp.deleted_by_fp = fp_hex;
+        tp.origin_app = "filemgr";
+        tp.item_type = "file";
+        tp.original_rel_path = rel_norm;
+        tp.payload_abs_path = abs_path;
+        tp.storage_root = storage_root;
+        tp.size_bytes = freed_bytes;
+        tp.file_count = 1;
+
+        if (mrec.has_value()) {
+            tp.source_pool = mrec->current_pool;
+            tp.source_tier_state = mrec->tier_state;
+        }
+
+        pqnas::TrashService::MoveToTrashResult tr;
+        if (!trash_service.move_to_trash(tp, &tr, &terr)) {
+            audit_fail("trash_move_failed", 500, terr);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to move item to trash"},
+                {"detail", pqnas::shorten(terr, 180)}
             }.dump());
             return;
         }
@@ -25401,6 +25489,14 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
                 audit_warn("favorites_cleanup_failed", ferr, rel_norm);
             }
         }
+        {
+            std::string gerr;
+            if (auto* gidx = pqnas::get_gallery_meta_index()) {
+                if (!gidx->erase_subtree("user", fp_hex, rel_norm, &gerr)) {
+                    audit_warn("gallery_meta_cleanup_failed", gerr, rel_norm);
+                }
+            }
+        }
 
         audit_ok(rel_path, "file", freed_bytes);
         reply_json(res, 200, json{
@@ -25408,7 +25504,8 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             {"fingerprint_hex", fp_hex},
             {"path", rel_path},
             {"type", "file"},
-            {"freed_bytes", freed_bytes}
+            {"freed_bytes", freed_bytes},
+            {"trash_id", tr.trash_id}
         }.dump());
         return;
     }
@@ -25427,7 +25524,6 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             return;
         }
 
-        // Legacy physical dir with no metadata subtree
         if (subtree_rows.empty()) {
             if (!item.has_physical_anchor) {
                 audit_fail("not_found", 404);
@@ -25451,6 +25547,7 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             }
 
             std::uint64_t freed_bytes = 0;
+            std::uint64_t file_count = 0;
             std::error_code ec;
 
             auto root_st = std::filesystem::symlink_status(abs_path, ec);
@@ -25524,6 +25621,7 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
                         }.dump());
                         return;
                     }
+                    ++file_count;
                     freed_bytes += static_cast<std::uint64_t>(sz);
                 }
             }
@@ -25539,7 +25637,6 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
                 return;
             }
 
-            // Recheck the root right before remove_all.
             ec.clear();
             auto root_st2 = std::filesystem::symlink_status(abs_path, ec);
             if (ec || !std::filesystem::exists(root_st2)) {
@@ -25572,14 +25669,31 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
                 return;
             }
 
-            std::uintmax_t removed = std::filesystem::remove_all(abs_path, ec);
-            if (ec || removed == 0) {
-                audit_fail("remove_all_failed", 500, ec.message());
+            const std::string pool_id = u.storage_pool_id.empty() ? "default" : u.storage_pool_id;
+            const std::filesystem::path storage_root = data_root_for_pool_id(pool_id);
+
+            std::string terr;
+
+            pqnas::TrashService::MoveToTrashParams tp;
+            tp.scope_type = "user";
+            tp.scope_id = fp_hex;
+            tp.deleted_by_fp = fp_hex;
+            tp.origin_app = "filemgr";
+            tp.item_type = "dir";
+            tp.original_rel_path = rel_norm;
+            tp.payload_abs_path = abs_path;
+            tp.storage_root = storage_root;
+            tp.size_bytes = freed_bytes;
+            tp.file_count = file_count;
+
+            pqnas::TrashService::MoveToTrashResult tr;
+            if (!trash_service.move_to_trash(tp, &tr, &terr)) {
+                audit_fail("trash_move_failed", 500, terr);
                 reply_json(res, 500, json{
                     {"ok", false},
                     {"error", "server_error"},
-                    {"message", "delete failed"},
-                    {"detail", pqnas::shorten(ec.message(), 180)}
+                    {"message", "failed to move directory to trash"},
+                    {"detail", pqnas::shorten(terr, 180)}
                 }.dump());
                 return;
             }
@@ -25590,6 +25704,14 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
                     audit_warn("favorites_cleanup_failed", ferr, rel_norm);
                 }
             }
+            {
+                std::string gerr;
+                if (auto* gidx = pqnas::get_gallery_meta_index()) {
+                    if (!gidx->erase_subtree("user", fp_hex, rel_norm, &gerr)) {
+                        audit_warn("gallery_meta_cleanup_failed", gerr, rel_norm);
+                    }
+                }
+            }
 
             audit_ok(rel_path, "dir", freed_bytes);
             reply_json(res, 200, json{
@@ -25597,18 +25719,15 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
                 {"fingerprint_hex", fp_hex},
                 {"path", rel_path},
                 {"type", "dir"},
-                {"freed_bytes", freed_bytes}
+                {"freed_bytes", freed_bytes},
+                {"trash_id", tr.trash_id}
             }.dump());
             return;
         }
 
-        // Metadata-backed dir: for now require all descendant physical files under one root tree.
         std::filesystem::path dir_abs;
         bool have_root = false;
 
-        // For metadata-backed dirs, metadata physical paths are authoritative.
-        // Do NOT prefer legacy physical anchor here, because hybrid legacy trees
-        // may exist and point to a different root than the file_locations rows.
         if (!subtree_rows.empty()) {
             const auto& first = subtree_rows.front();
             std::filesystem::path root = std::filesystem::path(first.physical_path);
@@ -25636,6 +25755,7 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
         const std::string dir_root_s = dir_abs.lexically_normal().string();
         bool all_under_root = true;
         std::uint64_t freed_bytes = 0;
+        const std::uint64_t file_count = static_cast<std::uint64_t>(subtree_rows.size());
 
         for (const auto& rec : subtree_rows) {
             const std::filesystem::path phys = std::filesystem::path(rec.physical_path).lexically_normal();
@@ -25730,7 +25850,6 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             return;
         }
 
-        // Recheck right before remove_all.
         ec.clear();
         auto dir_st2 = std::filesystem::symlink_status(dir_abs, ec);
         if (ec || !std::filesystem::exists(dir_st2)) {
@@ -25763,14 +25882,36 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             return;
         }
 
-        std::uintmax_t removed = std::filesystem::remove_all(dir_abs, ec);
-        if (ec || removed == 0) {
-            audit_fail("remove_all_failed", 500, ec.message());
+        const std::string pool_id = u.storage_pool_id.empty() ? "default" : u.storage_pool_id;
+        const std::filesystem::path storage_root = data_root_for_pool_id(pool_id);
+
+        std::string terr;
+
+        pqnas::TrashService::MoveToTrashParams tp;
+        tp.scope_type = "user";
+        tp.scope_id = fp_hex;
+        tp.deleted_by_fp = fp_hex;
+        tp.origin_app = "filemgr";
+        tp.item_type = "dir";
+        tp.original_rel_path = rel_norm;
+        tp.payload_abs_path = dir_abs;
+        tp.storage_root = storage_root;
+        tp.size_bytes = freed_bytes;
+        tp.file_count = file_count;
+
+        if (!subtree_rows.empty()) {
+            tp.source_pool = subtree_rows.front().current_pool;
+            tp.source_tier_state = subtree_rows.front().tier_state;
+        }
+
+        pqnas::TrashService::MoveToTrashResult tr;
+        if (!trash_service.move_to_trash(tp, &tr, &terr)) {
+            audit_fail("trash_move_failed", 500, terr);
             reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "server_error"},
-                {"message", "delete failed"},
-                {"detail", pqnas::shorten(ec.message(), 180)}
+                {"message", "failed to move directory to trash"},
+                {"detail", pqnas::shorten(terr, 180)}
             }.dump());
             return;
         }
@@ -25803,13 +25944,15 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
                 }
             }
         }
+
         audit_ok(rel_path, "dir", freed_bytes);
         reply_json(res, 200, json{
             {"ok", true},
             {"fingerprint_hex", fp_hex},
             {"path", rel_path},
             {"type", "dir"},
-            {"freed_bytes", freed_bytes}
+            {"freed_bytes", freed_bytes},
+            {"trash_id", tr.trash_id}
         }.dump());
         return;
     }

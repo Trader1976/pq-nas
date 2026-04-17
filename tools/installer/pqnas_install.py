@@ -4,7 +4,7 @@ PQ-NAS CLI Installer (Textual) — Wizard v1
 
 Flow:
   1) Disk selection (safe: system disks marked + blocked)
-  2) Backend selection: ext4 / btrfs / zfs
+  2) Backend selection: ext4 / btrfs
   3) Plan preview (exact commands shown)
   4) Optional reverse proxy (nginx, HTTP-only)
   5) Typed confirm: "WIPE <diskname>" or "INSTALL <mountpoint>"
@@ -1067,7 +1067,7 @@ def install_snapshot_restore_assets(asset_root: str, backend: str, log: Optional
       - <asset_root>/server/src/storage/snapshots/pqnas_restore_job.sh
       - <asset_root>/tools/release/systemd/<units>
     """
-    if backend not in ("btrfs", "zfs"):
+    if backend != "btrfs":
         if log:
             log.write("[*] Snapshot restore assets: skipped (backend is not snapshot-capable).")
         return
@@ -1494,7 +1494,7 @@ def nginx_test_reload(log: Optional[Log] = None) -> None:
         log.write("[*] nginx reloaded.")
 
 # -----------------------------------------------------------------
-# Plan generation (ext4 / btrfs / zfs)
+# Plan generation (ext4 / btrfs)
 # -----------------------------------------------------------------------------
 
 
@@ -1556,20 +1556,10 @@ def plan_for(state: InstallState) -> Tuple[List[List[str]], List[str]]:
         ]
         notes.append("Backend: btrfs (snapshots supported via subvolumes).")
 
-    elif state.backend == "zfs":
-        pool = "pqnas"
-        plan += [
-            ["zpool", "create", "-f", pool, d.path],
-            ["zfs", "set", f"mountpoint={mp}", f"{pool}"],
-            ["zfs", "create", f"{pool}/data"],
-            ["zfs", "create", f"{pool}/snaps"],
-        ]
-        notes.append("Backend: zfs (snapshots/replication/scrub supported).")
-        notes.append("Note: pool name is 'pqnas' (single-disk).")
     else:
         raise RuntimeError(f"Unknown backend: {state.backend}")
 
-    notes.append("TODO: fstab (ext4/btrfs) or ZFS import-on-boot; permissions.")
+    notes.append("TODO: fstab + permissions.")
     return plan, notes
 
 
@@ -1704,7 +1694,6 @@ class BackendSelectScreen(Screen):
             self.radio = RadioSet(
                 RadioButton("ext4 (simple, no snapshots)", id="ext4"),
                 RadioButton("btrfs (snapshots; recommended)", id="btrfs"),
-                RadioButton("zfs (advanced NAS features)", id="zfs"),
             )
             yield self.radio
 
@@ -1716,7 +1705,7 @@ class BackendSelectScreen(Screen):
                 yield Button("Back", id="back", variant="default")
                 yield Button("Next", id="next", variant="primary")
 
-            self.hint = Static("\nTip: ext4 = simplest, btrfs = best default, zfs = hardcore NAS.", classes="muted")
+            self.hint = Static("\nTip: ext4 = simplest, btrfs = best default.", classes="muted")
             yield self.hint
 
         yield Footer()
@@ -1745,7 +1734,7 @@ class BackendSelectScreen(Screen):
             if btn.value:
                 chosen = btn.id
                 break
-        if chosen not in ("ext4", "btrfs", "zfs"):
+        if chosen not in ("ext4", "btrfs"):
             return
 
         mp = (self.mp_in.value or "").strip()
@@ -2404,9 +2393,7 @@ class ExecuteScreen(Screen):
                     subprocess.run(["umount", mp], check=False)
                     subprocess.run(["mount", "-a"], check=True)
                     self.logw.write("mount -a OK")
-                elif backend == "zfs":
-                    self.logw.write("ZFS backend: mounts managed by ZFS.")
-                    subprocess.run(["zfs", "mount", "-a"], check=False)
+
             else:
                 self.logw.write("Existing filesystem mode: NOT writing /etc/fstab and NOT changing mounts.")
 

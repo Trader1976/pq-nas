@@ -289,6 +289,9 @@ add_executable(pqnas_server
         server/src/file_versions_restore.cpp
         server/src/gallery_meta.cpp
         server/src/image_embedded_meta.cpp
+        server/src/trash_index.cpp
+        server/src/trash_service.cpp
+        server/src/trash_routes.cpp
 )
 
 # Treat warnings as errors for the server (security-sensitive)

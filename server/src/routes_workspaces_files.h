@@ -13,6 +13,8 @@
 
 namespace pqnas {
 
+    class TrashService;
+
     using ReplyJsonFn =
         std::function<void(httplib::Response&, int, const std::string&)>;
 
@@ -43,7 +45,9 @@ namespace pqnas {
 
         std::uint64_t transport_max_upload_bytes = 0;
         std::uint64_t payload_max_upload_bytes = 0;
+
         pqnas::FileVersionsIndex* file_versions = nullptr;
+        pqnas::TrashService* trash_service = nullptr;
 
         ReplyJsonFn reply_json;
         RequireUserAuthUsersActorFn require_user_auth_users_actor;

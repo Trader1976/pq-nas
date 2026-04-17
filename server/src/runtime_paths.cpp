@@ -50,4 +50,16 @@ namespace pqnas {
         return exe_dir_local() + "/data";
     }
 
+    std::filesystem::path data_root_path() {
+        return std::filesystem::path(data_root_dir());
+    }
+
+    std::filesystem::path pqnas_hidden_root_for_storage_root(const std::filesystem::path& storage_root) {
+        return storage_root.lexically_normal() / ".pqnas";
+    }
+
+    std::filesystem::path pqnas_trash_root_for_storage_root(const std::filesystem::path& storage_root) {
+        return pqnas_hidden_root_for_storage_root(storage_root) / "trash";
+    }
+
 } // namespace pqnas

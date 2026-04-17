@@ -21,6 +21,8 @@
 #include "file_versions.h"
 #include "file_versions_present.h"
 #include "file_versions_restore.h"
+#include "trash_service.h"
+#include "runtime_paths.h"
 namespace pqnas {
     static std::string hex_encode_lower_local(const unsigned char* data, std::size_t len) {
         static constexpr char kHex[] = "0123456789abcdef";
@@ -6087,199 +6089,191 @@ srv.Post("/api/v4/workspaces/files/write_text",
         res.body = std::move(zip_data);
     });
 
-        // POST /api/v4/workspaces/files/delete?workspace_id=...&path=relative/path
-    // v1: physical filesystem only, allows file delete and recursive directory delete
-    srv.Post("/api/v4/workspaces/files/delete",
-             [&](const httplib::Request& req, httplib::Response& res) {
-        std::string actor_fp, actor_role;
-        if (!deps.require_user_auth_users_actor ||
-            !deps.require_user_auth_users_actor(
-                req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
-            return;
-        }
+// POST /api/v4/workspaces/files/delete?workspace_id=...&path=relative/path
+// Moves a workspace file or directory to trash.
+srv.Post("/api/v4/workspaces/files/delete",
+         [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+    if (!deps.require_user_auth_users_actor ||
+        !deps.require_user_auth_users_actor(
+            req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+        return;
+    }
 
-        (void)actor_role;
-        res.set_header("Cache-Control", "no-store");
+    (void)actor_role;
+    res.set_header("Cache-Control", "no-store");
 
-        auto audit_fail = [&](const std::string& workspace_id,
-                              const std::string& reason,
-                              int http,
-                              const std::string& detail = "") {
-            if (!deps.audit_emit) return;
-            std::map<std::string, std::string> f;
-            f["actor_fp"] = actor_fp;
-            if (!workspace_id.empty()) f["workspace_id"] = workspace_id;
-            f["reason"] = reason;
-            f["http"] = std::to_string(http);
-            if (!detail.empty()) f["detail"] = detail;
-            f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            auto it_cf = req.headers.find("CF-Connecting-IP");
-            if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
-            auto it_xff = req.headers.find("X-Forwarded-For");
-            if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
-            deps.audit_emit("workspace.files_delete_fail", "fail", f);
-        };
+    auto audit_fail = [&](const std::string& workspace_id,
+                          const std::string& reason,
+                          int http,
+                          const std::string& detail = "") {
+        if (!deps.audit_emit) return;
+        std::map<std::string, std::string> f;
+        f["actor_fp"] = actor_fp;
+        if (!workspace_id.empty()) f["workspace_id"] = workspace_id;
+        f["reason"] = reason;
+        f["http"] = std::to_string(http);
+        if (!detail.empty()) f["detail"] = detail;
+        f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
+        deps.audit_emit("workspace.files_delete_fail", "fail", f);
+    };
 
-        auto audit_ok = [&](const std::string& workspace_id,
-                            const std::string& rel_path,
-                            std::uint64_t removed_count) {
-            if (!deps.audit_emit) return;
-            std::map<std::string, std::string> f;
-            f["actor_fp"] = actor_fp;
-            f["workspace_id"] = workspace_id;
-            f["path"] = rel_path;
-            f["removed_count"] = std::to_string(static_cast<unsigned long long>(removed_count));
-            f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            auto it_cf = req.headers.find("CF-Connecting-IP");
-            if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
-            auto it_xff = req.headers.find("X-Forwarded-For");
-            if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
-            deps.audit_emit("workspace.files_delete_ok", "ok", f);
-        };
+    auto audit_ok = [&](const std::string& workspace_id,
+                        const std::string& rel_path,
+                        std::uint64_t removed_count) {
+        if (!deps.audit_emit) return;
+        std::map<std::string, std::string> f;
+        f["actor_fp"] = actor_fp;
+        f["workspace_id"] = workspace_id;
+        f["path"] = rel_path;
+        f["removed_count"] = std::to_string(static_cast<unsigned long long>(removed_count));
+        f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
+        deps.audit_emit("workspace.files_delete_ok", "ok", f);
+    };
 
-        if (!deps.workspaces->load(deps.workspaces_path)) {
-            audit_fail("", "workspaces_reload_failed", 500);
-            deps.reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "workspaces_reload_failed"},
-                {"message", "failed to reload workspaces"}
-            }.dump());
-            return;
-        }
+    if (!deps.trash_service) {
+        audit_fail("", "trash_service_missing", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "trash service missing"}
+        }.dump());
+        return;
+    }
 
-         json in = json::object();
-         if (!req.body.empty()) {
-             in = json::parse(req.body, nullptr, false);
-             if (in.is_discarded() || !in.is_object()) {
-                 audit_fail("", "bad_json", 400);
-                 deps.reply_json(res, 400, json{
-                     {"ok", false},
-                     {"error", "bad_request"},
-                     {"message", "invalid json"}
-                 }.dump());
-                 return;
-             }
-         }
+    if (!deps.workspaces->load(deps.workspaces_path)) {
+        audit_fail("", "workspaces_reload_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "workspaces_reload_failed"},
+            {"message", "failed to reload workspaces"}
+        }.dump());
+        return;
+    }
 
-         const std::string workspace_id =
-             req.has_param("workspace_id")
-                 ? trim_copy_safe(req.get_param_value("workspace_id"))
-                 : trim_copy_safe(in.value("workspace_id", ""));
-
-         if (workspace_id.empty()) {
-             audit_fail("", "missing_workspace_id", 400);
-             deps.reply_json(res, 400, json{
-                 {"ok", false},
-                 {"error", "bad_request"},
-                 {"message", "missing workspace_id"}
-             }.dump());
-             return;
-         }
-
-         std::string rel_path =
-             req.has_param("path")
-                 ? req.get_param_value("path")
-                 : in.value("path", "");
-
-         if (rel_path.empty()) {
-             audit_fail(workspace_id, "missing_path", 400);
-             deps.reply_json(res, 400, json{
-                 {"ok", false},
-                 {"error", "bad_request"},
-                 {"message", "missing path"}
-             }.dump());
-             return;
-         }
-
-        auto wopt = deps.workspaces->get(workspace_id);
-        if (!wopt.has_value()) {
-            audit_fail(workspace_id, "workspace_not_found", 404);
-            deps.reply_json(res, 404, json{
-                {"ok", false},
-                {"error", "not_found"},
-                {"message", "workspace not found"}
-            }.dump());
-            return;
-        }
-
-        const WorkspaceRec& w = *wopt;
-
-        if (w.status != "enabled") {
-            audit_fail(workspace_id, "workspace_disabled", 403);
-            deps.reply_json(res, 403, json{
-                {"ok", false},
-                {"error", "forbidden"},
-                {"message", "workspace disabled"}
-            }.dump());
-            return;
-        }
-
-        auto mopt = enabled_member_for_actor(w, actor_fp);
-        if (!mopt.has_value()) {
-            audit_fail(workspace_id, "workspace_access_denied", 403);
-            deps.reply_json(res, 403, json{
-                {"ok", false},
-                {"error", "forbidden"},
-                {"message", "workspace access denied"}
-            }.dump());
-            return;
-        }
-
-        // v1 policy: only owner/editor may delete
-        if (!(mopt->role == "owner" || mopt->role == "editor")) {
-            audit_fail(workspace_id, "workspace_write_denied", 403, mopt->role);
-            deps.reply_json(res, 403, json{
-                {"ok", false},
-                {"error", "forbidden"},
-                {"message", "workspace write access denied"}
-            }.dump());
-            return;
-        }
-
-        if (w.storage_state != "allocated") {
-            audit_fail(workspace_id, "storage_unallocated", 403);
-            deps.reply_json(res, 403, json{
-                {"ok", false},
-                {"error", "storage_unallocated"},
-                {"message", "Workspace storage not allocated"},
-                {"workspace_id", workspace_id},
-                {"quota_bytes", w.quota_bytes}
-            }.dump());
-            return;
-        }
-
-        // v1 minimal: default pool only
-        if (!w.storage_pool_id.empty()) {
-            audit_fail(workspace_id, "pool_not_supported_yet", 400, w.storage_pool_id);
+    json in = json::object();
+    if (!req.body.empty()) {
+        in = json::parse(req.body, nullptr, false);
+        if (in.is_discarded() || !in.is_object()) {
+            audit_fail("", "bad_json", 400);
             deps.reply_json(res, 400, json{
                 {"ok", false},
-                {"error", "pool_not_supported_yet"},
-                {"message", "workspace delete currently supports default pool only"}
+                {"error", "bad_request"},
+                {"message", "invalid json"}
             }.dump());
             return;
         }
+    }
 
-        std::string rel_norm;
-        {
-            std::string nerr;
-            if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
-                audit_fail(workspace_id, "invalid_path", 400, nerr);
-                deps.reply_json(res, 400, json{
-                    {"ok", false},
-                    {"error", "bad_request"},
-                    {"message", "invalid path"}
-                }.dump());
-                return;
-            }
-        }
+    const std::string workspace_id =
+        req.has_param("workspace_id")
+            ? trim_copy_safe(req.get_param_value("workspace_id"))
+            : trim_copy_safe(in.value("workspace_id", ""));
 
-        const std::filesystem::path ws_root =
-            workspace_dir_for_default_pool_only(deps.users_path, w);
+    if (workspace_id.empty()) {
+        audit_fail("", "missing_workspace_id", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing workspace_id"}
+        }.dump());
+        return;
+    }
 
-        std::filesystem::path abs_path;
-        std::string perr;
-        if (!pqnas::resolve_user_path_strict(ws_root, rel_norm, &abs_path, &perr)) {
-            audit_fail(workspace_id, "invalid_path", 400, perr);
+    std::string rel_path =
+        req.has_param("path")
+            ? req.get_param_value("path")
+            : in.value("path", "");
+
+    if (rel_path.empty()) {
+        audit_fail(workspace_id, "missing_path", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    auto wopt = deps.workspaces->get(workspace_id);
+    if (!wopt.has_value()) {
+        audit_fail(workspace_id, "workspace_not_found", 404);
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "workspace not found"}
+        }.dump());
+        return;
+    }
+
+    const WorkspaceRec& w = *wopt;
+
+    if (w.status != "enabled") {
+        audit_fail(workspace_id, "workspace_disabled", 403);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace disabled"}
+        }.dump());
+        return;
+    }
+
+    auto mopt = enabled_member_for_actor(w, actor_fp);
+    if (!mopt.has_value()) {
+        audit_fail(workspace_id, "workspace_access_denied", 403);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace access denied"}
+        }.dump());
+        return;
+    }
+
+    if (!(mopt->role == "owner" || mopt->role == "editor")) {
+        audit_fail(workspace_id, "workspace_write_denied", 403, mopt->role);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace write access denied"}
+        }.dump());
+        return;
+    }
+
+    if (w.storage_state != "allocated") {
+        audit_fail(workspace_id, "storage_unallocated", 403);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Workspace storage not allocated"},
+            {"workspace_id", workspace_id},
+            {"quota_bytes", w.quota_bytes}
+        }.dump());
+        return;
+    }
+
+    if (!w.storage_pool_id.empty()) {
+        audit_fail(workspace_id, "pool_not_supported_yet", 400, w.storage_pool_id);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "pool_not_supported_yet"},
+            {"message", "workspace delete currently supports default pool only"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm;
+    {
+        std::string nerr;
+        if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
+            audit_fail(workspace_id, "invalid_path", 400, nerr);
             deps.reply_json(res, 400, json{
                 {"ok", false},
                 {"error", "bad_request"},
@@ -6287,32 +6281,100 @@ srv.Post("/api/v4/workspaces/files/write_text",
             }.dump());
             return;
         }
+    }
 
-        // refuse deleting workspace root
-        if (abs_path.lexically_normal() == ws_root.lexically_normal()) {
-            audit_fail(workspace_id, "refuse_delete_root", 409, rel_norm);
-            deps.reply_json(res, 409, json{
-                {"ok", false},
-                {"error", "path_conflict"},
-                {"message", "refusing to delete workspace root"}
-            }.dump());
-            return;
-        }
+    const std::filesystem::path ws_root =
+        workspace_dir_for_default_pool_only(deps.users_path, w);
 
-        std::error_code ec;
-        const bool exists = std::filesystem::exists(abs_path, ec);
-        if (ec) {
-            audit_fail(workspace_id, "stat_failed", 500, ec.message());
+    std::filesystem::path abs_path;
+    std::string perr;
+    if (!pqnas::resolve_user_path_strict(ws_root, rel_norm, &abs_path, &perr)) {
+        audit_fail(workspace_id, "invalid_path", 400, perr);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    if (abs_path.lexically_normal() == ws_root.lexically_normal()) {
+        audit_fail(workspace_id, "refuse_delete_root", 409, rel_norm);
+        deps.reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "path_conflict"},
+            {"message", "refusing to delete workspace root"}
+        }.dump());
+        return;
+    }
+
+    std::error_code ec;
+    const bool exists = std::filesystem::exists(abs_path, ec);
+    if (ec) {
+        audit_fail(workspace_id, "stat_failed", 500, ec.message());
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "target stat failed"},
+            {"detail", ec.message()}
+        }.dump());
+        return;
+    }
+
+    if (!exists) {
+        audit_fail(workspace_id, "not_found", 404, rel_norm);
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "path not found"}
+        }.dump());
+        return;
+    }
+
+    const bool is_dir = std::filesystem::is_directory(abs_path, ec);
+    if (ec) {
+        audit_fail(workspace_id, "stat_failed", 500, ec.message());
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "target stat failed"},
+            {"detail", ec.message()}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path storage_root = std::filesystem::path(pqnas::data_root_dir());
+
+    pqnas::TrashService::MoveToTrashParams tp;
+    tp.scope_type = "workspace";
+    tp.scope_id = workspace_id;
+    tp.deleted_by_fp = actor_fp;
+    tp.origin_app = "filemgr";
+    tp.item_type = is_dir ? "dir" : "file";
+    tp.original_rel_path = rel_norm;
+    tp.payload_abs_path = abs_path;
+    tp.storage_root = storage_root;
+    tp.source_pool = "default";
+
+    if (is_dir) {
+        std::uint64_t file_count = 0;
+        std::uint64_t size_bytes = 0;
+        std::string scan_err;
+        if (!pqnas::TrashService::scan_payload_tree(abs_path, &file_count, &size_bytes, &scan_err)) {
+            audit_fail(workspace_id, "trash_scan_failed", 500, scan_err);
             deps.reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "server_error"},
-                {"message", "target stat failed"},
-                {"detail", ec.message()}
+                {"message", "failed to scan directory before trash move"},
+                {"detail", scan_err}
             }.dump());
             return;
         }
-
-        if (!exists) {
+        tp.file_count = file_count;
+        tp.size_bytes = size_bytes;
+    } else {
+        auto st = std::filesystem::symlink_status(abs_path, ec);
+        if (ec || !std::filesystem::exists(st)) {
             audit_fail(workspace_id, "not_found", 404, rel_norm);
             deps.reply_json(res, 404, json{
                 {"ok", false},
@@ -6321,100 +6383,64 @@ srv.Post("/api/v4/workspaces/files/write_text",
             }.dump());
             return;
         }
-
-        std::uint64_t removed_count = 0;
-
-        const bool is_dir = std::filesystem::is_directory(abs_path, ec);
-        if (ec) {
-            audit_fail(workspace_id, "stat_failed", 500, ec.message());
-            deps.reply_json(res, 500, json{
+        if (std::filesystem::is_symlink(st)) {
+            audit_fail(workspace_id, "symlink_not_supported", 400, rel_norm);
+            deps.reply_json(res, 400, json{
                 {"ok", false},
-                {"error", "server_error"},
-                {"message", "target stat failed"},
-                {"detail", ec.message()}
+                {"error", "bad_request"},
+                {"message", "symlinks not supported"}
+            }.dump());
+            return;
+        }
+        if (!std::filesystem::is_regular_file(st)) {
+            audit_fail(workspace_id, "path_not_file", 400, rel_norm);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "path is not a file"}
             }.dump());
             return;
         }
 
-        if (is_dir) {
-            const auto removed = std::filesystem::remove_all(abs_path, ec);
-            if (ec) {
-                audit_fail(workspace_id, "remove_all_failed", 500, ec.message());
-                deps.reply_json(res, 500, json{
-                    {"ok", false},
-                    {"error", "server_error"},
-                    {"message", "failed to delete directory"},
-                    {"detail", ec.message()}
-                }.dump());
-                return;
-            }
-            removed_count = static_cast<std::uint64_t>(removed);
-        } else {
-            if (!deps.file_versions) {
-                audit_fail(workspace_id, "file_versions_missing", 500);
-                deps.reply_json(res, 500, json{
-                    {"ok", false},
-                    {"error", "server_error"},
-                    {"message", "file versions service missing"}
-                }.dump());
-                return;
-            }
-
-            {
-                pqnas::PreserveLiveFileVersionParams vp;
-                vp.scope_type = "workspace";
-                vp.scope_id = workspace_id;
-                vp.scope_root = ws_root;
-                vp.logical_rel_path = rel_norm;
-                vp.live_abs_path = abs_path;
-                vp.event_kind = "delete_preserve";
-                vp.actor_fp = actor_fp;
-                vp.users = deps.users;
-
-                pqnas::FileVersionRec vrec;
-                std::string verr;
-                if (!deps.file_versions->preserve_live_file_version(vp, &vrec, &verr)) {
-                    audit_fail(workspace_id, "version_preserve_failed", 500, verr);
-                    deps.reply_json(res, 500, json{
-                        {"ok", false},
-                        {"error", "server_error"},
-                        {"message", "failed to preserve previous version"},
-                        {"detail", verr}
-                    }.dump());
-                    return;
-                }
-            }
-            const bool removed = std::filesystem::remove(abs_path, ec);
-            if (ec) {
-                audit_fail(workspace_id, "remove_failed", 500, ec.message());
-                deps.reply_json(res, 500, json{
-                    {"ok", false},
-                    {"error", "server_error"},
-                    {"message", "failed to delete file"},
-                    {"detail", ec.message()}
-                }.dump());
-                return;
-            }
-            if (!removed) {
-                audit_fail(workspace_id, "not_found", 404, rel_norm);
-                deps.reply_json(res, 404, json{
-                    {"ok", false},
-                    {"error", "not_found"},
-                    {"message", "path not found"}
-                }.dump());
-                return;
-            }
-            removed_count = 1;
+        auto sz = std::filesystem::file_size(abs_path, ec);
+        if (ec) {
+            audit_fail(workspace_id, "file_size_failed", 500, ec.message());
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to stat file before trash move"},
+                {"detail", ec.message()}
+            }.dump());
+            return;
         }
+        tp.file_count = 1;
+        tp.size_bytes = static_cast<std::uint64_t>(sz);
+    }
 
-        audit_ok(workspace_id, rel_norm, removed_count);
-
-        deps.reply_json(res, 200, json{
-            {"ok", true},
-            {"workspace_id", workspace_id},
-            {"path", rel_norm},
-            {"removed_count", removed_count}
+    pqnas::TrashService::MoveToTrashResult tr;
+    std::string terr;
+    if (!deps.trash_service->move_to_trash(tp, &tr, &terr)) {
+        audit_fail(workspace_id, "trash_move_failed", 500, terr);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to move item to trash"},
+            {"detail", terr}
         }.dump());
+        return;
+    }
+
+    const std::uint64_t removed_count = is_dir ? (tr.file_count + 1) : 1;
+
+    audit_ok(workspace_id, rel_norm, removed_count);
+
+    deps.reply_json(res, 200, json{
+        {"ok", true},
+        {"workspace_id", workspace_id},
+        {"path", rel_norm},
+        {"removed_count", removed_count},
+        {"trash_id", tr.trash_id}
+    }.dump());
 });
 
 srv.Get("/api/v4/workspaces/files/versions/list",
