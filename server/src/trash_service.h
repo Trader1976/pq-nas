@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <functional>
 
 namespace pqnas {
 
@@ -47,6 +48,7 @@ public:
     struct RestoreParams {
         std::string trash_id;
         std::filesystem::path restore_abs_path;
+        std::filesystem::path restore_root_abs;
         bool rename_if_conflict = false;
     };
 
@@ -81,6 +83,21 @@ public:
                           PurgeResult* out,
                           std::string* err);
 
+    using RestoreReindexFn = std::function<bool(
+        const TrashItemRec&,
+        const std::filesystem::path& restored_abs_path,
+        const std::string& restored_rel_path,
+        std::string* err)>;
+
+    using RestoreUnindexFn = std::function<void(
+        const TrashItemRec&,
+        const std::string& restored_rel_path)>;
+
+    void set_restore_reindexer(RestoreReindexFn fn);
+    void set_restore_unindexer(RestoreUnindexFn fn);
+
+
+
     static bool infer_storage_root_for_logical_path(const std::filesystem::path& payload_abs_path,
                                                     const std::string& logical_rel_path,
                                                     std::filesystem::path* out_storage_root,
@@ -93,6 +110,8 @@ public:
 
 private:
     TrashIndex* index_ = nullptr;
+    RestoreReindexFn restore_reindexer_;
+    RestoreUnindexFn restore_unindexer_;
 };
 
 } // namespace pqnas

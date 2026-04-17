@@ -8284,8 +8284,107 @@ v5.app_pair_build_qr_uri =
 
 	// (leave v5.sign_token_v4_ed25519 unset for now; we’ll wire once v5 verify uses it)
 
-	register_routes_v5(srv, v5);
+register_routes_v5(srv, v5);
 
+trash_service.set_restore_reindexer(
+    [&](const pqnas::TrashItemRec& rec,
+        const std::filesystem::path& restored_abs_path,
+        const std::string& restored_rel_path,
+        std::string* err) -> bool {
+        if (err) err->clear();
+
+        // For now, only rebuild live metadata for single restored files.
+        // Folder/subtree restore reindex can be added later.
+        if (rec.item_type != "file") {
+            return true;
+        }
+
+        auto* idx = pqnas::get_file_location_index();
+        if (!idx) {
+            if (err) *err = "file location index missing";
+            return false;
+        }
+
+        if (rec.scope_id.empty()) {
+            if (err) *err = "restore reindex failed: empty scope_id";
+            return false;
+        }
+        if (restored_rel_path.empty()) {
+            if (err) *err = "restore reindex failed: empty restored_rel_path";
+            return false;
+        }
+
+        std::error_code ec;
+        const auto st = std::filesystem::symlink_status(restored_abs_path, ec);
+        if (ec) {
+            if (err) *err = "restore stat failed: " + ec.message();
+            return false;
+        }
+        if (!std::filesystem::exists(st) || !std::filesystem::is_regular_file(st)) {
+            if (err) *err = "restored file missing or not regular";
+            return false;
+        }
+
+        std::uint64_t size_bytes = rec.size_bytes;
+        if (size_bytes == 0) {
+            const auto sz = std::filesystem::file_size(restored_abs_path, ec);
+            if (ec) {
+                if (err) *err = "file_size failed: " + ec.message();
+                return false;
+            }
+            size_bytes = static_cast<std::uint64_t>(sz);
+        }
+
+        const std::int64_t now_ts = now_epoch_sec();
+
+        pqnas::FileLocationRecord flr;
+        flr.fp = rec.scope_id;                    // user fp OR workspace_id
+        flr.logical_rel_path = restored_rel_path;
+        flr.current_pool = rec.source_pool;
+        flr.physical_path = restored_abs_path.string();
+        flr.tier_state = "capacity";
+        flr.size_bytes = size_bytes;
+        flr.mtime_epoch = now_ts;
+        flr.created_epoch = now_ts;
+        flr.updated_epoch = now_ts;
+        flr.version = 1;
+
+        std::string merr;
+        if (!idx->upsert_landing_file(flr, &merr)) {
+            if (err) *err = "file location reindex failed: " + merr;
+            return false;
+        }
+
+        // Photo Gallery metadata/facts are only for user scope.
+        if (rec.scope_type == "user") {
+            if (auto* gidx = pqnas::get_gallery_meta_index()) {
+                std::string gerr;
+                (void)gidx->touch_file_facts(
+                    "user",
+                    rec.scope_id,
+                    restored_rel_path,
+                    size_bytes,
+                    now_ts,
+                    now_ts,
+                    &gerr
+                );
+            }
+        }
+
+        return true;
+    });
+
+trash_service.set_restore_unindexer(
+    [&](const pqnas::TrashItemRec& rec,
+        const std::string& restored_rel_path) {
+        if (rec.item_type != "file") return;
+        if (rec.scope_id.empty() || restored_rel_path.empty()) return;
+
+        if (auto* idx = pqnas::get_file_location_index()) {
+            std::string uerr;
+            (void)idx->erase(rec.scope_id, restored_rel_path, &uerr);
+        }
+    });
     pqnas::TrashRoutesDeps trash_deps;
     trash_deps.users = &users;
     trash_deps.users_path = &users_path;

@@ -579,7 +579,7 @@
             workspaceMembersSub.textContent = `${FM.scope.workspaceName || FM.scope.workspaceId}`;
         }
         if (workspaceMembersStatus) {
-            workspaceMembersStatus.textContent = "Loading members?";
+            workspaceMembersStatus.textContent = "Loading members…";
         }
         if (workspaceMembersList) {
             workspaceMembersList.innerHTML = "";
@@ -632,7 +632,7 @@
 
         const old = workspaceLeaveBtn.textContent;
         workspaceLeaveBtn.disabled = true;
-        workspaceLeaveBtn.textContent = "Leaving?";
+        workspaceLeaveBtn.textContent = "Leaving…";
 
         try {
             await apiLeaveWorkspace(workspaceId);

@@ -79,11 +79,22 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   const shareStatus = document.getElementById("shareStatus");
   const emptyState = document.getElementById("emptyState");
 
+  const trashBtn = document.getElementById("trashBtn");
+  const trashModal = document.getElementById("trashModal");
+  const trashClose = document.getElementById("trashClose");
+  const trashRefreshBtn = document.getElementById("trashRefreshBtn");
+  const trashEmptyBtn = document.getElementById("trashEmptyBtn");
+  const trashTitle = document.getElementById("trashTitle");
+  const trashSub = document.getElementById("trashSub");
+  const trashStatus = document.getElementById("trashStatus");
+  const trashList = document.getElementById("trashList");
+  const trashCount = document.getElementById("trashCount");
   // ---- Soft quota (UI-only) ---------------------------------------------------
   let quotaInfo = null;
   let quotaInfoAtMs = 0;
   const QUOTA_TTL_MS = 15 * 1000;
-
+  let trashItemsCache = [];
+  let trashBusy = false;
   let uploadLimits = null;
   let uploadLimitsAtMs = 0;
   const UPLOAD_LIMITS_TTL_MS = 15 * 1000;
@@ -715,6 +726,311 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const d = new Date(unix * 1000);
     return d.toISOString().replace("T", " ").replace("Z", "");
   }
+  function currentTrashScopeInfo() {
+    const inWorkspace =
+        window.PQNAS_FILEMGR &&
+        typeof window.PQNAS_FILEMGR.isWorkspaceScope === "function" &&
+        window.PQNAS_FILEMGR.isWorkspaceScope();
+
+    const workspaceId =
+        window.PQNAS_FILEMGR &&
+        typeof window.PQNAS_FILEMGR.getWorkspaceId === "function"
+            ? String(window.PQNAS_FILEMGR.getWorkspaceId() || "").trim()
+            : "";
+
+    if (inWorkspace && workspaceId) {
+      return {
+        scope: "workspace",
+        workspaceId,
+        label: `Workspace trash • ${workspaceId}`,
+        canWrite: canWriteCurrentScope()
+      };
+    }
+
+    return {
+      scope: "user",
+      workspaceId: "",
+      label: "My trash",
+      canWrite: true
+    };
+  }
+
+  function trashListUrl(includeInactive = false) {
+    const info = currentTrashScopeInfo();
+    const qs = new URLSearchParams();
+    qs.set("scope", info.scope);
+    if (info.scope === "workspace") qs.set("workspace_id", info.workspaceId);
+    if (includeInactive) qs.set("include_inactive", "1");
+    return `/api/v4/trash/list?${qs.toString()}`;
+  }
+
+  function openTrashModal() {
+    if (!trashModal) return;
+    trashModal.classList.add("show");
+    trashModal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeTrashModal() {
+    if (!trashModal) return;
+    trashModal.classList.remove("show");
+    trashModal.setAttribute("aria-hidden", "true");
+  }
+
+  function fmtTrashWhen(epoch) {
+    return fmtEpochLocal(epoch);
+  }
+
+  function renderTrashItems() {
+    if (!trashList) return;
+
+    const info = currentTrashScopeInfo();
+    if (trashTitle) trashTitle.textContent = "Trash";
+    if (trashSub) trashSub.textContent = info.label;
+    if (trashCount) trashCount.textContent = `${trashItemsCache.length} item(s)`;
+
+    trashList.innerHTML = "";
+
+    if (!trashItemsCache.length) {
+      const empty = document.createElement("div");
+      empty.className = "trashEmpty";
+      empty.textContent = "Trash is empty.";
+      trashList.appendChild(empty);
+      if (trashEmptyBtn) trashEmptyBtn.disabled = true;
+      return;
+    }
+
+    if (trashEmptyBtn) trashEmptyBtn.disabled = !info.canWrite || trashBusy;
+
+    for (const rec of trashItemsCache) {
+      const row = document.createElement("div");
+      row.className = "trashRow";
+
+      const main = document.createElement("div");
+      main.className = "trashMain";
+
+      const name = document.createElement("div");
+      name.className = "trashName";
+      name.textContent = rec.original_rel_path || rec.trash_id;
+
+      const meta = document.createElement("div");
+      meta.className = "trashMeta";
+      meta.innerHTML =
+          `<span>${rec.item_type === "dir" ? "Folder" : "File"}</span>` +
+          `<span>${fmtSize(rec.size_bytes || 0)}</span>` +
+          `<span>Deleted: ${fmtTrashWhen(rec.deleted_epoch)}</span>` +
+          `<span>Purge after: ${fmtTrashWhen(rec.purge_after_epoch)}</span>`;
+
+      const path = document.createElement("div");
+      path.className = "trashPath";
+      path.textContent = rec.original_rel_path || "";
+
+      main.appendChild(name);
+      main.appendChild(meta);
+      main.appendChild(path);
+
+      const actions = document.createElement("div");
+      actions.className = "trashActions";
+
+      const restoreBtn = document.createElement("button");
+      restoreBtn.type = "button";
+      restoreBtn.className = "btn secondary";
+      restoreBtn.textContent = "Restore";
+      restoreBtn.disabled = !info.canWrite || trashBusy;
+      restoreBtn.onclick = async () => {
+        await restoreTrashItem(rec);
+      };
+
+      const purgeBtn = document.createElement("button");
+      purgeBtn.type = "button";
+      purgeBtn.className = "btn secondary";
+      purgeBtn.textContent = "Delete permanently";
+      purgeBtn.disabled = !info.canWrite || trashBusy;
+      purgeBtn.onclick = async () => {
+        await purgeTrashItem(rec);
+      };
+
+      actions.appendChild(restoreBtn);
+      actions.appendChild(purgeBtn);
+
+      row.appendChild(main);
+      row.appendChild(actions);
+      trashList.appendChild(row);
+    }
+  }
+
+  async function loadTrashItems() {
+    if (!trashStatus) return;
+
+    const info = currentTrashScopeInfo();
+    trashBusy = true;
+    if (trashStatus) trashStatus.textContent = `Loading ${info.label}…`;
+    if (trashEmptyBtn) trashEmptyBtn.disabled = true;
+    renderTrashItems();
+
+    try {
+      const r = await fetch(trashListUrl(false), {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "Accept": "application/json" }
+      });
+
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j || !j.ok || !Array.isArray(j.items)) {
+        const msg = j && (j.message || j.error)
+            ? `${j.error || ""} ${j.message || ""}`.trim()
+            : `HTTP ${r.status}`;
+        throw new Error(msg || `HTTP ${r.status}`);
+      }
+
+      trashItemsCache = j.items.slice();
+      if (trashStatus) trashStatus.textContent = `Loaded ${trashItemsCache.length} item(s).`;
+    } catch (e) {
+      trashItemsCache = [];
+      if (trashStatus) {
+        trashStatus.textContent = `Trash load failed: ${String(e && e.message ? e.message : e)}`;
+      }
+    } finally {
+      trashBusy = false;
+      renderTrashItems();
+    }
+  }
+
+  async function restoreTrashItem(rec) {
+    if (!rec || !rec.trash_id) return;
+
+    trashBusy = true;
+    renderTrashItems();
+    if (trashStatus) trashStatus.textContent = `Restoring ${rec.original_rel_path || rec.trash_id}…`;
+
+    try {
+      const r = await fetch("/api/v4/trash/restore", {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({
+          trash_id: rec.trash_id,
+          rename_if_conflict: true
+        })
+      });
+
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j || !j.ok) {
+        const msg = j && (j.message || j.error || j.detail)
+            ? [j.error, j.message, j.detail].filter(Boolean).join(" ")
+            : `HTTP ${r.status}`;
+        throw new Error(msg || `HTTP ${r.status}`);
+      }
+
+      setBadge("ok", "ready");
+      status.textContent = `Restored: ${j.restored_rel_path || rec.original_rel_path}`;
+      await loadTrashItems();
+      await load();
+    } catch (e) {
+      setBadge("err", "error");
+      if (trashStatus) {
+        trashStatus.textContent = `Restore failed: ${String(e && e.message ? e.message : e)}`;
+      }
+    } finally {
+      trashBusy = false;
+      renderTrashItems();
+    }
+  }
+
+  async function purgeTrashItem(rec) {
+    if (!rec || !rec.trash_id) return;
+
+    const ok = confirm(
+        `Delete permanently?\n\n${rec.original_rel_path || rec.trash_id}\n\nThis cannot be undone.`
+    );
+    if (!ok) return;
+
+    trashBusy = true;
+    renderTrashItems();
+    if (trashStatus) trashStatus.textContent = `Deleting permanently ${rec.original_rel_path || rec.trash_id}…`;
+
+    try {
+      const r = await fetch("/api/v4/trash/purge", {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({ trash_id: rec.trash_id })
+      });
+
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j || !j.ok) {
+        const msg = j && (j.message || j.error || j.detail)
+            ? [j.error, j.message, j.detail].filter(Boolean).join(" ")
+            : `HTTP ${r.status}`;
+        throw new Error(msg || `HTTP ${r.status}`);
+      }
+
+      setBadge("ok", "ready");
+      status.textContent = `Deleted permanently: ${rec.original_rel_path || rec.trash_id}`;
+      await loadTrashItems();
+      await load();
+    } catch (e) {
+      setBadge("err", "error");
+      if (trashStatus) {
+        trashStatus.textContent = `Permanent delete failed: ${String(e && e.message ? e.message : e)}`;
+      }
+    } finally {
+      trashBusy = false;
+      renderTrashItems();
+    }
+  }
+
+  async function emptyTrashScope() {
+    const active = trashItemsCache.filter((x) => x && x.restore_status === "trashed");
+    if (!active.length) return;
+
+    const ok = confirm(
+        `Delete permanently ${active.length} item(s) from trash?\n\nThis cannot be undone.`
+    );
+    if (!ok) return;
+
+    trashBusy = true;
+    renderTrashItems();
+
+    let done = 0;
+    let failed = 0;
+
+    for (const rec of active) {
+      if (trashStatus) {
+        trashStatus.textContent = `Emptying trash ${done + failed}/${active.length}…`;
+      }
+
+      try {
+        const r = await fetch("/api/v4/trash/purge", {
+          method: "POST",
+          credentials: "include",
+          cache: "no-store",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: JSON.stringify({ trash_id: rec.trash_id })
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) throw new Error(`HTTP ${r.status}`);
+        done++;
+      } catch (_) {
+        failed++;
+      }
+    }
+
+    trashBusy = false;
+    await loadTrashItems();
+    await load();
+
+    if (failed > 0) {
+      setBadge("warn", "partial");
+      status.textContent = `Trash emptied partially. Deleted permanently: ${done}. Failed: ${failed}.`;
+    } else {
+      setBadge("ok", "ready");
+      status.textContent = `Trash emptied. Deleted permanently: ${done}.`;
+    }
+  }
   function filetypeIconBase() {
     return "./icons/filetypes/";
   }
@@ -1208,11 +1524,11 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       return;
     }
 
-    const ok = confirm(`Delete ${paths.length} item(s)?\n\nThis cannot be undone.`);
+    const ok = confirm(`Move ${paths.length} item(s) to trash?\n\nItems can be restored from Trash until permanently purged.`);
     if (!ok) return;
 
-    setBadge("warn", "deleting…");
-    status.textContent = `Deleting 0/${paths.length}…`;
+    setBadge("warn", "moving to trash…");
+    status.textContent = `Moving to trash 0/${paths.length}…`;
 
     let done = 0;
     let failed = 0;
@@ -1221,7 +1537,6 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     for (const rel of paths) {
       try {
         const key = Array.from(selectedKeys).find((k) => keyToItemRelPath(k) === rel);
-        const type = key && String(key).startsWith("dir:") ? "dir" : "file";
 
         const url = apiDeleteUrl(rel);
         const r = await fetch(url, {
@@ -1238,25 +1553,27 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
               ? `${j.error || ""} ${j.message || ""}`.trim()
               : `HTTP ${r.status}`;
           failures.push(`${rel} — ${msg}`);
+          continue;
         }
       } catch (e) {
         failed++;
         failures.push(`${rel} — ${String(e && e.message ? e.message : e)}`);
+        continue;
       }
 
       done++;
-      status.textContent = `Deleting ${done}/${paths.length}…`;
+      status.textContent = `Moving to trash ${done}/${paths.length}…`;
     }
 
     clearSelection();
 
     if (failed > 0) {
       setBadge("err", "partial");
-      status.textContent = `Deleted ${paths.length - failed}/${paths.length}. Failed: ${failed}. See console.`;
+      status.textContent = `Moved ${done}/${paths.length} item(s) to trash. Failed: ${failed}. See console.`;
       console.warn("Multi-delete failures:", failures);
     } else {
       setBadge("ok", "ready");
-      status.textContent = `Deleted ${paths.length} item(s).`;
+      status.textContent = `Moved ${done} item(s) to trash.`;
     }
     try {
       await fetchFavoritesFromServer();
@@ -2126,7 +2443,7 @@ function pickFolder() {
     }
 
     if (canWriteCurrentScope()) {
-      ctxEl.appendChild(menuItem(`Delete selection (${selectedKeys.size})…`, "", () => deleteSelection(), { danger: true }));
+      ctxEl.appendChild(menuItem(`Move selection to trash (${selectedKeys.size})…`, "🗑", () => deleteSelection(), { danger: true }));
     }
   }
 
@@ -2392,11 +2709,15 @@ function pickFolder() {
     const rel = currentRelPathFor(item);
     const isDir = item.type === "dir";
 
-    const ok = confirm(isDir ? `Delete folder (recursive)?\n\n${rel}` : `Delete file?\n\n${rel}`);
+    const ok = confirm(
+        isDir
+            ? `Move folder to trash?\n\n${rel}\n\nThe folder and its contents will be moved to Trash.`
+            : `Move file to trash?\n\n${rel}`
+    );
     if (!ok) return;
 
-    setBadge("warn", "working…");
-    status.textContent = "Deleting…";
+    setBadge("warn", "moving to trash…");
+    status.textContent = "Moving to trash…";
 
     const url = apiDeleteUrl(rel);
     const r = await fetch(url, {
@@ -2410,7 +2731,7 @@ function pickFolder() {
     if (!r.ok || !j || !j.ok) {
       setBadge("err", "error");
       const msg = j && (j.message || j.error) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`;
-      status.textContent = `Delete failed: ${msg}`;
+      status.textContent = `Move to trash failed: ${msg}`;
       return;
     }
 
@@ -2420,7 +2741,9 @@ function pickFolder() {
       console.warn("Favorites refresh after delete failed:", e);
     }
 
-    status.textContent = "Deleted.";
+    status.textContent = j && j.trash_id
+        ? `Moved to trash.`
+        : `Moved to trash.`;
     setBadge("ok", "ready");
     clearSelection();
     await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
@@ -2662,6 +2985,24 @@ function pickFolder() {
   shareClose?.addEventListener("click", closeShareModal);
   shareModal?.addEventListener("click", (e) => {
     if (e.target === shareModal) closeShareModal();
+  });
+
+  trashBtn?.addEventListener("click", async () => {
+    openTrashModal();
+    await loadTrashItems();
+  });
+
+  trashClose?.addEventListener("click", closeTrashModal);
+  trashModal?.addEventListener("click", (e) => {
+    if (e.target === trashModal) closeTrashModal();
+  });
+
+  trashRefreshBtn?.addEventListener("click", async () => {
+    await loadTrashItems();
+  });
+
+  trashEmptyBtn?.addEventListener("click", async () => {
+    await emptyTrashScope();
   });
 
   propsClose?.addEventListener("click", closePropsModal);
@@ -3000,7 +3341,7 @@ function pickFolder() {
 
         ctxEl.appendChild(menuSep());
         ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
-        ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
+        ctxEl.appendChild(menuItem("Move to trash…", "🗑", () => doDelete(item), { danger: true }));
       }
 
       if (caps.properties !== false && !(selectedKeys && selectedKeys.size > 1)) {
@@ -3066,7 +3407,7 @@ function pickFolder() {
       if (canWrite) {
         ctxEl.appendChild(menuSep());
         ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
-        ctxEl.appendChild(menuItem("Delete…", "", () => doDelete(item), { danger: true }));
+        ctxEl.appendChild(menuItem("Move to trash…", "🗑", () => doDelete(item), { danger: true }));
       }
 
       if (caps.properties !== false && !(selectedKeys && selectedKeys.size > 1)) {
@@ -3148,6 +3489,16 @@ function pickFolder() {
       ctxEl.appendChild(menuSep());
     }
 
+    if (canWrite) {
+      ctxEl.appendChild(menuItem("New folder…", "", () => doMkdirAt(curPath)));
+      ctxEl.appendChild(menuSep());
+    }
+
+    ctxEl.appendChild(menuItem("Open trash", "🗑", async () => {
+      openTrashModal();
+      await loadTrashItems();
+    }));
+    
     ctxEl.appendChild(menuItem("Refresh", "", () => load()));
 
     ctxEl.setAttribute("aria-hidden", "false");

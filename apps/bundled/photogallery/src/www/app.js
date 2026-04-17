@@ -326,11 +326,11 @@
         if (!item || item.type !== "file") return;
 
         const rel = currentRelPathFor(item);
-        const ok = confirm(`Delete image?\n\n${rel}\n\nThis cannot be undone.`);
+        const ok = confirm(`Move image to trash?\n\n${rel}\n\nYou can restore it later from Trash.`);
         if (!ok) return;
 
         setBadge("warn", "working…");
-        setStatus(`Deleting ${item.name}…`);
+        setStatus(`Moving ${item.name} to trash…`);
 
         try {
             const r = await fetch(
@@ -358,11 +358,11 @@
             }
 
             setBadge("ok", "ready");
-            setStatus(`Deleted: ${item.name}`);
+            setStatus(`Moved to trash: ${item.name}`);
             await load();
         } catch (e) {
             setBadge("err", "error");
-            setStatus(`Delete failed: ${String(e && e.message ? e.message : e)}`);
+            setStatus(`Move to trash failed: ${String(e && e.message ? e.message : e)}`);
         }
     }
     async function renameFolder(item) {
@@ -417,11 +417,11 @@
         if (!item || item.type !== "dir") return;
 
         const rel = currentRelPathFor(item);
-        const ok = confirm(`Delete folder?\n\n${rel}\n\nThis removes the folder recursively and cannot be undone.`);
+        const ok = confirm(`Move folder to trash?\n\n${rel}\n\nThis moves the folder and its contents to Trash. You can restore it later.`);
         if (!ok) return;
 
         setBadge("warn", "working…");
-        setStatus(`Deleting folder ${item.name}…`);
+        setStatus(`Moving folder ${item.name} to trash…`);
 
         try {
             const r = await fetch(
@@ -442,11 +442,11 @@
             }
 
             setBadge("ok", "ready");
-            setStatus(`Deleted folder: ${item.name}`);
+            setStatus(`Moved folder to trash: ${item.name}`);
             await load();
         } catch (e) {
             setBadge("err", "error");
-            setStatus(`Folder delete failed: ${String(e && e.message ? e.message : e)}`);
+            setStatus(`Folder move to trash failed: ${String(e && e.message ? e.message : e)}`);
         }
     }
 
@@ -460,7 +460,7 @@
         }));
         ctxMenu.appendChild(menuSep());
         ctxMenu.appendChild(menuItem("Rename…", () => renameFolder(item)));
-        ctxMenu.appendChild(menuItem("Delete…", () => deleteFolder(item), { danger: true }));
+        ctxMenu.appendChild(menuItem("Move to trash…", () => deleteFolder(item), { danger: true }));
 
         placeContextMenu(x, y);
     }
@@ -480,7 +480,7 @@
         }));
         ctxMenu.appendChild(menuSep());
         ctxMenu.appendChild(menuItem("Rename…", () => renameImage(item)));
-        ctxMenu.appendChild(menuItem("Delete…", () => deleteImage(item), { danger: true }));
+        ctxMenu.appendChild(menuItem("Move to trash…", () => deleteImage(item), { danger: true }));
 
         placeContextMenu(x, y);
     }
@@ -666,12 +666,12 @@
         }
 
         const ok = confirm(
-            `Delete ${paths.length} selected item(s)?\n\nThis cannot be undone.`
+            `Move ${paths.length} selected item(s) to trash?\n\nYou can restore them later from Trash.`
         );
         if (!ok) return;
 
         setBadge("warn", "working…");
-        setStatus(`Deleting ${paths.length} item(s)…`);
+        setStatus(`Moving ${paths.length} item(s) to trash…`);
 
         let done = 0;
         const failed = [];
@@ -709,11 +709,11 @@
 
         if (failed.length) {
             setBadge("warn", "partial");
-            setStatus(`Deleted ${done}/${paths.length}. Failed: ${failed.length}`);
+            setStatus(`Moved to trash ${done}/${paths.length}. Failed: ${failed.length}`);
             console.warn("Photo Gallery deleteSelection failures:", failed);
         } else {
             setBadge("ok", "ready");
-            setStatus(`Deleted ${done} item(s).`);
+            setStatus(`Moved to trash ${done} item(s).`);
         }
     }
     const marquee = document.createElement("div");

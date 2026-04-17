@@ -482,6 +482,7 @@ void register_trash_routes(httplib::Server& srv, const TrashRoutesDeps& deps) {
         TrashService::RestoreParams rp;
         rp.trash_id = trash_id;
         rp.restore_abs_path = restore_abs;
+        rp.restore_root_abs = restore_root;
         rp.rename_if_conflict = rename_if_conflict;
 
         TrashService::RestoreResult rr;

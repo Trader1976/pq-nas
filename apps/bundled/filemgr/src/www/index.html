@@ -997,7 +997,64 @@
     #sortBtn{
       gap:8px;
     }
+    .trashList{
+      display:grid;
+      gap:10px;
+    }
 
+    .trashRow{
+      border:1px solid var(--border2);
+      border-radius:14px;
+      background: rgba(0,0,0,0.18);
+      padding:12px;
+      display:grid;
+      grid-template-columns: 1fr auto;
+      gap:12px;
+      align-items:start;
+    }
+
+    .trashMain{
+      min-width:0;
+      display:grid;
+      gap:6px;
+    }
+
+    .trashName{
+      font-weight:900;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+
+    .trashMeta{
+      display:flex;
+      flex-wrap:wrap;
+      gap:10px;
+      font-size:12px;
+      color:var(--fg-dim);
+    }
+
+    .trashPath{
+      font-family:var(--mono);
+      font-size:12px;
+      color:rgba(var(--fg-rgb),0.88);
+      overflow-wrap:anywhere;
+    }
+
+    .trashActions{
+      display:flex;
+      flex-wrap:wrap;
+      gap:8px;
+      justify-content:flex-end;
+    }
+
+    .trashEmpty{
+      border:1px dashed var(--border2);
+      border-radius:14px;
+      padding:16px;
+      text-align:center;
+      color:var(--fg-dim);
+    }
     #sortBtn svg{
       flex:0 0 auto;
     }
@@ -1074,7 +1131,12 @@
         <button class="btn secondary" id="favoritesToggleBtn" type="button" title="Show favorites only">
           <span class="btnTxt" id="favoritesToggleTxt">Favorites</span>
         </button>
-
+        <button class="btn secondary" id="trashBtn" type="button" title="Open Trash">
+  <span style="display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center;">
+    🗑
+  </span>
+          <span class="btnTxt">Trash</span>
+        </button>
         <button class="btn" id="refreshBtn" type="button" title="Refresh">
           <span class="btnTxt">Refresh</span>
         </button>
@@ -1327,6 +1389,29 @@
       </div>
     </div>
   </div>
+<div id="trashModal" class="modal" aria-hidden="true">
+  <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="trashTitle" style="width:min(980px, calc(100vw - 24px));">
+    <div class="modalHead">
+      <div>
+        <div id="trashTitle" class="modalTitle">Trash</div>
+        <div id="trashSub" class="modalSub mono">Current scope</div>
+      </div>
+      <button id="trashClose" class="btn secondary" type="button">Close</button>
+    </div>
+
+    <div class="modalBody" style="display:block;">
+      <div id="trashStatus" class="mono" style="margin-bottom:12px; opacity:.85;">Ready.</div>
+      <div id="trashList" class="trashList"></div>
+    </div>
+
+    <div class="modalFoot">
+      <button id="trashRefreshBtn" class="btn secondary" type="button">Refresh</button>
+      <button id="trashEmptyBtn" class="btn secondary" type="button">Empty trash</button>
+      <div style="flex:1 1 auto;"></div>
+      <span id="trashCount" class="mono" style="opacity:.8;"></span>
+    </div>
+  </div>
+</div>
 <div id="ctxMenu" class="ctxMenu" role="menu" aria-hidden="true"></div>
 
 <script src="./filetype_icons.js"></script>

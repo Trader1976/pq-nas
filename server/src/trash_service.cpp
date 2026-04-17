@@ -9,6 +9,7 @@
 #include <sstream>
 #include <system_error>
 #include <ctime>
+#include <utility>
 
 namespace pqnas {
 namespace {
@@ -294,6 +295,13 @@ static std::string trash_rel_payload_path_local(const std::string& scope_type,
 TrashService::TrashService(TrashIndex* index)
     : index_(index) {}
 
+void TrashService::set_restore_reindexer(RestoreReindexFn fn) {
+    restore_reindexer_ = std::move(fn);
+}
+
+void TrashService::set_restore_unindexer(RestoreUnindexFn fn) {
+    restore_unindexer_ = std::move(fn);
+}
 bool TrashService::infer_storage_root_for_logical_path(const std::filesystem::path& payload_abs_path,
                                                        const std::string& logical_rel_path,
                                                        std::filesystem::path* out_storage_root,
@@ -572,9 +580,37 @@ bool TrashService::restore_from_trash(const RestoreParams& p,
         return false;
     }
 
+    std::string restored_rel_path = rec.original_rel_path;
+    if (!p.restore_root_abs.empty()) {
+        std::error_code rec_ec;
+        auto rel = std::filesystem::relative(dst_abs, p.restore_root_abs.lexically_normal(), rec_ec);
+        if (!rec_ec && !rel.empty()) {
+            restored_rel_path = rel.generic_string();
+        }
+    }
+
+    // NEW: recreate live metadata before marking trash row restored
+    if (restore_reindexer_) {
+        std::string rixerr;
+        if (!restore_reindexer_(rec, dst_abs, restored_rel_path, &rixerr)) {
+            std::string rollback_err;
+            if (!move_path_local(dst_abs, src_abs, &rollback_err)) {
+                if (err) *err = "restore reindex failed: " + rixerr +
+                                "; rollback move failed: " + rollback_err;
+                return false;
+            }
+            if (err) *err = "restore reindex failed: " + rixerr;
+            return false;
+        }
+    }
+
     const std::int64_t now_ts = now_epoch_local();
     std::string serr;
     if (!index_->set_restore_status(p.trash_id, "restored", now_ts, &serr)) {
+        if (restore_unindexer_) {
+            restore_unindexer_(rec, restored_rel_path);
+        }
+
         std::string rerr;
         if (!move_path_local(dst_abs, src_abs, &rerr)) {
             if (err) *err = "restore status update failed: " + serr + "; rollback move failed: " + rerr;
