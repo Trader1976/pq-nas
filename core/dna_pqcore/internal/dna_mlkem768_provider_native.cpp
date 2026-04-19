@@ -30,8 +30,8 @@ static bool random_bytes_local(std::size_t n, std::vector<std::uint8_t>* out) {
 
 } // namespace
 
-    MlKem768ProviderId mlkem768_active_provider_id() {
-    return MlKem768ProviderId::dna;
+MlKem768ProviderId mlkem768_active_provider_id() {
+    return MlKem768ProviderId::native;
 }
 
 bool mlkem768_provider_available() {

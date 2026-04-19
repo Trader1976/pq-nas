@@ -1,7 +1,7 @@
+
 #include "dna_mlkem768_backend.h"
 #include "internal/dna_mlkem768_backend_diag.h"
 #include "internal/dna_mlkem768_provider.h"
-#include "internal/dna_mlkem768_provider_select.h"
 
 #include <openssl/crypto.h>
 
@@ -71,32 +71,31 @@ void mlkem768_wipe_shared_secret(std::vector<std::uint8_t>* ss) {
     wipe_bytes(ss);
 }
 
-// Public diagnostic helpers delegate to the selected internal provider.
+// Public diagnostic helpers delegate directly to vendored/native internal provider.
 bool mlkem768_available() {
-    return internal::mlkem768_selected_provider_available();
+    return internal::mlkem768_provider_available();
 }
 
 std::string mlkem768_backend_name() {
-    return internal::mlkem768_selected_provider_name();
+    return internal::mlkem768_provider_name();
 }
 
-// Public status API delegates to the selected internal provider.
+// Public status API delegates directly to vendored/native internal provider.
 MlKem768Status mlkem768_keygen_status(MlKem768Keypair* out) {
-    return internal::mlkem768_selected_provider_keygen(out);
+    return internal::mlkem768_provider_keygen(out);
 }
 
 MlKem768Status mlkem768_encapsulate_status(
     const std::vector<std::uint8_t>& public_key,
     MlKem768EncapResult* out) {
-    return internal::mlkem768_selected_provider_encapsulate(public_key, out);
+    return internal::mlkem768_provider_encapsulate(public_key, out);
 }
 
 MlKem768Status mlkem768_decapsulate_status(
     const std::vector<std::uint8_t>& secret_key,
     const std::vector<std::uint8_t>& ciphertext,
     std::vector<std::uint8_t>* out_shared_secret) {
-    return internal::mlkem768_selected_provider_decapsulate(
-        secret_key, ciphertext, out_shared_secret);
+    return internal::mlkem768_provider_decapsulate(secret_key, ciphertext, out_shared_secret);
 }
 
 // Compatibility wrapper around mlkem768_keygen_status().
@@ -140,9 +139,6 @@ bool mlkem768_decapsulate(const std::vector<std::uint8_t>& secret_key,
 
 // Diagnostic end-to-end ML-KEM self-test:
 // keygen -> encapsulate -> decapsulate -> shared-secret equality check.
-//
-// This deliberately exercises the public DNA boundary rather than calling the
-// internal provider functions directly.
 bool mlkem768_selftest(std::string* err) {
     if (err) err->clear();
 

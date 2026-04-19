@@ -219,9 +219,6 @@ target_link_libraries(pqnas_dna_pqcore_learn_kem PRIVATE
 add_library(pqnas_dna_pqcore_mlkem STATIC
         core/dna_pqcore/dna_mlkem768_backend.cpp
         core/dna_pqcore/internal/dna_mlkem768_provider_native.cpp
-        core/dna_pqcore/internal/dna_mlkem768_provider_stub.cpp
-        core/dna_pqcore/internal/dna_mlkem768_provider_dna.cpp
-        core/dna_pqcore/internal/dna_mlkem768_provider_select.cpp
         core/dna_pqcore/dna_mlkem768_backend.h
         $<TARGET_OBJECTS:dnanexus_mlkem_native_obj>
 )
@@ -232,11 +229,6 @@ target_include_directories(pqnas_dna_pqcore_mlkem PUBLIC
 
 target_include_directories(pqnas_dna_pqcore_mlkem PRIVATE
         ${CMAKE_SOURCE_DIR}/server/third_party/mlkem-native
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-target_link_libraries(pqnas_dna_pqcore_mlkem PUBLIC
-        pqnas_dna_pqcore_learn_kem
 )
 
 target_link_libraries(pqnas_dna_pqcore_mlkem PRIVATE
