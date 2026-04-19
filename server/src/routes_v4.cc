@@ -2,6 +2,8 @@
 #include <sodium.h>
 #include <openssl/sha.h>
 #include <ctime>
+#include <mutex>
+#include <unordered_map>
 
 extern "C" {
 #include "qrauth_v4.h"
@@ -54,6 +56,63 @@ int g_sess_ttl = 8 * 3600; // seconds
 //   unreliable clocks, signature expiry checks and session TTLs can break.
 static long now_epoch() { return (long)std::time(nullptr); }
 
+
+struct ConsumedProofEntry {
+    long consumed_at;
+    long proof_ts;
+    std::string fingerprint_b64;
+};
+
+static std::mutex g_consumed_proofs_mu;
+static std::unordered_map<std::string, ConsumedProofEntry> g_consumed_proofs;
+
+static std::string sha256_hex_str(const std::string& s) {
+    unsigned char digest[32];
+    SHA256((const unsigned char*)s.data(), s.size(), digest);
+
+    static const char hex[] = "0123456789abcdef";
+    std::string out;
+    out.resize(64);
+
+    for (size_t i = 0; i < 32; ++i) {
+        out[i * 2]     = hex[(digest[i] >> 4) & 0x0f];
+        out[i * 2 + 1] = hex[digest[i] & 0x0f];
+    }
+    return out;
+}
+
+static long consumed_proof_retention_sec() {
+    long keep = QR_V4_MAX_SKEW_SEC;
+    if (g_req_ttl > keep) keep = g_req_ttl;
+    return keep + 60; // small buffer
+}
+
+static void purge_consumed_proofs_locked(long now) {
+    const long keep = consumed_proof_retention_sec();
+
+    for (auto it = g_consumed_proofs.begin(); it != g_consumed_proofs.end(); ) {
+        if ((now - it->second.consumed_at) > keep) {
+            it = g_consumed_proofs.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+static bool mark_proof_consumed_once(const std::string& proof_hash,
+                                     long consumed_at,
+                                     long proof_ts,
+                                     const std::string& fingerprint_b64) {
+    std::lock_guard<std::mutex> lock(g_consumed_proofs_mu);
+
+    purge_consumed_proofs_locked(consumed_at);
+
+    auto [it, inserted] = g_consumed_proofs.emplace(
+        proof_hash,
+        ConsumedProofEntry{consumed_at, proof_ts, fingerprint_b64}
+    );
+    return inserted;
+}
 // Base64url encode (no padding), using libsodium variant.
 //
 // Used for:
@@ -347,6 +406,16 @@ static void route_v4_verify(const drogon::HttpRequestPtr& req,
         return jerr(resp, 403, "not_authorized", "identity_not_allowed"), cb(resp);
     }
 
+    // Replay protection: the same verified proof token may be accepted only once.
+    // Hash the normalized proof string (after whitespace stripping) so equivalent
+    // copy/paste variants collapse to one key.
+    long consume_now = now_epoch();
+    std::string proof_hash = sha256_hex_str(proof2);
+
+    if (!mark_proof_consumed_once(proof_hash, consume_now, claims.ts, fp_b64)) {
+        return jerr(resp, 403, "not_authorized", "verification failed"), cb(resp);
+    }
+
     // Mint cookie session
     //
     // Cookie contents (as designed in session_cookie.*) should include at least:
@@ -357,7 +426,7 @@ static void route_v4_verify(const drogon::HttpRequestPtr& req,
     // Security note:
     // - Keep cookie short-lived.
     // - Cookie is a bearer credential; protect it with Secure + HttpOnly + SameSite.
-    long iat = now_epoch();
+    long iat = consume_now;
     long exp = iat + g_sess_ttl;
     std::string cookieVal;
     // Mint cookie session bound to the verified identity (fingerprint_b64).

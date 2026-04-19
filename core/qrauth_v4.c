@@ -55,6 +55,15 @@ static int verify_ed25519_detached(const unsigned char pk[32],
     return crypto_sign_verify_detached(sig, msg, (unsigned long long)msg_len, pk);
 }
 
+#if QR_V4_ENFORCE_TIME
+static int qr_now_long(long *out) {
+    if (!out) return 0;
+    time_t now = time(NULL);
+    if (now == (time_t)-1) return 0;
+    *out = (long)now;
+    return 1;
+}
+#endif
 
 static int json_get_long(const char *json, const char *field, long *out) {
     if (!json || !field || !out) return 0;
@@ -122,8 +131,10 @@ qr_err_t qr_verify_req_token(const char *req_token, const unsigned char server_p
         free(payload_b64);
         return QR_ERR_B64;
     }
+    free(payload_b64);
+    payload_b64 = NULL;
 
-    // NUL-terminate for crude JSON parsing when time enforcement is enabled
+    // NUL-terminate for JSON parsing
     payload_bytes[payload_len] = 0;
 
     unsigned char sig[128];
@@ -139,6 +150,22 @@ qr_err_t qr_verify_req_token(const char *req_token, const unsigned char server_p
     if (verify_ed25519_detached(server_pk_raw, sig, digest, 32) != 0) {
         return QR_ERR_REQ_SIG;
     }
+
+#if QR_V4_ENFORCE_TIME
+    long exp = 0;
+    long now = 0;
+
+    if (!json_get_long((const char*)payload_bytes, "exp", &exp) || exp <= 0) {
+        return QR_ERR_JSON;
+    }
+    if (!qr_now_long(&now)) {
+        return QR_ERR_JSON;
+    }
+    if (now > exp) {
+        return QR_ERR_REQ_EXPIRED;
+    }
+#endif
+
     return QR_OK;
 }
 
@@ -210,6 +237,25 @@ qr_err_t qr_verify_proof_token(
         free(pk_b64); free(fp_b64); free(req_in_proof);
         return QR_ERR_REQ_MISMATCH;
     }
+
+    // proof freshness check
+#if QR_V4_ENFORCE_TIME
+    long now = 0;
+    long skew = 0;
+
+    if (!qr_now_long(&now)) {
+        free(pk_b64); free(fp_b64); free(req_in_proof);
+        return QR_ERR_JSON;
+    }
+
+    skew = (now >= ts) ? (now - ts) : (ts - now);
+    if (skew > QR_V4_MAX_SKEW_SEC) {
+        free(pk_b64); free(fp_b64); free(req_in_proof);
+        return QR_ERR_TS_SKEW;
+    }
+#endif
+
+    // decode pk (Ed25519 test only)
 
     // decode pk (Ed25519 test only)
     unsigned char pk_raw[128];
@@ -284,11 +330,8 @@ qr_err_t qr_extract_proof_claims(const char *proof_token, qr_proof_claims_t *out
     if (!fp_b64) return QR_ERR_JSON;
 
     // ts
-    const char *tsp = strstr(jsons, "\"ts\":");
     long ts = 0;
-    if (tsp) ts = strtol(tsp + 5, NULL, 10);
-
-    if (ts <= 0) {
+    if (!json_get_long(jsons, "ts", &ts) || ts <= 0) {
         free(fp_b64);
         return QR_ERR_JSON;
     }
