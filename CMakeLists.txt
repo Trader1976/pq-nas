@@ -22,7 +22,7 @@ if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 # -----------------------------------------------------------------------------
-# Dependencies 
+# Dependencies
 # -----------------------------------------------------------------------------
 find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
@@ -138,88 +138,11 @@ target_compile_definitions(dnanexus_mlkem_native_obj PRIVATE
 )
 
 # -----------------------------------------------------------------------------
-# Frozen learn-track source bundles needed by DNA ML-KEM provider
-# -----------------------------------------------------------------------------
-set(MLK_LEARN_FIELD_SRCS
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_field.cpp
-)
-
-set(MLK_LEARN_POLY_SRCS
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_poly.cpp
-)
-
-set(MLK_LEARN_SAMPLING_SRCS
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_cbd.cpp
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_prf.cpp
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_getnoise.cpp
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_noisevec.cpp
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_uniform.cpp
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_sample_ntt.cpp
-)
-
-set(MLK_LEARN_NTT_ONLY_SRCS
-        ${MLK_LEARN_FIELD_SRCS}
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_ntt.cpp
-)
-
-set(MLK_LEARN_MATRIX_SRCS
-        ${MLK_LEARN_SAMPLING_SRCS}
-        ${MLK_LEARN_NTT_ONLY_SRCS}
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_matrix_gen.cpp
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_matvec.cpp
-)
-
-set(MLK_LEARN_INDCPA_CORE_SRCS
-        ${MLK_LEARN_MATRIX_SRCS}
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_tomont.cpp
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_indcpa_keygen_skeleton.cpp
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_indcpa_encrypt_skeleton.cpp
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_indcpa_decrypt_skeleton.cpp
-)
-
-set(MLK_LEARN_MESSAGE_SRCS
-        ${MLK_LEARN_FIELD_SRCS}
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_message.cpp
-)
-
-set(MLK_LEARN_PACKED_SRCS
-        ${MLK_LEARN_INDCPA_CORE_SRCS}
-        ${MLK_LEARN_MESSAGE_SRCS}
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_indcpa_packed.cpp
-)
-
-set(MLK_LEARN_CPAPKE_SRCS
-        ${MLK_LEARN_PACKED_SRCS}
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_cpapke.cpp
-)
-
-set(MLK_LEARN_KEM_SRCS
-        ${MLK_LEARN_CPAPKE_SRCS}
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn/dna_mlkem_kem.cpp
-)
-
-# -----------------------------------------------------------------------------
-# Frozen learn-track KEM library used by DNA provider
-# -----------------------------------------------------------------------------
-add_library(pqnas_dna_pqcore_learn_kem STATIC
-        ${MLK_LEARN_KEM_SRCS}
-)
-
-target_include_directories(pqnas_dna_pqcore_learn_kem PUBLIC
-        ${CMAKE_SOURCE_DIR}/core/dna_pqcore_learn
-)
-
-target_link_libraries(pqnas_dna_pqcore_learn_kem PRIVATE
-        OpenSSL::Crypto
-)
-
-# -----------------------------------------------------------------------------
 # DNA-owned ML-KEM wrapper library used by pqnas_server share code
 # -----------------------------------------------------------------------------
 add_library(pqnas_dna_pqcore_mlkem STATIC
         core/dna_pqcore/dna_mlkem768_backend.cpp
         core/dna_pqcore/internal/dna_mlkem768_provider_native.cpp
-        core/dna_pqcore/dna_mlkem768_backend.h
         $<TARGET_OBJECTS:dnanexus_mlkem_native_obj>
 )
 
@@ -274,7 +197,6 @@ add_executable(pqnas_server
         server/src/routes_admin_workspaces.cpp
         server/src/routes_workspaces_files.cpp
         server/src/workspaces.cpp
-        server/src/routes_workspaces_files.cpp
         server/src/workspace_access_shared.cpp
         server/src/runtime_paths.cpp
         server/src/file_versions.cpp

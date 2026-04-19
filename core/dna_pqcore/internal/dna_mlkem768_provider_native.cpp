@@ -4,7 +4,7 @@
 #include <openssl/rand.h>
 
 #include <cstddef>
-#include <cstdint>
+#include <string>
 #include <vector>
 
 extern "C" {
@@ -30,15 +30,12 @@ static bool random_bytes_local(std::size_t n, std::vector<std::uint8_t>* out) {
 
 } // namespace
 
-MlKem768ProviderId mlkem768_active_provider_id() {
-    return MlKem768ProviderId::native;
-}
 
 bool mlkem768_provider_available() {
     return true;
 }
 
-    std::string mlkem768_provider_name() {
+std::string mlkem768_provider_name() {
     return "mlkem-native-c";
 }
 
