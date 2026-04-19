@@ -31,16 +31,22 @@ find_package(SQLite3 REQUIRED)
 
 pkg_check_modules(SODIUM REQUIRED libsodium)
 pkg_check_modules(QRENCODE REQUIRED libqrencode)
+pkg_check_modules(JSONCPP REQUIRED jsoncpp)
 
 # -----------------------------------------------------------------------------
 # Core library (default: used by tools/vectors; permissive / frozen-vector friendly)
 # -----------------------------------------------------------------------------
 add_library(pqnas_core STATIC
-        core/qrauth_v4.c
+        core/qrauth_v4.cc
 )
 
 target_include_directories(pqnas_core PUBLIC
         ${CMAKE_SOURCE_DIR}/core
+)
+
+target_include_directories(pqnas_core PUBLIC
+        ${CMAKE_SOURCE_DIR}/core
+        ${JSONCPP_INCLUDE_DIRS}
 )
 
 target_include_directories(pqnas_core PRIVATE
@@ -49,6 +55,11 @@ target_include_directories(pqnas_core PRIVATE
 
 target_compile_options(pqnas_core PRIVATE
         ${SODIUM_CFLAGS_OTHER}
+        ${JSONCPP_CFLAGS_OTHER}
+)
+
+target_link_libraries(pqnas_core PUBLIC
+        ${JSONCPP_LIBRARIES}
 )
 
 target_link_libraries(pqnas_core PRIVATE
@@ -60,11 +71,12 @@ target_link_libraries(pqnas_core PRIVATE
 # Core library (server strict mode: enables time enforcement in qrauth_v4.c)
 # -----------------------------------------------------------------------------
 add_library(pqnas_core_server STATIC
-        core/qrauth_v4.c
+        core/qrauth_v4.cc
 )
 
 target_include_directories(pqnas_core_server PUBLIC
         ${CMAKE_SOURCE_DIR}/core
+        ${JSONCPP_INCLUDE_DIRS}
 )
 
 target_include_directories(pqnas_core_server PRIVATE
@@ -73,12 +85,17 @@ target_include_directories(pqnas_core_server PRIVATE
 
 target_compile_options(pqnas_core_server PRIVATE
         ${SODIUM_CFLAGS_OTHER}
+        ${JSONCPP_CFLAGS_OTHER}
 )
 
 # Enforce req.exp and proof ts freshness in server builds only.
 target_compile_definitions(pqnas_core_server PRIVATE
         QR_V4_ENFORCE_TIME=1
         QR_V4_MAX_SKEW_SEC=300
+)
+
+target_link_libraries(pqnas_core_server PUBLIC
+        ${JSONCPP_LIBRARIES}
 )
 
 target_link_libraries(pqnas_core_server PRIVATE
@@ -111,7 +128,7 @@ target_compile_options(pqnas_verify_v4 PRIVATE
 )
 
 # IMPORTANT:
-# - Server must get strict time enforcement in core/qrauth_v4.c
+# - Server must get strict time enforcement in core/qrauth_v4.cc
 # - Tools/vectors should remain permissive to avoid breaking frozen vectors.
 # Therefore pqnas_verify_v4 links against pqnas_core_server.
 target_link_libraries(pqnas_verify_v4 PUBLIC

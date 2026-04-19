@@ -9,12 +9,16 @@
 #include <string.h>
 #include <time.h>
 
+#include <memory>
+#include <string>
+
+#include <jsoncpp/json/json.h>
 
 void qr_strip_ws_inplace(char *s) {
     if (!s) return;
     char *w = s;
     for (char *p = s; *p; p++) {
-        if (*p!=' ' && *p!='\t' && *p!='\r' && *p!='\n') {
+        if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') {
             *w++ = *p;
         }
     }
@@ -65,44 +69,70 @@ static int qr_now_long(long *out) {
 }
 #endif
 
-static int json_get_long(const char *json, const char *field, long *out) {
-    if (!json || !field || !out) return 0;
-    char pat[128];
-    snprintf(pat, sizeof(pat), "\"%s\":", field);
+static int parse_json_object_strict(const char *json,
+                                    Json::Value *out,
+                                    std::string *errs) {
+    if (!json || !out) return 0;
 
-    const char *p = strstr(json, pat);
-    if (!p) return 0;
-    p += strlen(pat);
+    Json::CharReaderBuilder b;
+    b["collectComments"] = false;
+    b["allowComments"] = false;
+    b["allowTrailingCommas"] = false;
+    b["strictRoot"] = true;
+    b["failIfExtra"] = true;
+    b["rejectDupKeys"] = true;
+    b["allowSingleQuotes"] = false;
+    b["allowNumericKeys"] = false;
 
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    std::unique_ptr<Json::CharReader> reader(b.newCharReader());
 
-    char *end = NULL;
-    long v = strtol(p, &end, 10);
-    if (end == p) return 0;
+    const char *begin = json;
+    const char *end = json + strlen(json);
 
-    *out = v;
-    return 1;
+    return reader->parse(begin, end, out, errs) ? 1 : 0;
 }
 
-static char *json_get_string_dup(const char *json, const char *field) {
-    // Minimal extractor: finds "field":"...".
-    // For v0 test vectors only. Production should use a real JSON parser or JCS bytes.
-    char pat[128];
-    snprintf(pat, sizeof(pat), "\"%s\":\"", field);
+static int json_require_string(const Json::Value& obj,
+                               const char *field,
+                               std::string *out) {
+    if (!field || !out) return 0;
+    if (!obj.isObject() || !obj.isMember(field)) return 0;
 
-    const char *p = strstr(json, pat);
-    if (!p) return NULL;
-    p += strlen(pat);
+    const Json::Value& v = obj[field];
+    if (!v.isString()) return 0;
 
-    const char *q = strchr(p, '"');
-    if (!q) return NULL;
+    *out = v.asString();
+    return !out->empty();
+}
 
-    size_t n = (size_t)(q - p);
-    char *v = (char*)malloc(n + 1);
-    if (!v) return NULL;
-    memcpy(v, p, n);
-    v[n] = 0;
-    return v;
+static int json_require_long(const Json::Value& obj,
+                             const char *field,
+                             long *out) {
+    if (!field || !out) return 0;
+    if (!obj.isObject() || !obj.isMember(field)) return 0;
+
+    const Json::Value& v = obj[field];
+
+    if (v.isInt64()) {
+        Json::Int64 x = v.asInt64();
+        *out = (long)x;
+        return 1;
+    }
+    if (v.isUInt64()) {
+        Json::UInt64 x = v.asUInt64();
+        *out = (long)x;
+        return 1;
+    }
+    if (v.isInt()) {
+        *out = (long)v.asInt();
+        return 1;
+    }
+    if (v.isUInt()) {
+        *out = (long)v.asUInt();
+        return 1;
+    }
+
+    return 0;
 }
 
 qr_err_t qr_verify_req_token(const char *req_token, const unsigned char server_pk_raw[32]) {
@@ -152,10 +182,15 @@ qr_err_t qr_verify_req_token(const char *req_token, const unsigned char server_p
     }
 
 #if QR_V4_ENFORCE_TIME
+    Json::Value req_obj;
+    std::string parse_errs;
+    if (!parse_json_object_strict((const char*)payload_bytes, &req_obj, &parse_errs)) {
+        return QR_ERR_JSON;
+    }
+
     long exp = 0;
     long now = 0;
-
-    if (!json_get_long((const char*)payload_bytes, "exp", &exp) || exp <= 0) {
+    if (!json_require_long(req_obj, "exp", &exp) || exp <= 0) {
         return QR_ERR_JSON;
     }
     if (!qr_now_long(&now)) {
@@ -180,7 +215,7 @@ qr_err_t qr_verify_proof_token(
     const char *req_norm = req_token_expected;
     if (strncmp(req_norm, "v4.", 3) == 0) req_norm += 3;
 
-    // verify server signature of expected req token (accepts v4. prefix in qr_verify_req_token)
+    // verify server signature of expected req token
     qr_err_t req_rc = qr_verify_req_token(req_token_expected, server_pk_raw);
     if (req_rc != QR_OK) return req_rc;
 
@@ -203,8 +238,9 @@ qr_err_t qr_verify_proof_token(
         return QR_ERR_B64;
     }
     free(proof_payload_b64);
+    proof_payload_b64 = NULL;
 
-    // Ensure NUL-terminated for crude JSON parsing
+    // Ensure NUL-terminated for strict JSON parsing
     proof_payload_bytes[proof_payload_len] = 0;
 
     unsigned char phone_sig[128];
@@ -213,55 +249,57 @@ qr_err_t qr_verify_proof_token(
         return QR_ERR_B64;
     }
 
-    // crude JSON parsing (v0 vectors only)
     const char *jsons = (const char*)proof_payload_bytes;
 
-    char *pk_b64 = json_get_string_dup(jsons, "pk");
-    char *fp_b64 = json_get_string_dup(jsons, "fingerprint");
-    char *req_in_proof = json_get_string_dup(jsons, "req");
-
-    const char *tsp = strstr(jsons, "\"ts\":");
-    long ts = 0;
-    if (tsp) ts = strtol(tsp + 5, NULL, 10);
-
-    if (!pk_b64 || !fp_b64 || !req_in_proof || ts == 0) {
-        free(pk_b64); free(fp_b64); free(req_in_proof);
+    Json::Value proof_obj;
+    std::string parse_errs;
+    if (!parse_json_object_strict(jsons, &proof_obj, &parse_errs)) {
         return QR_ERR_JSON;
     }
 
-    // proof must bind to expected req token (normalize optional v4. prefix on both)
+    std::string pk_b64_s;
+    std::string fp_b64_s;
+    std::string req_in_proof_s;
+    long ts = 0;
+
+    if (!json_require_string(proof_obj, "pk", &pk_b64_s) ||
+        !json_require_string(proof_obj, "fingerprint", &fp_b64_s) ||
+        !json_require_string(proof_obj, "req", &req_in_proof_s) ||
+        !json_require_long(proof_obj, "ts", &ts) ||
+        ts <= 0) {
+        return QR_ERR_JSON;
+    }
+
+    const char *pk_b64 = pk_b64_s.c_str();
+    const char *fp_b64 = fp_b64_s.c_str();
+    const char *req_in_proof = req_in_proof_s.c_str();
+
+    // proof must bind to expected req token
     const char *reqp_norm = req_in_proof;
     if (strncmp(reqp_norm, "v4.", 3) == 0) reqp_norm += 3;
 
     if (strcmp(reqp_norm, req_norm) != 0) {
-        free(pk_b64); free(fp_b64); free(req_in_proof);
         return QR_ERR_REQ_MISMATCH;
     }
 
-    // proof freshness check
 #if QR_V4_ENFORCE_TIME
     long now = 0;
     long skew = 0;
 
     if (!qr_now_long(&now)) {
-        free(pk_b64); free(fp_b64); free(req_in_proof);
         return QR_ERR_JSON;
     }
 
     skew = (now >= ts) ? (now - ts) : (ts - now);
     if (skew > QR_V4_MAX_SKEW_SEC) {
-        free(pk_b64); free(fp_b64); free(req_in_proof);
         return QR_ERR_TS_SKEW;
     }
 #endif
 
     // decode pk (Ed25519 test only)
-
-    // decode pk (Ed25519 test only)
     unsigned char pk_raw[128];
     size_t pk_len = 0;
     if (b64url_decode(pk_b64, pk_raw, sizeof(pk_raw), &pk_len) != 0 || pk_len != 32) {
-        free(pk_b64); free(fp_b64); free(req_in_proof);
         return QR_ERR_PK_DECODE;
     }
 
@@ -272,7 +310,6 @@ qr_err_t qr_verify_proof_token(
     char fp_calc_b64[256];
     b64url_encode(fp_calc_bytes, 64, fp_calc_b64, sizeof(fp_calc_b64));
     if (strcmp(fp_calc_b64, fp_b64) != 0) {
-        free(pk_b64); free(fp_b64); free(req_in_proof);
         return QR_ERR_FP_BINDING;
     }
 
@@ -293,12 +330,9 @@ qr_err_t qr_verify_proof_token(
     // phone signature is Ed25519(TEST) over prehash bytes
     int sig_rc = verify_ed25519_detached(pk_raw, phone_sig, prehash, 64);
 
-    free(pk_b64); free(fp_b64); free(req_in_proof);
-
     if (sig_rc != 0) return QR_ERR_PHONE_SIG;
     return QR_OK;
 }
-
 
 qr_err_t qr_extract_proof_claims(const char *proof_token, qr_proof_claims_t *out) {
     if (!proof_token || !out) return QR_ERR_FORMAT;
@@ -321,30 +355,33 @@ qr_err_t qr_extract_proof_claims(const char *proof_token, qr_proof_claims_t *out
         return QR_ERR_B64;
     }
     free(payload_b64);
+    payload_b64 = NULL;
+
     payload_bytes[payload_len] = 0;
 
     const char *jsons = (const char*)payload_bytes;
 
-    // fingerprint
-    char *fp_b64 = json_get_string_dup(jsons, "fingerprint");
-    if (!fp_b64) return QR_ERR_JSON;
+    Json::Value proof_obj;
+    std::string parse_errs;
+    if (!parse_json_object_strict(jsons, &proof_obj, &parse_errs)) {
+        return QR_ERR_JSON;
+    }
 
-    // ts
+    std::string fp_b64;
     long ts = 0;
-    if (!json_get_long(jsons, "ts", &ts) || ts <= 0) {
-        free(fp_b64);
+
+    if (!json_require_string(proof_obj, "fingerprint", &fp_b64) ||
+        !json_require_long(proof_obj, "ts", &ts) ||
+        ts <= 0) {
         return QR_ERR_JSON;
     }
 
-    size_t n = strlen(fp_b64);
+    size_t n = fp_b64.size();
     if (n == 0 || n >= sizeof(out->fingerprint_b64)) {
-        free(fp_b64);
         return QR_ERR_JSON;
     }
 
-    memcpy(out->fingerprint_b64, fp_b64, n + 1);
+    memcpy(out->fingerprint_b64, fp_b64.c_str(), n + 1);
     out->ts = ts;
-
-    free(fp_b64);
     return QR_OK;
 }
