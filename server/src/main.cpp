@@ -29504,8 +29504,6 @@ srv.Put("/api/v4/files/put",
     {
         std::string serr;
         if (!ensure_no_symlink_in_existing_path_prefix(out_abs.parent_path(), &serr)) {
-            std::cerr << "[put] symlink-check parent=" << out_abs.parent_path().string() << "\n";
-            std::cerr << "[put] symlink-check detail=" << serr << "\n";
 
             audit_fail("symlink_not_supported", 400, serr);
             reply_json(res, 400, json{
