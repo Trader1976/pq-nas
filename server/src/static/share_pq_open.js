@@ -1,6 +1,21 @@
 (() => {
     const boot = globalThis.PQ_SHARE_OPEN_BOOT || null;
 
+    function kemAlgFromMode(mode) {
+        const s = String(mode || "").toLowerCase();
+        if (s.startsWith("mlkem768")) return "ML-KEM-768";
+        return "X25519";
+    }
+
+    async function ensureOpenUnlock(mode) {
+        if (!window.PqShareUnlockV1) {
+            throw new Error("PQ unlock helper not loaded");
+        }
+        await window.PqShareUnlockV1.ensureUnlocked({
+            preferredAlg: kemAlgFromMode(mode),
+            purpose: "open"
+        });
+    }
     function el(id) {
         return document.getElementById(id);
     }
@@ -275,6 +290,8 @@
             throw new Error("PQ key helper not loaded");
         }
 
+        await ensureOpenUnlock(env.mode);
+
         const aad = PqShareKeysV1.b64ToBytes(env.aad_b64);
         const cekRaw = await PqShareKeysV1.unwrapCekFromEnvelope(env);
 
@@ -330,6 +347,7 @@
         setStatus("Requesting post-quantum open session…");
 
         const open = await fetchOpenInit();
+        await ensureOpenUnlock(open.mode);
         const cekRaw = await PqShareKeysV1.unwrapCekFromEnvelope(open);
 
         const baseAad = PqShareKeysV1.b64ToBytes(open.aad_b64);

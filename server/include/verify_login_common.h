@@ -38,7 +38,7 @@ struct VerifyLoginCommonContext {
     //
     // This handler will decide the key based on api_version and store/read under that key.
     struct ApprovalEntry { std::string cookie_val; std::string fingerprint; long expires_at = 0; };
-    
+
     struct PendingEntry {
         long expires_at = 0;
         std::string reason;

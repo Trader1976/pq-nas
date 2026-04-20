@@ -49,6 +49,14 @@
         return "This browser will generate a local ML-KEM-768 keypair. The file key is wrapped for this browser using post-quantum key encapsulation, and the shared file is decrypted locally in your browser.";
     }
 
+    async function ensureInviteUnlock() {
+        if (!window.PqShareUnlockV1) throw new Error("PQ unlock helper not loaded");
+        await window.PqShareUnlockV1.ensureUnlocked({
+            preferredAlg: preferredKemAlg,
+            purpose: "enroll"
+        });
+    }
+
     async function enroll(inviteId, deviceLabel, statusEl, submitBtn) {
         if (!inviteId) throw new Error("Missing invite id");
         if (!deviceLabel) throw new Error("Please enter a device name");
@@ -56,6 +64,8 @@
 
         statusEl.textContent = "Preparing secure browser enrollment…";
         submitBtn.disabled = true;
+
+        await ensureInviteUnlock();
 
         const pending = await window.PqShareKeysV1.generatePendingEnrollment(inviteId, {
             preferredAlg: preferredKemAlg
