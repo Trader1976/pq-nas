@@ -1457,7 +1457,7 @@
 
                     // show version once (don’t stomp useful status text every refresh)
                     if (!versionShown && statusLine) {
-                        statusLine.textContent = "DNA-Nexus v1.0.121";
+                        statusLine.textContent = "DNA-Nexus v1.0.122";
                         versionShown = true;
                     }
 

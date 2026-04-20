@@ -11,7 +11,8 @@
 // Build target should link authz.cc + session_cookie.cc.
 
 #include <sodium.h>
-
+#include <fstream>
+#include <sstream>
 #include <array>
 #include <cassert>
 #include <cstdint>
@@ -34,10 +35,26 @@ static std::string b64std_enc(const unsigned char* data, size_t len) {
     return out;
 }
 
-static std::string repo_root_from_file() {
-    // __FILE__ ends with .../tools/test_admin_cookie.cpp
-    // repo root is parent of tools/
-    return std::filesystem::path(__FILE__).parent_path().parent_path().string();
+static std::string write_temp_policy_file(const std::string& fp_hex) {
+    const auto dir = std::filesystem::temp_directory_path() / "pqnas_test_admin_cookie";
+    std::filesystem::create_directories(dir);
+
+    const auto path = dir / "policy.json";
+
+    std::ofstream f(path);
+    if (!f) return "";
+
+    f << "{\n"
+      << "  \"users\": [\n"
+      << "    {\n"
+      << "      \"fingerprint\": \"" << fp_hex << "\",\n"
+      << "      \"role\": \"admin\"\n"
+      << "    }\n"
+      << "  ]\n"
+      << "}\n";
+
+    f.close();
+    return path.string();
 }
 
 int main() {
@@ -46,9 +63,17 @@ int main() {
         return 2;
     }
 
-    const std::string repo_root = repo_root_from_file();
-    const std::string policy_path =
-        (std::filesystem::path(repo_root) / "config" / "policy.json").string();
+    const std::string fp_hex =
+        "11111111111111111111111111111111"
+        "22222222222222222222222222222222"
+        "33333333333333333333333333333333"
+        "44444444444444444444444444444444";
+
+    const std::string policy_path = write_temp_policy_file(fp_hex);
+    if (policy_path.empty()) {
+        std::cerr << "FAIL: could not create temporary policy fixture\n";
+        return 3;
+    }
 
     pqnas::Allowlist allowlist;
     if (!allowlist.load(policy_path)) {
@@ -60,10 +85,6 @@ int main() {
     unsigned char cookie_key[32];
     for (size_t i = 0; i < sizeof(cookie_key); i++) cookie_key[i] = (unsigned char)i;
 
-    // Use the same admin fingerprint you placed in policy.json
-    const std::string fp_hex =
-        "a8885f40f4c12c85837807021a48d31c1ba657f5aebe809107eccb72ce600240"
-        "76fd976c34109c78c68614c5d37702225397a3daba099fb16ed4738167bede39";
 
     // Sanity: policy says this should be admin
     if (!allowlist.is_admin(fp_hex)) {

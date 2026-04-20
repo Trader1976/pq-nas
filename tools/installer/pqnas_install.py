@@ -654,7 +654,27 @@ def ensure_dna_alerts_runtime_dir(log: Optional[Log] = None) -> str:
     path = "/var/lib/pqnas/dna-alerts"
     os.makedirs(path, exist_ok=True)
 
-    subprocess.run(["chown", "-R", "pqnas:pqnas", "/var/lib/pqnas"], check=False)
+    def ensure_dna_alerts_runtime_dir(log: Optional[Log] = None) -> str:
+        path = "/var/lib/pqnas/dna-alerts"
+    os.makedirs(path, exist_ok=True)
+
+    p = subprocess.run(
+        ["id", "-u", "pqnas"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if p.returncode != 0:
+        raise RuntimeError("pqnas service user does not exist before preparing DNA alerts runtime dir")
+
+    subprocess.run(["chown", "-R", "pqnas:pqnas", "/var/lib/pqnas"], check=True)
+    subprocess.run(["chmod", "750", "/var/lib/pqnas"], check=True)
+    subprocess.run(["chmod", "750", path], check=True)
+
+    if log:
+        log.write(f"[*] Prepared DNA alerts runtime dir: {path}")
+
+    return path
     subprocess.run(["chmod", "750", "/var/lib/pqnas"], check=False)
     subprocess.run(["chmod", "750", path], check=False)
 
@@ -2426,6 +2446,9 @@ class ExecuteScreen(Screen):
             self.logw.write("Ensuring /etc/pqnas config files …")
             ensure_config_files(mp, asset_root)
 
+            self.logw.write("Ensuring pqnas service user …")
+            ensure_service_user("pqnas", log=self.logw)
+
             self.logw.write("Installing DNA Connect alert runtime …")
             dna_alert_cli_path, dna_alert_lib_path = install_dna_alert_runtime(asset_root, log=self.logw)
 
@@ -2442,9 +2465,6 @@ class ExecuteScreen(Screen):
 
             self.logw.write("Checking DNA alert CLI runtime dependencies …")
             ensure_runtime_deps_for_dna_alert_cli(dna_alert_cli_path, log=self.logw)
-
-            self.logw.write("Ensuring pqnas service user …")
-            ensure_service_user("pqnas", log=self.logw)
 
             self.logw.write("Writing /etc/pqnas/pqnas.env …")
 
