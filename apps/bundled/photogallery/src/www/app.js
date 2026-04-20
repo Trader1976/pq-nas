@@ -15,6 +15,7 @@
     const statusEl = el("status");
     const filterInput = el("filterInput");
     const ratingFilter = el("ratingFilter");
+    const thumbSizeSelect = el("thumbSizeSelect");
     const refreshBtn = el("refreshBtn");
     const upBtn = el("upBtn");
     const gridEl = el("grid");
@@ -58,19 +59,29 @@
     let suppressBrowserSaveUntil = 0;
     let selectedRelPaths = new Set();
     let selectionAnchorRelPath = "";
+    let searchSeq = 0;
+    let filterTimer = 0;
+
 
     const RATING_FILTER_KEY = "pqnas_photogallery_rating_filter_v1";
+
+    const THUMB_SIZE_KEY = "pqnas_photogallery_thumb_size_v1";
 
     const state = {
         curPath: "",
         items: [],
         filter: "",
         ratingFilter: -1, // -1 = all, 0 = unrated, 1..5 = exact stars
+        thumbSize: 160,
         editingPath: "",
         editingRating: 0,
         previewPath: "",
         previewMode: "fit",
-        activeTilePath: ""
+        activeTilePath: "",
+        searchItems: [],
+        searchBasePath: "",
+        searchLoaded: false,
+        searchLoading: false
     };
 
     const dragState = {
@@ -109,6 +120,39 @@
             localStorage.setItem(RATING_FILTER_KEY, String(state.ratingFilter));
         } catch (_) {}
     }
+    function applyThumbSizeUi() {
+        const size = Number(state.thumbSize || 160);
+
+        if (gridEl) {
+            gridEl.style.setProperty("--pg-tile-min", `${size}px`);
+            gridEl.style.setProperty("--pg-thumb-height", `${Math.round(size * 0.82)}px`);
+        }
+
+        if (thumbSizeSelect) {
+            thumbSizeSelect.value = String(size);
+        }
+    }
+
+    function loadThumbSizePref() {
+        try {
+            const raw = Number(localStorage.getItem(THUMB_SIZE_KEY) || "160");
+            if ([120, 160, 220, 300].includes(raw)) {
+                state.thumbSize = raw;
+            } else {
+                state.thumbSize = 160;
+            }
+        } catch (_) {
+            state.thumbSize = 160;
+        }
+
+        applyThumbSizeUi();
+    }
+
+    function saveThumbSizePref() {
+        try {
+            localStorage.setItem(THUMB_SIZE_KEY, String(state.thumbSize));
+        } catch (_) {}
+    }
     function setBadge(kind, text) {
         if (!badge) return;
         badge.className = `badge ${kind}`;
@@ -132,6 +176,10 @@
     }
 
     function currentRelPathFor(item) {
+        if (!item) return "";
+        if (item.rel_path) return String(item.rel_path);
+        if (item.path) return String(item.path);
+        if (item.base_path) return joinPath(String(item.base_path || ""), item.name || "");
         return joinPath(state.curPath, item.name);
     }
 
@@ -315,7 +363,7 @@
 
             setBadge("ok", "ready");
             setStatus(`Renamed: ${oldName} → ${newName}`);
-            await load();
+            await load(true);
         } catch (e) {
             setBadge("err", "error");
             setStatus(`Rename failed: ${String(e && e.message ? e.message : e)}`);
@@ -359,7 +407,7 @@
 
             setBadge("ok", "ready");
             setStatus(`Moved to trash: ${item.name}`);
-            await load();
+            await load(true);
         } catch (e) {
             setBadge("err", "error");
             setStatus(`Move to trash failed: ${String(e && e.message ? e.message : e)}`);
@@ -406,7 +454,7 @@
 
             setBadge("ok", "ready");
             setStatus(`Renamed folder: ${oldName} → ${newName}`);
-            await load();
+            await load(true);
         } catch (e) {
             setBadge("err", "error");
             setStatus(`Folder rename failed: ${String(e && e.message ? e.message : e)}`);
@@ -443,7 +491,7 @@
 
             setBadge("ok", "ready");
             setStatus(`Moved folder to trash: ${item.name}`);
-            await load();
+            await load(true);
         } catch (e) {
             setBadge("err", "error");
             setStatus(`Folder move to trash failed: ${String(e && e.message ? e.message : e)}`);
@@ -705,7 +753,7 @@
         }
 
         clearSelection();
-        await load();
+        await load(true);
 
         if (failed.length) {
             setBadge("warn", "partial");
@@ -870,14 +918,186 @@
         });
     }
 
+    function isSearchMode() {
+        const hasText = !!String(state.filter || "").trim();
+        const rf = Number(state.ratingFilter);
+        const hasRating = Number.isFinite(rf) && rf >= 0;
+        return hasText || hasRating;
+    }
+
+    function invalidateSearchCache() {
+        searchSeq++;
+        state.searchItems = [];
+        state.searchBasePath = "";
+        state.searchLoaded = false;
+        state.searchLoading = false;
+    }
+
+    function groupPathForItem(item) {
+        return parentPath(currentRelPathFor(item));
+    }
+
+    function sortSearchItems(items) {
+        return items.slice().sort((a, b) => {
+            const ap = groupPathForItem(a);
+            const bp = groupPathForItem(b);
+            const byPath = String(ap).localeCompare(String(bp));
+            if (byPath) return byPath;
+            return String(a.name || "").localeCompare(String(b.name || ""));
+        });
+    }
+
+    async function ensureRecursiveSearchItems(force = false) {
+        const root = String(state.curPath || "");
+
+        if (!force && state.searchLoaded && state.searchBasePath === root) {
+            state.searchLoading = false;
+            return state.searchItems;
+        }
+
+        const mySeq = ++searchSeq;
+        state.searchLoading = true;
+        state.searchLoaded = false;
+        state.searchBasePath = root;
+        state.searchItems = [];
+
+        const out = [];
+        let scannedFolders = 0;
+
+        async function walk(path) {
+            if (mySeq !== searchSeq) throw new Error("__stale_search__");
+
+            scannedFolders++;
+            setStatus(`Searching /${path || ""} … folders: ${scannedFolders}, photos: ${out.length}`);
+
+            const j = await fetchJson(galleryListUrl(path));
+            const items = sortItems(Array.isArray(j.items) ? j.items : []);
+
+            for (const it of items) {
+                const rel = joinPath(path, it.name);
+                if (it.type === "file") {
+                    out.push({
+                        ...it,
+                        rel_path: rel,
+                        base_path: path
+                    });
+                }
+            }
+
+            for (const it of items) {
+                if (it.type === "dir") {
+                    await walk(joinPath(path, it.name));
+                }
+            }
+        }
+
+        try {
+            await walk(root);
+
+            if (mySeq !== searchSeq) throw new Error("__stale_search__");
+
+            state.searchItems = out;
+            state.searchLoaded = true;
+            return out;
+        } finally {
+            if (mySeq === searchSeq) {
+                state.searchLoading = false;
+            }
+        }
+    }
+
+    function makeSearchGroupHeader(folderPath, count, first) {
+        const head = document.createElement("div");
+        head.className = "searchGroupHead";
+        head.style.gridColumn = "1 / -1";
+        head.style.display = "flex";
+        head.style.justifyContent = "space-between";
+        head.style.alignItems = "baseline";
+        head.style.gap = "12px";
+        head.style.padding = first ? "0 2px 10px" : "14px 2px 10px";
+        head.style.margin = first ? "0 0 4px" : "10px 0 4px";
+        head.style.borderTop = first ? "none" : "1px solid rgba(var(--fg-rgb),0.16)";
+
+        const left = document.createElement("div");
+        left.style.fontWeight = "600";
+        left.style.opacity = "0.95";
+        left.textContent = "/" + (folderPath || "");
+
+        const right = document.createElement("div");
+        right.style.fontSize = "12px";
+        right.style.opacity = "0.72";
+        right.textContent = `${count} photo${count === 1 ? "" : "s"}`;
+
+        head.appendChild(left);
+        head.appendChild(right);
+        return head;
+    }
+
+    function updateViewStatus() {
+        const rf = Number(state.ratingFilter);
+        const ratingTxt =
+            rf < 0 ? "" :
+                (rf === 0 ? " • unrated only" : ` • ${rf}★ only`);
+        const textTxt =
+            state.filter ? ` • filter: ${state.filter}` : "";
+
+        const items = filteredItems();
+
+        if (isSearchMode()) {
+            const pathCount = new Set(items.map((it) => groupPathForItem(it))).size;
+            const scopeTxt = ` under /${state.curPath || ""}`;
+            setStatus(
+                `Found ${items.length} photo${items.length === 1 ? "" : "s"} in ${pathCount} path${pathCount === 1 ? "" : "s"}${scopeTxt}${ratingTxt}${textTxt}`
+            );
+            return;
+        }
+
+        setStatus(`Items: ${items.length}${ratingTxt}${textTxt}`);
+    }
+
+    async function refreshVisibleView(forceSearch = false) {
+        try {
+            if (isSearchMode()) {
+                const needSearch =
+                    forceSearch ||
+                    !state.searchLoaded ||
+                    state.searchBasePath !== state.curPath;
+
+                if (needSearch) {
+                    state.searchLoading = true;
+                    renderGrid();
+                    setBadge("warn", "search…");
+                    setStatus("Searching subfolders…");
+                    await ensureRecursiveSearchItems(forceSearch);
+                }
+            } else {
+                state.searchLoading = false;
+            }
+
+            renderGrid();
+            window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
+            setBadge("ok", "ready");
+            updateViewStatus();
+        } catch (e) {
+            const msg = String(e && e.message ? e.message : e);
+            if (msg === "__stale_search__") return;
+
+            state.searchLoading = false;
+            renderGrid();
+            setBadge("err", "error");
+            setStatus(`Search failed: ${msg}`);
+        }
+    }
+
     function filteredItems() {
         const q = String(state.filter || "").trim().toLowerCase();
         const rating = Number(state.ratingFilter);
 
-        const items = sortItems(state.items);
+        const baseItems = isSearchMode()
+            ? sortSearchItems(state.searchItems)
+            : sortItems(state.items);
 
-        return items.filter((it) => {
-            // Rating filter is image-only. Hide folders when active.
+        return baseItems.filter((it) => {
             if (Number.isFinite(rating) && rating >= 0) {
                 if (it.type !== "file") return false;
                 const stars = Number(it.rating || 0) || 0;
@@ -886,14 +1106,35 @@
 
             if (!q) return true;
 
+            if (it.type !== "file") return false;
+
             const hay = [
                 it.name || "",
+                groupPathForItem(it),
                 it.tags_text || "",
                 it.notes_text || ""
             ].join(" ").toLowerCase();
 
             return hay.includes(q);
         });
+    }
+
+    function applyMetaToItem(it, meta) {
+        if (!it) return;
+        it.rating = Number(meta.rating || 0) || 0;
+        it.tags_text = String(meta.tags_text || "");
+        it.notes_text = String(meta.notes_text || "");
+        if (meta.size_bytes != null) it.size_bytes = Number(meta.size_bytes || 0);
+        if (meta.mtime_epoch != null) it.mtime_unix = Number(meta.mtime_epoch || 0);
+    }
+
+    function applyMetaToCaches(rel, meta) {
+        for (const it of state.items) {
+            if (currentRelPathFor(it) === rel) applyMetaToItem(it, meta);
+        }
+        for (const it of state.searchItems) {
+            if (currentRelPathFor(it) === rel) applyMetaToItem(it, meta);
+        }
     }
 
     function filteredImageItems() {
@@ -1360,14 +1601,7 @@
             const j = await galleryMetaSet(rel, payload);
             const meta = j.meta || {};
 
-            const item = state.items.find((it) => currentRelPathFor(it) === rel);
-            if (item) {
-                item.rating = Number(meta.rating || 0) || 0;
-                item.tags_text = String(meta.tags_text || "");
-                item.notes_text = String(meta.notes_text || "");
-                if (meta.size_bytes != null) item.size_bytes = Number(meta.size_bytes || 0);
-                if (meta.mtime_epoch != null) item.mtime_unix = Number(meta.mtime_epoch || 0);
-            }
+            applyMetaToCaches(rel, meta);
 
             if (metaStatus) metaStatus.textContent = "Saved.";
             renderGrid();
@@ -1396,13 +1630,11 @@
         try {
             const j = await galleryMetaSet(rel, { rating });
             const meta = j.meta || {};
-            item.rating = Number(meta.rating || 0) || 0;
-            item.tags_text = String(meta.tags_text || item.tags_text || "");
-            item.notes_text = String(meta.notes_text || item.notes_text || "");
+            applyMetaToCaches(rel, meta);
             renderGrid();
             window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
             setBadge("ok", "ready");
-            setStatus(`Rated ${item.name}: ${item.rating}/5`);
+            setStatus(`Rated ${item.name}: ${Number(meta.rating || 0) || 0}/5`);
         } catch (e) {
             setBadge("err", "error");
             setStatus(`Rating failed: ${String(e && e.message ? e.message : e)}`);
@@ -1432,7 +1664,8 @@
             img.alt = item.name || "image";
 
             const rel = currentRelPathFor(item);
-            img.src = galleryThumbUrl(rel, 320, item.mtime_unix || 0);
+            const reqThumbSize = Math.max(160, Number(state.thumbSize || 160) * 2);
+            img.src = galleryThumbUrl(rel, reqThumbSize, item.mtime_unix || 0);
             img.onerror = () => {
                 img.onerror = null;
                 img.src = fileGetUrl(rel);
@@ -1524,6 +1757,23 @@
                 openFolderContextMenu(e.clientX, e.clientY, item);
             }
         });
+        thumbSizeSelect?.addEventListener("change", () => {
+            state.thumbSize = Number(thumbSizeSelect.value || "160");
+            applyThumbSizeUi();
+            saveThumbSizePref();
+            renderGrid();
+            window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
+
+            const count = filteredItems().length;
+            const rf = Number(state.ratingFilter);
+            const ratingTxt =
+                rf < 0 ? "" :
+                    (rf === 0 ? " • unrated only" : ` • ${rf}★ only`);
+            const textTxt =
+                state.filter ? ` • filter: ${state.filter}` : "";
+
+            setStatus(`Items: ${count}${ratingTxt}${textTxt} • thumbs: ${state.thumbSize}px`);
+        });
         tile.addEventListener("dblclick", () => {
             if (item.type === "dir") {
                 state.curPath = currentRelPathFor(item);
@@ -1566,26 +1816,70 @@
         if (!gridEl) return;
         gridEl.replaceChildren();
 
+        if (isSearchMode() && state.searchLoading && !state.searchLoaded) {
+            state.activeTilePath = "";
+            const loading = document.createElement("div");
+            loading.className = "emptyState";
+            loading.innerHTML = `
+            <div class="h">Searching subfolders…</div>
+            <div class="p">Scanning the current folder and all deeper folders for matching photos.</div>
+        `;
+            gridEl.appendChild(loading);
+            return;
+        }
+
         const items = filteredItems();
+
         if (!items.length) {
+            state.activeTilePath = "";
+
             const empty = document.createElement("div");
             empty.className = "emptyState";
-            empty.innerHTML = `
+
+            if (isSearchMode()) {
+                empty.innerHTML = `
+        <div class="h">No matching photos</div>
+        <div class="p">No photos matched the current search or rating filter in this folder or its subfolders.</div>
+    `;
+            } else {
+                empty.innerHTML = `
         <div class="h">Nothing to show</div>
         <div class="p">This folder has no subfolders or supported images that match the current filter.</div>
-      `;
+    `;
+            }
+
             gridEl.appendChild(empty);
             return;
         }
 
-        for (const item of items) {
-            gridEl.appendChild(makeTile(item));
+        if (isSearchMode()) {
+            const groups = new Map();
+
+            for (const item of items) {
+                const key = groupPathForItem(item);
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(item);
+            }
+
+            let first = true;
+            for (const [folderPath, groupItems] of groups) {
+                gridEl.appendChild(makeSearchGroupHeader(folderPath, groupItems.length, first));
+                for (const item of groupItems) {
+                    gridEl.appendChild(makeTile(item));
+                }
+                first = false;
+            }
+        } else {
+            for (const item of items) {
+                gridEl.appendChild(makeTile(item));
+            }
         }
+
         applySelectionToDom();
         ensureActiveTile();
     }
 
-    async function load() {
+    async function load(forceSearch = false) {
         closeContextMenu();
         setBadge("warn", "loading…");
         setStatus("Loading gallery…");
@@ -1594,36 +1888,31 @@
             const j = await fetchJson(galleryListUrl(state.curPath));
             state.items = Array.isArray(j.items) ? j.items.slice() : [];
             renderBreadcrumb();
-            renderGrid();
-            window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
 
-            const count = filteredItems().length;
-            const rf = Number(state.ratingFilter);
-            const ratingTxt =
-                rf < 0 ? "" :
-                    (rf === 0 ? " • unrated only" : ` • ${rf}★ only`);
-            const textTxt =
-                state.filter ? ` • filter: ${state.filter}` : "";
+            if (forceSearch || state.searchBasePath !== state.curPath) {
+                invalidateSearchCache();
+            }
 
-            setBadge("ok", "ready");
-            setStatus(`Items: ${count}${ratingTxt}${textTxt}`);
-
+            await refreshVisibleView(forceSearch);
         } catch (e) {
+            const msg = String(e && e.message ? e.message : e);
+            if (msg === "__stale_search__") return;
+
             renderBreadcrumb();
             if (gridEl) {
                 gridEl.innerHTML = `
-          <div class="emptyState">
-            <div class="h">Load failed</div>
-            <div class="p">${String(e && e.message ? e.message : e)}</div>
-          </div>
-        `;
+                <div class="emptyState">
+                    <div class="h">Load failed</div>
+                    <div class="p">${msg}</div>
+                </div>
+            `;
             }
             setBadge("err", "error");
-            setStatus(`Load failed: ${String(e && e.message ? e.message : e)}`);
+            setStatus(`Load failed: ${msg}`);
         }
     }
 
-    refreshBtn?.addEventListener("click", () => load());
+    refreshBtn?.addEventListener("click", () => load(true));
 
     upBtn?.addEventListener("click", () => {
         state.curPath = parentPath(state.curPath);
@@ -1633,31 +1922,28 @@
 
     filterInput?.addEventListener("input", () => {
         state.filter = String(filterInput.value || "");
-        renderGrid();
-        window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
-        const count = filteredItems().length;
-        const rf = Number(state.ratingFilter);
-        const ratingTxt =
-            rf < 0 ? "" :
-                (rf === 0 ? " • unrated only" : ` • ${rf}★ only`);
-        const textTxt =
-            state.filter ? ` • filter: ${state.filter}` : "";
-        setStatus(`Items: ${count}${ratingTxt}${textTxt}`);
+
+        window.clearTimeout(filterTimer);
+
+        if (isSearchMode() && (!state.searchLoaded || state.searchBasePath !== state.curPath)) {
+            state.searchLoading = true;
+            renderGrid();
+            setBadge("warn", "search…");
+            setStatus("Searching subfolders…");
+
+            filterTimer = window.setTimeout(() => {
+                refreshVisibleView(false);
+            }, 180);
+            return;
+        }
+
+        refreshVisibleView(false);
     });
 
     ratingFilter?.addEventListener("change", () => {
         state.ratingFilter = Number(ratingFilter.value || "-1");
         saveRatingFilterPref();
-        renderGrid();
-        window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
-        const count = filteredItems().length;
-        const rf = Number(state.ratingFilter);
-        const ratingTxt =
-            rf < 0 ? "" :
-                (rf === 0 ? " • unrated only" : ` • ${rf}★ only`);
-        const textTxt =
-            state.filter ? ` • filter: ${state.filter}` : "";
-        setStatus(`Items: ${count}${ratingTxt}${textTxt}`);
+        refreshVisibleView(false);
     });
 
     metaClose?.addEventListener("click", closeMetaModal);
@@ -1957,6 +2243,7 @@
     window.PQNAS_PHOTOGALLERY.clearSelection = clearSelection;
     titleLine.textContent = "Photo Gallery";
     loadRatingFilterPref();
+    loadThumbSizePref();
     renderBreadcrumb();
     load();
 })();

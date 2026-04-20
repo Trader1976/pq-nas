@@ -1081,13 +1081,17 @@ static bool ensure_no_symlink_in_existing_path_prefix(const std::filesystem::pat
 
         std::error_code ec;
         auto st = std::filesystem::symlink_status(cur, ec);
+
         if (ec) {
+            if (ec == std::make_error_code(std::errc::no_such_file_or_directory)) {
+                return true;
+            }
             if (err) *err = "symlink_status failed: " + ec.message();
             return false;
         }
 
         if (!std::filesystem::exists(st)) {
-            return true; // once a component does not exist, deeper ones cannot exist yet
+            return true;
         }
 
         if (std::filesystem::is_symlink(st)) {
@@ -29500,11 +29504,15 @@ srv.Put("/api/v4/files/put",
     {
         std::string serr;
         if (!ensure_no_symlink_in_existing_path_prefix(out_abs.parent_path(), &serr)) {
+            std::cerr << "[put] symlink-check parent=" << out_abs.parent_path().string() << "\n";
+            std::cerr << "[put] symlink-check detail=" << serr << "\n";
+
             audit_fail("symlink_not_supported", 400, serr);
             reply_json(res, 400, json{
                 {"ok", false},
                 {"error", "bad_request"},
-                {"message", "symlinks not supported"}
+                {"message", "symlinks not supported"},
+                {"detail", serr}
             }.dump());
             return;
         }

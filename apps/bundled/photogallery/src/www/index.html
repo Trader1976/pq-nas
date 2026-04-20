@@ -218,8 +218,10 @@
         }
 
         .grid{
+            --pg-tile-min: 160px;
+            --pg-thumb-height: 160px;
             display:grid;
-            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(var(--pg-tile-min), 1fr));
             gap:14px;
             align-content:start;
         }
@@ -234,7 +236,7 @@
             cursor:pointer;
             display:flex;
             flex-direction:column;
-            min-height:220px;
+            min-height:180px;
         }
         .tile:hover{
             transform:translateY(-1px);
@@ -244,7 +246,7 @@
 
         .thumbWrap{
             position:relative;
-            aspect-ratio: 1 / 1;
+            height: var(--pg-thumb-height);
             background:
                     linear-gradient(135deg, rgba(var(--fg-rgb),0.05), rgba(255,255,255,0.02)),
                     rgba(0,0,0,0.20);
@@ -754,7 +756,7 @@
             <div class="actions">
                 <span class="badge warn" id="badge">loading…</span>
 
-                <input id="filterInput" class="input" type="text" placeholder="Filter current folder">
+                <input id="filterInput" class="input" type="text" placeholder="Search this folder and subfolders">
 
                 <select
                         id="ratingFilter"
@@ -770,6 +772,19 @@
                     <option value="4">4★</option>
                     <option value="5">5★</option>
                 </select>
+
+                <select
+                        id="thumbSizeSelect"
+                        class="input"
+                        title="Thumbnail size"
+                        style="min-width:140px; width:auto;"
+                >
+                    <option value="120">Thumbs: Small</option>
+                    <option value="160" selected>Thumbs: Medium</option>
+                    <option value="220">Thumbs: Large</option>
+                    <option value="300">Thumbs: XL</option>
+                </select>
+
                 <span class="badge" id="selCount" style="display:none;">0 selected</span>
                 <button class="btn secondary" id="downloadSelBtn" type="button" disabled>Download selected</button>
                 <button
