@@ -304,10 +304,11 @@ struct ApprovalEntry {
 static std::unordered_map<std::string, ApprovalEntry> g_approvals;
 static std::mutex g_approvals_mu;
 
-// --- pending admin approval (sid -> reason) ---
+// --- pending admin approval / browser-bound preauth ---
 struct PendingEntry {
-    std::string reason;   // e.g. "user_disabled"
-    long expires_at = 0;  // unix epoch seconds
+    std::string reason;             // e.g. "user_disabled"
+    long expires_at = 0;            // unix epoch seconds
+    std::string browser_bind_hash;  // SHA-256 hex of preauth cookie minted by /api/v5/session
 };
 
 static std::unordered_map<std::string, PendingEntry> g_pending;
@@ -8112,19 +8113,33 @@ v5.consume_app_mint =
 	};
 	v5.approvals_pop = [&](const std::string& sid) { approvals_pop(sid); };
 
-	v5.pending_get = [&](const std::string& sid, RoutesV5Context::PendingEntry& out) {
-    	PendingEntry p;
-	    if (!pending_get(sid, p)) return false;
-    	out.expires_at = p.expires_at;
-	    out.reason     = p.reason;
-    	return true;
-	};
-	v5.pending_put = [&](const std::string& sid, const RoutesV5Context::PendingEntry& in) {
-    	PendingEntry p;
-	    p.expires_at = in.expires_at;
-    	p.reason     = in.reason;
-	    pending_put(sid, p);
-	};
+    v5.pending_get = [&](const std::string& sid, RoutesV5Context::PendingEntry& out) {
+        PendingEntry p;
+        if (!pending_get(sid, p)) return false;
+        out.expires_at = p.expires_at;
+        out.reason = p.reason;
+        out.browser_bind_hash = p.browser_bind_hash;
+        return true;
+    };
+
+    v5.pending_put = [&](const std::string& sid, const RoutesV5Context::PendingEntry& in) {
+        PendingEntry p;
+        p.expires_at = in.expires_at;
+        p.reason = in.reason;
+
+        // Preserve existing browser binding if caller is only updating reason/expiry.
+        if (!in.browser_bind_hash.empty()) {
+            p.browser_bind_hash = in.browser_bind_hash;
+        } else {
+            PendingEntry oldp;
+            if (pending_get(sid, oldp)) {
+                p.browser_bind_hash = oldp.browser_bind_hash;
+            }
+        }
+
+        pending_put(sid, p);
+    };
+
 	v5.pending_pop = [&](const std::string& sid) { pending_pop(sid); };
 
 	v5.app_device_refresh_expiry =
@@ -17688,20 +17703,32 @@ c.approvals_put = [&](const std::string& sid, const VerifyLoginCommonContext::Ap
 
 c.approvals_pop = [&](const std::string& sid){ approvals_pop(sid); };
 
-c.pending_get = [&](const std::string& sid, VerifyLoginCommonContext::PendingEntry& out){
-    PendingEntry p;
-    if (!pending_get(sid, p)) return false;
-    out.expires_at = p.expires_at;
-    out.reason     = p.reason;
-    return true;
-};
+    c.pending_get = [&](const std::string& sid, VerifyLoginCommonContext::PendingEntry& out){
+        PendingEntry p;
+        if (!pending_get(sid, p)) return false;
+        out.expires_at = p.expires_at;
+        out.reason = p.reason;
+        out.browser_bind_hash = p.browser_bind_hash;
+        return true;
+    };
 
-c.pending_put = [&](const std::string& sid, const VerifyLoginCommonContext::PendingEntry& in){
-    PendingEntry p;
-    p.expires_at = in.expires_at;
-    p.reason     = in.reason;
-    pending_put(sid, p);
-};
+    c.pending_put = [&](const std::string& sid, const VerifyLoginCommonContext::PendingEntry& in){
+        PendingEntry p;
+        p.expires_at = in.expires_at;
+        p.reason = in.reason;
+
+        // Preserve existing browser binding if caller is only updating reason/expiry.
+        if (!in.browser_bind_hash.empty()) {
+            p.browser_bind_hash = in.browser_bind_hash;
+        } else {
+            PendingEntry oldp;
+            if (pending_get(sid, oldp)) {
+                p.browser_bind_hash = oldp.browser_bind_hash;
+            }
+        }
+
+        pending_put(sid, p);
+    };
 
 c.pending_pop = [&](const std::string& sid){ pending_pop(sid); };
 

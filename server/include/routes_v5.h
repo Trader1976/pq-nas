@@ -65,7 +65,12 @@ struct RoutesV5Context {
 
     // approvals / pending maps
     struct ApprovalEntry { std::string cookie_val; std::string fingerprint; long expires_at = 0; };
-    struct PendingEntry  { long expires_at = 0; std::string reason; };
+
+	struct PendingEntry {
+		long expires_at = 0;
+		std::string reason;
+		std::string browser_bind_hash;
+	};
 
     std::function<void(long now)> approvals_prune;
     std::function<void(long now)> pending_prune;

@@ -34,6 +34,7 @@
 // - All JSON responses are no-store to avoid caching sensitive flow state.
 
 #include "routes_v5.h"
+#include <openssl/sha.h>
 
 #include <algorithm>
 #include <stdexcept>
@@ -72,6 +73,67 @@ static std::string normalize_query_b64(std::string s) {
     return s;
 }
 
+static std::string sha256_hex(const std::string& s) {
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    SHA256(reinterpret_cast<const unsigned char*>(s.data()), s.size(), digest);
+
+    static const char hex[] = "0123456789abcdef";
+    std::string out;
+    out.resize(SHA256_DIGEST_LENGTH * 2);
+
+    for (size_t i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
+        out[i * 2]     = hex[(digest[i] >> 4) & 0x0f];
+        out[i * 2 + 1] = hex[digest[i] & 0x0f];
+    }
+    return out;
+}
+
+static std::string get_cookie_value(const httplib::Request& req, const std::string& name) {
+    auto it = req.headers.find("Cookie");
+    if (it == req.headers.end()) return {};
+
+    const std::string& cookies = it->second;
+    size_t pos = 0;
+
+    while (pos < cookies.size()) {
+        while (pos < cookies.size() && (cookies[pos] == ' ' || cookies[pos] == ';')) pos++;
+
+        size_t eq = cookies.find('=', pos);
+        if (eq == std::string::npos) break;
+
+        size_t end = cookies.find(';', eq + 1);
+
+        std::string key = cookies.substr(pos, eq - pos);
+        std::string val = (end == std::string::npos)
+            ? cookies.substr(eq + 1)
+            : cookies.substr(eq + 1, end - (eq + 1));
+
+        if (key == name) return val;
+
+        if (end == std::string::npos) break;
+        pos = end + 1;
+    }
+
+    return {};
+}
+
+static std::string make_preauth_cookie(const std::string& value, long max_age_sec) {
+    return std::string("pqnas_preauth=") + value +
+           "; Path=/api/v5/consume" +
+           "; Max-Age=" + std::to_string(max_age_sec) +
+           "; HttpOnly" +
+           "; SameSite=Strict" +
+           "; Secure";
+}
+
+static std::string clear_preauth_cookie() {
+    return std::string("pqnas_preauth=") +
+           "; Path=/api/v5/consume" +
+           "; Max-Age=0" +
+           "; HttpOnly" +
+           "; SameSite=Strict" +
+           "; Secure";
+}
 
 // Strictly parse request body as a JSON object. Returns false with a stable
 // machine-readable error string for consistent 400 responses.
@@ -216,9 +278,19 @@ void register_routes_v5(httplib::Server& srv, const RoutesV5Context& ctx) {
             reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "pending_put_not_configured"}}.dump());
             return;
         }
+
+        const std::string preauth = ctx.random_b64url ? ctx.random_b64url(32) : std::string{};
+        if (preauth.empty()) {
+            reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "preauth_rng_failed"}}.dump());
+            return;
+        }
+
+        const std::string preauth_hash = sha256_hex(preauth);
+
         RoutesV5Context::PendingEntry pe;
         pe.expires_at = exp;
         pe.reason = "awaiting_scan";
+        pe.browser_bind_hash = preauth_hash;
         ctx.pending_put(k, pe);
 
         if (!(ctx.pending_get)) {
@@ -231,6 +303,9 @@ void register_routes_v5(httplib::Server& srv, const RoutesV5Context& ctx) {
             reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "pending_put_failed"}}.dump());
             return;
         }
+
+        const long max_age = (exp > now) ? (exp - now) : 0;
+        res.set_header("Set-Cookie", make_preauth_cookie(preauth, max_age));
 
         // audit (optional)
         if (ctx.audit_emit) {
@@ -393,6 +468,37 @@ srv.Post("/api/v5/consume", [&](const httplib::Request& req, httplib::Response& 
         return;
     }
 
+    RoutesV5Context::PendingEntry pe;
+    if (!(ctx.pending_get && ctx.pending_get(key, pe))) {
+        reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "session_missing"},
+            {"k", key}
+        }.dump());
+        return;
+    }
+
+    const std::string preauth = get_cookie_value(req, "pqnas_preauth");
+    if (preauth.empty()) {
+        reply_json(res, 428, json{
+            {"ok", false},
+            {"error", "preauth_required"},
+            {"message", "missing browser binding cookie"},
+            {"k", key}
+        }.dump());
+        return;
+    }
+
+    if (pe.browser_bind_hash.empty() || sha256_hex(preauth) != pe.browser_bind_hash) {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "browser_binding_failed"},
+            {"message", "browser binding check failed"},
+            {"k", key}
+        }.dump());
+        return;
+    }
+
     RoutesV5Context::ApprovalEntry ae;
     if (!(ctx.approvals_get && ctx.approvals_get(key, ae))) {
         reply_json(res, 409, json{{"ok", false}, {"error", "not_approved"}, {"k", key}}.dump());
@@ -419,18 +525,26 @@ srv.Post("/api/v5/consume", [&](const httplib::Request& req, httplib::Response& 
         "; SameSite=None" +
         "; Secure";
 
-    // IMPORTANT: set cookie header BEFORE body is finalized
-    res.set_header("Set-Cookie", set_cookie);
+    // IMPORTANT:
+    // - issue the real authenticated session cookie
+    // - immediately clear the one-time browser binding cookie
+    //
+    // We need TWO Set-Cookie headers here.
+    const std::string clear_cookie = clear_preauth_cookie();
 
-    // Audit (now we can audit the *actual* header we are sending)
+    res.headers.emplace("Set-Cookie", set_cookie);
+    res.headers.emplace("Set-Cookie", clear_cookie);
+
     if (ctx.audit_emit) {
         ctx.audit_emit("v5.consume_cookie", "ok", [&](std::map<std::string,std::string>& f) {
             f["k"] = key;
             f["cookie_len"] = std::to_string(ae.cookie_val.size());
             f["set_cookie_len"] = std::to_string(set_cookie.size());
+            f["clear_cookie_len"] = std::to_string(clear_cookie.size());
             f["cookie_has_secure"] = (set_cookie.find("Secure") != std::string::npos) ? "1" : "0";
             f["cookie_has_domain"] = (set_cookie.find("Domain=") != std::string::npos) ? "1" : "0";
             f["cookie_has_samesite_none"] = (set_cookie.find("SameSite=None") != std::string::npos) ? "1" : "0";
+            f["clear_cookie_has_max_age_0"] = (clear_cookie.find("Max-Age=0") != std::string::npos) ? "1" : "0";
         });
     }
 
