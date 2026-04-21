@@ -37,6 +37,9 @@
     const metaInfo = el("metaInfo");
     const metaStatus = el("metaStatus");
     const metaSaveBtn = el("metaSaveBtn");
+    const metaApplySelWrap = el("metaApplySelWrap");
+    const metaApplySelChk = el("metaApplySelChk");
+    const metaApplySelText = el("metaApplySelText");
 
     const previewModal = el("previewModal");
     const previewCard = el("previewCard");
@@ -503,7 +506,22 @@
         const count = selectedRelPaths.size;
         if (!count) return;
 
+        const imageTargets = selectedImageRelPaths();
+
         ctxMenu.innerHTML = "";
+
+        if (imageTargets.length) {
+            ctxMenu.appendChild(menuItem("Edit metadata for selected photos…", () => {
+                const preferred =
+                    state.activeTilePath && imageTargets.includes(state.activeTilePath)
+                        ? state.activeTilePath
+                        : imageTargets[0];
+
+                openMetaFor(preferred);
+            }));
+            ctxMenu.appendChild(menuSep());
+        }
+
         ctxMenu.appendChild(menuItem("Download selected", () => downloadSelectionZip()));
         ctxMenu.appendChild(menuItem("Export selected with metadata…", () => exportSelectionZip()));
         ctxMenu.appendChild(menuSep());
@@ -590,8 +608,9 @@
         if (downloadSelBtn) downloadSelBtn.disabled = count === 0;
         if (deleteSelBtn) deleteSelBtn.disabled = count === 0;
         if (clearSelBtn) clearSelBtn.disabled = count === 0;
-    }
 
+        refreshMetaApplySelectionUi();
+    }
     function clearSelectionDom() {
         if (!gridEl) return;
         for (const el of gridEl.querySelectorAll(".tile")) {
@@ -683,7 +702,50 @@
     function selectedRelPathsList() {
         return Array.from(selectedRelPaths).sort((a, b) => String(a).localeCompare(String(b)));
     }
+    function selectedImageRelPaths() {
+        if (!gridEl) return [];
 
+        return Array.from(gridEl.querySelectorAll(".tile[data-item-type='file']"))
+            .map((tile) => String(tile.dataset.relPath || ""))
+            .filter((rel) => rel && selectedRelPaths.has(rel))
+            .sort((a, b) => String(a).localeCompare(String(b)));
+    }
+
+    function refreshMetaApplySelectionUi() {
+        if (!metaApplySelWrap || !metaApplySelChk || !metaApplySelText) return;
+
+        const selectedImages = selectedImageRelPaths();
+        const show =
+            !!state.editingPath &&
+            selectedImages.length > 1 &&
+            selectedImages.includes(state.editingPath);
+
+        metaApplySelWrap.style.display = show ? "" : "none";
+
+        if (!show) {
+            metaApplySelChk.checked = false;
+            metaApplySelText.textContent = "Apply to selected photos";
+            metaApplySelWrap.style.background = "";
+            metaApplySelWrap.style.border = "";
+            metaApplySelWrap.style.borderRadius = "";
+            metaApplySelWrap.style.padding = "";
+            return;
+        }
+
+        metaApplySelText.textContent =
+            `Apply to ${selectedImages.length} selected photo${selectedImages.length === 1 ? "" : "s"}`;
+
+        if (metaApplySelChk.checked) {
+            metaApplySelWrap.style.background = "rgba(255, 215, 0, 0.18)";
+            metaApplySelWrap.style.border = "1px solid rgba(255, 215, 0, 0.45)";
+        } else {
+            metaApplySelWrap.style.background = "rgba(255, 215, 0, 0.10)";
+            metaApplySelWrap.style.border = "1px solid rgba(255, 215, 0, 0.28)";
+        }
+
+        metaApplySelWrap.style.borderRadius = "10px";
+        metaApplySelWrap.style.padding = "10px 12px";
+    }
     function getZipFilenameFromResponse(r, fallback = "gallery-selection.zip") {
         const cd = r.headers.get("Content-Disposition") || "";
 
@@ -1701,7 +1763,13 @@
         if (metaNotes) metaNotes.value = "";
         if (metaInfo) metaInfo.textContent = "Loading…";
         if (metaStatus) metaStatus.textContent = "Loading…";
+        const selectedImagesNow = selectedImageRelPaths();
+        if (metaApplySelChk) {
+            metaApplySelChk.checked =
+                selectedImagesNow.length > 1 && selectedImagesNow.includes(rel);
+        }
         updateMetaStars();
+        refreshMetaApplySelectionUi();
         openMetaModal();
 
         window.dispatchEvent(new CustomEvent("photogallery:meta-open", {
@@ -1744,6 +1812,17 @@
         if (!state.editingPath || metaSaveInFlight) return;
 
         const rel = state.editingPath;
+        const applyToSelection =
+            !!(metaApplySelWrap && metaApplySelChk && metaApplySelChk.checked);
+
+        let targets = applyToSelection ? selectedImageRelPaths() : [rel];
+
+        if (!targets.includes(rel)) {
+            targets = [rel, ...targets];
+        }
+
+        targets = Array.from(new Set(targets));
+
         const payload = {
             meta: {
                 description: {
@@ -1764,19 +1843,49 @@
             metaSaveBtn.disabled = true;
             metaSaveBtn.textContent = "Saving…";
         }
-        if (metaStatus) metaStatus.textContent = "Saving…";
+        if (metaStatus) {
+            metaStatus.textContent =
+                targets.length > 1
+                    ? `Saving to ${targets.length} photos…`
+                    : "Saving…";
+        }
+
+        let done = 0;
+        const failed = [];
 
         try {
-            const j = await galleryMetaSet(rel, payload);
-            const meta = j.meta || {};
+            for (const targetRel of targets) {
+                try {
+                    const j = await galleryMetaSet(targetRel, payload);
+                    const meta = j.meta || {};
+                    applyMetaToCaches(targetRel, meta);
+                    done++;
+                } catch (e) {
+                    failed.push(`${targetRel}: ${String(e && e.message ? e.message : e)}`);
+                }
+            }
 
-            applyMetaToCaches(rel, meta);
-
-            if (metaStatus) metaStatus.textContent = "Saved.";
             renderGrid();
             window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
+
+            if (failed.length) {
+                if (metaStatus) {
+                    metaStatus.textContent = `Saved ${done}/${targets.length}. Failed: ${failed.length}`;
+                }
+                setBadge("warn", "partial");
+                setStatus(`Metadata saved to ${done}/${targets.length} photo${targets.length === 1 ? "" : "s"}.`);
+                console.warn("Photo Gallery saveMeta partial failures:", failed);
+                return;
+            }
+
+            if (metaStatus) metaStatus.textContent = "Saved.";
             setBadge("ok", "ready");
-            setStatus(`Saved metadata: ${rel}`);
+
+            if (targets.length > 1) {
+                setStatus(`Saved metadata to ${targets.length} photos.`);
+            } else {
+                setStatus(`Saved metadata: ${rel}`);
+            }
 
             suppressBrowserSaveUntil = Date.now() + 1500;
             closeMetaModal();
@@ -2139,7 +2248,7 @@
         if (e.target === metaModal) closeMetaModal();
     });
     metaSaveBtn?.addEventListener("click", saveMeta);
-
+    metaApplySelChk?.addEventListener("change", refreshMetaApplySelectionUi);
     previewClose?.addEventListener("click", closePreviewModal);
     previewModal?.addEventListener("click", (e) => {
         if (dragState.moved) {
@@ -2405,7 +2514,7 @@
                 return;
         }
     });
-    
+
     window.addEventListener("scroll", closeContextMenu, true);
     window.addEventListener("resize", closeContextMenu);
     window.PQNAS_PHOTOGALLERY = window.PQNAS_PHOTOGALLERY || {};

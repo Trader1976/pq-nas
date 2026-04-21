@@ -828,7 +828,40 @@
                 <div>
                     <textarea id="metaNotes" class="textarea" placeholder="Optional notes or caption"></textarea>
                 </div>
-
+                <div
+                        id="metaApplySelWrap"
+                        style="
+            display:none;
+            margin-top:10px;
+            grid-column: 2 / -1;
+            width:100%;
+            box-sizing:border-box;
+        "
+                >
+                    <label
+                            style="
+                display:flex;
+                align-items:center;
+                gap:10px;
+                cursor:pointer;
+                width:100%;
+                white-space:nowrap;
+            "
+                    >
+                        <input
+                                id="metaApplySelChk"
+                                type="checkbox"
+                                style="flex:0 0 auto;"
+                        >
+                        <span
+                                id="metaApplySelText"
+                                style="
+                    display:block;
+                    white-space:nowrap;
+                "
+                        >Apply to selected photos</span>
+                    </label>
+                </div>
                 <div class="label">Info</div>
                 <div id="metaInfo" class="mono" style="opacity:.84;"></div>
             </div>
