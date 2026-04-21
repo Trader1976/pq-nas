@@ -250,6 +250,39 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   let curPath = "";
   let storageBlocked = false;
   let lastListedItems = [];
+  let loadSeq = 0;
+  let activeLoadController = null;
+
+  function currentScopeSnapshot(pathOverride) {
+    const path = typeof pathOverride === "string" ? pathOverride : curPath;
+
+    const inWorkspace =
+        window.PQNAS_FILEMGR &&
+        typeof window.PQNAS_FILEMGR.isWorkspaceScope === "function" &&
+        window.PQNAS_FILEMGR.isWorkspaceScope();
+
+    const workspaceId =
+        inWorkspace &&
+        window.PQNAS_FILEMGR &&
+        typeof window.PQNAS_FILEMGR.getWorkspaceId === "function"
+            ? String(window.PQNAS_FILEMGR.getWorkspaceId() || "")
+            : "";
+
+    return {
+      path: String(path || ""),
+      inWorkspace: !!inWorkspace,
+      workspaceId,
+      listUrl: apiListUrl(path || "")
+    };
+  }
+
+  function sameScopeSnapshot(a, b) {
+    return !!a && !!b &&
+        a.path === b.path &&
+        a.inWorkspace === b.inWorkspace &&
+        a.workspaceId === b.workspaceId &&
+        a.listUrl === b.listUrl;
+  }
 
   const VIEW_KEY = "pqnas_filemgr_view_mode";
   let viewMode = "grid";
@@ -295,7 +328,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   loadViewMode();
 
   // ---- Favorites ------------------------------------------------------------
-    const FAVORITES_ONLY_KEY = "pqnas_filemgr_favorites_only_v1";
+  const FAVORITES_ONLY_KEY = "pqnas_filemgr_favorites_only_v1";
 
   // stored as: { "file:path/to/a.txt": 1, "dir:docs": 1 }
   let favoritesMap = new Map();
@@ -2221,12 +2254,12 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     filePick.click();
   }
 
-function pickFolder() {
-  if (!requireWritableScopeOrExplain("Upload folder")) return;
-  if (!folderPick) return;
-  folderPick.value = "";
-  folderPick.click();
-}
+  function pickFolder() {
+    if (!requireWritableScopeOrExplain("Upload folder")) return;
+    if (!folderPick) return;
+    folderPick.value = "";
+    folderPick.click();
+  }
 
   filePick?.addEventListener("change", async () => {
     const files = Array.from(filePick.files || []);
@@ -3489,16 +3522,11 @@ function pickFolder() {
       ctxEl.appendChild(menuSep());
     }
 
-    if (canWrite) {
-      ctxEl.appendChild(menuItem("New folder…", "", () => doMkdirAt(curPath)));
-      ctxEl.appendChild(menuSep());
-    }
-
     ctxEl.appendChild(menuItem("Open trash", "🗑", async () => {
       openTrashModal();
       await loadTrashItems();
     }));
-    
+
     ctxEl.appendChild(menuItem("Refresh", "", () => load()));
 
     ctxEl.setAttribute("aria-hidden", "false");
@@ -4309,6 +4337,17 @@ function pickFolder() {
   }
 
   async function load() {
+    const mySeq = ++loadSeq;
+
+    if (activeLoadController) {
+      try { activeLoadController.abort(); } catch (_) {}
+    }
+
+    const controller = new AbortController();
+    activeLoadController = controller;
+
+    const loadSnap = currentScopeSnapshot(curPath);
+
     closeMenu();
     setBadge("warn", "loading…");
     status.textContent = "Loading…";
@@ -4320,7 +4359,7 @@ function pickFolder() {
 
     if (!storageBlocked) hideEmptyState();
 
-    const loadPath = curPath;
+    const loadPath = loadSnap.path;
 
     if (gridEl) gridEl.classList.remove("hidden");
     applyViewModeToDom();
@@ -4334,10 +4373,18 @@ function pickFolder() {
     const sorter = sortApi();
 
     try {
-      const url = apiListUrl(curPath);
+      const url = loadSnap.listUrl;
 
-      const r = await fetch(url, { credentials: "include", cache: "no-store" });
+      const r = await fetch(url, {
+        credentials: "include",
+        cache: "no-store",
+        signal: controller.signal
+      });
       const j = await r.json().catch(() => null);
+
+      if (controller.signal.aborted) return;
+      if (mySeq !== loadSeq) return;
+      if (!sameScopeSnapshot(loadSnap, currentScopeSnapshot(loadPath))) return;
 
       if (!r.ok || !j || !j.ok) {
         if (j && j.error === "storage_unallocated") {
@@ -4369,6 +4416,9 @@ function pickFolder() {
 
       if (needsFavoritesReady) {
         await favoritesPromise;
+        if (controller.signal.aborted) return;
+        if (mySeq !== loadSeq) return;
+        if (!sameScopeSnapshot(loadSnap, currentScopeSnapshot(loadPath))) return;
       }
 
       const allItemsRaw = Array.isArray(j.items) ? j.items.slice() : [];
@@ -4407,7 +4457,11 @@ function pickFolder() {
         gridEl.appendChild(empty);
 
         quotaPromise
-            .then((q) => { if (curPath === loadPath && q) applyQuotaUi(q); })
+            .then((q) => {
+              if (mySeq !== loadSeq) return;
+              if (!sameScopeSnapshot(loadSnap, currentScopeSnapshot(loadPath))) return;
+              if (q) applyQuotaUi(q);
+            })
             .catch(() => {});
         return;
       }
@@ -4417,7 +4471,8 @@ function pickFolder() {
 
       fetchMeStorageFast(1200)
           .then((ms) => {
-            if (curPath !== loadPath) return;
+            if (mySeq !== loadSeq) return;
+            if (!sameScopeSnapshot(loadSnap, currentScopeSnapshot(loadPath))) return;
             if (!ms) return;
             if (ms.ok === false && ms.error === "storage_unallocated") {
               showStorageUnallocatedState(ms);
@@ -4427,18 +4482,24 @@ function pickFolder() {
 
       quotaPromise
           .then((q) => {
-            if (curPath !== loadPath) return;
+            if (mySeq !== loadSeq) return;
+            if (!sameScopeSnapshot(loadSnap, currentScopeSnapshot(loadPath))) return;
             if (q) applyQuotaUi(q);
           })
           .catch(() => {});
 
       sharesPromise
           .then(() => {
-            if (curPath !== loadPath) return;
+            if (mySeq !== loadSeq) return;
+            if (!sameScopeSnapshot(loadSnap, currentScopeSnapshot(loadPath))) return;
             decorateTilesWithShareBadges(items);
           })
           .catch(() => {});
     } catch (e) {
+      if (controller.signal.aborted || (e && e.name === "AbortError")) {
+        return;
+      }
+
       setBadge("err", "network");
       status.textContent = "Network error";
 
@@ -4447,6 +4508,10 @@ function pickFolder() {
       err.style.cursor = "default";
       err.textContent = String(e && e.stack ? e.stack : e);
       gridEl.appendChild(err);
+    } finally {
+      if (activeLoadController === controller) {
+        activeLoadController = null;
+      }
     }
   }
 

@@ -207,6 +207,9 @@
         const writeOk = canCurrentScopeWrite();
         const inWorkspace = isWorkspaceScope();
 
+        document.body.classList.toggle("scope-user", !inWorkspace);
+        document.body.classList.toggle("scope-workspace", inWorkspace);
+
         if (scopeRole) {
             if (inWorkspace) {
                 scopeRole.textContent = FM.scope.workspaceRole || "";

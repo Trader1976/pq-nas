@@ -95,8 +95,17 @@
       justify-content:space-between;
       gap:14px;
       padding:12px 14px;
-      border-bottom: 1px solid var(--border2);
-      background: rgba(0,0,0,0.18);
+
+      border-bottom: 1px solid var(--fm-scope-topbar-border);
+      background: var(--fm-scope-topbar-bg);
+      box-shadow:
+              inset 0 -1px 0 rgba(255,255,255,0.03),
+              0 10px 30px var(--fm-scope-topbar-glow);
+
+      transition:
+              background 160ms ease,
+              border-color 160ms ease,
+              box-shadow 160ms ease;
     }
 
     .left{
@@ -612,8 +621,9 @@
       background: transparent;
     }
     body.embedded .bar{
-      border-bottom: 1px solid var(--border2);
-      background: rgba(0,0,0,0.12);
+      border-bottom: 1px solid var(--fm-scope-topbar-border);
+      background: var(--fm-scope-topbar-bg);
+      box-shadow: inset 0 -1px 0 rgba(255,255,255,0.03);
       border-radius: 0;
       border-left: 0;
       border-right: 0;
@@ -971,22 +981,24 @@
       max-width:340px;
       padding:6px 10px;
       border-radius:10px;
-      border:1px solid var(--border2);
-      background:rgba(0,0,0,0.22);
-      color:var(--fg);
+      border:1px solid var(--fm-scope-chip-border);
+      background: var(--fm-scope-chip-bg);
+      color: var(--fg);
       font-family:var(--sans);
       font-size:12px;
       font-weight:800;
+      transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
     }
 
     .scopeRole{
       padding:4px 8px;
       border-radius:999px;
-      border:1px solid rgba(var(--fg-rgb),0.18);
-      background:rgba(var(--fg-rgb),0.06);
+      border:1px solid var(--fm-scope-chip-border);
+      background: var(--fm-scope-chip-bg);
       font-size:11px;
       font-weight:900;
-      color:var(--fg-dim);
+      color: var(--fm-scope-chip-text);
+      transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
     }
     .scopeActions{
       display:flex;
@@ -1001,7 +1013,68 @@
       display:grid;
       gap:10px;
     }
+    :root {
+      --fm-scope-topbar-bg: rgba(0,0,0,0.18);
+      --fm-scope-topbar-border: var(--border2);
+      --fm-scope-topbar-glow: transparent;
 
+      --fm-scope-chip-bg: rgba(255,255,255,0.04);
+      --fm-scope-chip-border: rgba(var(--fg-rgb),0.12);
+      --fm-scope-chip-text: var(--fg-dim);
+    }
+
+    /* My Files */
+    body.scope-user {
+      --fm-scope-topbar-bg: rgba(0,0,0,0.18);
+      --fm-scope-topbar-border: var(--border2);
+      --fm-scope-topbar-glow: transparent;
+
+      --fm-scope-chip-bg: rgba(255,255,255,0.04);
+      --fm-scope-chip-border: rgba(var(--fg-rgb),0.12);
+      --fm-scope-chip-text: var(--fg-dim);
+    }
+
+    /* Workspace: generic fallback */
+    body.scope-workspace {
+      --fm-scope-topbar-bg: color-mix(in srgb, rgba(var(--fg-rgb),0.16) 70%, rgba(0,0,0,0.24));
+      --fm-scope-topbar-border: color-mix(in srgb, rgba(var(--fg-rgb),0.42) 70%, rgba(255,255,255,0.10));
+      --fm-scope-topbar-glow: rgba(var(--fg-rgb),0.14);
+
+      --fm-scope-chip-bg: rgba(var(--fg-rgb),0.12);
+      --fm-scope-chip-border: rgba(var(--fg-rgb),0.30);
+      --fm-scope-chip-text: rgba(var(--fg-rgb),0.98);
+    }
+
+    /* Bright theme: use cooler/cleaner workspace tint */
+    html[data-theme="bright"] body.scope-workspace {
+      --fm-scope-topbar-bg: rgba(40,120,255,0.10);
+      --fm-scope-topbar-border: rgba(40,120,255,0.28);
+      --fm-scope-topbar-glow: rgba(40,120,255,0.10);
+
+      --fm-scope-chip-bg: rgba(40,120,255,0.10);
+      --fm-scope-chip-border: rgba(40,120,255,0.24);
+      --fm-scope-chip-text: rgba(20,70,180,0.96);
+    }
+
+    /* Orange cyberpunk theme */
+    html[data-theme="cpunk_orange"] body.scope-workspace {
+      --fm-scope-topbar-bg: rgba(255,140,40,0.14);
+      --fm-scope-topbar-border: rgba(255,140,40,0.34);
+      --fm-scope-topbar-glow: rgba(255,140,40,0.12);
+
+      --fm-scope-chip-bg: rgba(255,140,40,0.12);
+      --fm-scope-chip-border: rgba(255,140,40,0.28);
+      --fm-scope-chip-text: rgba(255,190,120,0.98);
+    }
+    html[data-theme="win_classic"] body.scope-workspace {
+      --fm-scope-topbar-bg: rgba(40, 90, 180, 0.18);
+      --fm-scope-topbar-border: rgba(40, 90, 180, 0.38);
+      --fm-scope-topbar-glow: rgba(40, 90, 180, 0.14);
+
+      --fm-scope-chip-bg: rgba(40, 90, 180, 0.14);
+      --fm-scope-chip-border: rgba(40, 90, 180, 0.32);
+      --fm-scope-chip-text: rgba(220, 235, 255, 0.98);
+    }
     .trashRow{
       border:1px solid var(--border2);
       border-radius:14px;
@@ -1063,10 +1136,21 @@
       white-space:nowrap;
     }
     html[data-theme="bright"] .scopeSelect{
-      background:rgba(255,255,255,0.96);
-      border-color:rgba(0,0,0,0.12);
+      color: var(--fg);
     }
-
+    body.scope-workspace #scopeBar::before{
+      content:"WORKSPACE";
+      display:inline-flex;
+      align-items:center;
+      padding:4px 10px;
+      border-radius:999px;
+      font-size:11px;
+      font-weight:950;
+      letter-spacing:0.04em;
+      border:1px solid var(--fm-scope-chip-border);
+      background: var(--fm-scope-chip-bg);
+      color: var(--fm-scope-chip-text);
+    }
     .hidden{ display:none !important; }
   </style>
   <link rel="stylesheet" href="./file_versions_ui.css">
@@ -1416,8 +1500,8 @@
 
 <script src="./filetype_icons.js"></script>
 <script src="./filemgr_sort.js"></script>
-<script src="./app.js"></script>
 <script src="./filemgr_workspaces.js"></script>
+<script src="./app.js"></script>
 <script src="./file_versions_ui.js"></script>
 <script src="./textedit.js"></script>
 <script src="./imagepreview.js"></script>
