@@ -23212,6 +23212,7 @@ srv.Post("/api/v4/files/zip_sel", [&](const httplib::Request& req, httplib::Resp
     res.body = std::move(zip_data);
 });
 
+
     // POST /api/v4/files/rmrf?path=rel/path
 srv.Post("/api/v4/files/rmrf", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
@@ -27770,7 +27771,7 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
 // Lists immediate children for Photo Gallery:
 // - directories are always included
 // - files are included only if they look like supported images
-// - joins gallery metadata (rating/tags/notes) for exact child files
+// - joins gallery metadata for exact child files and returns both old and standardized fields
 srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
@@ -27854,7 +27855,40 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
         if (base.empty()) return name;
         return base + "/" + name;
     };
+    auto split_gallery_keywords_text_json = [](const std::string& s) -> json {
+    auto trim_ascii_ws_copy_local = [](std::string v) -> std::string {
+        auto is_ws = [](unsigned char c) -> bool {
+            return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+        };
 
+        std::size_t a = 0;
+        while (a < v.size() && is_ws((unsigned char)v[a])) ++a;
+
+        std::size_t b = v.size();
+        while (b > a && is_ws((unsigned char)v[b - 1])) --b;
+
+        return v.substr(a, b - a);
+    };
+
+    json out = json::array();
+
+    std::size_t start = 0;
+    while (start <= s.size()) {
+        const std::size_t comma = s.find(',', start);
+
+        std::string part = (comma == std::string::npos)
+            ? s.substr(start)
+            : s.substr(start, comma - start);
+
+        part = trim_ascii_ws_copy_local(part);
+        if (!part.empty()) out.push_back(part);
+
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+
+    return out;
+};
     // Storage allocated check (fail-closed)
     {
         auto uopt = users.get(fp_hex);
@@ -28126,6 +28160,15 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
             {"type", item.type},
             {"size_bytes", item.size_bytes},
             {"mtime_unix", item.mtime_unix},
+
+            // New standardized fields
+            {"imageRating", item.rating},
+            {"keywords", split_gallery_keywords_text_json(item.tags_text)},
+            {"description", json{
+                {"x-default", item.notes_text}
+            }},
+
+            // Old compatibility fields
             {"rating", item.rating},
             {"tags_text", item.tags_text},
             {"notes_text", item.notes_text}
@@ -28572,14 +28615,145 @@ srv.Get("/api/v4/gallery/thumb", [&](const httplib::Request& req, httplib::Respo
     serve_thumb(false);
 });
 
-// POST /api/v4/gallery/meta/set
-// Body:
-// {
-//   "path": "photos/cat.jpg",
-//   "rating": 5,            // optional, clamped 0..5
-//   "tags_text": "cat sofa",// optional
-//   "notes_text": "best shot" // optional
-// }
+    auto trim_ascii_ws_copy = [](std::string s) -> std::string {
+    auto is_ws = [](unsigned char c) -> bool {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    };
+
+    std::size_t a = 0;
+    while (a < s.size() && is_ws((unsigned char)s[a])) ++a;
+
+    std::size_t b = s.size();
+    while (b > a && is_ws((unsigned char)s[b - 1])) --b;
+
+    return s.substr(a, b - a);
+};
+
+auto split_gallery_keywords_text = [&](const std::string& s) -> std::vector<std::string> {
+    std::vector<std::string> out;
+
+    std::size_t start = 0;
+    while (start <= s.size()) {
+        const std::size_t comma = s.find(',', start);
+
+        std::string part = (comma == std::string::npos)
+            ? s.substr(start)
+            : s.substr(start, comma - start);
+
+        part = trim_ascii_ws_copy(part);
+        if (!part.empty()) out.push_back(part);
+
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+
+    return out;
+};
+
+auto join_gallery_keywords_json = [&](const json& jv, std::string* err) -> std::string {
+    if (!jv.is_array()) {
+        if (err) *err = "meta.keywords must be an array";
+        return "";
+    }
+
+    std::string out;
+    bool first = true;
+
+    for (const auto& it : jv) {
+        if (!it.is_string()) {
+            if (err) *err = "meta.keywords entries must be strings";
+            return "";
+        }
+
+        std::string s = trim_ascii_ws_copy(it.get<std::string>());
+        if (s.empty()) continue;
+        if (s.size() > 256) s.resize(256);
+
+        if (!first) out += ", ";
+        out += s;
+        first = false;
+
+        if (out.size() > 4000) {
+            out.resize(4000);
+            break;
+        }
+    }
+
+    return out;
+};
+
+auto extract_gallery_description_json = [&](const json& jv, std::string* err) -> std::string {
+    if (jv.is_string()) {
+        std::string s = jv.get<std::string>();
+        if (s.size() > 12000) s.resize(12000);
+        return s;
+    }
+
+    if (!jv.is_object()) {
+        if (err) *err = "meta.description must be an object";
+        return "";
+    }
+
+    auto it = jv.find("x-default");
+    if (it == jv.end() || it->is_null()) {
+        return "";
+    }
+
+    if (!it->is_string()) {
+        if (err) *err = "meta.description.x-default must be a string";
+        return "";
+    }
+
+    std::string s = it->get<std::string>();
+    if (s.size() > 12000) s.resize(12000);
+    return s;
+};
+
+auto make_gallery_meta_api_json = [&](int rating,
+                                      const std::string& tags_text,
+                                      const std::string& notes_text,
+                                      std::uint64_t size_bytes,
+                                      std::int64_t mtime_epoch,
+                                      std::int64_t created_epoch,
+                                      std::int64_t updated_epoch) -> json {
+    return json{
+        {"title", json{{"x-default", ""}}},
+        {"description", json{{"x-default", notes_text}}},
+        {"keywords", split_gallery_keywords_text(tags_text)},
+        {"imageRating", rating},
+
+        // keep old fields too for compatibility
+        {"rating", rating},
+        {"tags_text", tags_text},
+        {"notes_text", notes_text},
+
+        {"size_bytes", size_bytes},
+        {"mtime_epoch", mtime_epoch},
+        {"created_epoch", created_epoch},
+        {"updated_epoch", updated_epoch}
+    };
+};
+
+    // POST /api/v4/gallery/meta/set
+    // Accepts old shape:
+    // {
+    //   "path": "photos/cat.jpg",
+    //   "rating": 5,
+    //   "tags_text": "cat, sofa",
+    //   "notes_text": "best shot"
+    // }
+    //
+    // Also accepts new shape:
+    // {
+    //   "path": "photos/cat.jpg",
+    //   "meta": {
+    //     "imageRating": 5,
+    //     "keywords": ["cat", "sofa"],
+    //     "description": {
+    //       "x-default": "best shot"
+    //     }
+    //   }
+    // }
 srv.Post("/api/v4/gallery/meta/set", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
@@ -28693,25 +28867,65 @@ srv.Post("/api/v4/gallery/meta/set", [&](const httplib::Request& req, httplib::R
         return;
     }
 
-    const bool has_rating = in.contains("rating");
-    const bool has_tags = in.contains("tags_text");
-    const bool has_notes = in.contains("notes_text");
+    const bool has_meta = in.contains("meta");
+json meta_in = json::object();
 
-    if (!has_rating && !has_tags && !has_notes) {
-        audit_fail("no_fields", 400, "", rel_norm);
+if (has_meta) {
+    if (!in["meta"].is_object()) {
+        audit_fail("bad_meta", 400, "", rel_norm);
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "bad_request"},
-            {"message", "nothing to update"}
+            {"message", "meta must be an object"}
         }.dump());
         return;
     }
+    meta_in = in["meta"];
+}
 
-    std::optional<int> rating;
-    std::optional<std::string> tags_text;
-    std::optional<std::string> notes_text;
+const bool has_rating_old = in.contains("rating");
+const bool has_tags_old = in.contains("tags_text");
+const bool has_notes_old = in.contains("notes_text");
 
-    if (has_rating) {
+const bool has_rating_new = has_meta && meta_in.contains("imageRating");
+const bool has_tags_new = has_meta && meta_in.contains("keywords");
+const bool has_notes_new = has_meta && meta_in.contains("description");
+
+const bool has_rating = has_rating_old || has_rating_new;
+const bool has_tags = has_tags_old || has_tags_new;
+const bool has_notes = has_notes_old || has_notes_new;
+
+if (!has_rating && !has_tags && !has_notes) {
+    audit_fail("no_fields", 400, "", rel_norm);
+    reply_json(res, 400, json{
+        {"ok", false},
+        {"error", "bad_request"},
+        {"message", "nothing to update"}
+    }.dump());
+    return;
+}
+
+std::optional<int> rating;
+std::optional<std::string> tags_text;
+std::optional<std::string> notes_text;
+
+if (has_rating) {
+    if (has_rating_new) {
+        if (!meta_in["imageRating"].is_number_integer()) {
+            audit_fail("bad_imageRating", 400, "", rel_norm);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "meta.imageRating must be an integer"}
+            }.dump());
+            return;
+        }
+
+        int r = meta_in["imageRating"].get<int>();
+        if (r < 0) r = 0;
+        if (r > 5) r = 5;
+        rating = r;
+    } else {
         if (!in["rating"].is_number_integer()) {
             audit_fail("bad_rating", 400, "", rel_norm);
             reply_json(res, 400, json{
@@ -28721,13 +28935,29 @@ srv.Post("/api/v4/gallery/meta/set", [&](const httplib::Request& req, httplib::R
             }.dump());
             return;
         }
+
         int r = in["rating"].get<int>();
         if (r < 0) r = 0;
         if (r > 5) r = 5;
         rating = r;
     }
+}
 
-    if (has_tags) {
+if (has_tags) {
+    if (has_tags_new) {
+        std::string perr;
+        auto s = join_gallery_keywords_json(meta_in["keywords"], &perr);
+        if (!perr.empty()) {
+            audit_fail("bad_keywords", 400, perr, rel_norm);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", perr}
+            }.dump());
+            return;
+        }
+        tags_text = s;
+    } else {
         if (!in["tags_text"].is_string()) {
             audit_fail("bad_tags_text", 400, "", rel_norm);
             reply_json(res, 400, json{
@@ -28737,12 +28967,28 @@ srv.Post("/api/v4/gallery/meta/set", [&](const httplib::Request& req, httplib::R
             }.dump());
             return;
         }
+
         auto s = in["tags_text"].get<std::string>();
         if (s.size() > 4000) s.resize(4000);
         tags_text = s;
     }
+}
 
-    if (has_notes) {
+if (has_notes) {
+    if (has_notes_new) {
+        std::string perr;
+        auto s = extract_gallery_description_json(meta_in["description"], &perr);
+        if (!perr.empty()) {
+            audit_fail("bad_description", 400, perr, rel_norm);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", perr}
+            }.dump());
+            return;
+        }
+        notes_text = s;
+    } else {
         if (!in["notes_text"].is_string()) {
             audit_fail("bad_notes_text", 400, "", rel_norm);
             reply_json(res, 400, json{
@@ -28752,10 +28998,12 @@ srv.Post("/api/v4/gallery/meta/set", [&](const httplib::Request& req, httplib::R
             }.dump());
             return;
         }
+
         auto s = in["notes_text"].get<std::string>();
         if (s.size() > 12000) s.resize(12000);
         notes_text = s;
     }
+}
 
     // verify target exists and is a file
     pqnas::ResolvedLogicalItem item;
@@ -28909,39 +29157,60 @@ srv.Post("/api/v4/gallery/meta/set", [&](const httplib::Request& req, httplib::R
 
     audit_ok(rel_norm, has_rating, has_tags, has_notes);
 
-    json out{
-        {"ok", true},
-        {"path", rel_norm}
-    };
+    int final_rating = rating.has_value() ? *rating : 0;
+    std::string final_tags_text = tags_text.has_value() ? *tags_text : "";
+    std::string final_notes_text = notes_text.has_value() ? *notes_text : "";
+    std::uint64_t final_size_bytes = size_bytes;
+    std::int64_t final_mtime_epoch = mtime_epoch;
+    std::int64_t final_created_epoch = 0;
+    std::int64_t final_updated_epoch = now_ts;
 
     if (out_rec.has_value()) {
-        out["meta"] = json{
-            {"rating", out_rec->rating},
-            {"tags_text", out_rec->tags_text},
-            {"notes_text", out_rec->notes_text},
-            {"size_bytes", out_rec->size_bytes},
-            {"mtime_epoch", out_rec->mtime_epoch},
-            {"updated_epoch", out_rec->updated_epoch}
-        };
-    } else {
-        out["meta"] = json{
-            {"rating", rating.has_value() ? *rating : 0},
-            {"tags_text", tags_text.has_value() ? *tags_text : ""},
-            {"notes_text", notes_text.has_value() ? *notes_text : ""},
-            {"size_bytes", size_bytes},
-            {"mtime_epoch", mtime_epoch},
-            {"updated_epoch", now_ts}
-        };
+        final_rating = out_rec->rating;
+        final_tags_text = out_rec->tags_text;
+        final_notes_text = out_rec->notes_text;
+        final_size_bytes = out_rec->size_bytes;
+        final_mtime_epoch = out_rec->mtime_epoch;
+        final_created_epoch = out_rec->created_epoch;
+        final_updated_epoch = out_rec->updated_epoch;
     }
+
+    json out{
+        {"ok", true},
+        {"path", rel_norm},
+        {"meta", make_gallery_meta_api_json(
+            final_rating,
+            final_tags_text,
+            final_notes_text,
+            final_size_bytes,
+            final_mtime_epoch,
+            final_created_epoch,
+            final_updated_epoch
+        )},
+        {"file", json{
+            {"size_bytes", final_size_bytes},
+            {"mtime_epoch", final_mtime_epoch}
+        }}
+    };
+
+    reply_json(res, 200, out.dump());
 
     reply_json(res, 200, out.dump());
 });
 
-// POST /api/v4/gallery/meta/get
-// Body:
-// {
-//   "path": "photos/cat.jpg"
-// }
+    // POST /api/v4/gallery/meta/get
+    // Body:
+    // {
+    //   "path": "photos/cat.jpg"
+    // }
+    //
+    // Response includes both old compatibility fields:
+    //   rating, tags_text, notes_text
+    //
+    // and new standardized fields:
+    //   meta.imageRating
+    //   meta.keywords[]
+    //   meta.description["x-default"]
 srv.Post("/api/v4/gallery/meta/get", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
@@ -29178,17 +29447,31 @@ srv.Post("/api/v4/gallery/meta/get", [&](const httplib::Request& req, httplib::R
         return;
     }
 
+    const int final_rating = meta.has_value() ? meta->rating : 0;
+    const std::string final_tags_text = meta.has_value() ? meta->tags_text : "";
+    const std::string final_notes_text = meta.has_value() ? meta->notes_text : "";
+    const std::uint64_t final_size_bytes =
+        (meta.has_value() && meta->size_bytes > 0) ? meta->size_bytes : size_bytes;
+    const std::int64_t final_mtime_epoch =
+        (meta.has_value() && meta->mtime_epoch > 0) ? meta->mtime_epoch : mtime_epoch;
+    const std::int64_t final_created_epoch = meta.has_value() ? meta->created_epoch : 0;
+    const std::int64_t final_updated_epoch = meta.has_value() ? meta->updated_epoch : 0;
+
     json out{
         {"ok", true},
         {"path", rel_norm},
-        {"meta", json{
-            {"rating", meta.has_value() ? meta->rating : 0},
-            {"tags_text", meta.has_value() ? meta->tags_text : ""},
-            {"notes_text", meta.has_value() ? meta->notes_text : ""},
-            {"size_bytes", meta.has_value() && meta->size_bytes > 0 ? meta->size_bytes : size_bytes},
-            {"mtime_epoch", meta.has_value() && meta->mtime_epoch > 0 ? meta->mtime_epoch : mtime_epoch},
-            {"created_epoch", meta.has_value() ? meta->created_epoch : 0},
-            {"updated_epoch", meta.has_value() ? meta->updated_epoch : 0}
+        {"meta", make_gallery_meta_api_json(
+            final_rating,
+            final_tags_text,
+            final_notes_text,
+            final_size_bytes,
+            final_mtime_epoch,
+            final_created_epoch,
+            final_updated_epoch
+        )},
+        {"file", json{
+            {"size_bytes", final_size_bytes},
+            {"mtime_epoch", final_mtime_epoch}
         }}
     };
 
@@ -34737,6 +35020,940 @@ srv.Post("/api/v4/admin/storage/tiering/migrate_one", [&](const httplib::Request
         {"fingerprint", fp},
         {"path", rel_norm}
     }.dump());
+});
+
+    // POST /api/v4/gallery/export_sel_zip
+    // Body JSON: { "paths": ["rel/a.jpg", "rel/dir", ...], "max_bytes": 52428800, "base": "rel/dir" }
+    // Response: application/zip (in-memory, bounded)
+    //
+    // Semantics:
+    // - paths[] are user-root-relative (same as other v4 file endpoints).
+    // - Selected files and folders are staged into a temporary export tree.
+    // - For supported image files, matching gallery metadata is exported as standard XMP sidecars.
+    // - If "base" is provided, exported zip entry paths are made relative to base.
+    // - The original files are not modified; metadata sidecars are generated only inside the export zip.
+    srv.Post("/api/v4/gallery/export_sel_zip", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
+                          std::uint64_t max_bytes = 0, std::uint64_t paths_n = 0) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.gallery_export_sel_zip_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (max_bytes) ev.f["max_bytes"] = std::to_string((unsigned long long)max_bytes);
+        if (paths_n)  ev.f["paths_n"]  = std::to_string((unsigned long long)paths_n);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+
+        add_ip_headers(ev);
+        audit_append(ev);
+    };
+        auto lower_ascii_local = [](std::string s) -> std::string {
+        for (char& c : s) c = (char)std::tolower((unsigned char)c);
+        return s;
+    };
+
+    auto file_ext_lower = [&](const std::string& name) -> std::string {
+        std::string n = name;
+        const auto slash = n.find_last_of("/\\");
+        if (slash != std::string::npos) n = n.substr(slash + 1);
+
+        auto lower = lower_ascii_local(n);
+        const auto dot = lower.rfind('.');
+        if (dot == std::string::npos || dot == 0 || dot + 1 >= lower.size()) return "";
+        return lower.substr(dot + 1);
+    };
+
+    auto is_gallery_image_name = [&](const std::string& name) -> bool {
+        const std::string ext = file_ext_lower(name);
+        return ext == "png"  ||
+               ext == "jpg"  ||
+               ext == "jpeg" ||
+               ext == "gif"  ||
+               ext == "webp" ||
+               ext == "svg"  ||
+               ext == "bmp"  ||
+               ext == "ico";
+    };
+
+    auto pg_xml_escape = [](const std::string& s) -> std::string {
+        std::string out;
+        out.reserve(s.size() + 32);
+        for (char c : s) {
+            switch (c) {
+                case '&': out += "&amp;"; break;
+                case '<': out += "&lt;"; break;
+                case '>': out += "&gt;"; break;
+                case '"': out += "&quot;"; break;
+                case '\'': out += "&apos;"; break;
+                default: out.push_back(c); break;
+            }
+        }
+        return out;
+    };
+
+    auto pg_split_keywords_csv = [](const std::string& s) -> std::vector<std::string> {
+        auto trim_ws = [](std::string v) -> std::string {
+            auto is_ws = [](unsigned char c) {
+                return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+            };
+
+            std::size_t a = 0;
+            while (a < v.size() && is_ws((unsigned char)v[a])) ++a;
+
+            std::size_t b = v.size();
+            while (b > a && is_ws((unsigned char)v[b - 1])) --b;
+
+            return v.substr(a, b - a);
+        };
+
+        std::vector<std::string> out;
+        std::size_t start = 0;
+
+        while (start <= s.size()) {
+            std::size_t comma = s.find(',', start);
+            std::string part = (comma == std::string::npos)
+                ? s.substr(start)
+                : s.substr(start, comma - start);
+
+            part = trim_ws(part);
+            if (!part.empty()) out.push_back(part);
+
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+
+        return out;
+    };
+
+    auto pg_build_xmp_sidecar = [&](int rating,
+                                    const std::string& tags_text,
+                                    const std::string& notes_text) -> std::string {
+        const auto keywords = pg_split_keywords_csv(tags_text);
+
+        std::string x;
+        x += "<?xpacket begin=\"﻿\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n";
+        x += "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"DNA-Nexus Server\">\n";
+        x += " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n";
+        x += "  <rdf:Description rdf:about=\"\"\n";
+        x += "    xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\"\n";
+        x += "    xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n";
+
+        if (rating > 0) {
+            x += "   <xmp:Rating>" + std::to_string(rating) + "</xmp:Rating>\n";
+        }
+
+        if (!notes_text.empty()) {
+            x += "   <dc:description>\n";
+            x += "    <rdf:Alt>\n";
+            x += "     <rdf:li xml:lang=\"x-default\">" + pg_xml_escape(notes_text) + "</rdf:li>\n";
+            x += "    </rdf:Alt>\n";
+            x += "   </dc:description>\n";
+        }
+
+        if (!keywords.empty()) {
+            x += "   <dc:subject>\n";
+            x += "    <rdf:Bag>\n";
+            for (const auto& kw : keywords) {
+                x += "     <rdf:li>" + pg_xml_escape(kw) + "</rdf:li>\n";
+            }
+            x += "    </rdf:Bag>\n";
+            x += "   </dc:subject>\n";
+        }
+
+        x += "  </rdf:Description>\n";
+        x += " </rdf:RDF>\n";
+        x += "</x:xmpmeta>\n";
+        x += "<?xpacket end=\"w\"?>\n";
+        return x;
+    };
+    auto audit_ok = [&](std::uint64_t max_bytes,
+                        std::uint64_t input_bytes,
+                        std::uint64_t zip_bytes,
+                        std::uint64_t files,
+                        std::uint64_t dirs,
+                        std::uint64_t paths_n,
+                        const std::string& base_rel) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.gallery_export_sel_zip_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["max_bytes"] = std::to_string((unsigned long long)max_bytes);
+        ev.f["input_bytes"] = std::to_string((unsigned long long)input_bytes);
+        ev.f["zip_bytes"] = std::to_string((unsigned long long)zip_bytes);
+        ev.f["files"] = std::to_string((unsigned long long)files);
+        ev.f["dirs"]  = std::to_string((unsigned long long)dirs);
+        ev.f["paths_n"] = std::to_string((unsigned long long)paths_n);
+        if (!base_rel.empty()) ev.f["base"] = pqnas::shorten(base_rel, 200);
+
+        add_ip_headers(ev);
+        audit_append(ev);
+    };
+
+    // must have allocated storage
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        audit_fail("storage_unallocated", 403);
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    // Parse JSON body
+    json body;
+    try {
+        body = json::parse(req.body.empty() ? "{}" : req.body);
+    } catch (const std::exception& e) {
+        audit_fail("json_parse", 400, e.what());
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    if (!body.is_object()) {
+        audit_fail("json_schema", 400, "body must be object");
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid json schema"}}.dump());
+        return;
+    }
+
+    if (!body.contains("paths") || !body["paths"].is_array()) {
+        audit_fail("missing_paths", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing paths[]"}
+        }.dump());
+        return;
+    }
+
+    // Optional base folder: when provided, zip entries are stored relative to base.
+    // Example: base="test" and paths=["test/note.txt"] -> zip entry "note.txt".
+    std::string base_rel;
+    if (body.contains("base") && body["base"].is_string()) {
+        base_rel = body["base"].get<std::string>();
+
+        // normalize slashes + trim leading slashes
+        for (char& c : base_rel) if (c == '\\') c = '/';
+        while (!base_rel.empty() && base_rel[0] == '/') base_rel.erase(base_rel.begin());
+
+        // strip duplicate slashes
+        {
+            std::string tmp;
+            tmp.reserve(base_rel.size());
+            bool prev_slash = false;
+            for (char c : base_rel) {
+                if (c == '/') {
+                    if (prev_slash) continue;
+                    prev_slash = true;
+                    tmp.push_back(c);
+                } else {
+                    prev_slash = false;
+                    tmp.push_back(c);
+                }
+            }
+            base_rel.swap(tmp);
+        }
+
+        // remove trailing slash
+        while (!base_rel.empty() && base_rel.back() == '/') base_rel.pop_back();
+
+        // reject unsafe base
+        bool bad = false;
+        if (!base_rel.empty() && base_rel[0] == '-') bad = true;
+        if (base_rel.find('\n') != std::string::npos || base_rel.find('\r') != std::string::npos) bad = true;
+
+        // reject traversal segments
+        if (!bad && !base_rel.empty()) {
+            size_t start = 0;
+            while (start < base_rel.size()) {
+                size_t end = base_rel.find('/', start);
+                if (end == std::string::npos) end = base_rel.size();
+                std::string seg = base_rel.substr(start, end - start);
+                if (seg == "." || seg == ".." || seg.empty()) { bad = true; break; }
+                start = end + 1;
+            }
+        }
+
+        if (bad) base_rel.clear();
+    }
+
+    // max_bytes cap (controls RAM usage too)
+    std::uint64_t max_bytes = 50ull * 1024 * 1024; // 50 MiB default
+    if (body.contains("max_bytes")) {
+        try {
+            long long v = 0;
+            if (body["max_bytes"].is_number_integer()) v = body["max_bytes"].get<long long>();
+            else if (body["max_bytes"].is_string()) v = std::stoll(body["max_bytes"].get<std::string>());
+            if (v > 0) max_bytes = (std::uint64_t)v;
+        } catch (...) {}
+    }
+    const std::uint64_t MINB = 1ull * 1024 * 1024;       // 1 MiB
+    const std::uint64_t MAXB = 250ull * 1024 * 1024;     // 250 MiB hard clamp
+    if (max_bytes < MINB) max_bytes = MINB;
+    if (max_bytes > MAXB) max_bytes = MAXB;
+
+    // Collect + basic sanitize
+    std::vector<std::string> paths_in;
+    paths_in.reserve(body["paths"].size());
+
+    for (const auto& it : body["paths"]) {
+        if (!it.is_string()) continue;
+        std::string p = it.get<std::string>();
+
+        // normalize slashes + trim leading slashes
+        for (char& c : p) if (c == '\\') c = '/';
+        while (!p.empty() && p[0] == '/') p.erase(p.begin());
+
+        // strip duplicate slashes
+        {
+            std::string tmp;
+            tmp.reserve(p.size());
+            bool prev_slash = false;
+            for (char c : p) {
+                if (c == '/') {
+                    if (prev_slash) continue;
+                    prev_slash = true;
+                    tmp.push_back(c);
+                } else {
+                    prev_slash = false;
+                    tmp.push_back(c);
+                }
+            }
+            p.swap(tmp);
+        }
+
+        // remove trailing slash (we still treat dir fine)
+        while (p.size() > 1 && p.back() == '/') p.pop_back();
+
+        if (p.empty()) continue;
+
+        // Safety: reject leading '-' so it can't be treated as an option by zip
+        if (!p.empty() && p[0] == '-') continue;
+
+        // Safety: reject traversal segments
+        bool bad = false;
+        {
+            size_t start = 0;
+            while (start < p.size()) {
+                size_t end = p.find('/', start);
+                if (end == std::string::npos) end = p.size();
+                std::string seg = p.substr(start, end - start);
+                if (seg == "." || seg == ".." || seg.empty()) { bad = true; break; }
+                start = end + 1;
+            }
+        }
+        if (bad) continue;
+
+        // prevent CR/LF injection into -@ stdin list
+        if (p.find('\n') != std::string::npos || p.find('\r') != std::string::npos) continue;
+
+        paths_in.push_back(std::move(p));
+    }
+
+    // Hard cap selection count to avoid abuse
+    const std::size_t MAX_PATHS = 500;
+    if (paths_in.empty()) {
+        audit_fail("no_valid_paths", 400, "", max_bytes, 0);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "no valid paths"}
+        }.dump());
+        return;
+    }
+    if (paths_in.size() > MAX_PATHS) {
+        audit_fail("too_many_paths", 413, "paths[] too large", max_bytes, (std::uint64_t)paths_in.size());
+        reply_json(res, 413, json{
+            {"ok", false},
+            {"error", "too_large"},
+            {"message", "too many selected paths"}
+        }.dump());
+        return;
+    }
+
+    // Dedupe + drop children if parent dir is selected
+    std::sort(paths_in.begin(), paths_in.end());
+    paths_in.erase(std::unique(paths_in.begin(), paths_in.end()), paths_in.end());
+
+    std::vector<std::string> paths_rel;
+    paths_rel.reserve(paths_in.size());
+
+    auto is_child_of = [&](const std::string& child, const std::string& parent) -> bool {
+        if (child.size() <= parent.size()) return false;
+        if (child.compare(0, parent.size(), parent) != 0) return false;
+        return child[parent.size()] == '/';
+    };
+
+    for (const auto& p : paths_in) {
+        if (paths_rel.empty()) {
+            paths_rel.push_back(p);
+            continue;
+        }
+        bool covered = false;
+        for (const auto& sel : paths_rel) {
+            if (is_child_of(p, sel)) { covered = true; break; }
+        }
+        if (!covered) paths_rel.push_back(p);
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+
+    // If base is provided, ensure it's a real directory under user_dir (fail-closed).
+    std::filesystem::path base_abs;
+    if (!base_rel.empty()) {
+        std::string berr;
+        if (!pqnas::resolve_user_path_strict(user_dir, base_rel, &base_abs, &berr)) {
+            audit_fail("invalid_base", 400, berr, max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid base"}}.dump());
+            return;
+        }
+
+        {
+            std::string serr;
+            if (!ensure_no_symlink_in_existing_path_prefix(base_abs, &serr)) {
+                audit_fail("invalid_base", 400, serr, max_bytes, (std::uint64_t)paths_rel.size());
+                reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid base"}}.dump());
+                return;
+            }
+        }
+
+        std::error_code bec;
+        auto bst = std::filesystem::symlink_status(base_abs, bec);
+        if (bec || !std::filesystem::exists(bst) || !std::filesystem::is_directory(bst) || std::filesystem::is_symlink(bst)) {
+            audit_fail("invalid_base", 400, "base must be an existing directory", max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid base"}}.dump());
+            return;
+        }
+    }
+
+    // If base is set, require all selected paths to be within base.
+    // This prevents weird results when we chdir into base but zip tries to access paths outside it.
+    if (!base_rel.empty()) {
+        for (const auto& p : paths_rel) {
+            if (p == base_rel) continue;
+            if (!is_child_of(p, base_rel)) {
+                audit_fail("path_outside_base", 400, pqnas::shorten(p, 180), max_bytes, (std::uint64_t)paths_rel.size());
+                reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "selected path outside base"}
+                }.dump());
+                return;
+            }
+        }
+    }
+
+    // Resolve + pre-walk all selections (size + symlink checks)
+    std::uint64_t files = 0, dirs = 0, input_bytes = 0;
+
+    for (const auto& path_rel : paths_rel) {
+        std::filesystem::path path_abs;
+        std::string err;
+        if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &path_abs, &err)) {
+            audit_fail("invalid_path", 400, err, max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","invalid path"}}.dump());
+            return;
+        }
+
+        std::error_code ec;
+        {
+        std::string serr;
+        if (!ensure_no_symlink_in_existing_path_prefix(path_abs, &serr)) {
+            audit_fail("symlink_not_supported", 400, serr, max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "symlinks not supported for zip download"}
+            }.dump());
+            return;
+        }
+    }
+        auto st = std::filesystem::symlink_status(path_abs, ec);
+        if (ec || !std::filesystem::exists(st)) {
+            audit_fail("not_found", 404, path_rel, max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","path not found"}}.dump());
+            return;
+        }
+
+        if (std::filesystem::is_symlink(st)) {
+            audit_fail("symlink_not_supported", 400, "symlink selected", max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","symlinks not supported for zip download"}}.dump());
+            return;
+        }
+
+        const bool is_file = std::filesystem::is_regular_file(st);
+        const bool is_dir  = std::filesystem::is_directory(st);
+
+        if (is_file) {
+            files += 1;
+            input_bytes += pqnas::file_size_u64_safe(path_abs);
+            if (input_bytes > max_bytes) break;
+            continue;
+        }
+
+        if (is_dir) {
+            dirs += 1; // include selected root dir
+
+            std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
+            ec.clear();
+            for (auto it = std::filesystem::recursive_directory_iterator(path_abs, opts, ec);
+                 it != std::filesystem::recursive_directory_iterator();
+                 it.increment(ec)) {
+
+                if (ec) {
+                    audit_fail("walk_failed", 500, ec.message(), max_bytes, (std::uint64_t)paths_rel.size());
+                    reply_json(res, 500, json{
+                        {"ok", false},
+                        {"error", "server_error"},
+                        {"message", "directory walk failed"},
+                        {"detail", pqnas::shorten(ec.message(), 180)}
+                    }.dump());
+                    return;
+                }
+
+                std::error_code ec2;
+                auto st2 = std::filesystem::symlink_status(it->path(), ec2);
+                if (ec2) continue;
+
+                if (std::filesystem::is_symlink(st2)) {
+                    audit_fail("symlink_not_supported", 400, "symlink inside tree", max_bytes, (std::uint64_t)paths_rel.size());
+                    reply_json(res, 400, json{
+                        {"ok", false},
+                        {"error", "bad_request"},
+                        {"message", "symlinks inside directory are not supported for zip download"}
+                    }.dump());
+                    return;
+                }
+
+                if (std::filesystem::is_regular_file(st2)) {
+                    files += 1;
+                    input_bytes += pqnas::file_size_u64_safe(it->path());
+                    if (input_bytes > max_bytes) break;
+                    continue;
+                }
+
+                files += 1; // other types, 0 bytes
+            }
+            if (input_bytes > max_bytes) break;
+            continue;
+        }
+
+        audit_fail("unsupported_type", 400, path_rel, max_bytes, (std::uint64_t)paths_rel.size());
+        reply_json(res, 400, json{{"ok",false},{"error","bad_request"},{"message","unsupported path type for zip download"}}.dump());
+        return;
+    }
+
+    if (input_bytes > max_bytes) {
+        audit_fail("too_large", 413, "input exceeds max_bytes", max_bytes, (std::uint64_t)paths_rel.size());
+        reply_json(res, 413, json{{"ok",false},{"error","too_large"},{"message","selected content exceeds max_bytes"}}.dump());
+        return;
+    }
+
+        auto* gidx = pqnas::get_gallery_meta_index();
+    if (!gidx) {
+        audit_fail("gallery_meta_index_missing", 500, "", max_bytes, (std::uint64_t)paths_rel.size());
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "gallery metadata index missing"}
+        }.dump());
+        return;
+    }
+
+    auto logical_to_export_rel = [&](const std::string& logical_rel) -> std::string {
+        if (base_rel.empty()) return logical_rel;
+        if (logical_rel == base_rel) return "";
+        if (logical_rel.size() > base_rel.size() &&
+            logical_rel.compare(0, base_rel.size(), base_rel) == 0 &&
+            logical_rel[base_rel.size()] == '/') {
+            return logical_rel.substr(base_rel.size() + 1);
+        }
+        return logical_rel;
+    };
+
+    auto has_exportable_meta = [](int rating,
+                                  const std::string& tags_text,
+                                  const std::string& notes_text) -> bool {
+        return rating > 0 || !tags_text.empty() || !notes_text.empty();
+    };
+
+    std::filesystem::path stage_root;
+    auto cleanup_stage = [&]() {
+        if (!stage_root.empty()) {
+            std::error_code ec;
+            std::filesystem::remove_all(stage_root, ec);
+            stage_root.clear();
+        }
+    };
+
+    {
+        char tmpl[] = "/tmp/dna_gallery_export_XXXXXX";
+        char* made = ::mkdtemp(tmpl);
+        if (!made) {
+            audit_fail("mkdtemp_failed", 500, "mkdtemp()", max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "export staging failed"}
+            }.dump());
+            return;
+        }
+        stage_root = made;
+    }
+
+    auto stage_one_file = [&](const std::filesystem::path& src_abs,
+                              const std::filesystem::path& dst_abs,
+                              const std::string& logical_rel_file,
+                              std::string* err) -> bool {
+        std::error_code ec;
+
+        std::filesystem::create_directories(dst_abs.parent_path(), ec);
+        if (ec) {
+            if (err) *err = "create_directories failed: " + ec.message();
+            return false;
+        }
+
+        ec.clear();
+        std::filesystem::create_hard_link(src_abs, dst_abs, ec);
+        if (ec) {
+            ec.clear();
+            if (!std::filesystem::copy_file(src_abs, dst_abs,
+                                            std::filesystem::copy_options::overwrite_existing, ec)) {
+                if (err) *err = "copy_file failed: " + ec.message();
+                return false;
+            }
+        }
+
+        const std::string fname = dst_abs.filename().string();
+        if (!is_gallery_image_name(fname)) return true;
+
+        std::string gerr;
+        auto grec = gidx->get("user", fp_hex, logical_rel_file, &gerr);
+        if (!gerr.empty()) {
+            if (err) *err = "gallery metadata lookup failed: " + gerr;
+            return false;
+        }
+
+        if (!grec.has_value()) return true;
+        if (!has_exportable_meta(grec->rating, grec->tags_text, grec->notes_text)) return true;
+
+        const std::filesystem::path sidecar_abs =
+            dst_abs.parent_path() / (dst_abs.stem().string() + ".xmp");
+
+        ec.clear();
+        if (std::filesystem::exists(sidecar_abs, ec)) {
+            if (err) *err = "sidecar path conflict: " + sidecar_abs.string();
+            return false;
+        }
+
+        const std::string xmp = pg_build_xmp_sidecar(
+            grec->rating,
+            grec->tags_text,
+            grec->notes_text
+        );
+
+        std::ofstream ofs(sidecar_abs, std::ios::binary);
+        if (!ofs) {
+            if (err) *err = "failed to create sidecar: " + sidecar_abs.string();
+            return false;
+        }
+
+        ofs.write(xmp.data(), (std::streamsize)xmp.size());
+        if (!ofs.good()) {
+            if (err) *err = "failed to write sidecar: " + sidecar_abs.string();
+            return false;
+        }
+
+        return true;
+    };
+
+    for (const auto& path_rel : paths_rel) {
+        std::filesystem::path src_abs;
+        std::string err;
+        if (!pqnas::resolve_user_path_strict(user_dir, path_rel, &src_abs, &err)) {
+            cleanup_stage();
+            audit_fail("invalid_path", 400, err, max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            }.dump());
+            return;
+        }
+
+        const std::string export_rel = logical_to_export_rel(path_rel);
+        const std::filesystem::path dst_root =
+            export_rel.empty() ? stage_root : (stage_root / export_rel);
+
+        std::error_code ec;
+        auto st = std::filesystem::symlink_status(src_abs, ec);
+        if (ec || !std::filesystem::exists(st)) {
+            cleanup_stage();
+            audit_fail("not_found", 404, path_rel, max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "path not found"}
+            }.dump());
+            return;
+        }
+
+        if (std::filesystem::is_regular_file(st)) {
+            std::string serr;
+            if (!stage_one_file(src_abs, dst_root, path_rel, &serr)) {
+                cleanup_stage();
+                audit_fail("stage_file_failed", 500, serr, max_bytes, (std::uint64_t)paths_rel.size());
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "export staging failed"},
+                    {"detail", pqnas::shorten(serr, 180)}
+                }.dump());
+                return;
+            }
+            continue;
+        }
+
+        if (std::filesystem::is_directory(st)) {
+            ec.clear();
+            std::filesystem::create_directories(dst_root, ec);
+            if (ec) {
+                cleanup_stage();
+                audit_fail("stage_dir_failed", 500, ec.message(), max_bytes, (std::uint64_t)paths_rel.size());
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "export staging failed"},
+                    {"detail", pqnas::shorten(ec.message(), 180)}
+                }.dump());
+                return;
+            }
+
+            std::filesystem::directory_options opts = std::filesystem::directory_options::skip_permission_denied;
+            for (auto it = std::filesystem::recursive_directory_iterator(src_abs, opts, ec);
+                 it != std::filesystem::recursive_directory_iterator();
+                 it.increment(ec)) {
+
+                if (ec) {
+                    cleanup_stage();
+                    audit_fail("stage_walk_failed", 500, ec.message(), max_bytes, (std::uint64_t)paths_rel.size());
+                    reply_json(res, 500, json{
+                        {"ok", false},
+                        {"error", "server_error"},
+                        {"message", "export staging failed"},
+                        {"detail", pqnas::shorten(ec.message(), 180)}
+                    }.dump());
+                    return;
+                }
+
+                std::error_code ec2;
+                auto st2 = std::filesystem::symlink_status(it->path(), ec2);
+                if (ec2) continue;
+                if (std::filesystem::is_symlink(st2)) continue;
+
+                auto rel_inside = std::filesystem::relative(it->path(), src_abs, ec2);
+                if (ec2) {
+                    cleanup_stage();
+                    audit_fail("relative_failed", 500, ec2.message(), max_bytes, (std::uint64_t)paths_rel.size());
+                    reply_json(res, 500, json{
+                        {"ok", false},
+                        {"error", "server_error"},
+                        {"message", "export staging failed"},
+                        {"detail", pqnas::shorten(ec2.message(), 180)}
+                    }.dump());
+                    return;
+                }
+
+                const std::filesystem::path dst_abs = dst_root / rel_inside;
+
+                if (std::filesystem::is_directory(st2)) {
+                    ec2.clear();
+                    std::filesystem::create_directories(dst_abs, ec2);
+                    if (ec2) {
+                        cleanup_stage();
+                        audit_fail("stage_dir_failed", 500, ec2.message(), max_bytes, (std::uint64_t)paths_rel.size());
+                        reply_json(res, 500, json{
+                            {"ok", false},
+                            {"error", "server_error"},
+                            {"message", "export staging failed"},
+                            {"detail", pqnas::shorten(ec2.message(), 180)}
+                        }.dump());
+                        return;
+                    }
+                    continue;
+                }
+
+                if (std::filesystem::is_regular_file(st2)) {
+                    const std::string logical_rel_file =
+                        path_rel + "/" + rel_inside.generic_string();
+
+                    std::string serr;
+                    if (!stage_one_file(it->path(), dst_abs, logical_rel_file, &serr)) {
+                        cleanup_stage();
+                        audit_fail("stage_file_failed", 500, serr, max_bytes, (std::uint64_t)paths_rel.size());
+                        reply_json(res, 500, json{
+                            {"ok", false},
+                            {"error", "server_error"},
+                            {"message", "export staging failed"},
+                            {"detail", pqnas::shorten(serr, 180)}
+                        }.dump());
+                        return;
+                    }
+                }
+            }
+
+            continue;
+        }
+
+        cleanup_stage();
+        audit_fail("unsupported_type", 400, path_rel, max_bytes, (std::uint64_t)paths_rel.size());
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "unsupported path type for export"}
+        }.dump());
+        return;
+    }
+
+    int out_pipe[2] = {-1, -1};
+    if (::pipe(out_pipe) != 0) {
+        cleanup_stage();
+        audit_fail("pipe_failed", 500, "pipe()", max_bytes, (std::uint64_t)paths_rel.size());
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "zip failed"}
+        }.dump());
+        return;
+    }
+
+    pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(out_pipe[0]);
+        ::close(out_pipe[1]);
+        cleanup_stage();
+        audit_fail("fork_failed", 500, "fork()", max_bytes, (std::uint64_t)paths_rel.size());
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "zip failed"}
+        }.dump());
+        return;
+    }
+
+    if (pid == 0) {
+        ::dup2(out_pipe[1], STDOUT_FILENO);
+
+        ::close(out_pipe[0]);
+        ::close(out_pipe[1]);
+
+        if (::chdir(stage_root.c_str()) != 0) _exit(127);
+
+        const char* argv[] = {
+            "zip",
+            "-r",
+            "-q",
+            "-",
+            ".",
+            nullptr
+        };
+        ::execvp("zip", (char* const*)argv);
+        _exit(127);
+    }
+
+    ::close(out_pipe[1]);
+
+    std::string zip_data;
+    zip_data.reserve((size_t)std::min<std::uint64_t>(max_bytes, 4ull * 1024 * 1024));
+
+    const std::uint64_t zip_limit = max_bytes + 8ull * 1024 * 1024;
+    std::array<char, 64 * 1024> buf{};
+
+    while (true) {
+        ssize_t n = ::read(out_pipe[0], buf.data(), (ssize_t)buf.size());
+        if (n == 0) break;
+        if (n < 0) {
+            ::close(out_pipe[0]);
+            ::kill(pid, SIGKILL);
+            cleanup_stage();
+            audit_fail("read_failed", 500, "read(zip)", max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "zip failed"}
+            }.dump());
+            return;
+        }
+
+        if (zip_data.size() + (size_t)n > (size_t)zip_limit) {
+            ::close(out_pipe[0]);
+            ::kill(pid, SIGKILL);
+            cleanup_stage();
+            audit_fail("zip_too_large", 413, "zip output exceeds limit", max_bytes, (std::uint64_t)paths_rel.size());
+            reply_json(res, 413, json{
+                {"ok", false},
+                {"error", "too_large"},
+                {"message", "zip output too large"}
+            }.dump());
+            return;
+        }
+
+        zip_data.append(buf.data(), (size_t)n);
+    }
+
+    ::close(out_pipe[0]);
+
+    int st = 0;
+    ::waitpid(pid, &st, 0);
+
+    cleanup_stage();
+
+    if (!(WIFEXITED(st) && WEXITSTATUS(st) == 0)) {
+        audit_fail("zip_failed", 500, "zip exit nonzero", max_bytes, (std::uint64_t)paths_rel.size());
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "zip failed"}
+        }.dump());
+        return;
+    }
+
+    const std::string fname = "gallery-export.zip";
+
+    audit_ok(max_bytes, input_bytes, (std::uint64_t)zip_data.size(), files, dirs,
+             (std::uint64_t)paths_rel.size(), base_rel);
+
+    res.status = 200;
+    res.set_header("Cache-Control", "no-store");
+    res.set_header("Content-Type", "application/zip");
+    res.set_header("Content-Disposition", ("attachment; filename=\"" + fname + "\"").c_str());
+    res.body = std::move(zip_data);
 });
 
 srv.Get("/api/v4/admin/storage/tiering/status", [&](const httplib::Request& req, httplib::Response& res) {

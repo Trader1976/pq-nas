@@ -497,7 +497,24 @@
             setStatus(`Folder move to trash failed: ${String(e && e.message ? e.message : e)}`);
         }
     }
+    function openSelectionContextMenu(x, y) {
+        if (!ctxMenu) return;
 
+        const count = selectedRelPaths.size;
+        if (!count) return;
+
+        ctxMenu.innerHTML = "";
+        ctxMenu.appendChild(menuItem("Download selected", () => downloadSelectionZip()));
+        ctxMenu.appendChild(menuItem("Export selected with metadata…", () => exportSelectionZip()));
+        ctxMenu.appendChild(menuSep());
+        ctxMenu.appendChild(menuItem("Clear selection", () => {
+            clearSelection();
+            setStatus("Selection cleared.");
+        }));
+        ctxMenu.appendChild(menuItem("Move selected to trash…", () => deleteSelection(), { danger: true }));
+
+        placeContextMenu(x, y);
+    }
     function openFolderContextMenu(x, y, item) {
         if (!ctxMenu || !item || item.type !== "dir") return;
 
@@ -506,6 +523,8 @@
             state.curPath = currentRelPathFor(item);
             load();
         }));
+        ctxMenu.appendChild(menuItem("Download zip", () => downloadSingleFolderZip(item)));
+        ctxMenu.appendChild(menuItem("Export with metadata…", () => exportSingleItemZip(item)));
         ctxMenu.appendChild(menuSep());
         ctxMenu.appendChild(menuItem("Rename…", () => renameFolder(item)));
         ctxMenu.appendChild(menuItem("Move to trash…", () => deleteFolder(item), { danger: true }));
@@ -523,6 +542,8 @@
         ctxMenu.innerHTML = "";
         ctxMenu.appendChild(menuItem("Open preview", () => openPreviewFor(item)));
         ctxMenu.appendChild(menuItem("Edit metadata…", () => openMetaFor(item)));
+        ctxMenu.appendChild(menuItem("Download", () => downloadSingleImage(item)));
+        ctxMenu.appendChild(menuItem("Export with metadata…", () => exportSingleItemZip(item)));
         ctxMenu.appendChild(menuItem(shareLabel, () => {
             window.PQNAS_PHOTOGALLERY_SHARES?.openForItem(item);
         }));
@@ -663,24 +684,37 @@
 
         return fallback;
     }
+    function triggerBlobDownload(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename || "download";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+    }
 
-    async function downloadSelectionZip() {
-        const paths = selectedRelPathsList();
-        if (!paths.length) {
-            setStatus("Nothing selected.");
-            return;
-        }
+    function triggerDirectFileDownload(relPath, filename) {
+        const a = document.createElement("a");
+        a.href = fileGetUrl(relPath);
+        a.download = filename || "";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    }
 
+    async function fetchSelectionArchive(url, body, fallbackName, busyText, doneText) {
         setBadge("warn", "zip…");
-        setStatus(`Preparing zip (${paths.length} items)…`);
+        setStatus(busyText);
 
         try {
-            const r = await fetch("/api/v4/files/zip_sel", {
+            const r = await fetch(url, {
                 method: "POST",
                 credentials: "include",
                 cache: "no-store",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ paths, base: state.curPath || "" })
+                body: JSON.stringify(body)
             });
 
             if (!r.ok) {
@@ -689,21 +723,78 @@
             }
 
             const blob = await r.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = getZipFilenameFromResponse(r);
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            setTimeout(() => URL.revokeObjectURL(url), 1500);
+            triggerBlobDownload(blob, getZipFilenameFromResponse(r, fallbackName));
 
             setBadge("ok", "ready");
-            setStatus(`Download ready (${paths.length} items).`);
+            setStatus(doneText);
         } catch (e) {
             setBadge("err", "error");
-            setStatus(`Zip failed: ${String(e && e.message ? e.message : e)}`);
+            setStatus(`Download failed: ${String(e && e.message ? e.message : e)}`);
         }
+    }
+
+    function selectedBasePath() {
+        return state.curPath || "";
+    }
+
+    async function exportSelectionZip() {
+        const paths = selectedRelPathsList();
+        if (!paths.length) {
+            setStatus("Nothing selected.");
+            return;
+        }
+
+        await fetchSelectionArchive(
+            "/api/v4/gallery/export_sel_zip",
+            { paths, base: selectedBasePath() },
+            "gallery-export.zip",
+            `Preparing export (${paths.length} item${paths.length === 1 ? "" : "s"})…`,
+            `Export ready (${paths.length} item${paths.length === 1 ? "" : "s"}).`
+        );
+    }
+
+    function downloadSingleImage(item) {
+        const rel = currentRelPathFor(item);
+        triggerDirectFileDownload(rel, item.name || "image");
+        setBadge("ok", "ready");
+        setStatus(`Download started: ${item.name || rel}`);
+    }
+
+    async function downloadSingleFolderZip(item) {
+        const rel = currentRelPathFor(item);
+        await fetchSelectionArchive(
+            "/api/v4/files/zip_sel",
+            { paths: [rel], base: parentPath(rel) || "" },
+            `${item.name || "folder"}.zip`,
+            `Preparing zip for ${item.name || rel}…`,
+            `Download ready: ${item.name || rel}`
+        );
+    }
+
+    async function exportSingleItemZip(item) {
+        const rel = currentRelPathFor(item);
+        await fetchSelectionArchive(
+            "/api/v4/gallery/export_sel_zip",
+            { paths: [rel], base: parentPath(rel) || "" },
+            "gallery-export.zip",
+            `Preparing export for ${item.name || rel}…`,
+            `Export ready: ${item.name || rel}`
+        );
+    }
+    async function downloadSelectionZip() {
+        const paths = selectedRelPathsList();
+        if (!paths.length) {
+            setStatus("Nothing selected.");
+            return;
+        }
+
+        await fetchSelectionArchive(
+            "/api/v4/files/zip_sel",
+            { paths, base: selectedBasePath() },
+            "selection.zip",
+            `Preparing zip (${paths.length} item${paths.length === 1 ? "" : "s"})…`,
+            `Download ready (${paths.length} item${paths.length === 1 ? "" : "s"}).`
+        );
     }
 
     async function deleteSelection() {
@@ -855,6 +946,14 @@
     });
 
     gridWrap?.addEventListener("pointerup", endMarquee);
+    gridWrap?.addEventListener("contextmenu", (e) => {
+        if (e.target && e.target.closest && e.target.closest(".tile")) return;
+        if (!selectedRelPaths.size) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+        openSelectionContextMenu(e.clientX, e.clientY);
+    });
     gridWrap?.addEventListener("pointercancel", endMarquee);
     function renderBreadcrumb() {
         if (!pathLine) return;
@@ -1111,21 +1210,53 @@
             const hay = [
                 it.name || "",
                 groupPathForItem(it),
-                it.tags_text || "",
-                it.notes_text || ""
+                Array.isArray(it.keywords) ? it.keywords.join(" ") : (it.tags_text || ""),
+                it.description || it.notes_text || ""
             ].join(" ").toLowerCase();
 
             return hay.includes(q);
         });
     }
 
+    function normalizeGalleryMeta(meta) {
+        const imageRating =
+            meta && meta.imageRating != null
+                ? Number(meta.imageRating || 0) || 0
+                : Number(meta && meta.rating || 0) || 0;
+
+        const keywords = Array.isArray(meta && meta.keywords)
+            ? meta.keywords.map(v => String(v || "").trim()).filter(Boolean)
+            : String(meta && meta.tags_text || "")
+                .split(",")
+                .map(v => v.trim())
+                .filter(Boolean);
+
+        const description =
+            meta && meta.description && typeof meta.description === "object"
+                ? String(meta.description["x-default"] || "")
+                : String(meta && meta.notes_text || "");
+
+        return {
+            imageRating,
+            keywords,
+            description
+        };
+    }
     function applyMetaToItem(it, meta) {
         if (!it) return;
-        it.rating = Number(meta.rating || 0) || 0;
-        it.tags_text = String(meta.tags_text || "");
-        it.notes_text = String(meta.notes_text || "");
-        if (meta.size_bytes != null) it.size_bytes = Number(meta.size_bytes || 0);
-        if (meta.mtime_epoch != null) it.mtime_unix = Number(meta.mtime_epoch || 0);
+
+        const { imageRating, keywords, description } = normalizeGalleryMeta(meta);
+
+        it.rating = imageRating;
+        it.keywords = keywords.slice();
+        it.description = description;
+
+        // Keep old compatibility fields alive for now.
+        it.tags_text = keywords.join(", ");
+        it.notes_text = description;
+
+        if (meta && meta.size_bytes != null) it.size_bytes = Number(meta.size_bytes || 0);
+        if (meta && meta.mtime_epoch != null) it.mtime_unix = Number(meta.mtime_epoch || 0);
     }
 
     function applyMetaToCaches(rel, meta) {
@@ -1563,13 +1694,27 @@
         try {
             const j = await galleryMetaGet(rel);
             const meta = j.meta || {};
-            state.editingRating = Number(meta.rating || 0) || 0;
-            if (metaTags) metaTags.value = String(meta.tags_text || "");
-            if (metaNotes) metaNotes.value = String(meta.notes_text || "");
+            const { imageRating, keywords, description } = normalizeGalleryMeta(meta);
+
+            state.editingRating = imageRating;
+            if (metaTags) metaTags.value = keywords.join(", ");
+            if (metaNotes) metaNotes.value = description;
+
+            const sizeBytes =
+                j.file && j.file.size_bytes != null
+                    ? Number(j.file.size_bytes || 0)
+                    : Number(meta.size_bytes || 0);
+
+            const mtimeEpoch =
+                j.file && j.file.mtime_epoch != null
+                    ? Number(j.file.mtime_epoch || 0)
+                    : Number(meta.mtime_epoch || 0);
+
             if (metaInfo) {
                 metaInfo.textContent =
-                    `${fmtSize(meta.size_bytes || 0)} • ${fmtTime(meta.mtime_epoch || 0) || "unknown time"}`;
+                    `${fmtSize(sizeBytes)} • ${fmtTime(mtimeEpoch) || "unknown time"}`;
             }
+
             if (metaStatus) metaStatus.textContent = "Ready.";
             updateMetaStars();
         } catch (e) {
@@ -1583,9 +1728,16 @@
 
         const rel = state.editingPath;
         const payload = {
-            rating: Number(state.editingRating || 0),
-            tags_text: String(metaTags ? metaTags.value : ""),
-            notes_text: String(metaNotes ? metaNotes.value : "")
+            meta: {
+                description: {
+                    "x-default": String(metaNotes ? metaNotes.value : "").trim()
+                },
+                keywords: String(metaTags ? metaTags.value : "")
+                    .split(",")
+                    .map(s => s.trim())
+                    .filter(Boolean),
+                imageRating: Number(state.editingRating || 0)
+            }
         };
 
         metaSaveInFlight = true;
@@ -1628,13 +1780,20 @@
     async function quickRate(item, rating) {
         const rel = currentRelPathFor(item);
         try {
-            const j = await galleryMetaSet(rel, { rating });
+            const j = await galleryMetaSet(rel, {
+                meta: {
+                    imageRating: Number(rating || 0)
+                }
+            });
+
             const meta = j.meta || {};
+            const { imageRating } = normalizeGalleryMeta(meta);
+
             applyMetaToCaches(rel, meta);
             renderGrid();
             window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
             setBadge("ok", "ready");
-            setStatus(`Rated ${item.name}: ${Number(meta.rating || 0) || 0}/5`);
+            setStatus(`Rated ${item.name}: ${imageRating}/5`);
         } catch (e) {
             setBadge("err", "error");
             setStatus(`Rating failed: ${String(e && e.message ? e.message : e)}`);
@@ -1723,7 +1882,13 @@
 
             const tagLine = document.createElement("div");
             tagLine.className = "tagLine";
-            tagLine.textContent = item.tags_text ? shorten(item.tags_text, 60) : "No metadata";
+
+            const tagPreview =
+                Array.isArray(item.keywords) && item.keywords.length
+                    ? item.keywords.join(", ")
+                    : (item.tags_text || "");
+
+            tagLine.textContent = tagPreview ? shorten(tagPreview, 60) : "No metadata";
             body.appendChild(tagLine);
         } else {
             const tagLine = document.createElement("div");
@@ -1751,29 +1916,15 @@
                 selectionAnchorRelPath = rel;
             }
 
-            if (item.type === "file") {
+            if (selectedRelPaths.size > 1 && selectedRelPaths.has(rel)) {
+                openSelectionContextMenu(e.clientX, e.clientY);
+            } else if (item.type === "file") {
                 openImageContextMenu(e.clientX, e.clientY, item);
             } else if (item.type === "dir") {
                 openFolderContextMenu(e.clientX, e.clientY, item);
             }
         });
-        thumbSizeSelect?.addEventListener("change", () => {
-            state.thumbSize = Number(thumbSizeSelect.value || "160");
-            applyThumbSizeUi();
-            saveThumbSizePref();
-            renderGrid();
-            window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
 
-            const count = filteredItems().length;
-            const rf = Number(state.ratingFilter);
-            const ratingTxt =
-                rf < 0 ? "" :
-                    (rf === 0 ? " • unrated only" : ` • ${rf}★ only`);
-            const textTxt =
-                state.filter ? ` • filter: ${state.filter}` : "";
-
-            setStatus(`Items: ${count}${ratingTxt}${textTxt} • thumbs: ${state.thumbSize}px`);
-        });
         tile.addEventListener("dblclick", () => {
             if (item.type === "dir") {
                 state.curPath = currentRelPathFor(item);
@@ -1944,6 +2095,24 @@
         state.ratingFilter = Number(ratingFilter.value || "-1");
         saveRatingFilterPref();
         refreshVisibleView(false);
+    });
+
+    thumbSizeSelect?.addEventListener("change", () => {
+        state.thumbSize = Number(thumbSizeSelect.value || "160");
+        applyThumbSizeUi();
+        saveThumbSizePref();
+        renderGrid();
+        window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
+
+        const count = filteredItems().length;
+        const rf = Number(state.ratingFilter);
+        const ratingTxt =
+            rf < 0 ? "" :
+                (rf === 0 ? " • unrated only" : ` • ${rf}★ only`);
+        const textTxt =
+            state.filter ? ` • filter: ${state.filter}` : "";
+
+        setStatus(`Items: ${count}${ratingTxt}${textTxt} • thumbs: ${state.thumbSize}px`);
     });
 
     metaClose?.addEventListener("click", closeMetaModal);
