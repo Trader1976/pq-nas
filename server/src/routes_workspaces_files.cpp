@@ -23,6 +23,8 @@
 #include "file_versions_restore.h"
 #include "trash_service.h"
 #include "runtime_paths.h"
+#include "gallery_meta.h"
+
 namespace pqnas {
     static std::string hex_encode_lower_local(const unsigned char* data, std::size_t len) {
         static constexpr char kHex[] = "0123456789abcdef";
@@ -6790,7 +6792,36 @@ srv.Post("/api/v4/workspaces/files/restore_version",
         deps.reply_json(res, http, j.dump());
         return;
     }
+             {
+                 const std::uint64_t restored_size =
+                     rr.bytes > 0 ? static_cast<std::uint64_t>(rr.bytes)
+                                  : pqnas::file_size_u64_safe(abs_path);
 
+        const std::int64_t restored_mtime =
+            rr.mtime_epoch > 0 ? static_cast<std::int64_t>(rr.mtime_epoch)
+                               : static_cast<std::int64_t>(file_mtime_epoch_safe_local(abs_path));
+
+                 const std::int64_t now_ts = static_cast<std::int64_t>(std::time(nullptr));
+
+        if (auto* gidx = pqnas::get_gallery_meta_index()) {
+            std::string gerr;
+            if (!gidx->touch_file_facts(
+                    "workspace",
+                    workspace_id,
+                    rel_norm,
+                    restored_size,
+                    restored_mtime,
+                    now_ts,
+                    &gerr)) {
+                // Best-effort only:
+                // restore already succeeded, so do not fail the request just because
+                // gallery metadata facts could not be refreshed.
+            }
+        }
+
+                 // Same note here for file_locations: call your one-path fact refresh helper
+                 // if you have it for workspace-scoped paths too.
+             }
     json out = json::object();
     out["ok"] = true;
     out["workspace_id"] = workspace_id;

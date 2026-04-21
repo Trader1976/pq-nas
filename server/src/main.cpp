@@ -28136,11 +28136,18 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
                 item.notes_text = grec->notes_text;
 
                 // Prefer fresher gallery-cached facts only if file_locations did not provide them.
-                if (item.size_bytes == 0 && grec->size_bytes > 0) {
-                    item.size_bytes = grec->size_bytes;
-                }
-                if (item.mtime_unix == 0 && grec->mtime_epoch > 0) {
-                    item.mtime_unix = (long long)grec->mtime_epoch;
+                if (grec.has_value()) {
+                    item.rating = grec->rating;
+                    item.tags_text = grec->tags_text;
+                    item.notes_text = grec->notes_text;
+
+                    // Prefer gallery-cached file facts when present.
+                    if (grec->size_bytes > 0) {
+                        item.size_bytes = grec->size_bytes;
+                    }
+                    if (grec->mtime_epoch > 0) {
+                        item.mtime_unix = (long long)grec->mtime_epoch;
+                    }
                 }
             }
         }
@@ -30438,18 +30445,6 @@ srv.Post("/api/v4/files/restore_version", [&](const httplib::Request& req, httpl
         }.dump());
         return;
     }
-    {
-        std::string ancestor_err;
-        if (pqnas::any_file_ancestor_exists(users, fp_hex, rel_norm, &found_ancestor, &ancestor_err)) {
-            reply_json(res, 409, json{
-                {"ok", false},
-                {"error", "path_conflict"},
-                {"message", "a parent path is an existing file"},
-                {"ancestor", found_ancestor}
-            }.dump());
-            return;
-        }
-    }
 
     auto uopt = users.get(fp_hex);
     if (!uopt.has_value() || uopt->storage_state != "allocated") {
@@ -30513,7 +30508,47 @@ srv.Post("/api/v4/files/restore_version", [&](const httplib::Request& req, httpl
                    }.dump());
         return;
     }
+    // Refresh cached live file facts after restore so gallery list + thumb URLs
+    // reflect the restored version immediately.
+    {
+        const std::uint64_t restored_size =
+            rr.bytes > 0 ? static_cast<std::uint64_t>(rr.bytes)
+                         : pqnas::file_size_u64_safe(abs_path);
 
+        const std::int64_t restored_mtime =
+            rr.mtime_epoch > 0
+                ? static_cast<std::int64_t>(rr.mtime_epoch)
+                : static_cast<std::int64_t>(file_mtime_epoch_safe(abs_path));
+
+        const std::int64_t now_ts = static_cast<std::int64_t>(std::time(nullptr));
+
+        if (auto* gidx = pqnas::get_gallery_meta_index()) {
+            std::string gerr;
+            (void)gidx->touch_file_facts(
+                "user",
+                fp_hex,
+                rel_norm,
+                restored_size,
+                restored_mtime,
+                now_ts,
+                &gerr
+            );
+        }
+
+        // Also refresh file_locations if you have a single-path fact update helper.
+        // Use the exact helper from file_location_index.h/.cpp that updates
+        // size_bytes + mtime_epoch for one logical path.
+        //
+        // Example shape only:
+        //
+        // if (auto* flix = pqnas::get_file_location_index()) {
+        //     std::string ferr;
+        //     if (!flix->YOUR_SINGLE_PATH_FACT_UPDATE_METHOD(
+        //             fp_hex, rel_norm, restored_size, restored_mtime, &ferr)) {
+        //         audit_warn("file_location_restore_refresh_failed", ferr, rel_norm);
+        //     }
+        // }
+    }
     reply_json(res, 200, json{
         {"ok", true},
         {"scope_type", "user"},
