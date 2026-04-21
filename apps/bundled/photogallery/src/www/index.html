@@ -411,6 +411,9 @@
         #shareModal{
             z-index: 10030;
         }
+        #statsModal{
+            z-index: 10040;
+        }
         .modalCard{
             width:min(760px, calc(100vw - 24px));
             max-height:min(90vh, 920px);
@@ -840,6 +843,7 @@
             border-top:0;
         }
     </style>
+<link rel="stylesheet" href="./stats.css">
 </head>
 <body>
 <div class="wrap">
@@ -885,6 +889,7 @@
 
 
                 <button class="btn secondary" id="slideshowBtn" type="button">Slideshow</button>
+                <button class="btn secondary" id="statsBtn" type="button">Stats</button>
                 <button class="btn secondary" id="upBtn" type="button">Up</button>
                 <button class="btn" id="refreshBtn" type="button">Refresh</button>
             </div>
@@ -1117,10 +1122,68 @@
         </div>
     </div>
 </div>
+<div id="statsModal" class="modal" aria-hidden="true">
+    <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="statsTitle" style="width:min(1100px, calc(100vw - 24px));">
+        <div class="modalHead">
+            <div>
+                <div id="statsTitle" class="modalTitle">Photo statistics</div>
+                <div id="statsSub" class="modalSub">Current library</div>
+            </div>
+            <button id="statsClose" class="btn secondary" type="button">Close</button>
+        </div>
+
+        <div class="modalBody">
+            <div id="statsStatus" class="mono" style="opacity:.84; margin-bottom:14px;">Loading…</div>
+
+            <div id="statsSummary" class="pgStatsSummary"></div>
+
+            <div class="pgStatsSection">
+                <div class="pgStatsSectionTitle">Top cameras</div>
+                <div id="statsTopCameras" class="pgStatsList"></div>
+            </div>
+
+            <div class="pgStatsSection">
+                <div class="pgStatsSectionTitle">Top lenses</div>
+                <div id="statsTopLenses" class="pgStatsList"></div>
+            </div>
+
+            <div class="pgStatsGrid2">
+                <div class="pgStatsSection">
+                    <div class="pgStatsSectionTitle">ISO</div>
+                    <div id="statsIsoChart" class="pgStatsChart"></div>
+                </div>
+
+                <div class="pgStatsSection">
+                    <div class="pgStatsSectionTitle">Aperture</div>
+                    <div id="statsApertureChart" class="pgStatsChart"></div>
+                </div>
+
+                <div class="pgStatsSection">
+                    <div class="pgStatsSectionTitle">Shutter speed</div>
+                    <div id="statsShutterChart" class="pgStatsChart"></div>
+                </div>
+
+                <div class="pgStatsSection">
+                    <div class="pgStatsSectionTitle">Focal length</div>
+                    <div id="statsFocalChart" class="pgStatsChart"></div>
+                </div>
+            </div>
+
+            <div class="pgStatsSection">
+                <div class="pgStatsSectionTitle">Photos by month</div>
+                <div id="statsByMonthChart" class="pgStatsChart"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div id="ctxMenu" class="ctxMenu" role="menu" aria-hidden="true"></div>
 <script src="./gallery_embedded_meta.js"></script>
 <script src="./app.js"></script>
 <script src="./gallery_shares.js"></script>
 <script src="./gallery_slideshow.js"></script>
+<script src="./stats_api.js"></script>
+<script src="./stats_charts.js"></script>
+<script src="./stats_modal.js"></script>
 </body>
 </html>

@@ -80,7 +80,7 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include <map>
 #include <csignal>
 #include <sys/wait.h>
-
+#include <sqlite3.h>
 
 extern "C" {
 #include "qrauth_v4.h"
@@ -6890,6 +6890,437 @@ static bool migrate_one_landing_file(pqnas::UsersRegistry& users,
     }
 
     return true;
+}
+
+struct PhotoStatsRow {
+    std::string rel_path;
+    std::uint64_t size_bytes = 0;
+    std::int64_t mtime_epoch = 0;
+
+    std::string make;
+    std::string model;
+    std::string lens_model;
+    std::int64_t iso = 0;
+    double f_number = 0.0;
+    double exposure_time = 0.0;
+    double focal_length = 0.0;
+
+    std::string taken_at;
+    std::string taken_month;
+    bool exif_ok = false;
+};
+
+std::string shell_quote_single(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    out.push_back('\'');
+    for (char c : s) {
+        if (c == '\'') out += "'\\''";
+        else out.push_back(c);
+    }
+    out.push_back('\'');
+    return out;
+}
+
+bool is_supported_photo_ext(const std::filesystem::path& p) {
+    std::string ext = p.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    return ext == ".jpg"  || ext == ".jpeg" ||
+           ext == ".png"  || ext == ".webp" ||
+           ext == ".tif"  || ext == ".tiff" ||
+           ext == ".heic" || ext == ".heif";
+}
+
+std::int64_t file_mtime_epoch_safe_local(const std::filesystem::path& p) {
+    std::error_code ec;
+    const auto ft = std::filesystem::last_write_time(p, ec);
+    if (ec) return 0;
+
+    using namespace std::chrono;
+    const auto sctp = time_point_cast<system_clock::duration>(
+        ft - decltype(ft)::clock::now() + system_clock::now());
+
+    return static_cast<std::int64_t>(system_clock::to_time_t(sctp));
+}
+
+std::uint64_t file_size_u64_safe_local(const std::filesystem::path& p) {
+    std::error_code ec;
+    const auto sz = std::filesystem::file_size(p, ec);
+    if (ec) return 0;
+    return static_cast<std::uint64_t>(sz);
+}
+
+std::string normalize_rel_subpath_for_stats(const std::string& raw, bool* ok_out) {
+    bool ok = true;
+
+    std::string s = trim_copy(raw);
+    std::replace(s.begin(), s.end(), '\\', '/');
+
+    while (!s.empty() && s.front() == '/') s.erase(s.begin());
+    while (!s.empty() && s.back() == '/') s.pop_back();
+
+    if (s.empty()) {
+        if (ok_out) *ok_out = true;
+        return "";
+    }
+
+    std::filesystem::path p(s);
+    if (p.is_absolute()) {
+        if (ok_out) *ok_out = false;
+        return "";
+    }
+
+    std::filesystem::path norm = p.lexically_normal();
+    std::string out = norm.generic_string();
+
+    if (out == "." || out.empty()) {
+        if (ok_out) *ok_out = true;
+        return "";
+    }
+
+    if (out == ".." || out.rfind("../", 0) == 0 || out.find("/../") != std::string::npos) {
+        if (ok_out) *ok_out = false;
+        return "";
+    }
+
+    if (ok_out) *ok_out = ok;
+    return out;
+}
+
+std::string trim_trailing_zeroes(std::string s) {
+    if (s.find('.') == std::string::npos) return s;
+    while (!s.empty() && s.back() == '0') s.pop_back();
+    if (!s.empty() && s.back() == '.') s.pop_back();
+    return s;
+}
+
+std::string sql_col_text(sqlite3_stmt* st, int col) {
+    const unsigned char* p = sqlite3_column_text(st, col);
+    return p ? std::string(reinterpret_cast<const char*>(p)) : std::string();
+}
+
+bool ensure_photo_stats_schema(sqlite3* db, std::string* err) {
+    const char* sql = R"SQL(
+CREATE TABLE IF NOT EXISTS photo_exif_index (
+    rel_path TEXT PRIMARY KEY,
+    size_bytes INTEGER NOT NULL,
+    mtime_epoch INTEGER NOT NULL,
+    make TEXT,
+    model TEXT,
+    lens_model TEXT,
+    iso INTEGER,
+    f_number REAL,
+    exposure_time REAL,
+    focal_length REAL,
+    taken_at TEXT,
+    taken_month TEXT,
+    exif_ok INTEGER NOT NULL DEFAULT 0,
+    indexed_at INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_photo_exif_index_taken_month
+    ON photo_exif_index(taken_month);
+
+CREATE INDEX IF NOT EXISTS idx_photo_exif_index_model
+    ON photo_exif_index(model);
+
+CREATE INDEX IF NOT EXISTS idx_photo_exif_index_lens_model
+    ON photo_exif_index(lens_model);
+
+CREATE INDEX IF NOT EXISTS idx_photo_exif_index_iso
+    ON photo_exif_index(iso);
+)SQL";
+
+    char* zerr = nullptr;
+    const int rc = sqlite3_exec(db, sql, nullptr, nullptr, &zerr);
+    if (rc != SQLITE_OK) {
+        if (err) *err = zerr ? zerr : "sqlite schema error";
+        if (zerr) sqlite3_free(zerr);
+        return false;
+    }
+    return true;
+}
+
+bool load_cached_photo_stats_row(sqlite3* db,
+                                 const std::string& rel_path,
+                                 PhotoStatsRow* out) {
+    if (!db || !out) return false;
+
+    sqlite3_stmt* st = nullptr;
+    const char* sql = R"SQL(
+SELECT rel_path, size_bytes, mtime_epoch,
+       make, model, lens_model,
+       iso, f_number, exposure_time, focal_length,
+       taken_at, taken_month, exif_ok
+FROM photo_exif_index
+WHERE rel_path = ?1
+LIMIT 1
+)SQL";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) != SQLITE_OK) {
+        return false;
+    }
+
+    sqlite3_bind_text(st, 1, rel_path.c_str(), -1, SQLITE_TRANSIENT);
+
+    const int rc = sqlite3_step(st);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(st);
+        return false;
+    }
+
+    out->rel_path = sql_col_text(st, 0);
+    out->size_bytes = static_cast<std::uint64_t>(sqlite3_column_int64(st, 1));
+    out->mtime_epoch = static_cast<std::int64_t>(sqlite3_column_int64(st, 2));
+    out->make = sql_col_text(st, 3);
+    out->model = sql_col_text(st, 4);
+    out->lens_model = sql_col_text(st, 5);
+    out->iso = static_cast<std::int64_t>(sqlite3_column_int64(st, 6));
+    out->f_number = sqlite3_column_double(st, 7);
+    out->exposure_time = sqlite3_column_double(st, 8);
+    out->focal_length = sqlite3_column_double(st, 9);
+    out->taken_at = sql_col_text(st, 10);
+    out->taken_month = sql_col_text(st, 11);
+    out->exif_ok = sqlite3_column_int(st, 12) != 0;
+
+    sqlite3_finalize(st);
+    return true;
+}
+
+bool upsert_photo_stats_row(sqlite3* db,
+                            const PhotoStatsRow& row,
+                            std::int64_t indexed_at_epoch,
+                            std::string* err) {
+    if (!db) return false;
+
+    sqlite3_stmt* st = nullptr;
+    const char* sql = R"SQL(
+INSERT INTO photo_exif_index (
+    rel_path, size_bytes, mtime_epoch,
+    make, model, lens_model,
+    iso, f_number, exposure_time, focal_length,
+    taken_at, taken_month, exif_ok, indexed_at
+) VALUES (
+    ?1, ?2, ?3,
+    ?4, ?5, ?6,
+    ?7, ?8, ?9, ?10,
+    ?11, ?12, ?13, ?14
+)
+ON CONFLICT(rel_path) DO UPDATE SET
+    size_bytes = excluded.size_bytes,
+    mtime_epoch = excluded.mtime_epoch,
+    make = excluded.make,
+    model = excluded.model,
+    lens_model = excluded.lens_model,
+    iso = excluded.iso,
+    f_number = excluded.f_number,
+    exposure_time = excluded.exposure_time,
+    focal_length = excluded.focal_length,
+    taken_at = excluded.taken_at,
+    taken_month = excluded.taken_month,
+    exif_ok = excluded.exif_ok,
+    indexed_at = excluded.indexed_at
+)SQL";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db);
+        return false;
+    }
+
+    sqlite3_bind_text(st, 1, row.rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 2, static_cast<sqlite3_int64>(row.size_bytes));
+    sqlite3_bind_int64(st, 3, static_cast<sqlite3_int64>(row.mtime_epoch));
+    sqlite3_bind_text(st, 4, row.make.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 5, row.model.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 6, row.lens_model.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(st, 7, static_cast<sqlite3_int64>(row.iso));
+    sqlite3_bind_double(st, 8, row.f_number);
+    sqlite3_bind_double(st, 9, row.exposure_time);
+    sqlite3_bind_double(st, 10, row.focal_length);
+    sqlite3_bind_text(st, 11, row.taken_at.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 12, row.taken_month.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 13, row.exif_ok ? 1 : 0);
+    sqlite3_bind_int64(st, 14, static_cast<sqlite3_int64>(indexed_at_epoch));
+
+    const int rc = sqlite3_step(st);
+    sqlite3_finalize(st);
+
+    if (rc != SQLITE_DONE) {
+        if (err) *err = sqlite3_errmsg(db);
+        return false;
+    }
+
+    return true;
+}
+
+std::string exif_taken_month_from_string(const std::string& s) {
+    if (s.size() >= 7 && std::isdigit(static_cast<unsigned char>(s[0]))) {
+        if (s[4] == ':' || s[4] == '-') {
+            if (std::isdigit(static_cast<unsigned char>(s[5])) &&
+                std::isdigit(static_cast<unsigned char>(s[6]))) {
+                std::string out;
+                out.reserve(7);
+                out.append(s, 0, 4);
+                out.push_back('-');
+                out.append(s, 5, 2);
+                return out;
+                }
+        }
+    }
+    return "";
+}
+
+std::string read_command_stdout(const std::string& cmd) {
+    std::string out;
+    FILE* fp = popen(cmd.c_str(), "r");
+    if (!fp) return out;
+
+    char buf[4096];
+    while (true) {
+        const std::size_t n = std::fread(buf, 1, sizeof(buf), fp);
+        if (n == 0) break;
+        out.append(buf, n);
+    }
+
+    pclose(fp);
+    return out;
+}
+
+PhotoStatsRow exif_row_from_file(const std::string& rel_path,
+                                 const std::filesystem::path& abs_path,
+                                 std::uint64_t size_bytes,
+                                 std::int64_t mtime_epoch) {
+    PhotoStatsRow row;
+    row.rel_path = rel_path;
+    row.size_bytes = size_bytes;
+    row.mtime_epoch = mtime_epoch;
+
+    const std::string cmd =
+        "exiftool -json -n "
+        "-Make -Model -LensModel -ISO -FNumber -ExposureTime -FocalLength "
+        "-DateTimeOriginal -CreateDate "
+        + shell_quote_single(abs_path.string()) + " 2>/dev/null";
+
+    const std::string raw = read_command_stdout(cmd);
+    if (raw.empty()) {
+        return row;
+    }
+
+    try {
+        const json j = json::parse(raw);
+        if (!j.is_array() || j.empty() || !j[0].is_object()) {
+            return row;
+        }
+
+        const json& o = j[0];
+
+        row.make = o.value("Make", "");
+        row.model = o.value("Model", "");
+        row.lens_model = o.value("LensModel", "");
+        row.iso = o.contains("ISO") ? static_cast<std::int64_t>(o.value("ISO", 0.0)) : 0;
+        row.f_number = o.value("FNumber", 0.0);
+        row.exposure_time = o.value("ExposureTime", 0.0);
+        row.focal_length = o.value("FocalLength", 0.0);
+
+        row.taken_at = o.value("DateTimeOriginal", "");
+        if (row.taken_at.empty()) {
+            row.taken_at = o.value("CreateDate", "");
+        }
+        row.taken_month = exif_taken_month_from_string(row.taken_at);
+
+        row.exif_ok =
+            !row.make.empty() ||
+            !row.model.empty() ||
+            !row.lens_model.empty() ||
+            row.iso > 0 ||
+            row.f_number > 0.0 ||
+            row.exposure_time > 0.0 ||
+            row.focal_length > 0.0 ||
+            !row.taken_at.empty();
+    } catch (...) {
+        return row;
+    }
+
+    return row;
+}
+
+std::string lens_label_from_row(const PhotoStatsRow& row) {
+    return trim_copy(row.lens_model);
+}
+
+std::string camera_label_from_row(const PhotoStatsRow& row) {
+    const std::string make = trim_copy(row.make);
+    const std::string model = trim_copy(row.model);
+
+    if (!make.empty() && !model.empty()) {
+        if (model.rfind(make, 0) == 0) return model;
+        return make + " " + model;
+    }
+    if (!model.empty()) return model;
+    if (!make.empty()) return make;
+    return "";
+}
+std::string iso_bucket_from_row(const PhotoStatsRow& row) {
+    if (row.iso <= 0) return "";
+    return std::to_string(row.iso);
+}
+
+std::string aperture_bucket_from_row(const PhotoStatsRow& row) {
+    if (row.f_number <= 0.0) return "";
+    std::ostringstream oss;
+    oss << "f/" << trim_trailing_zeroes(std::to_string(row.f_number));
+    return oss.str();
+}
+
+std::string shutter_bucket_from_row(const PhotoStatsRow& row) {
+    const double t = row.exposure_time;
+    if (!(t > 0.0)) return "";
+
+    if (t >= 1.0) {
+        std::ostringstream oss;
+        oss << trim_trailing_zeroes(std::to_string(t)) << "s";
+        return oss.str();
+    }
+
+    const long long den = static_cast<long long>(std::llround(1.0 / t));
+    if (den > 0) return "1/" + std::to_string(den);
+
+    return "";
+}
+
+std::string focal_bucket_from_row(const PhotoStatsRow& row) {
+    if (row.focal_length <= 0.0) return "";
+
+    const double rounded = std::round(row.focal_length * 10.0) / 10.0;
+    std::ostringstream oss;
+    oss << trim_trailing_zeroes(std::to_string(rounded)) << "mm";
+    return oss.str();
+}
+
+void bump_bucket(std::map<std::string, int>& m, const std::string& key) {
+    if (!key.empty()) ++m[key];
+}
+
+json top_bucket_array(const std::map<std::string, int>& m, std::size_t limit) {
+    std::vector<std::pair<std::string, int>> v(m.begin(), m.end());
+
+    std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) {
+        if (a.second != b.second) return a.second > b.second;
+        return a.first < b.first;
+    });
+
+    json out = json::array();
+    std::size_t n = 0;
+    for (const auto& kv : v) {
+        if (n++ >= limit) break;
+        out.push_back({
+            {"label", kv.first},
+            {"count", kv.second}
+        });
+    }
+    return out;
 }
 
 struct TieringWorkerConfig {
@@ -29485,7 +29916,251 @@ srv.Post("/api/v4/gallery/meta/get", [&](const httplib::Request& req, httplib::R
     audit_ok(rel_norm, meta.has_value());
     reply_json(res, 200, out.dump());
 });
+srv.Get("/api/v4/photogallery/stats", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &actor_role)) {
+        return;
+    }
+    (void)actor_role;
 
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "users_reload_failed"},
+            {"message", "failed to reload users"}
+        }.dump());
+        return;
+    }
+
+    const auto uopt = users.get(actor_fp);
+    if (!uopt.has_value()) {
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "user_not_found"},
+            {"message", "user not found"}
+        }.dump());
+        return;
+    }
+
+    const auto& user = *uopt;
+    if (user.storage_state != "allocated" || user.root_rel.empty()) {
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"stats", {
+                {"total_photos", 0},
+                {"total_bytes", 0},
+                {"total_megabytes", 0.0},
+                {"photos_with_exif", 0},
+                {"unique_cameras", 0},
+                {"unique_lenses", 0},
+                {"first_taken_at", ""},
+                {"last_taken_at", ""},
+                {"top_cameras", json::array()},
+                {"top_lenses", json::array()},
+                {"iso_buckets", json::array()},
+                {"aperture_buckets", json::array()},
+                {"shutter_buckets", json::array()},
+                {"focal_length_buckets", json::array()},
+                {"by_month", json::array()}
+            }}
+        }.dump());
+        return;
+    }
+
+    bool path_ok = true;
+    const std::string rel_sub =
+        req.has_param("path")
+            ? normalize_rel_subpath_for_stats(req.get_param_value("path"), &path_ok)
+            : std::string();
+
+    if (!path_ok) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_root =
+        std::filesystem::path(pqnas::data_root_dir()) / user.root_rel;
+
+    const std::filesystem::path scan_root =
+        rel_sub.empty() ? user_root : (user_root / rel_sub);
+
+    std::error_code ec;
+    if (!std::filesystem::exists(scan_root, ec) || !std::filesystem::is_directory(scan_root, ec)) {
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"stats", {
+                {"total_photos", 0},
+                {"total_bytes", 0},
+                {"total_megabytes", 0.0},
+                {"photos_with_exif", 0},
+                {"unique_cameras", 0},
+                {"unique_lenses", 0},
+                {"first_taken_at", ""},
+                {"last_taken_at", ""},
+                {"top_cameras", json::array()},
+                {"top_lenses", json::array()},
+                {"iso_buckets", json::array()},
+                {"aperture_buckets", json::array()},
+                {"shutter_buckets", json::array()},
+                {"focal_length_buckets", json::array()},
+                {"by_month", json::array()}
+            }}
+        }.dump());
+        return;
+    }
+
+    sqlite3* db = nullptr;
+    const std::filesystem::path db_path =
+        std::filesystem::path(pqnas::data_root_dir()) / "photogallery_stats.sqlite3";
+
+    if (sqlite3_open(db_path.string().c_str(), &db) != SQLITE_OK) {
+        const std::string err = db ? sqlite3_errmsg(db) : "sqlite open failed";
+        if (db) sqlite3_close(db);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "sqlite_open_failed"},
+            {"message", err}
+        }.dump());
+        return;
+    }
+
+    std::string schema_err;
+    if (!ensure_photo_stats_schema(db, &schema_err)) {
+        sqlite3_close(db);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "sqlite_schema_failed"},
+            {"message", schema_err}
+        }.dump());
+        return;
+    }
+
+    std::uint64_t total_photos = 0;
+    std::uint64_t total_bytes = 0;
+    std::uint64_t photos_with_exif = 0;
+
+    std::set<std::string> unique_cameras;
+    std::set<std::string> unique_lenses;
+
+    std::map<std::string, int> top_cameras;
+    std::map<std::string, int> top_lenses;
+    std::map<std::string, int> iso_buckets;
+    std::map<std::string, int> aperture_buckets;
+    std::map<std::string, int> shutter_buckets;
+    std::map<std::string, int> focal_buckets;
+    std::map<std::string, int> by_month;
+
+    std::string first_taken_at;
+    std::string last_taken_at;
+
+    const std::int64_t indexed_now = static_cast<std::int64_t>(std::time(nullptr));
+
+    sqlite3_exec(db, "BEGIN IMMEDIATE TRANSACTION", nullptr, nullptr, nullptr);
+
+    for (std::filesystem::recursive_directory_iterator it(scan_root, ec), end;
+         it != end && !ec;
+         it.increment(ec)) {
+        if (ec) break;
+
+        std::error_code ec2;
+        if (!it->is_regular_file(ec2) || ec2) continue;
+
+        const std::filesystem::path abs = it->path();
+        if (!is_supported_photo_ext(abs)) continue;
+
+        const std::string rel =
+            std::filesystem::relative(abs, user_root, ec2).generic_string();
+        if (ec2 || rel.empty()) continue;
+
+        const std::uint64_t size_bytes = file_size_u64_safe_local(abs);
+        const std::int64_t mtime_epoch = file_mtime_epoch_safe_local(abs);
+
+        ++total_photos;
+        total_bytes += size_bytes;
+
+        PhotoStatsRow row;
+        const bool have_cached = load_cached_photo_stats_row(db, rel, &row);
+        const bool cache_match =
+            have_cached &&
+            row.size_bytes == size_bytes &&
+            row.mtime_epoch == mtime_epoch;
+
+        if (!cache_match) {
+            row = exif_row_from_file(rel, abs, size_bytes, mtime_epoch);
+            std::string upsert_err;
+            (void)upsert_photo_stats_row(db, row, indexed_now, &upsert_err);
+        }
+
+        if (row.exif_ok) ++photos_with_exif;
+
+        const std::string camera = camera_label_from_row(row);
+        const std::string lens = lens_label_from_row(row);
+
+        if (!camera.empty()) unique_cameras.insert(camera);
+        if (!lens.empty()) unique_lenses.insert(lens);
+
+        bump_bucket(top_cameras, camera);
+        bump_bucket(top_lenses, lens);
+        bump_bucket(iso_buckets, iso_bucket_from_row(row));
+        bump_bucket(aperture_buckets, aperture_bucket_from_row(row));
+        bump_bucket(shutter_buckets, shutter_bucket_from_row(row));
+        bump_bucket(focal_buckets, focal_bucket_from_row(row));
+        bump_bucket(by_month, row.taken_month);
+
+        if (!row.taken_at.empty()) {
+            if (first_taken_at.empty() || row.taken_at < first_taken_at) first_taken_at = row.taken_at;
+            if (last_taken_at.empty() || row.taken_at > last_taken_at) last_taken_at = row.taken_at;
+        }
+    }
+
+    sqlite3_exec(db, "COMMIT", nullptr, nullptr, nullptr);
+    sqlite3_close(db);
+
+    json stats;
+    stats["total_photos"] = total_photos;
+    stats["total_bytes"] = total_bytes;
+    stats["total_megabytes"] =
+        static_cast<double>(total_bytes) / (1024.0 * 1024.0);
+
+    stats["photos_with_exif"] = photos_with_exif;
+    stats["unique_cameras"] = static_cast<unsigned long long>(unique_cameras.size());
+    stats["unique_lenses"] = static_cast<unsigned long long>(unique_lenses.size());
+    stats["first_taken_at"] = first_taken_at;
+    stats["last_taken_at"] = last_taken_at;
+
+    stats["top_cameras"] = top_bucket_array(top_cameras, 10);
+    stats["top_lenses"] = top_bucket_array(top_lenses, 10);
+    stats["iso_buckets"] = top_bucket_array(iso_buckets, 12);
+    stats["aperture_buckets"] = top_bucket_array(aperture_buckets, 12);
+    stats["shutter_buckets"] = top_bucket_array(shutter_buckets, 12);
+    stats["focal_length_buckets"] = top_bucket_array(focal_buckets, 12);
+
+    {
+        std::vector<std::pair<std::string, int>> months(by_month.begin(), by_month.end());
+        std::sort(months.begin(), months.end(), [](const auto& a, const auto& b) {
+            return a.first < b.first;
+        });
+
+        stats["by_month"] = json::array();
+        for (const auto& kv : months) {
+            stats["by_month"].push_back({
+                {"label", kv.first},
+                {"count", kv.second}
+            });
+        }
+    }
+
+    res.set_header("Cache-Control", "no-store");
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", rel_sub},
+        {"stats", stats}
+    }.dump());
+});
 
 // ---- Files API (user storage) ----
 // PUT /api/v4/files/put?path=relative/path.bin[&overwrite=1]

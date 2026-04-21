@@ -1,0 +1,337 @@
+.pgStatsSummary{
+    display:grid;
+    grid-template-columns:repeat(auto-fit, minmax(170px, 1fr));
+    gap:12px;
+    margin-bottom:16px;
+}
+
+.pgStatsCard{
+    border:1px solid var(--border2);
+    border-radius:16px;
+    background:rgba(0,0,0,0.18);
+    padding:14px;
+    min-height:88px;
+    display:flex;
+    flex-direction:column;
+    justify-content:space-between;
+    gap:8px;
+}
+
+.pgStatsCardK{
+    font-size:12px;
+    font-weight:800;
+    color:rgba(var(--fg-rgb),0.70);
+    letter-spacing:.2px;
+}
+
+.pgStatsCardV{
+    font-size:22px;
+    font-weight:950;
+    line-height:1.1;
+    color:rgba(var(--fg-rgb),0.98);
+}
+
+.pgStatsCardSub{
+    font-size:12px;
+    color:var(--fg-dim);
+    font-family:var(--mono);
+    overflow-wrap:anywhere;
+}
+
+.pgStatsSection{
+    border:1px solid var(--border2);
+    border-radius:16px;
+    background:rgba(0,0,0,0.16);
+    padding:14px;
+    margin-top:14px;
+}
+
+.pgStatsSectionTitle{
+    font-size:14px;
+    font-weight:950;
+    margin-bottom:12px;
+    color:rgba(var(--fg-rgb),0.96);
+}
+
+.pgStatsGrid2{
+    display:grid;
+    grid-template-columns:repeat(2, minmax(0, 1fr));
+    gap:14px;
+    margin-top:14px;
+}
+
+@media (max-width: 960px){
+    .pgStatsGrid2{
+        grid-template-columns:1fr;
+    }
+}
+
+.pgStatsList,
+.pgStatsChart{
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+}
+
+.pgStatsRow{
+    display:flex;
+    flex-direction:column;
+    gap:6px;
+}
+
+.pgStatsRowHead{
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    gap:12px;
+}
+
+.pgStatsRowLabel{
+    min-width:0;
+    font-size:13px;
+    font-weight:850;
+    color:rgba(var(--fg-rgb),0.96);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+
+.pgStatsRowValue{
+    flex:0 0 auto;
+    font-size:12px;
+    font-family:var(--mono);
+    color:var(--fg-dim);
+}
+
+.pgStatsBar{
+    position:relative;
+    height:12px;
+    border-radius:999px;
+    overflow:hidden;
+    border:1px solid var(--border2);
+    background:rgba(255,255,255,0.04);
+}
+
+.pgStatsBarFill{
+    position:absolute;
+    inset:0 auto 0 0;
+    width:0%;
+    border-radius:999px;
+    background:linear-gradient(90deg,
+    rgba(var(--fg-rgb),0.88),
+    rgba(var(--fg-rgb),0.46));
+    box-shadow:0 0 18px rgba(var(--fg-rgb),0.18);
+}
+
+.pgStatsEmpty{
+    border:1px dashed var(--border2);
+    border-radius:14px;
+    padding:14px;
+    color:var(--fg-dim);
+    font-size:13px;
+    background:rgba(0,0,0,0.10);
+}
+
+.pgStatsNote{
+    margin-top:10px;
+    font-size:12px;
+    color:var(--fg-dim);
+    font-family:var(--mono);
+}
+/* ===== Stats modal color pass ===== */
+
+#statsModal .modalCard{
+    border:1px solid rgba(var(--fg-rgb),0.22);
+    background:
+            radial-gradient(1200px 700px at 12% 0%, rgba(var(--fg-rgb),0.09), transparent 52%),
+            radial-gradient(900px 600px at 100% 0%, rgba(255,0,170,0.08), transparent 48%),
+            linear-gradient(180deg, rgba(255,255,255,0.03), rgba(0,0,0,0.36));
+    box-shadow:
+            0 18px 70px rgba(0,0,0,0.55),
+            0 0 0 1px rgba(var(--fg-rgb),0.05) inset;
+}
+
+#statsModal .modalHead{
+    background:
+            linear-gradient(180deg, rgba(var(--fg-rgb),0.09), rgba(0,0,0,0.12));
+    border-bottom:1px solid rgba(var(--fg-rgb),0.12);
+}
+
+#statsModal .modalBody{
+    background: transparent;
+}
+
+#statsModal .modalTitle{
+    color: rgba(var(--fg-rgb),0.98);
+    text-shadow: 0 0 16px rgba(var(--fg-rgb),0.18);
+}
+
+#statsModal .modalSub,
+#statsModal #statsStatus{
+    color: rgba(var(--fg-rgb),0.72);
+}
+
+/* summary cards */
+#statsSummary{
+    display:grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap:14px;
+    margin-bottom:16px;
+}
+
+#statsSummary > *{
+    border:1px solid rgba(var(--fg-rgb),0.14);
+    border-radius:16px;
+    padding:14px 16px;
+    background:
+            linear-gradient(180deg, rgba(var(--fg-rgb),0.08), rgba(255,255,255,0.02));
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.02) inset;
+}
+
+#statsSummary > *:nth-child(1){ border-color: rgba(0,240,248,0.30); }
+#statsSummary > *:nth-child(2){ border-color: rgba(255,210,70,0.32); }
+#statsSummary > *:nth-child(3){ border-color: rgba(130,255,160,0.30); }
+#statsSummary > *:nth-child(4){ border-color: rgba(255,110,220,0.28); }
+#statsSummary > *:nth-child(5){ border-color: rgba(140,170,255,0.30); }
+
+#statsSummary .k,
+#statsSummary .label,
+#statsSummary .title{
+    color: rgba(var(--fg-rgb),0.72);
+    font-size:12px;
+    font-weight:800;
+    text-transform:uppercase;
+    letter-spacing:.05em;
+}
+
+#statsSummary .v,
+#statsSummary .value,
+#statsSummary .num{
+    color: rgba(var(--fg-rgb),1);
+    font-size:18px;
+    font-weight:950;
+    margin-top:6px;
+}
+
+/* section panels */
+#statsModal .pgStatsSection{
+    border:1px solid rgba(var(--fg-rgb),0.12);
+    border-radius:18px;
+    padding:14px;
+    background:
+            linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.18));
+    box-shadow: 0 8px 30px rgba(0,0,0,0.14);
+}
+
+#statsModal .pgStatsSectionTitle{
+    color: rgba(var(--fg-rgb),0.96);
+    font-weight:950;
+    letter-spacing:.02em;
+    margin-bottom:10px;
+}
+
+/* give each chart/list its own accent */
+#statsTopCameras{ --stats-accent: #00f0f8; }
+#statsTopLenses{ --stats-accent: #ff5fd2; }
+#statsIsoChart{ --stats-accent: #ffd54f; }
+#statsApertureChart{ --stats-accent: #7dff9c; }
+#statsShutterChart{ --stats-accent: #67b7ff; }
+#statsFocalChart{ --stats-accent: #b388ff; }
+#statsByMonthChart{ --stats-accent: #ff8a65; }
+
+/* list/chart rows */
+#statsModal .pgStatsListRow,
+#statsModal .pgStatsRow,
+#statsModal .pgStatsItem{
+    margin:10px 0 12px;
+}
+
+#statsModal .pgStatsListRowLabel,
+#statsModal .pgStatsRowLabel,
+#statsModal .pgStatsLabel{
+    color: rgba(var(--fg-rgb),0.95);
+    font-weight:850;
+}
+
+#statsModal .pgStatsListRowValue,
+#statsModal .pgStatsRowValue,
+#statsModal .pgStatsValue{
+    color: rgba(var(--fg-rgb),0.72);
+    font-family: var(--mono);
+    font-size:12px;
+}
+
+/* tracks */
+#statsTopCameras .pgStatsBarTrack,
+#statsTopLenses .pgStatsBarTrack,
+#statsIsoChart .pgStatsBarTrack,
+#statsApertureChart .pgStatsBarTrack,
+#statsShutterChart .pgStatsBarTrack,
+#statsFocalChart .pgStatsBarTrack,
+#statsByMonthChart .pgStatsBarTrack{
+    height:12px;
+    border-radius:999px;
+    background:
+            linear-gradient(180deg, rgba(255,255,255,0.06), rgba(0,0,0,0.16));
+    border:1px solid rgba(255,255,255,0.10);
+    overflow:hidden;
+}
+
+/* fills */
+#statsTopCameras .pgStatsBarFill,
+#statsTopLenses .pgStatsBarFill,
+#statsIsoChart .pgStatsBarFill,
+#statsApertureChart .pgStatsBarFill,
+#statsShutterChart .pgStatsBarFill,
+#statsFocalChart .pgStatsBarFill,
+#statsByMonthChart .pgStatsBarFill{
+    height:100%;
+    border-radius:999px;
+    background:
+            linear-gradient(90deg,
+            color-mix(in srgb, var(--stats-accent) 68%, white 32%),
+            var(--stats-accent));
+    box-shadow:
+            0 0 16px color-mix(in srgb, var(--stats-accent) 32%, transparent 68%),
+            0 0 0 1px rgba(255,255,255,0.08) inset;
+}
+
+/* empty blocks */
+#statsModal .pgStatsEmpty,
+#statsModal .pgStatsNoData,
+#statsModal .pgStatsList:empty,
+#statsModal .pgStatsChart:empty{
+    border:1px dashed rgba(var(--fg-rgb),0.16);
+    border-radius:14px;
+    padding:14px;
+    color: rgba(var(--fg-rgb),0.58);
+    background: rgba(255,255,255,0.02);
+}
+
+/* light theme tuning */
+html[data-theme="bright"] #statsModal .modalCard{
+    background:
+            radial-gradient(1200px 700px at 12% 0%, rgba(0,170,190,0.10), transparent 52%),
+            radial-gradient(900px 600px at 100% 0%, rgba(255,0,170,0.07), transparent 48%),
+            linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,248,252,0.98));
+    border-color: rgba(0,0,0,0.10);
+}
+
+html[data-theme="bright"] #statsModal .pgStatsSection,
+html[data-theme="bright"] #statsSummary > *{
+    background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(245,248,252,0.98));
+    border-color: rgba(0,0,0,0.10);
+}
+
+html[data-theme="bright"] #statsModal .modalTitle{
+    color: #083847;
+    text-shadow: none;
+}
+
+html[data-theme="bright"] #statsModal .modalSub,
+html[data-theme="bright"] #statsModal #statsStatus,
+html[data-theme="bright"] #statsModal .pgStatsListRowValue,
+html[data-theme="bright"] #statsModal .pgStatsRowValue,
+html[data-theme="bright"] #statsModal .pgStatsValue{
+    color: rgba(0,0,0,0.68);
+}

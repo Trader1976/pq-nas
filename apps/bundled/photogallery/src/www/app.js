@@ -1,6 +1,6 @@
 (() => {
     "use strict";
-
+    window.PQNAS_PHOTOGALLERY = window.PQNAS_PHOTOGALLERY || {};
     const el = (id) => document.getElementById(id);
 
     try {
@@ -2517,7 +2517,7 @@
 
     window.addEventListener("scroll", closeContextMenu, true);
     window.addEventListener("resize", closeContextMenu);
-    window.PQNAS_PHOTOGALLERY = window.PQNAS_PHOTOGALLERY || {};
+
     window.PQNAS_PHOTOGALLERY.getFilteredImageItems = () => filteredImageItems().slice();
     window.PQNAS_PHOTOGALLERY.currentRelPathFor = currentRelPathFor;
     window.PQNAS_PHOTOGALLERY.openPreviewFor = openPreviewFor;
@@ -2528,6 +2528,30 @@
     window.PQNAS_PHOTOGALLERY.setBadge = setBadge;
     window.PQNAS_PHOTOGALLERY.getSelectedRelPaths = () => selectedRelPathsList();
     window.PQNAS_PHOTOGALLERY.clearSelection = clearSelection;
+
+    window.PQNAS_PHOTOGALLERY.getCurrentPath = function () {
+        return state && typeof state.curPath === "string" ? state.curPath : "";
+    };
+
+    window.PQNAS_PHOTOGALLERY.getFilterState = function () {
+        return {
+            text: filterInput ? String(filterInput.value || "") : "",
+            rating: ratingFilter ? String(ratingFilter.value || "-1") : "-1",
+            thumbSize: thumbSizeSelect ? String(thumbSizeSelect.value || "160") : "160"
+        };
+    };
+
+    window.PQNAS_PHOTOGALLERY.reload = async function () {
+        if (typeof load === "function") {
+            return await load();
+        }
+    };
+
+    window.PQNAS_PHOTOGALLERY.api = window.PQNAS_PHOTOGALLERY.api || {};
+    window.PQNAS_PHOTOGALLERY.api.statsUrl = function () {
+        return "/api/v4/photogallery/stats";
+    };
+
     titleLine.textContent = "Photo Gallery";
     loadRatingFilterPref();
     loadThumbSizePref();
