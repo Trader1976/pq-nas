@@ -618,15 +618,21 @@
     function clearSelection() {
         selectedRelPaths.clear();
         selectionAnchorRelPath = "";
+        state.activeTilePath = "";
         clearSelectionDom();
+        updateTileSelection();
         updateSelectionUi();
     }
 
-    function setSingleSelection(relPath) {
+    function setSingleSelection(relPath, opts = {}) {
         if (!relPath) return;
         selectedRelPaths = new Set([relPath]);
         selectionAnchorRelPath = relPath;
         applySelectionToDom();
+        setActiveTileRelPath(relPath, {
+            scroll: opts.scroll === true,
+            focus: opts.focus === true
+        });
     }
 
     function toggleSelection(relPath) {
@@ -634,8 +640,11 @@
         if (selectedRelPaths.has(relPath)) selectedRelPaths.delete(relPath);
         else selectedRelPaths.add(relPath);
         applySelectionToDom();
+        setActiveTileRelPath(relPath, {
+            scroll: false,
+            focus: false
+        });
     }
-
     function ensureSelected(relPath) {
         if (!relPath) return;
         if (!selectedRelPaths.has(relPath)) {
@@ -665,6 +674,10 @@
         selectedRelPaths = next;
         selectionAnchorRelPath = String(toRelPath || "");
         applySelectionToDom();
+        setActiveTileRelPath(String(toRelPath || ""), {
+            scroll: false,
+            focus: false
+        });
     }
 
     function selectedRelPathsList() {
@@ -1348,8 +1361,9 @@
         const current = ensureActiveTile();
         const idx = Math.max(0, tiles.indexOf(current));
         const nextIdx = clamp(idx + delta, 0, tiles.length - 1);
+        const nextRel = tiles[nextIdx].dataset.relPath || "";
 
-        setActiveTileRelPath(tiles[nextIdx].dataset.relPath || "", {
+        setSingleSelection(nextRel, {
             scroll: true,
             focus: true
         });
@@ -1428,7 +1442,9 @@
         if (targetRow === pos.row) return;
 
         const targetCol = closestIndexByX(rows[targetRow], pos.entry.centerX);
-        setActiveTileRelPath(rows[targetRow][targetCol].relPath, {
+        const nextRel = rows[targetRow][targetCol].relPath;
+
+        setSingleSelection(nextRel, {
             scroll: true,
             focus: true
         });
@@ -1445,8 +1461,9 @@
 
         const targetRow = clamp(pos.row + (deltaPages * stepRows), 0, rows.length - 1);
         const targetCol = closestIndexByX(rows[targetRow], pos.entry.centerX);
+        const nextRel = rows[targetRow][targetCol].relPath;
 
-        setActiveTileRelPath(rows[targetRow][targetCol].relPath, {
+        setSingleSelection(nextRel, {
             scroll: true,
             focus: true
         });
@@ -1906,6 +1923,8 @@
             const rel = tile.dataset.relPath || "";
             if (!rel) return;
 
+            setActiveTileRelPath(rel, { scroll: false, focus: false });
+
             if (selectedRelPaths.size > 1) {
                 if (!selectedRelPaths.has(rel)) {
                     setSingleSelection(rel);
@@ -2153,38 +2172,7 @@
         clearSelection();
         setStatus("Selection cleared.");
     });
-    document.addEventListener("keydown", (e) => {
-        const previewOpen = !!(previewModal && previewModal.classList.contains("show"));
-        const metaOpen = !!(metaModal && metaModal.classList.contains("show"));
 
-        if (e.key === "Escape") {
-            if (metaOpen) {
-                e.preventDefault();
-                closeMetaModal();
-                return;
-            }
-            if (previewOpen) {
-                e.preventDefault();
-                closePreviewModal();
-            }
-            return;
-        }
-
-        if (!previewOpen) return;
-
-        if (e.key === "ArrowLeft") {
-            e.preventDefault();
-            const { idx } = currentPreviewIndex();
-            if (idx >= 0) openPreviewByIndex(idx - 1);
-            return;
-        }
-
-        if (e.key === "ArrowRight") {
-            e.preventDefault();
-            const { idx } = currentPreviewIndex();
-            if (idx >= 0) openPreviewByIndex(idx + 1);
-        }
-    });
 
     previewHead?.addEventListener("pointerdown", (e) => {
         if (!previewCard) return;
@@ -2306,18 +2294,64 @@
         closeContextMenu();
     });
     document.addEventListener("keydown", (e) => {
-        const anyModalOpen = !!document.querySelector(".modal.show");
-        if (anyModalOpen) return;
+        const previewOpen = !!(previewModal && previewModal.classList.contains("show"));
+        const metaOpen = !!(metaModal && metaModal.classList.contains("show"));
+
+        // Save hotkey handler lives elsewhere; don't interfere with typing.
+        if (metaOpen) {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                closeMetaModal();
+                return;
+            }
+
+            if (e.code === "Space" && !isTypingTarget(e.target)) {
+                e.preventDefault();
+                e.stopPropagation();
+                closeMetaModal();
+            }
+            return;
+        }
+
+        if (previewOpen) {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                closePreviewModal();
+                return;
+            }
+
+            if (e.key === "ArrowLeft") {
+                e.preventDefault();
+                const { idx } = currentPreviewIndex();
+                if (idx >= 0) openPreviewByIndex(idx - 1);
+                return;
+            }
+
+            if (e.key === "ArrowRight") {
+                e.preventDefault();
+                const { idx } = currentPreviewIndex();
+                if (idx >= 0) openPreviewByIndex(idx + 1);
+            }
+            return;
+        }
+
         if (isTypingTarget(e.target)) return;
 
         const tiles = getRenderedTiles();
         if (!tiles.length) return;
 
+        if (e.key === "Escape") {
+            closeContextMenu();
+            return;
+        }
+
         if (e.code === "Space") {
-            e.preventDefault(); // prevents page scroll
+            e.preventDefault();
+            e.stopPropagation();
             openSelectedTileMetadata();
             return;
         }
+
         switch (e.key) {
             case "ArrowLeft":
                 e.preventDefault();
@@ -2351,7 +2385,7 @@
 
             case "Home":
                 e.preventDefault();
-                setActiveTileRelPath(tiles[0].dataset.relPath || "", {
+                setSingleSelection(tiles[0].dataset.relPath || "", {
                     scroll: true,
                     focus: true
                 });
@@ -2359,7 +2393,7 @@
 
             case "End":
                 e.preventDefault();
-                setActiveTileRelPath(tiles[tiles.length - 1].dataset.relPath || "", {
+                setSingleSelection(tiles[tiles.length - 1].dataset.relPath || "", {
                     scroll: true,
                     focus: true
                 });
@@ -2371,32 +2405,7 @@
                 return;
         }
     });
-    document.addEventListener("keydown", (e) => {
-        const isSaveHotkey = (e.ctrlKey || e.metaKey) && String(e.key).toLowerCase() === "s";
-        if (!isSaveHotkey) return;
-
-        const metaOpen = !!(metaModal && metaModal.classList.contains("show"));
-        const shouldBlockBrowserSave =
-            metaOpen ||
-            metaSaveInFlight ||
-            Date.now() < suppressBrowserSaveUntil;
-
-        if (!shouldBlockBrowserSave) return;
-
-        e.preventDefault();
-        e.stopPropagation();
-
-        if (metaOpen && !metaSaveInFlight) {
-            saveMeta();
-        }
-    }, true);
-
-    document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") {
-            closeContextMenu();
-        }
-    });
-
+    
     window.addEventListener("scroll", closeContextMenu, true);
     window.addEventListener("resize", closeContextMenu);
     window.PQNAS_PHOTOGALLERY = window.PQNAS_PHOTOGALLERY || {};
