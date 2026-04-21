@@ -31883,51 +31883,145 @@ srv.Post("/api/v4/admin/users/avatar_upload", [&](const httplib::Request& req, h
         o.write(bytes.data(), (std::streamsize)bytes.size());
     }
 
-    const std::string url = std::string("/api/v4/admin/users/avatar?fingerprint=") + fp;
+    const std::string url = std::string("/api/v4/users/avatar?fingerprint=") + fp;
     reply_json(res, 200, json({{"ok",true},{"avatar_url",url}}).dump());
 });
 
 
-    // GET /api/v4/admin/users/avatar?fingerprint=...
-    srv.Get("/api/v4/admin/users/avatar", [&](const httplib::Request& req, httplib::Response& res) {
+// Shared avatar file responder used by both admin and normal-user avatar routes.
+auto serve_avatar_for_fingerprint = [&](const std::string& fp, httplib::Response& res) {
+    const std::filesystem::path dir = std::filesystem::path(pqnas::data_root_dir()) / "avatars";
+    const std::filesystem::path p_png  = dir / (fp + ".png");
+    const std::filesystem::path p_jpg  = dir / (fp + ".jpg");
+    const std::filesystem::path p_webp = dir / (fp + ".webp");
 
-        std::string actor_fp;
-        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp))
-            return;
+    std::filesystem::path p;
+    std::string ct;
 
-        const std::string fp = req.get_param_value("fingerprint");
-        if (fp.empty()) {
-            reply_json(res, 400,
-                json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
-            return;
+    if (std::filesystem::exists(p_png))      { p = p_png;  ct = "image/png"; }
+    else if (std::filesystem::exists(p_jpg)) { p = p_jpg;  ct = "image/jpeg"; }
+    else if (std::filesystem::exists(p_webp)){ p = p_webp; ct = "image/webp"; }
+    else {
+        reply_json(res, 404,
+            json({{"ok",false},{"error","not_found"},{"message","file missing"}}).dump());
+        return;
+    }
+
+    std::ifstream f(p, std::ios::binary);
+    if (!f.good()) {
+        reply_json(res, 500,
+            json({{"ok",false},{"error","server_error"},{"message","failed to open avatar"}}).dump());
+        return;
+    }
+
+    std::string bytes(
+        (std::istreambuf_iterator<char>(f)),
+        std::istreambuf_iterator<char>());
+
+    if (!f.good() && !f.eof()) {
+        reply_json(res, 500,
+            json({{"ok",false},{"error","server_error"},{"message","failed to read avatar"}}).dump());
+        return;
+    }
+
+    res.set_header("Cache-Control", "no-store");
+    res.set_content(bytes, ct.c_str());
+};
+
+// GET /api/v4/admin/users/avatar?fingerprint=...
+srv.Get("/api/v4/admin/users/avatar", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp;
+    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp))
+        return;
+
+    const std::string fp =
+        req.has_param("fingerprint") ? req.get_param_value("fingerprint") : "";
+
+    if (fp.empty()) {
+        reply_json(res, 400,
+            json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+        return;
+    }
+
+    serve_avatar_for_fingerprint(fp, res);
+});
+
+// GET /api/v4/users/avatar?fingerprint=...
+srv.Get("/api/v4/users/avatar", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+
+    // Use your normal logged-in user auth helper here.
+    // If your helper name differs, only this one line needs renaming.
+    if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &actor_role))
+        return;
+
+
+    const std::string target_fp =
+        req.has_param("fingerprint") ? req.get_param_value("fingerprint") : "";
+
+    if (target_fp.empty()) {
+        reply_json(res, 400,
+            json({{"ok",false},{"error","bad_request"},{"message","missing fingerprint"}}).dump());
+        return;
+    }
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500,
+            json({{"ok",false},{"error","users_reload_failed"},{"message","failed to reload users"}}).dump());
+        return;
+    }
+
+    if (!workspaces.load(workspaces_path)) {
+        reply_json(res, 500,
+            json({{"ok",false},{"error","workspaces_reload_failed"},{"message","failed to reload workspaces"}}).dump());
+        return;
+    }
+
+    bool allowed = false;
+
+    // Own avatar is always allowed.
+    if (target_fp == actor_fp) {
+        allowed = true;
+    }
+
+    // Enabled admins may view any avatar.
+    if (!allowed && users.is_admin_enabled(actor_fp)) {
+        allowed = true;
+    }
+
+    // Otherwise require both users to be enabled members of the same enabled workspace.
+    if (!allowed) {
+        for (const auto& kv : workspaces.snapshot()) {
+            const auto& w = kv.second;
+            if (w.status != "enabled") continue;
+
+            bool actor_in_same_workspace = false;
+            bool target_in_same_workspace = false;
+
+            for (const auto& m : w.members) {
+                if (m.status != "enabled") continue;
+
+                if (m.fingerprint == actor_fp)  actor_in_same_workspace = true;
+                if (m.fingerprint == target_fp) target_in_same_workspace = true;
+
+                if (actor_in_same_workspace && target_in_same_workspace) {
+                    allowed = true;
+                    break;
+                }
+            }
+
+            if (allowed) break;
         }
+    }
 
-        // Serve from data_root_dir()/avatars/<fp>.<ext>
-        const std::filesystem::path dir = std::filesystem::path(pqnas::data_root_dir()) / "avatars";
-        const std::filesystem::path p_png  = dir / (fp + ".png");
-        const std::filesystem::path p_jpg  = dir / (fp + ".jpg");
-        const std::filesystem::path p_webp = dir / (fp + ".webp");
+    if (!allowed) {
+        reply_json(res, 403,
+            json({{"ok",false},{"error","forbidden"},{"message","avatar access denied"}}).dump());
+        return;
+    }
 
-        std::filesystem::path p;
-        std::string ct;
-
-        if (std::filesystem::exists(p_png))      { p = p_png;  ct = "image/png"; }
-        else if (std::filesystem::exists(p_jpg)) { p = p_jpg;  ct = "image/jpeg"; }
-        else if (std::filesystem::exists(p_webp)){ p = p_webp; ct = "image/webp"; }
-        else {
-            reply_json(res, 404,
-                json({{"ok",false},{"error","not_found"},{"message","file missing"}}).dump());
-            return;
-        }
-
-        std::ifstream f(p, std::ios::binary);
-        std::string bytes(
-            (std::istreambuf_iterator<char>(f)),
-            std::istreambuf_iterator<char>());
-
-        res.set_header("Cache-Control", "no-store");
-        res.set_content(bytes, ct.c_str());
-    });
+    serve_avatar_for_fingerprint(target_fp, res);
+});
 
     // POST /api/v4/admin/users/avatar_remove
     srv.Post("/api/v4/admin/users/avatar_remove", [&](const httplib::Request& req, httplib::Response& res) {

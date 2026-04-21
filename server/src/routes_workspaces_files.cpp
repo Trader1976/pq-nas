@@ -634,7 +634,9 @@ json workspace_to_user_json(const WorkspaceRec& w,
 
     return out;
 }
-    json workspace_member_to_user_json(const WorkspaceMemberRec& m) {
+
+    json workspace_member_to_user_json(const WorkspaceMemberRec& m,
+                                           pqnas::UsersRegistry* users) {
     json out = json::object();
 
     out["fingerprint"] = m.fingerprint;
@@ -644,6 +646,26 @@ json workspace_to_user_json(const WorkspaceRec& w,
     out["added_by"] = m.added_by;
     out["responded_at"] = m.responded_at;
     out["responded_by"] = m.responded_by;
+
+    out["name"] = "";
+    out["avatar_url"] = "";
+
+    if (users) {
+        auto uopt = users->get(m.fingerprint);
+        if (uopt.has_value()) {
+            out["name"] = uopt->name;
+
+            std::string avatar_url = uopt->avatar_url;
+
+            // Normalize old stored admin-only avatar URLs to the user-visible route.
+            const std::string old_prefix = "/api/v4/admin/users/avatar?fingerprint=";
+            if (!avatar_url.empty() && avatar_url.rfind(old_prefix, 0) == 0) {
+                avatar_url = std::string("/api/v4/users/avatar?fingerprint=") + m.fingerprint;
+            }
+
+            out["avatar_url"] = avatar_url;
+        }
+    }
 
     return out;
 }
@@ -839,9 +861,9 @@ void register_workspace_file_routes(httplib::Server& srv,
         }
 
         deps.reply_json(res, 200, out.dump());
-    });
+});
 
-    srv.Get("/api/v4/workspaces/members",
+srv.Get("/api/v4/workspaces/members",
         [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp, actor_role;
     if (!deps.require_user_auth_users_actor ||
@@ -861,7 +883,14 @@ void register_workspace_file_routes(httplib::Server& srv,
         }.dump());
         return;
     }
-
+    if (!deps.users || !deps.users->load(deps.users_path)) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "users_reload_failed"},
+            {"message", "failed to reload users"}
+        }.dump());
+        return;
+    }
     const std::string workspace_id =
         req.has_param("workspace_id") ? trim_copy_safe(req.get_param_value("workspace_id")) : "";
 
@@ -913,7 +942,7 @@ void register_workspace_file_routes(httplib::Server& srv,
     out["members"] = json::array();
 
     for (const auto& m : w.members) {
-        out["members"].push_back(workspace_member_to_user_json(m));
+        out["members"].push_back(workspace_member_to_user_json(m, deps.users));
     }
 
     deps.reply_json(res, 200, out.dump());

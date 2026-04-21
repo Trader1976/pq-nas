@@ -538,8 +538,18 @@
             return;
         }
 
+        const escHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            "\"": "&quot;",
+            "'": "&#39;"
+        }[c]));
+
         workspaceMembersList.innerHTML = items.map((m) => {
             const fp = String(m.fingerprint || "");
+            const name = String(m.name || "");
+            const avatarUrl = String(m.avatar_url || "").trim();
             const role = String(m.role || "");
             const status = String(m.status || "");
             const addedAt = String(m.added_at || "");
@@ -551,17 +561,46 @@
             if (respondedAt) respondedBits.push(`responded ${respondedAt}`);
             if (respondedBy) respondedBits.push(`by ${respondedBy}`);
 
-            return `
-            <div style="border:1px solid rgba(var(--fg-rgb),0.12); border-radius:14px; background:rgba(0,0,0,0.16); padding:12px;">
-              <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:space-between;">
-                <div class="mono" style="font-weight:900; overflow-wrap:anywhere;">${fp}</div>
-                <span class="badge ${memberStatusClass(status)}">${status || "?"}</span>
-              </div>
+            const identityHtml = name
+                ? `
+                <div style="min-width:0;">
+                  <div style="font-weight:900; overflow-wrap:anywhere;">${escHtml(name)}</div>
+                  <div class="wsMemberFp mono" style="opacity:.78;">${escHtml(fp)}</div>
+                </div>
+              `
+                : `<div class="wsMemberFp mono">${escHtml(fp)}</div>`;
 
-              <div style="margin-top:8px; display:grid; gap:4px;">
-                <div><span class="k">Role</span> <span class="v">${role || "?"}</span></div>
-                <div><span class="k">Added</span> <span class="v">${addedAt || "?"}${addedBy ? ` by ${addedBy}` : ""}</span></div>
-                ${respondedBits.length ? `<div><span class="k">Response</span> <span class="v">${respondedBits.join(" ")}</span></div>` : ""}
+            const avatarHtml = avatarUrl
+                ? `
+                <img
+                  src="${escHtml(avatarUrl)}"
+                  alt=""
+                  style="width:56px; height:56px; border-radius:14px; object-fit:cover; border:1px solid rgba(var(--fg-rgb),0.14); background:rgba(0,0,0,0.12); flex:0 0 auto;"
+                />
+              `
+                : `
+                <div
+                  style="width:56px; height:56px; border-radius:14px; border:1px solid rgba(var(--fg-rgb),0.12); background:rgba(0,0,0,0.10); display:flex; align-items:center; justify-content:center; font-size:24px; opacity:.72; flex:0 0 auto;"
+                >👤</div>
+              `;
+
+            return `
+            <div class="wsMemberCard">
+              <div style="display:flex; gap:12px; align-items:flex-start;">
+                ${avatarHtml}
+
+                <div style="min-width:0; flex:1 1 auto;">
+                  <div class="wsMemberHead">
+                    ${identityHtml}
+                    <span class="badge ${memberStatusClass(status)}">${escHtml(status || "?")}</span>
+                  </div>
+
+                  <div class="wsMemberMeta">
+                    <div><span class="k">Role</span> <span class="v">${escHtml(role || "?")}</span></div>
+                    <div><span class="k">Added</span> <span class="v">${escHtml(addedAt || "?")}${addedBy ? ` by ${escHtml(addedBy)}` : ""}</span></div>
+                    ${respondedBits.length ? `<div><span class="k">Response</span> <span class="v">${escHtml(respondedBits.join(" "))}</span></div>` : ""}
+                  </div>
+                </div>
               </div>
             </div>
         `;
