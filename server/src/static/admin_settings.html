@@ -656,6 +656,11 @@
                         </label>
 
                         <label class="pill" style="gap:10px;">
+                            <span class="k">Automatic schedule</span>
+                            <input id="snapAuto" type="checkbox" />
+                        </label>
+
+                        <label class="pill" style="gap:10px;">
                             <span class="k">Per-volume schedule</span>
                             <input id="snapPerVolume" type="checkbox" />
                         </label>
@@ -698,6 +703,9 @@
                     </div>
 
                     <div class="note">
+                        If <b>Automatic schedule</b> is unchecked while snapshots remain enabled, snapshots are
+                        <b>manual only</b>: users/admins can still trigger “snapshot now”, but the scheduler does not run.
+                        <br/>
                         If per-volume schedule is enabled, each volume can override the global times/day + jitter.
                         Otherwise the global schedule applies to all volumes.
                     </div>

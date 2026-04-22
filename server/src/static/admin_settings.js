@@ -60,6 +60,7 @@
     // --- snapshots ---
     const snapPill = $("snapPill");
     const snapEnabled = $("snapEnabled");
+    const snapAuto = $("snapAuto");
     const snapTimesPerDay = $("snapTimesPerDay");
     const snapJitter = $("snapJitter");
     const snapRoot = $("snapRoot");
@@ -438,9 +439,12 @@
 
 
         const sched = s.schedule || {};
+        const schedMode = String(sched.mode || "times_per_day").trim();
+        const auto = schedMode !== "manual";
         const tpd = Number(sched.times_per_day ?? 6);
         const jit = Number(sched.jitter_seconds ?? 120);
 
+        if (snapAuto) snapAuto.checked = enabled && auto;
         if (snapTimesPerDay) snapTimesPerDay.value = String(Math.min(24, Math.max(1, tpd)));
         if (snapJitter) snapJitter.value = String(Math.min(3600, Math.max(0, jit)));
 
@@ -467,6 +471,8 @@
 
     function currentSnapshotsFromUi() {
         const enabled = !!snapEnabled?.checked;
+        const auto = !!snapAuto?.checked;
+        const schedMode = auto ? "times_per_day" : "manual";
 
         const global_tpd = Math.min(24, Math.max(1, parseInt(snapTimesPerDay?.value || "6", 10) || 6));
         const global_jitter = Math.min(3600, Math.max(0, parseInt(snapJitter?.value || "120", 10) || 120));
@@ -499,7 +505,7 @@
             backend: "btrfs",
             per_volume_policy: perVol,
             volumes,
-            schedule: { mode: "times_per_day", times_per_day: global_tpd, jitter_seconds: global_jitter },
+            schedule: { mode: schedMode, times_per_day: global_tpd, jitter_seconds: global_jitter },
             retention: base.retention && typeof base.retention === "object"
                 ? base.retention
                 : { keep_days: 7, keep_min: 12, keep_max: 500 }
@@ -514,7 +520,7 @@
                 const vtpd = Math.min(24, Math.max(1, parseInt(tpdSel?.value || String(global_tpd), 10) || global_tpd));
                 const vjit = Math.min(3600, Math.max(0, parseInt(jitInp?.value || String(global_jitter), 10) || global_jitter));
 
-                volumes[i].schedule = { mode: "times_per_day", times_per_day: vtpd, jitter_seconds: vjit };
+                volumes[i].schedule = { mode: schedMode, times_per_day: vtpd, jitter_seconds: vjit };
             }
         } else {
             // If per-volume disabled, remove per-volume schedules to keep config clean
@@ -529,35 +535,52 @@
 
     function syncSnapshotsEnabledUi() {
         const enabled = !!snapEnabled?.checked;
+        const auto = !!snapAuto?.checked;
         const perVol = !!snapPerVolume?.checked;
 
         // Grey out the section visually when disabled
         const card = snapEnabled?.closest?.(".card");
         const bd = card ? card.querySelector(".bd") : null;
-        if (bd) bd.classList.toggle("disabled-ui", !enabled);
+        // Do not dim the whole card body here, because Save/Reload stay enabled
+        // and should continue to look clickable.
+        void bd;
 
         // Always allow toggling + saving + reload
         if (snapEnabled) snapEnabled.disabled = false;
         if (btnSnapSave) btnSnapSave.disabled = false;
         if (btnSnapReload) btnSnapReload.disabled = false;
 
-        // Disable only “detail” inputs when disabled
-        const detailEls = [snapTimesPerDay, snapJitter, snapRoot, snapPerVolume];
-        for (const el of detailEls) {
-            if (!el) continue;
-            el.disabled = !enabled;
-        }
+        // Root remains editable whenever snapshots are enabled
+        if (snapRoot) snapRoot.disabled = !enabled;
 
-        // Enable/disable the per-volume table inputs based on enabled + perVol
+        // Automatic schedule toggle can be changed only when feature is enabled
+        if (snapAuto) snapAuto.disabled = !enabled;
+
+        // Schedule-only controls
+        if (snapTimesPerDay) snapTimesPerDay.disabled = !(enabled && auto);
+        if (snapJitter) snapJitter.disabled = !(enabled && auto);
+        if (snapPerVolume) snapPerVolume.disabled = !(enabled && auto);
+
+        // Enable/disable the per-volume table inputs based on enabled + auto + perVol
         if (snapVolTbody) {
             const rowControls = snapVolTbody.querySelectorAll(".snapVolTpd, .snapVolJit");
             for (const el of rowControls) {
-                el.disabled = !(enabled && perVol);
+                el.disabled = !(enabled && auto && perVol);
             }
         }
 
-        const label = enabled ? (perVol ? "Enabled • per-volume" : "Enabled") : "Disabled";
-        setSnapshotsPill(enabled ? "ok" : "warn", label);
+        let label = "Disabled";
+        let kind = "warn";
+
+        if (enabled && !auto) {
+            label = "Enabled • manual only";
+            kind = "ok";
+        } else if (enabled && auto) {
+            label = perVol ? "Enabled • automatic per-volume" : "Enabled • automatic";
+            kind = "ok";
+        }
+
+        setSnapshotsPill(kind, label);
 
         // Re-render table using latest loaded config (or current UI)
         renderSnapshotVolumesTable(gSnapshotsLast || currentSnapshotsFromUi());
@@ -1197,10 +1220,19 @@
         clearPreview();
     });
 
+    snapEnabled?.addEventListener("change", () => {
+        syncSnapshotsEnabledUi();
+    });
+
+    snapAuto?.addEventListener("change", () => {
+        syncSnapshotsEnabledUi();
+    });
+
     snapPerVolume?.addEventListener("change", () => {
         renderSnapshotVolumesTable(gSnapshotsLast || currentSnapshotsFromUi());
         syncSnapshotsEnabledUi();
     });
+
     // ---------------------------
     // Wire upload limits
     // ---------------------------

@@ -223,12 +223,13 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
     function updateButtons() {
         const hasVol = !!selectedVol;
+        const volEnabled = !!(selectedVol && selectedVol.enabled);
         const hasSnap = !!selectedSnap;
         const isSub = !!(selectedSnap && selectedSnap.is_btrfs_subvolume === true);
         const probe = String((selectedSnap && selectedSnap.probe) || "ok");
 
         detailsBtn.disabled = !hasSnap;
-        snapNowBtn.disabled = !hasVol;
+        snapNowBtn.disabled = !(hasVol && volEnabled);
         restoreBtn.disabled = !(hasVol && hasSnap && isSub && probe !== "no_privs");
     }
 
@@ -248,6 +249,11 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
                 selectedVol = v;
                 selectedSnap = null;
                 renderVolumes();
+
+                if (v.enabled === false) {
+                    status.textContent = `Volume ${v.name} is disabled for new snapshots. Loading existing snapshots…`;
+                }
+
                 loadSnapshotsForSelectedVol().catch(() => {});
             });
             volList.appendChild(d);
@@ -364,8 +370,14 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
         const noPrivsCount = snapshots.filter(s => String(s.probe || "") === "no_privs").length;
         const junkCount = snapshots.filter(s => s.is_btrfs_subvolume !== true).length;
+        const volEnabled = !!(selectedVol && selectedVol.enabled);
 
-        if (noPrivsCount > 0) {
+        if (!volEnabled) {
+            showBanner(
+                `⚠ Snapshots are <b>disabled</b> for volume <span class="mono">${escapeHtml(selectedVol.name)}</span> ` +
+                `in Admin Settings. Existing snapshots can still be viewed, but <b>Snapshot now</b> is unavailable.`
+            );
+        } else if (noPrivsCount > 0) {
             showBanner(
                 `⚠ Snapshot verification needs sudo privileges on this host. ` +
                 `${noPrivsCount} item(s) could not be verified. ` +
@@ -391,7 +403,11 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         }
 
         setBadge("ok", "ready");
-        status.textContent = `Snapshots loaded for ${selectedVol.name}.`;
+        if (selectedVol && selectedVol.enabled === false) {
+            status.textContent = `Snapshots loaded for ${selectedVol.name}. Snapshots are disabled for this volume, so manual create is unavailable.`;
+        } else {
+            status.textContent = `Snapshots loaded for ${selectedVol.name}.`;
+        }
         updateButtons();
     }
 
@@ -518,8 +534,14 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         if (msg.includes("Load failed")) return true;
         return false;
     }
+
     async function doSnapshotNow() {
         if (!selectedVol) return;
+        if (selectedVol.enabled === false) {
+            setBadge("warn", "disabled");
+            status.textContent = `Snapshots are disabled for ${selectedVol.name} in Admin Settings.`;
+            return;
+        }
 
         const vol = selectedVol.name;
 
@@ -563,8 +585,13 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
             status.textContent = "Ready.";
         } catch (e) {
             const msg = String(e && e.message ? e.message : e);
-            setBadge("err", "error");
-            status.textContent = `Snapshot now failed: ${msg}`;
+            if (msg.toLowerCase().includes("disabled")) {
+                setBadge("warn", "disabled");
+                status.textContent = `Snapshots are disabled for ${vol} in Admin Settings.`;
+            } else {
+                setBadge("err", "error");
+                status.textContent = `Snapshot now failed: ${msg}`;
+            }
         } finally {
             updateButtons();
         }

@@ -1,5 +1,4 @@
 #include "snapshot_provider.h"
-
 #include <nlohmann/json.hpp>
 
 #include <atomic>
@@ -14,9 +13,6 @@
 #include <vector>
 #include <ctime>
 #include <unordered_map>
-
-
-
 
 #include <fcntl.h>
 #include <sys/file.h>
@@ -266,14 +262,18 @@ std::thread start_snapshot_scheduler(
 
             if (!s.contains("snapshots") || !s["snapshots"].is_object()) continue;
             json sn = s["snapshots"];
-            const bool per_vol = sn.value("per_volume_schedule", false);
 
-
+            const bool per_vol =
+                sn.value("per_volume_policy",
+                         sn.value("per_volume_schedule", false));
 
             if (!sn.value("enabled", false)) continue;
             if (sn.value("backend", std::string("btrfs")) != "btrfs") continue;
 
             const json sched = sn.value("schedule", json::object());
+            const std::string mode = sched.value("mode", std::string("times_per_day"));
+            if (mode == "manual") continue;
+
             int tpd = sched.value("times_per_day", 6);
             int jitter = sched.value("jitter_seconds", 120);
             if (tpd < 1) tpd = 1;
@@ -395,6 +395,10 @@ std::thread start_snapshot_scheduler(
                     if (per_vol) {
                         const json vs = v.value("schedule", json::object());
                         if (vs.is_object()) {
+
+                            std::string v_mode = vs.value("mode", "times_per_day");
+                            if (v_mode == "manual") continue;
+                            
                             v_tpd    = vs.value("times_per_day", v_tpd);
                             v_jitter = vs.value("jitter_seconds", v_jitter);
                         }

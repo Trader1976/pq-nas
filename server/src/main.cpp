@@ -17059,7 +17059,10 @@ auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
 
         std::string mode = sched.value("mode", "times_per_day");
         if (sched.contains("mode") && !sched["mode"].is_string()) { err = "snapshots.schedule.mode must be string"; return json(); }
-        if (mode != "times_per_day") { err = "snapshots.schedule.mode must be: times_per_day"; return json(); }
+        if (mode != "manual" && mode != "times_per_day") {
+            err = "snapshots.schedule.mode must be: manual or times_per_day";
+            return json();
+        }
 
         int tpd = sched.value("times_per_day", 6);
         if (sched.contains("times_per_day") && !sched["times_per_day"].is_number_integer()) {
@@ -17122,8 +17125,8 @@ auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
                     err = "snapshots.volumes[].schedule.mode must be string";
                     return json();
                 }
-                if (vmode != "times_per_day") {
-                    err = "snapshots.volumes[].schedule.mode must be: times_per_day";
+                if (vmode != "manual" && vmode != "times_per_day") {
+                    err = "snapshots.volumes[].schedule.mode must be: manual or times_per_day";
                     return json();
                 }
 
@@ -31346,6 +31349,16 @@ srv.Post("/api/v4/snapshots/create", [&](const httplib::Request& req, httplib::R
     if (it == vols.end()) {
         audit_fail("unknown_volume", 404, vol);
         reply_json(res, 404, json{{"ok",false},{"error","not_found"},{"message","unknown volume"}}.dump());
+        return;
+    }
+
+    if (!it->enabled) {
+        audit_fail("snapshots_disabled", 409, vol);
+        reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "disabled"},
+            {"message", "snapshots are disabled for this volume"}
+        }.dump());
         return;
     }
 
