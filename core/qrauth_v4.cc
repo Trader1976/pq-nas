@@ -59,6 +59,16 @@ static int verify_ed25519_detached(const unsigned char pk[32],
     return crypto_sign_verify_detached(sig, msg, (unsigned long long)msg_len, pk);
 }
 
+static int ct_cstr_eq(const char *a, const char *b) {
+    if (!a || !b) return 0;
+
+    const size_t a_len = strlen(a);
+    const size_t b_len = strlen(b);
+    if (a_len != b_len) return 0;
+
+    return sodium_memcmp(a, b, a_len) == 0;
+}
+
 #if QR_V4_ENFORCE_TIME
 static int qr_now_long(long *out) {
     if (!out) return 0;
@@ -278,7 +288,7 @@ qr_err_t qr_verify_proof_token(
     const char *reqp_norm = req_in_proof;
     if (strncmp(reqp_norm, "v4.", 3) == 0) reqp_norm += 3;
 
-    if (strcmp(reqp_norm, req_norm) != 0) {
+    if (!ct_cstr_eq(reqp_norm, req_norm)) {
         return QR_ERR_REQ_MISMATCH;
     }
 
@@ -309,7 +319,7 @@ qr_err_t qr_verify_proof_token(
 
     char fp_calc_b64[256];
     b64url_encode(fp_calc_bytes, 64, fp_calc_b64, sizeof(fp_calc_b64));
-    if (strcmp(fp_calc_b64, fp_b64) != 0) {
+    if (!ct_cstr_eq(fp_calc_b64, fp_b64)) {
         return QR_ERR_FP_BINDING;
     }
 

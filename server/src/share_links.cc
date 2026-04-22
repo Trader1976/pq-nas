@@ -445,7 +445,7 @@ is_expired_utc()
 bool ShareRegistry::is_expired_utc(const std::string& expires_at_iso8601) {
     if (expires_at_iso8601.empty()) return false;
     std::tm tm{};
-    if (!iso8601_utc_to_tm(expires_at_iso8601, &tm)) return false; // fail-open: choose NOT expired on parse issues
+    if (!iso8601_utc_to_tm(expires_at_iso8601, &tm)) return true; // fail closed
     std::time_t exp = timegm_portable(&tm);
     std::time_t now = std::time(nullptr);
     return exp > 0 && now >= exp;
