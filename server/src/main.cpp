@@ -17916,38 +17916,6 @@ srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const http
     	}).dump());
 	});
 
-
-
-
-    // GET /api/v4/qr.svg?st=...
-    srv.Get("/api/v4/qr.svg", [&](const httplib::Request& req, httplib::Response& res) {
-        auto it = req.params.find("st");
-        if (it == req.params.end() || it->second.empty()) {
-            res.status = 400;
-            res.set_header("Content-Type", "application/json");
-            res.body = json({{"ok", false}, {"error", "bad_request"}, {"message", "missing st"}}).dump();
-            return;
-        }
-
-        const std::string st = it->second;
-
-        const std::string qr_uri =
-            "dna://auth?v=4&st=" + url_encode(st) +
-            "&origin=" + url_encode(ORIGIN) +
-            "&app=" + url_encode(APP_NAME);
-
-        try {
-            const std::string svg = qr_svg_from_text(qr_uri, 6, 4);
-            res.status = 200;
-            res.set_header("Content-Type", "image/svg+xml; charset=utf-8");
-            res.set_header("Cache-Control", "no-store");
-            res.body = svg;
-        } catch (const std::exception& e) {
-            res.status = 500;
-            res.set_header("Content-Type", "application/json");
-            res.body = json({{"ok", false}, {"error", "server_error"}, {"message", e.what()}}).dump();
-        }
-    });
     // --- Shared verify context (used by login verification routes) ---
 VerifyLoginCommonContext c;
 
