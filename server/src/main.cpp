@@ -18069,17 +18069,9 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
 
         f["body_len"] = std::to_string(req.body.size());
 
-        // Store the exact JSON body verified by server (TRUNCATED for safety).
-        // Increase limit if your proof JSON is larger, but keep an upper bound.
-        const size_t MAX_AUDIT_BODY = 32 * 1024; // 32 KiB
+        f["body_len"] = std::to_string(req.body.size());
         if (!req.body.empty()) {
-            if (req.body.size() <= MAX_AUDIT_BODY) {
-                f["verify_body_json"] = req.body; // exact bytes (assumes UTF-8 JSON)
-                f["verify_body_trunc"] = "0";
-            } else {
-                f["verify_body_json"] = req.body.substr(0, MAX_AUDIT_BODY);
-                f["verify_body_trunc"] = "1";
-            }
+            f["body_sha256"] = sha256_hex_lower_evp(req.body);
         }
     });
 
