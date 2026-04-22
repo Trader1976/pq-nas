@@ -330,17 +330,7 @@ void handle_verify_login_common(const httplib::Request& req,
         );
 
         if (ctx.session_cookie_mint(ctx.cookie_key, fp_b64, sess_iat, sess_exp, cookieVal)) {
-			if (ctx.audit_emit) {
-    		ctx.audit_emit("debug.cookie_format", "ok", [&](std::map<std::string,std::string>& f) {
-				f["cookie_has_path_root"] = (cookieVal.find("Path=/") != std::string::npos) ? "1" : "0";
-				f["cookie_has_httponly"]  = (cookieVal.find("HttpOnly") != std::string::npos) ? "1" : "0";
-				f["cookie_has_samesite"]  = (cookieVal.find("SameSite=") != std::string::npos) ? "1" : "0";
 
-        		f["starts_with_set_cookie"] =
-            		(cookieVal.rfind("Set-Cookie:", 0) == 0) ? "1" : "0";
-        		f["cookie_len"] = std::to_string(cookieVal.size());
-    		});
-		}
             if (ctx.approvals_put) {
                 VerifyLoginCommonContext::ApprovalEntry e;
                 e.cookie_val  = cookieVal;

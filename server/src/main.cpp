@@ -82,9 +82,6 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include <sys/wait.h>
 #include <sqlite3.h>
 
-extern "C" {
-#include "qrauth_v4.h"
-}
 #include "routes_v5.h"
 #include "verify_login_common.h"
 
