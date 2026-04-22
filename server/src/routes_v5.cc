@@ -551,9 +551,7 @@ srv.Post("/api/v5/consume", [&](const httplib::Request& req, httplib::Response& 
     reply_json(res, 200, json{
         {"ok", true},
         {"state", "consumed"},
-        {"k", key},
-        {"fingerprint", ae.fingerprint},
-        {"expires_at", ae.expires_at}
+        {"k", key}
     }.dump());
 });
 

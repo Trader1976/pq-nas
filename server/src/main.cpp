@@ -8748,7 +8748,7 @@ v5.app_pair_build_qr_uri =
     [&](const std::string& origin, const std::string& pair_token, const std::string& app_name) -> std::string {
         return pqnas::AppPairingStore::build_pair_qr_uri(origin, pair_token, app_name, v5.url_encode);
     };
-	// v4 verify bridge (phase-1)
+    // Verify bridge from shared verifier into RoutesV5Context
 	v5.verify_v4_json = [&](const std::string& body) -> RoutesV5Context::VerifyResult {
     	pqnas::VerifyV4Config cfg;
     	cfg.now_unix_sec = 0;
