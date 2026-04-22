@@ -9984,12 +9984,17 @@ srv.Post("/api/v4/storage/pools/execute-create", [&](const httplib::Request& req
     }
 
     const std::string pool_id = plan.value("pool_id", "");
-    const std::string mount   = plan.value("mount", "");
     const std::string disk    = plan.value("disk", "");
-    const std::string label   = plan.value("label", "");
+    const std::string mode    = plan.value("mode", "single");
     const bool force          = plan.value("force", false);
 
-    if (!is_pool_id_safe(pool_id) || mount.empty() || disk.rfind("/dev/",0)!=0 || label.empty()) {
+    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
+    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
+
+    const std::string mount = mount_for_pool_id(allowed_prefix, pool_id);
+    const std::string label = btrfs_label_for_pool_id(pool_id);
+
+    if (!is_pool_id_safe(pool_id) || !is_dev_path_basic_safe(disk) || mount.empty() || label.empty()) {
         audit_fail(actor_fp, "bad_plan_fields", 400, "",
                    json{{"pool_id", pool_id}, {"mount", mount}, {"disk", disk}, {"label", label}});
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_plan_fields"}}.dump());
@@ -10001,15 +10006,32 @@ srv.Post("/api/v4/storage/pools/execute-create", [&](const httplib::Request& req
         reply_json(res, 412, json{{"ok", false}, {"error", "force_required"}}.dump());
         return;
     }
-
-    if (!plan.contains("commands") || !plan["commands"].is_array()) {
-        audit_fail(actor_fp, "missing_commands", 400,
-                   "", json{{"pool_id", pool_id}, {"mount", mount}, {"disk", disk}, {"label", label}});
-        reply_json(res, 400, json{{"ok", false}, {"error", "missing_commands"}}.dump());
+    if (mode != "single") {
+        audit_fail(actor_fp, "unsupported_mode", 400,
+                   "", json{{"pool_id", pool_id}, {"disk", disk}, {"mode", mode}});
+        reply_json(res, 400, json{{"ok", false}, {"error", "unsupported_mode"}}.dump());
         return;
     }
 
-    const json commands = plan["commands"];
+    const std::string part =
+        (disk.find("/dev/nvme") == 0 || disk.find("/dev/mmcblk") == 0) ? (disk + "p1") : (disk + "1");
+
+    json commands = json::array();
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk --zap-all " + sh_quote(disk));
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(disk));
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk -n 1:0:0 -t 1:8300 -c 1:PQNAS_BTRFS " + sh_quote(disk));
+    commands.push_back("/usr/bin/sudo -n /usr/sbin/partprobe " + sh_quote(disk));
+    commands.push_back("/usr/bin/sudo -n /usr/bin/udevadm settle");
+    commands.push_back("/usr/bin/sudo -n /usr/bin/mkfs.btrfs -f -L " + sh_quote(label) + " -m single -d single " + sh_quote(part));
+    commands.push_back("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(mount));
+    commands.push_back("/usr/bin/sudo -n /bin/mount " + sh_quote(part) + " " + sh_quote(mount));
+
+    if (plan.contains("commands") && plan["commands"].is_array() && plan["commands"] != commands) {
+        audit_fail(actor_fp, "plan_commands_mismatch", 409,
+                   "", json{{"pool_id", pool_id}, {"disk", disk}});
+        reply_json(res, 409, json{{"ok", false}, {"error", "plan_commands_mismatch"}}.dump());
+        return;
+    }
     json results = json::array();
 
     bool all_ok = true;
@@ -16029,6 +16051,7 @@ srv.Get("/api/v4/raid/health", [&](const httplib::Request& req, httplib::Respons
     // POST /api/v4/consume
     srv.Post("/api/v4/consume", [&](const httplib::Request& req, httplib::Response& res) {
         approvals_prune(pqnas::now_epoch());
+        pending_prune(pqnas::now_epoch());
 
         auto audit_ua = [&]() -> std::string {
             auto it = req.headers.find("User-Agent");
@@ -16052,7 +16075,68 @@ srv.Get("/api/v4/raid/health", [&](const httplib::Request& req, httplib::Respons
             std::string sid = body.value("sid", "");
             if (sid.empty()) {
                 audit_fail("", "missing_sid", 400);
-                reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing sid"}}).dump());
+                reply_json(res, 400, json({
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "missing sid"}
+                }).dump());
+                return;
+            }
+
+            auto get_cookie_value_local = [&](const std::string& name) -> std::string {
+                auto it = req.headers.find("Cookie");
+                if (it == req.headers.end()) return {};
+
+                const std::string& cookies = it->second;
+                size_t pos = 0;
+                while (pos < cookies.size()) {
+                    while (pos < cookies.size() && (cookies[pos] == ' ' || cookies[pos] == ';')) pos++;
+                    size_t eq = cookies.find('=', pos);
+                    if (eq == std::string::npos) break;
+                    size_t end = cookies.find(';', eq + 1);
+
+                    std::string key = cookies.substr(pos, eq - pos);
+                    std::string val = (end == std::string::npos)
+                        ? cookies.substr(eq + 1)
+                        : cookies.substr(eq + 1, end - (eq + 1));
+
+                    if (key == name) return val;
+                    if (end == std::string::npos) break;
+                    pos = end + 1;
+                }
+                return {};
+            };
+
+            PendingEntry pe;
+            if (!pending_get(sid, pe)) {
+                audit_fail(sid, "session_missing", 409);
+                reply_json(res, 409, json({
+                    {"ok", false},
+                    {"error", "session_missing"},
+                    {"message", "session missing"}
+                }).dump());
+                return;
+            }
+
+            const std::string preauth = get_cookie_value_local("pqnas_preauth");
+            if (preauth.empty()) {
+                audit_fail(sid, "preauth_required", 428);
+                reply_json(res, 428, json({
+                    {"ok", false},
+                    {"error", "preauth_required"},
+                    {"message", "missing browser binding cookie"}
+                }).dump());
+                return;
+            }
+
+            if (pe.browser_bind_hash.empty() ||
+                sha256_hex_lower_evp(preauth) != pe.browser_bind_hash) {
+                audit_fail(sid, "browser_binding_failed", 403);
+                reply_json(res, 403, json({
+                    {"ok", false},
+                    {"error", "browser_binding_failed"},
+                    {"message", "browser binding check failed"}
+                }).dump());
                 return;
             }
 
@@ -16066,12 +16150,14 @@ srv.Get("/api/v4/raid/health", [&](const httplib::Request& req, httplib::Respons
             long now = pqnas::now_epoch();
             if (now > e.expires_at) {
                 approvals_pop(sid);
+                pending_pop(sid);
                 audit_fail(sid, "approval_expired", 410);
                 reply_json(res, 410, json({{"ok",false},{"error","expired"},{"message","approval expired"}}).dump());
                 return;
             }
 
             approvals_pop(sid);
+            pending_pop(sid);
 
             {
                 pqnas::AuditEvent ev;
@@ -16111,7 +16197,12 @@ srv.Get("/api/v4/raid/health", [&](const httplib::Request& req, httplib::Respons
                 audit_append(ev);
             }
 
-            res.set_header("Set-Cookie", cookie);
+            std::string clear_preauth =
+                "pqnas_preauth=; Path=/api/v4/consume; Max-Age=0; HttpOnly; SameSite=Strict";
+            if (secure) clear_preauth += "; Secure";
+
+            res.headers.emplace("Set-Cookie", cookie);
+            res.headers.emplace("Set-Cookie", clear_preauth);
             reply_json(res, 200, json({{"ok",true}}).dump());
         } catch (const std::exception& e) {
             audit_fail("", "bad_json", 400);
@@ -16119,12 +16210,14 @@ srv.Get("/api/v4/raid/health", [&](const httplib::Request& req, httplib::Respons
         }
     });
 
-     srv.Get("/api/v4/audit/tail", [&](const httplib::Request& req, httplib::Response& res) {
-        int n = 200;
-        if (req.has_param("n")) {
-            try { n = std::stoi(req.get_param_value("n")); } catch (...) {}
-        }
-        n = std::max(1, std::min(1000, n));
+    srv.Get("/api/v4/audit/tail", [&](const httplib::Request& req, httplib::Response& res) {
+       if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
+       int n = 200;
+       if (req.has_param("n")) {
+           try { n = std::stoi(req.get_param_value("n")); } catch (...) {}
+       }
+       n = std::max(1, std::min(1000, n));
 
         std::ifstream f(audit_jsonl_path);
         std::deque<json> q;
@@ -16148,9 +16241,10 @@ srv.Get("/api/v4/raid/health", [&](const httplib::Request& req, httplib::Respons
         reply_json(res, 200, out.dump());
     });
 
-    srv.Get("/api/v4/audit/verify", [&](const httplib::Request&, httplib::Response& res) {
-        std::string state = trim_nl(slurp_file(audit_state_path));
+    srv.Get("/api/v4/audit/verify", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
 
+        std::string state = trim_nl(slurp_file(audit_state_path));
         std::string last_hash;
         {
             std::ifstream f(audit_jsonl_path);
@@ -18029,12 +18123,41 @@ srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const http
         long issued_at  = pqnas::now_epoch();
         long expires_at = issued_at + REQ_TTL;
 
+        approvals_prune(issued_at);
+        pending_prune(issued_at);
+
         std::string sid   = random_b64url(18);
         std::string chal  = random_b64url(32);
         std::string nonce = random_b64url(16);
 
         std::string payload  = build_req_payload_canonical(sid, chal, nonce, issued_at, expires_at);
         std::string st_token = sign_req_token(payload);
+
+        const bool secure = (ORIGIN.rfind("https://", 0) == 0);
+
+        const std::string preauth = random_b64url(32);
+        if (preauth.empty()) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "preauth_rng_failed"}
+            }.dump());
+            return;
+        }
+
+        PendingEntry pe;
+        pe.expires_at = expires_at;
+        pe.reason = "awaiting_scan";
+        pe.browser_bind_hash = sha256_hex_lower_evp(preauth);
+        pending_put(sid, pe);
+
+        std::string preauth_cookie =
+            "pqnas_preauth=" + preauth +
+            "; Path=/api/v4/consume" +
+            "; Max-Age=" + std::to_string(std::max<long>(0, expires_at - issued_at)) +
+            "; HttpOnly" +
+            "; SameSite=Strict";
+        if (secure) preauth_cookie += "; Secure";
 
         std::string qr_uri =
             "dna://auth?v=4&st=" + url_encode(st_token) +
@@ -18065,7 +18188,7 @@ srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const http
             ev.f["ua"] = pqnas::shorten(it == req.headers.end() ? "" : it->second);
             audit_append(ev);
         }
-
+        res.set_header("Set-Cookie", preauth_cookie);
         reply_json(res, 200, out.dump());
     };
 
@@ -33448,7 +33571,9 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         reply_json(res, 200, json({{"ok",true}}).dump());
     });
 
-    srv.Get("/api/v4/debug/approvals", [&](const httplib::Request&, httplib::Response& res) {
+    srv.Get("/api/v4/debug/approvals", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
         json out;
         out["ok"] = true;
         out["count"] = 0;

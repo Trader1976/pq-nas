@@ -160,10 +160,6 @@ using qgp_dsa87_verify_fn = int (*)(const uint8_t* sig, size_t siglen,
 
         std::vector<std::string> candidates;
 
-        if (const char* env = std::getenv("PQNAS_DNA_LIB")) {
-            candidates.emplace_back(env);
-        }
-
         candidates.emplace_back(exe_dir_local() + "/libdna_lib.so");
 
         // Stable repo path (works when running from build/bin with repo layout unchanged)
