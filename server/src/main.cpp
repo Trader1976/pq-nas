@@ -9215,82 +9215,6 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
         reply_json(res, 200, json({{"ok",true},{"admin",true}}).dump());
     });
 
-// Polling endpoint (browser)
-srv.Get("/api/v4/status", [&](const httplib::Request& req, httplib::Response& res) {
-    // Prune both maps (approvals + pending) up-front so we don't leak memory
-    const long now0 = pqnas::now_epoch();
-    approvals_prune(now0);
-    pending_prune(now0);
-
-    auto audit_ua = [&]() -> std::string {
-        auto it = req.headers.find("User-Agent");
-        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
-    };
-
-    auto audit_fail = [&](const std::string& sid, const std::string& reason, int http_code) {
-        pqnas::AuditEvent ev;
-        ev.event = "v4.status_fail";
-        ev.outcome = "fail";
-        if (!sid.empty()) ev.f["sid"] = sid;
-        ev.f["reason"] = reason;
-        ev.f["http"] = std::to_string(http_code);
-        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-
-        auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
-
-        auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
-
-        ev.f["ua"] = audit_ua();
-        audit_append(ev);
-    };
-
-    auto sid = req.get_param_value("sid");
-    if (sid.empty()) {
-        audit_fail("", "missing_sid", 400);
-        reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","missing sid"}}).dump());
-        return;
-    }
-
-    // 1) If we have an approval entry, the phone already verified and /consume can succeed.
-    ApprovalEntry e;
-    if (approvals_get(sid, e)) {
-        const long now = pqnas::now_epoch();
-        if (now > e.expires_at) {
-            approvals_pop(sid);
-            reply_json(res, 200, json({{"ok",true},{"approved",false},{"expired",true}}).dump());
-            return;
-        }
-
-        reply_json(res, 200, json({{"ok",true},{"approved",true},{"fingerprint",e.fingerprint}}).dump());
-        return;
-    }
-
-    // 2) Otherwise: if this sid was marked pending (unknown/disabled user), tell browser to show wait page.
-    PendingEntry pe;
-    if (pending_get(sid, pe)) {
-        const long now = pqnas::now_epoch();
-        if (now <= pe.expires_at) {
-            json out = {
-                {"ok", true},
-                {"approved", false},
-                {"pending_admin", true},
-            };
-            // Only include reason if you actually store one (optional)
-            if (!pe.reason.empty()) out["reason"] = pe.reason;
-
-            reply_json(res, 200, out.dump());
-            return;
-        } else {
-            pending_pop(sid);
-        }
-    }
-
-    // 3) Default: not approved (normal "still waiting for phone approval" case)
-    reply_json(res, 200, json({{"ok",true},{"approved",false}}).dump());
-});
-
 // ----- GET /api/v4/storage/disks (admin-only) --------------------------------
 srv.Get("/api/v4/storage/disks", [&](const httplib::Request& req, httplib::Response& res) {
 pqnas::UsersRegistry users;
@@ -16084,168 +16008,6 @@ srv.Get("/api/v4/raid/health", [&](const httplib::Request& req, httplib::Respons
 });
 
 
-    // POST /api/v4/consume
-    srv.Post("/api/v4/consume", [&](const httplib::Request& req, httplib::Response& res) {
-        approvals_prune(pqnas::now_epoch());
-        pending_prune(pqnas::now_epoch());
-
-        auto audit_ua = [&]() -> std::string {
-            auto it = req.headers.find("User-Agent");
-            return pqnas::shorten(it == req.headers.end() ? "" : it->second);
-        };
-
-        auto audit_fail = [&](const std::string& sid, const std::string& reason, int http_code) {
-            pqnas::AuditEvent ev;
-            ev.event = "v4.consume_fail";
-            ev.outcome = "fail";
-            if (!sid.empty()) ev.f["sid"] = sid;
-            ev.f["reason"] = reason;
-            ev.f["http"] = std::to_string(http_code);
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            ev.f["ua"] = audit_ua();
-            audit_append(ev);
-        };
-
-        try {
-            json body = json::parse(req.body);
-            std::string sid = body.value("sid", "");
-            if (sid.empty()) {
-                audit_fail("", "missing_sid", 400);
-                reply_json(res, 400, json({
-                    {"ok", false},
-                    {"error", "bad_request"},
-                    {"message", "missing sid"}
-                }).dump());
-                return;
-            }
-
-            auto get_cookie_value_local = [&](const std::string& name) -> std::string {
-                auto it = req.headers.find("Cookie");
-                if (it == req.headers.end()) return {};
-
-                const std::string& cookies = it->second;
-                size_t pos = 0;
-                while (pos < cookies.size()) {
-                    while (pos < cookies.size() && (cookies[pos] == ' ' || cookies[pos] == ';')) pos++;
-                    size_t eq = cookies.find('=', pos);
-                    if (eq == std::string::npos) break;
-                    size_t end = cookies.find(';', eq + 1);
-
-                    std::string key = cookies.substr(pos, eq - pos);
-                    std::string val = (end == std::string::npos)
-                        ? cookies.substr(eq + 1)
-                        : cookies.substr(eq + 1, end - (eq + 1));
-
-                    if (key == name) return val;
-                    if (end == std::string::npos) break;
-                    pos = end + 1;
-                }
-                return {};
-            };
-
-            PendingEntry pe;
-            if (!pending_get(sid, pe)) {
-                audit_fail(sid, "session_missing", 409);
-                reply_json(res, 409, json({
-                    {"ok", false},
-                    {"error", "session_missing"},
-                    {"message", "session missing"}
-                }).dump());
-                return;
-            }
-
-            const std::string preauth = get_cookie_value_local("pqnas_preauth");
-            if (preauth.empty()) {
-                audit_fail(sid, "preauth_required", 428);
-                reply_json(res, 428, json({
-                    {"ok", false},
-                    {"error", "preauth_required"},
-                    {"message", "missing browser binding cookie"}
-                }).dump());
-                return;
-            }
-
-            if (pe.browser_bind_hash.empty() ||
-                sha256_hex_lower_evp(preauth) != pe.browser_bind_hash) {
-                audit_fail(sid, "browser_binding_failed", 403);
-                reply_json(res, 403, json({
-                    {"ok", false},
-                    {"error", "browser_binding_failed"},
-                    {"message", "browser binding check failed"}
-                }).dump());
-                return;
-            }
-
-            ApprovalEntry e;
-            if (!approvals_get(sid, e)) {
-                audit_fail(sid, "not_approved", 404);
-                reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","not approved"}}).dump());
-                return;
-            }
-
-            long now = pqnas::now_epoch();
-            if (now > e.expires_at) {
-                approvals_pop(sid);
-                pending_pop(sid);
-                audit_fail(sid, "approval_expired", 410);
-                reply_json(res, 410, json({{"ok",false},{"error","expired"},{"message","approval expired"}}).dump());
-                return;
-            }
-
-            approvals_pop(sid);
-            pending_pop(sid);
-
-            {
-                pqnas::AuditEvent ev;
-                ev.event = "v4.consume_ok";
-                ev.outcome = "ok";
-                ev.f["sid"] = sid;
-                if (!e.fingerprint.empty()) ev.f["fingerprint"] = e.fingerprint;
-                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-                ev.f["ua"] = audit_ua();
-                audit_append(ev);
-            }
-
-            const bool secure = (ORIGIN.rfind("https://", 0) == 0);
-
-            std::string cookie = "pqnas_session=" + e.cookie_val + "; Path=/; HttpOnly; SameSite=Lax";
-            cookie += "; Max-Age=" + std::to_string(SESS_TTL);
-            if (secure) cookie += "; Secure";
-
-            {
-                pqnas::AuditEvent ev;
-                ev.event = "v4.cookie_set";
-                ev.outcome = "ok";
-                ev.f["sid"] = sid;
-                if (!e.fingerprint.empty()) ev.f["fingerprint"] = e.fingerprint;
-                ev.f["secure"] = secure ? "true" : "false";
-                ev.f["max_age"] = std::to_string(SESS_TTL);
-
-                ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-
-                auto it_cf = req.headers.find("CF-Connecting-IP");
-                if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
-
-                auto it_xff = req.headers.find("X-Forwarded-For");
-                if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
-
-                ev.f["ua"] = audit_ua();
-                audit_append(ev);
-            }
-
-            std::string clear_preauth =
-                "pqnas_preauth=; Path=/api/v4/consume; Max-Age=0; HttpOnly; SameSite=Strict";
-            if (secure) clear_preauth += "; Secure";
-
-            res.headers.emplace("Set-Cookie", cookie);
-            res.headers.emplace("Set-Cookie", clear_preauth);
-            reply_json(res, 200, json({{"ok",true}}).dump());
-        } catch (const std::exception& e) {
-            audit_fail("", "bad_json", 400);
-            reply_json(res, 400, json({{"ok",false},{"error","bad_request"},{"message","invalid json"},{"detail",e.what()}}).dump());
-        }
-    });
-
     srv.Get("/api/v4/audit/tail", [&](const httplib::Request& req, httplib::Response& res) {
        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
 
@@ -18155,81 +17917,7 @@ srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const http
 	});
 
 
-    auto session_handler = [&](const httplib::Request& req, httplib::Response& res) {
-        long issued_at  = pqnas::now_epoch();
-        long expires_at = issued_at + REQ_TTL;
 
-        approvals_prune(issued_at);
-        pending_prune(issued_at);
-
-        std::string sid   = random_b64url(18);
-        std::string chal  = random_b64url(32);
-        std::string nonce = random_b64url(16);
-
-        std::string payload  = build_req_payload_canonical(sid, chal, nonce, issued_at, expires_at);
-        std::string st_token = sign_req_token(payload);
-
-        const bool secure = (ORIGIN.rfind("https://", 0) == 0);
-
-        const std::string preauth = random_b64url(32);
-        if (preauth.empty()) {
-            reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "server_error"},
-                {"message", "preauth_rng_failed"}
-            }.dump());
-            return;
-        }
-
-        PendingEntry pe;
-        pe.expires_at = expires_at;
-        pe.reason = "awaiting_scan";
-        pe.browser_bind_hash = sha256_hex_lower_evp(preauth);
-        pending_put(sid, pe);
-
-        std::string preauth_cookie =
-            "pqnas_preauth=" + preauth +
-            "; Path=/api/v4/consume" +
-            "; Max-Age=" + std::to_string(std::max<long>(0, expires_at - issued_at)) +
-            "; HttpOnly" +
-            "; SameSite=Strict";
-        if (secure) preauth_cookie += "; Secure";
-
-        std::string qr_uri =
-            "dna://auth?v=4&st=" + url_encode(st_token) +
-            "&origin=" + url_encode(ORIGIN) +
-            "&app=" + url_encode(APP_NAME);
-
-        json out = {
-            {"v", 4},
-            {"sid", sid},
-            {"expires_at", expires_at},
-            {"st", st_token},
-            {"req", st_token},
-            {"qr_uri", qr_uri}
-        };
-
-        {
-            pqnas::AuditEvent ev;
-            ev.event = "v4.session_issued";
-            ev.outcome = "ok";
-            ev.f["sid"] = sid;
-            ev.f["issued_at"] = std::to_string(issued_at);
-            ev.f["expires_at"] = std::to_string(expires_at);
-            ev.f["origin"] = ORIGIN;
-            ev.f["app"] = APP_NAME;
-            ev.f["client_ip"] = client_ip(req);
-            ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-            auto it = req.headers.find("User-Agent");
-            ev.f["ua"] = pqnas::shorten(it == req.headers.end() ? "" : it->second);
-            audit_append(ev);
-        }
-        res.set_header("Set-Cookie", preauth_cookie);
-        reply_json(res, 200, out.dump());
-    };
-
-    srv.Get("/api/v4/session", session_handler);
-    srv.Post("/api/v4/session", session_handler);
 
     // GET /api/v4/qr.svg?st=...
     srv.Get("/api/v4/qr.svg", [&](const httplib::Request& req, httplib::Response& res) {
@@ -18260,7 +17948,7 @@ srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const http
             res.body = json({{"ok", false}, {"error", "server_error"}, {"message", e.what()}}).dump();
         }
     });
-// --- Shared verify context (used by both /api/v4/verify and /api/v5/verify) ---
+    // --- Shared verify context (used by login verification routes) ---
 VerifyLoginCommonContext c;
 
 c.origin = &ORIGIN;
@@ -18366,16 +18054,7 @@ c.audit_emit = [&](const std::string& event,
     audit_append(ev);
 };
 
-// ---- Verify routes (short wrappers) ----
-srv.Post("/api/v4/verify", [&](const httplib::Request& req, httplib::Response& res) {
-    if (c.audit_emit) c.audit_emit("route.hit", "ok", [&](std::map<std::string,std::string>& f){
-        f["path"] = "/api/v4/verify";
-        f["ip"]   = req.remote_addr.empty() ? "?" : req.remote_addr;
-        auto it = req.headers.find("User-Agent");
-        if (it != req.headers.end()) f["ua"] = c.shorten ? c.shorten(it->second, 120) : it->second;
-    });
-    handle_verify_login_common(req, res, 4, c);
-});
+
 
 srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& res) {
     if (c.audit_emit) c.audit_emit("route.hit", "ok", [&](std::map<std::string,std::string>& f){

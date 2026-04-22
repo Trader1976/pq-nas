@@ -17,7 +17,7 @@
 //   sensitive data bounded (ctx.shorten).
 //
 // Non-responsibilities
-// - This file does not define HTTP routes; it is called by routes for /api/v4/verify
+// - This file does not define HTTP routes; it is called by login verify routes.
 //   and /api/v5/verify. Cookie delivery is done by /api/v5/consume.
 
 #include "verify_login_common.h"

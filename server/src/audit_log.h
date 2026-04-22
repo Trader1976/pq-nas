@@ -37,7 +37,6 @@ struct AuditEvent {
     // Event identifier.
     // Convention: "<subsystem>.<action>"
     // Examples:
-    //   - "v4.session_issued"
     //   - "v4.verify_ok"
     //   - "v4.verify_fail"
     //   - "policy.denied"
