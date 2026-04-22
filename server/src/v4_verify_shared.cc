@@ -22,17 +22,17 @@ static VerifyV4Result fail(VerifyV4Rc rc, const std::string& msg, const std::str
   return r;
 }
 
-VerifyV4Result verify_v4_json(
-    const std::string& verify_body_json,
-    const std::array<unsigned char, 32>& server_pk_ed25519,
-    const std::optional<VerifyV4Config>& cfg_opt)
+  VerifyV4Result verify_v4_json(
+      const std::string& request_body_json,
+      const std::array<unsigned char, 32>& server_pk_ed25519,
+      const std::optional<VerifyV4Config>& cfg_opt)
 {
   VerifyV4Config cfg = cfg_opt.value_or(VerifyV4Config{});
 
   // 1) Parse JSON + envelope + required fields
   json body;
   try {
-    body = json::parse(verify_body_json);
+    body = json::parse(request_body_json);
   } catch (const std::exception& e) {
     return fail(VerifyV4Rc::JSON_PARSE, "json parse failed", e.what());
   }

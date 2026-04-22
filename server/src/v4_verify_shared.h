@@ -67,9 +67,9 @@ struct VerifyV4Result {
   std::string detail; // short, no secrets
 };
 
-VerifyV4Result verify_v4_json(
-    const std::string& verify_body_json,
-    const std::array<unsigned char, 32>& server_pk_ed25519,
-    const std::optional<VerifyV4Config>& cfg = std::nullopt);
+  VerifyV4Result verify_v4_json(
+      const std::string& request_body_json,
+      const std::array<unsigned char, 32>& server_pk_ed25519,
+      const std::optional<VerifyV4Config>& cfg = std::nullopt);
 
 } // namespace pqnas
