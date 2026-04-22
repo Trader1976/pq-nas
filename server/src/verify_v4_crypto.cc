@@ -14,7 +14,9 @@
 #include <unistd.h>
 #include <limits.h>
 #include <filesystem>
-
+#include <array>
+#include <fstream>
+#include <unordered_set>
 
 namespace pqnas {
 
@@ -147,13 +149,87 @@ using qgp_dsa87_verify_fn = int (*)(const uint8_t* sig, size_t siglen,
                                    const uint8_t* msg, size_t msglen,
                                    const uint8_t* pk);
 
+static std::string hex_lower_bytes(const unsigned char* p, size_t n) {
+    static const char* kHex = "0123456789abcdef";
+    std::string out;
+    out.resize(n * 2);
+    for (size_t i = 0; i < n; ++i) {
+        out[i * 2]     = kHex[(p[i] >> 4) & 0x0f];
+        out[i * 2 + 1] = kHex[p[i] & 0x0f];
+    }
+    return out;
+}
+
+static bool sha256_file_hex(const std::string& path, std::string* out_hex, std::string* err) {
+    if (out_hex) out_hex->clear();
+    if (err) err->clear();
+
+    std::ifstream f(path, std::ios::binary);
+    if (!f) {
+        if (err) *err = "cannot open file";
+        return false;
+    }
+
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) {
+        if (err) *err = "EVP_MD_CTX_new failed";
+        return false;
+    }
+
+    bool ok = false;
+    do {
+        if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1) {
+            if (err) *err = "EVP_DigestInit_ex failed";
+            break;
+        }
+
+        std::array<char, 64 * 1024> buf{};
+        while (f) {
+            f.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+            const std::streamsize got = f.gcount();
+            if (got > 0) {
+                if (EVP_DigestUpdate(ctx, buf.data(), static_cast<size_t>(got)) != 1) {
+                    if (err) *err = "EVP_DigestUpdate failed";
+                    goto done;
+                }
+            }
+        }
+
+        if (!f.eof()) {
+            if (err) *err = "read failed";
+            break;
+        }
+
+        unsigned char md[EVP_MAX_MD_SIZE];
+        unsigned int md_len = 0;
+        if (EVP_DigestFinal_ex(ctx, md, &md_len) != 1) {
+            if (err) *err = "EVP_DigestFinal_ex failed";
+            break;
+        }
+
+        if (out_hex) *out_hex = hex_lower_bytes(md, md_len);
+        ok = true;
+    } while (false);
+
+done:
+    EVP_MD_CTX_free(ctx);
+    return ok;
+}
+
+static bool is_allowed_dna_lib_sha256(const std::string& hex) {
+    static const std::unordered_set<std::string> kAllowed = {
+        "38b9b528551df2e1b2ee65613cd87c5e6b3dfb3207d43e458ca2c4c300431ecb"
+    };
+    return kAllowed.find(hex) != kAllowed.end();
+}
+
     static qgp_dsa87_verify_fn load_qgp_dsa87_verify() {
         static void* h = nullptr;
         static qgp_dsa87_verify_fn fn = nullptr;
         if (fn) return fn;
 
         auto try_open = [&](const std::string& p) -> void* {
-            void* hh = dlopen(p.c_str(), RTLD_NOW);
+            void* hh = dlopen(p.c_str(), RTLD_NOW | RTLD_LOCAL);
             if (hh) return hh;
             return nullptr;
         };
@@ -168,23 +244,38 @@ using qgp_dsa87_verify_fn = int (*)(const uint8_t* sig, size_t siglen,
                 .lexically_normal().string()
         );
 
-        std::string last_err;
-        for (const auto& libpath : candidates) {
-            h = try_open(libpath);
-            if (h) {
-                fn = (qgp_dsa87_verify_fn)dlsym(h, "qgp_dsa87_verify");
-                if (!fn) {
-                    last_err = std::string("dlsym failed in ") + libpath;
-                    dlclose(h);
-                    h = nullptr;
-                    continue;
-                }
-                return fn;
-            } else {
-                const char* e = dlerror();
-                last_err = std::string("dlopen failed: ") + libpath + " : " + (e ? e : "");
-            }
+    std::string last_err;
+    for (const auto& libpath : candidates) {
+        std::string sha_hex;
+        std::string sha_err;
+        if (!sha256_file_hex(libpath, &sha_hex, &sha_err)) {
+            last_err = std::string("sha256 check failed: ") + libpath + " : " + sha_err;
+            continue;
         }
+
+        if (!is_allowed_dna_lib_sha256(sha_hex)) {
+            last_err = std::string("sha256 mismatch for ") + libpath + " : " + sha_hex;
+            continue;
+        }
+
+        h = try_open(libpath);
+        if (h) {
+            dlerror(); // clear any stale error
+            fn = (qgp_dsa87_verify_fn)dlsym(h, "qgp_dsa87_verify");
+            const char* sym_err = dlerror();
+            if (sym_err || !fn) {
+                last_err = std::string("dlsym failed in ") + libpath + " : " + (sym_err ? sym_err : "");
+                dlclose(h);
+                h = nullptr;
+                continue;
+            }
+            return fn;
+        }
+
+        const char* e = dlerror();
+        last_err = std::string("dlopen failed: ") + libpath + " : " + (e ? e : "");
+
+    }
 
         throw std::runtime_error(last_err.empty() ? "dlopen failed" : last_err);
     }
