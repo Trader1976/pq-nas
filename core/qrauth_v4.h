@@ -117,7 +117,7 @@ extern "C" {
     );
 
     // Verify the v4 phone response JSON body against the issued ST token.
-    // This matches the server /api/v4/verify logic:
+	// This matches the server /api/v5/verify flow:
     //
     // - verify ST signature (Ed25519) with server_pk_raw
     // - compute st_hash and compare to signed_payload.st_hash
