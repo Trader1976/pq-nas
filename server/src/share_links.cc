@@ -58,8 +58,8 @@ Caveats / future improvements:
   - save_atomic() does not fsync() directory entry; on some filesystems, a power
     loss could lose the rename. Consider fsync file + fsync parent directory for
     stronger durability if you need it.
-  - is_expired_utc() currently "fails open" on parse errors (treat as not expired).
-    Depending on your threat model, you may prefer "fail closed" (treat as expired).
+  - is_expired_utc() now fails closed on parse errors (treats malformed expiry as expired).
+    This is safer for security, but malformed stored timestamps will invalidate links.
 ================================================================================
 */
 
@@ -439,8 +439,8 @@ std::string ShareRegistry::add_seconds_utc_iso8601(long long seconds) {
 is_expired_utc()
   - Determines whether an ISO8601 UTC timestamp is in the past.
   - If expires_at is empty -> not expired.
-  - If parse fails -> currently treated as not expired (fail-open).
-    Consider fail-closed if you treat malformed expiration as suspicious.
+  - If parse fails -> treated as expired (fail-closed).
+    Malformed expiration timestamps are considered invalid for safety.
 */
 bool ShareRegistry::is_expired_utc(const std::string& expires_at_iso8601) {
     if (expires_at_iso8601.empty()) return false;
