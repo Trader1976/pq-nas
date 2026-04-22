@@ -33248,7 +33248,7 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         reply_json(res, 200, json({{"ok",true}}).dump());
     });
 
-    srv.Get("/api/v4/debug/approvals", [&](const httplib::Request& req, httplib::Response& res) {
+    srv.Get("/api/debug/auth/approvals", [&](const httplib::Request& req, httplib::Response& res) {
         const bool auth_debug_enabled = (std::getenv("PQNAS_ENABLE_AUTH_DEBUG") != nullptr);
         if (!auth_debug_enabled) {
             reply_json(res, 404, json{
