@@ -81,6 +81,7 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include <csignal>
 #include <sys/wait.h>
 #include <sqlite3.h>
+#include <unordered_set>
 
 #include "routes_v5.h"
 #include "verify_login_common.h"
@@ -695,8 +696,6 @@ static std::string effective_root_rel_for_user(const pqnas::UserRec& u,
     return data_root / root_rel;
 }
 
-
-static std::string mount_for_pool_id(const std::string& allowed_prefix, const std::string& pool_id);
 static std::filesystem::path user_dir_for_fp(pqnas::UsersRegistry& users, const std::string& fp_hex)
 {
     auto uopt = users.get(fp_hex);
@@ -2600,74 +2599,10 @@ static std::string pool_id_from_mount_best_effort(const std::string& mount) {
     return out;
 }
 
-static json pools_cfg_upgrade_to_v2_if_needed(json j) {
-    if (!j.is_object()) j = json::object();
-    int ver = 1;
-    try { if (j.contains("version")) ver = j["version"].get<int>(); } catch (...) { ver = 1; }
-
-    if (ver >= 2) {
-        // ensure shape
-        if (!j.contains("pools") || !j["pools"].is_object()) j["pools"] = json::object();
-        j["version"] = 2;
-        return j;
-    }
-
-    // v1 -> v2
-    json out = json::object();
-    out["version"] = 2;
-    out["pools"] = json::object();
-
-    const std::string ts = iso8601_now();
-
-    if (j.contains("names_by_mount") && j["names_by_mount"].is_object()) {
-        for (auto it = j["names_by_mount"].begin(); it != j["names_by_mount"].end(); ++it) {
-            const std::string mount = it.key();
-            std::string name;
-            try { name = it.value().is_string() ? it.value().get<std::string>() : ""; } catch (...) { name = ""; }
-
-            json one = json::object();
-            if (!name.empty()) one["display_name"] = name;
-            one["created_ts"] = ts;
-            one["managed"] = false; // existing entries are not “wizard-created”
-            out["pools"][mount] = one;
-        }
-    }
-
-    return out;
-}
 
 static std::filesystem::path pools_cfg_path_from_users_path(const std::string& users_path);
 static bool write_text_file_atomic(const std::string&, const std::string&);
 static bool read_text_file(const std::string&, std::string*);
-
-static json load_or_init_pools_cfg_v2(const std::string& users_path) {
-    const auto cfg_path = pools_cfg_path_from_users_path(users_path);
-
-    std::string txt;
-    if (read_text_file(cfg_path.string(), &txt)) {
-        try {
-            json j = json::parse(txt);
-            j = pools_cfg_upgrade_to_v2_if_needed(j);
-
-            std::error_code ec;
-            std::filesystem::create_directories(cfg_path.parent_path(), ec);
-            (void)write_text_file_atomic(cfg_path.string(), j.dump(2) + "\n");
-            return j;
-        } catch (...) {
-            // fall through to init
-        }
-    }
-
-    // init v2
-    json j = json::object();
-    j["version"] = 2;
-    j["pools"] = json::object();
-
-    std::error_code ec;
-    std::filesystem::create_directories(cfg_path.parent_path(), ec);
-    (void)write_text_file_atomic(cfg_path.string(), j.dump(2) + "\n");
-    return j;
-}
 
 static bool is_pool_id_safe(const std::string& s) {
     if (s.size() < 2 || s.size() > 24) return false;
@@ -2686,25 +2621,6 @@ static std::string upper_ascii_copy(std::string s) {
         if (c >= 'a' && c <= 'z') c = char(c - 'a' + 'A');
     }
     return s;
-}
-
-static std::string random_hex_64() {
-    std::array<unsigned char, 32> b{};
-    std::random_device rd;
-    for (auto& x : b) x = (unsigned char)(rd() & 0xFF);
-
-    static const char* H = "0123456789abcdef";
-    std::string out;
-    out.reserve(64);
-    for (unsigned char v : b) {
-        out.push_back(H[(v >> 4) & 0xF]);
-        out.push_back(H[(v >> 0) & 0xF]);
-    }
-    return out;
-}
-
-static std::string mount_for_pool_id(const std::string& allowed_prefix, const std::string& pool_id) {
-    return allowed_prefix + "/" + pool_id;
 }
 
 static std::string btrfs_label_for_pool_id(const std::string& pool_id) {
@@ -3836,6 +3752,158 @@ static bool ensure_dir_fail_closed(const std::string& dir, std::string* err) {
     }
 
     return true;
+}
+#include <unordered_set>
+#include <algorithm>
+#include <cctype>
+
+static bool validate_create_pool_devices(
+    const json& devices_json,
+    const json& disk_inventory,
+    std::vector<std::string>& devices_out,
+    std::string& err)
+{
+    devices_out.clear();
+
+    if (!devices_json.is_array() || devices_json.empty()) {
+        err = "devices must be a non-empty array";
+        return false;
+    }
+
+    std::unordered_set<std::string> seen;
+
+    for (const auto& v : devices_json) {
+        if (!v.is_string()) {
+            err = "device entry must be a string";
+            return false;
+        }
+
+        std::string dev = httplib::detail::trim_copy(v.get<std::string>());
+        if (!is_dev_path_basic_safe(dev)) {
+            err = "invalid device path: " + dev;
+            return false;
+        }
+
+        if (!seen.insert(dev).second) {
+            err = "duplicate device: " + dev;
+            return false;
+        }
+
+        if (!disk_inventory.contains("by_path") || !disk_inventory["by_path"].is_object()) {
+            err = "disk inventory missing by_path";
+            return false;
+        }
+
+        const auto& by_path = disk_inventory["by_path"];
+        if (!by_path.contains(dev) || by_path[dev].is_null()) {
+            err = "device not found in disk inventory: " + dev;
+            return false;
+        }
+
+        const auto& dinfo = by_path[dev];
+
+        auto truthy = [&](const char* key) -> bool {
+            if (!dinfo.contains(key) || dinfo[key].is_null()) return false;
+            const auto& x = dinfo[key];
+            if (x.is_boolean()) return x.get<bool>();
+            if (x.is_number_integer()) return x.get<long long>() != 0;
+            if (x.is_number_unsigned()) return x.get<unsigned long long>() != 0;
+            if (x.is_string()) {
+                const std::string s = x.get<std::string>();
+                return s == "1" || s == "true" || s == "yes";
+            }
+            return false;
+        };
+
+        if (truthy("mounted") ||
+            truthy("in_use") ||
+            truthy("busy") ||
+            truthy("has_children") ||
+            truthy("has_partitions")) {
+            err = "device is mounted or in use: " + dev;
+            return false;
+        }
+
+        if (truthy("is_system_disk") ||
+            truthy("is_root_disk")) {
+            err = "refusing system/root disk: " + dev;
+            return false;
+        }
+
+        devices_out.push_back(dev);
+    }
+
+    std::sort(devices_out.begin(), devices_out.end());
+    return true;
+}
+
+static json build_create_pool_commands_json(
+    const std::string& pool_id,
+    const std::string& mode,
+    const std::vector<std::string>& devices,
+    bool force)
+{
+    std::string root = getenv_str("PQNAS_STORAGE_ROOT");
+    if (root.empty()) root = "/srv/pqnas";
+
+    const std::string mount = root + "/pools/" + pool_id;
+
+    std::string label_pool_id = pool_id;
+    std::transform(label_pool_id.begin(), label_pool_id.end(), label_pool_id.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    const std::string label = "PQNAS_" + label_pool_id;
+
+    json cmds = json::array();
+
+    if (force) {
+        for (const auto& d : devices) {
+            cmds.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk --zap-all " + sh_quote(d));
+            cmds.push_back("/usr/bin/sudo -n /usr/sbin/partprobe " + sh_quote(d));
+            cmds.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(d));
+        }
+    }
+
+    std::string mkfs = "/usr/bin/sudo -n /usr/sbin/mkfs.btrfs -f ";
+    if (mode == "raid1") mkfs += "-d raid1 -m raid1 ";
+    mkfs += "-L " + sh_quote(label);
+    for (const auto& d : devices) mkfs += " " + sh_quote(d);
+    cmds.push_back(mkfs);
+
+    cmds.push_back("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(mount));
+    cmds.push_back("/usr/bin/sudo -n /bin/mount -t btrfs " +
+                   sh_quote(std::string("LABEL=") + label) + " " +
+                   sh_quote(mount));
+
+    cmds.push_back("/usr/bin/sudo -n /usr/bin/udevadm settle");
+    cmds.push_back("/usr/bin/sudo -n /usr/bin/btrfs device scan");
+    cmds.push_back("/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(mount));
+
+    const std::string data_dir = mount + "/data";
+    cmds.push_back("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(data_dir));
+    cmds.push_back("/usr/bin/sudo -n /bin/chown pqnas:pqnas " + sh_quote(data_dir));
+    cmds.push_back("/usr/bin/sudo -n /bin/chmod 0755 " + sh_quote(data_dir));
+
+    return cmds;
+}
+
+static std::string compute_create_pool_plan_id(
+    const std::string& plan_nonce,
+    const std::string& pool_id,
+    const std::string& mode,
+    const std::vector<std::string>& devices,
+    bool force,
+    const json& canonical_commands)
+{
+    json basis;
+    basis["op"] = "create-pool";
+    basis["plan_nonce"] = plan_nonce;
+    basis["pool_id"] = pool_id;
+    basis["mode"] = mode;
+    basis["force"] = force;
+    basis["devices"] = devices;
+    basis["commands"] = canonical_commands;
+
+    return sha256_hex_lower_evp(basis.dump());
 }
 
 static int open_excl_lockfile(const std::string& path, std::string* err) {
@@ -9721,353 +9789,7 @@ srv.Get("/api/v4/storage/pools", [&](const httplib::Request& req, httplib::Respo
     }.dump());
 });
 
-srv.Post("/api/v4/storage/pools/plan-create", [&](const httplib::Request& req, httplib::Response& res) {
-    pqnas::UsersRegistry users;
-    if (!users.load(users_path)) {
-        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
-        return;
-    }
-    if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
 
-    json body;
-    try { body = json::parse(req.body); }
-    catch (...) {
-        reply_json(res, 400, json{{"ok", false}, {"error", "bad_json"}}.dump());
-        return;
-    }
-
-    const std::string pool_id = body.value("pool_id", "");
-    const std::string disk    = body.value("disk", "");
-    const std::string mode    = body.value("mode", "single"); // for now: "single" only in wizard step 1
-    const bool force          = body.value("force", false);
-
-    // Allowed prefix
-    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
-    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
-
-    if (!is_pool_id_safe(pool_id)) {
-        reply_json(res, 400, json{{"ok", false}, {"error", "bad_pool_id"}, {"pool_id", pool_id}}.dump());
-        return;
-    }
-    if (disk.rfind("/dev/", 0) != 0) {
-        reply_json(res, 400, json{{"ok", false}, {"error", "bad_disk"}, {"disk", disk}}.dump());
-        return;
-    }
-    if (mode != "single") {
-        reply_json(res, 400, json{{"ok", false}, {"error", "unsupported_mode"}, {"mode", mode}}.dump());
-        return;
-    }
-
-    const std::string mount = mount_for_pool_id(allowed_prefix, pool_id);
-    const std::string label = btrfs_label_for_pool_id(pool_id);
-
-    // sanity: mount must be under prefix
-    if (mount.rfind(allowed_prefix, 0) != 0) {
-        reply_json(res, 400, json{{"ok", false}, {"error", "mount_not_allowed"}, {"mount", mount}}.dump());
-        return;
-    }
-
-    // Prevent collisions with existing btrfs mounts under prefix
-    {
-        std::string mounts_out;
-        int rc = run_capture("/usr/bin/findmnt -rn -t btrfs -o TARGET", &mounts_out);
-        cap_string(mounts_out, 1024 * 1024);
-        rtrim_inplace(mounts_out);
-
-        if (rc == 0) {
-            for (const std::string& raw : split_lines(mounts_out)) {
-                const std::string t = trim_copy(raw); // you already use trim_copy elsewhere in this file
-                if (!t.empty() && t == mount) {
-                    reply_json(res, 409, json{
-                        {"ok", false},
-                        {"error", "mount_already_exists"},
-                        {"mount", mount}
-                    }.dump());
-                    return;
-                }
-            }
-        }
-    }
-
-    // Plan
-    json plan;
-    plan["plan_id"] = random_hex_64();
-    plan["kind"] = "create_pool";
-    plan["pool_id"] = pool_id;
-    plan["mount"] = mount;
-    plan["disk"] = disk;
-    plan["mode"] = mode;
-    plan["label"] = label;
-    plan["force"] = force;
-    plan["ts"] = iso8601_now();
-
-    json warnings = json::array();
-    if (!force) warnings.push_back("This will erase the selected disk. Set force=true to allow destructive operations.");
-    plan["warnings"] = warnings;
-
-    json commands = json::array();
-
-    // We partition disk -> /dev/XXX1 (same style as add-device)
-    // (If you later want “use whole disk”, we’ll do a separate explicit mode.)
-    commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk --zap-all " + sh_quote(disk));
-    commands.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(disk));
-    commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk -n 1:0:0 -t 1:8300 -c 1:PQNAS_BTRFS " + sh_quote(disk));
-    commands.push_back("/usr/bin/sudo -n /usr/sbin/partprobe " + sh_quote(disk));
-    commands.push_back("/usr/bin/sudo -n /usr/bin/udevadm settle");
-
-    // partition path (simple “p1” handling like nvme vs sdX)
-    const std::string part =
-        (disk.find("/dev/nvme") == 0 || disk.find("/dev/mmcblk") == 0) ? (disk + "p1") : (disk + "1");
-
-    // Explicit profiles (you confirmed)
-    commands.push_back("/usr/bin/sudo -n /usr/bin/mkfs.btrfs -f -L " + sh_quote(label) + " -m single -d single " + sh_quote(part));
-
-    // mountpoint
-    commands.push_back("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(mount));
-    commands.push_back("/usr/bin/sudo -n /bin/mount " + sh_quote(part) + " " + sh_quote(mount));
-
-    plan["commands"] = commands;
-
-    reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
-});
-
-srv.Post("/api/v4/storage/pools/execute-create", [&](const httplib::Request& req, httplib::Response& res) {
-    pqnas::UsersRegistry users;
-    if (!users.load(users_path)) {
-        reply_json(res, 500, json{{"ok", false}, {"error", "users_load_failed"}, {"path", users_path}}.dump());
-        return;
-    }
-
-    // ---- audit helpers (match Files API style) ----
-    auto audit_ua = [&]() -> std::string {
-        auto it = req.headers.find("User-Agent");
-        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
-    };
-
-    auto audit_fail = [&](const std::string& actor_fp,
-                          const std::string& reason,
-                          int http,
-                          const std::string& detail = "",
-                          const json& extra = json::object()) {
-        pqnas::AuditEvent ev;
-        ev.event = "v4.storage_pools_execute_create_fail";
-        ev.outcome = "fail";
-        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
-        ev.f["reason"] = reason;
-        ev.f["http"] = std::to_string(http);
-        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 220);
-
-        // Optional structured context
-        if (extra.is_object()) {
-            for (auto it = extra.begin(); it != extra.end(); ++it) {
-                const std::string k = pqnas::shorten(it.key(), 64);
-                if (it.value().is_string()) ev.f["x_" + k] = pqnas::shorten(it.value().get<std::string>(), 220);
-                else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f["x_" + k] = it.value().dump();
-                else if (it.value().is_boolean()) ev.f["x_" + k] = (it.value().get<bool>() ? "true" : "false");
-                else ev.f["x_" + k] = pqnas::shorten(it.value().dump(), 220);
-            }
-        }
-
-        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-
-        auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
-
-        auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
-
-        ev.f["ua"] = audit_ua();
-        audit_append(ev); // rotates inside audit_append()
-    };
-
-    auto audit_ok = [&](const std::string& actor_fp,
-                        const json& extra = json::object()) {
-        pqnas::AuditEvent ev;
-        ev.event = "v4.storage_pools_execute_create_ok";
-        ev.outcome = "ok";
-        if (!actor_fp.empty()) ev.f["fingerprint"] = actor_fp;
-
-        if (extra.is_object()) {
-            for (auto it = extra.begin(); it != extra.end(); ++it) {
-                const std::string k = pqnas::shorten(it.key(), 64);
-                if (it.value().is_string()) ev.f["x_" + k] = pqnas::shorten(it.value().get<std::string>(), 220);
-                else if (it.value().is_number_integer() || it.value().is_number_unsigned()) ev.f["x_" + k] = it.value().dump();
-                else if (it.value().is_boolean()) ev.f["x_" + k] = (it.value().get<bool>() ? "true" : "false");
-                else ev.f["x_" + k] = pqnas::shorten(it.value().dump(), 220);
-            }
-        }
-
-        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
-
-        auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
-
-        auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
-
-        ev.f["ua"] = audit_ua();
-        audit_append(ev); // rotates inside audit_append()
-    };
-
-    // ---- auth (need actor fingerprint for audit) ----
-    std::string actor_fp;
-    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
-
-    json body;
-    try { body = json::parse(req.body); }
-    catch (...) {
-        audit_fail(actor_fp, "bad_json", 400);
-        reply_json(res, 400, json{{"ok", false}, {"error", "bad_json"}}.dump());
-        return;
-    }
-
-    if (!body.contains("plan") || !body["plan"].is_object()) {
-        audit_fail(actor_fp, "missing_plan", 400);
-        reply_json(res, 400, json{{"ok", false}, {"error", "missing_plan"}}.dump());
-        return;
-    }
-
-    const json plan = body["plan"];
-    const bool confirm = body.value("confirm", false);
-
-    if (!confirm) {
-        audit_fail(actor_fp, "confirm_required", 412);
-        reply_json(res, 412, json{{"ok", false}, {"error", "confirm_required"}}.dump());
-        return;
-    }
-
-    const std::string pool_id = plan.value("pool_id", "");
-    const std::string disk    = plan.value("disk", "");
-    const std::string mode    = plan.value("mode", "single");
-    const bool force          = plan.value("force", false);
-
-    std::string allowed_prefix = getenv_str("PQNAS_STORAGE_ROOT");
-    if (allowed_prefix.empty()) allowed_prefix = "/srv/pqnas";
-
-    const std::string mount = mount_for_pool_id(allowed_prefix, pool_id);
-    const std::string label = btrfs_label_for_pool_id(pool_id);
-
-    if (!is_pool_id_safe(pool_id) || !is_dev_path_basic_safe(disk) || mount.empty() || label.empty()) {
-        audit_fail(actor_fp, "bad_plan_fields", 400, "",
-                   json{{"pool_id", pool_id}, {"mount", mount}, {"disk", disk}, {"label", label}});
-        reply_json(res, 400, json{{"ok", false}, {"error", "bad_plan_fields"}}.dump());
-        return;
-    }
-    if (!force) {
-        audit_fail(actor_fp, "force_required", 412,
-                   "", json{{"pool_id", pool_id}, {"mount", mount}, {"disk", disk}, {"label", label}});
-        reply_json(res, 412, json{{"ok", false}, {"error", "force_required"}}.dump());
-        return;
-    }
-    if (mode != "single") {
-        audit_fail(actor_fp, "unsupported_mode", 400,
-                   "", json{{"pool_id", pool_id}, {"disk", disk}, {"mode", mode}});
-        reply_json(res, 400, json{{"ok", false}, {"error", "unsupported_mode"}}.dump());
-        return;
-    }
-
-    const std::string part =
-        (disk.find("/dev/nvme") == 0 || disk.find("/dev/mmcblk") == 0) ? (disk + "p1") : (disk + "1");
-
-    json commands = json::array();
-    commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk --zap-all " + sh_quote(disk));
-    commands.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(disk));
-    commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk -n 1:0:0 -t 1:8300 -c 1:PQNAS_BTRFS " + sh_quote(disk));
-    commands.push_back("/usr/bin/sudo -n /usr/sbin/partprobe " + sh_quote(disk));
-    commands.push_back("/usr/bin/sudo -n /usr/bin/udevadm settle");
-    commands.push_back("/usr/bin/sudo -n /usr/bin/mkfs.btrfs -f -L " + sh_quote(label) + " -m single -d single " + sh_quote(part));
-    commands.push_back("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(mount));
-    commands.push_back("/usr/bin/sudo -n /bin/mount " + sh_quote(part) + " " + sh_quote(mount));
-
-    // Security note:
-    // Commands below are always regenerated server-side from validated plan fields.
-    // Client-supplied plan["commands"] is never executed; if present, it is only used
-    // as a consistency check against the server-generated command list.
-    if (plan.contains("commands") && plan["commands"].is_array() && plan["commands"] != commands) {
-        audit_fail(actor_fp, "plan_commands_mismatch", 409,
-                   "", json{{"pool_id", pool_id}, {"disk", disk}});
-        reply_json(res, 409, json{{"ok", false}, {"error", "plan_commands_mismatch"}}.dump());
-        return;
-    }
-    json results = json::array();
-
-    bool all_ok = true;
-    int fail_i = -1;
-    int fail_rc = 0;
-
-    for (int i = 0; i < (int)commands.size(); i++) {
-        if (!commands[i].is_string()) continue;
-        const std::string cmd = commands[i].get<std::string>();
-
-        std::string out;
-        int ec = 0;
-        const bool okc = run_cmd_capture(cmd, &out, &ec);
-        cap_string(out, 256 * 1024);
-
-        results.push_back(json{
-            {"i", i},
-            {"cmd", cmd},
-            {"ok", okc},
-            {"rc", ec},
-            {"out", out}
-        });
-
-        if (!okc || ec != 0) { all_ok = false; fail_i = i; fail_rc = ec; break; }
-    }
-
-    // If succeeded, persist “managed pool” metadata (v2)
-    std::string cfg_path_str;
-    if (all_ok) {
-        json cfg = load_or_init_pools_cfg_v2(users_path);
-        const auto cfg_path = pools_cfg_path_from_users_path(users_path);
-        cfg_path_str = cfg_path.string();
-
-        if (!cfg.contains("pools") || !cfg["pools"].is_object()) cfg["pools"] = json::object();
-
-        json one = json::object();
-        one["display_name"] = plan.value("display_name", ""); // optional
-        if (one["display_name"].get<std::string>().empty()) one["display_name"] = label; // fallback
-        one["created_ts"] = iso8601_now();
-        one["managed"] = true;
-        one["pool_id"] = pool_id;
-        one["label"] = label;
-        one["disk"] = disk;
-
-        cfg["pools"][mount] = one;
-
-        (void)write_text_file_atomic(cfg_path.string(), cfg.dump(2) + "\n");
-    }
-
-    // ---- audit outcome ----
-    if (all_ok) {
-        audit_ok(actor_fp, json{
-            {"pool_id", pool_id},
-            {"mount", mount},
-            {"disk", disk},
-            {"label", label},
-            {"commands", (int)commands.size()},
-            {"pools_cfg_path", cfg_path_str}
-        });
-    } else {
-        audit_fail(actor_fp, "command_failed", 200, "",
-                   json{
-                       {"pool_id", pool_id},
-                       {"mount", mount},
-                       {"disk", disk},
-                       {"label", label},
-                       {"commands", (int)commands.size()},
-                       {"failed_i", fail_i},
-                       {"failed_rc", fail_rc}
-                   });
-    }
-
-    reply_json(res, 200, json{
-        {"ok", all_ok},
-        {"plan", plan},
-        {"results", results},
-        {"pools_cfg_path", cfg_path_str}
-    }.dump());
-});
 // ----- POST /api/v4/storage/pools/set-name (admin-only) ---------------------
 // Body: { "mount": "/srv/pqnas", "display_name": "Home pool" }
 srv.Post("/api/v4/storage/pools/set-name", [&](const httplib::Request& req, httplib::Response& res) {
@@ -13824,7 +13546,7 @@ srv.Post("/api/v4/raid/plan/remove-device", [&](const httplib::Request& req, htt
     reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
 });
 
-    // ----- POST /api/v4/raid/plan/create-pool (admin-only, plan-only) -------------
+// ----- POST /api/v4/raid/plan/create-pool (admin-only, plan-only) -------------
 srv.Post("/api/v4/raid/plan/create-pool", [&](const httplib::Request& req, httplib::Response& res) {
 
     pqnas::UsersRegistry users;
@@ -13835,100 +13557,103 @@ srv.Post("/api/v4/raid/plan/create-pool", [&](const httplib::Request& req, httpl
     if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
 
     json in;
-    try { in = json::parse(req.body.empty() ? "{}" : req.body); }
-    catch (...) {
-        reply_json(res, 400, json({{"ok",false},{"error","invalid_json"}}).dump());
+    try {
+        in = json::parse(req.body.empty() ? "{}" : req.body);
+    } catch (...) {
+        reply_json(res, 400, json{{"ok", false}, {"error", "invalid_json"}}.dump());
         return;
     }
 
-    std::string pool_id = in.value("pool_id", "");
-    std::vector<std::string> devices;
-    if (in.contains("devices") && in["devices"].is_array()) {
-        for (auto& d : in["devices"]) {
-            if (d.is_string()) devices.push_back(d.get<std::string>());
-        }
-    }
+    const std::string pool_id = trim_copy(in.value("pool_id", ""));
+    const std::string mode    = trim_copy(in.value("mode", "single"));
+    const bool force          = in.value("force", false);
 
-    std::string mode = in.value("mode", "single");
-    bool force = in.value("force", false);
+    json devices_json = json::array();
+    if (in.contains("devices")) devices_json = in["devices"];
 
-    // Validate pool_id
     if (!std::regex_match(pool_id, std::regex("^[a-z0-9_-]{1,32}$"))) {
-        reply_json(res, 400, json{{"ok",false},{"error","bad_pool_id"}}.dump());
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_pool_id"}}.dump());
         return;
     }
 
-    if (devices.empty()) {
-        reply_json(res, 400, json{{"ok",false},{"error","no_devices"}}.dump());
+    if (mode != "single" && mode != "raid1") {
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_mode"}}.dump());
+        return;
+    }
+
+    json disk_inventory = storage_list_disks_json();
+
+    std::vector<std::string> devices;
+    std::string dev_err;
+    if (!validate_create_pool_devices(devices_json, disk_inventory, devices, dev_err)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_devices"},
+            {"message", dev_err}
+        }.dump());
         return;
     }
 
     if (mode == "raid1" && devices.size() < 2) {
-        reply_json(res, 400, json{{"ok",false},{"error","raid1_requires_2_devices"}}.dump());
+        reply_json(res, 400, json{{"ok", false}, {"error", "raid1_requires_2_devices"}}.dump());
         return;
     }
 
-    const std::string mount =
-        "/srv/pqnas/pools/" + pool_id;
+    std::string root = getenv_str("PQNAS_STORAGE_ROOT");
+    if (root.empty()) root = "/srv/pqnas";
 
+    const std::string mount = root + "/pools/" + pool_id;
     if (std::filesystem::exists(mount)) {
-        reply_json(res, 400, json{{"ok",false},{"error","mount_exists"},{"mount",mount}}.dump());
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "mount_exists"},
+            {"mount", mount}
+        }.dump());
+        return;
+    }
+
+    const std::string label = "PQNAS_" + upper_ascii(pool_id);
+
+    const json commands =
+        build_create_pool_commands_json(pool_id, mode, devices, force);
+
+    if (!commands.is_array() || commands.empty()) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "canonical_plan_empty"}}.dump());
+        return;
+    }
+
+    json steps = json::array();
+    steps.push_back("Create Btrfs filesystem.");
+    steps.push_back("Create mount directory.");
+    steps.push_back("Mount new pool.");
+    steps.push_back("Prepare pool data directory.");
+
+    json warnings = json::array();
+    if (force) warnings.push_back("DESTRUCTIVE: devices will be wiped.");
+
+    const std::string plan_nonce = rand_hex_16();
+    const std::string plan_id =
+        compute_create_pool_plan_id(plan_nonce, pool_id, mode, devices, force, commands);
+
+    if (plan_id.empty()) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "plan_id_compute_failed"}}.dump());
         return;
     }
 
     json plan;
-    plan["pool_id"] = pool_id;
-    plan["mount"] = mount;
-    plan["devices"] = devices;
-    plan["mode"] = mode;
-    plan["force"] = force;
-
-    json commands = json::array();
-    json steps = json::array();
-    json warnings = json::array();
-
-    std::string label = "PQNAS_" + upper_ascii(pool_id);
-    plan["label"] = label;
-
-    // wipe devices if force
-    if (force) {
-        for (const auto& d : devices) {
-            commands.push_back("/usr/bin/sudo -n /usr/sbin/sgdisk --zap-all " + sh_quote(d));
-            commands.push_back("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(d));
-        }
-        warnings.push_back("DESTRUCTIVE: devices will be wiped.");
-    }
-
-    // mkfs
-    std::string mkfs = "/usr/bin/sudo -n /usr/sbin/mkfs.btrfs -f ";
-    if (mode == "raid1") mkfs += "-d raid1 -m raid1 ";
-    mkfs += "-L " + sh_quote(label);
-    for (const auto& d : devices) mkfs += " " + sh_quote(d);
-    commands.push_back(mkfs);
-
-    // mkdir
-    commands.push_back("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(mount));
-
-    // mount (device[0] enough)
-    commands.push_back("/usr/bin/sudo -n /bin/mount " + sh_quote(devices[0]) + " " + sh_quote(mount));
-
-    steps.push_back("Create Btrfs filesystem.");
-    steps.push_back("Create mount directory.");
-    steps.push_back("Mount new pool.");
-
-    plan["commands"] = commands;
-    plan["steps"] = steps;
-    plan["warnings"] = warnings;
-
-    const std::string plan_nonce = rand_hex_16();
+    plan["pool_id"]    = pool_id;
+    plan["mount"]      = mount;
+    plan["devices"]    = devices;   // canonical validated device list
+    plan["mode"]       = mode;
+    plan["force"]      = force;
+    plan["label"]      = label;
+    plan["commands"]   = commands;  // canonical commands from shared helper
+    plan["steps"]      = steps;
+    plan["warnings"]   = warnings;
     plan["plan_nonce"] = plan_nonce;
+    plan["plan_id"]    = plan_id;
 
-    const std::string joined = join_commands_for_hash(commands);
-    const std::string plan_id =
-        sha256_hex_lower_evp(joined + "\nplan_nonce=" + plan_nonce + "\n");
-    plan["plan_id"] = plan_id;
-
-    reply_json(res, 200, json{{"ok",true},{"plan",plan}}.dump());
+    reply_json(res, 200, json{{"ok", true}, {"plan", plan}}.dump());
 });
 
 // ----- POST /api/v4/raid/execute/add-device (admin-only) ---------------------
@@ -15405,34 +15130,30 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
         return;
     }
 
-    const std::string plan_id    = in.value("plan_id", "");
-    const std::string plan_nonce = in.value("plan_nonce", "");
+    const std::string plan_id    = trim_copy(in.value("plan_id", ""));
+    const std::string plan_nonce = trim_copy(in.value("plan_nonce", ""));
     const bool confirm           = in.value("confirm", false);
 
-    const std::string pool_id = in.value("pool_id", "");
-    const std::string mode    = in.value("mode", "single"); // single|raid1
+    const std::string pool_id = trim_copy(in.value("pool_id", ""));
+    const std::string mode    = trim_copy(in.value("mode", "single"));
     const bool force          = in.value("force", false);
 
-    std::vector<std::string> devices;
-    if (in.contains("devices") && in["devices"].is_array()) {
-        for (auto& d : in["devices"]) {
-            if (d.is_string()) devices.push_back(d.get<std::string>());
-        }
-    }
+    json devices_json = json::array();
+    if (in.contains("devices")) devices_json = in["devices"];
+
+    std::vector<std::string> devices; // canonical validated device list
 
     std::string root = getenv_str("PQNAS_STORAGE_ROOT");
     if (root.empty()) root = "/srv/pqnas";
     const std::string mount = root + "/pools/" + pool_id;
     const std::string label = "PQNAS_" + upper_ascii(pool_id);
 
-    // We know recp only after plan_id is validated, but include placeholder now.
     auto audit_ctx = [&](const json& extra = json::object()) -> json {
         json j = {
             {"op", "create-pool"},
             {"confirm", confirm},
             {"plan_id", plan_id},
             {"plan_nonce", plan_nonce},
-
             {"pool_id", pool_id},
             {"mode", mode},
             {"force", force},
@@ -15447,13 +15168,11 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
     };
 
     if (!confirm || plan_id.empty() || plan_nonce.empty()) {
-        audit_fail(actor_fp, "missing_plan_id_or_confirm", 400, "",
-                   audit_ctx());
+        audit_fail(actor_fp, "missing_plan_id_or_confirm", 400, "", audit_ctx());
         reply_json(res, 400, json{{"ok", false}, {"error", "missing_plan_id_or_confirm"}}.dump());
         return;
     }
 
-    // plan_id must be 64 hex (canonical exec-record key)
     if (!is_hex_64_lower_or_upper(plan_id)) {
         audit_fail(actor_fp, "bad_plan_id_format", 400, "", audit_ctx());
         reply_json(res, 400, json{
@@ -15465,21 +15184,63 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
         return;
     }
 
+    // keep this mild unless your planner already emits a stricter format
+    if (plan_nonce.size() > 128) {
+        audit_fail(actor_fp, "bad_plan_nonce", 400, "", audit_ctx());
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_plan_nonce"}}.dump());
+        return;
+    }
+
     if (!std::regex_match(pool_id, std::regex("^[a-z0-9_-]{1,32}$"))) {
         audit_fail(actor_fp, "bad_pool_id", 400, "", audit_ctx());
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_pool_id"}}.dump());
         return;
     }
 
-    if (devices.empty()) {
-        audit_fail(actor_fp, "no_devices", 400, "", audit_ctx());
-        reply_json(res, 400, json{{"ok", false}, {"error", "no_devices"}}.dump());
+    if (mode != "single" && mode != "raid1") {
+        audit_fail(actor_fp, "bad_mode", 400, "", audit_ctx());
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_mode"}}.dump());
+        return;
+    }
+
+    json disk_inventory = storage_list_disks_json();
+
+    std::string dev_err;
+    if (!validate_create_pool_devices(devices_json, disk_inventory, devices, dev_err)) {
+        audit_fail(actor_fp, "bad_devices", 400, dev_err, audit_ctx());
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_devices"},
+            {"message", dev_err}
+        }.dump());
         return;
     }
 
     if (mode == "raid1" && devices.size() < 2) {
         audit_fail(actor_fp, "raid1_requires_2_devices", 400, "", audit_ctx());
         reply_json(res, 400, json{{"ok", false}, {"error", "raid1_requires_2_devices"}}.dump());
+        return;
+    }
+
+    const json canonical_commands =
+        build_create_pool_commands_json(pool_id, mode, devices, force);
+
+    if (!canonical_commands.is_array() || canonical_commands.empty()) {
+        audit_fail(actor_fp, "canonical_plan_empty", 500, "", audit_ctx());
+        reply_json(res, 500, json{{"ok", false}, {"error", "canonical_plan_empty"}}.dump());
+        return;
+    }
+
+    const std::string expected_plan_id =
+        compute_create_pool_plan_id(plan_nonce, pool_id, mode, devices, force, canonical_commands);
+
+    if (expected_plan_id != plan_id) {
+        audit_fail(actor_fp, "plan_mismatch", 400, "",
+                   audit_ctx(json{{"expected_plan_id", expected_plan_id}}));
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "plan_mismatch"}
+        }.dump());
         return;
     }
 
@@ -15543,6 +15304,12 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
     record["ts_last"]    = record["ts_start"];
     record["results"]    = json::array();
 
+    record["pool_id"]    = pool_id;
+    record["mode"]       = mode;
+    record["force"]      = force;
+    record["devices"]    = devices;
+    record["commands"]   = canonical_commands;
+
     (void)write_text_file_atomic(recp, record.dump(2) + "\n");
 
     json results = json::array();
@@ -15601,69 +15368,21 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
     };
 
     try {
-        // wipe (only if force)
-        if (force) {
-            for (const auto& d : devices) {
-                if (!run_step("/usr/bin/sudo -n /usr/sbin/sgdisk --zap-all " + sh_quote(d))) break;
-
-                // Best-effort: make kernel re-read partition table (reduces wipefs "busy" races)
-                if (all_ok) (void)run_step("/usr/bin/sudo -n /usr/sbin/partprobe " + sh_quote(d));
-
-                if (!run_step("/usr/bin/sudo -n /usr/sbin/wipefs -a " + sh_quote(d))) break;
+        for (const auto& cmdv : canonical_commands) {
+            if (!cmdv.is_string()) {
+                all_ok = false;
+                break;
             }
+            if (!run_step(cmdv.get<std::string>())) break;
         }
 
-        // mkfs
-        if (all_ok) {
-            std::string mkfs = "/usr/bin/sudo -n /usr/sbin/mkfs.btrfs -f ";
-            if (mode == "raid1") mkfs += "-d raid1 -m raid1 ";
-            mkfs += "-L " + sh_quote(label);
-            for (const auto& d : devices) mkfs += " " + sh_quote(d);
-            (void)run_step(mkfs);
-        }
-
-        // mkdir mountpoint
-        if (all_ok) {
-            (void)run_step("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(mount));
-        }
-
-        // mount by LABEL
-        if (all_ok) {
-            (void)run_step("/usr/bin/sudo -n /bin/mount -t btrfs " +
-                           sh_quote(std::string("LABEL=") + label) + " " +
-                           sh_quote(mount));
-        }
-
-        // stabilize
-        if (all_ok) (void)run_step("/usr/bin/sudo -n /usr/bin/udevadm settle");
-        if (all_ok) (void)run_step("/usr/bin/sudo -n /usr/bin/btrfs device scan");
-        if (all_ok) (void)run_step("/usr/bin/sudo -n /usr/bin/btrfs filesystem show " + sh_quote(mount));
-
-        // Prepare PQ-NAS data root on the new managed pool and make it writable
-        // for the service account. This avoids later storage allocation /
-        // migration / upload failures when the pool was created by root.
-        if (all_ok) {
-            const std::string data_dir = mount + "/data";
-            (void)run_step("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(data_dir));
-        }
-
-        if (all_ok) {
-            const std::string data_dir = mount + "/data";
-            (void)run_step("/usr/bin/sudo -n /bin/chown pqnas:pqnas " + sh_quote(data_dir));
-        }
-
-        if (all_ok) {
-            const std::string data_dir = mount + "/data";
-            (void)run_step("/usr/bin/sudo -n /bin/chmod 0755 " + sh_quote(data_dir));
-        }
-
-         // update pools.json
+        // update pools.json
         if (all_ok) {
             json cfg = pqnas::load_or_init_pools_cfg_v3(users_path);
 
             if (!cfg.contains("names_by_mount") || !cfg["names_by_mount"].is_object())
                 cfg["names_by_mount"] = json::object();
-            cfg["names_by_mount"][mount] = pool_id; // keep legacy compatibility
+            cfg["names_by_mount"][mount] = pool_id;
 
             if (!cfg.contains("pools") || !cfg["pools"].is_object())
                 cfg["pools"] = json::object();
@@ -15671,7 +15390,6 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
             std::string fs_label_detected;
             std::string fs_uuid_detected;
             int fs_devices_detected = -1;
-
 
             {
                 std::string show_out;
@@ -15703,6 +15421,7 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
                 all_ok = false;
             }
         }
+
 
         // finalize exec record
         record["ok"]     = all_ok;
@@ -15742,6 +15461,7 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
         return;
     }
 });
+
 // ----- GET /api/v4/raid/job?job_id=... (admin-only) ---------------------------
 srv.Get("/api/v4/raid/job", [&](const httplib::Request& req, httplib::Response& res) {
     pqnas::UsersRegistry users;
