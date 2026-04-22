@@ -261,9 +261,7 @@ const std::string STATIC_WAIT_APPROVAL_JS    = static_path("wait_approval.js");
 const std::string STATIC_SYSTEM_HTML         = static_path("system.html");
 const std::string STATIC_SYSTEM_JS           = static_path("system.js");
 const std::string STATIC_LOGIN               = static_path("login.html");
-const std::string STATIC_JS                  = static_path("pqnas_v4.js");
 const std::string STATIC_V5_JS               = static_path("pqnas_v5.js");
-const std::string STATIC_AUTH_JS             = static_path("pqnas_auth.js");
 const std::string STATIC_ADMIN_SETTINGS_HTML = static_path("admin_settings.html");
 const std::string STATIC_ADMIN_SETTINGS_JS   = static_path("admin_settings.js");
 const std::string STATIC_APPROVALS_HTML      = static_path("admin_approvals.html");
@@ -9150,33 +9148,8 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
         res.set_content(body, "application/javascript; charset=utf-8");
     });
 
-    srv.Get("/static/pqnas_v4.js", [&](const httplib::Request&, httplib::Response& res) {
-        std::string body;
-        if (!read_file_to_string(STATIC_JS, body)) {
-            res.status = 500;
-            res.set_header("Content-Type", "text/plain");
-            res.body = "Missing static file: " + STATIC_JS;
-            return;
-        }
-        res.status = 200;
-        res.set_header("Content-Type", "application/javascript; charset=utf-8");
-        res.body = body;
-    });
 
 
-	// GET /static/pqnas_auth.js
-	srv.Get("/static/pqnas_auth.js", [&](const httplib::Request&, httplib::Response& res) {
-    	std::string body;
-    	if (!read_file_to_string(STATIC_AUTH_JS, body)) {
-        	res.status = 500;
-	        res.set_header("Content-Type", "text/plain");
-    	    res.body = "Missing static file: " + STATIC_AUTH_JS;
-        	return;
-	    }
-    	res.status = 200;
-	    res.set_header("Content-Type", "application/javascript; charset=utf-8");
-    	res.body = body;
-	});
 
 	srv.Get("/static/pqnas_v5.js", [&](const httplib::Request&, httplib::Response& res) {
     	std::string body;
