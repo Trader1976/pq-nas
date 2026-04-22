@@ -417,14 +417,14 @@ Use only after verifying the preview.
 
 ## 3.6 Snapshots
 
-PQ-NAS supports automatic filesystem snapshots using Btrfs read-only subvolume snapshots. Snapshots provide point-in-time copies of your data that can be used for:
+DNA-Nexus Server supports automatic filesystem snapshots using **Btrfs read-only subvolume snapshots**. Snapshots provide point-in-time copies of your data that can be used for:
 
 - recovering accidentally deleted files
-- rolling back after ransomware or corruption
+- rolling back after corruption, unwanted changes, or ransomware
 - inspecting historical states
-- creating backups or replication targets
+- creating backup or replication source data
 
-Snapshots are read-only, lightweight, and space-efficient because Btrfs stores only changed blocks.
+Snapshots are **read-only, lightweight, and space-efficient** because Btrfs stores only changed blocks between snapshots.
 
 ### How snapshot scheduling works
 
@@ -432,7 +432,7 @@ Snapshots run periodically according to a schedule.
 
 ### Times per day
 
-Controls how many snapshots are taken in 24 hours.
+Controls how many snapshots are taken in a 24-hour period.
 
 Examples:
 
@@ -462,15 +462,15 @@ Each snapshot will run roughly every 4 hours, plus a random delay of up to 2 min
 
 Retention controls how many old snapshots are kept:
 
-- `keep_days` — minimum age to keep
-- `keep_min` — minimum number always preserved
-- `keep_max` — maximum allowed snapshots
+- `keep_days` — minimum age window to preserve
+- `keep_min` — minimum number of snapshots always kept
+- `keep_max` — maximum allowed snapshot count
 
-After every successful snapshot, PQ-NAS automatically prunes old ones while respecting these limits.
+After every successful snapshot, DNA-Nexus Server automatically prunes old snapshots while respecting these limits.
 
 ### Snapshot volumes
 
-Each snapshot entry contains:
+Each snapshot volume entry contains:
 
 - volume name
 - source subvolume
@@ -482,7 +482,7 @@ Example:
 { "name": "data", "source_subvolume": "/srv/pqnas/data", "snap_root": "/srv/pqnas/.snapshots/data" }
 ```
 
-Snapshots are created inside the snapshot root as timestamped directories.
+Snapshots are created inside the configured snapshot root using timestamp-based names.
 
 ### Admin UI — snapshot controls
 
@@ -490,21 +490,21 @@ The **Admin → Settings → Snapshots (Btrfs)** panel allows runtime configurat
 
 #### Enabled
 
-Turns snapshotting on or off globally.
+Turns automatic snapshotting on or off globally.
 
 When disabled:
 
-- no snapshots run
-- settings remain visible but inputs are greyed out
+- no automatic snapshots run
+- settings remain visible, but scheduling is inactive
 
 When enabled:
 
 - the scheduler is active
-- snapshots run automatically
+- snapshots run automatically according to the configured schedule
 
 #### Per-volume schedule
 
-When enabled, each volume can override the global schedule.
+When enabled, each configured volume can override the global schedule.
 
 Each volume row gets its own:
 
@@ -521,19 +521,19 @@ The default snapshot frequency applied to all volumes unless per-volume scheduli
 
 #### Global Jitter
 
-Default jitter applied to all volumes unless per-volume scheduling is enabled.
+The default jitter applied to all volumes unless per-volume scheduling is enabled.
 
 #### Snapshot root path
 
-Shows where snapshots are written for the primary volume.
+Each configured volume has its own snapshot root path.
 
-This must:
+This path must:
 
 - be an absolute path
-- be empty or non-existent before creation
-- reside on the same Btrfs filesystem as the source subvolume
+- exist on the same Btrfs filesystem as the source subvolume
+- be intended only for snapshot storage for that volume
 
-PQ-NAS will automatically create the directory if missing.
+DNA-Nexus Server will create the path if needed when the configuration is valid.
 
 #### Save snapshots
 
@@ -542,8 +542,8 @@ Writes the current snapshot configuration to disk and activates it.
 This:
 
 - updates `/etc/pqnas/admin_settings.json`
-- reloads the scheduler
-- applies new timing immediately
+- reloads snapshot scheduling
+- applies the new timing configuration immediately
 
 #### Reload
 
@@ -551,15 +551,15 @@ Reloads snapshot settings from the server.
 
 Useful if:
 
-- another admin changed settings
-- you edited configuration files manually
+- another administrator changed settings
+- configuration files were edited manually
 - you want to discard unsaved UI changes
 
 ### Locking and safety
 
 Only one snapshot runner executes at a time.
 
-PQ-NAS uses a lock file:
+DNA-Nexus Server uses a lock file:
 
 - `/run/pqnas_snapshot.lock`
 
@@ -569,12 +569,12 @@ This prevents overlapping snapshot jobs.
 
 ### Notes and best practices
 
-Recommended defaults for home / small office:
+Recommended defaults for home or small office use:
 
 - `Times/day: 6`
 - `Jitter: 120`
 
-Retention:
+Retention example:
 
 - `keep_days: 7`
 - `keep_min: 12`
@@ -582,33 +582,36 @@ Retention:
 
 ### Snapshot storage
 
-Snapshot directories can grow large. Make sure:
+Snapshot trees can grow large over time. Make sure:
 
-- the snapshot root has enough free space
-- your backup strategy includes snapshot replication or cleanup
+- the Btrfs filesystem has enough free space
+- retention settings are appropriate for your storage size
+- your backup strategy includes snapshot replication or additional backup copies
 
 ### Snapshots are not backups
 
 Snapshots protect against:
 
 - accidental deletion
+- unwanted local changes
 - local corruption
 
-They do not protect against:
+They do **not** protect against:
 
 - disk failure
-- filesystem destruction
+- total filesystem loss
 - fire or theft
+- host compromise that destroys both live data and snapshots
 
-For full protection, replicate snapshots to another machine or off-site backup target.
+For full protection, replicate snapshots to another machine or maintain an off-site backup.
 
 ### Advanced usage
 
 Administrators may:
 
-- add multiple volumes
+- add multiple snapshot volumes
 - use different schedules per volume
-- disable snapshotting temporarily during maintenance
+- disable automatic snapshotting temporarily during maintenance
 
 ---
 
@@ -616,10 +619,10 @@ Administrators may:
 
 The Snapshot Manager allows administrators to:
 
-- view all snapshots for each volume
+- view all snapshots for each configured volume
 - inspect snapshot details
-- restore any snapshot safely
-- create a new snapshot manually (**Snapshot now**)
+- restore a selected snapshot safely
+- create a new snapshot manually using **Snapshot now**
 
 Automatic snapshot scheduling is configured separately in:
 
@@ -638,7 +641,7 @@ The page contains two main columns:
 - **Left column** — Volumes
 - **Right column** — Snapshots for the selected volume
 
-Top bar contains:
+The top bar contains:
 
 - **Refresh** — reload volumes and snapshots
 - **Details** — show detailed snapshot information
@@ -682,9 +685,9 @@ Snapshots are sorted newest first.
 ### Status labels
 
 - **latest** — newest snapshot available
-- **ro** — read-only snapshot (normal and expected)
-- **rw** — read-write snapshot (unusual; typically indicates a manual or non-standard snapshot)
-- **⚠** — snapshot could not be verified due to missing sudo permissions
+- **ro** — read-only snapshot, which is the normal and expected type
+- **rw** — read-write snapshot, which is unusual and typically indicates a manual or non-standard snapshot
+- **⚠** — snapshot could not be fully verified, often due to missing sudo permissions
 - **junk** — directory exists but is not a valid Btrfs snapshot subvolume
 
 ### What ro and rw mean
@@ -701,15 +704,15 @@ Properties:
 
 **rw — Read-write snapshot**
 
-This is not normally created by PQ-NAS.
+This is not normally created by DNA-Nexus Server.
 
-May indicate:
+It may indicate:
 
-- manual test snapshot
-- external tool snapshot
-- improper snapshot
+- a manual test snapshot
+- an external tool snapshot
+- an improperly created snapshot
 
-PQ-NAS restore still works, but read-only snapshots are recommended.
+Restore may still work, but read-only snapshots are the recommended and expected format.
 
 ### Snapshot now button
 
@@ -730,26 +733,26 @@ This does not affect automatic scheduling.
 
 **Restore** replaces the live volume with the selected snapshot.
 
-Steps:
+Typical steps:
 
 1. Select a snapshot
 2. Click **Restore**
 3. Confirm the action
 4. Type the confirmation phrase exactly
-5. Confirm restore plan
+5. Confirm the restore plan
 
-PQ-NAS will:
+DNA-Nexus Server will:
 
 - stop `pqnas.service` briefly
-- preserve current data as backup
-- replace live data with snapshot
+- preserve current data as a backup
+- replace the live subvolume with the selected snapshot
 - restart `pqnas.service`
 
 Downtime is typically only a few seconds.
 
 ### Backup safety during restore
 
-Before restore, PQ-NAS automatically creates a backup of the current live volume.
+Before restore, DNA-Nexus Server automatically creates a backup of the current live volume.
 
 Example:
 
@@ -757,20 +760,20 @@ Example:
 
 This allows recovery if needed.
 
-Backups can be removed manually after verification.
+These backup subvolumes can be removed manually after verification.
 
 ### Details button
 
 Shows technical information about the selected snapshot.
 
-Includes:
+This may include:
 
 - full filesystem path
 - verification result
 - internal metadata
 - Btrfs subvolume information
 
-This is useful for troubleshooting.
+This is useful for troubleshooting and validation.
 
 ### Refresh button
 
@@ -779,26 +782,26 @@ Reloads volumes and snapshots from the server.
 Use this when:
 
 - a new snapshot was created
-- another admin performed changes
+- another administrator performed changes
 - you want the latest status
 
 ### Restore safety model
 
-Restore uses atomic subvolume swap.
+Restore uses an atomic subvolume swap model.
 
 This means:
 
 - no partial restores
-- no inconsistent state
-- instant rollback capability
+- no inconsistent intermediate state
+- quick rollback behavior at the filesystem level
 
-PQ-NAS guarantees either:
+DNA-Nexus Server is designed so that restore either:
 
-- restore fully succeeds
+- succeeds fully
 
 or
 
-- system remains unchanged
+- leaves the system unchanged
 
 ### Recommended usage
 
@@ -806,8 +809,8 @@ Create **Snapshot now** before:
 
 - system upgrades
 - configuration changes
-- file deletions
-- testing
+- large file deletions
+- testing or maintenance work
 
 Restore a snapshot when:
 
@@ -821,34 +824,33 @@ Snapshot Manager does not control automatic snapshot schedules.
 
 Scheduling is configured in:
 
-- **Admin → Settings → Snapshots**
+- **Admin → Settings → Snapshots (Btrfs)**
 
 Snapshot Manager is used for:
 
-- manual snapshots
+- manual snapshot creation
 - restore operations
-- inspection
+- snapshot inspection
 
 ### Safety and permissions
 
 - all Snapshot Manager operations require administrator privileges
-- all actions are audited
+- actions are auditable
 - restore operations require explicit confirmation
-- snapshots are always created inside configured `snap_root` directories
+- snapshots are created only inside configured `snap_root` directories
 
 ### Summary
 
-Snapshot Manager provides safe and reliable recovery.
+Snapshot Manager provides safe and reliable recovery tools.
 
 Key capabilities:
 
 - view snapshots
 - create snapshots manually
-- restore any snapshot
+- restore a selected snapshot
 - inspect snapshot details
 
-Snapshots are fast, space-efficient, and safe.
-
+Snapshots are fast, space-efficient, and useful for recovery, but they should still be combined with proper backups for full protection.
 ---
 
 ## 4. Troubleshooting
