@@ -378,6 +378,65 @@ static json normalize_app_launch_policy_entry(const json& in) {
     return out;
 }
 
+static std::string content_disposition_ascii_fallback(const std::string& in) {
+    std::string out;
+    out.reserve(in.size());
+
+    for (unsigned char c : in) {
+        // Block header injection + quoted-string breakage + awkward path-ish chars.
+        if (c <= 31 || c == 127 ||
+            c == '"' || c == '\\' ||
+            c == '\r' || c == '\n' ||
+            c == ';' || c == '/') {
+            out.push_back('_');
+            continue;
+            }
+
+        // Keep visible ASCII only in plain filename= fallback.
+        if (c >= 32 && c <= 126) out.push_back(static_cast<char>(c));
+        else out.push_back('_');
+    }
+
+    if (out.empty()) out = "download";
+    return out;
+}
+
+static std::string content_disposition_rfc5987(const std::string& in) {
+    auto is_attr_char = [](unsigned char c) -> bool {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
+            return true;
+        switch (c) {
+        case '!': case '#': case '$': case '&': case '+': case '-': case '.':
+        case '^': case '_': case '`': case '|': case '~':
+            return true;
+        default:
+            return false;
+        }
+    };
+
+    static const char hex[] = "0123456789ABCDEF";
+
+    std::string out;
+    out.reserve(in.size() * 3);
+
+    for (unsigned char c : in) {
+        if (is_attr_char(c)) {
+            out.push_back(static_cast<char>(c));
+        } else {
+            out.push_back('%');
+            out.push_back(hex[(c >> 4) & 0xF]);
+            out.push_back(hex[c & 0xF]);
+        }
+    }
+    return out;
+}
+
+static std::string build_content_disposition(const std::string& kind, const std::string& filename) {
+    const std::string fallback = content_disposition_ascii_fallback(filename);
+    const std::string encoded  = content_disposition_rfc5987(filename);
+    return kind + "; filename=\"" + fallback + "\"; filename*=UTF-8''" + encoded;
+}
+
 static json normalize_app_launch_policy_json(const json& in) {
     json out = json::object();
     out["schema"] = 1;
@@ -10026,6 +10085,10 @@ srv.Post("/api/v4/storage/pools/execute-create", [&](const httplib::Request& req
     commands.push_back("/usr/bin/sudo -n /bin/mkdir -p " + sh_quote(mount));
     commands.push_back("/usr/bin/sudo -n /bin/mount " + sh_quote(part) + " " + sh_quote(mount));
 
+    // Security note:
+    // Commands below are always regenerated server-side from validated plan fields.
+    // Client-supplied plan["commands"] is never executed; if present, it is only used
+    // as a consistency check against the server-generated command list.
     if (plan.contains("commands") && plan["commands"].is_array() && plan["commands"] != commands) {
         audit_fail(actor_fp, "plan_commands_mismatch", 409,
                    "", json{{"pool_id", pool_id}, {"disk", disk}});
@@ -23176,7 +23239,7 @@ srv.Post("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response
     res.status = 200;
     res.set_header("Cache-Control", "no-store");
     res.set_header("Content-Type", "application/zip");
-    res.set_header("Content-Disposition", ("attachment; filename=\"" + fname + "\"").c_str());
+    res.set_header("Content-Disposition", build_content_disposition("attachment", fname));
     res.body = std::move(zip_data);
 });
 
@@ -23765,7 +23828,7 @@ srv.Post("/api/v4/files/zip_sel", [&](const httplib::Request& req, httplib::Resp
     res.status = 200;
     res.set_header("Cache-Control", "no-store");
     res.set_header("Content-Type", "application/zip");
-    res.set_header("Content-Disposition", ("attachment; filename=\"" + fname + "\"").c_str());
+    res.set_header("Content-Disposition", build_content_disposition("attachment", fname));
     res.body = std::move(zip_data);
 });
 
@@ -28111,7 +28174,7 @@ srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response&
     res.set_header("Cache-Control", "no-store");
     res.set_header("Content-Type", "application/zip");
     res.set_header("Content-Length", std::to_string((unsigned long long)zip_bytes));
-    res.set_header("Content-Disposition", std::string("attachment; filename=\"") + out_name + "\"");
+    res.set_header("Content-Disposition", build_content_disposition("attachment", out_name));
 
     auto streamer = std::make_shared<ZipStreamer>(std::move(items), totals);
 
@@ -28297,8 +28360,10 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
 
     res.set_header(
         "Content-Disposition",
-        std::string(inline_preview ? "inline; filename=\"" : "attachment; filename=\"") +
-        abs.filename().string() + "\""
+        build_content_disposition(
+            inline_preview ? "inline" : "attachment",
+            abs.filename().string()
+        )
     );
 
     // httplib content provider: called repeatedly until it returns false
@@ -36894,7 +36959,7 @@ srv.Post("/api/v4/admin/storage/tiering/migrate_one", [&](const httplib::Request
     res.status = 200;
     res.set_header("Cache-Control", "no-store");
     res.set_header("Content-Type", "application/zip");
-    res.set_header("Content-Disposition", ("attachment; filename=\"" + fname + "\"").c_str());
+        res.set_header("Content-Disposition", build_content_disposition("attachment", fname));
     res.body = std::move(zip_data);
 });
 
@@ -37260,7 +37325,7 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
 
         res.status = 200;
         res.set_header("Cache-Control", "no-store");
-        res.set_header("Content-Disposition", ("attachment; filename=\"" + fname + "\"").c_str());
+        res.set_header("Content-Disposition", build_content_disposition("attachment", fname));
         res.set_content(std::move(data), "application/octet-stream");
         return;
     }
@@ -37436,7 +37501,7 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
     res.status = 200;
     res.set_header("Cache-Control", "no-store");
     res.set_header("Content-Type", "application/zip");
-    res.set_header("Content-Disposition", ("attachment; filename=\"" + fname + "\"").c_str());
+    res.set_header("Content-Disposition", build_content_disposition("attachment", fname));
     res.body = std::move(zip_data);
 });
 

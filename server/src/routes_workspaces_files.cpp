@@ -211,6 +211,65 @@ bool workspace_edit_lease_from_json_local(const json& j,
     return true;
 }
 
+        static std::string content_disposition_ascii_fallback(const std::string& in) {
+    std::string out;
+    out.reserve(in.size());
+
+    for (unsigned char c : in) {
+        // Block header injection + quoted-string breakage + awkward path-ish chars.
+        if (c <= 31 || c == 127 ||
+            c == '"' || c == '\\' ||
+            c == '\r' || c == '\n' ||
+            c == ';' || c == '/') {
+            out.push_back('_');
+            continue;
+            }
+
+        // Keep visible ASCII only in plain filename= fallback.
+        if (c >= 32 && c <= 126) out.push_back(static_cast<char>(c));
+        else out.push_back('_');
+    }
+
+    if (out.empty()) out = "download";
+    return out;
+}
+
+        static std::string content_disposition_rfc5987(const std::string& in) {
+    auto is_attr_char = [](unsigned char c) -> bool {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
+            return true;
+        switch (c) {
+        case '!': case '#': case '$': case '&': case '+': case '-': case '.':
+        case '^': case '_': case '`': case '|': case '~':
+            return true;
+        default:
+            return false;
+        }
+    };
+
+    static const char hex[] = "0123456789ABCDEF";
+
+    std::string out;
+    out.reserve(in.size() * 3);
+
+    for (unsigned char c : in) {
+        if (is_attr_char(c)) {
+            out.push_back(static_cast<char>(c));
+        } else {
+            out.push_back('%');
+            out.push_back(hex[(c >> 4) & 0xF]);
+            out.push_back(hex[c & 0xF]);
+        }
+    }
+    return out;
+}
+
+        static std::string build_content_disposition(const std::string& kind, const std::string& filename) {
+    const std::string fallback = content_disposition_ascii_fallback(filename);
+    const std::string encoded  = content_disposition_rfc5987(filename);
+    return kind + "; filename=\"" + fallback + "\"; filename*=UTF-8''" + encoded;
+}
+
 bool write_string_file_atomic_local(const std::filesystem::path& abs_path,
                                     const std::string& body,
                                     std::string* err) {
@@ -4997,8 +5056,7 @@ srv.Post("/api/v4/workspaces/files/write_text",
         }
 
         const auto filename = abs_path.filename().string();
-        res.set_header("Content-Disposition",
-                       "inline; filename=\"" + filename + "\"");
+        res.set_header("Content-Disposition", build_content_disposition("inline", filename));
         res.set_content(body, "application/octet-stream");
 
         audit_ok(workspace_id, rel_norm, static_cast<std::uint64_t>(body.size()));
@@ -5416,9 +5474,10 @@ srv.Post("/api/v4/workspaces/files/write_text",
             dirs);
 
         res.status = 200;
+        res.headers.erase("Cache-Control");
         res.set_header("Cache-Control", "no-store");
         res.set_header("Content-Type", "application/zip");
-        res.set_header("Content-Disposition", ("attachment; filename=\"" + fname + "\"").c_str());
+        res.set_header("Content-Disposition", build_content_disposition("attachment", fname));
         res.body = std::move(zip_data);
     };
 
@@ -6113,11 +6172,12 @@ srv.Post("/api/v4/workspaces/files/write_text",
             (std::uint64_t)paths_rel.size(),
             base_rel);
 
-        res.status = 200;
-        res.set_header("Cache-Control", "no-store");
-        res.set_header("Content-Type", "application/zip");
-        res.set_header("Content-Disposition", ("attachment; filename=\"" + fname + "\"").c_str());
-        res.body = std::move(zip_data);
+            res.status = 200;
+            res.headers.erase("Cache-Control");
+            res.set_header("Cache-Control", "no-store");
+            res.set_header("Content-Type", "application/zip");
+            res.set_header("Content-Disposition", build_content_disposition("attachment", fname));
+            res.body = std::move(zip_data);
     });
 
 // POST /api/v4/workspaces/files/delete?workspace_id=...&path=relative/path
