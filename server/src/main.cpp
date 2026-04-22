@@ -33281,6 +33281,14 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
     });
 
     srv.Get("/api/v4/debug/approvals", [&](const httplib::Request& req, httplib::Response& res) {
+        const bool auth_debug_enabled = (std::getenv("PQNAS_ENABLE_AUTH_DEBUG") != nullptr);
+        if (!auth_debug_enabled) {
+            reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"}
+            }.dump());
+            return;
+        }
         if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
 
         json out;
@@ -33294,15 +33302,11 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
             std::lock_guard<std::mutex> lk(g_approvals_mu);
             out["count"] = (int)g_approvals.size();
             for (const auto& kv : g_approvals) {
-                const auto& sid = kv.first;
                 const auto& e = kv.second;
                 out["items"].push_back({
-                    {"sid", sid},
-                    {"sid_len", (int)sid.size()},
                     {"expires_at", e.expires_at},
                     {"now", now},
-                    {"ttl_left", (e.expires_at > now) ? (e.expires_at - now) : 0},
-                    {"fingerprint", e.fingerprint}
+                    {"ttl_left", (e.expires_at > now) ? (e.expires_at - now) : 0}
                 });
             }
         }
