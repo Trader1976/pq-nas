@@ -62,7 +62,7 @@ bool policy_load_allowlist(const std::string& path) {
 /*
 Check whether a fingerprint is allowed any access (user or admin).
 
-Used during /api/v4/verify after cryptographic verification succeeds.
+Used during /api/v5/verify after cryptographic verification succeeds.
 
 Security notes:
 - Input must already be verified and normalized (lowercase hex).
