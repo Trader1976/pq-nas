@@ -541,10 +541,6 @@ srv.Post("/api/v5/consume", [&](const httplib::Request& req, httplib::Response& 
             f["cookie_len"] = std::to_string(ae.cookie_val.size());
             f["set_cookie_len"] = std::to_string(set_cookie.size());
             f["clear_cookie_len"] = std::to_string(clear_cookie.size());
-            f["cookie_has_secure"] = (set_cookie.find("Secure") != std::string::npos) ? "1" : "0";
-            f["cookie_has_domain"] = (set_cookie.find("Domain=") != std::string::npos) ? "1" : "0";
-            f["cookie_has_samesite_none"] = (set_cookie.find("SameSite=None") != std::string::npos) ? "1" : "0";
-            f["clear_cookie_has_max_age_0"] = (clear_cookie.find("Max-Age=0") != std::string::npos) ? "1" : "0";
         });
     }
 
