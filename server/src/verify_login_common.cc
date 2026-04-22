@@ -1,6 +1,6 @@
 // verify_login_common.cc
 //
-// Shared login verification handler for v4 and v5 routes.
+// Shared login verification handler for v4 and v5 rout
 //
 // Responsibilities
 // - Parse and cryptographically verify the client proof (verify_v4_json).
@@ -17,8 +17,8 @@
 //   sensitive data bounded (ctx.shorten).
 //
 // Non-responsibilities
-// - This file does not define HTTP routes; it is called by login verify routes.
-//   and /api/v5/verify. Cookie delivery is done by /api/v5/consume.
+// - This file does not define HTTP routes; it is called by /api/v5/verify.
+//   Cookie delivery is done by /api/v5/consume.
 
 #include "verify_login_common.h"
 
@@ -49,9 +49,8 @@ static std::string hdr(const httplib::Request& req, const char* key) {
 
 // handle_verify_login_common
 //
-// One implementation for both v4 and v5 verify endpoints.
-// `api_version` controls:
-// - audit event naming (v4.* vs v5.*)
+// Shared implementation for /api/v5/verify.
+// - audit event naming
 // - approval key selection:
 //     v4: approval_key = sid (legacy)
 //     v5: approval_key = st_hash_b64 (stateless-ready correlation key)
@@ -63,19 +62,17 @@ static std::string hdr(const httplib::Request& req, const char* key) {
 // - User enablement is enforced *after* cryptographic verification, keyed by fingerprint.
 void handle_verify_login_common(const httplib::Request& req,
                                httplib::Response& res,
-                               int api_version,
                                const VerifyLoginCommonContext& ctx) {
     auto fail = [&](int code, const std::string& msg, const std::string& detail = "") {
         json out = {
             {"ok", false},
+            {"v", 5},
             {"error", (code == 400 ? "bad_request" : "not_authorized")},
             {"message", msg}
         };
-        if (api_version == 5) out["v"] = 5;
         if (!detail.empty()) out["detail"] = detail;
         reply_json(res, code, out.dump());
     };
-
     // --- audit context (filled after verify_v4_json) ---
     std::string audit_sid;
     std::string audit_st_hash_b64;
@@ -90,7 +87,7 @@ void handle_verify_login_common(const httplib::Request& req,
 
     auto audit_fail = [&](const std::string& reason, const std::string& detail = "") {
         if (!ctx.audit_emit) return;
-        ctx.audit_emit((api_version == 5 ? "v5.verify_fail" : "v4.verify_fail"), "fail",
+        ctx.audit_emit("v5.verify_fail", "fail",
                        [&](std::map<std::string,std::string>& f) {
             if (!audit_sid.empty()) f["sid"] = audit_sid;
             if (!audit_st_hash_b64.empty()) f["st_hash_b64"] = audit_st_hash_b64;
@@ -185,14 +182,8 @@ void handle_verify_login_common(const httplib::Request& req,
         //
         // v4 legacy uses vr.sid (session id).
         // v5 should NOT rely on sid; key off st_hash_b64 (derived from signed st).
-		// approval_key contract
-		// - v5 MUST be stateless-ready: do not key flow state by server-minted sid.
-		// - We key approvals/pending by st_hash_b64, derived from signed request token `st`.
-		// - v4 keeps sid to preserve old client behavior.
-		// The key is used to:
-		//   * attach "pending_admin" reason (UX)
-		//   * store approval cookie value for /api/v5/consume
-        const std::string approval_key = (api_version == 5) ? st_hash : vr.sid;
+        const std::string approval_key = st_hash;
+
         if (approval_key.empty()) {
             audit_fail("missing_approval_key");
             return fail(400, "verify failed", "missing approval key");
@@ -228,9 +219,7 @@ void handle_verify_login_common(const httplib::Request& req,
                     ctx.allowlist->save(*ctx.allowlist_path);
                 }
 
-                audit_info((api_version == 5 ? "v5.bootstrap_first_admin"
-                                             : "v4.bootstrap_first_admin"),
-                           "ok");
+                audit_info("v5.bootstrap_first_admin", "ok");
             }
         }
         // ---- Users registry policy (fail-closed) ----
@@ -246,7 +235,7 @@ void handle_verify_login_common(const httplib::Request& req,
             const bool created = ctx.users->ensure_present_disabled_user(computed_fp, now_iso);
             const bool saved   = created ? ctx.users->save(*ctx.users_path) : false;
 
-            audit_info((api_version == 5 ? "v5.user_auto_created_disabled" : "v4.user_auto_created_disabled"),
+            audit_info("v5.user_auto_created_disabled",
                        "ok",
                        created ? "created" : "already_exists_race",
                        saved ? "" : "users_save_failed");
@@ -261,7 +250,7 @@ void handle_verify_login_common(const httplib::Request& req,
         }
 
         if (!ctx.users->is_enabled_user(computed_fp)) {
-            audit_info((api_version == 5 ? "v5.user_disabled" : "v4.user_disabled"), "fail", "not_enabled");
+            audit_info("v5.user_disabled", "fail", "not_enabled");
 
             if (ctx.pending_put) {
 				VerifyLoginCommonContext::PendingEntry p;
@@ -273,18 +262,17 @@ void handle_verify_login_common(const httplib::Request& req,
         }
 
         // Update last_seen
+        // Update last_seen
         {
             const bool touched = ctx.users->touch_last_seen(computed_fp, now_iso);
             const bool saved   = touched ? ctx.users->save(*ctx.users_path) : false;
 
             if (touched && saved) {
-                audit_info((api_version == 5 ? "v5.user_last_seen_updated" : "v4.user_last_seen_updated"), "ok");
+                audit_info("v5.user_last_seen_updated", "ok");
             } else if (touched && !saved) {
-                audit_info((api_version == 5 ? "v5.user_last_seen_updated" : "v4.user_last_seen_updated"),
-                           "fail", "users_save_failed");
+                audit_info("v5.user_last_seen_updated", "fail", "users_save_failed");
             } else {
-                audit_info((api_version == 5 ? "v5.user_last_seen_updated" : "v4.user_last_seen_updated"),
-                           "fail", "touch_failed");
+                audit_info("v5.user_last_seen_updated", "fail", "touch_failed");
             }
         }
 
@@ -293,11 +281,11 @@ void handle_verify_login_common(const httplib::Request& req,
 		// - When PQNAS_V4_VECTORS is set, TTLs become huge and additional debug prints
 		//   are emitted. This is test-only behavior to support deterministic verification vectors.
         if (vectors_mode) {
-            std::cerr << "[v4_vectors] FP_HEX " << computed_fp
+            std::cerr << "[verify_vectors] FP_HEX " << computed_fp
                       << " SID " << vr.sid
                       << " ST_HASH " << st_hash
                       << "\n";
-            std::cerr << "[v4_vectors] CANON_SHA256_B64 " << vr.canonical_sha256_b64 << "\n";
+            std::cerr << "[verify_vectors] CANON_SHA256_B64 " << vr.canonical_sha256_b64 << "\n";
         }
 
         // ---- mint AT (still v4 format in phase-1) ----
@@ -361,22 +349,24 @@ void handle_verify_login_common(const httplib::Request& req,
                 ctx.approvals_put(approval_key, e);
             }
 
-            audit_info((api_version == 5 ? "v5.cookie_minted" : "v4.cookie_minted"), "ok");
+            audit_info("v5.cookie_minted", "ok");
         } else {
             audit_fail("cookie_mint_failed");
         }
 
         // ---- verify ok audit ----
-        audit_info((api_version == 5 ? "v5.verify_ok" : "v4.verify_ok"), "ok");
+        audit_info("v5.verify_ok", "ok");
 
         // Response version matches route version (v4 or v5), AT is still v4 in phase-1.
         //
         // For v5, include "k" (approval key) so the browser can poll/consume without sid.
-        json out = {{"ok",true},{"v", api_version},{"at",at}};
-        if (api_version == 5) {
-            out["k"] = approval_key;        // stateless-ready correlation key (st_hash_b64)
-            out["st_hash_b64"] = st_hash;   // redundant but useful for debugging
-        }
+        json out = {
+            {"ok", true},
+            {"v", 5},
+            {"at", at},
+            {"k", approval_key},
+            {"st_hash_b64", st_hash}
+        };
 
         reply_json(res, 200, out.dump());
     }

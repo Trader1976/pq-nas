@@ -32,11 +32,9 @@ struct VerifyLoginCommonContext {
 
     // approvals/pending maps
     //
-    // NOTE ABOUT KEYING:
-    // - v4 legacy: key is usually vr.sid
-    // - v5 stateless-ready: key should be vr.st_hash_b64 (derived from signed st)
-    //
-    // This handler will decide the key based on api_version and store/read under that key.
+    // KEYING:
+    // - v5 uses vr.st_hash_b64 (derived from signed st) as the correlation key.
+    // - approvals/pending are stored and read under that key.
     struct ApprovalEntry { std::string cookie_val; std::string fingerprint; long expires_at = 0; };
 
     struct PendingEntry {
@@ -79,8 +77,7 @@ struct VerifyLoginCommonContext {
                        const std::function<void(std::map<std::string,std::string>&)>& fill)> audit_emit;
 };
 
-// Shared handler used by both /api/v4/verify and /api/v5/verify
+// Shared handler used by /api/v5/verify
 void handle_verify_login_common(const httplib::Request& req,
                                httplib::Response& res,
-                               int api_version, // 4 or 5 (route version)
                                const VerifyLoginCommonContext& ctx);
