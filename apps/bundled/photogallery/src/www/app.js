@@ -48,6 +48,8 @@
     const previewPath = el("previewPath");
     const previewInfo = el("previewInfo");
     const previewImg = el("previewImg");
+    const previewBody = previewCard ? previewCard.querySelector(".previewBody") : null;
+
     const previewPrevBtn = el("previewPrevBtn");
     const previewNextBtn = el("previewNextBtn");
     const previewFitBtn = el("previewFitBtn");
@@ -83,6 +85,7 @@
         editingRating: 0,
         previewPath: "",
         previewMode: "fit",
+        previewZoom: 1,
         activeTilePath: "",
         searchItems: [],
         searchBasePath: "",
@@ -116,6 +119,14 @@
         cardTop: 0
     };
 
+    const previewPanState = {
+        active: false,
+        startX: 0,
+        startY: 0,
+        scrollLeft: 0,
+        scrollTop: 0,
+        moved: false
+    };
 
     function loadRatingFilterPref() {
         try {
@@ -1922,23 +1933,140 @@ async function ensureTreeStats(force = false) {
         if (previewNextBtn) previewNextBtn.disabled = !hasMany || idx < 0;
         if (previewMetaBtn) previewMetaBtn.disabled = idx < 0;
     }
+    function clampPreviewZoom(z) {
+        return clamp(Number(z || 1), 0.05, 8);
+    }
 
+    function computeFitZoom() {
+        if (!previewImg || !previewBody || !previewImg.naturalWidth || !previewImg.naturalHeight) {
+            return 1;
+        }
+
+        const fitX = previewBody.clientWidth / previewImg.naturalWidth;
+        const fitY = previewBody.clientHeight / previewImg.naturalHeight;
+        return Math.min(1, fitX, fitY);
+    }
+
+    function currentPreviewZoom() {
+        return state.previewMode === "fit"
+            ? computeFitZoom()
+            : clampPreviewZoom(state.previewZoom || 1);
+    }
+
+    function setPreviewScrollableMode(on) {
+        if (!previewBody) return;
+
+        previewBody.style.display = on ? "block" : "flex";
+        previewBody.style.alignItems = on ? "flex-start" : "center";
+        previewBody.style.justifyContent = on ? "flex-start" : "center";
+    }
+
+    function updatePreviewInfoText() {
+        if (!previewInfo || !previewImg || !previewImg.naturalWidth || !previewImg.naturalHeight) return;
+
+        const { items, idx } = currentPreviewIndex();
+        const pos = (idx >= 0 && items.length > 1) ? ` • ${idx + 1} / ${items.length}` : "";
+        const pct = Math.round(currentPreviewZoom() * 100);
+
+        previewInfo.textContent = `${previewImg.naturalWidth} × ${previewImg.naturalHeight} • ${pct}%${pos}`;
+    }
+
+    function isPreviewPannable() {
+        if (!previewBody || !previewImg || !previewImg.naturalWidth || !previewImg.naturalHeight) {
+            return false;
+        }
+
+        return currentPreviewZoom() > computeFitZoom() + 0.01;
+    }
+
+    function updatePreviewPanCursor() {
+        if (!previewBody) return;
+
+        if (previewPanState.active) {
+            previewBody.style.cursor = "grabbing";
+        } else if (isPreviewPannable()) {
+            previewBody.style.cursor = "grab";
+        } else {
+            previewBody.style.cursor = "";
+        }
+    }
+
+    function applyPreviewZoom(nextZoom, opts = {}) {
+        if (!previewImg || !previewBody || !previewImg.naturalWidth || !previewImg.naturalHeight) return;
+
+        const fitZoom = computeFitZoom();
+        const zoom = clampPreviewZoom(nextZoom);
+
+        if (opts.snapToFit !== false && Math.abs(zoom - fitZoom) < 0.02) {
+            applyPreviewFitMode();
+            return;
+        }
+
+        const bodyRect = previewBody.getBoundingClientRect();
+        const oldRect = previewImg.getBoundingClientRect();
+        const oldWidth = oldRect.width || (previewImg.naturalWidth * currentPreviewZoom());
+        const oldHeight = oldRect.height || (previewImg.naturalHeight * currentPreviewZoom());
+
+        const clientX = Number.isFinite(opts.clientX)
+            ? opts.clientX
+            : (bodyRect.left + bodyRect.width / 2);
+
+        const clientY = Number.isFinite(opts.clientY)
+            ? opts.clientY
+            : (bodyRect.top + bodyRect.height / 2);
+
+        const offsetX = previewBody.scrollLeft + (clientX - bodyRect.left);
+        const offsetY = previewBody.scrollTop + (clientY - bodyRect.top);
+
+        const relX = oldWidth > 0 ? (offsetX / oldWidth) : 0.5;
+        const relY = oldHeight > 0 ? (offsetY / oldHeight) : 0.5;
+
+        state.previewMode = "zoom";
+        state.previewZoom = zoom;
+
+        setPreviewScrollableMode(true);
+
+        previewImg.style.maxWidth = "none";
+        previewImg.style.maxHeight = "none";
+        previewImg.style.width = `${Math.max(1, Math.round(previewImg.naturalWidth * zoom))}px`;
+        previewImg.style.height = `${Math.max(1, Math.round(previewImg.naturalHeight * zoom))}px`;
+
+        requestAnimationFrame(() => {
+            const newRect = previewImg.getBoundingClientRect();
+            const newWidth = newRect.width || (previewImg.naturalWidth * zoom);
+            const newHeight = newRect.height || (previewImg.naturalHeight * zoom);
+
+            previewBody.scrollLeft = Math.max(0, relX * newWidth - (clientX - bodyRect.left));
+            previewBody.scrollTop = Math.max(0, relY * newHeight - (clientY - bodyRect.top));
+
+            updatePreviewInfoText();
+            updatePreviewPanCursor();
+        });
+    }
     function applyPreviewFitMode() {
-        state.previewMode = "fit";
         if (!previewImg) return;
-        previewImg.style.maxWidth = "100%";
-        previewImg.style.maxHeight = "100%";
+
+        state.previewMode = "fit";
+        state.previewZoom = computeFitZoom();
+
+        setPreviewScrollableMode(false);
+
+        if (previewBody) {
+            previewBody.scrollLeft = 0;
+            previewBody.scrollTop = 0;
+        }
+
         previewImg.style.width = "auto";
         previewImg.style.height = "auto";
+        previewImg.style.maxWidth = "100%";
+        previewImg.style.maxHeight = "100%";
+
+        updatePreviewInfoText();
+        updatePreviewPanCursor();
     }
 
     function applyPreviewActualMode() {
-        state.previewMode = "actual";
-        if (!previewImg) return;
-        previewImg.style.maxWidth = "none";
-        previewImg.style.maxHeight = "none";
-        previewImg.style.width = "auto";
-        previewImg.style.height = "auto";
+        applyPreviewZoom(1, { snapToFit: false });
     }
 
     function openPreviewByIndex(nextIdx) {
@@ -1960,23 +2088,20 @@ async function ensureTreeStats(force = false) {
 
         if (previewImg) {
             previewImg.alt = item.name || "image";
+
             previewImg.onload = () => {
-                const { items, idx } = currentPreviewIndex();
-                const pos = (idx >= 0 && items.length > 1) ? ` • ${idx + 1} / ${items.length}` : "";
-                if (previewInfo) {
-                    previewInfo.textContent = `${previewImg.naturalWidth} × ${previewImg.naturalHeight}${pos}`;
-                }
+                applyPreviewFitMode();
                 updatePreviewNav();
             };
+
             previewImg.onerror = () => {
                 if (previewInfo) previewInfo.textContent = "Failed to load preview";
             };
+            previewImg.draggable = false;
             previewImg.src = fileGetUrl(rel);
         }
 
         const wasAlreadyOpen = !!(previewModal && previewModal.classList.contains("show"));
-
-        applyPreviewFitMode();
 
         if (!wasAlreadyOpen) {
             placePreviewCentered();
@@ -2005,10 +2130,22 @@ async function ensureTreeStats(force = false) {
         previewModal.setAttribute("aria-hidden", "true");
         state.previewPath = "";
 
+        state.previewMode = "fit";
+        state.previewZoom = 1;
+
+        if (previewBody) {
+            previewBody.scrollLeft = 0;
+            previewBody.scrollTop = 0;
+        }
+
         if (previewImg) {
             previewImg.removeAttribute("src");
             previewImg.alt = "";
         }
+
+        previewPanState.active = false;
+        previewPanState.moved = false;
+        updatePreviewPanCursor();
 
         window.dispatchEvent(new CustomEvent("photogallery:preview-close", {
             detail: { relPath: oldRel }
@@ -2758,6 +2895,65 @@ async function ensureTreeStats(force = false) {
         if (idx >= 0) openPreviewByIndex(idx + 1);
     });
 
+    previewBody?.addEventListener("wheel", (e) => {
+        if (!previewModal || !previewModal.classList.contains("show")) return;
+        if (!previewImg || !previewImg.naturalWidth || !previewImg.naturalHeight) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        const baseZoom = currentPreviewZoom();
+        const factor = Math.exp(-e.deltaY * 0.0015);
+
+        applyPreviewZoom(baseZoom * factor, {
+            clientX: e.clientX,
+            clientY: e.clientY,
+            snapToFit: true
+        });
+    }, { passive: false });
+    previewBody?.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        if (!previewModal || !previewModal.classList.contains("show")) return;
+        if (!isPreviewPannable()) return;
+
+        previewPanState.active = true;
+        previewPanState.startX = e.clientX;
+        previewPanState.startY = e.clientY;
+        previewPanState.scrollLeft = previewBody.scrollLeft;
+        previewPanState.scrollTop = previewBody.scrollTop;
+        previewPanState.moved = false;
+
+        updatePreviewPanCursor();
+
+        try { previewBody.setPointerCapture(e.pointerId); } catch (_) {}
+        e.preventDefault();
+    });
+
+    previewBody?.addEventListener("pointermove", (e) => {
+        if (!previewPanState.active || !previewBody) return;
+
+        const dx = e.clientX - previewPanState.startX;
+        const dy = e.clientY - previewPanState.startY;
+
+        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+            previewPanState.moved = true;
+        }
+
+        previewBody.scrollLeft = previewPanState.scrollLeft - dx;
+        previewBody.scrollTop = previewPanState.scrollTop - dy;
+
+        e.preventDefault();
+    });
+
+    function endPreviewPan() {
+        if (!previewPanState.active) return;
+        previewPanState.active = false;
+        updatePreviewPanCursor();
+    }
+
+    previewBody?.addEventListener("pointerup", endPreviewPan);
+    previewBody?.addEventListener("pointercancel", endPreviewPan);
+    previewBody?.addEventListener("lostpointercapture", endPreviewPan);
     downloadSelBtn?.addEventListener("click", downloadSelectionZip);
     deleteSelBtn?.addEventListener("click", deleteSelection);
     clearSelBtn?.addEventListener("click", () => {
