@@ -27608,7 +27608,11 @@ srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response&
         auto uopt = users.get(fp_hex);
         if (!uopt.has_value()) {
             audit_fail("user_missing", 403);
-            reply_json(res, 403, json{{"ok", false}, {"error", "forbidden"}, {"message", "policy denied"}}.dump());
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "policy denied"}
+            }.dump());
             return;
         }
         const auto& u = *uopt;
@@ -27639,9 +27643,24 @@ srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response&
         return;
     }
 
-    // Validate exists + directory
+    // Refuse any symlink in the existing prefix chain
+    {
+        std::string serr;
+        if (!ensure_no_symlink_in_existing_path_prefix(abs_dir, &serr)) {
+            audit_fail("symlink_not_supported", 400, serr);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "symlinks not supported"},
+                {"detail", serr}
+            }.dump());
+            return;
+        }
+    }
+
+    // Validate exists + directory, without following symlinks
     std::error_code ec;
-    auto st = std::filesystem::status(abs_dir, ec);
+    auto st = std::filesystem::symlink_status(abs_dir, ec);
     if (ec || !std::filesystem::exists(st)) {
         audit_fail("not_found", 404);
         reply_json(res, 404, json{
@@ -27651,6 +27670,17 @@ srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response&
         }.dump());
         return;
     }
+
+    if (std::filesystem::is_symlink(st)) {
+        audit_fail("symlink_not_supported", 400, abs_dir.string());
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "symlinks not supported"}
+        }.dump());
+        return;
+    }
+
     if (!std::filesystem::is_directory(st)) {
         audit_fail("not_directory", 400);
         reply_json(res, 400, json{
@@ -27677,15 +27707,32 @@ srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response&
 
         if (ec) break;
         const auto& de = *it;
-        if (!de.is_regular_file(ec)) continue;
-        if (ec) { ec.clear(); continue; }
+
+        std::error_code ec2;
+        auto ent_st = std::filesystem::symlink_status(de.path(), ec2);
+        if (ec2) {
+            ec2.clear();
+            continue;
+        }
+
+        // Never include symlinks in the zip, and never recurse through them.
+        if (std::filesystem::is_symlink(ent_st)) {
+            continue;
+        }
+
+        if (!std::filesystem::is_regular_file(ent_st)) {
+            continue;
+        }
 
         const std::filesystem::path abs = de.path();
         std::uint64_t sz = pqnas::file_size_u64_safe(abs);
 
         // build relative name within the selected directory
         std::filesystem::path rel_inside = std::filesystem::relative(abs, base, ec);
-        if (ec) { ec.clear(); continue; }
+        if (ec) {
+            ec.clear();
+            continue;
+        }
 
         std::string name = zip_root.empty()
             ? rel_inside.string()
@@ -27699,7 +27746,7 @@ srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response&
         z.zip_name = name;
         z.size_u64 = sz;
 
-        std::uint16_t dt=0, dd=0;
+        std::uint16_t dt = 0, dd = 0;
         zip_dos_time_date(de.last_write_time(ec), dt, dd);
         if (ec) ec.clear();
         z.dos_time = dt;
@@ -27725,7 +27772,7 @@ srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response&
     }
 
     // Sort stable by name for deterministic output
-    std::sort(items.begin(), items.end(), [](const ZipFileItem& a, const ZipFileItem& b){
+    std::sort(items.begin(), items.end(), [](const ZipFileItem& a, const ZipFileItem& b) {
         return a.zip_name < b.zip_name;
     });
 

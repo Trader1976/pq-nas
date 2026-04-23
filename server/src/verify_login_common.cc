@@ -167,7 +167,7 @@ void handle_verify_login_common(const httplib::Request& req,
 
             audit_fail(std::string("v4_shared_rc_") + std::to_string((int)vr.rc), vr.detail);
             if (http == 410) return fail(410, "st expired");
-            return fail(http, "verify failed", vr.detail);
+            return fail(http, "verify failed");
         }
 
         const bool vectors_mode = (std::getenv("PQNAS_V4_VECTORS") != nullptr);
@@ -186,7 +186,7 @@ void handle_verify_login_common(const httplib::Request& req,
 
         if (approval_key.empty()) {
             audit_fail("missing_approval_key");
-            return fail(400, "verify failed", "missing approval key");
+            return fail(400, "verify failed");
         }
 
         // Bootstrap: first verified fingerprint becomes admin if fresh install
@@ -362,6 +362,6 @@ void handle_verify_login_common(const httplib::Request& req,
     }
     catch (const std::exception& e) {
         audit_fail("exception", e.what());
-        return fail(400, "exception", e.what());
+        return fail(400, "verify failed");
     }
 }

@@ -236,46 +236,71 @@ static bool is_allowed_dna_lib_sha256(const std::string& hex) {
 
         std::vector<std::string> candidates;
 
+        // 1) Explicit runtime-installed path from env (preferred)
+        if (const char* p = std::getenv("PQNAS_DNA_LIB"); p && *p) {
+            candidates.emplace_back(p);
+        }
+
+        // 2) Installer/runtime default path
+        candidates.emplace_back("/opt/pqnas/lib/dna/libdna_lib.so");
+
+        // 3) Side-by-side with executable (useful for some package/dev layouts)
         candidates.emplace_back(exe_dir_local() + "/libdna_lib.so");
 
-        // Stable repo path (works when running from build/bin with repo layout unchanged)
+        // 4) Dev-tree fallback only
         candidates.emplace_back(
-            (std::filesystem::path(exe_dir_local()) / ".." / ".." / "server" / "third_party" / "dna" / "lib" / "linux" / "x64" / "libdna_lib.so")
+            (std::filesystem::path(exe_dir_local()) / ".." / ".." / "server" / "third_party" /
+             "dna" / "lib" / "linux" / "x64" / "libdna_lib.so")
                 .lexically_normal().string()
         );
 
-    std::string last_err;
-    for (const auto& libpath : candidates) {
-        std::string sha_hex;
-        std::string sha_err;
-        if (!sha256_file_hex(libpath, &sha_hex, &sha_err)) {
-            last_err = std::string("sha256 check failed: ") + libpath + " : " + sha_err;
-            continue;
+        // de-dup while preserving order
+        std::vector<std::string> uniq;
+        uniq.reserve(candidates.size());
+        for (const auto& c : candidates) {
+            if (c.empty()) continue;
+            if (std::find(uniq.begin(), uniq.end(), c) == uniq.end()) {
+                uniq.push_back(c);
+            }
         }
 
-        if (!is_allowed_dna_lib_sha256(sha_hex)) {
-            last_err = std::string("sha256 mismatch for ") + libpath + " : " + sha_hex;
-            continue;
-        }
+        std::string last_err;
+        for (const auto& libpath : uniq) {
+            std::string sha_hex;
+            std::string sha_err;
 
-        h = try_open(libpath);
-        if (h) {
-            dlerror(); // clear any stale error
-            fn = (qgp_dsa87_verify_fn)dlsym(h, "qgp_dsa87_verify");
+            if (!sha256_file_hex(libpath, &sha_hex, &sha_err)) {
+                last_err = std::string("sha256 check failed: ") + libpath + " : " + sha_err;
+                continue;
+            }
+
+            if (!is_allowed_dna_lib_sha256(sha_hex)) {
+                last_err = std::string("sha256 mismatch for ") + libpath + " : " + sha_hex;
+                continue;
+            }
+
+            h = try_open(libpath);
+            if (!h) {
+                const char* e = dlerror();
+                last_err = std::string("dlopen failed: ") + libpath + " : " + (e ? e : "");
+                continue;
+            }
+
+            dlerror(); // clear stale error
+            fn = reinterpret_cast<qgp_dsa87_verify_fn>(dlsym(h, "qgp_dsa87_verify"));
             const char* sym_err = dlerror();
             if (sym_err || !fn) {
                 last_err = std::string("dlsym failed in ") + libpath + " : " + (sym_err ? sym_err : "");
                 dlclose(h);
                 h = nullptr;
+                fn = nullptr;
                 continue;
             }
+
+            std::cerr << "[pq-verify] using lib: " << libpath
+                      << " sha256=" << sha_hex << "\n" << std::flush;
             return fn;
         }
-
-        const char* e = dlerror();
-        last_err = std::string("dlopen failed: ") + libpath + " : " + (e ? e : "");
-
-    }
 
         throw std::runtime_error(last_err.empty() ? "dlopen failed" : last_err);
     }
