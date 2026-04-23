@@ -75,7 +75,7 @@
             return mod.runtime.leafletPromise;
         },
 
-        buildSideList(items, markerByPath, deps) {
+        buildSideList(items, markerByPath, selectedRel, setSelectedRel, deps) {
             const list = document.createElement("div");
             list.className = "mapPhotoList";
 
@@ -85,6 +85,7 @@
                 const btn = document.createElement("button");
                 btn.type = "button";
                 btn.className = "mapPhotoBtn";
+                if (rel === selectedRel) btn.classList.add("active");
 
                 const main = document.createElement("div");
                 main.className = "mapPhotoMain";
@@ -113,11 +114,16 @@
                 btn.appendChild(main);
 
                 btn.addEventListener("click", () => {
+                    setSelectedRel(rel);
+
                     const marker = markerByPath.get(rel);
                     if (marker && mod.runtime.map) {
                         mod.runtime.map.setView(marker.getLatLng(), Math.max(mod.runtime.map.getZoom(), 13), { animate: true });
                         marker.openPopup();
                     }
+                });
+
+                btn.addEventListener("dblclick", () => {
                     deps.openPreviewFor(item);
                 });
 
@@ -126,7 +132,84 @@
 
             return list;
         },
+        buildSelectionCard(item, deps) {
+            const card = document.createElement("div");
+            card.className = "mapSelectionCard";
 
+            if (!item) {
+                card.innerHTML = `
+                    <div class="mapSelectionPlaceholder">No photo selected.</div>
+                `;
+                return card;
+            }
+
+            const rel = deps.currentRelPathFor(item);
+
+            const thumbWrap = document.createElement("div");
+            thumbWrap.className = "mapSelectionThumbWrap";
+
+            const img = document.createElement("img");
+            img.className = "mapSelectionThumb";
+            img.alt = item.name || "photo";
+            img.loading = "eager";
+            img.decoding = "async";
+            img.src = deps.galleryThumbUrl(rel, 640, item.mtime_unix || 0);
+            img.onerror = () => {
+                img.onerror = null;
+                thumbWrap.innerHTML = `<div class="mapSelectionPlaceholder">Thumbnail not available.</div>`;
+            };
+
+            thumbWrap.appendChild(img);
+
+            const body = document.createElement("div");
+            body.className = "mapSelectionBody";
+
+            const title = document.createElement("div");
+            title.className = "mapSelectionTitle";
+            title.textContent = item.name || "(unnamed)";
+
+            const path = document.createElement("div");
+            path.className = "mapSelectionPath";
+            path.textContent = "/" + rel;
+
+            const coord = document.createElement("div");
+            coord.className = "mapSelectionCoord";
+            coord.textContent = `${Number(item.gps_latitude).toFixed(6)}, ${Number(item.gps_longitude).toFixed(6)}`;
+
+            const time = document.createElement("div");
+            time.className = "mapSelectionTime";
+            time.textContent = deps.fmtTime(item.capture_time_unix || 0) || "no capture time";
+
+            body.appendChild(title);
+            body.appendChild(path);
+            body.appendChild(coord);
+            body.appendChild(time);
+
+            if (item.gps_altitude != null) {
+                const alt = document.createElement("div");
+                alt.className = "mapSelectionAlt";
+                alt.textContent = `Altitude: ${item.gps_altitude}`;
+                body.appendChild(alt);
+            }
+
+            const actions = document.createElement("div");
+            actions.className = "mapSelectionActions";
+
+            const openBtn = document.createElement("button");
+            openBtn.type = "button";
+            openBtn.className = "btn";
+            openBtn.textContent = "Open preview";
+            openBtn.addEventListener("click", () => {
+                deps.openPreviewFor(item);
+            });
+
+            actions.appendChild(openBtn);
+            body.appendChild(actions);
+
+            card.appendChild(thumbWrap);
+            card.appendChild(body);
+            return card;
+        },
         render(mapCanvas, items, deps) {
             if (!mapCanvas) return;
 
@@ -157,7 +240,7 @@
 
             const side = document.createElement("div");
             side.className = "mapSide";
-
+            const selectionHost = document.createElement("div");
             const summary = document.createElement("div");
             summary.className = "mapSummary";
             summary.innerHTML = `
@@ -166,6 +249,7 @@
             `;
 
             side.appendChild(summary);
+            side.appendChild(selectionHost);
             pane.appendChild(viewport);
             pane.appendChild(side);
             mapCanvas.appendChild(pane);
@@ -192,6 +276,29 @@
 
                 const bounds = [];
                 const markerByPath = new Map();
+                const itemByPath = new Map();
+
+                let selectedRel = items.length ? deps.currentRelPathFor(items[0]) : "";
+
+                const renderSelection = () => {
+                    const selectedItem = selectedRel ? itemByPath.get(selectedRel) : null;
+                    selectionHost.replaceChildren(mod.buildSelectionCard(selectedItem || null, deps));
+                };
+
+                const setSelectedRel = (rel) => {
+                    selectedRel = String(rel || "");
+                    renderSelection();
+
+                    const oldList = side.querySelector(".mapPhotoList");
+
+                    if (items.length > 1) {
+                        const newList = mod.buildSideList(items, markerByPath, selectedRel, setSelectedRel, deps);
+                        if (oldList) oldList.replaceWith(newList);
+                        else side.appendChild(newList);
+                    } else if (oldList) {
+                        oldList.remove();
+                    }
+                };
 
                 for (const item of items) {
                     const lat = Number(item.gps_latitude);
@@ -199,7 +306,14 @@
                     if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
 
                     const rel = deps.currentRelPathFor(item);
-                    const marker = L.marker([lat, lon]);
+                    itemByPath.set(rel, item);
+
+                    const marker = L.circleMarker([lat, lon], {
+                        radius: 8,
+                        weight: 2,
+                        opacity: 1,
+                        fillOpacity: 0.85
+                    });
 
                     const popupHtml = `
                         <div class="mapLeafletPopup">
@@ -214,7 +328,7 @@
 
                     marker.bindPopup(popupHtml);
                     marker.on("click", () => {
-                        deps.openPreviewFor(item);
+                        setSelectedRel(rel);
                     });
 
                     marker.addTo(mod.runtime.markersLayer);
@@ -222,8 +336,11 @@
                     bounds.push([lat, lon]);
                 }
 
-                side.appendChild(mod.buildSideList(items, markerByPath, deps));
+                renderSelection();
 
+                if (items.length > 1) {
+                    side.appendChild(mod.buildSideList(items, markerByPath, selectedRel, setSelectedRel, deps));
+                }
                 if (bounds.length === 1) {
                     mod.runtime.map.setView(bounds[0], 13);
                 } else if (bounds.length > 1) {

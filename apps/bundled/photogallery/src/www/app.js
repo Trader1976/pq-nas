@@ -2815,7 +2815,8 @@ async function ensureTreeStats(force = false) {
             currentRelPathFor,
             fmtTime,
             openPreviewFor,
-            refreshFooterStats
+            refreshFooterStats,
+            galleryThumbUrl
         });
     }
 
