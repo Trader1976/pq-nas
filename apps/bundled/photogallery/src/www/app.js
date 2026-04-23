@@ -153,34 +153,6 @@
         applyThumbSizeUi();
     }
 
-    function openBackgroundContextMenu(x, y) {
-        if (!ctxMenu) return;
-
-        ctxMenu.innerHTML = "";
-
-        ctxMenu.appendChild(menuItem("Upload photos…", () => {
-            window.PQNAS_PHOTOGALLERY?.upload?.pickFiles?.();
-        }));
-
-        ctxMenu.appendChild(menuItem("Upload folder…", () => {
-            window.PQNAS_PHOTOGALLERY?.upload?.pickFolder?.();
-        }));
-
-        ctxMenu.appendChild(menuSep());
-
-        if (state.curPath) {
-            ctxMenu.appendChild(menuItem("Up", () => {
-                setCurrentPath(parentPath(state.curPath), "background-context-up");
-                clearSelection();
-                load();
-            }));
-        }
-
-        ctxMenu.appendChild(menuItem("Refresh", () => load(true)));
-
-        placeContextMenu(x, y);
-    }
-
     function saveThumbSizePref() {
         try {
             localStorage.setItem(THUMB_SIZE_KEY, String(state.thumbSize));
@@ -602,6 +574,47 @@
             setStatus(`Folder move to trash failed: ${String(e && e.message ? e.message : e)}`);
         }
     }
+    async function createFolder(basePath = state.curPath) {
+        const shownBase = basePath ? `/${basePath}` : "/";
+        const name = prompt(`New folder name in ${shownBase}:`, "New Folder");
+        if (!name) return;
+
+        if (name.includes("/") || name.includes("\\")) {
+            alert("Folder name cannot contain '/' or '\\'.");
+            return;
+        }
+
+        const rel = basePath ? `${basePath}/${name}` : name;
+
+        setBadge("warn", "working…");
+        setStatus(`Creating folder ${name}…`);
+
+        try {
+            const r = await fetch(
+                `/api/v4/files/mkdir?path=${encodeURIComponent(rel)}`,
+                {
+                    method: "POST",
+                    credentials: "include",
+                    cache: "no-store"
+                }
+            );
+
+            const j = await r.json().catch(() => null);
+            if (!r.ok || !j || !j.ok) {
+                const msg = j && (j.message || j.error)
+                    ? `${j.error || ""} ${j.message || ""}`.trim()
+                    : `HTTP ${r.status}`;
+                throw new Error(msg || `HTTP ${r.status}`);
+            }
+
+            setBadge("ok", "ready");
+            setStatus(`Created folder: ${name}`);
+            await load(true);
+        } catch (e) {
+            setBadge("err", "error");
+            setStatus(`Create folder failed: ${String(e && e.message ? e.message : e)}`);
+        }
+    }
     function openSelectionContextMenu(x, y) {
         if (!ctxMenu) return;
 
@@ -643,11 +656,64 @@
             setCurrentPath(currentRelPathFor(item), "folder-context-open");
             load();
         }));
+        ctxMenu.appendChild(menuItem("New folder here…", () => {
+            createFolder(currentRelPathFor(item));
+        }));
         ctxMenu.appendChild(menuItem("Download zip", () => downloadSingleFolderZip(item)));
         ctxMenu.appendChild(menuItem("Export with metadata…", () => exportSingleItemZip(item)));
         ctxMenu.appendChild(menuSep());
         ctxMenu.appendChild(menuItem("Rename…", () => renameFolder(item)));
         ctxMenu.appendChild(menuItem("Move to trash…", () => deleteFolder(item), { danger: true }));
+
+        placeContextMenu(x, y);
+    }
+    function openBackgroundContextMenu(x, y) {
+        if (!ctxMenu) return;
+
+        ctxMenu.innerHTML = "";
+
+        ctxMenu.appendChild(menuItem("Upload files…", () => {
+            if (window.PQNAS_PHOTOGALLERY?.upload?.pickFiles) {
+                window.PQNAS_PHOTOGALLERY.upload.pickFiles();
+                return;
+            }
+            if (window.PQNAS_PHOTOGALLERY_UPLOAD?.pickFiles) {
+                window.PQNAS_PHOTOGALLERY_UPLOAD.pickFiles();
+                return;
+            }
+            setBadge("err", "error");
+            setStatus("Upload module not loaded.");
+        }));
+
+        ctxMenu.appendChild(menuItem("Upload folder…", () => {
+            if (window.PQNAS_PHOTOGALLERY?.upload?.pickFolder) {
+                window.PQNAS_PHOTOGALLERY.upload.pickFolder();
+                return;
+            }
+            if (window.PQNAS_PHOTOGALLERY_UPLOAD?.pickFolder) {
+                window.PQNAS_PHOTOGALLERY_UPLOAD.pickFolder();
+                return;
+            }
+            setBadge("err", "error");
+            setStatus("Upload module not loaded.");
+        }));
+
+        ctxMenu.appendChild(menuSep());
+
+        ctxMenu.appendChild(menuItem("New folder…", () => {
+            createFolder(state.curPath);
+        }));
+
+        if (state.curPath) {
+            ctxMenu.appendChild(menuItem("Up", () => {
+                setCurrentPath(parentPath(state.curPath), "background-context-up");
+                clearSelection();
+                load();
+            }));
+        }
+
+        ctxMenu.appendChild(menuSep());
+        ctxMenu.appendChild(menuItem("Refresh", () => load(true)));
 
         placeContextMenu(x, y);
     }
