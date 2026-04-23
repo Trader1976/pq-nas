@@ -13,6 +13,7 @@
     const pathLine = el("pathLine");
     const badge = el("badge");
     const statusEl = el("status");
+    const footerStats = el("footerStats");
     const filterInput = el("filterInput");
     const ratingFilter = el("ratingFilter");
     const thumbSizeSelect = el("thumbSizeSelect");
@@ -86,7 +87,16 @@
         searchItems: [],
         searchBasePath: "",
         searchLoaded: false,
-        searchLoading: false
+        searchLoading: false,
+        treeStats: {
+            basePath: "",
+            loaded: false,
+            loading: false,
+            dirs: 0,
+            files: 0,
+            fileBytes: 0,
+            seq: 0
+        }
     };
 
     const dragState = {
@@ -105,6 +115,8 @@
         cardLeft: 0,
         cardTop: 0
     };
+
+
     function loadRatingFilterPref() {
         try {
             const raw = Number(localStorage.getItem(RATING_FILTER_KEY) || "-1");
@@ -137,6 +149,7 @@
             thumbSizeSelect.value = String(size);
         }
     }
+
 
     function loadThumbSizePref() {
         try {
@@ -778,6 +791,7 @@
         if (clearSelBtn) clearSelBtn.disabled = count === 0;
 
         refreshMetaApplySelectionUi();
+        refreshFooterStats();
     }
     function clearSelectionDom() {
         if (!gridEl) return;
@@ -879,6 +893,159 @@
             .sort((a, b) => String(a).localeCompare(String(b)));
     }
 
+    function resetTreeStats() {
+        state.treeStats = {
+            basePath: "",
+            loaded: false,
+            loading: false,
+            dirs: 0,
+            files: 0,
+            fileBytes: 0,
+            seq: (state.treeStats?.seq || 0) + 1
+        };
+    }
+
+
+async function ensureTreeStats(force = false) {
+    const root = String(state.curPath || "");
+    const currentSeq = (state.treeStats?.seq || 0) + 1;
+
+    if (!force &&
+        state.treeStats.loaded &&
+        !state.treeStats.loading &&
+        state.treeStats.basePath === root) {
+        return state.treeStats;
+    }
+
+    state.treeStats = {
+        basePath: root,
+        loaded: false,
+        loading: true,
+        dirs: 0,
+        files: 0,
+        fileBytes: 0,
+        seq: currentSeq
+    };
+
+    async function walk(path) {
+        if (!state.treeStats || state.treeStats.seq !== currentSeq) return;
+
+        const j = await fetchJson(galleryListUrl(path));
+        const items = Array.isArray(j.items) ? j.items : [];
+
+        for (const it of items) {
+            if (it.type === "dir") {
+                state.treeStats.dirs++;
+            } else if (it.type === "file") {
+                state.treeStats.files++;
+                state.treeStats.fileBytes += Number(it.size_bytes || 0) || 0;
+            }
+        }
+
+        for (const it of items) {
+            if (it.type === "dir") {
+                await walk(joinPath(path, it.name));
+            }
+        }
+    }
+
+    await walk(root);
+
+    if (state.treeStats && state.treeStats.seq === currentSeq) {
+        state.treeStats.loading = false;
+        state.treeStats.loaded = true;
+    }
+
+    return state.treeStats;
+}
+    function visibleItemsSummary() {
+        const items = filteredItems();
+
+        let dirs = 0;
+        let files = 0;
+        let fileBytes = 0;
+
+        for (const it of items) {
+            if (it.type === "dir") {
+                dirs++;
+            } else if (it.type === "file") {
+                files++;
+                fileBytes += Number(it.size_bytes || 0) || 0;
+            }
+        }
+
+        return {
+            items: items.length,
+            dirs,
+            files,
+            fileBytes
+        };
+    }
+
+    function selectedItemsSummary() {
+        const all = [...state.items, ...state.searchItems];
+        const seen = new Set();
+
+        let items = 0;
+        let dirs = 0;
+        let files = 0;
+        let fileBytes = 0;
+
+        for (const it of all) {
+            const rel = currentRelPathFor(it);
+            if (!rel || seen.has(rel) || !selectedRelPaths.has(rel)) continue;
+            seen.add(rel);
+
+            items++;
+            if (it.type === "dir") {
+                dirs++;
+            } else if (it.type === "file") {
+                files++;
+                fileBytes += Number(it.size_bytes || 0) || 0;
+            }
+        }
+
+        return { items, dirs, files, fileBytes };
+    }
+
+    function refreshFooterStats() {
+        if (!footerStats) return;
+
+        const vis = visibleItemsSummary();
+        const tree = state.treeStats || {
+            loaded: false,
+            loading: false,
+            dirs: 0,
+            files: 0,
+            fileBytes: 0
+        };
+
+        const parts = [];
+
+        parts.push(`Here: ${vis.items}`);
+        parts.push(`Folders: ${vis.dirs}`);
+        parts.push(`Files: ${vis.files}`);
+        parts.push(`Size: ${fmtSize(vis.fileBytes)}`);
+
+        if (tree.loading) {
+            parts.push(`Tree: loading…`);
+        } else if (tree.loaded) {
+            parts.push(`Tree folders: ${tree.dirs}`);
+            parts.push(`Tree files: ${tree.files}`);
+            parts.push(`Tree size: ${fmtSize(tree.fileBytes)}`);
+        }
+
+        const sel = selectedItemsSummary();
+        let html = parts
+            .map((p) => `${p}`)
+            .join(` <span class="footerStatsDimSep">•</span> `);
+
+        if (sel.items > 0) {
+            html += ` <span class="footerStatsDimSep">•</span> <span class="footerStatsSel">Selected: ${sel.items} • ${fmtSize(sel.fileBytes)}</span>`;
+        }
+
+        footerStats.innerHTML = html;
+    }
     function refreshMetaApplySelectionUi() {
         if (!metaApplySelWrap || !metaApplySelChk || !metaApplySelText) return;
 
@@ -2386,6 +2553,7 @@
             <div class="p">Scanning the current folder and all deeper folders for matching photos.</div>
         `;
             gridEl.appendChild(loading);
+            refreshFooterStats();
             return;
         }
 
@@ -2410,6 +2578,7 @@
             }
 
             gridEl.appendChild(empty);
+            refreshFooterStats();
             return;
         }
 
@@ -2446,6 +2615,7 @@
 
         applySelectionToDom();
         ensureActiveTile();
+        refreshFooterStats();
     }
 
     async function load(forceSearch = false) {
@@ -2456,6 +2626,14 @@
         try {
             const j = await fetchJson(galleryListUrl(state.curPath));
             state.items = Array.isArray(j.items) ? j.items.slice() : [];
+            if (state.treeStats.basePath !== state.curPath) {
+                resetTreeStats();
+            }
+            refreshFooterStats();
+
+            ensureTreeStats(forceSearch)
+                .then(() => refreshFooterStats())
+                .catch(() => refreshFooterStats());
             renderBreadcrumb();
 
             if (forceSearch || state.searchBasePath !== state.curPath) {

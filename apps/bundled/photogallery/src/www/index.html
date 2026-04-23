@@ -973,6 +973,16 @@
             border-color:rgba(255,90,90,0.28);
             background:rgba(255,90,90,0.10);
         }
+        .footerStatsLine{
+            opacity:.82;
+        }
+        .footerStatsSel{
+            color: rgba(var(--fg-rgb), 0.98);
+            font-weight: 900;
+        }
+        .footerStatsDimSep{
+            opacity:.45;
+        }
     </style>
 <link rel="stylesheet" href="./bursts.css?v=4">
 <link rel="stylesheet" href="./stats.css">
@@ -1037,7 +1047,10 @@
 
         <div class="footer">
             <div id="status" class="mono">Ready.</div>
+            <div style="flex:1 1 auto;"></div>
+            <div id="footerStats" class="mono" style="opacity:.82;">Items: 0</div>
             <div class="mono">DNA-Nexus bundled app • photogallery 1.0.0</div>
+
             <div id="uploadProg" style="display:none" aria-hidden="true">
                 <div class="upRow">
                     <div class="upLeft">
