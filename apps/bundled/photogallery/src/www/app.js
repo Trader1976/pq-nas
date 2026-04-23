@@ -58,6 +58,8 @@
     const metaCard = el("metaCard");
     const metaHead = el("metaHead");
 
+    const panelEl = document.querySelector(".panel");
+
     let metaSaveInFlight = false;
     let suppressBrowserSaveUntil = 0;
     let selectedRelPaths = new Set();
@@ -149,6 +151,34 @@
         }
 
         applyThumbSizeUi();
+    }
+
+    function openBackgroundContextMenu(x, y) {
+        if (!ctxMenu) return;
+
+        ctxMenu.innerHTML = "";
+
+        ctxMenu.appendChild(menuItem("Upload photos…", () => {
+            window.PQNAS_PHOTOGALLERY?.upload?.pickFiles?.();
+        }));
+
+        ctxMenu.appendChild(menuItem("Upload folder…", () => {
+            window.PQNAS_PHOTOGALLERY?.upload?.pickFolder?.();
+        }));
+
+        ctxMenu.appendChild(menuSep());
+
+        if (state.curPath) {
+            ctxMenu.appendChild(menuItem("Up", () => {
+                setCurrentPath(parentPath(state.curPath), "background-context-up");
+                clearSelection();
+                load();
+            }));
+        }
+
+        ctxMenu.appendChild(menuItem("Refresh", () => load(true)));
+
+        placeContextMenu(x, y);
     }
 
     function saveThumbSizePref() {
@@ -1093,14 +1123,31 @@
     });
 
     gridWrap?.addEventListener("pointerup", endMarquee);
-    gridWrap?.addEventListener("contextmenu", (e) => {
-        if (e.target && e.target.closest && e.target.closest(".tile")) return;
-        if (!selectedRelPaths.size) return;
+
+    panelEl?.addEventListener("contextmenu", (e) => {
+        const target = e.target;
+
+        if (!target || !(target instanceof Element)) return;
+
+        // Let tile-specific handlers keep control.
+        if (target.closest(".tile")) return;
+
+        // Do not hijack native menu inside editable controls.
+        if (target.closest("input, textarea, select")) return;
+
+        // Do not interfere with modals.
+        if (target.closest(".modal.show")) return;
 
         e.preventDefault();
         e.stopPropagation();
-        openSelectionContextMenu(e.clientX, e.clientY);
-    });
+
+        if (selectedRelPaths.size > 0) {
+            openSelectionContextMenu(e.clientX, e.clientY);
+        } else {
+            openBackgroundContextMenu(e.clientX, e.clientY);
+        }
+    }, true);
+
     gridWrap?.addEventListener("pointercancel", endMarquee);
     function renderBreadcrumb() {
         if (!pathLine) return;
@@ -2733,9 +2780,9 @@
         };
     };
 
-    window.PQNAS_PHOTOGALLERY.reload = async function () {
+    window.PQNAS_PHOTOGALLERY.reload = async function (forceSearch = false) {
         if (typeof load === "function") {
-            return await load();
+            return await load(!!forceSearch);
         }
     };
 

@@ -871,6 +871,108 @@
             border-right:0;
             border-top:0;
         }
+        .hidden{ display:none !important; }
+
+        .gridWrap{
+            position:relative;
+        }
+
+        .dropOverlay{
+            position:absolute;
+            inset:0;
+            z-index:20;
+            display:none;
+            align-items:center;
+            justify-content:center;
+            text-align:center;
+            border:1px dashed var(--border);
+            border-radius:18px;
+            background:rgba(0,0,0,0.28);
+            backdrop-filter:blur(4px);
+        }
+
+        .dropOverlay.show{
+            display:flex;
+        }
+
+        .dropOverlay .big{
+            font-size:22px;
+            font-weight:900;
+            letter-spacing:.02em;
+        }
+
+        .dropOverlay .small{
+            margin-top:6px;
+            font-size:13px;
+            opacity:.78;
+        }
+
+        html[data-theme="bright"] .dropOverlay{
+            background:rgba(255,255,255,0.56);
+        }
+
+        #uploadProg{
+            min-width:min(460px,100%);
+        }
+
+        .upRow{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            margin-bottom:8px;
+        }
+
+        .upLeft{
+            min-width:0;
+            display:flex;
+            align-items:center;
+            gap:8px;
+            flex-wrap:wrap;
+        }
+
+        .upText,
+        .upPct{
+            font-family:var(--mono);
+            font-size:12px;
+            opacity:.9;
+        }
+
+        .upBar{
+            height:10px;
+            border-radius:999px;
+            overflow:hidden;
+            border:1px solid var(--border2);
+            background:rgba(0,0,0,0.18);
+        }
+
+        .upFill{
+            height:100%;
+            width:0%;
+            background:linear-gradient(90deg, rgba(var(--fg-rgb),0.55), rgba(var(--fg-rgb),0.95));
+            transition:width 120ms ease;
+        }
+
+        .upPill{
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            padding:4px 10px;
+            border-radius:999px;
+            border:1px solid var(--border2);
+            font-size:12px;
+            line-height:1.2;
+        }
+
+        .upPill.warn{
+            border-color:rgba(255,190,0,0.28);
+            background:rgba(255,190,0,0.10);
+        }
+
+        .upPill.err{
+            border-color:rgba(255,90,90,0.28);
+            background:rgba(255,90,90,0.10);
+        }
     </style>
 <link rel="stylesheet" href="./bursts.css?v=4">
 <link rel="stylesheet" href="./stats.css">
@@ -916,8 +1018,6 @@
                     <option value="300">Thumbs: XL</option>
                 </select>
 
-
-
                 <button class="btn secondary" id="slideshowBtn" type="button">Slideshow</button>
                 <button class="btn secondary" id="statsBtn" type="button">Stats</button>
                 <button class="btn secondary" id="upBtn" type="button">Up</button>
@@ -925,17 +1025,86 @@
             </div>
         </div>
 
-        <div class="gridWrap">
+        <div class="gridWrap" id="gridWrap">
+            <div class="dropOverlay" id="dropOverlay" aria-hidden="true">
+                <div>
+                    <div class="big">Drop photos or folders to upload</div>
+                    <div class="small">Uploads into the current folder</div>
+                </div>
+            </div>
             <div id="grid" class="grid"></div>
         </div>
 
         <div class="footer">
             <div id="status" class="mono">Ready.</div>
             <div class="mono">DNA-Nexus bundled app • photogallery 1.0.0</div>
+            <div id="uploadProg" style="display:none" aria-hidden="true">
+                <div class="upRow">
+                    <div class="upLeft">
+                        <div id="uploadProgText" class="upText">Uploading…</div>
+                        <span id="uploadProgPill" class="upPill hidden"></span>
+                    </div>
+                    <div id="uploadProgPct" class="upPct">0%</div>
+                </div>
+                <button id="uploadCancelBtn" class="btn secondary hidden" type="button">Cancel</button>
+                <div class="upBar">
+                    <div id="uploadProgFill" class="upFill" style="width:0%"></div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
+<div id="uploadConflictModal" class="modal" aria-hidden="true">
+    <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="uploadConflictTitle">
+        <div class="modalHead">
+            <div>
+                <div id="uploadConflictTitle" class="modalTitle">File already exists</div>
+                <div id="uploadConflictPath" class="modalSub">/</div>
+            </div>
+            <button id="uploadConflictClose" class="btn secondary" type="button">Close</button>
+        </div>
 
+        <div class="modalBody">
+            <div class="formGrid">
+                <div class="label">Existing file</div>
+                <div id="uploadConflictExisting" class="mono" style="opacity:.9;"></div>
+
+                <div class="label">New file</div>
+                <div id="uploadConflictIncoming" class="mono" style="opacity:.9;"></div>
+
+                <div class="label">Choice</div>
+                <div style="display:grid; gap:10px;">
+                    <label style="display:flex; gap:10px; align-items:flex-start;">
+                        <input type="radio" name="uploadConflictChoice" id="uploadConflictKeepOld" value="keep_old" checked>
+                        <span>
+                            <strong>Keep existing</strong><br>
+                            <span style="opacity:.82;">Skip this upload and keep the file already stored.</span>
+                        </span>
+                    </label>
+
+                    <label style="display:flex; gap:10px; align-items:flex-start;">
+                        <input type="radio" name="uploadConflictChoice" id="uploadConflictReplace" value="replace">
+                        <span>
+                            <strong>Replace with new</strong><br>
+                            <span style="opacity:.82;">Upload the new file and replace the existing one.</span>
+                        </span>
+                    </label>
+
+                    <label style="display:flex; gap:10px; align-items:center; margin-top:8px;">
+                        <input type="checkbox" id="uploadConflictApplyAll">
+                        <span>Use this choice for all remaining conflicts in this upload</span>
+                    </label>
+                </div>
+
+                <div class="label">Action</div>
+                <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                    <button id="uploadConflictOkBtn" class="btn" type="button">Continue</button>
+                    <button id="uploadConflictCancelBtn" class="btn secondary" type="button">Cancel upload</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 <div id="metaModal" class="modal" aria-hidden="true">
     <div id="metaCard" class="modalCard" role="dialog" aria-modal="true" aria-labelledby="metaTitle"
          style="width:min(760px, calc(100vw - 24px)); position:absolute; left:50%; top:110px; transform:translateX(-50%);">
@@ -1208,9 +1377,25 @@
 </div>
 
 <div id="ctxMenu" class="ctxMenu" role="menu" aria-hidden="true"></div>
+<input
+        id="filePick"
+        type="file"
+        multiple
+        accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.svg,.ico,.tif,.tiff,.heic,.heif,.cr2,.cr3,.nef,.arw,.raf,.dng,.rw2,.orf"
+        style="display:none"
+/>
+
+<input
+        id="folderPick"
+        type="file"
+        webkitdirectory
+        multiple
+        style="display:none"
+/>
 <script src="./gallery_embedded_meta.js"></script>
 <script src="./bursts.js?v=4"></script>
 <script src="./app.js?v=4"></script>
+<script src="./gallery_upload.js?v=1"></script>
 <script src="./gallery_shares.js"></script>
 <script src="./gallery_slideshow.js"></script>
 <script src="./stats_api.js"></script>
