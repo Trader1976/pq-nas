@@ -1,0 +1,129 @@
+.mapPaneReal{
+    display:grid;
+    grid-template-columns: minmax(320px, 1fr) 340px;
+    gap:14px;
+    min-height:100%;
+}
+
+.mapViewport{
+    min-height:520px;
+    border:1px solid var(--border2);
+    border-radius:18px;
+    overflow:hidden;
+    background: rgba(0,0,0,0.20);
+    box-shadow: 0 0 18px rgba(var(--fg-rgb),0.06);
+}
+
+.mapHost{
+    width:100%;
+    height:100%;
+    min-height:520px;
+}
+
+.mapSide{
+    display:flex;
+    flex-direction:column;
+    gap:12px;
+    min-height:0;
+}
+
+.mapSummary{
+    border:1px solid var(--border2);
+    border-radius:18px;
+    background: rgba(0,0,0,0.18);
+    padding:14px;
+}
+
+.mapPhotoList{
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    min-height:0;
+    overflow:auto;
+    padding-right:2px;
+}
+
+.mapPhotoBtn{
+    width:100%;
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:12px;
+    padding:12px 14px;
+    border:1px solid var(--border2);
+    border-radius:14px;
+    background: rgba(0,0,0,0.18);
+    color:var(--fg);
+    text-align:left;
+    cursor:pointer;
+}
+
+.mapPhotoBtn:hover{
+    background: rgba(var(--fg-rgb),0.06);
+    border-color: rgba(var(--fg-rgb),0.22);
+}
+
+.mapPhotoMain{
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    gap:4px;
+}
+
+.mapPhotoName{
+    font-weight:900;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+
+.mapPhotoPath,
+.mapPhotoCoord,
+.mapPhotoTime{
+    font-family:var(--mono);
+    font-size:12px;
+    color:var(--fg-dim);
+    overflow-wrap:anywhere;
+}
+
+.mapLeafletPopup{
+    min-width:180px;
+}
+
+.mapLeafletPopupTitle{
+    font-weight:900;
+    margin-bottom:6px;
+    color:#111;
+}
+
+.mapLeafletPopupMeta{
+    font-size:12px;
+    line-height:1.4;
+    color:#333;
+    word-break:break-word;
+}
+
+html[data-theme="bright"] .mapViewport,
+html[data-theme="bright"] .mapSummary,
+html[data-theme="bright"] .mapPhotoBtn{
+    background: rgba(255,255,255,0.92);
+}
+
+@media (max-width: 960px){
+    .mapPaneReal{
+        grid-template-columns: 1fr;
+    }
+
+    .mapViewport,
+    .mapHost{
+        min-height:420px;
+    }
+
+    .mapSide{
+        min-height:auto;
+    }
+
+    .mapPhotoList{
+        max-height:280px;
+    }
+}

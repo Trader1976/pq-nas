@@ -2775,12 +2775,19 @@ async function ensureTreeStats(force = false) {
 
     function setViewMode(mode) {
         state.viewMode = mode === "map" ? "map" : "grid";
+
+        if (state.viewMode !== "map") {
+            window.PQNAS_PHOTOGALLERY?.map?.destroyMap?.();
+        }
+
         renderGrid();
         updateViewStatus();
 
         if (state.viewMode === "map") {
             window.setTimeout(() => {
-                try { mapRuntime.map?.invalidateSize(); } catch (_) {}
+                try {
+                    window.PQNAS_PHOTOGALLERY?.map?.runtime?.map?.invalidateSize?.();
+                } catch (_) {}
             }, 0);
         }
     }
@@ -2788,10 +2795,9 @@ async function ensureTreeStats(force = false) {
     function renderMap() {
         if (!mapCanvas) return;
 
-        destroyLeafletMap();
-        mapCanvas.replaceChildren();
-
         if (isSearchMode() && state.searchLoading && !state.searchLoaded) {
+            mapCanvas.replaceChildren();
+
             const loading = document.createElement("div");
             loading.className = "emptyState";
             loading.innerHTML = `
@@ -2805,122 +2811,11 @@ async function ensureTreeStats(force = false) {
 
         const items = mapItems();
 
-        if (!items.length) {
-            const empty = document.createElement("div");
-            empty.className = "emptyState";
-            empty.innerHTML = `
-            <div class="h">No photos with location</div>
-            <div class="p">Nothing in the current view has GPS coordinates yet.</div>
-        `;
-            mapCanvas.appendChild(empty);
-            refreshFooterStats();
-            return;
-        }
-
-        const pane = document.createElement("div");
-        pane.className = "mapPaneReal";
-
-        const viewport = document.createElement("div");
-        viewport.className = "mapViewport";
-
-        const mapHost = document.createElement("div");
-        mapHost.className = "mapHost";
-        viewport.appendChild(mapHost);
-
-        const side = document.createElement("div");
-        side.className = "mapSide";
-
-        const summary = document.createElement("div");
-        summary.className = "mapSummary";
-        summary.innerHTML = `
-        <div class="h">Map</div>
-        <div class="p">GPS photos in current view: ${items.length}</div>
-    `;
-
-        side.appendChild(summary);
-        pane.appendChild(viewport);
-        pane.appendChild(side);
-        mapCanvas.appendChild(pane);
-
-        refreshFooterStats();
-
-        ensureLeafletLoaded().then((L) => {
-            if (state.viewMode !== "map") return;
-            if (!mapHost.isConnected) return;
-
-            mapRuntime.map = L.map(mapHost, {
-                zoomControl: true,
-                worldCopyJump: true
-            });
-
-            mapRuntime.tileLayer = L.tileLayer(
-                "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-                {
-                    maxZoom: 19,
-                    attribution: "&copy; OpenStreetMap contributors"
-                }
-            ).addTo(mapRuntime.map);
-
-            mapRuntime.markersLayer = L.layerGroup().addTo(mapRuntime.map);
-
-            const bounds = [];
-            const markerByPath = new Map();
-
-            for (const item of items) {
-                const lat = Number(item.gps_latitude);
-                const lon = Number(item.gps_longitude);
-                if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
-
-                const rel = currentRelPathFor(item);
-                const marker = L.marker([lat, lon]);
-
-                const popupHtml = `
-                <div class="mapLeafletPopup">
-                    <div class="mapLeafletPopupTitle">${escapeHtml(item.name || "(unnamed)")}</div>
-                    <div class="mapLeafletPopupMeta">
-                        <div>${escapeHtml("/" + rel)}</div>
-                        <div>${escapeHtml(fmtTime(item.capture_time_unix || 0) || "no capture time")}</div>
-                        <div>${escapeHtml(lat.toFixed(6) + ", " + lon.toFixed(6))}</div>
-                    </div>
-                </div>
-            `;
-
-                marker.bindPopup(popupHtml);
-                marker.on("click", () => {
-                    openPreviewFor(item);
-                });
-
-                marker.addTo(mapRuntime.markersLayer);
-                markerByPath.set(rel, marker);
-                bounds.push([lat, lon]);
-            }
-
-            side.appendChild(buildMapSideList(items, markerByPath));
-
-            if (bounds.length === 1) {
-                mapRuntime.map.setView(bounds[0], 13);
-            } else if (bounds.length > 1) {
-                mapRuntime.map.fitBounds(bounds, { padding: [28, 28] });
-            } else {
-                mapRuntime.map.setView([0, 0], 2);
-            }
-
-            window.setTimeout(() => {
-                try { mapRuntime.map.invalidateSize(); } catch (_) {}
-            }, 0);
-        }).catch((e) => {
-            if (!mapHost.isConnected) return;
-
-            const msg = String(e && e.message ? e.message : e || "Map failed to load");
-            viewport.replaceChildren();
-
-            const errBox = document.createElement("div");
-            errBox.className = "emptyState";
-            errBox.innerHTML = `
-            <div class="h">Map failed to load</div>
-            <div class="p">${escapeHtml(msg)}</div>
-        `;
-            viewport.appendChild(errBox);
+        window.PQNAS_PHOTOGALLERY?.map?.render(mapCanvas, items, {
+            currentRelPathFor,
+            fmtTime,
+            openPreviewFor,
+            refreshFooterStats
         });
     }
 
