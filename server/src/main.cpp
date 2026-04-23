@@ -7053,7 +7053,11 @@ bool is_supported_photo_ext(const std::filesystem::path& p) {
     return ext == ".jpg"  || ext == ".jpeg" ||
            ext == ".png"  || ext == ".webp" ||
            ext == ".tif"  || ext == ".tiff" ||
-           ext == ".heic" || ext == ".heif";
+           ext == ".heic" || ext == ".heif" ||
+           ext == ".cr2"  || ext == ".cr3"  ||
+           ext == ".nef"  || ext == ".arw"  ||
+           ext == ".raf"  || ext == ".dng"  ||
+           ext == ".rw2"  || ext == ".orf";
 }
 
 std::int64_t file_mtime_epoch_safe_local(const std::filesystem::path& p) {
@@ -27915,9 +27919,20 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
                ext == "webp" ||
                ext == "svg"  ||
                ext == "bmp"  ||
-               ext == "ico";
+               ext == "ico"  ||
+               ext == "tif"  ||
+               ext == "tiff" ||
+               ext == "heic" ||
+               ext == "heif" ||
+               ext == "cr2"  ||
+               ext == "cr3"  ||
+               ext == "nef"  ||
+               ext == "arw"  ||
+               ext == "raf"  ||
+               ext == "dng"  ||
+               ext == "rw2"  ||
+               ext == "orf";
     };
-
     auto join_rel = [&](const std::string& base, const std::string& name) -> std::string {
         if (base.empty()) return name;
         return base + "/" + name;
@@ -37126,7 +37141,15 @@ srv.Post("/api/v4/gallery/meta/embedded_get", [&](const httplib::Request& req, h
                ext == "tif"  ||
                ext == "tiff" ||
                ext == "heic" ||
-               ext == "heif";
+               ext == "heif" ||
+               ext == "cr2"  ||
+               ext == "cr3"  ||
+               ext == "nef"  ||
+               ext == "arw"  ||
+               ext == "raf"  ||
+               ext == "dng"  ||
+               ext == "rw2"  ||
+               ext == "orf";
     };
 
     {

@@ -241,7 +241,47 @@
         s = String(s || "");
         return s.length <= n ? s : s.slice(0, Math.max(0, n - 1)) + "…";
     }
+    function fileExtLower(name) {
+        const s = String(name || "");
+        const i = s.lastIndexOf(".");
+        return i >= 0 ? s.slice(i + 1).toLowerCase() : "";
+    }
 
+    function isRawName(name) {
+        return [
+            "cr2", "cr3", "nef", "arw", "raf", "dng", "rw2", "orf"
+        ].includes(fileExtLower(name));
+    }
+
+    function renderRawGlyph() {
+        const wrap = document.createElement("div");
+        wrap.className = "rawGlyph";
+        wrap.innerHTML = `
+      <div style="
+        display:flex;
+        flex-direction:column;
+        align-items:center;
+        justify-content:center;
+        gap:8px;
+        width:100%;
+        height:100%;
+        padding:16px;
+        text-align:center;
+      ">
+        <div style="
+          font-size:34px;
+          font-weight:900;
+          opacity:.92;
+          letter-spacing:.04em;
+        ">RAW</div>
+        <div style="
+          font-size:12px;
+          opacity:.72;
+          font-family:var(--mono);
+        ">Original camera file</div>
+      </div>`;
+        return wrap;
+    }
     function escapeAttr(s) {
         return String(s || "").replace(/"/g, "&quot;");
     }
@@ -1982,21 +2022,35 @@
         if (item.type === "dir") {
             thumbWrap.appendChild(renderFolderGlyph());
         } else {
-            const img = document.createElement("img");
-            img.className = "thumb";
-            img.loading = "lazy";
-            img.decoding = "async";
-            img.alt = item.name || "image";
-
             const rel = currentRelPathFor(item);
-            const reqThumbSize = Math.max(160, Number(state.thumbSize || 160) * 2);
-            img.src = galleryThumbUrl(rel, reqThumbSize, item.mtime_unix || 0);
-            img.onerror = () => {
-                img.onerror = null;
-                img.src = fileGetUrl(rel);
-            };
+            const capture = item && item._pg_capture;
+            const rawOnly = isRawName(item.name || "") && !(capture && capture.pair_kind === "raw+jpeg");
 
-            thumbWrap.appendChild(img);
+            if (rawOnly) {
+                thumbWrap.appendChild(renderRawGlyph());
+            } else {
+                const img = document.createElement("img");
+                img.className = "thumb";
+                img.loading = "lazy";
+                img.decoding = "async";
+                img.alt = item.name || "image";
+
+                const reqThumbSize = Math.max(160, Number(state.thumbSize || 160) * 2);
+                img.src = galleryThumbUrl(rel, reqThumbSize, item.mtime_unix || 0);
+                img.onerror = () => {
+                    img.onerror = null;
+                    img.src = fileGetUrl(rel);
+                };
+
+                thumbWrap.appendChild(img);
+            }
+
+            if (capture && capture.pair_kind === "raw+jpeg") {
+                const pairBadge = document.createElement("div");
+                pairBadge.className = "pgPairBadge";
+                pairBadge.textContent = "RAW+JPG";
+                thumbWrap.appendChild(pairBadge);
+            }
         }
 
         const tools = document.createElement("div");
@@ -2140,15 +2194,46 @@
 
         const thumbWrap = coverTile.querySelector(".thumbWrap");
         if (thumbWrap) {
-            const badge = document.createElement("div");
-            badge.className = "pgBurstBadge";
-            badge.textContent = `Burst ${burst.items.length}`;
-            thumbWrap.appendChild(badge);
+            const burstCount = Array.isArray(burst.items) ? burst.items.length : 0;
+
+            const hasRawPair =
+                Array.isArray(burst.captures) &&
+                burst.captures.some((cap) => cap && cap.pair_kind === "raw+jpeg");
+
+            const compactExpandedCover =
+                burst.expanded &&
+                Number(state.thumbSize || 160) <= 120 &&
+                hasRawPair;
+
+            if (!compactExpandedCover) {
+                const badge = document.createElement("div");
+                badge.className = "pgBurstBadge";
+                badge.innerHTML = `
+            <span class="pgBurstBadgeLong">Burst ${burstCount}</span>
+            <span class="pgBurstBadgeShort" style="display:none;">${hasRawPair ? `RAW B${burstCount}` : `B${burstCount}`}</span>
+        `;
+                thumbWrap.appendChild(badge);
+            }
+
+            if (hasRawPair) {
+                const pairBadge = document.createElement("div");
+                pairBadge.className = "pgPairBadge";
+                pairBadge.innerHTML = `
+            <span class="pgPairBadgeLong">RAW+JPG</span>
+            <span class="pgPairBadgeShort" style="display:none;">RAW</span>
+        `;
+                thumbWrap.appendChild(pairBadge);
+            }
 
             const toggleBtn = document.createElement("button");
             toggleBtn.type = "button";
             toggleBtn.className = "pgBurstToggle";
-            toggleBtn.textContent = burst.expanded ? "Hide" : "Show";
+            toggleBtn.title = burst.expanded ? "Hide burst" : "Show burst";
+            toggleBtn.setAttribute("aria-label", burst.expanded ? "Hide burst" : "Show burst");
+            toggleBtn.innerHTML = `
+        <span class="pgBurstToggleText">${burst.expanded ? "Hide" : "Show"}</span>
+        <span class="pgBurstToggleIcon" aria-hidden="true" style="display:none;">${burst.expanded ? "−" : "+"}</span>
+    `;
             toggleBtn.addEventListener("click", (e) => {
                 e.preventDefault();
                 e.stopPropagation();
