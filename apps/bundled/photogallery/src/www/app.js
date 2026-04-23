@@ -57,6 +57,7 @@
     const previewMetaBtn = el("previewMetaBtn");
     const previewClose = el("previewClose");
     const previewShareBtn = el("previewShareBtn");
+    const previewFullscreenBtn = el("previewFullscreenBtn");
 
     const metaCard = el("metaCard");
     const metaHead = el("metaHead");
@@ -1971,6 +1972,51 @@ async function ensureTreeStats(force = false) {
         previewInfo.textContent = `${previewImg.naturalWidth} × ${previewImg.naturalHeight} • ${pct}%${pos}`;
     }
 
+    function isPreviewFullscreen() {
+        return !!previewModal && document.fullscreenElement === previewModal;
+    }
+
+    async function enterPreviewFullscreen() {
+        if (!previewModal) return;
+
+        previewModal.classList.add("previewFullscreen");
+
+        try {
+            await previewModal.requestFullscreen();
+        } catch (_) {
+            previewModal.classList.remove("previewFullscreen");
+        }
+    }
+
+    async function exitPreviewFullscreen() {
+        if (!isPreviewFullscreen()) return;
+
+        try {
+            await document.exitFullscreen();
+        } catch (_) {}
+    }
+
+    async function togglePreviewFullscreen() {
+        if (isPreviewFullscreen()) {
+            await exitPreviewFullscreen();
+        } else {
+            await enterPreviewFullscreen();
+        }
+    }
+
+    function syncPreviewFullscreenUi() {
+        const on = isPreviewFullscreen();
+
+        if (!on && previewModal) {
+            previewModal.classList.remove("previewFullscreen");
+        }
+
+        if (previewFullscreenBtn) {
+            previewFullscreenBtn.textContent = on ? "Windowed" : "Fullscreen";
+            previewFullscreenBtn.title = on ? "Exit fullscreen" : "Enter fullscreen";
+        }
+    }
+
     function isPreviewPannable() {
         if (!previewBody || !previewImg || !previewImg.naturalWidth || !previewImg.naturalHeight) {
             return false;
@@ -2092,6 +2138,7 @@ async function ensureTreeStats(force = false) {
             previewImg.onload = () => {
                 applyPreviewFitMode();
                 updatePreviewNav();
+                syncPreviewFullscreenUi();
             };
 
             previewImg.onerror = () => {
@@ -2124,6 +2171,11 @@ async function ensureTreeStats(force = false) {
     function closePreviewModal() {
         if (!previewModal) return;
 
+        if (isPreviewFullscreen()) {
+            document.exitFullscreen().catch(() => {});
+        }
+
+        previewModal.classList.remove("previewFullscreen");
         const oldRel = state.previewPath;
 
         previewModal.classList.remove("show");
@@ -2885,6 +2937,10 @@ async function ensureTreeStats(force = false) {
         if (rel) openMetaFor(rel);
     });
 
+    previewFullscreenBtn?.addEventListener("click", async () => {
+        await togglePreviewFullscreen();
+    });
+
     previewPrevBtn?.addEventListener("click", () => {
         const { idx } = currentPreviewIndex();
         if (idx >= 0) openPreviewByIndex(idx - 1);
@@ -2911,6 +2967,18 @@ async function ensureTreeStats(force = false) {
             snapToFit: true
         });
     }, { passive: false });
+
+    previewImg?.addEventListener("dblclick", async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (isPreviewFullscreen()) {
+            await exitPreviewFullscreen();
+        } else {
+            await enterPreviewFullscreen();
+        }
+    });
+
     previewBody?.addEventListener("pointerdown", (e) => {
         if (e.button !== 0) return;
         if (!previewModal || !previewModal.classList.contains("show")) return;
