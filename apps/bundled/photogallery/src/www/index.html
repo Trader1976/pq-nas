@@ -13,12 +13,19 @@
             --pg_surface: var(--panel);
             --pg_surface2: var(--panel2);
             --pg_overlay: rgba(0,0,0,0.56);
-        }
+            --pg_burst_chip_bg: linear-gradient(180deg, var(--pg_surface2), var(--pg_surface));
+            --pg_burst_chip_border: var(--border);
+            --pg_burst_chip_text: var(--fg);
+            --pg_burst_chip_shadow: 0 10px 24px rgba(0,0,0,0.22);
 
-        html[data-theme="bright"]{
-            --pg_overlay: rgba(255,255,255,0.34);
-            --pg_surface: rgba(255,255,255,0.97);
-            --pg_surface2: rgba(255,255,255,0.995);
+            --pg_burst_btn_bg: linear-gradient(180deg, var(--pg_surface2), var(--pg_surface));
+            --pg_burst_btn_border: var(--border);
+            --pg_burst_btn_text: var(--fg);
+            --pg_burst_btn_shadow: 0 10px 24px rgba(0,0,0,0.22);
+
+            --pg_burst_btn_hover_bg: rgba(var(--fg-rgb),0.10);
+            --pg_burst_btn_hover_border: rgba(var(--fg-rgb),0.42);
+            --pg_burst_btn_backdrop: blur(6px);
         }
 
         html:not([data-theme]){
@@ -185,11 +192,6 @@
             padding:10px 12px;
             min-width:220px;
             width:280px;
-        }
-
-        html[data-theme="bright"] .input{
-            background: rgba(255,255,255,1);
-            border-color: rgba(0,0,0,0.12);
         }
 
         .badge{
@@ -497,6 +499,29 @@
             color: var(--fg);
             font-family: var(--sans);
         }
+        html[data-theme="bright"]{
+            --pg_overlay: rgba(255,255,255,0.34);
+            --pg_surface: rgba(255,255,255,0.97);
+            --pg_surface2: rgba(255,255,255,0.995);
+
+            --pg_burst_chip_bg: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(246,248,252,0.98));
+            --pg_burst_chip_border: rgba(0,0,0,0.12);
+            --pg_burst_chip_text: #083847;
+            --pg_burst_chip_shadow: 0 8px 18px rgba(0,0,0,0.08);
+
+            --pg_burst_btn_bg: linear-gradient(180deg, rgba(255,255,255,0.995), rgba(248,250,253,0.995));
+            --pg_burst_btn_border: rgba(0,0,0,0.14);
+            --pg_burst_btn_text: #083847;
+            --pg_burst_btn_shadow: 0 8px 18px rgba(0,0,0,0.06);
+
+            --pg_burst_btn_hover_bg: linear-gradient(180deg, rgba(255,255,255,1), rgba(248,250,253,1));
+            --pg_burst_btn_hover_border: rgba(0,0,0,0.18);
+            --pg_burst_btn_backdrop: none;
+        }
+        html[data-theme="bright"] .input{
+            background: rgba(255,255,255,1);
+            border-color: rgba(0,0,0,0.12);
+        }
 
         html[data-theme="bright"] .field,
         html[data-theme="bright"] .textarea{
@@ -504,6 +529,10 @@
             border-color: rgba(0,0,0,0.12);
         }
 
+        html[data-theme="bright"] .pgBurstToggle:hover{
+            background: linear-gradient(180deg, rgba(255,255,255,1), rgba(248,250,253,1));
+            border-color: rgba(0,0,0,0.18);
+        }
         .textarea{
             min-height:120px;
             resize:vertical;
@@ -843,6 +872,7 @@
             border-top:0;
         }
     </style>
+<link rel="stylesheet" href="./bursts.css?v=3">
 <link rel="stylesheet" href="./stats.css">
 </head>
 <body>
@@ -1179,7 +1209,8 @@
 
 <div id="ctxMenu" class="ctxMenu" role="menu" aria-hidden="true"></div>
 <script src="./gallery_embedded_meta.js"></script>
-<script src="./app.js"></script>
+<script src="./bursts.js?v=3"></script>
+<script src="./app.js?v=3"></script>
 <script src="./gallery_shares.js"></script>
 <script src="./gallery_slideshow.js"></script>
 <script src="./stats_api.js"></script>

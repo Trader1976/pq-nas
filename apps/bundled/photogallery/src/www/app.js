@@ -177,7 +177,39 @@
         const i = p.lastIndexOf("/");
         return i < 0 ? "" : p.slice(0, i);
     }
+    function normalizeRelPath(p) {
+        p = String(p || "").replace(/\\/g, "/").trim();
+        p = p.replace(/^\/+/, "").replace(/\/+$/, "");
 
+        if (!p) return "";
+
+        const parts = [];
+        for (const part of p.split("/")) {
+            if (!part || part === ".") continue;
+            if (part === "..") {
+                if (parts.length) parts.pop();
+                continue;
+            }
+            parts.push(part);
+        }
+
+        return parts.join("/");
+    }
+
+    function setCurrentPath(nextPath, reason = "") {
+        const prev = String(state.curPath || "");
+        const norm = normalizeRelPath(nextPath);
+
+        console.debug("[photogallery path]", {
+            reason,
+            prev,
+            next: String(nextPath || ""),
+            normalized: norm
+        });
+
+        state.curPath = norm;
+        return state.curPath;
+    }
     function currentRelPathFor(item) {
         if (!item) return "";
         if (item.rel_path) return String(item.rel_path);
@@ -538,7 +570,7 @@
 
         ctxMenu.innerHTML = "";
         ctxMenu.appendChild(menuItem("Open", () => {
-            state.curPath = currentRelPathFor(item);
+            setCurrentPath(currentRelPathFor(item), "folder-context-open");
             load();
         }));
         ctxMenu.appendChild(menuItem("Download zip", () => downloadSingleFolderZip(item)));
@@ -1039,7 +1071,7 @@
         root.textContent = "/";
         root.title = "Go to root";
         root.addEventListener("click", () => {
-            state.curPath = "";
+            setCurrentPath("", "breadcrumb-root");
             clearSelection();
             load();
         });
@@ -1075,7 +1107,7 @@
             if (i !== parts.length - 1) {
                 const target = acc;
                 crumb.addEventListener("click", () => {
-                    state.curPath = target;
+                    setCurrentPath(target, "breadcrumb-click");
                     clearSelection();
                     load();
                 });
@@ -1292,7 +1324,15 @@
             return hay.includes(q);
         });
     }
+    function displayItems() {
+        const items = filteredItems();
 
+        if (!window.PQNAS_PHOTOGALLERY?.bursts?.buildDisplayItems) {
+            return items.map((item) => ({ kind: "item", item }));
+        }
+
+        return window.PQNAS_PHOTOGALLERY.bursts.buildDisplayItems(items);
+    }
     function normalizeGalleryMeta(meta) {
         const imageRating =
             meta && meta.imageRating != null
@@ -2055,7 +2095,7 @@
 
         tile.addEventListener("dblclick", () => {
             if (item.type === "dir") {
-                state.curPath = currentRelPathFor(item);
+                setCurrentPath(currentRelPathFor(item), "folder-dblclick");
                 clearSelection();
                 load();
             } else {
@@ -2090,7 +2130,51 @@
 
         return tile;
     }
+    function makeBurstBlock(burst) {
+        const wrap = document.createElement("div");
+        wrap.className = burst.expanded ? "pgBurst pgBurstExpanded" : "pgBurst";
+        wrap.dataset.burstKey = burst.key;
 
+        const coverTile = makeTile(burst.cover);
+        coverTile.classList.add("pgBurstCoverTile");
+
+        const thumbWrap = coverTile.querySelector(".thumbWrap");
+        if (thumbWrap) {
+            const badge = document.createElement("div");
+            badge.className = "pgBurstBadge";
+            badge.textContent = `Burst ${burst.items.length}`;
+            thumbWrap.appendChild(badge);
+
+            const toggleBtn = document.createElement("button");
+            toggleBtn.type = "button";
+            toggleBtn.className = "pgBurstToggle";
+            toggleBtn.textContent = burst.expanded ? "Hide" : "Show";
+            toggleBtn.addEventListener("click", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                window.PQNAS_PHOTOGALLERY?.bursts?.toggleExpanded(burst.key);
+                renderGrid();
+                window.dispatchEvent(new CustomEvent("photogallery:view-updated"));
+            });
+            thumbWrap.appendChild(toggleBtn);
+        }
+
+        wrap.appendChild(coverTile);
+
+        if (burst.expanded) {
+            const itemsWrap = document.createElement("div");
+            itemsWrap.className = "pgBurstItems";
+
+            burst.items.forEach((it, idx) => {
+                if (idx === burst.coverIdx) return;
+                itemsWrap.appendChild(makeTile(it));
+            });
+
+            wrap.appendChild(itemsWrap);
+        }
+
+        return wrap;
+    }
     function renderGrid() {
         if (!gridEl) return;
         gridEl.replaceChildren();
@@ -2143,14 +2227,22 @@
             let first = true;
             for (const [folderPath, groupItems] of groups) {
                 gridEl.appendChild(makeSearchGroupHeader(folderPath, groupItems.length, first));
-                for (const item of groupItems) {
-                    gridEl.appendChild(makeTile(item));
+                const displayGroupItems =
+                    window.PQNAS_PHOTOGALLERY?.bursts?.buildDisplayItems
+                        ? window.PQNAS_PHOTOGALLERY.bursts.buildDisplayItems(groupItems)
+                        : groupItems.map((item) => ({ kind: "item", item }));
+
+                for (const entry of displayGroupItems) {
+                    if (entry.kind === "burst") gridEl.appendChild(makeBurstBlock(entry.burst));
+                    else gridEl.appendChild(makeTile(entry.item));
                 }
                 first = false;
             }
         } else {
-            for (const item of items) {
-                gridEl.appendChild(makeTile(item));
+            const entries = displayItems();
+            for (const entry of entries) {
+                if (entry.kind === "burst") gridEl.appendChild(makeBurstBlock(entry.burst));
+                else gridEl.appendChild(makeTile(entry.item));
             }
         }
 
@@ -2186,6 +2278,21 @@
                 </div>
             `;
             }
+
+
+            if (msg.includes("not_found") || msg.includes("directory not found")) {
+                const cur = normalizeRelPath(state.curPath);
+                const parent = parentPath(cur);
+
+                if (cur && parent !== cur) {
+                    console.warn("[photogallery] path not found, falling back to parent", { cur, parent });
+                    setCurrentPath(parent, "load-fallback-parent");
+                    try {
+                        await load(forceSearch);
+                        return;
+                    } catch (_) {}
+                }
+            }
             setBadge("err", "error");
             setStatus(`Load failed: ${msg}`);
         }
@@ -2194,7 +2301,7 @@
     refreshBtn?.addEventListener("click", () => load(true));
 
     upBtn?.addEventListener("click", () => {
-        state.curPath = parentPath(state.curPath);
+        setCurrentPath(parentPath(state.curPath), "up-button");
         clearSelection();
         load();
     });

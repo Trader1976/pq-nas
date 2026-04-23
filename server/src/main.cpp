@@ -7028,6 +7028,7 @@ struct PhotoStatsRow {
     double focal_length = 0.0;
 
     std::string taken_at;
+    std::int64_t taken_epoch = 0;
     std::string taken_month;
     bool exif_ok = false;
 };
@@ -7123,6 +7124,28 @@ std::string sql_col_text(sqlite3_stmt* st, int col) {
     return p ? std::string(reinterpret_cast<const char*>(p)) : std::string();
 }
 
+bool sqlite_table_has_column(sqlite3* db, const char* table_name, const char* column_name) {
+    if (!db || !table_name || !column_name) return false;
+
+    sqlite3_stmt* st = nullptr;
+    const std::string sql = "PRAGMA table_info(" + std::string(table_name) + ")";
+    if (sqlite3_prepare_v2(db, sql.c_str(), -1, &st, nullptr) != SQLITE_OK) {
+        return false;
+    }
+
+    bool found = false;
+    while (sqlite3_step(st) == SQLITE_ROW) {
+        const unsigned char* p = sqlite3_column_text(st, 1); // column name
+        if (p && std::string(reinterpret_cast<const char*>(p)) == column_name) {
+            found = true;
+            break;
+        }
+    }
+
+    sqlite3_finalize(st);
+    return found;
+}
+
 bool ensure_photo_stats_schema(sqlite3* db, std::string* err) {
     const char* sql = R"SQL(
 CREATE TABLE IF NOT EXISTS photo_exif_index (
@@ -7137,6 +7160,7 @@ CREATE TABLE IF NOT EXISTS photo_exif_index (
     exposure_time REAL,
     focal_length REAL,
     taken_at TEXT,
+    taken_epoch INTEGER NOT NULL DEFAULT 0,
     taken_month TEXT,
     exif_ok INTEGER NOT NULL DEFAULT 0,
     indexed_at INTEGER NOT NULL DEFAULT 0
@@ -7162,7 +7186,65 @@ CREATE INDEX IF NOT EXISTS idx_photo_exif_index_iso
         if (zerr) sqlite3_free(zerr);
         return false;
     }
+
+    // Migration for older installs that already have photo_exif_index without taken_epoch.
+    if (!sqlite_table_has_column(db, "photo_exif_index", "taken_epoch")) {
+        const char* alter_sql =
+            "ALTER TABLE photo_exif_index "
+            "ADD COLUMN taken_epoch INTEGER NOT NULL DEFAULT 0;";
+
+        char* alter_err = nullptr;
+        const int alter_rc = sqlite3_exec(db, alter_sql, nullptr, nullptr, &alter_err);
+        if (alter_rc != SQLITE_OK) {
+            if (err) *err = alter_err ? alter_err : "failed to add taken_epoch column";
+            if (alter_err) sqlite3_free(alter_err);
+            return false;
+        }
+    }
+
     return true;
+}
+
+std::int64_t exif_taken_epoch_from_string(const std::string& s) {
+    // EXIF DateTimeOriginal / CreateDate usually comes as:
+    // YYYY:MM:DD HH:MM:SS
+    // For burst grouping v1, treat it as naive local camera time.
+    if (s.size() < 19) return 0;
+
+    auto is_digit_local = [](char c) -> bool {
+        return c >= '0' && c <= '9';
+    };
+
+    if (!(is_digit_local(s[0]) && is_digit_local(s[1]) && is_digit_local(s[2]) && is_digit_local(s[3]) &&
+          s[4] == ':' &&
+          is_digit_local(s[5]) && is_digit_local(s[6]) &&
+          s[7] == ':' &&
+          is_digit_local(s[8]) && is_digit_local(s[9]) &&
+          s[10] == ' ' &&
+          is_digit_local(s[11]) && is_digit_local(s[12]) &&
+          s[13] == ':' &&
+          is_digit_local(s[14]) && is_digit_local(s[15]) &&
+          s[16] == ':' &&
+          is_digit_local(s[17]) && is_digit_local(s[18]))) {
+        return 0;
+          }
+
+    try {
+        std::tm tm{};
+        tm.tm_year = std::stoi(s.substr(0, 4)) - 1900;
+        tm.tm_mon  = std::stoi(s.substr(5, 2)) - 1;
+        tm.tm_mday = std::stoi(s.substr(8, 2));
+        tm.tm_hour = std::stoi(s.substr(11, 2));
+        tm.tm_min  = std::stoi(s.substr(14, 2));
+        tm.tm_sec  = std::stoi(s.substr(17, 2));
+        tm.tm_isdst = -1;
+
+        const std::time_t tt = std::mktime(&tm);
+        if (tt <= 0) return 0;
+        return static_cast<std::int64_t>(tt);
+    } catch (...) {
+        return 0;
+    }
 }
 
 bool load_cached_photo_stats_row(sqlite3* db,
@@ -7175,7 +7257,7 @@ bool load_cached_photo_stats_row(sqlite3* db,
 SELECT rel_path, size_bytes, mtime_epoch,
        make, model, lens_model,
        iso, f_number, exposure_time, focal_length,
-       taken_at, taken_month, exif_ok
+       taken_at, taken_epoch, taken_month, exif_ok
 FROM photo_exif_index
 WHERE rel_path = ?1
 LIMIT 1
@@ -7204,13 +7286,19 @@ LIMIT 1
     out->exposure_time = sqlite3_column_double(st, 8);
     out->focal_length = sqlite3_column_double(st, 9);
     out->taken_at = sql_col_text(st, 10);
-    out->taken_month = sql_col_text(st, 11);
-    out->exif_ok = sqlite3_column_int(st, 12) != 0;
+    out->taken_epoch = static_cast<std::int64_t>(sqlite3_column_int64(st, 11));
+    out->taken_month = sql_col_text(st, 12);
+    out->exif_ok = sqlite3_column_int(st, 13) != 0;
 
     sqlite3_finalize(st);
+
+    // Compatibility for old rows that already had taken_at but not taken_epoch yet.
+    if (out->taken_epoch == 0 && !out->taken_at.empty()) {
+        out->taken_epoch = exif_taken_epoch_from_string(out->taken_at);
+    }
+
     return true;
 }
-
 bool upsert_photo_stats_row(sqlite3* db,
                             const PhotoStatsRow& row,
                             std::int64_t indexed_at_epoch,
@@ -7223,12 +7311,12 @@ INSERT INTO photo_exif_index (
     rel_path, size_bytes, mtime_epoch,
     make, model, lens_model,
     iso, f_number, exposure_time, focal_length,
-    taken_at, taken_month, exif_ok, indexed_at
+    taken_at, taken_epoch, taken_month, exif_ok, indexed_at
 ) VALUES (
     ?1, ?2, ?3,
     ?4, ?5, ?6,
     ?7, ?8, ?9, ?10,
-    ?11, ?12, ?13, ?14
+    ?11, ?12, ?13, ?14, ?15
 )
 ON CONFLICT(rel_path) DO UPDATE SET
     size_bytes = excluded.size_bytes,
@@ -7241,6 +7329,7 @@ ON CONFLICT(rel_path) DO UPDATE SET
     exposure_time = excluded.exposure_time,
     focal_length = excluded.focal_length,
     taken_at = excluded.taken_at,
+    taken_epoch = excluded.taken_epoch,
     taken_month = excluded.taken_month,
     exif_ok = excluded.exif_ok,
     indexed_at = excluded.indexed_at
@@ -7262,18 +7351,19 @@ ON CONFLICT(rel_path) DO UPDATE SET
     sqlite3_bind_double(st, 9, row.exposure_time);
     sqlite3_bind_double(st, 10, row.focal_length);
     sqlite3_bind_text(st, 11, row.taken_at.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(st, 12, row.taken_month.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(st, 13, row.exif_ok ? 1 : 0);
-    sqlite3_bind_int64(st, 14, static_cast<sqlite3_int64>(indexed_at_epoch));
+    sqlite3_bind_int64(st, 12, static_cast<sqlite3_int64>(row.taken_epoch));
+    sqlite3_bind_text(st, 13, row.taken_month.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(st, 14, row.exif_ok ? 1 : 0);
+    sqlite3_bind_int64(st, 15, static_cast<sqlite3_int64>(indexed_at_epoch));
 
     const int rc = sqlite3_step(st);
-    sqlite3_finalize(st);
-
     if (rc != SQLITE_DONE) {
         if (err) *err = sqlite3_errmsg(db);
+        sqlite3_finalize(st);
         return false;
     }
 
+    sqlite3_finalize(st);
     return true;
 }
 
@@ -7350,6 +7440,7 @@ PhotoStatsRow exif_row_from_file(const std::string& rel_path,
         if (row.taken_at.empty()) {
             row.taken_at = o.value("CreateDate", "");
         }
+
         row.taken_month = exif_taken_month_from_string(row.taken_at);
 
         row.exif_ok =
@@ -7366,6 +7457,31 @@ PhotoStatsRow exif_row_from_file(const std::string& rel_path,
     }
 
     return row;
+}
+
+bool refresh_one_photo_exif_row(sqlite3* db,
+                                const std::string& rel_path,
+                                const std::filesystem::path& abs_path,
+                                std::uint64_t size_bytes,
+                                std::int64_t mtime_epoch,
+                                PhotoStatsRow* out,
+                                std::string* err) {
+    if (!db) {
+        if (err) *err = "db_null";
+        return false;
+    }
+
+    PhotoStatsRow row = exif_row_from_file(rel_path, abs_path, size_bytes, mtime_epoch);
+    const std::int64_t indexed_now = static_cast<std::int64_t>(std::time(nullptr));
+
+    std::string upsert_err;
+    if (!upsert_photo_stats_row(db, row, indexed_now, &upsert_err)) {
+        if (err) *err = upsert_err;
+        return false;
+    }
+
+    if (out) *out = std::move(row);
+    return true;
 }
 
 std::string lens_label_from_row(const PhotoStatsRow& row) {
@@ -27902,6 +28018,9 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
         int rating = 0;
         std::string tags_text;
         std::string notes_text;
+
+        std::string capture_time_text;
+        std::int64_t capture_time_unix = 0;
     };
 
     std::map<std::string, ListedItem> merged;
@@ -27952,7 +28071,7 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
                         }
 
                         merged[name] = ListedItem{
-                            name, "dir", 0, mtime_unix, 0, "", ""
+                            name, "dir", 0, mtime_unix, 0, "", "", "", 0
                         };
                         continue;
                     }
@@ -27975,7 +28094,7 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
                         }
 
                         merged[name] = ListedItem{
-                            name, "file", size_bytes, mtime_unix, 0, "", ""
+                            name, "file", size_bytes, mtime_unix, 0, "", "", "", 0
                         };
                     }
                 }
@@ -28029,7 +28148,9 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
                     (long long)rec.mtime_epoch,
                     0,
                     "",
-                    ""
+                    "",
+                    "",
+                    0
                 };
             } else {
                 it->second.type = t;
@@ -28103,7 +28224,87 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
             }
         }
     }
+    // 4) Best-effort EXIF capture-time cache for visible image files.
+    sqlite3* photo_db = nullptr;
+    {
+        const std::filesystem::path photo_db_path =
+            std::filesystem::path(pqnas::data_root_dir()) / "photogallery_stats.sqlite3";
 
+        if (sqlite3_open(photo_db_path.string().c_str(), &photo_db) != SQLITE_OK) {
+            if (photo_db) {
+                sqlite3_close(photo_db);
+                photo_db = nullptr;
+            }
+        } else {
+            std::string schema_err;
+            if (!ensure_photo_stats_schema(photo_db, &schema_err)) {
+                sqlite3_close(photo_db);
+                photo_db = nullptr;
+            }
+        }
+    }
+
+    if (photo_db) {
+        for (auto& kv : merged) {
+            auto& item = kv.second;
+            if (item.type != "file") continue;
+
+            const std::string child_rel = join_rel(rel_dir_norm, item.name);
+
+            PhotoStatsRow row;
+            bool have_row = load_cached_photo_stats_row(photo_db, child_rel, &row);
+
+            const bool cache_match =
+                have_row &&
+                row.size_bytes == item.size_bytes &&
+                row.mtime_epoch == static_cast<std::int64_t>(item.mtime_unix);
+
+            if (!cache_match) {
+                pqnas::ResolvedLogicalItem resolved;
+                std::string rerr;
+
+                if (pqnas::resolve_existing_user_item(users, fp_hex, child_rel, &resolved, &rerr) &&
+                    resolved.exists &&
+                    resolved.is_file &&
+                    resolved.has_physical_anchor) {
+
+                    std::uint64_t exif_size = item.size_bytes;
+                    std::int64_t exif_mtime = static_cast<std::int64_t>(item.mtime_unix);
+
+                    if (exif_size == 0) {
+                        exif_size = file_size_u64_safe_local(resolved.abs_path);
+                        item.size_bytes = exif_size;
+                    }
+
+                    if (exif_mtime == 0) {
+                        exif_mtime = file_mtime_epoch_safe_local(resolved.abs_path);
+                        item.mtime_unix = static_cast<long long>(exif_mtime);
+                    }
+
+                    PhotoStatsRow fresh;
+                    std::string ferr;
+                    if (refresh_one_photo_exif_row(photo_db,
+                                                   child_rel,
+                                                   resolved.abs_path,
+                                                   exif_size,
+                                                   exif_mtime,
+                                                   &fresh,
+                                                   &ferr)) {
+                        row = std::move(fresh);
+                        have_row = true;
+                    }
+                }
+            }
+
+            if (have_row) {
+                item.capture_time_text = row.taken_at;
+                item.capture_time_unix = row.taken_epoch;
+            }
+        }
+
+        sqlite3_close(photo_db);
+        photo_db = nullptr;
+    }
     json out;
     out["ok"] = true;
     out["fingerprint_hex"] = fp_hex;
@@ -28118,6 +28319,8 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
             {"type", item.type},
             {"size_bytes", item.size_bytes},
             {"mtime_unix", item.mtime_unix},
+            {"capture_time_text", item.capture_time_text},
+            {"capture_time_unix", item.capture_time_unix},
 
             // New standardized fields
             {"imageRating", item.rating},
