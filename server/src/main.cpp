@@ -7031,6 +7031,12 @@ struct PhotoStatsRow {
     std::int64_t taken_epoch = 0;
     std::string taken_month;
     bool exif_ok = false;
+
+    double gps_latitude = 0.0;
+    double gps_longitude = 0.0;
+    double gps_altitude = 0.0;
+    bool gps_altitude_ok = false;
+    bool gps_ok = false;
 };
 
 std::string shell_quote_single(const std::string& s) {
@@ -7166,6 +7172,11 @@ CREATE TABLE IF NOT EXISTS photo_exif_index (
     taken_at TEXT,
     taken_epoch INTEGER NOT NULL DEFAULT 0,
     taken_month TEXT,
+    gps_latitude REAL NOT NULL DEFAULT 0,
+    gps_longitude REAL NOT NULL DEFAULT 0,
+    gps_altitude REAL NOT NULL DEFAULT 0,
+    gps_altitude_ok INTEGER NOT NULL DEFAULT 0,
+    gps_ok INTEGER NOT NULL DEFAULT 0,
     exif_ok INTEGER NOT NULL DEFAULT 0,
     indexed_at INTEGER NOT NULL DEFAULT 0
 );
@@ -7206,6 +7217,70 @@ CREATE INDEX IF NOT EXISTS idx_photo_exif_index_iso
         }
     }
 
+    if (!sqlite_table_has_column(db, "photo_exif_index", "gps_latitude")) {
+        const char* alter_sql =
+            "ALTER TABLE photo_exif_index "
+            "ADD COLUMN gps_latitude REAL NOT NULL DEFAULT 0;";
+        char* alter_err = nullptr;
+        const int alter_rc = sqlite3_exec(db, alter_sql, nullptr, nullptr, &alter_err);
+        if (alter_rc != SQLITE_OK) {
+            if (err) *err = alter_err ? alter_err : "failed to add gps_latitude column";
+            if (alter_err) sqlite3_free(alter_err);
+            return false;
+        }
+    }
+
+    if (!sqlite_table_has_column(db, "photo_exif_index", "gps_longitude")) {
+        const char* alter_sql =
+            "ALTER TABLE photo_exif_index "
+            "ADD COLUMN gps_longitude REAL NOT NULL DEFAULT 0;";
+        char* alter_err = nullptr;
+        const int alter_rc = sqlite3_exec(db, alter_sql, nullptr, nullptr, &alter_err);
+        if (alter_rc != SQLITE_OK) {
+            if (err) *err = alter_err ? alter_err : "failed to add gps_longitude column";
+            if (alter_err) sqlite3_free(alter_err);
+            return false;
+        }
+    }
+
+    if (!sqlite_table_has_column(db, "photo_exif_index", "gps_altitude")) {
+        const char* alter_sql =
+            "ALTER TABLE photo_exif_index "
+            "ADD COLUMN gps_altitude REAL NOT NULL DEFAULT 0;";
+        char* alter_err = nullptr;
+        const int alter_rc = sqlite3_exec(db, alter_sql, nullptr, nullptr, &alter_err);
+        if (alter_rc != SQLITE_OK) {
+            if (err) *err = alter_err ? alter_err : "failed to add gps_altitude column";
+            if (alter_err) sqlite3_free(alter_err);
+            return false;
+        }
+    }
+
+    if (!sqlite_table_has_column(db, "photo_exif_index", "gps_ok")) {
+        const char* alter_sql =
+            "ALTER TABLE photo_exif_index "
+            "ADD COLUMN gps_ok INTEGER NOT NULL DEFAULT 0;";
+        char* alter_err = nullptr;
+        const int alter_rc = sqlite3_exec(db, alter_sql, nullptr, nullptr, &alter_err);
+        if (alter_rc != SQLITE_OK) {
+            if (err) *err = alter_err ? alter_err : "failed to add gps_ok column";
+            if (alter_err) sqlite3_free(alter_err);
+            return false;
+        }
+    }
+
+    if (!sqlite_table_has_column(db, "photo_exif_index", "gps_altitude_ok")) {
+        const char* alter_sql =
+            "ALTER TABLE photo_exif_index "
+            "ADD COLUMN gps_altitude_ok INTEGER NOT NULL DEFAULT 0;";
+        char* alter_err = nullptr;
+        const int alter_rc = sqlite3_exec(db, alter_sql, nullptr, nullptr, &alter_err);
+        if (alter_rc != SQLITE_OK) {
+            if (err) *err = alter_err ? alter_err : "failed to add gps_altitude_ok column";
+            if (alter_err) sqlite3_free(alter_err);
+            return false;
+        }
+    }
     return true;
 }
 
@@ -7261,7 +7336,9 @@ bool load_cached_photo_stats_row(sqlite3* db,
 SELECT rel_path, size_bytes, mtime_epoch,
        make, model, lens_model,
        iso, f_number, exposure_time, focal_length,
-       taken_at, taken_epoch, taken_month, exif_ok
+        taken_at, taken_epoch, taken_month,
+        gps_latitude, gps_longitude, gps_altitude, gps_altitude_ok, gps_ok,
+        exif_ok
 FROM photo_exif_index
 WHERE rel_path = ?1
 LIMIT 1
@@ -7292,7 +7369,12 @@ LIMIT 1
     out->taken_at = sql_col_text(st, 10);
     out->taken_epoch = static_cast<std::int64_t>(sqlite3_column_int64(st, 11));
     out->taken_month = sql_col_text(st, 12);
-    out->exif_ok = sqlite3_column_int(st, 13) != 0;
+    out->gps_latitude = sqlite3_column_double(st, 13);
+    out->gps_longitude = sqlite3_column_double(st, 14);
+    out->gps_altitude = sqlite3_column_double(st, 15);
+    out->gps_altitude_ok = sqlite3_column_int(st, 16) != 0;
+    out->gps_ok = sqlite3_column_int(st, 17) != 0;
+    out->exif_ok = sqlite3_column_int(st, 18) != 0;
 
     sqlite3_finalize(st);
 
@@ -7315,12 +7397,16 @@ INSERT INTO photo_exif_index (
     rel_path, size_bytes, mtime_epoch,
     make, model, lens_model,
     iso, f_number, exposure_time, focal_length,
-    taken_at, taken_epoch, taken_month, exif_ok, indexed_at
+    taken_at, taken_epoch, taken_month,
+    gps_latitude, gps_longitude, gps_altitude, gps_altitude_ok, gps_ok,
+    exif_ok, indexed_at
 ) VALUES (
     ?1, ?2, ?3,
     ?4, ?5, ?6,
     ?7, ?8, ?9, ?10,
-    ?11, ?12, ?13, ?14, ?15
+    ?11, ?12, ?13,
+    ?14, ?15, ?16, ?17, ?18,
+    ?19, ?20
 )
 ON CONFLICT(rel_path) DO UPDATE SET
     size_bytes = excluded.size_bytes,
@@ -7335,6 +7421,11 @@ ON CONFLICT(rel_path) DO UPDATE SET
     taken_at = excluded.taken_at,
     taken_epoch = excluded.taken_epoch,
     taken_month = excluded.taken_month,
+    gps_latitude = excluded.gps_latitude,
+    gps_longitude = excluded.gps_longitude,
+    gps_altitude = excluded.gps_altitude,
+    gps_altitude_ok = excluded.gps_altitude_ok,
+    gps_ok = excluded.gps_ok,
     exif_ok = excluded.exif_ok,
     indexed_at = excluded.indexed_at
 )SQL";
@@ -7357,8 +7448,13 @@ ON CONFLICT(rel_path) DO UPDATE SET
     sqlite3_bind_text(st, 11, row.taken_at.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_int64(st, 12, static_cast<sqlite3_int64>(row.taken_epoch));
     sqlite3_bind_text(st, 13, row.taken_month.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(st, 14, row.exif_ok ? 1 : 0);
-    sqlite3_bind_int64(st, 15, static_cast<sqlite3_int64>(indexed_at_epoch));
+    sqlite3_bind_double(st, 14, row.gps_latitude);
+    sqlite3_bind_double(st, 15, row.gps_longitude);
+    sqlite3_bind_double(st, 16, row.gps_altitude);
+    sqlite3_bind_int(st, 17, row.gps_altitude_ok ? 1 : 0);
+    sqlite3_bind_int(st, 18, row.gps_ok ? 1 : 0);
+    sqlite3_bind_int(st, 19, row.exif_ok ? 1 : 0);
+    sqlite3_bind_int64(st, 20, static_cast<sqlite3_int64>(indexed_at_epoch));
 
     const int rc = sqlite3_step(st);
     if (rc != SQLITE_DONE) {
@@ -7417,6 +7513,7 @@ PhotoStatsRow exif_row_from_file(const std::string& rel_path,
         "exiftool -json -n "
         "-Make -Model -LensModel -ISO -FNumber -ExposureTime -FocalLength "
         "-DateTimeOriginal -CreateDate "
+        "-GPSLatitude -GPSLongitude -GPSAltitude -GPSLatitudeRef -GPSLongitudeRef "
         + shell_quote_single(abs_path.string()) + " 2>/dev/null";
 
     const std::string raw = read_command_stdout(cmd);
@@ -7447,6 +7544,34 @@ PhotoStatsRow exif_row_from_file(const std::string& rel_path,
 
         row.taken_month = exif_taken_month_from_string(row.taken_at);
 
+        const bool has_gps_lat = o.contains("GPSLatitude") && o["GPSLatitude"].is_number();
+        const bool has_gps_lon = o.contains("GPSLongitude") && o["GPSLongitude"].is_number();
+        const bool has_gps_alt = o.contains("GPSAltitude") && o["GPSAltitude"].is_number();
+
+        if (has_gps_lat) row.gps_latitude = o["GPSLatitude"].get<double>();
+        if (has_gps_lon) row.gps_longitude = o["GPSLongitude"].get<double>();
+        if (has_gps_alt) {
+            row.gps_altitude = o["GPSAltitude"].get<double>();
+            row.gps_altitude_ok = true;
+        }
+
+        const std::string lat_ref = trim_copy(o.value("GPSLatitudeRef", ""));
+        const std::string lon_ref = trim_copy(o.value("GPSLongitudeRef", ""));
+
+        if (!lat_ref.empty()) {
+            const char c = (char)std::toupper((unsigned char)lat_ref[0]);
+            if (c == 'S') row.gps_latitude = -std::abs(row.gps_latitude);
+            else if (c == 'N') row.gps_latitude = std::abs(row.gps_latitude);
+        }
+
+        if (!lon_ref.empty()) {
+            const char c = (char)std::toupper((unsigned char)lon_ref[0]);
+            if (c == 'W') row.gps_longitude = -std::abs(row.gps_longitude);
+            else if (c == 'E') row.gps_longitude = std::abs(row.gps_longitude);
+        }
+
+        row.gps_ok = has_gps_lat && has_gps_lon;
+
         row.exif_ok =
             !row.make.empty() ||
             !row.model.empty() ||
@@ -7455,7 +7580,8 @@ PhotoStatsRow exif_row_from_file(const std::string& rel_path,
             row.f_number > 0.0 ||
             row.exposure_time > 0.0 ||
             row.focal_length > 0.0 ||
-            !row.taken_at.empty();
+            !row.taken_at.empty() ||
+            row.gps_ok;
     } catch (...) {
         return row;
     }
@@ -28036,6 +28162,12 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
 
         std::string capture_time_text;
         std::int64_t capture_time_unix = 0;
+
+        double gps_latitude = 0.0;
+        double gps_longitude = 0.0;
+        double gps_altitude = 0.0;
+        bool has_gps = false;
+        bool has_gps_altitude = false;
     };
 
     std::map<std::string, ListedItem> merged;
@@ -28086,7 +28218,7 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
                         }
 
                         merged[name] = ListedItem{
-                            name, "dir", 0, mtime_unix, 0, "", "", "", 0
+                            name, "dir", 0, mtime_unix, 0, "", "", "", 0, 0.0, 0.0, 0.0, false, false
                         };
                         continue;
                     }
@@ -28109,7 +28241,7 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
                         }
 
                         merged[name] = ListedItem{
-                            name, "file", size_bytes, mtime_unix, 0, "", "", "", 0
+                            name, "file", size_bytes, mtime_unix, 0, "", "", "", 0, 0.0, 0.0, 0.0, false, false
                         };
                     }
                 }
@@ -28165,7 +28297,12 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
                     "",
                     "",
                     "",
-                    0
+                    0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    false,
+                    false
                 };
             } else {
                 it->second.type = t;
@@ -28228,7 +28365,6 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
                     item.tags_text = grec->tags_text;
                     item.notes_text = grec->notes_text;
 
-                    // Prefer gallery-cached file facts when present.
                     if (grec->size_bytes > 0) {
                         item.size_bytes = grec->size_bytes;
                     }
@@ -28314,6 +28450,13 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
             if (have_row) {
                 item.capture_time_text = row.taken_at;
                 item.capture_time_unix = row.taken_epoch;
+                if (row.gps_ok) {
+                    item.gps_latitude = row.gps_latitude;
+                    item.gps_longitude = row.gps_longitude;
+                    item.gps_altitude = row.gps_altitude;
+                    item.has_gps = true;
+                    item.has_gps_altitude = row.gps_altitude_ok;
+                }
             }
         }
 
@@ -28336,6 +28479,10 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
             {"mtime_unix", item.mtime_unix},
             {"capture_time_text", item.capture_time_text},
             {"capture_time_unix", item.capture_time_unix},
+            {"has_gps", item.has_gps},
+            {"gps_latitude", item.has_gps ? json(item.gps_latitude) : json(nullptr)},
+            {"gps_longitude", item.has_gps ? json(item.gps_longitude) : json(nullptr)},
+            {"gps_altitude", (item.has_gps && item.has_gps_altitude) ? json(item.gps_altitude) : json(nullptr)},
 
             // New standardized fields
             {"imageRating", item.rating},
@@ -29228,7 +29375,19 @@ if (has_notes) {
                ext == "webp" ||
                ext == "svg"  ||
                ext == "bmp"  ||
-               ext == "ico";
+               ext == "ico"  ||
+               ext == "tif"  ||
+               ext == "tiff" ||
+               ext == "heic" ||
+               ext == "heif" ||
+               ext == "cr2"  ||
+               ext == "cr3"  ||
+               ext == "nef"  ||
+               ext == "arw"  ||
+               ext == "raf"  ||
+               ext == "dng"  ||
+               ext == "rw2"  ||
+               ext == "orf";
     };
 
     if (!is_gallery_image_name(std::filesystem::path(rel_norm).filename().string())) {
@@ -29458,7 +29617,19 @@ srv.Post("/api/v4/gallery/meta/get", [&](const httplib::Request& req, httplib::R
                ext == "webp" ||
                ext == "svg"  ||
                ext == "bmp"  ||
-               ext == "ico";
+               ext == "ico"  ||
+               ext == "tif"  ||
+               ext == "tiff" ||
+               ext == "heic" ||
+               ext == "heif" ||
+               ext == "cr2"  ||
+               ext == "cr3"  ||
+               ext == "nef"  ||
+               ext == "arw"  ||
+               ext == "raf"  ||
+               ext == "dng"  ||
+               ext == "rw2"  ||
+               ext == "orf";
     };
 
     // allocated storage required
@@ -35651,7 +35822,19 @@ srv.Post("/api/v4/admin/storage/tiering/migrate_one", [&](const httplib::Request
                ext == "webp" ||
                ext == "svg"  ||
                ext == "bmp"  ||
-               ext == "ico";
+               ext == "ico"  ||
+               ext == "tif"  ||
+               ext == "tiff" ||
+               ext == "heic" ||
+               ext == "heif" ||
+               ext == "cr2"  ||
+               ext == "cr3"  ||
+               ext == "nef"  ||
+               ext == "arw"  ||
+               ext == "raf"  ||
+               ext == "dng"  ||
+               ext == "rw2"  ||
+               ext == "orf";
     };
 
     auto pg_xml_escape = [](const std::string& s) -> std::string {

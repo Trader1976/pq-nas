@@ -22,7 +22,7 @@
     const gridEl = el("grid");
     const ctxMenu = el("ctxMenu");
 
-    const gridWrap = gridEl ? gridEl.closest(".gridWrap") : null;
+    const gridWrap = el("gridWrap");
 
     const downloadSelBtn = el("downloadSelBtn");
     const deleteSelBtn = el("deleteSelBtn");
@@ -62,6 +62,11 @@
     const metaCard = el("metaCard");
     const metaHead = el("metaHead");
 
+    const gridBtn = el("gridBtn");
+    const mapBtn = el("mapBtn");
+    const mapWrap = el("mapWrap");
+    const mapCanvas = el("mapCanvas");
+
     const panelEl = document.querySelector(".panel");
 
     let metaSaveInFlight = false;
@@ -82,6 +87,7 @@
         filter: "",
         ratingFilter: -1, // -1 = all, 0 = unrated, 1..5 = exact stars
         thumbSize: 160,
+        viewMode: "grid",
         editingPath: "",
         editingRating: 0,
         previewPath: "",
@@ -127,6 +133,13 @@
         scrollLeft: 0,
         scrollTop: 0,
         moved: false
+    };
+
+    const mapRuntime = {
+        leafletPromise: null,
+        map: null,
+        markersLayer: null,
+        tileLayer: null
     };
 
     function loadRatingFilterPref() {
@@ -1580,7 +1593,18 @@ async function ensureTreeStats(force = false) {
             state.filter ? ` • filter: ${state.filter}` : "";
 
         const items = filteredItems();
+        if (state.viewMode === "map") {
+            const gpsCount = mapItems().length;
+            const textTxt =
+                state.filter ? ` • filter: ${state.filter}` : "";
+            const rf = Number(state.ratingFilter);
+            const ratingTxt =
+                rf < 0 ? "" :
+                    (rf === 0 ? " • unrated only" : ` • ${rf}★ only`);
 
+            setStatus(`Map: ${gpsCount} GPS photo${gpsCount === 1 ? "" : "s"} under /${state.curPath || ""}${ratingTxt}${textTxt}`);
+            return;
+        }
         if (isSearchMode()) {
             const pathCount = new Set(items.map((it) => groupPathForItem(it))).size;
             const scopeTxt = ` under /${state.curPath || ""}`;
@@ -2729,7 +2753,305 @@ async function ensureTreeStats(force = false) {
 
         return wrap;
     }
+    function mapItems() {
+        return filteredItems().filter((it) =>
+            it &&
+            it.type === "file" &&
+            it.has_gps &&
+            it.gps_latitude != null &&
+            it.gps_longitude != null
+        );
+    }
+
+    function applyViewModeUi() {
+        const mapOn = state.viewMode === "map";
+
+        gridWrap?.classList.toggle("hidden", mapOn);
+        mapWrap?.classList.toggle("hidden", !mapOn);
+
+        gridBtn?.classList.toggle("active", !mapOn);
+        mapBtn?.classList.toggle("active", mapOn);
+    }
+
+    function setViewMode(mode) {
+        state.viewMode = mode === "map" ? "map" : "grid";
+        renderGrid();
+        updateViewStatus();
+
+        if (state.viewMode === "map") {
+            window.setTimeout(() => {
+                try { mapRuntime.map?.invalidateSize(); } catch (_) {}
+            }, 0);
+        }
+    }
+
+    function renderMap() {
+        if (!mapCanvas) return;
+
+        destroyLeafletMap();
+        mapCanvas.replaceChildren();
+
+        if (isSearchMode() && state.searchLoading && !state.searchLoaded) {
+            const loading = document.createElement("div");
+            loading.className = "emptyState";
+            loading.innerHTML = `
+            <div class="h">Searching subfolders…</div>
+            <div class="p">Scanning the current folder and all deeper folders for photos with GPS coordinates.</div>
+        `;
+            mapCanvas.appendChild(loading);
+            refreshFooterStats();
+            return;
+        }
+
+        const items = mapItems();
+
+        if (!items.length) {
+            const empty = document.createElement("div");
+            empty.className = "emptyState";
+            empty.innerHTML = `
+            <div class="h">No photos with location</div>
+            <div class="p">Nothing in the current view has GPS coordinates yet.</div>
+        `;
+            mapCanvas.appendChild(empty);
+            refreshFooterStats();
+            return;
+        }
+
+        const pane = document.createElement("div");
+        pane.className = "mapPaneReal";
+
+        const viewport = document.createElement("div");
+        viewport.className = "mapViewport";
+
+        const mapHost = document.createElement("div");
+        mapHost.className = "mapHost";
+        viewport.appendChild(mapHost);
+
+        const side = document.createElement("div");
+        side.className = "mapSide";
+
+        const summary = document.createElement("div");
+        summary.className = "mapSummary";
+        summary.innerHTML = `
+        <div class="h">Map</div>
+        <div class="p">GPS photos in current view: ${items.length}</div>
+    `;
+
+        side.appendChild(summary);
+        pane.appendChild(viewport);
+        pane.appendChild(side);
+        mapCanvas.appendChild(pane);
+
+        refreshFooterStats();
+
+        ensureLeafletLoaded().then((L) => {
+            if (state.viewMode !== "map") return;
+            if (!mapHost.isConnected) return;
+
+            mapRuntime.map = L.map(mapHost, {
+                zoomControl: true,
+                worldCopyJump: true
+            });
+
+            mapRuntime.tileLayer = L.tileLayer(
+                "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                {
+                    maxZoom: 19,
+                    attribution: "&copy; OpenStreetMap contributors"
+                }
+            ).addTo(mapRuntime.map);
+
+            mapRuntime.markersLayer = L.layerGroup().addTo(mapRuntime.map);
+
+            const bounds = [];
+            const markerByPath = new Map();
+
+            for (const item of items) {
+                const lat = Number(item.gps_latitude);
+                const lon = Number(item.gps_longitude);
+                if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+
+                const rel = currentRelPathFor(item);
+                const marker = L.marker([lat, lon]);
+
+                const popupHtml = `
+                <div class="mapLeafletPopup">
+                    <div class="mapLeafletPopupTitle">${escapeHtml(item.name || "(unnamed)")}</div>
+                    <div class="mapLeafletPopupMeta">
+                        <div>${escapeHtml("/" + rel)}</div>
+                        <div>${escapeHtml(fmtTime(item.capture_time_unix || 0) || "no capture time")}</div>
+                        <div>${escapeHtml(lat.toFixed(6) + ", " + lon.toFixed(6))}</div>
+                    </div>
+                </div>
+            `;
+
+                marker.bindPopup(popupHtml);
+                marker.on("click", () => {
+                    openPreviewFor(item);
+                });
+
+                marker.addTo(mapRuntime.markersLayer);
+                markerByPath.set(rel, marker);
+                bounds.push([lat, lon]);
+            }
+
+            side.appendChild(buildMapSideList(items, markerByPath));
+
+            if (bounds.length === 1) {
+                mapRuntime.map.setView(bounds[0], 13);
+            } else if (bounds.length > 1) {
+                mapRuntime.map.fitBounds(bounds, { padding: [28, 28] });
+            } else {
+                mapRuntime.map.setView([0, 0], 2);
+            }
+
+            window.setTimeout(() => {
+                try { mapRuntime.map.invalidateSize(); } catch (_) {}
+            }, 0);
+        }).catch((e) => {
+            if (!mapHost.isConnected) return;
+
+            const msg = String(e && e.message ? e.message : e || "Map failed to load");
+            viewport.replaceChildren();
+
+            const errBox = document.createElement("div");
+            errBox.className = "emptyState";
+            errBox.innerHTML = `
+            <div class="h">Map failed to load</div>
+            <div class="p">${escapeHtml(msg)}</div>
+        `;
+            viewport.appendChild(errBox);
+        });
+    }
+
+    function escapeHtml(s) {
+        return String(s || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+    }
+
+    function destroyLeafletMap() {
+        if (mapRuntime.map) {
+            try { mapRuntime.map.remove(); } catch (_) {}
+        }
+        mapRuntime.map = null;
+        mapRuntime.markersLayer = null;
+        mapRuntime.tileLayer = null;
+    }
+
+    function ensureLeafletLoaded() {
+        if (window.L) return Promise.resolve(window.L);
+        if (mapRuntime.leafletPromise) return mapRuntime.leafletPromise;
+
+        mapRuntime.leafletPromise = new Promise((resolve, reject) => {
+            const cssHref = "./leaflet.css";
+            const jsSrc = "./leaflet.js";
+
+            const hasCss = Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
+                .some((el) => (el.getAttribute("href") || "") === cssHref);
+
+            if (!hasCss) {
+                const link = document.createElement("link");
+                link.rel = "stylesheet";
+                link.href = cssHref;
+                document.head.appendChild(link);
+            }
+
+            const existingScript = Array.from(document.querySelectorAll("script"))
+                .find((el) => (el.getAttribute("src") || "") === jsSrc);
+
+            if (window.L) {
+                resolve(window.L);
+                return;
+            }
+
+            if (existingScript) {
+                existingScript.addEventListener("load", () => resolve(window.L), { once: true });
+                existingScript.addEventListener("error", () => reject(new Error("Failed to load Leaflet script")), { once: true });
+                return;
+            }
+
+            const script = document.createElement("script");
+            script.src = jsSrc;
+            script.async = true;
+            script.onload = () => {
+                if (window.L) resolve(window.L);
+                else reject(new Error("Leaflet loaded but window.L is missing"));
+            };
+            script.onerror = () => reject(new Error("Failed to load Leaflet script"));
+            document.head.appendChild(script);
+        });
+
+        return mapRuntime.leafletPromise;
+    }
+
+    function buildMapSideList(items, markerByPath) {
+        const list = document.createElement("div");
+        list.className = "mapPhotoList";
+
+        for (const item of items) {
+            const rel = currentRelPathFor(item);
+
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "mapPhotoBtn";
+
+            const main = document.createElement("div");
+            main.className = "mapPhotoMain";
+
+            const name = document.createElement("div");
+            name.className = "mapPhotoName";
+            name.textContent = item.name || "(unnamed)";
+
+            const path = document.createElement("div");
+            path.className = "mapPhotoPath";
+            path.textContent = "/" + rel;
+
+            const coord = document.createElement("div");
+            coord.className = "mapPhotoCoord";
+            coord.textContent = `${Number(item.gps_latitude).toFixed(6)}, ${Number(item.gps_longitude).toFixed(6)}`;
+
+            const time = document.createElement("div");
+            time.className = "mapPhotoTime";
+            time.textContent = fmtTime(item.capture_time_unix || 0) || "no capture time";
+
+            main.appendChild(name);
+            main.appendChild(path);
+            main.appendChild(coord);
+            main.appendChild(time);
+
+            btn.appendChild(main);
+
+            btn.addEventListener("click", () => {
+                const marker = markerByPath.get(rel);
+                if (marker && mapRuntime.map) {
+                    mapRuntime.map.setView(marker.getLatLng(), Math.max(mapRuntime.map.getZoom(), 13), { animate: true });
+                    marker.openPopup();
+                }
+                openPreviewFor(item);
+            });
+
+            list.appendChild(btn);
+        }
+
+        return list;
+    }
+
     function renderGrid() {
+        applyViewModeUi();
+
+        if (state.viewMode === "map") {
+            renderMap();
+            return;
+        }
+
+        renderGridBody();
+    }
+
+    function renderGridBody() {
         if (!gridEl) return;
         gridEl.replaceChildren();
 
@@ -2870,7 +3192,13 @@ async function ensureTreeStats(force = false) {
         clearSelection();
         load();
     });
+    gridBtn?.addEventListener("click", () => {
+        setViewMode("grid");
+    });
 
+    mapBtn?.addEventListener("click", () => {
+        setViewMode("map");
+    });
     filterInput?.addEventListener("input", () => {
         state.filter = String(filterInput.value || "");
 
