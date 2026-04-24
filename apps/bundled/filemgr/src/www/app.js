@@ -1128,12 +1128,20 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return ext === "pdf";
   }
   const VIDEO_PREVIEW_EXTS = new Set([
-    "mp4", "webm", "ogv", "ogg", "mov", "m4v"
+    "mp4", "webm", "ogv", "mov", "m4v"
   ]);
 
   function isProbablyVideoPreviewableName(name) {
     const ext = normalizeIconExt(fileExtLower(name));
     return !!ext && VIDEO_PREVIEW_EXTS.has(ext);
+  }
+  const AUDIO_PREVIEW_EXTS = new Set([
+    "mp3", "wav", "ogg", "oga", "m4a", "aac", "flac", "opus"
+  ]);
+
+  function isProbablyAudioPreviewableName(name) {
+    const ext = normalizeIconExt(fileExtLower(name));
+    return !!ext && AUDIO_PREVIEW_EXTS.has(ext);
   }
   function iconMap() {
     return (window.PQNAS_FILE_ICONS && typeof window.PQNAS_FILE_ICONS === "object")
@@ -3413,6 +3421,13 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         ctxEl.appendChild(menuItem("Open video preview", "", () => window.PQNAS_FILEMGR.videoPreview.open(item)));
         ctxEl.appendChild(menuItem("Open original", "", () => doOpenOriginal(item)));
       }
+      if (caps.audioPreview !== false &&
+          window.PQNAS_FILEMGR &&
+          window.PQNAS_FILEMGR.audioPreview &&
+          isProbablyAudioPreviewableName(item.name)) {
+        ctxEl.appendChild(menuItem("Open audio preview", "", () => window.PQNAS_FILEMGR.audioPreview.open(item)));
+        ctxEl.appendChild(menuItem("Open original", "", () => doOpenOriginal(item)));
+      }
       if (caps.textEdit !== false &&
           window.PQNAS_FILEMGR &&
           window.PQNAS_FILEMGR.textEdit &&
@@ -3854,6 +3869,11 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             window.PQNAS_FILEMGR.pdfPreview &&
             isProbablyPdfPreviewableName(item.name)) {
           window.PQNAS_FILEMGR.pdfPreview.open(item);
+        } else if (caps.audioPreview !== false &&
+            window.PQNAS_FILEMGR &&
+            window.PQNAS_FILEMGR.audioPreview &&
+            isProbablyAudioPreviewableName(item.name)) {
+          window.PQNAS_FILEMGR.audioPreview.open(item);
         } else if (caps.videoPreview !== false &&
             window.PQNAS_FILEMGR &&
             window.PQNAS_FILEMGR.videoPreview &&
@@ -4594,6 +4614,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   FM.isProbablyImagePreviewableName = isProbablyImagePreviewableName;
   FM.isProbablyPdfPreviewableName = isProbablyPdfPreviewableName;
   FM.isProbablyVideoPreviewableName = isProbablyVideoPreviewableName;
+  FM.isProbablyAudioPreviewableName = isProbablyAudioPreviewableName;
   load().catch((e) => {
     console.warn("Initial load failed:", e);
   });

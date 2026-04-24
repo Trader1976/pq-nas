@@ -8,7 +8,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     let modal = null;
     let titleEl = null;
     let pathEl = null;
-    let videoEl = null;
+    let audioEl = null;
     let openOriginalBtn = null;
     let downloadBtn = null;
 
@@ -22,12 +22,15 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     let modalStartTop = 0;
     let positionedOnce = false;
 
-    const VIDEO_EXTS = new Set([
-        "mp4",
-        "webm",
-        "ogv",
-        "mov",
-        "m4v"
+    const AUDIO_EXTS = new Set([
+        "mp3",
+        "wav",
+        "ogg",
+        "oga",
+        "m4a",
+        "aac",
+        "flac",
+        "opus"
     ]);
 
     function fileExtLower(name) {
@@ -42,21 +45,24 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     function mimeForExt(ext) {
         const e = String(ext || "").toLowerCase();
 
-        if (e === "mp4" || e === "m4v") return "video/mp4";
-        if (e === "webm") return "video/webm";
-        if (e === "ogv" || e === "ogg") return "video/ogg";
-        if (e === "mov") return "video/quicktime";
+        if (e === "mp3") return "audio/mpeg";
+        if (e === "wav") return "audio/wav";
+        if (e === "ogg" || e === "oga") return "audio/ogg";
+        if (e === "m4a") return "audio/mp4";
+        if (e === "aac") return "audio/aac";
+        if (e === "flac") return "audio/flac";
+        if (e === "opus") return "audio/ogg";
 
-        return "video/mp4";
+        return "audio/mpeg";
     }
 
     function canOpenFor(item) {
         if (!item || item.type !== "file") return false;
-        return VIDEO_EXTS.has(fileExtLower(item.name));
+        return AUDIO_EXTS.has(fileExtLower(item.name));
     }
 
     function safeName(item) {
-        return String(item && item.name ? item.name : "Video preview");
+        return String(item && item.name ? item.name : "Audio preview");
     }
 
     function relPathFor(item) {
@@ -122,7 +128,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     function installDragging() {
         if (!modal) return;
 
-        const head = modal.querySelector(".videoPreviewHead");
+        const head = modal.querySelector(".audioPreviewHead");
         if (!head) return;
 
         head.addEventListener("pointerdown", (e) => {
@@ -188,44 +194,50 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         if (modal) return modal;
 
         modal = document.createElement("div");
-        modal.id = "videoPreviewModal";
-        modal.className = "videoPreviewModal";
+        modal.id = "audioPreviewModal";
+        modal.className = "audioPreviewModal";
         modal.setAttribute("aria-hidden", "true");
 
         modal.innerHTML = `
-      <div class="videoPreviewBox" role="dialog" aria-modal="false" aria-label="Video preview">
-        <div class="videoPreviewHead">
-          <div class="videoPreviewTitleWrap">
-            <div id="videoPreviewTitle" class="videoPreviewTitle">Video preview</div>
-            <div id="videoPreviewPath" class="videoPreviewPath mono"></div>
+      <div class="audioPreviewBox" role="dialog" aria-modal="false" aria-label="Audio preview">
+        <div class="audioPreviewHead">
+          <div class="audioPreviewTitleWrap">
+            <div id="audioPreviewTitle" class="audioPreviewTitle">Audio preview</div>
+            <div id="audioPreviewPath" class="audioPreviewPath mono"></div>
           </div>
-          <div class="videoPreviewActions">
-            <button id="videoPreviewOpenOriginal" type="button" class="btn secondary">Open original</button>
-            <button id="videoPreviewDownload" type="button" class="btn secondary">Download</button>
-            <button id="videoPreviewClose" type="button" class="btn secondary">Close</button>
+          <div class="audioPreviewActions">
+            <button id="audioPreviewOpenOriginal" type="button" class="btn secondary">Open original</button>
+            <button id="audioPreviewDownload" type="button" class="btn secondary">Download</button>
+            <button id="audioPreviewClose" type="button" class="btn secondary">Close</button>
           </div>
         </div>
-        <div class="videoPreviewBody">
-          <video
-            id="videoPreviewPlayer"
-            class="videoPreviewPlayer"
+
+        <div class="audioPreviewBody">
+          <div class="audioPreviewIcon" aria-hidden="true">♪</div>
+          <div class="audioPreviewNow">
+            <div id="audioPreviewNowTitle" class="audioPreviewNowTitle"></div>
+            <div class="audioPreviewHint">Browser-native audio playback</div>
+          </div>
+          <audio
+            id="audioPreviewPlayer"
+            class="audioPreviewPlayer"
             controls
-            playsinline
             preload="metadata"
-          ></video>
+          ></audio>
         </div>
       </div>
     `;
 
         document.body.appendChild(modal);
 
-        titleEl = modal.querySelector("#videoPreviewTitle");
-        pathEl = modal.querySelector("#videoPreviewPath");
-        videoEl = modal.querySelector("#videoPreviewPlayer");
-        openOriginalBtn = modal.querySelector("#videoPreviewOpenOriginal");
-        downloadBtn = modal.querySelector("#videoPreviewDownload");
+        titleEl = modal.querySelector("#audioPreviewTitle");
+        pathEl = modal.querySelector("#audioPreviewPath");
+        audioEl = modal.querySelector("#audioPreviewPlayer");
+        openOriginalBtn = modal.querySelector("#audioPreviewOpenOriginal");
+        downloadBtn = modal.querySelector("#audioPreviewDownload");
 
-        const closeBtn = modal.querySelector("#videoPreviewClose");
+        const closeBtn = modal.querySelector("#audioPreviewClose");
+        const nowTitle = modal.querySelector("#audioPreviewNowTitle");
 
         closeBtn?.addEventListener("click", close);
 
@@ -259,10 +271,13 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         if (titleEl) titleEl.textContent = safeName(item);
         if (pathEl) pathEl.textContent = "/" + rel;
 
-        if (videoEl) {
-            try { videoEl.pause(); } catch (_) {}
-            videoEl.removeAttribute("src");
-            videoEl.load();
+        const nowTitle = modal ? modal.querySelector("#audioPreviewNowTitle") : null;
+        if (nowTitle) nowTitle.textContent = safeName(item);
+
+        if (audioEl) {
+            try { audioEl.pause(); } catch (_) {}
+            audioEl.removeAttribute("src");
+            audioEl.load();
         }
 
         modal.classList.add("show");
@@ -270,7 +285,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
         if (FM && typeof FM.setBadge === "function") FM.setBadge("warn", "loading…");
         const status = FM && typeof FM.getStatusEl === "function" ? FM.getStatusEl() : null;
-        if (status) status.textContent = `Loading video preview: ${safeName(item)}…`;
+        if (status) status.textContent = `Loading audio preview: ${safeName(item)}…`;
 
         if (openOriginalBtn) {
             openOriginalBtn.onclick = () => {
@@ -290,7 +305,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
                 credentials: "include",
                 cache: "no-store",
                 headers: {
-                    "Accept": `${mime},video/*,*/*`
+                    "Accept": `${mime},audio/*,*/*`
                 }
             });
 
@@ -302,32 +317,32 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
             if (seq !== openSeq) return;
 
-            const videoBlob = blob.type && blob.type.startsWith("video/")
+            const audioBlob = blob.type && blob.type.startsWith("audio/")
                 ? blob
                 : new Blob([blob], { type: mime });
 
-            const blobUrl = URL.createObjectURL(videoBlob);
+            const blobUrl = URL.createObjectURL(audioBlob);
             currentBlobUrl = blobUrl;
 
-            if (videoEl) {
-                videoEl.src = blobUrl;
-                videoEl.load();
+            if (audioEl) {
+                audioEl.src = blobUrl;
+                audioEl.load();
             }
 
             if (FM && typeof FM.setBadge === "function") FM.setBadge("ok", "preview");
-            if (status) status.textContent = `Previewing video: ${safeName(item)}`;
+            if (status) status.textContent = `Previewing audio: ${safeName(item)}`;
         } catch (e) {
             if (seq !== openSeq) return;
 
             if (FM && typeof FM.setBadge === "function") FM.setBadge("err", "error");
             if (status) {
-                status.textContent = `Video preview failed: ${String(e && e.message ? e.message : e)}`;
+                status.textContent = `Audio preview failed: ${String(e && e.message ? e.message : e)}`;
             }
 
-            if (videoEl) {
-                try { videoEl.pause(); } catch (_) {}
-                videoEl.removeAttribute("src");
-                videoEl.load();
+            if (audioEl) {
+                try { audioEl.pause(); } catch (_) {}
+                audioEl.removeAttribute("src");
+                audioEl.load();
             }
         }
     }
@@ -340,16 +355,16 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         modal.classList.remove("show");
         modal.setAttribute("aria-hidden", "true");
 
-        if (videoEl) {
-            try { videoEl.pause(); } catch (_) {}
-            videoEl.removeAttribute("src");
-            videoEl.load();
+        if (audioEl) {
+            try { audioEl.pause(); } catch (_) {}
+            audioEl.removeAttribute("src");
+            audioEl.load();
         }
 
         revokeCurrentBlobUrl();
     }
 
-    FM.videoPreview = {
+    FM.audioPreview = {
         open,
         close,
         canOpenFor
