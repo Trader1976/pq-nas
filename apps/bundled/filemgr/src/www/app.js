@@ -1127,7 +1127,14 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const ext = normalizeIconExt(fileExtLower(name));
     return ext === "pdf";
   }
+  const VIDEO_PREVIEW_EXTS = new Set([
+    "mp4", "webm", "ogv", "ogg", "mov", "m4v"
+  ]);
 
+  function isProbablyVideoPreviewableName(name) {
+    const ext = normalizeIconExt(fileExtLower(name));
+    return !!ext && VIDEO_PREVIEW_EXTS.has(ext);
+  }
   function iconMap() {
     return (window.PQNAS_FILE_ICONS && typeof window.PQNAS_FILE_ICONS === "object")
         ? window.PQNAS_FILE_ICONS
@@ -3399,6 +3406,13 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         ctxEl.appendChild(menuItem("Open PDF preview", "", () => window.PQNAS_FILEMGR.pdfPreview.open(item)));
         ctxEl.appendChild(menuItem("Open original", "", () => doOpenOriginal(item)));
       }
+      if (caps.videoPreview !== false &&
+          window.PQNAS_FILEMGR &&
+          window.PQNAS_FILEMGR.videoPreview &&
+          isProbablyVideoPreviewableName(item.name)) {
+        ctxEl.appendChild(menuItem("Open video preview", "", () => window.PQNAS_FILEMGR.videoPreview.open(item)));
+        ctxEl.appendChild(menuItem("Open original", "", () => doOpenOriginal(item)));
+      }
       if (caps.textEdit !== false &&
           window.PQNAS_FILEMGR &&
           window.PQNAS_FILEMGR.textEdit &&
@@ -3840,9 +3854,12 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             window.PQNAS_FILEMGR.pdfPreview &&
             isProbablyPdfPreviewableName(item.name)) {
           window.PQNAS_FILEMGR.pdfPreview.open(item);
-        } else if (caps.textEdit !== false &&
+        } else if (caps.videoPreview !== false &&
             window.PQNAS_FILEMGR &&
-            window.PQNAS_FILEMGR.textEdit &&
+            window.PQNAS_FILEMGR.videoPreview &&
+            isProbablyVideoPreviewableName(item.name)) {
+          window.PQNAS_FILEMGR.videoPreview.open(item);
+        } else if (caps.textEdit !== false &&
             isProbablyTextEditableName(item.name)) {
           console.log("[app.dblclick.textedit] item =", item);
           console.log("[app.dblclick.textedit] rel =", currentRelPathFor(item));
@@ -4576,6 +4593,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   FM.isProbablyTextEditableName = isProbablyTextEditableName;
   FM.isProbablyImagePreviewableName = isProbablyImagePreviewableName;
   FM.isProbablyPdfPreviewableName = isProbablyPdfPreviewableName;
+  FM.isProbablyVideoPreviewableName = isProbablyVideoPreviewableName;
   load().catch((e) => {
     console.warn("Initial load failed:", e);
   });

@@ -1,0 +1,131 @@
+.videoPreviewModal {
+    position: fixed;
+    inset: auto;
+    left: 50%;
+    top: 52%;
+    width: min(1000px, calc(100vw - 28px));
+    height: min(72vh, calc(100vh - 28px));
+    z-index: 10001;
+    display: none;
+    transform: translate(-50%, -50%);
+    background: transparent;
+    pointer-events: none;
+}
+
+.videoPreviewModal.show {
+    display: block;
+}
+
+.videoPreviewBox {
+    width: 100%;
+    height: 100%;
+    min-width: 360px;
+    min-height: 260px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    resize: both;
+    pointer-events: auto;
+    border: 1px solid rgba(var(--fg-rgb), 0.18);
+    border-radius: 18px;
+    background: var(--bg);
+    color: var(--fg);
+    box-shadow: 0 22px 80px rgba(0, 0, 0, 0.58);
+}
+
+.videoPreviewHead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(var(--fg-rgb), 0.12);
+    background: rgba(var(--fg-rgb), 0.05);
+    cursor: move;
+    user-select: none;
+}
+
+.videoPreviewTitleWrap {
+    min-width: 0;
+    pointer-events: none;
+}
+
+.videoPreviewTitle {
+    font-weight: 900;
+    font-size: 15px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.videoPreviewPath {
+    margin-top: 3px;
+    opacity: 0.72;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.videoPreviewActions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    cursor: default;
+}
+
+.videoPreviewActions button {
+    cursor: pointer;
+}
+
+.videoPreviewBody {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #050505;
+}
+
+.videoPreviewPlayer {
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    background: #050505;
+    outline: none;
+}
+
+.videoPreviewModal.dragging {
+    user-select: none;
+}
+
+.videoPreviewModal.dragging .videoPreviewPlayer {
+    pointer-events: none;
+}
+
+@media (max-width: 720px) {
+    .videoPreviewModal {
+        left: 8px;
+        top: 8px;
+        width: calc(100vw - 16px);
+        height: calc(100vh - 16px);
+        transform: none;
+    }
+
+    .videoPreviewBox {
+        border-radius: 14px;
+    }
+
+    .videoPreviewHead {
+        align-items: stretch;
+        flex-direction: column;
+        cursor: default;
+    }
+
+    .videoPreviewActions {
+        justify-content: flex-end;
+        flex-wrap: wrap;
+    }
+}
