@@ -1123,7 +1123,10 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const ext = normalizeIconExt(fileExtLower(name));
     return !!ext && IMAGE_PREVIEW_EXTS.has(ext);
   }
-
+  function isProbablyPdfPreviewableName(name) {
+    const ext = normalizeIconExt(fileExtLower(name));
+    return ext === "pdf";
+  }
 
   function iconMap() {
     return (window.PQNAS_FILE_ICONS && typeof window.PQNAS_FILE_ICONS === "object")
@@ -3389,7 +3392,13 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         ctxEl.appendChild(menuItem("Open preview", "", () => window.PQNAS_FILEMGR.imagePreview.open(item)));
         ctxEl.appendChild(menuItem("Open original", "", () => doOpenOriginal(item)));
       }
-
+      if (caps.pdfPreview !== false &&
+          window.PQNAS_FILEMGR &&
+          window.PQNAS_FILEMGR.pdfPreview &&
+          isProbablyPdfPreviewableName(item.name)) {
+        ctxEl.appendChild(menuItem("Open PDF preview", "", () => window.PQNAS_FILEMGR.pdfPreview.open(item)));
+        ctxEl.appendChild(menuItem("Open original", "", () => doOpenOriginal(item)));
+      }
       if (caps.textEdit !== false &&
           window.PQNAS_FILEMGR &&
           window.PQNAS_FILEMGR.textEdit &&
@@ -3826,6 +3835,11 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             window.PQNAS_FILEMGR.imagePreview &&
             isProbablyImagePreviewableName(item.name)) {
           window.PQNAS_FILEMGR.imagePreview.open(item);
+        } else if (caps.pdfPreview !== false &&
+            window.PQNAS_FILEMGR &&
+            window.PQNAS_FILEMGR.pdfPreview &&
+            isProbablyPdfPreviewableName(item.name)) {
+          window.PQNAS_FILEMGR.pdfPreview.open(item);
         } else if (caps.textEdit !== false &&
             window.PQNAS_FILEMGR &&
             window.PQNAS_FILEMGR.textEdit &&
@@ -4553,6 +4567,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   FM.clearSelection = clearSelection;
   FM.currentRelPathFor = currentRelPathFor;
   FM.joinPath = joinPath;
+  FM.apiGetUrl = apiGetUrl;
   FM.fmtSize = fmtSize;
   FM.setBadge = setBadge;
   FM.copyText = copyText;
@@ -4560,6 +4575,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   FM.getLoadFn = () => load;
   FM.isProbablyTextEditableName = isProbablyTextEditableName;
   FM.isProbablyImagePreviewableName = isProbablyImagePreviewableName;
+  FM.isProbablyPdfPreviewableName = isProbablyPdfPreviewableName;
   load().catch((e) => {
     console.warn("Initial load failed:", e);
   });
