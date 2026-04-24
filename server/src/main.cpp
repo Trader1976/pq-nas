@@ -8175,7 +8175,62 @@ bool write_text_file_atomic_utf8(const std::filesystem::path& target_abs,
 
     return true;
 }
+    static std::string header_value(const httplib::Request& req, const char* key) {
+    auto it = req.headers.find(key);
+    return (it == req.headers.end()) ? std::string() : it->second;
+}
 
+    // CSRF defense for browser cookie-auth mutation routes.
+    // - If request uses Bearer auth, skip this check (mobile/API clients).
+    // - If request relies on cookie auth, require same-origin Origin header.
+    // - Fallback to Referer prefix check only if Origin is absent.
+    static bool require_same_origin_for_cookie_mutation(
+        const httplib::Request& req,
+        httplib::Response& res)
+{
+    const std::string authz = header_value(req, "Authorization");
+    const bool has_bearer =
+        authz.size() > 7 &&
+        authz.compare(0, 7, "Bearer ") == 0;
+
+    if (has_bearer) {
+        return true;
+    }
+
+    const std::string origin = header_value(req, "Origin");
+    if (!origin.empty()) {
+        if (origin == ORIGIN) return true;
+
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "origin mismatch"}
+        }.dump());
+        return false;
+    }
+
+    const std::string referer = header_value(req, "Referer");
+    if (!referer.empty()) {
+        const std::string allowed_prefix = ORIGIN + "/";
+        if (referer == ORIGIN || referer.rfind(allowed_prefix, 0) == 0) {
+            return true;
+        }
+
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "origin mismatch"}
+        }.dump());
+        return false;
+    }
+
+    reply_json(res, 403, json{
+        {"ok", false},
+        {"error", "forbidden"},
+        {"message", "origin required"}
+    }.dump());
+    return false;
+}
 } // namespace
 
 // -----------------------------------------------------------------------------
@@ -9208,7 +9263,7 @@ trash_service.set_restore_unindexer(
     trash_deps.users_path = &users_path;
     trash_deps.workspaces = &workspaces;
     trash_deps.workspaces_path = &workspaces_path;
-
+    trash_deps.origin = &ORIGIN;
     trash_deps.trash_index = &trash_index;
     trash_deps.trash_service = &trash_service;
     trash_deps.cookie_key = COOKIE_KEY;
@@ -13973,6 +14028,10 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
     // ---- auth (need actor fingerprint for audit) ----
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+    if (!require_same_origin_for_cookie_mutation(req, res)) {
+        audit_fail(actor_fp, "origin_mismatch", 403);
+        return;
+    }
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
@@ -14864,6 +14923,10 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
     // ---- auth (need actor fingerprint for audit) ----
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+    if (!require_same_origin_for_cookie_mutation(req, res)) {
+        audit_fail(actor_fp, "origin_mismatch", 403);
+        return;
+    }
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
@@ -15367,6 +15430,10 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
     // ---- auth (need actor fingerprint for audit) ----
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+    if (!require_same_origin_for_cookie_mutation(req, res)) {
+        audit_fail(actor_fp, "origin_mismatch", 403);
+        return;
+    }
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
@@ -18115,6 +18182,7 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
     admin_ws_deps.users_path = users_path;
     admin_ws_deps.workspaces_path = workspaces_path;
     admin_ws_deps.cookie_key = COOKIE_KEY;
+    admin_ws_deps.origin = &ORIGIN;
     admin_ws_deps.reply_json =
         [](httplib::Response& res, int status, const std::string& body) {
             reply_json(res, status, body);
@@ -18151,6 +18219,7 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
     ws_file_deps.users_path = users_path;
     ws_file_deps.workspaces_path = workspaces_path;
     ws_file_deps.cookie_key = COOKIE_KEY;
+    ws_file_deps.origin = &ORIGIN;
     ws_file_deps.transport_max_upload_bytes =
         (g_transport_max_upload_bytes ? g_transport_max_upload_bytes : k_payload_max_upload_bytes);
     ws_file_deps.payload_max_upload_bytes = k_payload_max_upload_bytes;
@@ -19288,6 +19357,7 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
     std::string fp_hex, role;
 
 	if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
@@ -20024,7 +20094,7 @@ srv.Post("/api/v4/files/mkdir", [&](const httplib::Request& req, httplib::Respon
     std::string fp_hex, role;
 
 	if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
-
+    if (!require_same_origin_for_cookie_mutation(req, res)) return;
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
         return pqnas::shorten(it == req.headers.end() ? "" : it->second);
@@ -20407,7 +20477,7 @@ srv.Post("/api/v4/files/hash", [&](const httplib::Request& req, httplib::Respons
 srv.Post("/api/v4/files/rmdir", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
-
+    if (!require_same_origin_for_cookie_mutation(req, res)) return;
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
         return pqnas::shorten(it == req.headers.end() ? "" : it->second);
@@ -22112,7 +22182,7 @@ srv.Get("/api/v4/files/read_text", [&](const httplib::Request& req, httplib::Res
 srv.Post("/api/v4/files/write_text", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
-
+    if (!require_same_origin_for_cookie_mutation(req, res)) return;
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
         return pqnas::shorten(it == req.headers.end() ? "" : it->second);
@@ -22478,7 +22548,7 @@ srv.Post("/api/v4/files/write_text", [&](const httplib::Request& req, httplib::R
 srv.Post("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
-
+    if (!require_same_origin_for_cookie_mutation(req, res)) return;
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
         return pqnas::shorten(it == req.headers.end() ? "" : it->second);
@@ -26906,7 +26976,7 @@ if (!pqnas::resolve_existing_user_file_path(users, fp_hex, path_rel, &rp, &err))
 srv.Post("/api/v4/files/copy", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
-
+    if (!require_same_origin_for_cookie_mutation(req, res)) return;
     auto audit_ua = [&]() -> std::string {
         auto it = req.headers.find("User-Agent");
         return pqnas::shorten(it == req.headers.end() ? "" : it->second);
@@ -30214,7 +30284,10 @@ srv.Put("/api/v4/files/put",
         ev.f["ua"] = audit_ua();
         audit_append(ev);
     };
-
+    if (!require_same_origin_for_cookie_mutation(req, res)) {
+        audit_fail("origin_mismatch", 403);
+        return;
+    }
     auto file_time_to_epoch_sec = [](const std::filesystem::file_time_type& ft) -> std::int64_t {
         using namespace std::chrono;
         const auto sctp = time_point_cast<system_clock::duration>(

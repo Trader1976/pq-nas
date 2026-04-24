@@ -40,6 +40,7 @@ namespace pqnas {
 
         std::string users_path;
         std::string workspaces_path;
+        const std::string* origin = nullptr;
 
         const unsigned char* cookie_key = nullptr;
 

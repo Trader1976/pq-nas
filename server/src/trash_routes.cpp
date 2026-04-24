@@ -92,7 +92,76 @@ static void audit_local(const TrashRoutesDeps& deps,
 static bool is_trash_inactive_err_local(const std::string& err) {
     return err == "trash item is not active";
 }
+    static std::string trash_header_value_local(const httplib::Request& req, const char* key) {
+    auto it = req.headers.find(key);
+    return (it == req.headers.end()) ? std::string() : it->second;
+}
 
+    // Same-origin CSRF check for cookie-authenticated trash mutations.
+    //
+    // Why this exists:
+    // - Trash restore and purge are destructive browser-triggered actions that
+    //   usually authenticate with the session cookie.
+    // - We require same-origin requests so another site cannot trigger restore or
+    //   purge through the user's logged-in browser session.
+    //
+    // Rules:
+    // - Bearer-token requests are exempt because they do not depend on ambient
+    //   browser cookies.
+    // - Prefer Origin when present.
+    // - Fall back to Referer for same-origin browser requests that omit Origin.
+    // - Reject requests with mismatched origin/referer or with neither header.
+    bool require_same_origin_for_cookie_mutation_trash_local(
+        const httplib::Request& req,
+        httplib::Response& res,
+        const std::string& expected_origin
+    ) {
+    const std::string auth = trash_header_value_local(req, "Authorization");
+    if (auth.rfind("Bearer ", 0) == 0) return true;
+
+    const std::string origin = trash_header_value_local(req, "Origin");
+    if (!origin.empty()) {
+        if (origin == expected_origin) return true;
+        res.status = 403;
+        res.set_header("Content-Type", "application/json");
+        res.body = R"({"ok":false,"error":"forbidden","message":"origin mismatch"})";
+        return false;
+    }
+
+    const std::string referer = trash_header_value_local(req, "Referer");
+    if (!referer.empty()) {
+        if (referer.rfind(expected_origin, 0) == 0) return true;
+        res.status = 403;
+        res.set_header("Content-Type", "application/json");
+        res.body = R"({"ok":false,"error":"forbidden","message":"origin mismatch"})";
+        return false;
+    }
+
+    res.status = 403;
+    res.set_header("Content-Type", "application/json");
+    res.body = R"({"ok":false,"error":"forbidden","message":"missing origin"})";
+    return false;
+}
+    // Thin deps-aware wrapper for trash-route same-origin enforcement.
+    //
+    // Why this exists:
+    // - Trash routes receive configuration through TrashRoutesDeps.
+    // - This keeps the route file independent from any global ORIGIN symbol.
+    // - It also fails closed if origin wiring is missing or empty, preventing trash
+    //   mutations from running without the intended CSRF protection.
+    bool require_same_origin_for_cookie_mutation_trash_deps(
+        const httplib::Request& req,
+        httplib::Response& res,
+        const TrashRoutesDeps& deps
+    ) {
+    if (!deps.origin || deps.origin->empty()) {
+        res.status = 500;
+        res.set_header("Content-Type", "application/json");
+        res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+        return false;
+    }
+    return require_same_origin_for_cookie_mutation_trash_local(req, res, *deps.origin);
+}
 // Resolves a logical relative path under an allowed restore root.
 //
 // Security intent:
@@ -406,7 +475,7 @@ void register_trash_routes(httplib::Server& srv, const TrashRoutesDeps& deps) {
             !deps.require_user_auth_users_actor(req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
             return;
         }
-
+        if (!require_same_origin_for_cookie_mutation_trash_deps(req, res, deps)) return;
         if (!deps.trash_index || !deps.trash_service) {
             audit_local(deps, "v4.trash_restore_fail", "fail", {
                 {"actor_fp", actor_fp},
@@ -649,7 +718,7 @@ void register_trash_routes(httplib::Server& srv, const TrashRoutesDeps& deps) {
             !deps.require_user_auth_users_actor(req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
             return;
         }
-
+        if (!require_same_origin_for_cookie_mutation_trash_deps(req, res, deps)) return;
         if (!deps.trash_index || !deps.trash_service) {
             audit_local(deps, "v4.trash_purge_fail", "fail", {
                 {"actor_fp", actor_fp},

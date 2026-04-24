@@ -35,6 +35,7 @@ struct TrashRoutesDeps {
     // - resolving live user storage roots for restore
     // - reloading or consulting current user state when needed
     UsersRegistry* users = nullptr;
+    const std::string* origin = nullptr;
     const std::string* users_path = nullptr;
 
     // Workspace registry and its backing path.

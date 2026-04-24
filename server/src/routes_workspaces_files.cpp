@@ -38,6 +38,87 @@ namespace pqnas {
         return out;
     }
 
+    static std::string ws_header_value(const httplib::Request& req, const char* key) {
+        auto it = req.headers.find(key);
+        return (it == req.headers.end()) ? std::string() : it->second;
+    }
+
+    // Same-origin CSRF check for cookie-authenticated workspace mutations.
+    //
+    // Why this exists:
+    // - Workspace file routes are called from the browser and usually rely on the
+    //   session cookie for authentication.
+    // - That makes mutating endpoints vulnerable to cross-site request forgery
+    //   unless we verify the request came from this server origin.
+    //
+    // Rules:
+    // - Bearer-token requests are exempt because they are not driven by ambient
+    //   browser cookies.
+    // - Prefer Origin when present.
+    // - Fall back to Referer for same-origin browser requests that omit Origin.
+    // - Reject requests with mismatched origin/referer or with neither header.
+    static bool require_same_origin_for_cookie_mutation_ws(
+        const httplib::Request& req,
+        httplib::Response& res,
+        const std::string& origin_allowed)
+    {
+        const std::string authz = ws_header_value(req, "Authorization");
+        const bool has_bearer =
+            authz.size() > 7 &&
+            authz.compare(0, 7, "Bearer ") == 0;
+
+        if (has_bearer) {
+            return true;
+        }
+
+        const std::string origin = ws_header_value(req, "Origin");
+        if (!origin.empty()) {
+            if (origin == origin_allowed) return true;
+
+            res.status = 403;
+            res.set_header("Content-Type", "application/json");
+            res.body = R"({"ok":false,"error":"forbidden","message":"origin mismatch"})";
+            return false;
+        }
+
+        const std::string referer = ws_header_value(req, "Referer");
+        if (!referer.empty()) {
+            const std::string allowed_prefix = origin_allowed + "/";
+            if (referer == origin_allowed || referer.rfind(allowed_prefix, 0) == 0) {
+                return true;
+            }
+
+            res.status = 403;
+            res.set_header("Content-Type", "application/json");
+            res.body = R"({"ok":false,"error":"forbidden","message":"origin mismatch"})";
+            return false;
+        }
+
+        res.status = 403;
+        res.set_header("Content-Type", "application/json");
+        res.body = R"({"ok":false,"error":"forbidden","message":"origin required"})";
+        return false;
+    }
+    // Thin deps-aware wrapper for workspace-file same-origin enforcement.
+    //
+    // Why this exists:
+    // - Route handlers should not depend on a global ORIGIN symbol.
+    // - The expected origin is injected from main.cpp via WorkspaceFileRouteDeps.
+    // - This wrapper also fails closed if origin wiring is missing or empty, so
+    //   mutating handlers do not silently run without CSRF protection.
+    static bool require_same_origin_for_cookie_mutation_ws_deps(
+        const httplib::Request& req,
+        httplib::Response& res,
+        const WorkspaceFileRouteDeps& deps
+    ) {
+        if (!deps.origin || deps.origin->empty()) {
+            res.status = 500;
+            res.set_header("Content-Type", "application/json");
+            res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+            return false;
+        }
+        return require_same_origin_for_cookie_mutation_ws(req, res, *deps.origin);
+    }
     static bool sha256_file_local(const std::filesystem::path& p, std::string* out_hex, std::string* err) {
         std::ifstream f(p, std::ios::binary);
         if (!f.good()) {
@@ -1014,7 +1095,14 @@ srv.Get("/api/v4/workspaces/members",
             req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
         return;
     }
+    if (!deps.origin || deps.origin->empty()) {
+         res.status = 500;
+         res.set_header("Content-Type", "application/json");
+         res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+         return;
+     }
 
+    if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
     (void)actor_role;
     res.set_header("Cache-Control", "no-store");
 
@@ -1208,7 +1296,14 @@ srv.Get("/api/v4/workspaces/members",
             req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
         return;
     }
+     if (!deps.origin || deps.origin->empty()) {
+          res.status = 500;
+          res.set_header("Content-Type", "application/json");
+          res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+          return;
+      }
 
+    if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
     (void)actor_role;
     res.set_header("Cache-Control", "no-store");
 
@@ -1361,7 +1456,14 @@ srv.Get("/api/v4/workspaces/members",
             req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
         return;
     }
+             if (!deps.origin || deps.origin->empty()) {
+              res.status = 500;
+              res.set_header("Content-Type", "application/json");
+              res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+              return;
+          }
 
+    if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
     (void)actor_role;
     res.set_header("Cache-Control", "no-store");
 
@@ -2734,7 +2836,14 @@ srv.Post("/api/v4/workspaces/files/write_text",
                 req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
             return;
         }
+                 if (!deps.origin || deps.origin->empty()) {
+              res.status = 500;
+              res.set_header("Content-Type", "application/json");
+              res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+              return;
+          }
 
+        if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
         (void)actor_role;
         res.set_header("Cache-Control", "no-store");
 
@@ -3215,7 +3324,14 @@ srv.Post("/api/v4/workspaces/files/write_text",
                 req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
             return;
         }
+                 if (!deps.origin || deps.origin->empty()) {
+              res.status = 500;
+              res.set_header("Content-Type", "application/json");
+              res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+              return;
+          }
 
+        if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
         (void)actor_role;
         res.set_header("Cache-Control", "no-store");
 
@@ -3359,7 +3475,14 @@ srv.Post("/api/v4/workspaces/files/write_text",
                 req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
             return;
         }
+                 if (!deps.origin || deps.origin->empty()) {
+              res.status = 500;
+              res.set_header("Content-Type", "application/json");
+              res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+              return;
+          }
 
+        if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
         (void)actor_role;
         res.set_header("Cache-Control", "no-store");
 
@@ -3490,7 +3613,14 @@ srv.Post("/api/v4/workspaces/files/write_text",
                 req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
             return;
         }
+                 if (!deps.origin || deps.origin->empty()) {
+              res.status = 500;
+              res.set_header("Content-Type", "application/json");
+              res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+              return;
+          }
 
+        if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
         (void)actor_role;
         res.set_header("Cache-Control", "no-store");
 
@@ -4001,7 +4131,14 @@ srv.Post("/api/v4/workspaces/files/write_text",
                 req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
             return;
         }
+                 if (!deps.origin || deps.origin->empty()) {
+              res.status = 500;
+              res.set_header("Content-Type", "application/json");
+              res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+              return;
+          }
 
+        if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
         (void)actor_role;
         res.set_header("Cache-Control", "no-store");
 
@@ -4203,7 +4340,14 @@ srv.Post("/api/v4/workspaces/files/write_text",
                 req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
             return;
         }
+                if (!deps.origin || deps.origin->empty()) {
+             res.status = 500;
+             res.set_header("Content-Type", "application/json");
+             res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+             return;
+         }
 
+        if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
         (void)actor_role;
         res.set_header("Cache-Control", "no-store");
 
@@ -6190,6 +6334,14 @@ srv.Post("/api/v4/workspaces/files/delete",
             req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
         return;
     }
+             if (!deps.origin || deps.origin->empty()) {
+              res.status = 500;
+              res.set_header("Content-Type", "application/json");
+              res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+              return;
+          }
+
+    if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
 
     (void)actor_role;
     res.set_header("Cache-Control", "no-store");
@@ -6686,7 +6838,14 @@ srv.Post("/api/v4/workspaces/files/restore_version",
             req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
         return;
     }
+             if (!deps.origin || deps.origin->empty()) {
+              res.status = 500;
+              res.set_header("Content-Type", "application/json");
+              res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+              return;
+          }
 
+    if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
     (void)actor_role;
     res.set_header("Cache-Control", "no-store");
 
@@ -6933,7 +7092,14 @@ srv.Post("/api/v4/workspaces/files/move",
                 req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
             return;
         }
+                 if (!deps.origin || deps.origin->empty()) {
+              res.status = 500;
+              res.set_header("Content-Type", "application/json");
+              res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+              return;
+          }
 
+        if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
         (void)actor_role;
         res.set_header("Cache-Control", "no-store");
 

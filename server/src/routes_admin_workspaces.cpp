@@ -10,112 +10,218 @@
 namespace pqnas {
 
 namespace {
+    // Trims leading and trailing ASCII whitespace from a copy of the input string.
+    //
+    // Why this exists:
+    // - Admin workspace routes accept human-entered JSON fields such as names,
+    //   notes, fingerprints, and ids.
+    // - Normalizing whitespace early keeps validation and comparisons consistent.
+    std::string trim_copy_safe(const std::string& s) {
+        std::size_t a = 0;
+        while (a < s.size() && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
 
-std::string trim_copy_safe(const std::string& s) {
-    std::size_t a = 0;
-    while (a < s.size() && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
+        std::size_t b = s.size();
+        while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1]))) --b;
 
-    std::size_t b = s.size();
-    while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1]))) --b;
-
-    return s.substr(a, b - a);
-}
-
-std::string normalize_pool_id_copy(const std::string& s) {
-    const std::string v = trim_copy_safe(s);
-    if (v.empty()) return "";
-    std::string low = v;
-    for (char& c : low) {
-        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        return s.substr(a, b - a);
     }
-    if (low == "default") return "";
-    return v;
-}
 
+    // Normalizes a pool id for internal comparisons.
+    //
+    // Rules:
+    // - surrounding whitespace is removed
+    // - empty stays empty
+    // - "default" is normalized to empty string so the default pool has one
+    //   canonical internal representation
+    // - other values keep their original spelling after trim
+    std::string normalize_pool_id_copy(const std::string& s) {
+        const std::string v = trim_copy_safe(s);
+        if (v.empty()) return "";
+        std::string low = v;
+        for (char& c : low) {
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        }
+        if (low == "default") return "";
+        return v;
+    }
+
+    // Resolves the filesystem root used for default-pool workspace storage.
+    //
+    // Resolution order:
+    // - PQNAS_DATA_ROOT if set
+    // - PQNAS_STORAGE_ROOT + "/data" if set
+    // - legacy fallback derived from users_path
+    //
+    // Why this exists:
+    // - Admin workspace create/delete needs a stable way to find the on-disk root
+    //   for default-pool workspace directories.
     std::filesystem::path default_data_root_from_users_path(const std::string& users_path) {
-    if (const char* p = std::getenv("PQNAS_DATA_ROOT")) {
-        if (*p) return std::filesystem::path(p);
+        if (const char* p = std::getenv("PQNAS_DATA_ROOT")) {
+            if (*p) return std::filesystem::path(p);
+        }
+
+        if (const char* p = std::getenv("PQNAS_STORAGE_ROOT")) {
+            if (*p) return std::filesystem::path(p) / "data";
+        }
+
+        // Legacy fallback only.
+        const std::filesystem::path up(users_path);
+        return up.parent_path().parent_path() / "data";
     }
-
-    if (const char* p = std::getenv("PQNAS_STORAGE_ROOT")) {
-        if (*p) return std::filesystem::path(p) / "data";
+        static std::string admin_ws_header_value_local(const httplib::Request& req, const char* key) {
+        auto it = req.headers.find(key);
+        return (it == req.headers.end()) ? std::string() : it->second;
     }
+    // Same-origin CSRF check for cookie-authenticated admin workspace mutations.
+    //
+    // Why this exists:
+    // - Admin workspace actions (create/delete/rename/member changes) are
+    //   high-impact browser actions that typically use the session cookie.
+    // - We therefore require the request to come from this server origin before
+    //   allowing the mutation.
+    //
+    // Rules:
+    // - Bearer-token requests are exempt because they do not rely on ambient
+    //   browser cookies.
+    // - Prefer Origin when present.
+    // - Fall back to Referer for same-origin browser requests that omit Origin.
+    // - Reject requests with mismatched origin/referer or with neither header.
+    bool require_same_origin_for_cookie_mutation_admin_ws_local(
+        const httplib::Request& req,
+        httplib::Response& res,
+        const std::string& expected_origin
+    ) {
+        const std::string auth = admin_ws_header_value_local(req, "Authorization");
+        if (auth.rfind("Bearer ", 0) == 0) return true;
 
-    // Legacy fallback only.
-    const std::filesystem::path up(users_path);
-    return up.parent_path().parent_path() / "data";
-}
+        const std::string origin = admin_ws_header_value_local(req, "Origin");
+        if (!origin.empty()) {
+            if (origin == expected_origin) return true;
+            res.status = 403;
+            res.set_header("Content-Type", "application/json");
+            res.body = R"({"ok":false,"error":"forbidden","message":"origin mismatch"})";
+            return false;
+        }
 
-bool ensure_dir_exists_local(const std::filesystem::path& p, std::string* err) {
-    if (err) err->clear();
+        const std::string referer = admin_ws_header_value_local(req, "Referer");
+        if (!referer.empty()) {
+            if (referer.rfind(expected_origin, 0) == 0) return true;
+            res.status = 403;
+            res.set_header("Content-Type", "application/json");
+            res.body = R"({"ok":false,"error":"forbidden","message":"origin mismatch"})";
+            return false;
+        }
 
-    std::error_code ec;
-    std::filesystem::create_directories(p, ec);
-    if (ec) {
-        if (err) *err = ec.message();
+        res.status = 403;
+        res.set_header("Content-Type", "application/json");
+        res.body = R"({"ok":false,"error":"forbidden","message":"missing origin"})";
         return false;
     }
-    return true;
-}
 
-std::uint64_t dir_size_bytes_best_effort_local(const std::filesystem::path& root) {
-    std::uint64_t total = 0;
-    std::error_code ec;
-
-    if (!std::filesystem::exists(root, ec)) return 0;
-    ec.clear();
-
-    for (std::filesystem::recursive_directory_iterator it(root, ec), end;
-         it != end && !ec;
-         it.increment(ec)) {
-        if (ec) break;
-
-        std::error_code ec2;
-        if (it->is_regular_file(ec2) && !ec2) {
-            std::error_code ec3;
-            const auto sz = it->file_size(ec3);
-            if (!ec3) total += static_cast<std::uint64_t>(sz);
+    // Thin deps-aware wrapper for admin-workspace same-origin enforcement.
+    //
+    // Why this exists:
+    // - Admin route code should read configuration through AdminWorkspaceRouteDeps
+    //   instead of depending on a global ORIGIN symbol.
+    // - This also fails closed when origin wiring is missing or empty, which is
+    //   safer than accidentally running admin mutations without CSRF checks.
+    bool require_same_origin_for_cookie_mutation_admin_ws_deps(
+            const httplib::Request& req,
+            httplib::Response& res,
+            const AdminWorkspaceRouteDeps& deps
+        ) {
+        if (!deps.origin || deps.origin->empty()) {
+            res.status = 500;
+            res.set_header("Content-Type", "application/json");
+            res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+            return false;
         }
+        return require_same_origin_for_cookie_mutation_admin_ws_local(req, res, *deps.origin);
     }
 
-    return total;
-}
+
+    // Best-effort directory creation helper.
+    //
+    // Behavior:
+    // - creates the full directory chain if missing
+    // - succeeds if the directory already exists
+    // - returns the filesystem error message through err on failure
+    bool ensure_dir_exists_local(const std::filesystem::path& p, std::string* err) {
+        if (err) err->clear();
+
+        std::error_code ec;
+        std::filesystem::create_directories(p, ec);
+        if (ec) {
+            if (err) *err = ec.message();
+            return false;
+        }
+        return true;
+    }
+
+    std::uint64_t dir_size_bytes_best_effort_local(const std::filesystem::path& root) {
+        std::uint64_t total = 0;
+        std::error_code ec;
+
+        if (!std::filesystem::exists(root, ec)) return 0;
+        ec.clear();
+
+        for (std::filesystem::recursive_directory_iterator it(root, ec), end;
+             it != end && !ec;
+             it.increment(ec)) {
+            if (ec) break;
+
+            std::error_code ec2;
+            if (it->is_regular_file(ec2) && !ec2) {
+                std::error_code ec3;
+                const auto sz = it->file_size(ec3);
+                if (!ec3) total += static_cast<std::uint64_t>(sz);
+            }
+        }
+
+        return total;
+    }
     bool statvfs_path_local(const std::string& path,
                             std::uint64_t* out_total_bytes,
                             std::uint64_t* out_free_bytes) {
-    if (out_total_bytes) *out_total_bytes = 0;
-    if (out_free_bytes) *out_free_bytes = 0;
+        if (out_total_bytes) *out_total_bytes = 0;
+        if (out_free_bytes) *out_free_bytes = 0;
 
-    struct statvfs st {};
-    if (::statvfs(path.c_str(), &st) != 0) return false;
+        struct statvfs st {};
+        if (::statvfs(path.c_str(), &st) != 0) return false;
 
-    const unsigned long long total =
-        static_cast<unsigned long long>(st.f_blocks) *
-        static_cast<unsigned long long>(st.f_frsize);
+        const unsigned long long total =
+            static_cast<unsigned long long>(st.f_blocks) *
+            static_cast<unsigned long long>(st.f_frsize);
 
-    const unsigned long long freeb =
-        static_cast<unsigned long long>(st.f_bavail) *
-        static_cast<unsigned long long>(st.f_frsize);
+        const unsigned long long freeb =
+            static_cast<unsigned long long>(st.f_bavail) *
+            static_cast<unsigned long long>(st.f_frsize);
 
-    if (out_total_bytes) *out_total_bytes = static_cast<std::uint64_t>(total);
-    if (out_free_bytes) *out_free_bytes = static_cast<std::uint64_t>(freeb);
-    return true;
-}
-
-    std::string nearest_existing_path_for_statvfs(const std::filesystem::path& p) {
-    std::error_code ec;
-    std::filesystem::path cur = p;
-
-    while (!cur.empty()) {
-        if (std::filesystem::exists(cur, ec) && !ec) {
-            return cur.string();
-        }
-        ec.clear();
-        cur = cur.parent_path();
+        if (out_total_bytes) *out_total_bytes = static_cast<std::uint64_t>(total);
+        if (out_free_bytes) *out_free_bytes = static_cast<std::uint64_t>(freeb);
+        return true;
     }
 
-    return "/";
-}
+    // Finds the nearest existing path at or above p that can be safely passed to
+    // statvfs().
+    //
+    // Why this exists:
+    // - New workspace paths may not exist yet.
+    // - Capacity checks still need a real existing path on the target filesystem.
+    std::string nearest_existing_path_for_statvfs(const std::filesystem::path& p) {
+        std::error_code ec;
+        std::filesystem::path cur = p;
+
+        while (!cur.empty()) {
+            if (std::filesystem::exists(cur, ec) && !ec) {
+                return cur.string();
+            }
+            ec.clear();
+            cur = cur.parent_path();
+        }
+
+        return "/";
+    }
     std::uint64_t sum_allocated_user_quota_on_pool_local(const UsersRegistry& users,
                                                          const std::string& want_pool_id,
                                                          const std::string& exclude_fp) {
@@ -185,70 +291,85 @@ bool quota_gb_json_to_bytes(const json& j,
     }
     return true;
 }
-
-void audit_workspace_event(const AdminWorkspaceRouteDeps& deps,
-                           const std::string& event,
-                           const std::string& outcome,
-                           const std::map<std::string, std::string>& fields) {
-    if (deps.audit_emit) deps.audit_emit(event, outcome, fields);
-}
-
-bool is_enabled_user_for_workspace_owner(const UsersRegistry& users,
-                                         const std::string& fp) {
-    auto uopt = users.get(fp);
-    if (!uopt.has_value()) return false;
-    return uopt->status == "enabled";
-}
-
-json workspace_to_admin_json(const WorkspaceRec& w,
-                             const std::string& users_path) {
-    json out = json::object();
-
-    out["workspace_id"] = w.workspace_id;
-    out["name"] = w.name;
-    out["status"] = w.status;
-    out["notes"] = w.notes;
-
-    out["created_at"] = w.created_at;
-    out["created_by"] = w.created_by;
-
-    out["storage_state"] = w.storage_state;
-    out["storage_pool_id"] = w.storage_pool_id;
-    out["pool_id"] = w.storage_pool_id.empty() ? "default" : w.storage_pool_id;
-    out["root_rel"] = w.root_rel;
-    out["quota_bytes"] = w.quota_bytes;
-    out["storage_set_at"] = w.storage_set_at;
-    out["storage_set_by"] = w.storage_set_by;
-
-    out["member_count"] = static_cast<unsigned long long>(w.members.size());
-
-    json members = json::array();
-    for (const auto& m : w.members) {
-        members.push_back(json{
-            {"fingerprint", m.fingerprint},
-            {"role", m.role},
-            {"status", m.status},
-            {"added_at", m.added_at},
-            {"added_by", m.added_by},
-            {"responded_at", m.responded_at},
-            {"responded_by", m.responded_by}
-        });
+    // Small audit helper for admin workspace routes.
+    //
+    // Why this exists:
+    // - Keeps route code shorter and makes audit emission optional through deps.
+    void audit_workspace_event(const AdminWorkspaceRouteDeps& deps,
+                               const std::string& event,
+                               const std::string& outcome,
+                               const std::map<std::string, std::string>& fields) {
+        if (deps.audit_emit) deps.audit_emit(event, outcome, fields);
     }
-    out["members"] = std::move(members);
 
-    std::uint64_t used_bytes = 0;
-    if (w.storage_state == "allocated" && w.storage_pool_id.empty() && !w.root_rel.empty()) {
-        const std::filesystem::path abs =
-            default_data_root_from_users_path(users_path) / w.root_rel;
-        used_bytes = dir_size_bytes_best_effort_local(abs);
+    bool is_enabled_user_for_workspace_owner(const UsersRegistry& users,
+                                             const std::string& fp) {
+        auto uopt = users.get(fp);
+        if (!uopt.has_value()) return false;
+        return uopt->status == "enabled";
     }
-    out["storage_used_bytes"] = used_bytes;
 
-    return out;
-}
+    // Converts one workspace record into the admin API response shape.
+    //
+    // Included data:
+    // - basic workspace metadata
+    // - storage metadata
+    // - member list
+    // - best-effort storage_used_bytes for allocated default-pool workspaces
+    json workspace_to_admin_json(const WorkspaceRec& w,
+                                 const std::string& users_path) {
+        json out = json::object();
+
+        out["workspace_id"] = w.workspace_id;
+        out["name"] = w.name;
+        out["status"] = w.status;
+        out["notes"] = w.notes;
+
+        out["created_at"] = w.created_at;
+        out["created_by"] = w.created_by;
+
+        out["storage_state"] = w.storage_state;
+        out["storage_pool_id"] = w.storage_pool_id;
+        out["pool_id"] = w.storage_pool_id.empty() ? "default" : w.storage_pool_id;
+        out["root_rel"] = w.root_rel;
+        out["quota_bytes"] = w.quota_bytes;
+        out["storage_set_at"] = w.storage_set_at;
+        out["storage_set_by"] = w.storage_set_by;
+
+        out["member_count"] = static_cast<unsigned long long>(w.members.size());
+
+        json members = json::array();
+        for (const auto& m : w.members) {
+            members.push_back(json{
+                {"fingerprint", m.fingerprint},
+                {"role", m.role},
+                {"status", m.status},
+                {"added_at", m.added_at},
+                {"added_by", m.added_by},
+                {"responded_at", m.responded_at},
+                {"responded_by", m.responded_by}
+            });
+        }
+        out["members"] = std::move(members);
+
+        std::uint64_t used_bytes = 0;
+        if (w.storage_state == "allocated" && w.storage_pool_id.empty() && !w.root_rel.empty()) {
+            const std::filesystem::path abs =
+                default_data_root_from_users_path(users_path) / w.root_rel;
+            used_bytes = dir_size_bytes_best_effort_local(abs);
+        }
+        out["storage_used_bytes"] = used_bytes;
+
+        return out;
+    }
 
 } // namespace
 
+    // Counts enabled owners in a workspace.
+    //
+    // Why this exists:
+    // - Delete/demotion/removal rules depend on whether a workspace would lose its
+    //   last enabled owner.
     std::size_t count_enabled_owners(const WorkspaceRec& w) {
     std::size_t n = 0;
     for (const auto& m : w.members) {
@@ -257,6 +378,13 @@ json workspace_to_admin_json(const WorkspaceRec& w,
     return n;
 }
 
+
+    // Returns true when the workspace has exactly one enabled member and that
+    // member is an owner.
+    //
+    // Why this exists:
+    // - Workspace delete is allowed only in the "sole enabled owner, no other
+    //   active members" state.
     bool has_single_enabled_owner_only(const WorkspaceRec& w) {
     std::size_t enabled_count = 0;
     std::size_t enabled_owner_count = 0;
@@ -269,13 +397,19 @@ json workspace_to_admin_json(const WorkspaceRec& w,
 
     return enabled_count == 1 && enabled_owner_count == 1;
 }
+    // Returns true if the workspace contains a member entry for the given
+    // fingerprint, regardless of status.
     bool workspace_member_exists(const WorkspaceRec& w, const std::string& fp) {
     for (const auto& m : w.members) {
         if (m.fingerprint == fp) return true;
     }
     return false;
 }
-
+    // Looks up one workspace member by fingerprint.
+    //
+    // Returns:
+    // - the matching member record if found
+    // - std::nullopt otherwise
     std::optional<WorkspaceMemberRec> workspace_member_get(const WorkspaceRec& w, const std::string& fp) {
     for (const auto& m : w.members) {
         if (m.fingerprint == fp) return m;
@@ -295,9 +429,23 @@ json workspace_to_admin_json(const WorkspaceRec& w,
     }
     return true;
 }
-
+    // Registers admin workspace HTTP routes.
+    //
+    // Route groups:
+    // - list workspaces
+    // - create/delete/rename workspaces
+    // - add/remove members
+    // - change member roles
+    //
+    // Security:
+    // - all mutating routes require admin cookie auth
+    // - all mutating routes enforce same-origin checks
 void register_admin_workspace_routes(httplib::Server& srv,
                                      const AdminWorkspaceRouteDeps& deps) {
+    // GET /api/v4/admin/workspaces
+    //
+    // Returns the current admin view of all workspaces with expanded metadata and
+    // member information.
     srv.Get("/api/v4/admin/workspaces",
             [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
@@ -329,7 +477,11 @@ void register_admin_workspace_routes(httplib::Server& srv,
 
         deps.reply_json(res, 200, out.dump());
     });
-
+    // POST /api/v4/admin/workspaces/create
+    //
+    // Creates a new workspace in the default pool, allocates its on-disk directory,
+    // validates the requested owner, and performs committed-quota admission checks
+    // against the backing filesystem capacity.
 srv.Post("/api/v4/admin/workspaces/create",
          [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp;
@@ -338,7 +490,7 @@ srv.Post("/api/v4/admin/workspaces/create",
             req, res, deps.cookie_key, deps.users_path, deps.users, &actor_fp)) {
         return;
     }
-
+    if (!require_same_origin_for_cookie_mutation_admin_ws_deps(req, res, deps)) return;
     res.set_header("Cache-Control", "no-store");
 
     json j;
@@ -648,7 +800,11 @@ srv.Post("/api/v4/admin/workspaces/create",
         {"workspace", workspace_to_admin_json(w, deps.users_path)}
     }.dump());
 });
-    
+    // POST /api/v4/admin/workspaces/delete
+    //
+    // Deletes a workspace only when it is in the safe "single enabled owner only"
+    // state, removes its directory tree for default-pool storage, and erases the
+    // registry entry.
     srv.Post("/api/v4/admin/workspaces/delete",
          [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp;
@@ -657,7 +813,7 @@ srv.Post("/api/v4/admin/workspaces/create",
             req, res, deps.cookie_key, deps.users_path, deps.users, &actor_fp)) {
         return;
     }
-
+    if (!require_same_origin_for_cookie_mutation_admin_ws_deps(req, res, deps)) return;
     res.set_header("Cache-Control", "no-store");
 
     if (!reload_workspaces_or_500(deps, res)) return;
@@ -802,7 +958,10 @@ srv.Post("/api/v4/admin/workspaces/create",
         {"workspace_id", workspace_id}
     }.dump());
 });
-    
+    // POST /api/v4/admin/workspaces/rename
+    //
+    // Renames an existing workspace in the registry. This affects workspace
+    // metadata only; it does not move or rename the on-disk root.
 srv.Post("/api/v4/admin/workspaces/rename",
          [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp;
@@ -811,7 +970,7 @@ srv.Post("/api/v4/admin/workspaces/rename",
             req, res, deps.cookie_key, deps.users_path, deps.users, &actor_fp)) {
         return;
     }
-
+    if (!require_same_origin_for_cookie_mutation_admin_ws_deps(req, res, deps)) return;
     res.set_header("Cache-Control", "no-store");
 
     if (!reload_workspaces_or_500(deps, res)) return;
@@ -894,8 +1053,16 @@ srv.Post("/api/v4/admin/workspaces/rename",
         {"workspace", workspace_to_admin_json(w, deps.users_path)}
     }.dump());
 });
-
-        srv.Post("/api/v4/admin/workspaces/members/add",
+    // POST /api/v4/admin/workspaces/members/add
+    //
+    // Adds a new workspace member or updates an existing member entry.
+    //
+    // Behavior:
+    // - enabled members stay enabled
+    // - invited members keep invited status
+    // - missing/disabled members become invited again
+    // - role is normalized before storing
+    srv.Post("/api/v4/admin/workspaces/members/add",
              [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
         if (!deps.require_admin_cookie_users_actor ||
@@ -903,7 +1070,7 @@ srv.Post("/api/v4/admin/workspaces/rename",
                 req, res, deps.cookie_key, deps.users_path, deps.users, &actor_fp)) {
             return;
         }
-
+        if (!require_same_origin_for_cookie_mutation_admin_ws_deps(req, res, deps)) return;
         res.set_header("Cache-Control", "no-store");
 
         if (!reload_workspaces_or_500(deps, res)) return;
@@ -1044,7 +1211,9 @@ srv.Post("/api/v4/admin/workspaces/rename",
             {"workspace", workspace_to_admin_json(*w2, deps.users_path)}
         }.dump());
     });
-
+    // POST /api/v4/admin/workspaces/members/remove
+    //
+    // Removes a workspace member, but refuses to remove the last enabled owner.
     srv.Post("/api/v4/admin/workspaces/members/remove",
              [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
@@ -1053,7 +1222,7 @@ srv.Post("/api/v4/admin/workspaces/rename",
                 req, res, deps.cookie_key, deps.users_path, deps.users, &actor_fp)) {
             return;
         }
-
+        if (!require_same_origin_for_cookie_mutation_admin_ws_deps(req, res, deps)) return;
         res.set_header("Cache-Control", "no-store");
 
         if (!reload_workspaces_or_500(deps, res)) return;
@@ -1157,7 +1326,10 @@ srv.Post("/api/v4/admin/workspaces/rename",
             {"workspace", workspace_to_admin_json(*w2, deps.users_path)}
         }.dump());
     });
-
+    // POST /api/v4/admin/workspaces/members/set_role
+    //
+    // Changes a member's workspace role, but refuses to demote the last enabled
+    // owner away from owner role.
     srv.Post("/api/v4/admin/workspaces/members/set_role",
              [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
@@ -1166,7 +1338,7 @@ srv.Post("/api/v4/admin/workspaces/rename",
                 req, res, deps.cookie_key, deps.users_path, deps.users, &actor_fp)) {
             return;
         }
-
+        if (!require_same_origin_for_cookie_mutation_admin_ws_deps(req, res, deps)) return;
         res.set_header("Cache-Control", "no-store");
 
         if (!reload_workspaces_or_500(deps, res)) return;
