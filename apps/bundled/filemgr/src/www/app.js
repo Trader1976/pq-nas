@@ -142,6 +142,19 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return "ok";
   }
 
+  const OFFICE_PREVIEW_EXTS = new Set([
+    "doc", "docx",
+    "xls", "xlsx",
+    "ppt", "pptx",
+    "odt", "ods", "odp",
+    "rtf"
+  ]);
+
+  function isProbablyOfficePreviewableName(name) {
+    const ext = normalizeIconExt(fileExtLower(name));
+    return !!ext && OFFICE_PREVIEW_EXTS.has(ext);
+  }
+
   async function fetchMeStorageFast(timeoutMs = 1200) {
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), timeoutMs);
@@ -3428,6 +3441,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         ctxEl.appendChild(menuItem("Open audio preview", "", () => window.PQNAS_FILEMGR.audioPreview.open(item)));
         ctxEl.appendChild(menuItem("Open original", "", () => doOpenOriginal(item)));
       }
+
       if (caps.textEdit !== false &&
           window.PQNAS_FILEMGR &&
           window.PQNAS_FILEMGR.textEdit &&
@@ -3879,6 +3893,11 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             window.PQNAS_FILEMGR.videoPreview &&
             isProbablyVideoPreviewableName(item.name)) {
           window.PQNAS_FILEMGR.videoPreview.open(item);
+        } else if (caps.officePreview !== false &&
+            window.PQNAS_FILEMGR &&
+            window.PQNAS_FILEMGR.officePreview &&
+            isProbablyOfficePreviewableName(item.name)) {
+          window.PQNAS_FILEMGR.officePreview.open(item);
         } else if (caps.textEdit !== false &&
             isProbablyTextEditableName(item.name)) {
           console.log("[app.dblclick.textedit] item =", item);
@@ -4614,6 +4633,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   FM.isProbablyImagePreviewableName = isProbablyImagePreviewableName;
   FM.isProbablyPdfPreviewableName = isProbablyPdfPreviewableName;
   FM.isProbablyVideoPreviewableName = isProbablyVideoPreviewableName;
+  FM.isProbablyOfficePreviewableName = isProbablyOfficePreviewableName;
   FM.isProbablyAudioPreviewableName = isProbablyAudioPreviewableName;
   load().catch((e) => {
     console.warn("Initial load failed:", e);

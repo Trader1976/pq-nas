@@ -27884,6 +27884,441 @@ srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response&
     audit_ok(rel_path, zip_bytes);
 });
 
+// ---- Office document preview ------------------------------------------------
+// Converts common Office/OpenDocument files to a temporary PDF using LibreOffice.
+// These helpers are lambdas because this route block lives inside main().
+
+auto lower_ext_no_dot_local = [](const std::filesystem::path& p) -> std::string {
+    std::string e = p.extension().string();
+    if (!e.empty() && e[0] == '.') e.erase(e.begin());
+    for (char& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return e;
+};
+
+auto executable_in_path_local = [](const std::string& exe) -> bool {
+    if (exe.empty()) return false;
+
+    if (exe.find('/') != std::string::npos) {
+        return ::access(exe.c_str(), X_OK) == 0;
+    }
+
+    const char* path_env = std::getenv("PATH");
+    if (!path_env || !*path_env) return false;
+
+    std::string path(path_env);
+    std::size_t pos = 0;
+
+    while (pos <= path.size()) {
+        std::size_t next = path.find(':', pos);
+        std::string dir = path.substr(pos, next == std::string::npos ? std::string::npos : next - pos);
+        if (dir.empty()) dir = ".";
+
+        const std::filesystem::path candidate = std::filesystem::path(dir) / exe;
+        if (::access(candidate.c_str(), X_OK) == 0) return true;
+
+        if (next == std::string::npos) break;
+        pos = next + 1;
+    }
+
+    return false;
+};
+
+auto is_office_preview_ext_local = [](const std::string& ext) -> bool {
+    static const std::set<std::string> kExts = {
+        "doc", "docx",
+        "xls", "xlsx",
+        "ppt", "pptx",
+        "odt", "ods", "odp",
+        "rtf"
+    };
+    return kExts.find(ext) != kExts.end();
+};
+
+auto make_office_preview_tmpdir_local = [](std::string* err) -> std::filesystem::path {
+    std::error_code ec;
+
+    const auto base = std::filesystem::temp_directory_path(ec);
+    if (ec) {
+        if (err) *err = ec.message();
+        return {};
+    }
+
+    for (int i = 0; i < 64; ++i) {
+        const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto p = base / (
+            "pqnas-office-preview-" +
+            std::to_string(static_cast<unsigned long long>(::getpid())) + "-" +
+            std::to_string(static_cast<unsigned long long>(now)) + "-" +
+            std::to_string(i)
+        );
+
+        std::filesystem::create_directory(p, ec);
+        if (!ec) return p;
+        ec.clear();
+    }
+
+    if (err) *err = "failed to create temporary directory";
+    return {};
+};
+
+auto run_soffice_convert_pdf_local = [](const std::filesystem::path& in_file,
+                                        const std::filesystem::path& out_dir,
+                                        std::string* err) -> bool {
+    pid_t pid = ::fork();
+    if (pid < 0) {
+        if (err) *err = "fork failed";
+        return false;
+    }
+
+    if (pid == 0) {
+        const std::string in_file_s = in_file.string();
+        const std::string out_dir_s = out_dir.string();
+
+        // LibreOffice may fail with exit code 77 when its default user profile
+        // cannot be created/locked by the service user. Give each preview its own
+        // temporary profile under the already-created preview temp directory.
+        const std::string profile_arg =
+            std::string("-env:UserInstallation=file://") + out_dir_s + "/lo-profile";
+
+        ::setenv("HOME", out_dir_s.c_str(), 1);
+
+        ::execlp(
+            "soffice",
+            "soffice",
+            profile_arg.c_str(),
+            "--headless",
+            "--nologo",
+            "--nofirststartwizard",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            out_dir_s.c_str(),
+            in_file_s.c_str(),
+            static_cast<char*>(nullptr)
+        );
+
+        _exit(127);
+    }
+
+    int status = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+
+    while (true) {
+        pid_t r = ::waitpid(pid, &status, WNOHANG);
+        if (r == pid) break;
+
+        if (r < 0) {
+            if (err) *err = "waitpid failed";
+            return false;
+        }
+
+        if (std::chrono::steady_clock::now() > deadline) {
+            ::kill(pid, SIGKILL);
+            ::waitpid(pid, &status, 0);
+            if (err) *err = "LibreOffice conversion timed out";
+            return false;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        if (err) {
+            *err = "LibreOffice conversion failed with exit code ";
+            *err += WIFEXITED(status) ? std::to_string(WEXITSTATUS(status)) : "signal";
+        }
+        return false;
+    }
+
+    return true;
+};
+
+auto find_generated_pdf_local = [&](const std::filesystem::path& out_dir,
+                                    std::string* err) -> std::filesystem::path {
+    std::error_code ec;
+
+    for (const auto& de : std::filesystem::directory_iterator(out_dir, ec)) {
+        if (ec) break;
+        if (!de.is_regular_file(ec)) {
+            ec.clear();
+            continue;
+        }
+
+        const auto ext = lower_ext_no_dot_local(de.path());
+        if (ext == "pdf") return de.path();
+    }
+
+    if (err) *err = ec ? ec.message() : "LibreOffice did not produce a PDF";
+    return {};
+};
+
+// GET /api/v4/files/office_preview?path=relative/document.docx
+// Converts supported Office/OpenDocument files to PDF and streams the PDF inline.
+srv.Get("/api/v4/files/office_preview", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto audit_ua = [&]() -> std::string {
+        auto it = req.headers.find("User-Agent");
+        return pqnas::shorten(it == req.headers.end() ? "" : it->second);
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_office_preview_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        audit_append(ev);
+    };
+
+    auto audit_ok = [&](const std::string& rel_path, std::uint64_t bytes) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.files_office_preview_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_path, 200);
+        ev.f["bytes"] = std::to_string((unsigned long long)bytes);
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+
+        ev.f["ua"] = audit_ua();
+        audit_append(ev);
+    };
+
+    std::string rel_path;
+    if (req.has_param("path")) rel_path = req.get_param_value("path");
+
+    if (rel_path.empty()) {
+        audit_fail("missing_path", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        }.dump());
+        return;
+    }
+
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value()) {
+            audit_fail("user_missing", 403);
+            reply_json(res, 403, json{{"ok", false}, {"error", "forbidden"}, {"message", "policy denied"}}.dump());
+            return;
+        }
+
+        const auto& u = *uopt;
+        if (u.storage_state != "allocated") {
+            audit_fail("storage_unallocated", 403);
+            reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"},
+                {"fingerprint_hex", fp_hex},
+                {"quota_bytes", u.quota_bytes}
+            }.dump());
+            return;
+        }
+    }
+
+    pqnas::ResolvedExistingPath rp;
+    std::string perr;
+    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, rel_path, &rp, &perr)) {
+        audit_fail("invalid_path", 400, perr);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path abs = rp.abs_path;
+
+    {
+        std::string serr;
+        if (!ensure_no_symlink_in_existing_path_prefix(abs, &serr)) {
+            audit_fail("symlink_not_supported", 400, serr);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "symlinks not supported"}
+            }.dump());
+            return;
+        }
+    }
+
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        audit_fail("not_found", 404);
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "file not found"}
+        }.dump());
+        return;
+    }
+
+    if (std::filesystem::is_symlink(st)) {
+        audit_fail("symlink_not_supported", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "symlinks not supported"}
+        }.dump());
+        return;
+    }
+
+    if (!std::filesystem::is_regular_file(st)) {
+        audit_fail("not_regular_file", 400);
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "not a regular file"}
+        }.dump());
+        return;
+    }
+
+    const std::string ext = lower_ext_no_dot_local(abs);
+    if (!is_office_preview_ext_local(ext)) {
+        audit_fail("unsupported_ext", 415, ext);
+        reply_json(res, 415, json{
+            {"ok", false},
+            {"error", "unsupported_media_type"},
+            {"message", "office preview supports doc/docx/xls/xlsx/ppt/pptx/odt/ods/odp/rtf"}
+        }.dump());
+        return;
+    }
+
+    const std::uint64_t input_sz = pqnas::file_size_u64_safe(abs);
+    constexpr std::uint64_t kMaxOfficePreviewBytes = 50ull * 1024ull * 1024ull;
+    if (input_sz > kMaxOfficePreviewBytes) {
+        audit_fail("too_large", 413);
+        reply_json(res, 413, json{
+            {"ok", false},
+            {"error", "too_large"},
+            {"message", "office preview file is too large"}
+        }.dump());
+        return;
+    }
+
+    if (!executable_in_path_local("soffice")) {
+        audit_fail("soffice_missing", 503);
+        reply_json(res, 503, json{
+            {"ok", false},
+            {"error", "office_preview_unavailable"},
+            {"message", "Office preview requires LibreOffice on this server"},
+            {"detail", "soffice was not found in PATH"}
+        }.dump());
+        return;
+    }
+
+    std::string terr;
+    const auto tmpdir = make_office_preview_tmpdir_local(&terr);
+    if (tmpdir.empty()) {
+        audit_fail("tmpdir_failed", 500, terr);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to create temporary preview directory"}
+        }.dump());
+        return;
+    }
+
+    auto cleanup_tmpdir = std::make_shared<std::filesystem::path>(tmpdir);
+
+    std::string cerr;
+    if (!run_soffice_convert_pdf_local(abs, tmpdir, &cerr)) {
+        std::error_code rm_ec;
+        std::filesystem::remove_all(tmpdir, rm_ec);
+
+        audit_fail("convert_failed", 500, cerr);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "conversion_failed"},
+            {"message", "LibreOffice failed to convert this document"},
+            {"detail", cerr}
+        }.dump());
+        return;
+    }
+
+    std::string ferr;
+    const auto pdf_path = find_generated_pdf_local(tmpdir, &ferr);
+    if (pdf_path.empty()) {
+        std::error_code rm_ec;
+        std::filesystem::remove_all(tmpdir, rm_ec);
+
+        audit_fail("pdf_missing", 500, ferr);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "conversion_failed"},
+            {"message", "converted PDF was not found"},
+            {"detail", ferr}
+        }.dump());
+        return;
+    }
+
+    const std::uint64_t pdf_sz = pqnas::file_size_u64_safe(pdf_path);
+
+    auto fp = std::make_shared<std::ifstream>(pdf_path, std::ios::binary);
+    if (!fp->good()) {
+        std::error_code rm_ec;
+        std::filesystem::remove_all(tmpdir, rm_ec);
+
+        audit_fail("open_pdf_failed", 500);
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to open converted PDF"}
+        }.dump());
+        return;
+    }
+
+    const std::string out_name = abs.stem().string() + ".pdf";
+
+    res.set_header("Cache-Control", "no-store");
+    res.set_header("Content-Disposition", build_content_disposition("inline", out_name));
+
+    res.set_content_provider(
+        static_cast<size_t>(pdf_sz),
+        "application/pdf",
+        [fp](size_t /*offset*/, size_t length, httplib::DataSink& sink) mutable {
+            std::string buf;
+            buf.resize(length);
+
+            fp->read(buf.data(), static_cast<std::streamsize>(length));
+            std::streamsize n = fp->gcount();
+            if (n > 0) sink.write(buf.data(), static_cast<size_t>(n));
+
+            return n > 0;
+        },
+        [fp, cleanup_tmpdir](bool /*success*/) mutable {
+            if (fp && fp->is_open()) fp->close();
+
+            std::error_code rm_ec;
+            std::filesystem::remove_all(*cleanup_tmpdir, rm_ec);
+        }
+    );
+
+    audit_ok(rel_path, pdf_sz);
+});
 
 // GET /api/v4/files/get?path=relative/path.bin
 // Response: raw bytes (streams file)
