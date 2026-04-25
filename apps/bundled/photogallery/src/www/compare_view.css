@@ -1,0 +1,169 @@
+.compareViewModal {
+    position: fixed;
+    inset: auto;
+    left: 50%;
+    top: 52%;
+    width: min(1500px, calc(100vw - 28px));
+    height: min(92vh, calc(100vh - 28px));
+    z-index: 10020;
+    display: none;
+    transform: translate(-50%, -50%);
+    background: transparent;
+    pointer-events: none;
+}
+
+.compareViewModal.show {
+    display: block;
+}
+
+.compareViewCard {
+    width: 100%;
+    height: 100%;
+    min-width: 420px;
+    min-height: 320px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    resize: both;
+    pointer-events: auto;
+    border: 1px solid rgba(var(--fg-rgb), 0.18);
+    border-radius: 18px;
+    background: var(--bg);
+    color: var(--fg);
+    box-shadow: 0 24px 90px rgba(0, 0, 0, 0.62);
+}
+
+.compareViewHead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 12px 14px;
+    border-bottom: 1px solid rgba(var(--fg-rgb), 0.12);
+    background: rgba(var(--fg-rgb), 0.05);
+    cursor: move;
+    user-select: none;
+}
+
+.compareViewTitle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.compareViewZoom {
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(var(--fg-rgb), 0.16);
+    background: rgba(var(--fg-rgb), 0.06);
+    font-family: var(--mono);
+    font-size: 12px;
+    opacity: 0.9;
+}
+
+.compareViewActions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    cursor: default;
+}
+
+.compareViewActions button {
+    cursor: pointer;
+}
+
+.compareViewBody {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: rgba(var(--fg-rgb), 0.12);
+    cursor: grab;
+    overflow: hidden;
+}
+
+.compareViewModal.dragging .compareViewBody {
+    cursor: grabbing;
+}
+
+.comparePane {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #070707;
+}
+
+.comparePaneTitle {
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(0, 0, 0, 0.52);
+    color: rgba(255, 255, 255, 0.86);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.compareImageWrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.compareImage {
+    max-width: 92%;
+    max-height: 92%;
+    object-fit: contain;
+    transform-origin: center center;
+    user-select: none;
+    pointer-events: none;
+    will-change: transform;
+}
+
+.compareViewHint {
+    padding: 8px 12px;
+    border-top: 1px solid rgba(var(--fg-rgb), 0.10);
+    background: rgba(var(--fg-rgb), 0.035);
+    opacity: 0.72;
+    font-size: 12px;
+}
+
+@media (max-width: 820px) {
+    .compareViewModal {
+        left: 8px;
+        top: 8px;
+        width: calc(100vw - 16px);
+        height: calc(100vh - 16px);
+        transform: none;
+    }
+
+    .compareViewCard {
+        min-width: 0;
+        height: 100%;
+        border-radius: 14px;
+    }
+
+    .compareViewHead {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .compareViewActions {
+        justify-content: flex-end;
+        flex-wrap: wrap;
+    }
+
+    .compareViewBody {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr 1fr;
+    }
+}

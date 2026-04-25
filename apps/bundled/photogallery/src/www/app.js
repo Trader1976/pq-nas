@@ -664,6 +664,15 @@
         ctxMenu.innerHTML = "";
 
         if (imageTargets.length) {
+            if (imageTargets.length === 2 &&
+                window.PQNAS_PHOTOGALLERY &&
+                window.PQNAS_PHOTOGALLERY.compareView &&
+                typeof window.PQNAS_PHOTOGALLERY.compareView.open === "function") {
+                ctxMenu.appendChild(menuItem("Compare side by side", () => {
+                    window.PQNAS_PHOTOGALLERY.compareView.open(imageTargets);
+                }));
+            }
+
             ctxMenu.appendChild(menuItem("Edit metadata for selected photos…", () => {
                 const preferred =
                     state.activeTilePath && imageTargets.includes(state.activeTilePath)
