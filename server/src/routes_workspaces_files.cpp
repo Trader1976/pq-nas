@@ -14,6 +14,8 @@
 #include <csignal>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <sstream>
+#include <fcntl.h>
 #include "audit_fields.h"
 #include "storage_resolver.h"
 #include "runtime_paths.h"
@@ -593,6 +595,214 @@ static std::uint64_t file_mtime_epoch_safe_local(const std::filesystem::path& p)
     );
     const auto sec = duration_cast<seconds>(sctp.time_since_epoch()).count();
     return sec > 0 ? static_cast<std::uint64_t>(sec) : 0;
+}
+
+static std::string lower_ascii_copy_local(std::string s) {
+    for (char& c : s) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return s;
+}
+
+static bool is_supported_workspace_thumb_ext_local(const std::string& name) {
+    const std::string n = lower_ascii_copy_local(name);
+    const auto dot = n.rfind('.');
+    if (dot == std::string::npos) return false;
+
+    const std::string ext = n.substr(dot + 1);
+    return ext == "jpg"  || ext == "jpeg" ||
+           ext == "png"  || ext == "webp" ||
+           ext == "bmp"  || ext == "gif"  ||
+           ext == "tif"  || ext == "tiff" ||
+           ext == "heic" || ext == "heif";
+}
+
+static std::uint64_t fnv1a64_local(const std::string& s) {
+    std::uint64_t h = 1469598103934665603ULL;
+    for (unsigned char c : s) {
+        h ^= static_cast<std::uint64_t>(c);
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+static std::string hex_u64_local(std::uint64_t v) {
+    std::ostringstream oss;
+    oss << std::hex << std::nouppercase << v;
+    return oss.str();
+}
+
+static std::uint64_t file_size_u64_local(const std::filesystem::path& p) {
+    std::error_code ec;
+    const auto sz = std::filesystem::file_size(p, ec);
+    return ec ? 0ULL : static_cast<std::uint64_t>(sz);
+}
+
+static bool path_has_prefix_components_local(const std::filesystem::path& root,
+                                             const std::filesystem::path& child) {
+    const auto rnorm = root.lexically_normal();
+    const auto cnorm = child.lexically_normal();
+
+    auto ri = rnorm.begin();
+    auto ci = cnorm.begin();
+
+    for (; ri != rnorm.end(); ++ri, ++ci) {
+        if (ci == cnorm.end()) return false;
+        if (*ri != *ci) return false;
+    }
+
+    return true;
+}
+
+static bool ensure_no_symlink_in_existing_workspace_path_local(
+    const std::filesystem::path& ws_root,
+    const std::filesystem::path& abs_path,
+    std::string* err
+) {
+    if (err) err->clear();
+
+    const auto root_norm = ws_root.lexically_normal();
+    const auto abs_norm = abs_path.lexically_normal();
+
+    if (!path_has_prefix_components_local(root_norm, abs_norm)) {
+        if (err) *err = "path escapes workspace root";
+        return false;
+    }
+
+    std::error_code ec;
+    auto rel = abs_norm.lexically_relative(root_norm);
+    if (rel.empty()) {
+        if (err) *err = "empty relative path";
+        return false;
+    }
+
+    auto st_root = std::filesystem::symlink_status(root_norm, ec);
+    if (ec || !std::filesystem::exists(st_root)) {
+        if (err) *err = ec ? ec.message() : "workspace root not found";
+        return false;
+    }
+    if (std::filesystem::is_symlink(st_root)) {
+        if (err) *err = "workspace root is symlink";
+        return false;
+    }
+
+    std::filesystem::path cur = root_norm;
+    for (const auto& part : rel) {
+        if (part == "." || part == "..") {
+            if (err) *err = "invalid relative path component";
+            return false;
+        }
+
+        cur /= part;
+
+        ec.clear();
+        auto st = std::filesystem::symlink_status(cur, ec);
+        if (ec || !std::filesystem::exists(st)) {
+            if (err) *err = ec ? ec.message() : "path component not found";
+            return false;
+        }
+
+        if (std::filesystem::is_symlink(st)) {
+            if (err) *err = "symlink not supported";
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static int spawn_wait_workspace_thumb_local(const std::vector<std::string>& args) {
+    if (args.empty()) return 127;
+
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (const auto& s : args) {
+        argv.push_back(const_cast<char*>(s.c_str()));
+    }
+    argv.push_back(nullptr);
+
+    pid_t pid = fork();
+    if (pid < 0) return 127;
+
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+
+        execvp(argv[0], argv.data());
+        _exit(127);
+    }
+
+    int st = 0;
+    while (waitpid(pid, &st, 0) < 0) {
+        if (errno == EINTR) continue;
+        return 127;
+    }
+
+    if (WIFEXITED(st)) return WEXITSTATUS(st);
+    if (WIFSIGNALED(st)) return 128 + WTERMSIG(st);
+    return 127;
+}
+
+static bool generate_workspace_thumb_local(const std::filesystem::path& src_abs,
+                                           const std::filesystem::path& dst_abs,
+                                           int size,
+                                           std::string* err) {
+    if (err) err->clear();
+
+    const std::string size_arg = std::to_string(size) + "x" + std::to_string(size) + ">";
+    std::vector<std::string> attempts;
+
+    auto try_cmd = [&](const std::string& exe) -> bool {
+        std::vector<std::string> args = {
+            exe,
+            src_abs.string(),
+            "-auto-orient",
+            "-thumbnail", size_arg,
+            "-strip",
+            "-quality", "82",
+            dst_abs.string()
+        };
+
+        const int rc = spawn_wait_workspace_thumb_local(args);
+        attempts.push_back(exe + "=" + std::to_string(rc));
+
+        if (rc != 0) return false;
+
+        std::error_code ec;
+        auto st = std::filesystem::symlink_status(dst_abs, ec);
+        return !ec &&
+               std::filesystem::exists(st) &&
+               !std::filesystem::is_symlink(st) &&
+               std::filesystem::is_regular_file(st);
+    };
+
+    if (try_cmd("/usr/bin/magick")) return true;
+    if (try_cmd("/usr/local/bin/magick")) return true;
+    if (try_cmd("magick")) return true;
+    if (try_cmd("/usr/bin/convert")) return true;
+    if (try_cmd("/usr/local/bin/convert")) return true;
+    if (try_cmd("convert")) return true;
+
+    if (err) {
+        std::string joined;
+        for (size_t i = 0; i < attempts.size(); ++i) {
+            if (i) joined += ", ";
+            joined += attempts[i];
+        }
+        *err = "thumbnail generator failed: " + joined;
+    }
+
+    return false;
+}
+
+static std::filesystem::path workspace_thumb_cache_root_local() {
+    return std::filesystem::path(pqnas::data_root_dir()).parent_path()
+        / "cache"
+        / "workspace_file_thumbs";
 }
 
 static std::string guess_text_mime_from_name_local(const std::string& name) {
@@ -4960,6 +5170,282 @@ srv.Post("/api/v4/workspaces/files/write_text",
             }.dump());
             return;
         }
+    });
+    srv.Get("/api/v4/workspaces/files/thumb", [&](const httplib::Request& req, httplib::Response& res) {
+        auto reply_thumb_json = [&](int code, json body) {
+            if (deps.reply_json) {
+                deps.reply_json(res, code, body.dump());
+            } else {
+                res.status = code;
+                res.set_header("Content-Type", "application/json");
+                res.body = body.dump();
+            }
+        };
+
+        if (!deps.users || !deps.workspaces || !deps.cookie_key) {
+            reply_thumb_json(500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "workspace thumb route deps not configured"}
+            });
+            return;
+        }
+
+        std::string fp_hex;
+        std::string role;
+        if (!deps.require_user_auth_users_actor(
+                req,
+                res,
+                deps.cookie_key,
+                deps.users,
+                &fp_hex,
+                &role
+            )) {
+            return;
+        }
+
+        auto audit_emit_thumb = [&](const std::string& event,
+                                    const std::string& outcome,
+                                    std::map<std::string, std::string> fields) {
+            fields["fingerprint"] = fp_hex;
+            fields["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+            auto it_cf = req.headers.find("CF-Connecting-IP");
+            if (it_cf != req.headers.end()) fields["cf_ip"] = it_cf->second;
+
+            auto it_xff = req.headers.find("X-Forwarded-For");
+            if (it_xff != req.headers.end()) fields["xff"] = pqnas::shorten(it_xff->second, 120);
+
+            auto it_ua = req.headers.find("User-Agent");
+            if (it_ua != req.headers.end()) fields["ua"] = pqnas::shorten(it_ua->second, 180);
+
+            if (deps.audit_emit) {
+                deps.audit_emit(event, outcome, fields);
+            }
+        };
+
+        auto fail = [&](const std::string& reason,
+                        int http,
+                        const std::string& message,
+                        const std::string& detail = "") {
+            std::map<std::string, std::string> f{
+                {"reason", reason},
+                {"http", std::to_string(http)}
+            };
+            if (!detail.empty()) f["detail"] = pqnas::shorten(detail, 180);
+
+            audit_emit_thumb("v4.workspaces_files_thumb_fail", "fail", std::move(f));
+
+            json body{
+                {"ok", false},
+                {"error", http == 404 ? "not_found" :
+                          http == 403 ? "forbidden" :
+                          http == 415 ? "unsupported_media_type" :
+                          http == 400 ? "bad_request" : "server_error"},
+                {"message", message}
+            };
+            if (!detail.empty()) body["detail"] = pqnas::shorten(detail, 180);
+
+            reply_thumb_json(http, std::move(body));
+        };
+
+        std::string workspace_id;
+        if (req.has_param("workspace_id")) {
+            workspace_id = trim_copy_safe(req.get_param_value("workspace_id"));
+        }
+
+        if (workspace_id.empty() || !pqnas::is_valid_workspace_id(workspace_id)) {
+            fail("invalid_workspace_id", 400, "invalid workspace_id");
+            return;
+        }
+
+        std::string rel_path;
+        if (req.has_param("path")) {
+            rel_path = req.get_param_value("path");
+        }
+
+        if (rel_path.empty()) {
+            fail("missing_path", 400, "missing path");
+            return;
+        }
+
+        std::string rel_norm;
+        {
+            std::string nerr;
+            if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr) || rel_norm.empty()) {
+                fail("invalid_path", 400, "invalid path", nerr);
+                return;
+            }
+        }
+
+        int thumb_size = 320;
+        if (req.has_param("size")) {
+            try {
+                thumb_size = std::stoi(req.get_param_value("size"));
+            } catch (...) {
+                thumb_size = 320;
+            }
+        }
+        if (thumb_size < 64) thumb_size = 64;
+        if (thumb_size > 1024) thumb_size = 1024;
+
+        auto wopt = deps.workspaces->get(workspace_id);
+        if (!wopt.has_value()) {
+            fail("workspace_not_found", 404, "workspace not found");
+            return;
+        }
+
+        WorkspaceRec workspace = *wopt;
+
+        if (workspace.status != "enabled") {
+            fail("workspace_disabled", 403, "workspace disabled");
+            return;
+        }
+
+        auto member = enabled_member_for_actor(workspace, fp_hex);
+        if (!member.has_value()) {
+            fail("not_workspace_member", 403, "not a workspace member");
+            return;
+        }
+
+        if (workspace.storage_state != "allocated" || workspace.root_rel.empty()) {
+            fail("workspace_storage_unallocated", 403, "workspace storage not allocated");
+            return;
+        }
+
+        const std::filesystem::path ws_root =
+            default_data_root_from_users_path(deps.users_path) / workspace.root_rel;
+
+        const std::filesystem::path abs = ws_root / rel_norm;
+
+        {
+            std::string serr;
+            if (!ensure_no_symlink_in_existing_workspace_path_local(ws_root, abs, &serr)) {
+                fail("invalid_or_symlink_path", 400, "invalid path", serr);
+                return;
+            }
+        }
+
+        std::error_code ec;
+        auto st = std::filesystem::symlink_status(abs, ec);
+        if (ec || !std::filesystem::exists(st)) {
+            fail("not_found", 404, "file not found", ec ? ec.message() : "");
+            return;
+        }
+
+        if (std::filesystem::is_symlink(st)) {
+            fail("symlink_not_supported", 400, "symlinks not supported");
+            return;
+        }
+
+        if (!std::filesystem::is_regular_file(st)) {
+            fail("not_regular_file", 400, "not a regular file");
+            return;
+        }
+
+        if (!is_supported_workspace_thumb_ext_local(abs.filename().string())) {
+            fail("unsupported_image_type", 415, "unsupported image type", abs.filename().string());
+            return;
+        }
+
+        const std::uint64_t src_bytes = file_size_u64_local(abs);
+        const std::uint64_t src_mtime = file_mtime_epoch_safe_local(abs);
+
+        const std::string key_material =
+            workspace_id + "\n" +
+            rel_norm + "\n" +
+            std::to_string(thumb_size) + "\n" +
+            std::to_string(static_cast<unsigned long long>(src_bytes)) + "\n" +
+            std::to_string(static_cast<unsigned long long>(src_mtime));
+
+        const std::string thumb_key = hex_u64_local(fnv1a64_local(key_material));
+
+        const std::filesystem::path cache_dir =
+            workspace_thumb_cache_root_local()
+            / workspace_id
+            / std::to_string(thumb_size);
+
+        const std::filesystem::path cache_abs = cache_dir / (thumb_key + ".jpg");
+
+        auto serve_thumb = [&](bool cached) {
+            std::string buf;
+            std::string rerr;
+
+            if (!read_file_bytes_all_local(cache_abs, &buf, &rerr)) {
+                fail("thumb_read_failed", 500, "failed to read thumbnail", rerr);
+                return;
+            }
+
+            const auto out_bytes = static_cast<std::uint64_t>(buf.size());
+
+            res.set_header("Cache-Control", "private, max-age=86400");
+            res.set_content(std::move(buf), "image/jpeg");
+
+            audit_emit_thumb("v4.workspaces_files_thumb_ok", "ok", {
+                {"workspace_id", workspace_id},
+                {"path", pqnas::shorten(rel_norm, 200)},
+                {"cached", cached ? "1" : "0"},
+                {"bytes", std::to_string(static_cast<unsigned long long>(out_bytes))}
+            });
+        };
+
+        {
+            std::error_code cec;
+            auto cst = std::filesystem::symlink_status(cache_abs, cec);
+
+            if (!cec &&
+                std::filesystem::exists(cst) &&
+                !std::filesystem::is_symlink(cst) &&
+                std::filesystem::is_regular_file(cst)) {
+                serve_thumb(true);
+                return;
+            }
+        }
+
+        ec.clear();
+        std::filesystem::create_directories(cache_dir, ec);
+        if (ec) {
+            fail("cache_mkdir_failed", 500, "failed to create thumbnail cache directory", ec.message());
+            return;
+        }
+
+        const std::filesystem::path tmp_abs =
+            cache_dir / (thumb_key + ".tmp." + random_urlsafe_token(8) + ".jpg");
+
+        std::string terr;
+        if (!generate_workspace_thumb_local(abs, tmp_abs, thumb_size, &terr)) {
+            std::error_code rm_ec;
+            std::filesystem::remove(tmp_abs, rm_ec);
+
+            fail("thumb_generate_failed", 500, "failed to generate thumbnail", terr);
+            return;
+        }
+
+        {
+            std::error_code ren_ec;
+            std::filesystem::rename(tmp_abs, cache_abs, ren_ec);
+
+            if (ren_ec) {
+                std::error_code cec;
+                auto cst = std::filesystem::symlink_status(cache_abs, cec);
+
+                if (!cec &&
+                    std::filesystem::exists(cst) &&
+                    !std::filesystem::is_symlink(cst) &&
+                    std::filesystem::is_regular_file(cst)) {
+                    std::error_code rm_ec;
+                    std::filesystem::remove(tmp_abs, rm_ec);
+                } else {
+                    std::error_code rm_ec;
+                    std::filesystem::remove(tmp_abs, rm_ec);
+
+                    fail("thumb_rename_failed", 500, "failed to finalize thumbnail", ren_ec.message());
+                    return;
+                }
+            }
+        }
+
+        serve_thumb(false);
     });
     // GET /api/v4/workspaces/files/get?workspace_id=...&path=relative/file.bin
     // v1: physical filesystem only, reads file into memory before reply
