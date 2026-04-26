@@ -281,6 +281,7 @@ static pqnas::AppTokenStore g_app_tokens;
 static pqnas::AppPairingStore g_app_pairing;
 
 static std::string ORIGIN   = "https://nas.example.com";
+static std::string TLS_SPKI_SHA256_PIN;
 static std::string ISS      = "pq-nas";
 static std::string AUD      = "dna-messenger";
 static std::string SCOPE    = "pqnas.login";
@@ -1567,6 +1568,73 @@ static std::string slurp_file(const std::string& path) {
     std::ostringstream ss;
     ss << f.rdbuf();
     return ss.str();
+}
+
+static std::string trim_copy_for_tls_pin(const std::string& s) {
+    std::size_t a = 0;
+    while (a < s.size() && std::isspace(static_cast<unsigned char>(s[a]))) ++a;
+
+    std::size_t b = s.size();
+    while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1]))) --b;
+
+    return s.substr(a, b - a);
+}
+
+static bool normalize_tls_spki_sha256_pin_for_qr(
+    const std::string& raw,
+    std::string* out,
+    std::string* err
+) {
+    if (out) out->clear();
+    if (err) err->clear();
+
+    const std::string v = trim_copy_for_tls_pin(raw);
+    static constexpr const char* kPrefix = "sha256/";
+
+    if (v.rfind(kPrefix, 0) != 0) {
+        if (err) *err = "TLS pin must start with sha256/";
+        return false;
+    }
+
+    const std::string b64 = v.substr(std::strlen(kPrefix));
+    if (b64.empty()) {
+        if (err) *err = "TLS pin base64 payload is empty";
+        return false;
+    }
+
+    unsigned char decoded[32]{};
+    size_t decoded_len = 0;
+
+    if (sodium_base642bin(
+            decoded,
+            sizeof(decoded),
+            b64.c_str(),
+            b64.size(),
+            nullptr,
+            &decoded_len,
+            nullptr,
+            sodium_base64_VARIANT_ORIGINAL
+        ) != 0 ||
+        decoded_len != sizeof(decoded)) {
+        if (err) *err = "TLS pin must be standard base64 SHA-256 digest";
+        return false;
+    }
+
+    std::string normalized_b64(
+        sodium_base64_encoded_len(sizeof(decoded), sodium_base64_VARIANT_ORIGINAL),
+        '\0'
+    );
+
+    sodium_bin2base64(
+        normalized_b64.data(),
+        normalized_b64.size(),
+        decoded,
+        sizeof(decoded),
+        sodium_base64_VARIANT_ORIGINAL
+    );
+
+    if (out) *out = std::string(kPrefix) + std::string(normalized_b64.c_str());
+    return true;
 }
 
 static std::string sign_req_token(const std::string& payload_json) {
@@ -8253,6 +8321,18 @@ int main()
         }
 
     if (const char* v = std::getenv("PQNAS_ORIGIN")) ORIGIN = v;
+
+    if (const char* v = std::getenv("PQNAS_TLS_SPKI_SHA256_PIN")) {
+        std::string pin_err;
+        std::string pin_norm;
+        if (!normalize_tls_spki_sha256_pin_for_qr(v, &pin_norm, &pin_err)) {
+            std::cerr << "[cfg] FATAL: invalid PQNAS_TLS_SPKI_SHA256_PIN: "
+                      << pin_err << std::endl;
+            return 2;
+        }
+
+        TLS_SPKI_SHA256_PIN = pin_norm;
+    }
     if (const char* v = std::getenv("PQNAS_ISS")) ISS = v;
     if (const char* v = std::getenv("PQNAS_AUD")) AUD = v;
     if (const char* v = std::getenv("PQNAS_SCOPE")) SCOPE = v;
@@ -8750,6 +8830,12 @@ auto maybe_auto_rotate_before_append = [&]() {
     }
     std::cerr << "[cfg] shares_path=" << shares_path << std::endl;
 
+    if (TLS_SPKI_SHA256_PIN.empty()) {
+        std::cerr << "[cfg] WARNING: PQNAS_TLS_SPKI_SHA256_PIN is not configured; Android app pairing QR will fail closed." << std::endl;
+    } else {
+        std::cerr << "[cfg] mobile_tls_spki_pin=configured" << std::endl;
+    }
+
     pqnas::ShareRegistry shares(shares_path);
     {
         std::string err;
@@ -8800,6 +8886,7 @@ auto maybe_auto_rotate_before_append = [&]() {
 	v5.origin = &ORIGIN;
 	v5.rp_id  = &RP_ID;
 	v5.app    = &APP_NAME;
+    v5.tls_spki_sha256_pin = &TLS_SPKI_SHA256_PIN;
 
 	v5.req_ttl  = &REQ_TTL;
 	v5.sess_ttl = &SESS_TTL;
@@ -9085,7 +9172,18 @@ v5.app_pair_start =
         out.pair_id = s.pair_id;
         out.pair_token = s.pair_token;
         out.expires_at = s.expires_at;
-        out.qr_uri = pqnas::AppPairingStore::build_pair_qr_uri(*v5.origin, s.pair_token, *v5.app, v5.url_encode);
+        if (!v5.tls_spki_sha256_pin || v5.tls_spki_sha256_pin->empty()) {
+            err = "tls pin not configured";
+            return false;
+        }
+
+        out.qr_uri = pqnas::AppPairingStore::build_pair_qr_uri(
+            *v5.origin,
+            s.pair_token,
+            *v5.app,
+            *v5.tls_spki_sha256_pin,
+            v5.url_encode
+        );
         return true;
     };
 
@@ -9128,8 +9226,17 @@ v5.app_pair_mark_consumed_device =
     };
 
 v5.app_pair_build_qr_uri =
-    [&](const std::string& origin, const std::string& pair_token, const std::string& app_name) -> std::string {
-        return pqnas::AppPairingStore::build_pair_qr_uri(origin, pair_token, app_name, v5.url_encode);
+    [&](const std::string& origin,
+        const std::string& pair_token,
+        const std::string& app_name,
+        const std::string& tls_pin_sha256) -> std::string {
+        return pqnas::AppPairingStore::build_pair_qr_uri(
+            origin,
+            pair_token,
+            app_name,
+            tls_pin_sha256,
+            v5.url_encode
+        );
     };
     // Verify bridge from shared verifier into RoutesV5Context
 	v5.verify_v4_json = [&](const std::string& body) -> RoutesV5Context::VerifyResult {

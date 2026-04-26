@@ -19,9 +19,10 @@ struct VerifyV4Config;
 // depend on main.cpp internals except through these callbacks/refs.
 struct RoutesV5Context {
     // config strings (owned by main.cpp)
-    const std::string* origin = nullptr;   // ORIGIN
-    const std::string* rp_id  = nullptr;   // RP_ID
-    const std::string* app    = nullptr;   // APP_NAME
+    const std::string* origin = nullptr;               // ORIGIN
+    const std::string* rp_id  = nullptr;               // RP_ID
+    const std::string* app    = nullptr;               // APP_NAME
+    const std::string* tls_spki_sha256_pin = nullptr;  // QR-carried Android TLS trust pin
 
     // TTLs (owned by main.cpp)
     const int*  req_ttl  = nullptr;        // REQ_TTL
@@ -183,7 +184,8 @@ struct RoutesV5Context {
 
     std::function<std::string(const std::string& origin,
                               const std::string& pair_token,
-                              const std::string& app_name)> app_pair_build_qr_uri;
+                              const std::string& app_name,
+                              const std::string& tls_pin_sha256)> app_pair_build_qr_uri;
 
 	std::function<bool(const std::string& fingerprint_hex,
     	               const std::string& device_name,

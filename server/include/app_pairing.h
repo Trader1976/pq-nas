@@ -58,6 +58,7 @@ public:
     static std::string build_pair_qr_uri(const std::string& origin,
                                          const std::string& pair_token,
                                          const std::string& app_name,
+                                         const std::string& tls_pin_sha256,
                                          const std::function<std::string(const std::string&)>& url_encode);
 
 private:

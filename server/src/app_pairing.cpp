@@ -226,16 +226,18 @@ std::string AppPairingStore::build_pair_qr_uri(
     const std::string& origin,
     const std::string& pair_token,
     const std::string& app_name,
+    const std::string& tls_pin_sha256,
     const std::function<std::string(const std::string&)>& url_encode) {
 
     const auto enc = [&](const std::string& s) -> std::string {
         return url_encode ? url_encode(s) : s;
     };
 
-    return "dna://pair?v=1"
+    return "dna://pair?v=2"
            "&pt=" + enc(pair_token) +
            "&origin=" + enc(origin) +
-           "&app=" + enc(app_name);
+           "&app=" + enc(app_name) +
+           "&tls_pin_sha256=" + enc(tls_pin_sha256);
 }
 
 } // namespace pqnas

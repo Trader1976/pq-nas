@@ -775,6 +775,7 @@ srv.Post("/api/v5/app_pair/start", [&](const httplib::Request& req, httplib::Res
         {"pair_id", out.pair_id},
         {"expires_at", out.expires_at},
         {"qr_uri", out.qr_uri},
+        {"tls_pin_sha256", (ctx.tls_spki_sha256_pin ? *ctx.tls_spki_sha256_pin : std::string{})},
         {"qr_svg", std::string("/api/v5/app_pair/qr.svg?pt=") + (ctx.url_encode ? ctx.url_encode(out.pair_token) : out.pair_token)}
     }.dump());
 });
@@ -934,13 +935,23 @@ srv.Get("/api/v5/app_pair/qr.svg", [&](const httplib::Request& req, httplib::Res
         return;
     }
 
-    if (!ctx.app_pair_build_qr_uri || !ctx.qr_svg_from_text || !ctx.origin || !ctx.app) {
-        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "pair qr dependencies missing"}}.dump());
+    if (!ctx.app_pair_build_qr_uri ||
+        !ctx.qr_svg_from_text ||
+        !ctx.origin ||
+        !ctx.app ||
+        !ctx.tls_spki_sha256_pin ||
+        ctx.tls_spki_sha256_pin->empty()) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "pair qr TLS pin not configured"}}.dump());
         return;
     }
 
     const std::string pt = it->second;
-    const std::string qr_uri = ctx.app_pair_build_qr_uri(*ctx.origin, pt, *ctx.app);
+    const std::string qr_uri = ctx.app_pair_build_qr_uri(
+        *ctx.origin,
+        pt,
+        *ctx.app,
+        *ctx.tls_spki_sha256_pin
+    );
 
     try {
         const std::string svg = ctx.qr_svg_from_text(qr_uri, 6, 4);
