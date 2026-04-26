@@ -969,7 +969,7 @@
             }
 
             const s = document.createElement("script");
-            s.src = "./albums_view.js?v=2";
+            s.src = "./albums_view.js?v=9";
             s.async = false;
             s.dataset.pqnasAlbumsView = "1";
 
@@ -1552,6 +1552,18 @@ async function ensureTreeStats(force = false) {
         // Do not interfere with modals.
         if (target.closest(".modal.show")) return;
 
+        // Albums have their own collection context menu in albums_view.js.
+        // Do not show the normal gallery upload/new-folder context menu there.
+        if (target.closest("#albumsWrap")) {
+            return;
+        }
+
+        if (state.viewMode === "albums") {
+            e.preventDefault();
+            e.stopPropagation();
+            closeContextMenu();
+            return;
+        }
         e.preventDefault();
         e.stopPropagation();
 

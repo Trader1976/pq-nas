@@ -291,3 +291,33 @@
     background: rgba(255,90,90,0.12) !important;
     border-color: rgba(255,90,90,0.42) !important;
 }
+.pgAlbumCtxMenu{
+    position:fixed;
+    z-index:12050;
+    min-width:190px;
+    max-width:min(360px, calc(100vw - 24px));
+    border:1px solid var(--border2);
+    border-radius:14px;
+    background:rgba(0,0,0,0.78);
+    color:var(--fg);
+    box-shadow:var(--shadow);
+    padding:6px;
+    display:none;
+    backdrop-filter:blur(8px);
+}
+
+.pgAlbumCtxMenu{
+    z-index:12050;
+}
+
+.pgAlbumCtxItem.disabled,
+.pgAlbumCtxItem:disabled{
+    cursor:default;
+    opacity:.62;
+}
+
+.pgAlbumCtxItem.disabled:hover,
+.pgAlbumCtxItem:disabled:hover{
+    background:transparent;
+    border-color:transparent;
+}

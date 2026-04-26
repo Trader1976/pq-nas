@@ -99,6 +99,302 @@
         });
     }
 
+    let albumCtxMenu = null;
+    let albumCtxBound = false;
+
+    function ensureAlbumContextMenu() {
+        if (albumCtxMenu) return albumCtxMenu;
+
+        albumCtxMenu = document.createElement("div");
+        albumCtxMenu.className = "ctxMenu pgAlbumCtxMenu";
+        albumCtxMenu.setAttribute("aria-hidden", "true");
+        document.body.appendChild(albumCtxMenu);
+
+        if (!albumCtxBound) {
+            albumCtxBound = true;
+
+            document.addEventListener("click", () => closeAlbumContextMenu(), true);
+            document.addEventListener("keydown", (ev) => {
+                if (ev.key === "Escape") closeAlbumContextMenu();
+            }, true);
+            window.addEventListener("resize", () => closeAlbumContextMenu());
+            window.addEventListener("scroll", () => closeAlbumContextMenu(), true);
+        }
+
+        return albumCtxMenu;
+    }
+
+    function closeAlbumContextMenu() {
+        if (!albumCtxMenu) return;
+        albumCtxMenu.classList.remove("show");
+        albumCtxMenu.setAttribute("aria-hidden", "true");
+        albumCtxMenu.innerHTML = "";
+    }
+
+    function albumMenuItem(label, onClick, opts = {}) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = `ctxItem pgAlbumCtxItem${opts.danger ? " danger" : ""}`;
+        b.textContent = label;
+
+        if (opts.disabled) {
+            b.disabled = true;
+            b.classList.add("disabled");
+        } else {
+            b.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                closeAlbumContextMenu();
+                onClick();
+            });
+        }
+
+        return b;
+    }
+
+    function albumMenuSep() {
+        const d = document.createElement("div");
+        d.className = "ctxSep pgAlbumCtxSep";
+        return d;
+    }
+
+    function placeAlbumContextMenu(x, y) {
+        const menu = ensureAlbumContextMenu();
+
+        menu.style.left = "0px";
+        menu.style.top = "0px";
+        menu.classList.add("show");
+
+        const rect = menu.getBoundingClientRect();
+        const pad = 8;
+
+        const nx = Math.max(pad, Math.min(x, window.innerWidth - rect.width - pad));
+        const ny = Math.max(pad, Math.min(y, window.innerHeight - rect.height - pad));
+
+        menu.style.left = `${nx}px`;
+        menu.style.top = `${ny}px`;
+        menu.setAttribute("aria-hidden", "false");
+    }
+
+    function backToAlbumList(host) {
+        state.mode = "list";
+        state.currentAlbum = null;
+        state.currentItems = [];
+        renderList(host);
+    }
+
+    async function createAlbumFromUi(host) {
+        const picked = await openCreateAlbumModal({ defaultName: "New album" });
+        if (!picked) return;
+
+        try {
+            setBadge("warn", "working…");
+            setStatus("Creating album…");
+
+            await createAlbum(picked.name, picked.description);
+
+            state.albums = await listAlbums();
+            state.mode = "list";
+            state.currentAlbum = null;
+            state.currentItems = [];
+
+            renderList(host);
+
+            setBadge("ok", "ready");
+            setStatus(`Created album: ${picked.name}`);
+        } catch (e) {
+            setBadge("err", "error");
+            setStatus(`Create album failed: ${String(e && e.message ? e.message : e)}`);
+        }
+    }
+
+    async function deleteAlbumFromUi(host, album) {
+        if (!album || !album.album_id) return;
+
+        const name = album.name || album.album_id;
+        if (!confirm(`Delete album?\n\n${name}\n\nThis removes the album only. Photos stay in your gallery.`)) {
+            return;
+        }
+
+        try {
+            setBadge("warn", "working…");
+            setStatus(`Deleting album: ${name}…`);
+
+            await deleteAlbum(album.album_id);
+
+            state.albums = await listAlbums();
+            state.mode = "list";
+            state.currentAlbum = null;
+            state.currentItems = [];
+
+            renderList(host);
+
+            setBadge("ok", "ready");
+            setStatus(`Deleted album: ${name}`);
+        } catch (e) {
+            setBadge("err", "error");
+            setStatus(`Delete album failed: ${String(e && e.message ? e.message : e)}`);
+        }
+    }
+
+    async function setAlbumCoverFromUi(host, album, rel) {
+        if (!album || !album.album_id || !rel) return;
+
+        try {
+            setBadge("warn", "working…");
+            setStatus(`Setting album cover: ${basename(rel)}…`);
+
+            const r = await setCover(album.album_id, rel);
+
+            const fresh = await listAlbums();
+            state.albums = fresh;
+            state.currentAlbum =
+                fresh.find((a) => a.album_id === album.album_id) ||
+                r.album ||
+                {
+                    ...album,
+                    cover_path: rel,
+                    cover_logical_rel_path: rel
+                };
+
+            renderAlbum(host);
+
+            setBadge("ok", "ready");
+            setStatus(`Album cover set: ${basename(rel)}`);
+        } catch (e) {
+            setBadge("err", "error");
+            setStatus(`Set cover failed: ${String(e && e.message ? e.message : e)}`);
+        }
+    }
+
+    async function removeAlbumItemFromUi(host, album, rel) {
+        if (!album || !album.album_id || !rel) return;
+
+        if (!confirm(`Remove from album?\n\n${rel}`)) return;
+
+        try {
+            setBadge("warn", "working…");
+            setStatus(`Removing ${basename(rel)} from album…`);
+
+            await removeItems(album.album_id, [rel]);
+            state.currentItems = await listItems(album.album_id);
+
+            const fresh = await listAlbums();
+            state.albums = fresh;
+            state.currentAlbum = fresh.find((a) => a.album_id === album.album_id) || album;
+
+            renderAlbum(host);
+
+            setBadge("ok", "ready");
+            setStatus(`Removed from album: ${basename(rel)}`);
+        } catch (e) {
+            setBadge("err", "error");
+            setStatus(`Remove failed: ${String(e && e.message ? e.message : e)}`);
+        }
+    }
+
+    function openAlbumsListContextMenu(host, x, y) {
+        const menu = ensureAlbumContextMenu();
+        menu.innerHTML = "";
+
+        menu.appendChild(albumMenuItem("Create album…", () => createAlbumFromUi(host)));
+        menu.appendChild(albumMenuItem("Refresh albums", () => render(host, { force: true })));
+
+        placeAlbumContextMenu(x, y);
+    }
+
+    function openAlbumCardContextMenu(host, album, x, y) {
+        const menu = ensureAlbumContextMenu();
+        menu.innerHTML = "";
+
+        menu.appendChild(albumMenuItem("Open album", () => openAlbum(host, album)));
+        menu.appendChild(albumMenuSep());
+        menu.appendChild(albumMenuItem("Delete album…", () => deleteAlbumFromUi(host, album), { danger: true }));
+
+        placeAlbumContextMenu(x, y);
+    }
+
+    function openAlbumBackgroundContextMenu(host, album, x, y) {
+        const menu = ensureAlbumContextMenu();
+        menu.innerHTML = "";
+
+        menu.appendChild(albumMenuItem("Back to albums", () => backToAlbumList(host)));
+        menu.appendChild(albumMenuItem("Refresh album", () => render(host, { force: true })));
+
+        if (album && album.album_id) {
+            menu.appendChild(albumMenuSep());
+            menu.appendChild(albumMenuItem("Delete album…", () => deleteAlbumFromUi(host, album), { danger: true }));
+        }
+
+        placeAlbumContextMenu(x, y);
+    }
+
+    function openAlbumPhotoContextMenu(host, album, rel, x, y) {
+        const menu = ensureAlbumContextMenu();
+        menu.innerHTML = "";
+
+        const cover = album?.cover_path || album?.cover_logical_rel_path || "";
+        const isCover = !!cover && cover === rel;
+
+        menu.appendChild(albumMenuItem("Open preview", () => openPreview(rel)));
+
+        if (isCover) {
+            menu.appendChild(albumMenuItem("Cover photo", () => {}, { disabled: true }));
+        } else {
+            menu.appendChild(albumMenuItem("Set as album cover", () => setAlbumCoverFromUi(host, album, rel)));
+        }
+
+        menu.appendChild(albumMenuSep());
+        menu.appendChild(albumMenuItem("Remove from album…", () => removeAlbumItemFromUi(host, album, rel), { danger: true }));
+
+        placeAlbumContextMenu(x, y);
+    }
+
+    function bindAlbumListContextMenu(host) {
+        host.oncontextmenu = (ev) => {
+            const target = ev.target;
+            if (!target || !(target instanceof Element)) return;
+            if (target.closest("input, textarea, select, button[data-pg-albums-create], button[data-pg-albums-refresh]")) return;
+
+            ev.preventDefault();
+            ev.stopPropagation();
+
+            const card = target.closest("[data-pg-album-id]");
+            if (card) {
+                const id = card.getAttribute("data-pg-album-id") || "";
+                const album = state.albums.find((a) => a.album_id === id);
+                if (album) {
+                    openAlbumCardContextMenu(host, album, ev.clientX, ev.clientY);
+                    return;
+                }
+            }
+
+            openAlbumsListContextMenu(host, ev.clientX, ev.clientY);
+        };
+    }
+
+    function bindAlbumDetailContextMenu(host, album) {
+        host.oncontextmenu = (ev) => {
+            const target = ev.target;
+            if (!target || !(target instanceof Element)) return;
+            if (target.closest("input, textarea, select")) return;
+
+            ev.preventDefault();
+            ev.stopPropagation();
+
+            const photo = target.closest("[data-pg-album-path]");
+            if (photo) {
+                const rel = photo.getAttribute("data-pg-album-path") || "";
+                if (rel) {
+                    openAlbumPhotoContextMenu(host, album, rel, ev.clientX, ev.clientY);
+                    return;
+                }
+            }
+
+            openAlbumBackgroundContextMenu(host, album, ev.clientX, ev.clientY);
+        };
+    }
+
     async function deleteAlbum(albumId) {
         return fetchJson("/api/v4/gallery/albums/delete", {
             method: "POST",
@@ -177,6 +473,8 @@
             </div>
         `;
         bindCommon(host);
+        bindAlbumListContextMenu(host);
+
     }
 
     function albumCardHtml(album) {
@@ -220,6 +518,7 @@
         `;
 
         bindCommon(host);
+        bindAlbumListContextMenu(host);
 
         host.querySelectorAll("[data-pg-album-id]").forEach((btn) => {
             btn.addEventListener("click", () => {
@@ -278,6 +577,7 @@
         `;
 
         bindCommon(host);
+        bindAlbumDetailContextMenu(host, album);
 
         host.querySelectorAll("[data-pg-open-photo]").forEach((btn) => {
             btn.addEventListener("click", () => openPreview(btn.getAttribute("data-pg-open-photo") || ""));
@@ -287,61 +587,16 @@
                 ev.stopPropagation();
 
                 const rel = btn.getAttribute("data-pg-set-cover") || "";
-                if (!rel || !album.album_id) return;
-
-                try {
-                    setBadge("warn", "working…");
-                    setStatus(`Setting album cover: ${basename(rel)}…`);
-
-                    const r = await setCover(album.album_id, rel);
-
-                    const fresh = await listAlbums();
-                    state.albums = fresh;
-                    state.currentAlbum =
-                        fresh.find((a) => a.album_id === album.album_id) ||
-                        r.album ||
-                        {
-                            ...album,
-                            cover_path: rel,
-                            cover_logical_rel_path: rel
-                        };
-
-                    renderAlbum(host);
-
-                    setBadge("ok", "ready");
-                    setStatus(`Album cover set: ${basename(rel)}`);
-                } catch (e) {
-                    setBadge("err", "error");
-                    setStatus(`Set cover failed: ${String(e && e.message ? e.message : e)}`);
-                }
+                await setAlbumCoverFromUi(host, album, rel);
             });
         });
+
         host.querySelectorAll("[data-pg-remove-photo]").forEach((btn) => {
             btn.addEventListener("click", async (ev) => {
                 ev.stopPropagation();
 
                 const rel = btn.getAttribute("data-pg-remove-photo") || "";
-                if (!rel || !album.album_id) return;
-
-                if (!confirm(`Remove from album?\n\n${rel}`)) return;
-
-                try {
-                    setBadge("warn", "working…");
-                    setStatus(`Removing ${basename(rel)} from album…`);
-                    await removeItems(album.album_id, [rel]);
-                    state.currentItems = await listItems(album.album_id);
-
-                    const fresh = await listAlbums();
-                    state.albums = fresh;
-                    state.currentAlbum = fresh.find((a) => a.album_id === album.album_id) || album;
-
-                    renderAlbum(host);
-                    setBadge("ok", "ready");
-                    setStatus(`Removed from album: ${basename(rel)}`);
-                } catch (e) {
-                    setBadge("err", "error");
-                    setStatus(`Remove failed: ${String(e && e.message ? e.message : e)}`);
-                }
+                await removeAlbumItemFromUi(host, album, rel);
             });
         });
     }
@@ -454,29 +709,8 @@
         });
     }
     function bindCommon(host) {
-        host.querySelector("[data-pg-albums-create]")?.addEventListener("click", async () => {
-            const picked = await openCreateAlbumModal({ defaultName: "New album" });
-            if (!picked) return;
-
-            try {
-                setBadge("warn", "working…");
-                setStatus("Creating album…");
-
-                await createAlbum(picked.name, picked.description);
-
-                state.albums = await listAlbums();
-                state.mode = "list";
-                state.currentAlbum = null;
-                state.currentItems = [];
-
-                renderList(host);
-
-                setBadge("ok", "ready");
-                setStatus(`Created album: ${picked.name}`);
-            } catch (e) {
-                setBadge("err", "error");
-                setStatus(`Create album failed: ${String(e && e.message ? e.message : e)}`);
-            }
+        host.querySelector("[data-pg-albums-create]")?.addEventListener("click", () => {
+            createAlbumFromUi(host);
         });
 
         host.querySelector("[data-pg-albums-refresh]")?.addEventListener("click", () => {
@@ -484,39 +718,11 @@
         });
 
         host.querySelector("[data-pg-albums-back]")?.addEventListener("click", () => {
-            state.mode = "list";
-            state.currentAlbum = null;
-            state.currentItems = [];
-            renderList(host);
+            backToAlbumList(host);
         });
-        host.querySelector("[data-pg-albums-delete]")?.addEventListener("click", async () => {
-            const album = state.currentAlbum;
-            if (!album || !album.album_id) return;
 
-            const name = album.name || album.album_id;
-            if (!confirm(`Delete album?\n\n${name}\n\nThis removes the album only. Photos stay in your gallery.`)) {
-                return;
-            }
-
-            try {
-                setBadge("warn", "working…");
-                setStatus(`Deleting album: ${name}…`);
-
-                await deleteAlbum(album.album_id);
-
-                state.albums = await listAlbums();
-                state.mode = "list";
-                state.currentAlbum = null;
-                state.currentItems = [];
-
-                renderList(host);
-
-                setBadge("ok", "ready");
-                setStatus(`Deleted album: ${name}`);
-            } catch (e) {
-                setBadge("err", "error");
-                setStatus(`Delete album failed: ${String(e && e.message ? e.message : e)}`);
-            }
+        host.querySelector("[data-pg-albums-delete]")?.addEventListener("click", () => {
+            deleteAlbumFromUi(host, state.currentAlbum);
         });
     }
 
