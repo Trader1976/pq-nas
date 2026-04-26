@@ -150,6 +150,8 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 
 // image gallery
 #include "gallery_meta.h"
+#include "gallery_albums_routes.h"
+#include "gallery_albums.h"
 #include "image_embedded_meta.h"
 
 // trash
@@ -8310,6 +8312,18 @@ int main()
 
     pqnas::set_gallery_meta_index(&gallery_meta_index);
 
+    const std::filesystem::path gallery_albums_db =
+        std::filesystem::path(pqnas::data_root_dir()).parent_path() / "config" / "gallery_albums.db";
+
+    pqnas::GalleryAlbumsIndex gallery_albums_index(gallery_albums_db);
+    {
+        std::string aerr;
+        if (!gallery_albums_index.open(&aerr) || !gallery_albums_index.init_schema(&aerr)) {
+            std::cerr << "[gallery_albums] WARNING: failed to open/init gallery albums db: "
+                      << aerr << std::endl;
+        }
+    }
+    pqnas::set_gallery_albums_index(&gallery_albums_index);
     const std::filesystem::path trash_db =
     std::filesystem::path(pqnas::data_root_dir()).parent_path() / "config" / "trash.db";
 
@@ -9305,6 +9319,31 @@ trash_service.set_restore_unindexer(
     };
     pqnas::register_trash_routes(srv, trash_deps);
 
+    pqnas::GalleryAlbumRoutesDeps gallery_album_deps;
+    gallery_album_deps.users = &users;
+    gallery_album_deps.albums = &gallery_albums_index;
+    gallery_album_deps.cookie_key = COOKIE_KEY;
+    gallery_album_deps.require_user_auth_users_actor =
+        [](
+            const httplib::Request& req,
+            httplib::Response& res,
+            const unsigned char* cookie_key,
+            pqnas::UsersRegistry* users_ptr,
+            std::string* fp_hex,
+            std::string* role
+        ) -> bool {
+            return require_user_auth_users_actor(
+                req,
+                res,
+                cookie_key,
+                users_ptr,
+                fp_hex,
+                role
+            );
+    };
+    gallery_album_deps.reply_json = reply_json;
+
+    pqnas::register_gallery_album_routes(srv, gallery_album_deps);
 
 // GET /api/public/auth_mode
 // Returns installer-selected auth mode for login page: v4 | v5 | auto

@@ -64,8 +64,10 @@
 
     const gridBtn = el("gridBtn");
     const mapBtn = el("mapBtn");
+    const albumsBtn = el("albumsBtn");
     const mapWrap = el("mapWrap");
     const mapCanvas = el("mapCanvas");
+    const albumsWrap = el("albumsWrap");
 
     const panelEl = document.querySelector(".panel");
 
@@ -673,6 +675,10 @@
                 }));
             }
 
+            ctxMenu.appendChild(menuItem("Add selected photos to album…", () => {
+                addSelectedImagesToAlbum();
+            }));
+
             ctxMenu.appendChild(menuItem("Edit metadata for selected photos…", () => {
                 const preferred =
                     state.activeTilePath && imageTargets.includes(state.activeTilePath)
@@ -773,7 +779,15 @@
             "Share link…";
 
         ctxMenu.innerHTML = "";
+        ctxMenu.innerHTML = "";
         ctxMenu.appendChild(menuItem("Open preview", () => openPreviewFor(item)));
+
+        ctxMenu.appendChild(menuItem("Add to album…", () => {
+            const rel = currentRelPathFor(item);
+            setSingleSelection(rel);
+            addSelectedImagesToAlbum();
+        }));
+
         ctxMenu.appendChild(menuItem("Edit metadata…", () => openMetaFor(item)));
         ctxMenu.appendChild(menuItem("Download", () => downloadSingleImage(item)));
         ctxMenu.appendChild(menuItem("Export with metadata…", () => exportSingleItemZip(item)));
@@ -925,6 +939,139 @@
             .map((tile) => String(tile.dataset.relPath || ""))
             .filter((rel) => rel && selectedRelPaths.has(rel))
             .sort((a, b) => String(a).localeCompare(String(b)));
+    }
+
+    let albumsViewLoadPromise = null;
+
+    function ensureAlbumsViewLoaded() {
+        if (window.PQNAS_PHOTOGALLERY?.albumsView) {
+            return Promise.resolve(window.PQNAS_PHOTOGALLERY.albumsView);
+        }
+
+        if (albumsViewLoadPromise) return albumsViewLoadPromise;
+
+        albumsViewLoadPromise = new Promise((resolve, reject) => {
+            const existing = document.querySelector('script[data-pqnas-albums-view="1"]');
+            if (existing) {
+                existing.addEventListener("load", () => {
+                    if (window.PQNAS_PHOTOGALLERY?.albumsView) {
+                        resolve(window.PQNAS_PHOTOGALLERY.albumsView);
+                    } else {
+                        reject(new Error("albums_view.js loaded but did not register albumsView"));
+                    }
+                }, { once: true });
+
+                existing.addEventListener("error", () => {
+                    reject(new Error("albums_view.js failed to load"));
+                }, { once: true });
+
+                return;
+            }
+
+            const s = document.createElement("script");
+            s.src = "./albums_view.js?v=2";
+            s.async = false;
+            s.dataset.pqnasAlbumsView = "1";
+
+            s.onload = () => {
+                if (window.PQNAS_PHOTOGALLERY?.albumsView) {
+                    resolve(window.PQNAS_PHOTOGALLERY.albumsView);
+                } else {
+                    reject(new Error("albums_view.js loaded but did not register albumsView"));
+                }
+            };
+
+            s.onerror = () => {
+                reject(new Error("albums_view.js failed to load"));
+            };
+
+            document.body.appendChild(s);
+        });
+
+        return albumsViewLoadPromise;
+    }
+
+    function openPreviewByRelPath(relPath) {
+        relPath = String(relPath || "");
+        if (!relPath) return;
+
+        const all = [...state.items, ...state.searchItems];
+
+        let item = all.find((it) =>
+            it &&
+            it.type === "file" &&
+            currentRelPathFor(it) === relPath
+        );
+
+        if (!item) {
+            const name = relPath.split("/").pop() || relPath;
+            item = {
+                type: "file",
+                name,
+                rel_path: relPath,
+                path: relPath,
+                size_bytes: 0,
+                mtime_unix: 0
+            };
+        }
+
+        openPreviewFor(item);
+    }
+
+    async function addSelectedImagesToAlbum() {
+        const paths = selectedImageRelPaths();
+
+        if (!paths.length) {
+            setStatus("Select photos first.");
+            return;
+        }
+
+        try {
+            setBadge("warn", "albums…");
+            setStatus("Loading albums…");
+
+            let album = null;
+
+            if (window.PQNAS_PHOTOGALLERY?.albumsPicker?.open) {
+                album = await window.PQNAS_PHOTOGALLERY.albumsPicker.open({
+                    photoCount: paths.length
+                });
+            } else {
+                throw new Error("albums picker module not loaded");
+            }
+
+            if (!album) {
+                setBadge("ok", "ready");
+                setStatus("Add to album cancelled.");
+                return;
+            }
+
+            if (!album || !album.album_id) {
+                throw new Error("album create/select failed");
+            }
+
+            const r = await fetchJson("/api/v4/gallery/albums/add_items", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                body: JSON.stringify({
+                    album_id: album.album_id,
+                    paths
+                })
+            });
+
+            setBadge("ok", "ready");
+            setStatus(`Added ${r.added || paths.length} photo(s) to album: ${album.name || album.album_id}`);
+
+            if (state.viewMode === "albums") {
+                renderGrid();
+            }
+        } catch (e) {
+            setBadge("err", "error");
+            setStatus(`Add to album failed: ${String(e && e.message ? e.message : e)}`);
+        }
     }
 
     function resetTreeStats() {
@@ -2774,16 +2921,30 @@ async function ensureTreeStats(force = false) {
 
     function applyViewModeUi() {
         const mapOn = state.viewMode === "map";
+        const albumsOn = state.viewMode === "albums";
+        const gridOn = !mapOn && !albumsOn;
 
-        gridWrap?.classList.toggle("hidden", mapOn);
+        gridWrap?.classList.toggle("hidden", !gridOn);
         mapWrap?.classList.toggle("hidden", !mapOn);
+        albumsWrap?.classList.toggle("hidden", !albumsOn);
 
-        gridBtn?.classList.toggle("active", !mapOn);
+        if (albumsWrap) {
+            albumsWrap.setAttribute("aria-hidden", albumsOn ? "false" : "true");
+        }
+
+        gridBtn?.classList.toggle("active", gridOn);
         mapBtn?.classList.toggle("active", mapOn);
+        albumsBtn?.classList.toggle("active", albumsOn);
     }
 
     function setViewMode(mode) {
-        state.viewMode = mode === "map" ? "map" : "grid";
+        if (mode === "map") {
+            state.viewMode = "map";
+        } else if (mode === "albums") {
+            state.viewMode = "albums";
+        } else {
+            state.viewMode = "grid";
+        }
 
         if (state.viewMode !== "map") {
             window.PQNAS_PHOTOGALLERY?.map?.destroyMap?.();
@@ -2952,10 +3113,70 @@ async function ensureTreeStats(force = false) {
             renderMap();
             return;
         }
+        if (state.viewMode === "albums") {
+            if (!albumsWrap) return;
 
+            if (window.PQNAS_PHOTOGALLERY?.albumsView) {
+                setBadge("warn", "loading…");
+                setStatus("Loading albums…");
+
+                Promise.resolve(
+                    window.PQNAS_PHOTOGALLERY.albumsView.render(albumsWrap, {
+                        galleryThumbUrl,
+                        openPreviewByRelPath,
+                        setBadge,
+                        setStatus
+                    })
+                )
+                    .then(() => {
+                        if (state.viewMode === "albums") {
+                            setBadge("ok", "ready");
+                            setStatus("Albums ready.");
+                            refreshFooterStats();
+                        }
+                    })
+                    .catch((e) => {
+                        const msg = String(e && e.message ? e.message : e);
+                        albumsWrap.innerHTML = `
+                    <div class="emptyState">
+                        <div class="h">Albums failed to load</div>
+                        <div class="p">${msg}</div>
+                    </div>
+                `;
+                        setBadge("err", "error");
+                        setStatus(`Albums failed: ${msg}`);
+                    });
+
+                return;
+            }
+
+            albumsWrap.innerHTML = `
+        <div class="emptyState">
+            <div class="h">Loading albums…</div>
+            <div class="p">Loading albums_view.js.</div>
+        </div>
+    `;
+
+            ensureAlbumsViewLoaded()
+                .then(() => {
+                    if (state.viewMode === "albums") renderGrid();
+                })
+                .catch((e) => {
+                    const msg = String(e && e.message ? e.message : e);
+                    albumsWrap.innerHTML = `
+                <div class="emptyState">
+                    <div class="h">Albums module failed to load</div>
+                    <div class="p">${msg}</div>
+                </div>
+            `;
+                    setBadge("err", "error");
+                    setStatus(`Albums module failed to load: ${msg}`);
+                });
+
+            return;
+        }
         renderGridBody();
     }
-
     function renderGridBody() {
         if (!gridEl) return;
         gridEl.replaceChildren();
@@ -3098,11 +3319,29 @@ async function ensureTreeStats(force = false) {
         load();
     });
     gridBtn?.addEventListener("click", () => {
+        window.PQNAS_PHOTOGALLERY?.albumsView?.resetToList?.();
         setViewMode("grid");
     });
 
     mapBtn?.addEventListener("click", () => {
+        window.PQNAS_PHOTOGALLERY?.albumsView?.resetToList?.();
         setViewMode("map");
+    });
+
+    albumsBtn?.addEventListener("click", async () => {
+        try {
+            setBadge("warn", "loading…");
+            setStatus("Loading albums module…");
+
+            await ensureAlbumsViewLoaded();
+
+            window.PQNAS_PHOTOGALLERY?.albumsView?.resetToList?.();
+
+            setViewMode("albums");
+        } catch (e) {
+            setBadge("err", "error");
+            setStatus(`Albums module failed to load: ${String(e && e.message ? e.message : e)}`);
+        }
     });
     filterInput?.addEventListener("input", () => {
         state.filter = String(filterInput.value || "");

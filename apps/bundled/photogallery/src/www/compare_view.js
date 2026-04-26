@@ -293,7 +293,7 @@
         ensureModal();
         placeInitialModal();
         keepModalInViewport();
-        
+
         state.paths = list.slice(0, 2);
         resetView();
 

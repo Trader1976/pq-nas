@@ -1,0 +1,293 @@
+.pgAlbumsToolbar{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:14px;
+    padding:14px;
+    border:1px solid var(--border2);
+    border-radius:18px;
+    background: rgba(0,0,0,0.18);
+    margin-bottom:14px;
+    flex-wrap:wrap;
+}
+
+.pgAlbumsTitleBlock{
+    min-width:0;
+}
+
+.pgAlbumsTitle{
+    font-weight:950;
+    font-size:18px;
+    letter-spacing:.2px;
+}
+
+.pgAlbumsSub{
+    margin-top:4px;
+    color:var(--fg-dim);
+    font-family:var(--mono);
+    font-size:12px;
+    max-width:70ch;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+
+.pgAlbumsActions{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+    justify-content:flex-end;
+}
+
+.pgAlbumsGrid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(260px, 1fr));
+    gap:16px;
+}
+
+.pgAlbumCard{
+    text-align:left;
+    border:1px solid var(--border2);
+    border-radius:22px;
+    background:linear-gradient(180deg, rgba(var(--fg-rgb),0.05), rgba(0,0,0,0.22));
+    color:var(--fg);
+    padding:0;
+    cursor:pointer;
+    display:flex;
+    flex-direction:column;
+    min-height:250px;
+    overflow:hidden;
+    transition:transform 140ms ease, background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+    box-shadow:0 12px 28px rgba(0,0,0,0.14);
+}
+
+.pgAlbumCard:hover{
+    transform:translateY(-2px);
+    background:rgba(var(--fg-rgb),0.06);
+    border-color:rgba(var(--fg-rgb),0.34);
+    box-shadow:0 18px 42px rgba(0,0,0,0.20);
+}
+
+.pgAlbumCover{
+    position:relative;
+    height:168px;
+    overflow:hidden;
+    background:
+            radial-gradient(220px 140px at 25% 20%, rgba(var(--fg-rgb),0.20), transparent 62%),
+            linear-gradient(135deg, rgba(var(--fg-rgb),0.08), rgba(0,0,0,0.18));
+    display:flex;
+    align-items:center;
+    justify-content:center;
+}
+
+.pgAlbumCoverImg{
+    width:100%;
+    height:100%;
+    object-fit:cover;
+    display:block;
+    transform:scale(1.01);
+    transition:transform 180ms ease, filter 180ms ease;
+}
+
+.pgAlbumCard:hover .pgAlbumCoverImg{
+    transform:scale(1.045);
+    filter:saturate(1.08) contrast(1.04);
+}
+
+.pgAlbumCoverEmpty{
+    height:100%;
+    width:100%;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    color:rgba(var(--fg-rgb),0.78);
+}
+
+.pgAlbumCoverGlyph{
+    width:56px;
+    height:56px;
+    border-radius:18px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size:30px;
+    background:rgba(var(--fg-rgb),0.08);
+    border:1px solid rgba(var(--fg-rgb),0.20);
+}
+
+.pgAlbumCoverHint{
+    font-size:12px;
+    font-family:var(--mono);
+    color:var(--fg-dim);
+}
+
+.pgAlbumCardBody{
+    min-width:0;
+    flex:1 1 auto;
+    padding:14px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+}
+
+.pgAlbumName{
+    font-weight:950;
+    font-size:16px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+
+.pgAlbumDesc{
+    color:var(--fg-dim);
+    font-size:12px;
+    line-height:1.35;
+    min-height:34px;
+}
+
+.pgAlbumMeta{
+    margin-top:auto;
+    align-self:flex-start;
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    padding:5px 9px;
+    border-radius:999px;
+    border:1px solid rgba(var(--fg-rgb),0.16);
+    background:rgba(var(--fg-rgb),0.07);
+    font-family:var(--mono);
+    color:rgba(var(--fg-rgb),0.76);
+    font-size:12px;
+}
+
+.pgAlbumsEmpty{
+    border:1px solid var(--border2);
+    border-radius:18px;
+    background:rgba(0,0,0,0.22);
+    padding:18px;
+}
+
+.pgAlbumsEmpty .h{
+    font-weight:950;
+    font-size:16px;
+    margin-bottom:6px;
+}
+
+.pgAlbumsEmpty .p{
+    color:var(--fg-dim);
+    line-height:1.45;
+}
+
+.pgAlbumPhotos{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));
+    gap:14px;
+}
+
+.pgAlbumPhoto{
+    border:1px solid var(--border2);
+    border-radius:18px;
+    background:rgba(0,0,0,0.22);
+    overflow:hidden;
+    display:flex;
+    flex-direction:column;
+    min-height:260px;
+}
+
+.pgAlbumThumbBtn{
+    appearance:none;
+    border:0;
+    background:rgba(0,0,0,0.20);
+    height:170px;
+    width:100%;
+    padding:0;
+    cursor:pointer;
+    overflow:hidden;
+}
+
+.pgAlbumThumb{
+    width:100%;
+    height:100%;
+    object-fit:cover;
+    display:block;
+}
+
+.pgAlbumPhotoBody{
+    padding:12px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    min-width:0;
+}
+
+.pgAlbumPhotoName{
+    font-weight:900;
+    font-size:13px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+
+.pgAlbumPhotoPath{
+    color:var(--fg-dim);
+    font-family:var(--mono);
+    font-size:11px;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.pgAlbumPhotoActions{
+    display:flex;
+    gap:8px;
+    flex-wrap:wrap;
+    align-items:center;
+}
+
+.pgAlbumCoverBtn{
+    align-self:flex-start;
+    padding:7px 10px;
+    font-size:12px;
+}
+
+.pgAlbumCoverBtn.isCover,
+.pgAlbumCoverBtn:disabled{
+    opacity:.92;
+    cursor:default;
+    border-color:rgba(var(--fg-rgb),0.28);
+    background:rgba(var(--fg-rgb),0.10);
+}
+
+.pgAlbumCoverBadge{
+    position:absolute;
+    top:10px;
+    left:10px;
+    z-index:2;
+    padding:5px 9px;
+    border-radius:999px;
+    border:1px solid rgba(var(--fg-rgb),0.28);
+    background:rgba(0,0,0,0.48);
+    color:var(--fg);
+    font-size:12px;
+    font-weight:900;
+    backdrop-filter:blur(6px);
+}
+
+.pgAlbumThumbBtn{
+    position:relative;
+}
+.pgAlbumRemoveBtn{
+    align-self:flex-start;
+    padding:7px 10px;
+    font-size:12px;
+}
+.pgAlbumDangerBtn{
+    border-color: rgba(255,90,90,0.28) !important;
+    color: rgba(255,190,190,0.96) !important;
+}
+
+.pgAlbumDangerBtn:hover{
+    background: rgba(255,90,90,0.12) !important;
+    border-color: rgba(255,90,90,0.42) !important;
+}

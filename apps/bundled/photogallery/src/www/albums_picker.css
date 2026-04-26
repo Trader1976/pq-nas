@@ -1,0 +1,239 @@
+.pgAlbumPickerBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:10060;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:var(--pg_overlay, rgba(0,0,0,.56));
+    backdrop-filter:blur(6px);
+}
+
+.pgAlbumPickerCard{
+    width:min(720px, calc(100vw - 24px));
+    max-height:min(86vh, 820px);
+    display:flex;
+    flex-direction:column;
+    border:1px solid var(--border2);
+    border-radius:18px;
+    background:
+            linear-gradient(180deg, var(--pg_surface2, var(--panel2)), var(--pg_surface, var(--panel))),
+            var(--bg);
+    box-shadow:var(--shadow);
+    overflow:hidden;
+}
+
+.pgAlbumPickerHead,
+.pgAlbumPickerFoot{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:12px 14px;
+    border-bottom:1px solid var(--border2);
+    background:
+            linear-gradient(180deg, var(--pg_surface2, var(--panel2)), var(--pg_surface, var(--panel))),
+            var(--bg);
+}
+
+.pgAlbumPickerFoot{
+    border-top:1px solid var(--border2);
+    border-bottom:0;
+    justify-content:flex-end;
+    flex-wrap:wrap;
+}
+
+.pgAlbumPickerTitle{
+    font-weight:950;
+}
+
+.pgAlbumPickerSub{
+    margin-top:2px;
+    font-size:12px;
+    color:var(--fg-dim);
+    font-family:var(--mono);
+}
+
+.pgAlbumPickerBody{
+    padding:14px;
+    overflow:auto;
+    display:grid;
+    gap:12px;
+    background:
+            linear-gradient(180deg, var(--pg_surface, var(--panel)), var(--pg_surface, var(--panel))),
+            var(--bg);
+}
+
+.pgAlbumPickerCreate{
+    display:grid;
+    grid-template-columns:1fr auto;
+    gap:10px;
+    align-items:center;
+}
+
+.pgAlbumPickerList{
+    display:grid;
+    gap:10px;
+}
+
+.pgAlbumPickerRow{
+    width:100%;
+    text-align:left;
+    display:grid;
+    grid-template-columns:64px minmax(0, 1fr) auto;
+    gap:12px;
+    align-items:center;
+    padding:10px 12px 10px 10px;
+    border-radius:16px;
+    border:1px solid var(--border2);
+    background:
+            linear-gradient(180deg, var(--pg_surface2, var(--panel2)), var(--pg_surface, var(--panel))),
+            var(--bg);
+    color:var(--fg);
+    cursor:pointer;
+}
+
+.pgAlbumPickerRow:hover{
+    background:rgba(var(--fg-rgb), .07);
+    border-color:rgba(var(--fg-rgb), .28);
+}
+
+.pgAlbumPickerRow.active{
+    background:rgba(var(--fg-rgb), .12);
+    border-color:rgba(var(--fg-rgb), .48);
+}
+
+.pgAlbumPickerText{
+    min-width:0;
+}
+
+.pgAlbumPickerThumb{
+    width:64px;
+    height:52px;
+    border-radius:14px;
+    border:1px solid var(--border2);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:
+            linear-gradient(180deg, var(--pg_surface2, var(--panel2)), var(--pg_surface2, var(--panel2))),
+            var(--bg);
+    font-size:22px;
+    overflow:hidden;
+    box-shadow:0 8px 18px rgba(0,0,0,.16);
+}
+
+.pgAlbumPickerThumbImg{
+    width:100%;
+    height:100%;
+    object-fit:cover;
+    display:block;
+}
+
+.pgAlbumPickerThumbFallback{
+    opacity:.82;
+}
+.pgAlbumPickerName{
+    font-weight:950;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+
+.pgAlbumPickerDesc{
+    margin-top:3px;
+    font-size:12px;
+    color:var(--fg-dim);
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+
+.pgAlbumPickerCount{
+    font-family:var(--mono);
+    font-size:12px;
+    color:var(--fg-dim);
+    white-space:nowrap;
+}
+
+.pgAlbumPickerEmpty{
+    border:1px solid var(--border2);
+    border-radius:16px;
+    padding:14px;
+    color:var(--fg-dim);
+    background:
+            linear-gradient(180deg, var(--pg_surface2, var(--panel2)), var(--pg_surface2, var(--panel2))),
+            var(--bg);
+}
+
+.pgAlbumCreateBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:10070;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:var(--pg_overlay, rgba(0,0,0,.56));
+    backdrop-filter:blur(6px);
+}
+
+.pgAlbumCreateCard{
+    width:min(560px, calc(100vw - 24px));
+    max-height:min(86vh, 720px);
+    display:flex;
+    flex-direction:column;
+    border:1px solid var(--border2);
+    border-radius:18px;
+    background:
+            linear-gradient(180deg, var(--pg_surface2, var(--panel2)), var(--pg_surface, var(--panel))),
+            var(--bg);
+    box-shadow:var(--shadow);
+    overflow:hidden;
+}
+
+.pgAlbumCreateHead,
+.pgAlbumCreateFoot{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:12px 14px;
+    border-bottom:1px solid var(--border2);
+    background:
+            linear-gradient(180deg, var(--pg_surface2, var(--panel2)), var(--pg_surface, var(--panel))),
+            var(--bg);
+}
+
+.pgAlbumCreateFoot{
+    border-top:1px solid var(--border2);
+    border-bottom:0;
+    justify-content:flex-end;
+    flex-wrap:wrap;
+}
+
+.pgAlbumCreateBody{
+    padding:14px;
+    display:grid;
+    gap:12px;
+    background:
+            linear-gradient(180deg, var(--pg_surface, var(--panel)), var(--pg_surface, var(--panel))),
+            var(--bg);
+}
+
+.pgAlbumCreateLabel{
+    display:grid;
+    gap:7px;
+    color:var(--fg);
+    font-weight:850;
+}
+
+.pgAlbumCreateLabel span{
+    font-size:13px;
+    color:var(--fg-dim);
+}
+
+.pgAlbumCreateTextarea{
+    min-height:110px;
+}
