@@ -12,8 +12,8 @@ struct ShareLink {
     std::string owner_fp;   // fingerprint hex
     std::string scope_kind; // "user" | "workspace"
     std::string workspace_id; // "" for user-scoped shares
-    std::string path;       // rel path under user's storage root
-    std::string type;       // "file" | "dir"
+    std::string path;       // rel path under user's storage root, or album_id when type == "album"
+    std::string type;       // "file" | "dir" | "album"
     std::string created_at; // ISO8601 UTC string
     std::string expires_at; // ISO8601 UTC string ("" => no expiry)
     std::uint64_t downloads = 0;

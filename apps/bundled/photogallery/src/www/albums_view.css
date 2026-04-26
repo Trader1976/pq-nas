@@ -413,7 +413,36 @@
     border-color:rgba(var(--fg-rgb),0.28);
     background:rgba(var(--fg-rgb),0.10);
 }
+.pgAlbumCard{
+    position: relative;
+}
 
+.pgAlbumSharedBadge{
+    position: absolute;
+    z-index: 5;
+    top: 10px;
+    right: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 9px;
+    border-radius: 999px;
+    border: 1px solid rgba(var(--fg-rgb),0.34);
+    background: rgba(0,0,0,0.58);
+    color: var(--fg);
+    font-size: 11px;
+    font-weight: 900;
+    line-height: 1;
+    box-shadow: 0 10px 24px rgba(0,0,0,0.28);
+    backdrop-filter: blur(8px);
+    pointer-events: none;
+}
+
+.pgAlbumSharedBadge.expired{
+    border-color: rgba(255,190,0,0.34);
+    background: rgba(70,45,0,0.68);
+    color: rgba(255,230,180,0.98);
+}
 .pgAlbumCoverBadge{
     position:absolute;
     top:10px;

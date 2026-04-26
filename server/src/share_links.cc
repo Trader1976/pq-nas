@@ -502,7 +502,7 @@ bool ShareRegistry::create_scoped(const std::string& owner_fp,
         return false;
     }
 
-    if (type != "file" && type != "dir") {
+    if (type != "file" && type != "dir" && type != "album") {
         if (err) *err = "invalid type";
         return false;
     }

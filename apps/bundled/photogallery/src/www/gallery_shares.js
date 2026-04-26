@@ -24,18 +24,21 @@
 
     let currentOpen = {
         relPath: "",
-        type: "file"
+        type: "file",
+        label: ""
     };
 
     function normalizeRelPath(rel) {
         return String(rel || "").replace(/\\/g, "/").replace(/^\/+/, "");
     }
-
-    function shareKey(type, relPath) {
-        const t = type === "dir" ? "dir" : "file";
-        return `${t}:${normalizeRelPath(relPath)}`;
+    function normalizeShareType(type) {
+        if (type === "dir") return "dir";
+        if (type === "album") return "album";
+        return "file";
     }
-
+    function shareKey(type, relPath) {
+        return `${normalizeShareType(type)}:${normalizeRelPath(relPath)}`;
+    }
     function existingShareFor(relPath, type) {
         return sharesByKey.get(shareKey(type, relPath)) || null;
     }
@@ -101,7 +104,7 @@
         sharesLoadedAt = now;
     }
 
-    async function createShare(relPath, expiresSec) {
+    async function createShare(relPath, type, expiresSec) {
         const r = await fetch("/api/v4/shares/create", {
             method: "POST",
             credentials: "include",
@@ -112,6 +115,7 @@
             },
             body: JSON.stringify({
                 path: relPath,
+                type: normalizeShareType(type),
                 expires_sec: expiresSec,
                 mode: "standard"
             })
@@ -214,10 +218,14 @@
         return isShareExpired(s) ? "Manage share link… (expired)" : "Manage share link…";
     }
 
-    function populateModalFromExisting(relPath, type) {
+    function populateModalFromExisting(relPath, type, label = "") {
         const existing = existingShareFor(relPath, type);
 
-        if (sharePath) sharePath.textContent = "/" + relPath;
+        if (sharePath) {
+            sharePath.textContent = normalizeShareType(type) === "album"
+                ? `Album: ${label || relPath}`
+                : "/" + relPath;
+        }
         if (shareStatus) shareStatus.textContent = "";
         if (shareOut) shareOut.value = "";
         if (shareOutWrap) shareOutWrap.style.display = "none";
@@ -244,18 +252,19 @@
         }
     }
 
-    async function openForRelPath(relPath, type = "file") {
+    async function openForRelPath(relPath, type = "file", label = "") {
         const rel = normalizeRelPath(relPath);
         if (!rel) return;
 
         currentOpen.relPath = rel;
-        currentOpen.type = (type === "dir") ? "dir" : "file";
+        currentOpen.type = normalizeShareType(type);
+        currentOpen.label = String(label || "");
 
         try {
             await refreshSharesCache(false);
         } catch (_) {}
 
-        populateModalFromExisting(currentOpen.relPath, currentOpen.type);
+        populateModalFromExisting(currentOpen.relPath, currentOpen.type, currentOpen.label);
         openModal();
     }
 
@@ -284,7 +293,7 @@
             }
 
             const expiresSec = expiresSecFromPreset(shareExpiry ? shareExpiry.value : "24h");
-            const j = await createShare(rel, expiresSec);
+            const j = await createShare(rel, type, expiresSec);
 
             const outUrl = fullShareUrl(j.url, j.token);
             if (shareOut) shareOut.value = outUrl;
@@ -355,6 +364,17 @@
     window.addEventListener("photogallery:preview-close", () => {
         updatePreviewShareButton();
     });
+
+    PG.shares = {
+        ...(PG.shares || {}),
+        openForItem,
+        openForRelPath,
+        refreshSharesCache,
+        decorateVisibleShareBadges,
+        menuLabelForRelPath,
+        existingShareFor,
+        isShareExpired
+    };
 
     window.PQNAS_PHOTOGALLERY_SHARES = {
         openForItem,

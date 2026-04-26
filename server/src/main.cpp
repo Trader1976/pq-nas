@@ -35406,7 +35406,25 @@ srv.Post("/api/v4/shares/create", [&](const httplib::Request& req, httplib::Resp
         reply(400, json{{"ok", false}, {"error", "bad_request"}, {"message", "invalid path"}});
         return;
     }
+    std::string requested_type;
+    if (body.contains("type") && body["type"].is_string()) {
+        requested_type = body["type"].get<std::string>();
+    }
 
+    if (!requested_type.empty() &&
+        requested_type != "file" &&
+        requested_type != "dir" &&
+        requested_type != "album") {
+        audit_fail("invalid_type", 400, requested_type, path_rel);
+        reply(400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid share type"}
+        });
+        return;
+    }
+
+    const bool requested_album_share = (requested_type == "album");
     // Optional expires_sec
     long long expires_sec = 0;
     if (body.contains("expires_sec")) {
@@ -35451,6 +35469,26 @@ srv.Post("/api/v4/shares/create", [&](const httplib::Request& req, httplib::Resp
     const std::string scope_kind = workspace_scope ? "workspace" : "user";
     const bool pq_recipient_enrolled = (share_mode == "pq_recipient_enrolled_v1");
 
+    if (requested_album_share && workspace_scope) {
+        audit_fail("album_workspace_not_supported", 400, "", path_rel);
+        reply(400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "Album shares are currently user-scoped only"}
+        });
+        return;
+    }
+
+    if (requested_album_share && pq_recipient_enrolled) {
+        audit_fail("album_pq_not_supported", 400, "", path_rel);
+        reply(400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "Album shares currently support standard links only"}
+        });
+        return;
+    }
+
     if (workspace_scope && pq_recipient_enrolled) {
         audit_fail("workspace_pq_not_supported", 400, "", path_rel);
         reply(400, json{
@@ -35463,9 +35501,48 @@ srv.Post("/api/v4/shares/create", [&](const httplib::Request& req, httplib::Resp
 
     std::string resolved_path_rel = path_rel;
     std::filesystem::path resolved_abs_path;
-    std::string type;
+    std::string type = requested_album_share ? "album" : "";
 
-    if (!workspace_scope) {
+    if (requested_album_share) {
+        bool album_id_ok = !path_rel.empty() && path_rel.size() <= 160;
+        for (char c : path_rel) {
+            const bool ok =
+                (c >= 'a' && c <= 'z') ||
+                (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') ||
+                c == '_' ||
+                c == '-';
+            if (!ok) {
+                album_id_ok = false;
+                break;
+            }
+        }
+
+        if (!album_id_ok) {
+            audit_fail("invalid_album_id", 400, "", path_rel);
+            reply(400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid album_id"}
+            });
+            return;
+        }
+
+        std::string album_err;
+        auto album = gallery_albums_index.get_album("user", fp_hex, path_rel, &album_err);
+        if (!album.has_value()) {
+            audit_fail("album_not_found", 404, album_err, path_rel);
+            reply(404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "album not found"}
+            });
+            return;
+        }
+
+        resolved_path_rel = path_rel;
+        type = "album";
+    } else if (!workspace_scope) {
         // ---- user-scoped share ----
         auto uopt = users.get(fp_hex);
         if (!uopt.has_value() || uopt->storage_state != "allocated") {
@@ -37348,7 +37425,211 @@ srv.Get("/api/v4/admin/storage/tiering/status", [&](const httplib::Request& req,
     }.dump());
 });
 
-    // Public share download: GET /s/<token>
+    auto public_album_html_escape = [](const std::string& in) -> std::string {
+    std::string out;
+    out.reserve(in.size() + 16);
+    for (char c : in) {
+        switch (c) {
+            case '&': out += "&amp;"; break;
+            case '<': out += "&lt;"; break;
+            case '>': out += "&gt;"; break;
+            case '"': out += "&quot;"; break;
+            case '\'': out += "&#039;"; break;
+            default: out.push_back(c); break;
+        }
+    }
+    return out;
+};
+
+auto public_album_url_encode = [](const std::string& in) -> std::string {
+    static const char* hex = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(in.size() * 3);
+
+    for (unsigned char c : in) {
+        const bool safe =
+            (c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~';
+
+        if (safe) {
+            out.push_back(static_cast<char>(c));
+        } else {
+            out.push_back('%');
+            out.push_back(hex[(c >> 4) & 0x0F]);
+            out.push_back(hex[c & 0x0F]);
+        }
+    }
+
+    return out;
+};
+
+auto public_album_normalize_rel = [](std::string p) -> std::string {
+    for (char& c : p) {
+        if (c == '\\') c = '/';
+    }
+    while (!p.empty() && p.front() == '/') p.erase(p.begin());
+    while (p.size() > 1 && p.back() == '/') p.pop_back();
+    return p;
+};
+
+auto public_album_mime_for_path = [](std::string p) -> std::string {
+    for (char& c : p) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+
+    const auto dot = p.find_last_of('.');
+    const std::string ext = (dot == std::string::npos) ? "" : p.substr(dot);
+
+    if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
+    if (ext == ".png") return "image/png";
+    if (ext == ".gif") return "image/gif";
+    if (ext == ".webp") return "image/webp";
+    if (ext == ".bmp") return "image/bmp";
+    if (ext == ".tif" || ext == ".tiff") return "image/tiff";
+    if (ext == ".heic") return "image/heic";
+    if (ext == ".heif") return "image/heif";
+
+    return "";
+};
+
+auto public_album_resolve_photo = [&](const pqnas::ShareLink& share,
+                                      const std::string& rel_in,
+                                      std::filesystem::path* out_abs,
+                                      std::string* out_mime,
+                                      std::string* err) -> bool {
+    if (share.type != "album") {
+        if (err) *err = "not album share";
+        return false;
+    }
+
+    if (share.owner_fp.empty() || share.path.empty()) {
+        if (err) *err = "invalid album share";
+        return false;
+    }
+
+    const std::string rel = public_album_normalize_rel(rel_in);
+    if (rel.empty() || rel[0] == '-' ||
+        rel.find('\n') != std::string::npos ||
+        rel.find('\r') != std::string::npos) {
+        if (err) *err = "invalid path";
+        return false;
+    }
+
+    const std::string mime = public_album_mime_for_path(rel);
+    if (mime.empty()) {
+        if (err) *err = "not an image";
+        return false;
+    }
+
+    std::string album_err;
+    auto album = gallery_albums_index.get_album("user", share.owner_fp, share.path, &album_err);
+    if (!album.has_value()) {
+        if (err) *err = "album not found";
+        return false;
+    }
+
+    std::string items_err;
+    const auto items = gallery_albums_index.list_items("user", share.owner_fp, share.path, 5000, &items_err);
+
+    bool in_album = false;
+    for (const auto& item : items) {
+        if (public_album_normalize_rel(item.logical_rel_path) == rel) {
+            in_album = true;
+            break;
+        }
+    }
+
+    if (!in_album) {
+        if (err) *err = "photo not in album";
+        return false;
+    }
+
+    pqnas::ResolvedLogicalItem resolved;
+    std::string rerr;
+    if (!pqnas::resolve_existing_user_item(users, share.owner_fp, rel, &resolved, &rerr) ||
+        !resolved.exists ||
+        !resolved.has_physical_anchor ||
+        !resolved.is_file) {
+        if (err) *err = rerr.empty() ? "photo not found" : rerr;
+        return false;
+    }
+
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(resolved.abs_path, ec);
+    if (ec || !std::filesystem::exists(st) ||
+        std::filesystem::is_symlink(st) ||
+        !std::filesystem::is_regular_file(st)) {
+        if (err) *err = "photo not found";
+        return false;
+    }
+
+    if (out_abs) *out_abs = resolved.abs_path;
+    if (out_mime) *out_mime = mime;
+    return true;
+};
+
+srv.Get("/api/public/gallery/album/image", [&](const httplib::Request& req, httplib::Response& res) {
+    auto fail = [&](int status, const std::string& msg) {
+        res.status = status;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(msg + "\n", "text/plain; charset=utf-8");
+    };
+
+    const std::string token = req.has_param("token") ? req.get_param_value("token") : "";
+    const std::string rel = req.has_param("path") ? req.get_param_value("path") : "";
+
+    if (token.empty() || rel.empty()) {
+        fail(400, "Bad request");
+        return;
+    }
+
+    pqnas::ShareLink share;
+    std::string err;
+    auto valid = shares.is_valid_now(token, &share, &err);
+
+    if (!valid.has_value()) {
+        fail(404, "Not found");
+        return;
+    }
+
+    if (valid.value() == false) {
+        fail(410, "Expired");
+        return;
+    }
+
+    if (share.type != "album") {
+        fail(404, "Not found");
+        return;
+    }
+
+    std::filesystem::path abs;
+    std::string mime;
+    std::string rerr;
+    if (!public_album_resolve_photo(share, rel, &abs, &mime, &rerr)) {
+        fail(404, "Not found");
+        return;
+    }
+
+    std::ifstream f(abs, std::ios::binary);
+    if (!f.good()) {
+        fail(500, "Server error");
+        return;
+    }
+
+    std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+
+    std::string fname = std::filesystem::path(abs).filename().string();
+    if (fname.empty()) fname = "photo";
+
+    res.status = 200;
+    res.set_header("Cache-Control", "no-store");
+    res.set_header("Content-Disposition", build_content_disposition("inline", fname));
+    res.set_content(std::move(data), mime);
+});
+
+// Public share download: GET /s/<token>
 srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Response& res) {
     const std::string token = req.matches[1].str();
 
@@ -37475,6 +37756,120 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
         }
     }
 
+    if (s.type == "album") {
+    if (is_pq_share) {
+        audit_event("share_album_open", "fail", &s, "pq_album_not_supported", 400);
+        res.status = 400;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Bad request\n", "text/plain; charset=utf-8");
+        return;
+    }
+
+    std::string album_err;
+    auto album = gallery_albums_index.get_album("user", s.owner_fp, s.path, &album_err);
+    if (!album.has_value()) {
+        audit_event("share_album_open", "fail", &s, "album_not_found", 404, album_err);
+        res.status = 404;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content("Not found\n", "text/plain; charset=utf-8");
+        return;
+    }
+
+    std::string items_err;
+    const auto items = gallery_albums_index.list_items("user", s.owner_fp, s.path, 5000, &items_err);
+
+    const std::string album_name = album->name.empty() ? "Shared album" : album->name;
+    const std::string album_desc = album->description;
+
+    std::ostringstream html;
+    html
+        << "<!doctype html>"
+        << "<html lang='en'>"
+        << "<head>"
+        << "<meta charset='utf-8'>"
+        << "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        << "<title>" << public_album_html_escape(album_name) << " • DNA-Nexus</title>"
+        << "<style>"
+        << ":root{color-scheme:dark;}"
+        << "*{box-sizing:border-box;}"
+        << "body{margin:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#050712;color:#e9fbff;}"
+        << ".wrap{max-width:1240px;margin:0 auto;padding:24px;}"
+        << ".head{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;margin-bottom:20px;}"
+        << ".kicker{opacity:.68;font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;}"
+        << "h1{margin:.2rem 0 0;font-size:clamp(28px,5vw,54px);line-height:1.02;}"
+        << ".desc{opacity:.78;max-width:780px;margin-top:10px;line-height:1.5;}"
+        << ".count{opacity:.72;font-size:13px;white-space:nowrap;}"
+        << ".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px;}"
+        << ".tile{display:block;position:relative;aspect-ratio:1/1;border-radius:18px;overflow:hidden;background:#111827;border:1px solid rgba(255,255,255,.12);box-shadow:0 14px 40px rgba(0,0,0,.32);}"
+        << ".tile img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .18s ease,filter .18s ease;}"
+        << ".tile:hover img{transform:scale(1.035);filter:brightness(1.08);}"
+        << ".name{position:absolute;left:0;right:0;bottom:0;padding:28px 10px 10px;font-size:12px;font-weight:750;color:white;background:linear-gradient(180deg,transparent,rgba(0,0,0,.72));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}"
+        << ".empty{padding:42px;border:1px dashed rgba(255,255,255,.2);border-radius:20px;opacity:.75;text-align:center;}"
+        << ".brand{margin-top:28px;opacity:.42;font-size:12px;}"
+        << "</style>"
+        << "</head>"
+        << "<body>"
+        << "<div class='wrap'>"
+        << "<div class='head'>"
+        << "<div>"
+        << "<div class='kicker'>DNA-Nexus shared photo album</div>"
+        << "<h1>" << public_album_html_escape(album_name) << "</h1>";
+
+    if (!album_desc.empty()) {
+        html << "<div class='desc'>" << public_album_html_escape(album_desc) << "</div>";
+    }
+
+    html
+        << "</div>"
+        << "<div class='count'>" << items.size() << " photo" << (items.size() == 1 ? "" : "s") << "</div>"
+        << "</div>";
+
+    if (items.empty()) {
+        html << "<div class='empty'>This shared album is empty.</div>";
+    } else {
+        html << "<div class='grid'>";
+
+        for (const auto& item : items) {
+            const std::string rel = public_album_normalize_rel(item.logical_rel_path);
+            if (rel.empty()) continue;
+
+            if (public_album_mime_for_path(rel).empty()) {
+                continue;
+            }
+
+            const std::string url =
+                "/api/public/gallery/album/image?token=" +
+                public_album_url_encode(token) +
+                "&path=" +
+                public_album_url_encode(rel);
+
+            std::string name = std::filesystem::path(rel).filename().string();
+            if (name.empty()) name = rel;
+
+            html
+                << "<a class='tile' href='" << url << "' target='_blank' rel='noopener'>"
+                << "<img loading='lazy' src='" << url << "' alt='" << public_album_html_escape(name) << "'>"
+                << "<div class='name'>" << public_album_html_escape(name) << "</div>"
+                << "</a>";
+        }
+
+        html << "</div>";
+    }
+
+    html
+        << "<div class='brand'>Shared with DNA-Nexus Server</div>"
+        << "</div>"
+        << "</body>"
+        << "</html>";
+
+    audit_event("share_album_open", "ok", &s, "", 200);
+    (void)shares.increment_downloads(token, &err);
+
+    res.status = 200;
+    res.set_header("Cache-Control", "no-store");
+    res.set_content(html.str(), "text/html; charset=utf-8");
+    return;
+}
 
     std::filesystem::path abs;
     std::string rerr;

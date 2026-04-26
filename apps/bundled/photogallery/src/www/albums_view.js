@@ -266,7 +266,54 @@
             setStatus(`Set cover failed: ${String(e && e.message ? e.message : e)}`);
         }
     }
+    function existingAlbumShare(album) {
+        if (!album || !album.album_id) return null;
 
+        const shares =
+            window.PQNAS_PHOTOGALLERY?.shares ||
+            window.PQNAS_PHOTOGALLERY_SHARES;
+
+        if (!shares || typeof shares.existingShareFor !== "function") {
+            return null;
+        }
+
+        return shares.existingShareFor(album.album_id, "album");
+    }
+
+    function albumShareBadgeHtml(album) {
+        const shares =
+            window.PQNAS_PHOTOGALLERY?.shares ||
+            window.PQNAS_PHOTOGALLERY_SHARES;
+
+        const share = existingAlbumShare(album);
+        if (!share) return "";
+
+        const expired =
+            shares &&
+            typeof shares.isShareExpired === "function" &&
+            shares.isShareExpired(share);
+
+        return `
+        <div class="pgAlbumSharedBadge ${expired ? "expired" : ""}" title="${expired ? "Album share link expired" : "Album is shared"}">
+            ${expired ? "⏰ Expired" : "🔗 Shared"}
+        </div>
+    `;
+    }
+    function shareAlbumFromUi(album) {
+        if (!album || !album.album_id) return;
+
+        const shares = window.PQNAS_PHOTOGALLERY?.shares;
+        if (!shares || typeof shares.openForRelPath !== "function") {
+            alert("Share module is not loaded.");
+            return;
+        }
+
+        shares.openForRelPath(
+            album.album_id,
+            "album",
+            album.name || album.album_id
+        );
+    }
     async function removeAlbumItemFromUi(host, album, rel) {
         if (!album || !album.album_id || !rel) return;
 
@@ -308,6 +355,7 @@
         menu.innerHTML = "";
 
         menu.appendChild(albumMenuItem("Open album", () => openAlbum(host, album)));
+        menu.appendChild(albumMenuItem("Share album…", () => shareAlbumFromUi(album)));
         menu.appendChild(albumMenuSep());
         menu.appendChild(albumMenuItem("Delete album…", () => deleteAlbumFromUi(host, album), { danger: true }));
 
@@ -323,6 +371,7 @@
 
         if (album && album.album_id) {
             menu.appendChild(albumMenuSep());
+            menu.appendChild(albumMenuItem("Share album…", () => shareAlbumFromUi(album)));
             menu.appendChild(albumMenuItem("Delete album…", () => deleteAlbumFromUi(host, album), { danger: true }));
         }
 
@@ -456,6 +505,7 @@
             </div>
             <div class="pgAlbumsActions">
                 ${back ? `<button class="btn secondary" type="button" data-pg-albums-back="1">Albums</button>` : ""}
+                ${back ? `<button class="btn secondary" type="button" data-pg-albums-share="1">Share album…</button>` : ""}
                 <button class="btn secondary" type="button" data-pg-albums-refresh="1">Refresh</button>
                 <button class="btn" type="button" data-pg-albums-create="1">Create album…</button>
                 ${canDelete ? `<button class="btn secondary pgAlbumDangerBtn" type="button" data-pg-albums-delete="1">Delete album…</button>` : ""}
@@ -503,23 +553,24 @@
             : emptySvg;
 
         return `
-            <button class="pgAlbumCard" type="button" data-pg-album-id="${escapeHtml(album.album_id)}">
-                <span class="pgAlbumCardInner">
-                    <span class="pgAlbumCover">
-                        ${coverHtml}
-                        <span class="pgAlbumCoverType">Album</span>
-                        <span class="pgAlbumCoverCount">▦ ${escapeHtml(photoLabel)}</span>
-                    </span>
-
-                    <span class="pgAlbumCardBody">
-                        <span class="pgAlbumKicker">Photo album</span>
-                        <span class="pgAlbumName">${escapeHtml(shorten(name, 80))}</span>
-                        <span class="pgAlbumDesc">${escapeHtml(shorten(desc || "No description", 120))}</span>
-                        <span class="pgAlbumMeta">${escapeHtml(photoLabel)} · collection</span>
-                    </span>
+        <button class="pgAlbumCard" type="button" data-pg-album-id="${escapeHtml(album.album_id)}">
+            ${albumShareBadgeHtml(album)}
+            <span class="pgAlbumCardInner">
+                <span class="pgAlbumCover">
+                    ${coverHtml}
+                    <span class="pgAlbumCoverType">Album</span>
+                    <span class="pgAlbumCoverCount">▦ ${escapeHtml(photoLabel)}</span>
                 </span>
-            </button>
-        `;
+    
+                <span class="pgAlbumCardBody">
+                    <span class="pgAlbumKicker">Photo album</span>
+                    <span class="pgAlbumName">${escapeHtml(shorten(name, 80))}</span>
+                    <span class="pgAlbumDesc">${escapeHtml(shorten(desc || "No description", 120))}</span>
+                    <span class="pgAlbumMeta">${escapeHtml(photoLabel)} · collection</span>
+                </span>
+            </span>
+        </button>
+    `;
     }
 
     function renderList(host) {
@@ -738,7 +789,11 @@
         host.querySelector("[data-pg-albums-back]")?.addEventListener("click", () => {
             backToAlbumList(host);
         });
-
+        host.querySelector("[data-pg-albums-share]")?.addEventListener("click", () => {
+            if (state.currentAlbum) {
+                shareAlbumFromUi(state.currentAlbum);
+            }
+        });
         host.querySelector("[data-pg-albums-delete]")?.addEventListener("click", () => {
             deleteAlbumFromUi(host, state.currentAlbum);
         });
@@ -781,9 +836,26 @@
             if (opts.force || !state.albums.length) {
                 state.albums = await listAlbums();
             }
+            try {
+                const shares =
+                    window.PQNAS_PHOTOGALLERY?.shares ||
+                    window.PQNAS_PHOTOGALLERY_SHARES;
 
+                if (shares && typeof shares.refreshSharesCache === "function") {
+                    await shares.refreshSharesCache(false);
+                }
+            } catch (_) {}
             if (state.mode === "album" && state.currentAlbum) {
                 state.currentItems = await listItems(state.currentAlbum.album_id);
+                try {
+                    const shares =
+                        window.PQNAS_PHOTOGALLERY?.shares ||
+                        window.PQNAS_PHOTOGALLERY_SHARES;
+
+                    if (shares && typeof shares.refreshSharesCache === "function") {
+                        await shares.refreshSharesCache(false);
+                    }
+                } catch (_) {}
                 renderAlbum(host);
             } else {
                 state.mode = "list";
