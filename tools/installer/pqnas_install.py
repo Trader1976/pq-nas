@@ -434,6 +434,9 @@ class InstallState:
     https_enabled: bool = False
     https_email: str = ""
     https_redirect: bool = True
+    # Android app pairing TLS SPKI pin.
+    # Written as PQNAS_TLS_SPKI_SHA256_PIN when HTTPS cert material is available.
+    tls_spki_pin_sha256: str = ""
 
 
 # -----------------------------------------------------------------------------
@@ -654,10 +657,6 @@ def ensure_dna_alerts_runtime_dir(log: Optional[Log] = None) -> str:
     path = "/var/lib/pqnas/dna-alerts"
     os.makedirs(path, exist_ok=True)
 
-    def ensure_dna_alerts_runtime_dir(log: Optional[Log] = None) -> str:
-        path = "/var/lib/pqnas/dna-alerts"
-    os.makedirs(path, exist_ok=True)
-
     p = subprocess.run(
         ["id", "-u", "pqnas"],
         stdout=subprocess.DEVNULL,
@@ -670,13 +669,6 @@ def ensure_dna_alerts_runtime_dir(log: Optional[Log] = None) -> str:
     subprocess.run(["chown", "-R", "pqnas:pqnas", "/var/lib/pqnas"], check=True)
     subprocess.run(["chmod", "750", "/var/lib/pqnas"], check=True)
     subprocess.run(["chmod", "750", path], check=True)
-
-    if log:
-        log.write(f"[*] Prepared DNA alerts runtime dir: {path}")
-
-    return path
-    subprocess.run(["chmod", "750", "/var/lib/pqnas"], check=False)
-    subprocess.run(["chmod", "750", path], check=False)
 
     if log:
         log.write(f"[*] Prepared DNA alerts runtime dir: {path}")
@@ -881,12 +873,13 @@ def ensure_config_files(root: str, asset_root: str) -> None:
 
 
 def write_env_file(
-    root: str,
-    *,
-    origin: Optional[str] = None,
-    rp_id: Optional[str] = None,
-    dna_lib_path: Optional[str] = None,
-    auth_mode: Optional[str] = None,
+        root: str,
+        *,
+        origin: Optional[str] = None,
+        rp_id: Optional[str] = None,
+        dna_lib_path: Optional[str] = None,
+        auth_mode: Optional[str] = None,
+        tls_spki_pin_sha256: Optional[str] = None,
 ) -> None:
 
     etc_dir = "/etc/pqnas"
@@ -923,6 +916,10 @@ def write_env_file(
     # Login authentication mode (v4 | v5 | auto)
     if auth_mode:
         lines += [f"PQNAS_AUTH_MODE={auth_mode}"]
+        # Android app pairing requires this when QR pairing is used.
+        # It is not secret; it pins the expected HTTPS certificate public key.
+        if tls_spki_pin_sha256:
+            lines += ["", f"PQNAS_TLS_SPKI_SHA256_PIN={tls_spki_pin_sha256}"]
 
 
     # DNA engine .so path for /api/v4/verify
@@ -1303,6 +1300,160 @@ def have_letsencrypt_cert(hostname: str) -> bool:
     fullchain, privkey = letsencrypt_cert_paths(hostname)
     return os.path.isfile(fullchain) and os.path.isfile(privkey)
 
+def compute_tls_spki_sha256_pin_from_cert(cert_path: str) -> str:
+    """
+    Compute Android/OkHttp-style TLS SPKI SHA-256 pin from a certificate file.
+
+    Output format:
+      sha256/<base64>
+    """
+    if not cert_path or not os.path.isfile(cert_path):
+        return ""
+
+    p1 = subprocess.run(
+        ["openssl", "x509", "-in", cert_path, "-pubkey", "-noout"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+
+    p2 = subprocess.run(
+        ["openssl", "pkey", "-pubin", "-outform", "DER"],
+        input=p1.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+
+    p3 = subprocess.run(
+        ["openssl", "dgst", "-sha256", "-binary"],
+        input=p2.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+
+    p4 = subprocess.run(
+        ["openssl", "base64", "-A"],
+        input=p3.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+
+    b64 = (p4.stdout or b"").decode("ascii", errors="replace").strip()
+    pin = f"sha256/{b64}"
+
+    if not re.fullmatch(r"sha256/[A-Za-z0-9+/]{43}=", pin):
+        raise RuntimeError(f"Computed TLS SPKI pin has unexpected format: {pin}")
+
+    return pin
+
+
+def compute_tls_spki_sha256_pin_from_host(hostname: str, port: int = 443) -> str:
+    """
+    Best-effort fallback for external HTTPS / Cloudflare / non-local TLS.
+
+    This asks the currently reachable TLS endpoint for its leaf certificate and
+    computes the SPKI pin from that. Prefer local Let's Encrypt cert files when
+    available.
+    """
+    host = (hostname or "").strip()
+    if not host:
+        return ""
+
+    p1 = subprocess.run(
+        ["openssl", "s_client", "-connect", f"{host}:{port}", "-servername", host],
+        input=b"",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=15,
+        check=False,
+    )
+    if p1.returncode != 0 or not p1.stdout:
+        return ""
+
+    p2 = subprocess.run(
+        ["openssl", "x509", "-pubkey", "-noout"],
+        input=p1.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if p2.returncode != 0 or not p2.stdout:
+        return ""
+
+    p3 = subprocess.run(
+        ["openssl", "pkey", "-pubin", "-outform", "DER"],
+        input=p2.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if p3.returncode != 0 or not p3.stdout:
+        return ""
+
+    p4 = subprocess.run(
+        ["openssl", "dgst", "-sha256", "-binary"],
+        input=p3.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if p4.returncode != 0 or not p4.stdout:
+        return ""
+
+    p5 = subprocess.run(
+        ["openssl", "base64", "-A"],
+        input=p4.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if p5.returncode != 0 or not p5.stdout:
+        return ""
+
+    b64 = (p5.stdout or b"").decode("ascii", errors="replace").strip()
+    pin = f"sha256/{b64}"
+
+    if not re.fullmatch(r"sha256/[A-Za-z0-9+/]{43}=", pin):
+        return ""
+
+    return pin
+
+
+def detect_tls_spki_sha256_pin(hostname: str, log: Optional[Log] = None) -> tuple[str, str]:
+    """
+    Return (pin, source).
+
+    Priority:
+      1) local Let's Encrypt fullchain.pem
+      2) live TLS endpoint via openssl s_client
+    """
+    host = (hostname or "").strip()
+    if not host:
+        return ("", "")
+
+    fullchain, _privkey = letsencrypt_cert_paths(host)
+
+    if os.path.isfile(fullchain):
+        try:
+            pin = compute_tls_spki_sha256_pin_from_cert(fullchain)
+            if pin:
+                return (pin, fullchain)
+        except Exception as e:
+            if log:
+                log.write(f"[WARN] Could not compute TLS SPKI pin from {fullchain}: {e}")
+
+    try:
+        pin = compute_tls_spki_sha256_pin_from_host(host, 443)
+        if pin:
+            return (pin, f"{host}:443")
+    except Exception as e:
+        if log:
+            log.write(f"[WARN] Could not compute TLS SPKI pin from live host {host}:443: {e}")
+
+    return ("", "")
 
 def write_nginx_site_http_only(
         server_name: str,
@@ -2472,6 +2623,8 @@ class ExecuteScreen(Screen):
 
             origin = None
             rp_id = None
+            tls_spki_pin_sha256 = ""
+            tls_pin_source = ""
 
             if st.nginx_hostname:
                 if st.nginx_enabled:
@@ -2485,12 +2638,20 @@ class ExecuteScreen(Screen):
 
                 rp_id = st.nginx_hostname
 
+            if origin and origin.startswith("https://") and st.nginx_hostname:
+                tls_spki_pin_sha256, tls_pin_source = detect_tls_spki_sha256_pin(
+                    st.nginx_hostname,
+                    log=self.logw,
+                )
+                st.tls_spki_pin_sha256 = tls_spki_pin_sha256
+
             write_env_file(
                 mp,
                 origin=origin,
                 rp_id=rp_id,
                 dna_lib_path=dna_path,
                 auth_mode=st.auth_mode,
+                tls_spki_pin_sha256=tls_spki_pin_sha256,
             )
 
             if origin and rp_id:
@@ -2506,6 +2667,15 @@ class ExecuteScreen(Screen):
                     "[!] No public URL configured yet.\n"
                     "    If you later add nginx or HTTPS, update:\n"
                     "    /etc/pqnas/pqnas.env (PQNAS_ORIGIN + PQNAS_RP_ID)"
+                )
+
+            if tls_spki_pin_sha256:
+                self.logw.write(f"🔐 Android pairing TLS SPKI pin: configured ({tls_pin_source})")
+            else:
+                self.logw.write(
+                    "[!] Android pairing TLS SPKI pin is not configured.\n"
+                    "    Trusted Devices / mobile app pairing will fail closed until\n"
+                    "    PQNAS_TLS_SPKI_SHA256_PIN is set in /etc/pqnas/pqnas.env."
                 )
 
             self.logw.write("")
@@ -2642,17 +2812,34 @@ class ExecuteScreen(Screen):
                         redirect=st.https_redirect,
                         logw=self.logw,
                     )
-                    self.logw.write("Updating /etc/pqnas/pqnas.env to use https origin …")
-                    write_env_file(
-                        mp,
-                        origin=f"https://{st.nginx_hostname}",
-                        rp_id=st.nginx_hostname,
-                        dna_lib_path=dna_path,
-                        auth_mode=st.auth_mode,
-                    )
-                    run_systemctl(["restart", "pqnas.service"])
-
                     if ok:
+                        self.logw.write("Updating /etc/pqnas/pqnas.env to use https origin …")
+
+                        tls_spki_pin_sha256, tls_pin_source = detect_tls_spki_sha256_pin(
+                            st.nginx_hostname,
+                            log=self.logw,
+                        )
+                        st.tls_spki_pin_sha256 = tls_spki_pin_sha256
+
+                        write_env_file(
+                            mp,
+                            origin=f"https://{st.nginx_hostname}",
+                            rp_id=st.nginx_hostname,
+                            dna_lib_path=dna_path,
+                            auth_mode=st.auth_mode,
+                            tls_spki_pin_sha256=tls_spki_pin_sha256,
+                        )
+                        run_systemctl(["restart", "pqnas.service"])
+
+                        if tls_spki_pin_sha256:
+                            self.logw.write(f"🔐 Android pairing TLS SPKI pin: configured ({tls_pin_source})")
+                        else:
+                            self.logw.write(
+                                "[WARN] HTTPS is enabled, but TLS SPKI pin could not be computed.\n"
+                                "       Trusted Devices / mobile app pairing will fail closed until\n"
+                                "       PQNAS_TLS_SPKI_SHA256_PIN is set manually."
+                            )
+
                         self.logw.write("[OK] HTTPS enabled via certbot.")
                         self.logw.write("Rewriting nginx site config for HTTPS …")
                         conf_path = write_nginx_site_https_if_available(
@@ -2665,7 +2852,17 @@ class ExecuteScreen(Screen):
                         self.logw.write("Testing + reloading nginx …")
                         nginx_test_reload(log=self.logw)
                     else:
-                        self.logw.write("[WARN] HTTPS setup failed; continuing with HTTP.")
+                        self.logw.write("[WARN] HTTPS setup failed; keeping HTTP origin.")
+
+                        write_env_file(
+                            mp,
+                            origin=f"http://{st.nginx_hostname}",
+                            rp_id=st.nginx_hostname,
+                            dna_lib_path=dna_path,
+                            auth_mode=st.auth_mode,
+                            tls_spki_pin_sha256="",
+                        )
+                        run_systemctl(["restart", "pqnas.service"])
 
                 if have_letsencrypt_cert(st.nginx_hostname):
                     self.logw.write(f"✅ nginx ready: https://{st.nginx_hostname}/  (http redirects with 308)")

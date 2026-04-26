@@ -58,6 +58,7 @@ ensure_os_deps() {
       smartmontools \
       libsodium23 \
       libssl3 \
+      openssl \
       libstdc++6 \
       libgcc-s1 \
       ca-certificates
