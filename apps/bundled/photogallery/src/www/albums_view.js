@@ -482,24 +482,42 @@
         const desc = album.description || "";
         const count = Number(album.item_count || 0);
         const cover = album.cover_path || album.cover_logical_rel_path || "";
+        const photoLabel = `${count} photo${count === 1 ? "" : "s"}`;
+
+        const emptySvg = `
+            <span class="pgAlbumCoverEmpty">
+                <svg class="pgAlbumCoverSvg" viewBox="0 0 180 118" aria-hidden="true" focusable="false">
+                    <rect class="pgAlbumSvgSheet back" x="48" y="22" width="94" height="66" rx="12" transform="rotate(-7 95 55)"></rect>
+                    <rect class="pgAlbumSvgSheet mid" x="38" y="28" width="104" height="70" rx="13" transform="rotate(4 90 63)"></rect>
+                    <rect class="pgAlbumSvgSheet front" x="32" y="20" width="108" height="74" rx="14"></rect>
+                    <circle class="pgAlbumSvgSun" cx="58" cy="44" r="8"></circle>
+                    <path class="pgAlbumSvgMountain" d="M42 82 L68 58 L86 74 L102 52 L130 82 Z"></path>
+                    <path class="pgAlbumSvgLine" d="M48 101 H132"></path>
+                </svg>
+                <span class="pgAlbumCoverHint">Empty album</span>
+            </span>
+        `;
 
         const coverHtml = cover
             ? `<img class="pgAlbumCoverImg" src="${escapeHtml(thumbUrl(cover))}" alt="">`
-            : `<div class="pgAlbumCoverEmpty">
-                   <div class="pgAlbumCoverGlyph">▦</div>
-                   <div class="pgAlbumCoverHint">No cover yet</div>
-               </div>`;
+            : emptySvg;
 
         return `
             <button class="pgAlbumCard" type="button" data-pg-album-id="${escapeHtml(album.album_id)}">
-                <div class="pgAlbumCover">
-                    ${coverHtml}
-                </div>
-                <div class="pgAlbumCardBody">
-                    <div class="pgAlbumName">${escapeHtml(shorten(name, 80))}</div>
-                    <div class="pgAlbumDesc">${escapeHtml(shorten(desc || "No description", 120))}</div>
-                    <div class="pgAlbumMeta">${count} photo${count === 1 ? "" : "s"}</div>
-                </div>
+                <span class="pgAlbumCardInner">
+                    <span class="pgAlbumCover">
+                        ${coverHtml}
+                        <span class="pgAlbumCoverType">Album</span>
+                        <span class="pgAlbumCoverCount">▦ ${escapeHtml(photoLabel)}</span>
+                    </span>
+
+                    <span class="pgAlbumCardBody">
+                        <span class="pgAlbumKicker">Photo album</span>
+                        <span class="pgAlbumName">${escapeHtml(shorten(name, 80))}</span>
+                        <span class="pgAlbumDesc">${escapeHtml(shorten(desc || "No description", 120))}</span>
+                        <span class="pgAlbumMeta">${escapeHtml(photoLabel)} · collection</span>
+                    </span>
+                </span>
             </button>
         `;
     }

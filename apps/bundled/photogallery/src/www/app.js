@@ -969,7 +969,7 @@
             }
 
             const s = document.createElement("script");
-            s.src = "./albums_view.js?v=9";
+            s.src = "./albums_view.js?v=10";
             s.async = false;
             s.dataset.pqnasAlbumsView = "1";
 

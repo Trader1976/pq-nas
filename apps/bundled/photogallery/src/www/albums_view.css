@@ -41,36 +41,91 @@
 
 .pgAlbumsGrid{
     display:grid;
-    grid-template-columns:repeat(auto-fill, minmax(260px, 1fr));
-    gap:16px;
+    grid-template-columns:repeat(auto-fill, minmax(270px, 1fr));
+    gap:22px;
+    padding:4px 2px 8px 2px;
 }
 
 .pgAlbumCard{
+    position:relative;
     text-align:left;
-    border:1px solid var(--border2);
-    border-radius:22px;
-    background:linear-gradient(180deg, rgba(var(--fg-rgb),0.05), rgba(0,0,0,0.22));
+    border:0;
+    border-radius:24px;
+    background:transparent;
     color:var(--fg);
     padding:0;
     cursor:pointer;
+    display:block;
+    min-height:292px;
+    transition:transform 140ms ease;
+}
+
+.pgAlbumCard::before,
+.pgAlbumCard::after{
+    content:"";
+    position:absolute;
+    border:1px solid var(--border2);
+    border-radius:24px;
+    background:
+            linear-gradient(180deg, rgba(var(--fg-rgb),0.045), rgba(0,0,0,0.18)),
+            var(--pg_surface, var(--panel));
+    box-shadow:0 12px 26px rgba(0,0,0,0.12);
+    pointer-events:none;
+    transition:transform 140ms ease, opacity 140ms ease, border-color 140ms ease;
+}
+
+.pgAlbumCard::before{
+    inset:10px -8px -8px 10px;
+    transform:rotate(-2.2deg);
+    opacity:.58;
+    z-index:0;
+}
+
+.pgAlbumCard::after{
+    inset:5px -4px -4px 5px;
+    transform:rotate(1.25deg);
+    opacity:.72;
+    z-index:1;
+}
+
+.pgAlbumCardInner{
+    position:relative;
+    z-index:2;
     display:flex;
     flex-direction:column;
-    min-height:250px;
+    min-height:292px;
+    border:1px solid var(--border2);
+    border-radius:24px;
+    background:
+            linear-gradient(180deg, rgba(var(--fg-rgb),0.055), rgba(0,0,0,0.22)),
+            var(--pg_surface, var(--panel));
     overflow:hidden;
-    transition:transform 140ms ease, background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
-    box-shadow:0 12px 28px rgba(0,0,0,0.14);
+    box-shadow:0 16px 34px rgba(0,0,0,0.16);
+    transition:background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
 }
 
 .pgAlbumCard:hover{
     transform:translateY(-2px);
-    background:rgba(var(--fg-rgb),0.06);
-    border-color:rgba(var(--fg-rgb),0.34);
-    box-shadow:0 18px 42px rgba(0,0,0,0.20);
+}
+
+.pgAlbumCard:hover::before{
+    transform:rotate(-3.2deg) translateY(1px);
+    border-color:rgba(var(--fg-rgb),0.22);
+}
+
+.pgAlbumCard:hover::after{
+    transform:rotate(2deg) translateY(1px);
+    border-color:rgba(var(--fg-rgb),0.26);
+}
+
+.pgAlbumCard:hover .pgAlbumCardInner{
+    border-color:rgba(var(--fg-rgb),0.36);
+    box-shadow:0 22px 48px rgba(0,0,0,0.22);
 }
 
 .pgAlbumCover{
     position:relative;
-    height:168px;
+    height:166px;
     overflow:hidden;
     background:
             radial-gradient(220px 140px at 25% 20%, rgba(var(--fg-rgb),0.20), transparent 62%),
@@ -94,6 +149,48 @@
     filter:saturate(1.08) contrast(1.04);
 }
 
+.pgAlbumCover::after{
+    content:"";
+    position:absolute;
+    left:0;
+    right:0;
+    bottom:0;
+    height:46%;
+    background:linear-gradient(180deg, transparent, rgba(0,0,0,0.34));
+    pointer-events:none;
+}
+
+.pgAlbumCoverType,
+.pgAlbumCoverCount{
+    position:absolute;
+    z-index:2;
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+    border-radius:999px;
+    border:1px solid rgba(var(--fg-rgb),0.28);
+    background:rgba(0,0,0,0.46);
+    color:var(--fg);
+    font-size:11px;
+    font-weight:950;
+    backdrop-filter:blur(6px);
+}
+
+.pgAlbumCoverType{
+    top:10px;
+    right:10px;
+    padding:5px 9px;
+    text-transform:uppercase;
+    letter-spacing:.06em;
+}
+
+.pgAlbumCoverCount{
+    left:10px;
+    bottom:10px;
+    padding:5px 9px;
+    font-family:var(--mono);
+}
+
 .pgAlbumCoverEmpty{
     height:100%;
     width:100%;
@@ -102,22 +199,60 @@
     align-items:center;
     justify-content:center;
     gap:8px;
-    color:rgba(var(--fg-rgb),0.78);
+    color:rgba(var(--fg-rgb),0.76);
+    background:
+            radial-gradient(180px 120px at 45% 35%, rgba(var(--fg-rgb),0.12), transparent 64%),
+            linear-gradient(135deg, rgba(var(--fg-rgb),0.045), rgba(0,0,0,0.06));
 }
 
-.pgAlbumCoverGlyph{
-    width:56px;
-    height:56px;
-    border-radius:18px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    font-size:30px;
-    background:rgba(var(--fg-rgb),0.08);
-    border:1px solid rgba(var(--fg-rgb),0.20);
+.pgAlbumCoverSvg{
+    width:112px;
+    height:78px;
+    color:rgba(var(--fg-rgb),0.82);
+    filter:drop-shadow(0 10px 18px rgba(0,0,0,0.12));
+}
+
+.pgAlbumSvgSheet{
+    fill:rgba(var(--fg-rgb),0.055);
+    stroke:rgba(var(--fg-rgb),0.30);
+    stroke-width:2;
+}
+
+.pgAlbumSvgSheet.back{
+    opacity:.42;
+}
+
+.pgAlbumSvgSheet.mid{
+    opacity:.62;
+}
+
+.pgAlbumSvgSheet.front{
+    fill:rgba(var(--fg-rgb),0.075);
+    opacity:.92;
+}
+
+.pgAlbumSvgSun{
+    fill:rgba(var(--fg-rgb),0.22);
+    stroke:rgba(var(--fg-rgb),0.42);
+    stroke-width:2;
+}
+
+.pgAlbumSvgMountain{
+    fill:rgba(var(--fg-rgb),0.12);
+    stroke:rgba(var(--fg-rgb),0.46);
+    stroke-width:2;
+    stroke-linejoin:round;
+}
+
+.pgAlbumSvgLine{
+    stroke:rgba(var(--fg-rgb),0.34);
+    stroke-width:2;
+    stroke-linecap:round;
 }
 
 .pgAlbumCoverHint{
+    position:relative;
+    z-index:2;
     font-size:12px;
     font-family:var(--mono);
     color:var(--fg-dim);
@@ -126,25 +261,45 @@
 .pgAlbumCardBody{
     min-width:0;
     flex:1 1 auto;
-    padding:14px;
+    padding:14px 14px 16px 14px;
     display:flex;
     flex-direction:column;
-    gap:8px;
+    gap:7px;
+    background:
+            linear-gradient(180deg, rgba(var(--fg-rgb),0.025), rgba(0,0,0,0.08)),
+            transparent;
+}
+
+.pgAlbumKicker{
+    display:inline-flex;
+    align-self:flex-start;
+    padding:4px 8px;
+    border-radius:999px;
+    border:1px solid rgba(var(--fg-rgb),0.16);
+    background:rgba(var(--fg-rgb),0.06);
+    color:rgba(var(--fg-rgb),0.76);
+    font-family:var(--mono);
+    font-size:10px;
+    font-weight:900;
+    text-transform:uppercase;
+    letter-spacing:.08em;
 }
 
 .pgAlbumName{
+    display:block;
     font-weight:950;
-    font-size:16px;
+    font-size:17px;
     overflow:hidden;
     text-overflow:ellipsis;
     white-space:nowrap;
 }
 
 .pgAlbumDesc{
+    display:block;
     color:var(--fg-dim);
     font-size:12px;
     line-height:1.35;
-    min-height:34px;
+    min-height:32px;
 }
 
 .pgAlbumMeta{
@@ -320,4 +475,57 @@
 .pgAlbumCtxItem:disabled:hover{
     background:transparent;
     border-color:transparent;
+}
+
+html[data-theme="win_classic"] .pgAlbumCard,
+html[data-theme="win_classic"] .pgAlbumCardInner,
+html[data-theme="win_classic"] .pgAlbumCard::before,
+html[data-theme="win_classic"] .pgAlbumCard::after{
+    border-radius:2px;
+}
+
+html[data-theme="win_classic"] .pgAlbumCard::before,
+html[data-theme="win_classic"] .pgAlbumCard::after{
+    box-shadow:1px 1px 0 rgba(0,0,0,0.28);
+}
+
+html[data-theme="win_classic"] .pgAlbumCoverType,
+html[data-theme="win_classic"] .pgAlbumCoverCount,
+html[data-theme="win_classic"] .pgAlbumKicker,
+html[data-theme="win_classic"] .pgAlbumMeta{
+    border-radius:2px;
+}
+
+/* Light/classic themes: album image badges should be readable light pills,
+   not dark glass badges. */
+html[data-theme="bright"] .pgAlbumCoverType,
+html[data-theme="bright"] .pgAlbumCoverCount,
+html[data-theme="bright"] .pgAlbumCoverBadge{
+    background:rgba(255,255,255,0.86);
+    color:#111827;
+    border-color:rgba(0,0,0,0.20);
+    box-shadow:0 6px 14px rgba(0,0,0,0.12);
+    backdrop-filter:none;
+}
+
+html[data-theme="bright"] .pgAlbumCoverType,
+html[data-theme="bright"] .pgAlbumCoverCount{
+    font-weight:950;
+}
+
+html[data-theme="win_classic"] .pgAlbumCoverType,
+html[data-theme="win_classic"] .pgAlbumCoverCount,
+html[data-theme="win_classic"] .pgAlbumCoverBadge{
+    background:#e6e6e6;
+    color:#000;
+    border-color:#808080;
+    box-shadow:
+            inset 1px 1px 0 #ffffff,
+            inset -1px -1px 0 #9a9a9a;
+    backdrop-filter:none;
+}
+
+html[data-theme="win_classic"] .pgAlbumCoverType,
+html[data-theme="win_classic"] .pgAlbumCoverCount{
+    font-weight:950;
 }
