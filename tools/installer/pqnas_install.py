@@ -1188,6 +1188,7 @@ def enable_letsencrypt_nginx(domain: str, email: str, redirect: bool, logw=None)
             "-d", domain,
             "--non-interactive",
             "--agree-tos",
+            "--reuse-key",
             "--email", email,
         ]
         if redirect:
@@ -1207,6 +1208,8 @@ def enable_letsencrypt_nginx(domain: str, email: str, redirect: bool, logw=None)
 
         if p.returncode != 0:
             raise RuntimeError("certbot failed")
+
+        ensure_letsencrypt_reuse_key(domain, log=logw)
 
         subprocess.run(
             ["systemctl", "reload", "nginx"],
@@ -1299,6 +1302,56 @@ def have_letsencrypt_cert(hostname: str) -> bool:
     """
     fullchain, privkey = letsencrypt_cert_paths(hostname)
     return os.path.isfile(fullchain) and os.path.isfile(privkey)
+
+
+def ensure_letsencrypt_reuse_key(hostname: str, log: Optional[Log] = None) -> bool:
+    """
+    Ensure Certbot keeps using the same private key on renewal.
+
+    Why this matters:
+      Android app pairing pins the HTTPS certificate public key using
+      PQNAS_TLS_SPKI_SHA256_PIN. If Certbot rotates the private key during
+      renewal, the SPKI pin changes and already-paired mobile clients can fail.
+
+    Returns True if a local Certbot renewal config exists and was verified/updated.
+    Returns False when this host is not managed by local Certbot.
+    """
+    h = (hostname or "").strip()
+    if not h:
+        return False
+
+    renewal_path = f"/etc/letsencrypt/renewal/{h}.conf"
+    if not os.path.isfile(renewal_path):
+        return False
+
+    with open(renewal_path, "r", encoding="utf-8") as f:
+        old_text = f.read()
+
+    # Remove all existing reuse_key entries, then add one canonical value.
+    new_text = re.sub(r"(?m)^\s*reuse_key\s*=.*\n?", "", old_text)
+
+    if "[renewalparams]" in new_text:
+        new_text = new_text.replace(
+            "[renewalparams]\n",
+            "[renewalparams]\nreuse_key = True\n",
+            1,
+        )
+    else:
+        new_text = new_text.rstrip() + "\n\n[renewalparams]\nreuse_key = True\n"
+
+    if new_text != old_text:
+        tmp = renewal_path + ".new"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(new_text)
+        os.replace(tmp, renewal_path)
+        if log:
+            log.write(f"[*] Certbot renewal key reuse enabled: {renewal_path}")
+    else:
+        if log:
+            log.write(f"[*] Certbot renewal key reuse already enabled: {renewal_path}")
+
+    return True
+
 
 def compute_tls_spki_sha256_pin_from_cert(cert_path: str) -> str:
     """
@@ -2639,6 +2692,8 @@ class ExecuteScreen(Screen):
                 rp_id = st.nginx_hostname
 
             if origin and origin.startswith("https://") and st.nginx_hostname:
+                ensure_letsencrypt_reuse_key(st.nginx_hostname, log=self.logw)
+
                 tls_spki_pin_sha256, tls_pin_source = detect_tls_spki_sha256_pin(
                     st.nginx_hostname,
                     log=self.logw,
