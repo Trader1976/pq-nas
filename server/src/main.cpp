@@ -7890,6 +7890,21 @@ static std::string guess_download_mime_from_name(const std::string& name) {
     if (ext == "bmp") return "image/bmp";
     if (ext == "ico") return "image/x-icon";
 
+    if (ext == "mp4" || ext == "m4v") return "video/mp4";
+    if (ext == "mov") return "video/quicktime";
+    if (ext == "webm") return "video/webm";
+    if (ext == "mkv") return "video/x-matroska";
+    if (ext == "avi") return "video/x-msvideo";
+    if (ext == "3gp" || ext == "3gpp") return "video/3gpp";
+
+    if (ext == "mp3") return "audio/mpeg";
+    if (ext == "m4a") return "audio/mp4";
+    if (ext == "aac") return "audio/aac";
+    if (ext == "wav") return "audio/wav";
+    if (ext == "ogg" || ext == "oga") return "audio/ogg";
+    if (ext == "opus") return "audio/opus";
+    if (ext == "flac") return "audio/flac";
+
     if (ext == "txt" || ext == "log" || ext == "md") return "text/plain; charset=utf-8";
     if (ext == "json") return "application/json; charset=utf-8";
     if (ext == "html" || ext == "htm") return "text/html; charset=utf-8";
@@ -7909,8 +7924,24 @@ static bool is_inline_preview_mime(const std::string& mime) {
            mime == "image/webp" ||
            mime == "image/svg+xml" ||
            mime == "image/bmp" ||
-           mime == "image/x-icon";
+           mime == "image/x-icon" ||
+
+           mime == "video/mp4" ||
+           mime == "video/quicktime" ||
+           mime == "video/webm" ||
+           mime == "video/x-matroska" ||
+           mime == "video/x-msvideo" ||
+           mime == "video/3gpp" ||
+
+           mime == "audio/mpeg" ||
+           mime == "audio/mp4" ||
+           mime == "audio/aac" ||
+           mime == "audio/wav" ||
+           mime == "audio/ogg" ||
+           mime == "audio/opus" ||
+           mime == "audio/flac";
 }
+
 static void tiering_worker_loop(pqnas::UsersRegistry* users,
                                 std::atomic<bool>* stop_flag) {
 	std::cerr << "[tiering-worker] started\n";
@@ -28639,19 +28670,43 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
         )
     );
 
-    // httplib content provider: called repeatedly until it returns false
+    res.set_header("Accept-Ranges", "bytes");
+
+    // httplib calls this provider with the exact byte offset requested by
+    // normal downloads, single Range requests, and multi-range media probes.
+    // We must seek to that offset every time; otherwise Range headers are
+    // correct but the body comes from the wrong place.
     res.set_content_provider(
-        (size_t)sz,
+        static_cast<size_t>(sz),
         mime.c_str(),
-        [fp](size_t /*offset*/, size_t length, httplib::DataSink& sink) mutable {
-            std::string buf;
-            buf.resize(length);
+        [fp](size_t offset, size_t length, httplib::DataSink& sink) mutable {
+            if (!fp || !fp->is_open()) return false;
 
-            fp->read(buf.data(), (std::streamsize)length);
-            std::streamsize n = fp->gcount();
-            if (n > 0) sink.write(buf.data(), (size_t)n);
+            fp->clear();
+            fp->seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+            if (!fp->good()) return false;
 
-            return n > 0; // false ends the stream
+            constexpr size_t kChunk = 64 * 1024;
+            std::vector<char> buf;
+            buf.resize(std::min(kChunk, length));
+
+            size_t remaining = length;
+
+            while (remaining > 0) {
+                const size_t want = std::min(buf.size(), remaining);
+
+                fp->read(buf.data(), static_cast<std::streamsize>(want));
+                const std::streamsize got = fp->gcount();
+
+                if (got <= 0) break;
+
+                sink.write(buf.data(), static_cast<size_t>(got));
+                remaining -= static_cast<size_t>(got);
+
+                if (static_cast<size_t>(got) < want) break;
+            }
+
+            return remaining == 0;
         },
         [fp](bool /*success*/) mutable {
             if (fp && fp->is_open()) fp->close();
