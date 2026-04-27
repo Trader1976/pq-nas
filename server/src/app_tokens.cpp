@@ -569,7 +569,82 @@ bool AppTokenStore::refresh_access_token(
 
     return true;
 }
+bool AppTokenStore::revoke_refresh_token(
+    const std::string& raw_refresh_token,
+    const std::string& device_id,
+    std::string* err)
+{
+    if (err) err->clear();
 
+    if (raw_refresh_token.empty()) {
+        if (err) *err = "empty refresh token";
+        return false;
+    }
+
+    if (device_id.empty()) {
+        if (err) *err = "empty device_id";
+        return false;
+    }
+
+    const std::string h = sha256_hex_lower(raw_refresh_token);
+    if (h.empty()) {
+        if (err) *err = "refresh token hash failed";
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+
+        auto it = refresh_by_hash_.find(h);
+        if (it == refresh_by_hash_.end()) {
+            if (err) *err = "refresh token not found";
+            return false;
+        }
+
+        AppRefreshSession& rs = it->second;
+
+        if (rs.device_id != device_id) {
+            if (err) *err = "device mismatch";
+            return false;
+        }
+
+        /*
+         * A valid refresh token proves possession of this app device session.
+         * Logout should kill the whole app-device session, not just the single
+         * refresh token:
+         *
+         * - revoke every refresh token for this device
+         * - revoke every access token for this device
+         * - mark the device itself revoked
+         *
+         * This makes Android logout immediate even if an access token still had
+         * a few minutes left.
+         */
+        for (auto& kv : refresh_by_hash_) {
+            if (kv.second.device_id == device_id) {
+                kv.second.revoked = true;
+            }
+        }
+
+        for (auto& kv : access_by_hash_) {
+            if (kv.second.device_id == device_id) {
+                kv.second.revoked = true;
+            }
+        }
+
+        if (TrustedAppDevice* d = find_device_mut(device_id)) {
+            d->revoked = true;
+        }
+    }
+
+    std::string save_err;
+    if (!save(&save_err)) {
+        if (err) *err = "save failed: " + save_err;
+        return false;
+    }
+
+    return true;
+}
 void AppTokenStore::prune_expired_access_tokens(long now) {
     std::lock_guard<std::mutex> lk(mu_);
     for (auto it = access_by_hash_.begin(); it != access_by_hash_.end();) {

@@ -96,6 +96,11 @@ public:
         long* out_access_exp,
         std::string* err);
 
+	bool revoke_refresh_token(
+	const std::string& raw_refresh_token,
+	const std::string& device_id,
+	std::string* err);
+
     void prune_expired_access_tokens(long now);
     void prune_expired_refresh_tokens(long now);
 

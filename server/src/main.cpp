@@ -9393,7 +9393,22 @@ v5.consume_app_mint =
 	        out.device_id = device_id;
 	        return true;
 	    };
+    v5.revoke_app_token = [&](
+        const std::string& refresh_token,
+        const std::string& device_id,
+        const std::string& client_ip,
+        std::string& err) -> bool
+    {
+        (void)client_ip;
 
+        err.clear();
+
+        if (!g_app_tokens.revoke_refresh_token(refresh_token, device_id, &err)) {
+            return false;
+        }
+
+        return true;
+    };
 	v5.build_req_payload_canonical = [&](const std::string& sid,
                                      const std::string& chal,
                                      const std::string& nonce,

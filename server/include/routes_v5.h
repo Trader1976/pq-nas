@@ -203,7 +203,7 @@ struct RoutesV5Context {
                        const std::string& client_ip,
                        RefreshAppResult& out,
                        std::string& err)> refresh_app_token;
-
+	std::function<bool(const std::string& refresh_token, const std::string& device_id, const std::string& client_ip, std::string& err)> revoke_app_token;
     std::function<VerifyResult(const std::string& body)> verify_v4_json;
     std::function<std::string(const nlohmann::json&, const unsigned char* /*SERVER_SK*/)> sign_token_v4_ed25519;
 

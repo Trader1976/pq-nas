@@ -890,7 +890,83 @@ srv.Post("/api/v5/token/refresh", [&](const httplib::Request& req, httplib::Resp
         {"device_id", out.device_id.empty() ? device_id : out.device_id}
     }.dump());
 });
+// ---- POST /api/v5/token/revoke {refresh_token, device_id} ----
+// Mobile/app logout endpoint.
+// Requires possession of the refresh token, then revokes the whole app-device session.
+srv.Post("/api/v5/token/revoke", [&](const httplib::Request& req, httplib::Response& res) {
+    json j;
+    std::string jerr;
 
+    if (!parse_json_body(req, j, jerr)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", jerr}
+        }.dump());
+        return;
+    }
+
+    const std::string refresh_token = j.value("refresh_token", std::string{});
+    const std::string device_id = j.value("device_id", std::string{});
+
+    if (refresh_token.empty() || device_id.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing refresh_token or device_id"}
+        }.dump());
+        return;
+    }
+
+    if (!ctx.revoke_app_token) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "revoke_app_token_not_configured"}
+        }.dump());
+        return;
+    }
+
+    std::string rerr;
+    const std::string client_ip = ctx.client_ip ? ctx.client_ip(req) : req.remote_addr;
+
+    if (!ctx.revoke_app_token(refresh_token, device_id, client_ip, rerr)) {
+        if (ctx.audit_emit) {
+            ctx.audit_emit("v5.token_revoke_fail", "fail", [&](std::map<std::string, std::string>& f) {
+                f["device_id"] = device_id;
+                f["reason"] = rerr.empty() ? "revoke_failed" : rerr;
+                if (!client_ip.empty()) f["ip"] = client_ip;
+
+                const std::string ua = req_header_or_empty(req, "User-Agent");
+                if (!ua.empty()) f["ua"] = ua;
+            });
+        }
+
+        reply_json(res, 401, json{
+            {"ok", false},
+            {"error", "unauthorized"},
+            {"message", rerr.empty() ? "revoke denied" : rerr},
+            {"device_id", device_id}
+        }.dump());
+        return;
+    }
+
+    if (ctx.audit_emit) {
+        ctx.audit_emit("v5.token_revoke_ok", "ok", [&](std::map<std::string, std::string>& f) {
+            f["device_id"] = device_id;
+            if (!client_ip.empty()) f["ip"] = client_ip;
+
+            const std::string ua = req_header_or_empty(req, "User-Agent");
+            if (!ua.empty()) f["ua"] = ua;
+        });
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"device_id", device_id},
+        {"state", "revoked"}
+    }.dump());
+});
 // ---- POST /api/v5/app_pair/start ----
 srv.Post("/api/v5/app_pair/start", [&](const httplib::Request& req, httplib::Response& res) {
     if (!ctx.require_user_cookie) {
