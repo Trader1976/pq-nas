@@ -436,6 +436,351 @@ static std::string build_content_disposition(const std::string& kind, const std:
     return kind + "; filename=\"" + fallback + "\"; filename*=UTF-8''" + encoded;
 }
 
+
+static std::string public_share_ext_lower_local(const std::filesystem::path& p) {
+    std::string ext = p.extension().string();
+    for (char& c : ext) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return ext;
+}
+
+static std::string public_share_guess_mime_local(const std::filesystem::path& p) {
+    const std::string ext = public_share_ext_lower_local(p);
+
+    if (ext == ".mp4" || ext == ".m4v") return "video/mp4";
+    if (ext == ".webm") return "video/webm";
+    if (ext == ".ogv" || ext == ".ogg") return "video/ogg";
+    if (ext == ".mov") return "video/quicktime";
+
+    if (ext == ".mp3") return "audio/mpeg";
+    if (ext == ".m4a") return "audio/mp4";
+    if (ext == ".wav") return "audio/wav";
+    if (ext == ".flac") return "audio/flac";
+
+    if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
+    if (ext == ".png") return "image/png";
+    if (ext == ".gif") return "image/gif";
+    if (ext == ".webp") return "image/webp";
+
+    if (ext == ".pdf") return "application/pdf";
+
+    return "application/octet-stream";
+}
+
+static bool public_share_is_video_mime_local(const std::string& mime) {
+    return mime.rfind("video/", 0) == 0;
+}
+
+static bool public_share_is_previewable_mime_local(const std::string& mime) {
+    return mime.rfind("video/", 0) == 0 ||
+           mime.rfind("audio/", 0) == 0 ||
+           mime.rfind("image/", 0) == 0 ||
+           mime == "application/pdf";
+}
+
+static std::string public_share_html_escape_local(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+
+    for (char c : s) {
+        switch (c) {
+        case '&': out += "&amp;"; break;
+        case '<': out += "&lt;"; break;
+        case '>': out += "&gt;"; break;
+        case '"': out += "&quot;"; break;
+        case '\'': out += "&#39;"; break;
+        default: out.push_back(c); break;
+        }
+    }
+
+    return out;
+}
+static bool public_share_parse_range_local(const std::string& h,
+                                           std::uint64_t size,
+                                           std::uint64_t* start,
+                                           std::uint64_t* end) {
+    if (!start || !end) return false;
+    if (size == 0) return false;
+    if (h.rfind("bytes=", 0) != 0) return false;
+
+    const std::string spec = h.substr(6);
+    const auto dash = spec.find('-');
+    if (dash == std::string::npos) return false;
+
+    const std::string a = spec.substr(0, dash);
+    const std::string b = spec.substr(dash + 1);
+
+    try {
+        if (a.empty()) {
+            if (b.empty()) return false;
+
+            const std::uint64_t suffix = std::stoull(b);
+            if (suffix == 0) return false;
+
+            *start = suffix >= size ? 0 : size - suffix;
+            *end = size - 1;
+            return true;
+        }
+
+        std::uint64_t s = std::stoull(a);
+        std::uint64_t e = b.empty() ? size - 1 : std::stoull(b);
+
+        if (s >= size) return false;
+        if (e < s) return false;
+        if (e >= size) e = size - 1;
+
+        *start = s;
+        *end = e;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+static void public_share_send_file_stream_local(const httplib::Request& req,
+                                                httplib::Response& res,
+                                                const std::filesystem::path& abs_path,
+                                                const std::string& filename,
+                                                bool force_download) {
+    std::error_code ec;
+    const std::uint64_t size = std::filesystem::file_size(abs_path, ec);
+    if (ec) {
+        res.status = 404;
+        res.set_content(R"({"ok":false,"error":"file_not_found"})", "application/json");
+        return;
+    }
+
+    const std::string mime = public_share_guess_mime_local(abs_path);
+    const bool previewable = public_share_is_previewable_mime_local(mime);
+
+    res.set_header("Accept-Ranges", "bytes");
+
+    res.set_header(
+        "Content-Disposition",
+        build_content_disposition(
+            (force_download || !previewable) ? "attachment" : "inline",
+            filename.empty() ? "download" : filename
+        )
+    );
+
+    const std::string range = req.get_header_value("Range");
+
+    if (!range.empty()) {
+        // cpp-httplib parsed the Range header into req.ranges earlier.
+        // Since this route handles Range manually, clear the parsed ranges
+        // or httplib will apply Range a second time to our 1024-byte body
+        // and emit a bogus duplicate:
+        // Content-Range: bytes 0-1023/1024
+        auto& mutable_req = const_cast<httplib::Request&>(req);
+        mutable_req.ranges.clear();
+
+        std::uint64_t start = 0;
+        std::uint64_t end = 0;
+
+        if (!public_share_parse_range_local(range, size, &start, &end)) {
+            res.status = 416;
+            res.set_header("Content-Range", ("bytes */" + std::to_string(size)).c_str());
+            res.set_content("", "text/plain; charset=utf-8");
+            return;
+        }
+
+        // Safety cap: do not read huge requested ranges into RAM.
+        // Browsers are fine receiving a smaller satisfiable range and asking again.
+        static constexpr std::uint64_t kMaxManualRangeBytes = 8ull * 1024ull * 1024ull;
+
+        if (end >= start && (end - start + 1) > kMaxManualRangeBytes) {
+            end = start + kMaxManualRangeBytes - 1;
+            if (end >= size) end = size - 1;
+        }
+
+        const std::uint64_t len64 = end - start + 1;
+
+        std::string body;
+        body.resize(static_cast<size_t>(len64));
+
+        std::ifstream in(abs_path, std::ios::binary);
+        if (!in.good()) {
+            res.status = 404;
+            res.set_content(R"({"ok":false,"error":"file_not_found"})", "application/json");
+            return;
+        }
+
+        in.seekg(static_cast<std::streamoff>(start), std::ios::beg);
+        if (!in.good()) {
+            res.status = 500;
+            res.set_content("Server error\n", "text/plain; charset=utf-8");
+            return;
+        }
+
+        in.read(body.data(), static_cast<std::streamsize>(body.size()));
+        const size_t got = static_cast<size_t>(in.gcount());
+        if (got != body.size()) {
+            body.resize(got);
+            if (body.empty()) {
+                res.status = 500;
+                res.set_content("Server error\n", "text/plain; charset=utf-8");
+                return;
+            }
+            end = start + static_cast<std::uint64_t>(body.size()) - 1;
+        }
+
+        res.status = 206;
+        res.set_header(
+            "Content-Range",
+            (
+                "bytes " +
+                std::to_string(start) +
+                "-" +
+                std::to_string(end) +
+                "/" +
+                std::to_string(size)
+            ).c_str()
+        );
+
+        res.set_content(std::move(body), mime.c_str());
+        return;
+    }
+
+    res.status = 200;
+
+    // Full non-range response. This is fine for normal GET / ?raw=1.
+    res.set_content_provider(
+        static_cast<size_t>(size),
+        mime.c_str(),
+        [abs_path](size_t offset, size_t length, httplib::DataSink& sink) {
+            std::ifstream in(abs_path, std::ios::binary);
+            if (!in.good()) return false;
+
+            in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+            if (!in.good()) return false;
+
+            std::array<char, 64 * 1024> buf{};
+            size_t remaining = length;
+
+            while (remaining > 0 && in.good()) {
+                const size_t want = std::min(remaining, buf.size());
+                in.read(buf.data(), static_cast<std::streamsize>(want));
+
+                const size_t got = static_cast<size_t>(in.gcount());
+                if (got == 0) break;
+
+                if (!sink.write(buf.data(), got)) return false;
+                remaining -= got;
+            }
+
+            return remaining == 0;
+        }
+    );
+}
+
+static std::string public_share_video_page_local(const std::string& token,
+                                                 const std::string& filename) {
+    const std::string title = public_share_html_escape_local(
+        filename.empty() ? "Shared video" : filename
+    );
+    const std::string safe_token = public_share_html_escape_local(token);
+
+    return std::string(R"HTML(<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>)HTML") + title + R"HTML(</title>
+<style>
+:root {
+    color-scheme: dark;
+    --bg:#080b12;
+    --panel:#111827;
+    --fg:#e5e7eb;
+    --dim:#9ca3af;
+    --border:rgba(255,255,255,.14);
+}
+* { box-sizing:border-box; }
+body {
+    margin:0;
+    min-height:100vh;
+    background:
+        radial-gradient(circle at top left, rgba(255,122,24,.16), transparent 34rem),
+        linear-gradient(180deg, #05070c, #0b1020);
+    color:var(--fg);
+    font:14px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:24px;
+}
+.card {
+    width:min(1100px, 100%);
+    background:rgba(17,24,39,.86);
+    border:1px solid var(--border);
+    border-radius:22px;
+    box-shadow:0 24px 80px rgba(0,0,0,.46);
+    overflow:hidden;
+}
+.head {
+    padding:18px 20px;
+    border-bottom:1px solid var(--border);
+    display:flex;
+    gap:12px;
+    align-items:center;
+    justify-content:space-between;
+}
+.name {
+    font-weight:700;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+.actions {
+    display:flex;
+    gap:10px;
+    flex-shrink:0;
+}
+a.btn {
+    color:var(--fg);
+    text-decoration:none;
+    border:1px solid var(--border);
+    border-radius:12px;
+    padding:8px 12px;
+    background:rgba(255,255,255,.06);
+}
+a.btn:hover {
+    background:rgba(255,255,255,.1);
+}
+.player {
+    padding:18px;
+}
+video {
+    width:100%;
+    max-height:78vh;
+    border-radius:16px;
+    background:#000;
+    display:block;
+}
+.foot {
+    color:var(--dim);
+    padding:0 20px 18px;
+}
+</style>
+</head>
+<body>
+<div class="card">
+    <div class="head">
+        <div class="name">)HTML" + title + R"HTML(</div>
+        <div class="actions">
+            <a class="btn" href="/s/)HTML" + safe_token + R"HTML(?download=1">Download</a>
+        </div>
+    </div>
+    <div class="player">
+        <video controls preload="metadata" src="/s/)HTML" + safe_token + R"HTML(?raw=1"></video>
+    </div>
+    <div class="foot">DNA-Nexus shared video</div>
+</div>
+</body>
+</html>
+)HTML";
+}
+
 static json normalize_app_launch_policy_json(const json& in) {
     json out = json::object();
     out["schema"] = 1;
@@ -38191,27 +38536,73 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
 
     // Serve
     if (s.type == "file") {
-        // Stream file (simple v1: read to memory; if you already have a streaming helper, use it)
-        std::ifstream f(abs, std::ios::binary);
-        if (!f.good()) {
-            audit_event("share_download", "fail", &s, "open_failed", 500);
-            res.status = 500;
-            res.set_header("Cache-Control", "no-store");
-            res.set_content("Server error\n", "text/plain; charset=utf-8");
-            return;
-        }
-        std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-
-        audit_event("share_download", "ok", &s, "", 200);
-        (void)shares.increment_downloads(token, &err); // best effort
-
         std::string fname = std::filesystem::path(s.path).filename().string();
         if (fname.empty()) fname = "download";
 
-        res.status = 200;
+        const std::string mime = public_share_guess_mime_local(abs);
+
+        const bool force_download = req.has_param("download");
+        const bool raw_stream =
+            req.has_param("raw") ||
+            !req.get_header_value("Range").empty();
+
+        // Keep old behavior for normal non-video share links:
+        // /s/<token> still downloads normal files.
+        //
+        // But video links open a browser player page:
+        // /s/<token>       -> HTML video page
+        // /s/<token>?raw=1 -> actual video stream with Range support
+        if (!force_download && !raw_stream && public_share_is_video_mime_local(mime)) {
+            std::error_code ec_file;
+            const auto sz = std::filesystem::file_size(abs, ec_file);
+            if (ec_file || sz == 0) {
+                audit_event(
+                    "share_download",
+                    "fail",
+                    &s,
+                    ec_file ? "file_size_failed" : "empty_file",
+                    404,
+                    ec_file ? ec_file.message() : "empty file"
+                );
+
+                res.status = 404;
+                res.set_header("Cache-Control", "no-store");
+                res.set_content("Not found\n", "text/plain; charset=utf-8");
+                return;
+            }
+
+            audit_event("share_download", "ok", &s, "video_preview_page", 200);
+            (void)shares.increment_downloads(token, &err);
+
+            res.status = 200;
+            res.set_header("Cache-Control", "no-store");
+            res.set_content(
+                public_share_video_page_local(token, fname),
+                "text/html; charset=utf-8"
+            );
+            return;
+        }
+
+        const bool attachment_mode =
+            force_download ||
+            !raw_stream;
+
+        audit_event(
+            "share_download",
+            "ok",
+            &s,
+            attachment_mode ? "" : "inline_stream",
+            raw_stream ? 206 : 200
+        );
+
+        // Count old-style downloads and explicit downloads.
+        // Do not count every video Range request, otherwise one video view can become many downloads.
+        if (attachment_mode || force_download) {
+            (void)shares.increment_downloads(token, &err);
+        }
+
         res.set_header("Cache-Control", "no-store");
-        res.set_header("Content-Disposition", build_content_disposition("attachment", fname));
-        res.set_content(std::move(data), "application/octet-stream");
+        public_share_send_file_stream_local(req, res, abs, fname, attachment_mode);
         return;
     }
 
