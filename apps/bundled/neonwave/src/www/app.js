@@ -1483,6 +1483,76 @@
     playlistLoadBtn?.addEventListener("click", loadSelectedPlaylistToQueue);
     playlistDeleteBtn?.addEventListener("click", deleteSelectedPlaylist);
 
+
+    function neonwavePublicTrack(track) {
+        const cleanPath = normPath(track && track.path ? track.path : "");
+        if (!cleanPath || cleanPath === "/") return null;
+
+        return {
+            name: String(track.name || cleanPath.split("/").pop() || cleanPath),
+            path: cleanPath,
+            cover: String(track.cover || coverForDir(parentPath(cleanPath)) || "")
+        };
+    }
+
+    window.NEONWAVE_APP_API = {
+        getQueue() {
+            return state.queue.map(neonwavePublicTrack).filter(Boolean);
+        },
+
+        setQueue(tracks, autoplay = true) {
+            const clean = Array.isArray(tracks)
+                ? tracks.map(neonwavePublicTrack).filter(Boolean)
+                : [];
+
+            state.queue = clean;
+            state.currentIndex = -1;
+            renderQueue();
+
+            if (autoplay && state.queue.length) {
+                playQueueIndex(0);
+            }
+        },
+
+        addToQueueMany(tracks, autoplay = false) {
+            const clean = Array.isArray(tracks)
+                ? tracks.map(neonwavePublicTrack).filter(Boolean)
+                : [];
+
+            if (!clean.length) return;
+
+            const shouldAutoplay = autoplay && state.currentIndex < 0 && state.queue.length === 0;
+            state.queue.push(...clean);
+            renderQueue();
+
+            if (shouldAutoplay) {
+                playQueueIndex(0);
+            }
+        }
+    };
+
+    window.PQNAS_NEONWAVE_APP = {
+        scanCurrent() {
+            return scanAudio(state.path || "/");
+        },
+
+        scanPath(path) {
+            return scanAudio(path || state.path || "/");
+        },
+
+        currentPath() {
+            return state.path || "/";
+        },
+
+        currentMode() {
+            return state.mode || "folder";
+        },
+
+        loadPath(path) {
+            return loadPath(path || "/");
+        }
+    };
+
     renderQueue();
     loadPath("/");
 })();

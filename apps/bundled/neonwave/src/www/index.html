@@ -39,6 +39,20 @@
                 <button id="upBtn" class="pillBtn small" type="button">Up</button>
             </div>
 
+            <div class="librarySearchBox">
+                <div class="librarySearchInputWrap">
+                    <span class="librarySearchIcon">⌕</span>
+                    <input id="librarySearch" class="librarySearchInput" type="search"
+                           placeholder="Search current folder or scanned results…"
+                           autocomplete="off" spellcheck="false">
+                    <button id="librarySearchDeep" class="librarySearchDeep" type="button" title="Deep scan from current folder">Deep</button>
+                    <button id="librarySearchClear" class="librarySearchClear" type="button" title="Clear search">×</button>
+                </div>
+                <div id="librarySearchCount" class="librarySearchCount">0</div>
+            </div>
+
+            <div id="librarySearchEmpty" class="empty librarySearchEmpty" hidden>No matching tracks, folders or cover images.</div>
+
             <div id="statusLine" class="statusLine">Loading…</div>
             <div id="list" class="list"></div>
         </section>
@@ -102,6 +116,7 @@
 
                 <div id="eqGrid" class="eqGrid"></div>
             </div>
+            
 
             <div class="queueHead">
                 <div class="panelTitle">Queue</div>
@@ -113,6 +128,8 @@
     </main>
 </div>
 
+<script src="./neonwave_search.js"></script>
 <script src="./app.js"></script>
+<script src="./playlists.js"></script>
 </body>
 </html>

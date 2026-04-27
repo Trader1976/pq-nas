@@ -509,3 +509,108 @@ audio {
     color: var(--err, #ff5c7a);
     background: color-mix(in srgb, var(--err, #ff5c7a) 7%, transparent);
 }
+
+/* NeonWave library search/filter */
+.librarySearchBox {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    margin: 0 0 12px;
+}
+
+.librarySearchInputWrap {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--nw-accent-border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--nw-accent) 5%, transparent);
+    padding: 7px 9px 7px 12px;
+    min-width: 0;
+}
+
+.librarySearchIcon {
+    color: var(--nw-dim);
+    font-size: 15px;
+    line-height: 1;
+}
+
+.librarySearchInput {
+    min-width: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: var(--nw-fg);
+    font: inherit;
+}
+
+.librarySearchInput::placeholder {
+    color: var(--nw-dim);
+    opacity: 0.82;
+}
+
+.librarySearchClear {
+    width: 25px;
+    height: 25px;
+    border: 1px solid var(--nw-accent-border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--nw-accent) 7%, transparent);
+    color: var(--nw-accent);
+    cursor: pointer;
+    line-height: 1;
+}
+
+.librarySearchClear:hover {
+    background: var(--nw-accent-bg2);
+}
+
+.librarySearchCount {
+    color: var(--nw-dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+    white-space: nowrap;
+    border: 1px solid var(--nw-accent-border);
+    border-radius: 999px;
+    padding: 7px 10px;
+    background: color-mix(in srgb, var(--nw-accent) 4%, transparent);
+}
+
+.librarySearchEmpty {
+    border: 1px dashed var(--nw-accent-border);
+    border-radius: 14px;
+    margin-bottom: 10px;
+}
+
+.nwSearchHidden {
+    display: none !important;
+}
+.librarySearchDeep {
+    height: 25px;
+    border: 1px solid var(--nw-accent-border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--nw-accent) 7%, transparent);
+    color: var(--nw-accent);
+    cursor: pointer;
+    line-height: 1;
+    padding: 0 9px;
+    font-size: 12px;
+}
+
+.librarySearchDeep:hover {
+    background: var(--nw-accent-bg2);
+}
+
+.librarySearchDeep:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+.librarySearchDeep,
+.librarySearchClear {
+    flex: 0 0 auto;
+}
+
+.librarySearchInputWrap .librarySearchInput {
+    width: 100%;
+}
