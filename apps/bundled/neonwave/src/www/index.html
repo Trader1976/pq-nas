@@ -6,6 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="/static/theme.css">
     <link rel="stylesheet" href="./app.css">
+    <script src="/static/theme.js"></script>
 </head>
 <body>
 <div class="musicApp">
@@ -52,6 +53,35 @@
             </div>
 
             <audio id="audio" controls preload="metadata"></audio>
+            <div class="vizBox">
+                <div class="vizHead">
+                    <div class="panelTitle">Visualizer</div>
+                    <select id="vizStyle" class="vizSelect">
+                        <option value="bars">Neon bars</option>
+                        <option value="wave">Waveform</option>
+                        <option value="rings">Pulse rings</option>
+                        <option value="off">Off</option>
+                    </select>
+                </div>
+
+                <canvas id="vizCanvas" class="vizCanvas"></canvas>
+            </div>
+            <div class="eqBox">
+                <div class="eqHead">
+                    <div class="panelTitle">Equalizer</div>
+                    <label class="eqPower">
+                        <input id="eqEnabled" type="checkbox" checked>
+                        <span>On</span>
+                    </label>
+                </div>
+
+                <div class="eqControls">
+                    <select id="eqPreset" class="eqPreset"></select>
+                    <button id="eqResetBtn" class="pillBtn small" type="button">Reset</button>
+                </div>
+
+                <div id="eqGrid" class="eqGrid"></div>
+            </div>
 
             <div class="queueHead">
                 <div class="panelTitle">Queue</div>

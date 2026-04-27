@@ -17,7 +17,26 @@
         "albumart.jpg", "albumart.jpeg", "albumart.png", "albumart.webp",
         "album_art.jpg", "album_art.jpeg", "album_art.png", "album_art.webp"
     ];
+    const EQ_STORAGE_KEY = "pqnas_neonwave_eq_v1";
+    const VIZ_STORAGE_KEY = "pqnas_neonwave_viz_v1";
 
+    const EQ_BANDS = [
+        { label: "60", freq: 60, type: "lowshelf", q: 0.8 },
+        { label: "170", freq: 170, type: "peaking", q: 1.0 },
+        { label: "350", freq: 350, type: "peaking", q: 1.0 },
+        { label: "1k", freq: 1000, type: "peaking", q: 1.0 },
+        { label: "3.5k", freq: 3500, type: "peaking", q: 1.0 },
+        { label: "10k", freq: 10000, type: "highshelf", q: 0.8 }
+    ];
+
+    const EQ_PRESETS = {
+        Flat: [0, 0, 0, 0, 0, 0],
+        Rock: [5, 3, -2, -1, 3, 5],
+        Metal: [4, 2, 0, 2, 4, 6],
+        Bass: [7, 5, 2, 0, -1, -2],
+        Vocal: [-2, -1, 1, 4, 3, -1],
+        Night: [-4, -3, -2, -1, -2, -5]
+    };
     const COVER_NAME_RANK = new Map(COVER_FILE_NAMES.map((name, idx) => [name, idx]));
 
     const state = {
@@ -31,7 +50,21 @@
         sourceIndex: 0,
         scanning: false,
         coverByDir: Object.create(null),
-        coverCheckedDirs: new Set()
+        coverCheckedDirs: new Set(),
+        eq: {
+            ctx: null,
+            source: null,
+            filters: [],
+            values: null,
+            enabled: true
+        },
+        viz: {
+            analyser: null,
+            freqData: null,
+            timeData: null,
+            raf: 0,
+            style: "bars"
+        }
     };
 
     const el = (id) => document.getElementById(id);
@@ -51,6 +84,12 @@
     const nowSub = el("nowSub");
     const queueList = el("queueList");
     const clearQueueBtn = el("clearQueueBtn");
+    const eqEnabled = el("eqEnabled");
+    const eqPreset = el("eqPreset");
+    const eqGrid = el("eqGrid");
+    const eqResetBtn = el("eqResetBtn");
+    const vizStyle = el("vizStyle");
+    const vizCanvas = el("vizCanvas");
 
     function esc(s) {
         return String(s ?? "").replace(/[&<>"']/g, (c) => ({
@@ -267,10 +306,7 @@
         if (changed && state.mode === "folder" && state.path === basePath) {
             renderList();
         }
-    
-        if (changed) renderList();
-}
-
+    }
     function fileSizeText(n) {
         n = Number(n);
         if (!Number.isFinite(n) || n < 0) return "";
@@ -478,7 +514,506 @@
         renderQueue();
         playQueueIndex(0);
     }
+    function clampDb(v) {
+        v = Number(v);
+        if (!Number.isFinite(v)) return 0;
+        return Math.max(-12, Math.min(12, Math.round(v)));
+    }
 
+    function dbText(v) {
+        v = clampDb(v);
+        return `${v > 0 ? "+" : ""}${v} dB`;
+    }
+
+    function defaultEqValues() {
+        return EQ_BANDS.map(() => 0);
+    }
+
+    function loadEqSettings() {
+        const out = {
+            enabled: true,
+            values: defaultEqValues()
+        };
+
+        try {
+            const raw = localStorage.getItem(EQ_STORAGE_KEY);
+            if (!raw) return out;
+
+            const j = JSON.parse(raw);
+            if (typeof j.enabled === "boolean") out.enabled = j.enabled;
+
+            if (Array.isArray(j.values) && j.values.length === EQ_BANDS.length) {
+                out.values = j.values.map(clampDb);
+            }
+        } catch {
+            // keep defaults
+        }
+
+        return out;
+    }
+
+    function saveEqSettings() {
+        try {
+            localStorage.setItem(EQ_STORAGE_KEY, JSON.stringify({
+                enabled: eqEnabled ? !!eqEnabled.checked : state.eq.enabled,
+                values: state.eq.values || defaultEqValues()
+            }));
+        } catch {
+            // ignore storage failure
+        }
+    }
+
+    function disconnectNode(node) {
+        try {
+            if (node) node.disconnect();
+        } catch {
+            // already disconnected
+        }
+    }
+
+    function connectEqGraph() {
+        if (!state.eq.source || !state.eq.ctx) return;
+
+        disconnectNode(state.eq.source);
+        for (const f of state.eq.filters) disconnectNode(f);
+        disconnectNode(state.viz.analyser);
+
+        const analyser = state.viz.analyser || state.eq.ctx.createAnalyser();
+
+        state.viz.analyser = analyser;
+        analyser.fftSize = 2048;
+        analyser.smoothingTimeConstant = 0.84;
+
+        if (!state.viz.freqData || state.viz.freqData.length !== analyser.frequencyBinCount) {
+            state.viz.freqData = new Uint8Array(analyser.frequencyBinCount);
+        }
+
+        if (!state.viz.timeData || state.viz.timeData.length !== analyser.fftSize) {
+            state.viz.timeData = new Uint8Array(analyser.fftSize);
+        }
+
+        const enabled = eqEnabled ? !!eqEnabled.checked : state.eq.enabled;
+        state.eq.enabled = enabled;
+
+        let tail = state.eq.source;
+
+        if (enabled && state.eq.filters.length) {
+            for (const f of state.eq.filters) {
+                tail.connect(f);
+                tail = f;
+            }
+        }
+
+        tail.connect(analyser);
+        analyser.connect(state.eq.ctx.destination);
+    }
+
+    function applyEqValues(values, syncSliders = true) {
+        state.eq.values = values.map(clampDb);
+
+        if (state.eq.ctx && state.eq.filters.length) {
+            for (let i = 0; i < state.eq.filters.length; i++) {
+                const f = state.eq.filters[i];
+                const v = state.eq.values[i] || 0;
+                f.gain.setTargetAtTime(v, state.eq.ctx.currentTime, 0.015);
+            }
+        }
+
+        if (syncSliders && eqGrid) {
+            eqGrid.querySelectorAll("input[data-eq-index]").forEach((slider) => {
+                const idx = Number(slider.dataset.eqIndex);
+                const v = state.eq.values[idx] || 0;
+                slider.value = String(v);
+
+                const val = slider.parentElement?.querySelector(".eqBandValue");
+                if (val) val.textContent = dbText(v);
+            });
+        }
+    }
+
+    function ensureEqGraph() {
+        if (!audio) return false;
+        if (state.eq.ctx && state.eq.source) return true;
+
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) {
+            setStatus("Equalizer is not supported by this browser.");
+            return false;
+        }
+
+        try {
+            const ctx = new AudioCtx();
+            const source = ctx.createMediaElementSource(audio);
+
+            const values = state.eq.values || defaultEqValues();
+            const filters = EQ_BANDS.map((band, idx) => {
+                const f = ctx.createBiquadFilter();
+                f.type = band.type;
+                f.frequency.value = band.freq;
+                f.Q.value = band.q || 1.0;
+                f.gain.value = values[idx] || 0;
+                return f;
+            });
+
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 2048;
+            analyser.smoothingTimeConstant = 0.84;
+
+            state.eq.ctx = ctx;
+            state.eq.source = source;
+            state.eq.filters = filters;
+
+            state.viz.analyser = analyser;
+            state.viz.freqData = new Uint8Array(analyser.frequencyBinCount);
+            state.viz.timeData = new Uint8Array(analyser.fftSize);
+
+            connectEqGraph();
+            applyEqValues(values, false);
+            return true;
+        } catch (e) {
+            setStatus(`Equalizer failed: ${String(e && e.message ? e.message : e)}`);
+            return false;
+        }
+    }
+
+    async function resumeEqContext() {
+        if (!ensureEqGraph()) return;
+
+        if (state.eq.ctx && state.eq.ctx.state === "suspended") {
+            try {
+                await state.eq.ctx.resume();
+            } catch {
+                // browser may require another user gesture
+            }
+        }
+    }
+
+    function renderEqControls() {
+        if (!eqGrid) return;
+
+        const saved = loadEqSettings();
+        state.eq.values = saved.values.slice();
+        state.eq.enabled = saved.enabled;
+
+        if (eqEnabled) eqEnabled.checked = saved.enabled;
+
+        if (eqPreset) {
+            eqPreset.innerHTML = `<option value="custom">Custom</option>`;
+            for (const name of Object.keys(EQ_PRESETS)) {
+                const opt = document.createElement("option");
+                opt.value = name;
+                opt.textContent = name;
+                eqPreset.appendChild(opt);
+            }
+            eqPreset.value = "custom";
+        }
+
+        eqGrid.innerHTML = "";
+
+        EQ_BANDS.forEach((band, idx) => {
+            const wrap = document.createElement("div");
+            wrap.className = "eqBand";
+
+            const label = document.createElement("div");
+            label.className = "eqBandLabel";
+            label.textContent = band.label;
+
+            const slider = document.createElement("input");
+            slider.className = "eqSlider";
+            slider.type = "range";
+            slider.min = "-12";
+            slider.max = "12";
+            slider.step = "1";
+            slider.value = String(state.eq.values[idx] || 0);
+            slider.dataset.eqIndex = String(idx);
+            slider.title = `${band.label} Hz`;
+
+            const value = document.createElement("div");
+            value.className = "eqBandValue";
+            value.textContent = dbText(state.eq.values[idx] || 0);
+
+            slider.addEventListener("input", () => {
+                const v = clampDb(slider.value);
+                state.eq.values[idx] = v;
+                value.textContent = dbText(v);
+
+                if (eqPreset) eqPreset.value = "custom";
+
+                if (state.eq.ctx && state.eq.filters[idx]) {
+                    state.eq.filters[idx].gain.setTargetAtTime(v, state.eq.ctx.currentTime, 0.015);
+                }
+
+                saveEqSettings();
+            });
+
+            wrap.appendChild(label);
+            wrap.appendChild(slider);
+            wrap.appendChild(value);
+            eqGrid.appendChild(wrap);
+        });
+
+        applyEqValues(state.eq.values, true);
+    }
+    function loadVizSettings() {
+        try {
+            const raw = localStorage.getItem(VIZ_STORAGE_KEY);
+            if (!raw) return "bars";
+
+            const j = JSON.parse(raw);
+            const style = String(j.style || "bars");
+
+            if (["bars", "wave", "rings", "off"].includes(style)) return style;
+        } catch {
+            // keep default
+        }
+
+        return "bars";
+    }
+
+    function saveVizSettings() {
+        try {
+            localStorage.setItem(VIZ_STORAGE_KEY, JSON.stringify({
+                style: state.viz.style || "bars"
+            }));
+        } catch {
+            // ignore storage failure
+        }
+    }
+
+    function canvasCssColor(name, fallback) {
+        try {
+            const cs = getComputedStyle(document.documentElement);
+            const v = cs.getPropertyValue(name).trim();
+            return v || fallback;
+        } catch {
+            return fallback;
+        }
+    }
+
+    function prepareVizCanvas() {
+        if (!vizCanvas) return null;
+
+        const rect = vizCanvas.getBoundingClientRect();
+        const w = Math.max(1, Math.floor(rect.width || 320));
+        const h = Math.max(1, Math.floor(rect.height || 132));
+        const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+
+        const needW = Math.floor(w * dpr);
+        const needH = Math.floor(h * dpr);
+
+        if (vizCanvas.width !== needW || vizCanvas.height !== needH) {
+            vizCanvas.width = needW;
+            vizCanvas.height = needH;
+        }
+
+        const ctx = vizCanvas.getContext("2d");
+        if (!ctx) return null;
+
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        return { ctx, w, h };
+    }
+
+    function clearVisualizerCanvas(text = "Choose a track") {
+        const c = prepareVizCanvas();
+        if (!c) return;
+
+        const { ctx, w, h } = c;
+        const info = canvasCssColor("--info", "#00e5ff");
+        const fgDim = canvasCssColor("--fg-dim", "#8aa");
+
+        ctx.clearRect(0, 0, w, h);
+
+        ctx.globalAlpha = 0.22;
+        ctx.strokeStyle = info;
+        ctx.lineWidth = 1;
+
+        for (let x = 16; x < w; x += 28) {
+            ctx.beginPath();
+            ctx.moveTo(x, 12);
+            ctx.lineTo(x, h - 12);
+            ctx.stroke();
+        }
+
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = fgDim;
+        ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(text, w / 2, h / 2 + 4);
+    }
+
+    function drawBars(c, data) {
+        const { ctx, w, h } = c;
+        const info = canvasCssColor("--info", "#00e5ff");
+
+        ctx.clearRect(0, 0, w, h);
+
+        const bars = 48;
+        const gap = 2;
+        const barW = Math.max(2, (w - gap * (bars - 1)) / bars);
+
+        ctx.shadowColor = info;
+        ctx.shadowBlur = 12;
+
+        for (let i = 0; i < bars; i++) {
+            const idx = Math.floor((i / bars) * data.length * 0.72);
+            const v = data[idx] / 255;
+            const bh = Math.max(3, v * (h - 18));
+            const x = i * (barW + gap);
+            const y = h - bh - 8;
+
+            const grad = ctx.createLinearGradient(0, y, 0, h);
+            grad.addColorStop(0, "rgba(255,255,255,0.92)");
+            grad.addColorStop(0.25, info);
+            grad.addColorStop(1, "rgba(0,229,255,0.12)");
+
+            ctx.fillStyle = grad;
+            ctx.fillRect(x, y, barW, bh);
+        }
+
+        ctx.shadowBlur = 0;
+    }
+
+    function drawWave(c, data) {
+        const { ctx, w, h } = c;
+        const info = canvasCssColor("--info", "#00e5ff");
+
+        ctx.clearRect(0, 0, w, h);
+
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = info;
+        ctx.shadowColor = info;
+        ctx.shadowBlur = 14;
+        ctx.beginPath();
+
+        for (let i = 0; i < data.length; i++) {
+            const x = (i / (data.length - 1)) * w;
+            const y = (data[i] / 255) * h;
+
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+    }
+
+    function drawRings(c, data) {
+        const { ctx, w, h } = c;
+        const info = canvasCssColor("--info", "#00e5ff");
+
+        ctx.clearRect(0, 0, w, h);
+
+        let sum = 0;
+        const max = Math.min(120, data.length);
+
+        for (let i = 0; i < max; i++) sum += data[i];
+
+        const bass = max ? sum / max / 255 : 0;
+        const cx = w / 2;
+        const cy = h / 2;
+        const base = Math.min(w, h) * 0.16;
+        const pulse = bass * Math.min(w, h) * 0.22;
+
+        ctx.strokeStyle = info;
+        ctx.shadowColor = info;
+        ctx.shadowBlur = 18;
+
+        for (let i = 0; i < 4; i++) {
+            ctx.globalAlpha = Math.max(0.12, 0.56 - i * 0.12);
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(cx, cy, base + pulse + i * 17, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+
+        ctx.globalAlpha = 1;
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = "rgba(0,229,255,0.12)";
+        ctx.beginPath();
+        ctx.arc(cx, cy, base * 0.55 + pulse * 0.35, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    function visualizerFrame() {
+        state.viz.raf = 0;
+
+        if (!vizCanvas) return;
+
+        const style = state.viz.style || "bars";
+
+        if (style === "off") {
+            clearVisualizerCanvas("Visualizer off");
+            return;
+        }
+
+        if (!state.viz.analyser || !audio || audio.paused || audio.ended) {
+            clearVisualizerCanvas("Waiting for audio");
+            return;
+        }
+
+        const c = prepareVizCanvas();
+        if (!c) return;
+
+        if (style === "wave") {
+            state.viz.analyser.getByteTimeDomainData(state.viz.timeData);
+            drawWave(c, state.viz.timeData);
+        } else if (style === "rings") {
+            state.viz.analyser.getByteFrequencyData(state.viz.freqData);
+            drawRings(c, state.viz.freqData);
+        } else {
+            state.viz.analyser.getByteFrequencyData(state.viz.freqData);
+            drawBars(c, state.viz.freqData);
+        }
+
+        state.viz.raf = window.requestAnimationFrame(visualizerFrame);
+    }
+
+    function startVisualizer() {
+        if (!vizCanvas) return;
+
+        if ((state.viz.style || "bars") === "off") {
+            stopVisualizer("Visualizer off");
+            return;
+        }
+
+        ensureEqGraph();
+
+        if (state.viz.raf) return;
+        state.viz.raf = window.requestAnimationFrame(visualizerFrame);
+    }
+
+    function stopVisualizer(text = "Choose a track") {
+        if (state.viz.raf) {
+            window.cancelAnimationFrame(state.viz.raf);
+            state.viz.raf = 0;
+        }
+
+        clearVisualizerCanvas(text);
+    }
+
+    function initVisualizerControls() {
+        state.viz.style = loadVizSettings();
+
+        if (vizStyle) {
+            vizStyle.value = state.viz.style;
+            vizStyle.addEventListener("change", () => {
+                state.viz.style = vizStyle.value || "bars";
+                saveVizSettings();
+
+                if (state.viz.style === "off") {
+                    stopVisualizer("Visualizer off");
+                } else if (audio && !audio.paused && !audio.ended) {
+                    startVisualizer();
+                } else {
+                    clearVisualizerCanvas("Choose a track");
+                }
+            });
+        }
+
+        clearVisualizerCanvas(state.viz.style === "off" ? "Visualizer off" : "Choose a track");
+    }
     function playQueueIndex(idx) {
         if (idx < 0 || idx >= state.queue.length) return;
 
@@ -491,7 +1026,12 @@
 
         state.sourceCandidates = audioUrlCandidates(t.path);
         state.sourceIndex = 0;
+
+        ensureEqGraph();
+        resumeEqContext();
+
         audio.src = state.sourceCandidates[state.sourceIndex];
+        startVisualizer();
         audio.play().catch(() => {
             setStatus("Click play in the browser audio controls to start playback.");
         });
@@ -604,9 +1144,42 @@
     audio.addEventListener("ended", () => {
         if (state.currentIndex + 1 < state.queue.length) {
             playQueueIndex(state.currentIndex + 1);
+            return;
         }
+
+        stopVisualizer("Playback ended");
+    });
+    renderEqControls();
+    initVisualizerControls();
+
+    eqEnabled?.addEventListener("change", () => {
+        state.eq.enabled = !!eqEnabled.checked;
+        ensureEqGraph();
+        connectEqGraph();
+        saveEqSettings();
     });
 
+    eqPreset?.addEventListener("change", () => {
+        const name = eqPreset.value;
+        if (!EQ_PRESETS[name]) return;
+
+        applyEqValues(EQ_PRESETS[name].slice(), true);
+        saveEqSettings();
+    });
+
+    eqResetBtn?.addEventListener("click", () => {
+        if (eqPreset) eqPreset.value = "Flat";
+        applyEqValues(EQ_PRESETS.Flat.slice(), true);
+        saveEqSettings();
+    });
+
+    audio?.addEventListener("play", () => {
+        resumeEqContext();
+        startVisualizer();
+    });
+    audio?.addEventListener("pause", () => {
+        if (!audio.ended) stopVisualizer("Paused");
+    });
     audio.addEventListener("error", () => {
         if (!state.sourceCandidates.length) return;
 
