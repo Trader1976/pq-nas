@@ -1249,6 +1249,18 @@
         state.currentIndex = idx;
         const t = state.queue[idx];
 
+        try {
+            window.dispatchEvent(new CustomEvent("neonwave:trackchange", {
+                detail: {
+                    name: t.name || String(t.path || "").split("/").pop() || "Track",
+                    path: t.path || "",
+                    cover: t.cover || coverForDir(parentPath(t.path || "/")) || ""
+                }
+            }));
+        } catch {
+            // History/extension hooks are best-effort only.
+        }
+
         nowTitle.textContent = t.name;
         nowSub.textContent = t.path;
         setCoverNode(nowCover, t.cover || coverForDir(parentPath(t.path)), "♪");
@@ -1616,6 +1628,10 @@
     window.PQNAS_NEONWAVE_APP = {
         scanCurrent() {
             return scanAudio(state.path || "/");
+        },
+        getCurrentTrack() {
+            if (state.currentIndex < 0 || state.currentIndex >= state.queue.length) return null;
+            return neonwavePublicTrack(state.queue[state.currentIndex]);
         },
         showFavorites(tracks) {
             state.mode = "scan";

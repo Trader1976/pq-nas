@@ -688,3 +688,120 @@ audio {
     color: var(--nw-accent);
     text-shadow: 0 0 10px color-mix(in srgb, var(--nw-accent) 65%, transparent);
 }
+/* NeonWave listening history */
+.historyBox {
+    border: 1px solid var(--nw-accent-border);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--nw-accent) 4%, transparent);
+    padding: 10px;
+    margin: 8px 0 18px;
+}
+
+.historyHead,
+.historyModeRow {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+}
+
+.historyHead {
+    justify-content: space-between;
+    margin-bottom: 9px;
+}
+
+.historyModeRow {
+    margin-bottom: 10px;
+}
+
+.historyModeBtn {
+    flex: 1;
+    border: 1px solid var(--nw-accent-border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--nw-accent) 5%, transparent);
+    color: var(--nw-dim);
+    padding: 7px 9px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.historyModeBtn.active {
+    color: var(--nw-accent);
+    background: var(--nw-accent-bg2);
+    border-color: var(--nw-accent-border-strong);
+}
+
+.historyList {
+    display: grid;
+    gap: 8px;
+}
+
+.historyItem {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 9px;
+    border: 1px solid var(--nw-accent-border);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--nw-accent) 5%, transparent);
+    padding: 8px;
+}
+
+.historyCover {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    color: var(--nw-accent);
+    background: color-mix(in srgb, var(--nw-panel2) 88%, transparent);
+    border: 1px solid var(--nw-border2);
+}
+
+.historyCover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.historyName {
+    color: var(--nw-accent);
+    font-weight: 700;
+    overflow-wrap: anywhere;
+}
+
+.historyMeta,
+.historyStats {
+    color: var(--nw-dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    overflow-wrap: anywhere;
+}
+
+.historyMeta {
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+.historyStats {
+    font-size: 10px;
+    margin-top: 3px;
+}
+
+.historyActions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+@media (max-width: 520px) {
+    .historyItem {
+        grid-template-columns: 42px minmax(0, 1fr);
+    }
+
+    .historyActions {
+        grid-column: 1 / -1;
+        flex-direction: row;
+        justify-content: flex-end;
+    }
+}

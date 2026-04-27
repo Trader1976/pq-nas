@@ -143,7 +143,19 @@
                 <div id="eqGrid" class="eqGrid"></div>
             </div>
 
+            <div class="historyBox">
+                <div class="historyHead">
+                    <div class="panelTitle">History</div>
+                    <button id="historyClearBtn" class="pillBtn small dangerSoft" type="button">Clear</button>
+                </div>
 
+                <div class="historyModeRow">
+                    <button id="historyRecentBtn" class="historyModeBtn active" type="button">Recently played</button>
+                    <button id="historyMostBtn" class="historyModeBtn" type="button">Most played</button>
+                </div>
+
+                <div id="historyList" class="historyList"></div>
+            </div>
             <div class="queueHead">
                 <div class="panelTitle">Queue</div>
                 <button id="clearQueueBtn" class="pillBtn small" type="button">Clear</button>
@@ -158,6 +170,7 @@
 <script src="./neonwave_favorites.js"></script>
 <script src="./app.js"></script>
 <script src="./neonwave_sleep_timer.js"></script>
+<script src="./neonwave_history.js"></script>
 <script src="./neonwave_media_keys.js"></script>
 <script src="./playlists.js"></script>
 </body>
