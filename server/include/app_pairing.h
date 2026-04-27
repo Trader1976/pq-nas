@@ -50,6 +50,9 @@ public:
                               const std::string& device_id,
                               std::string* err);
 
+    bool rollback_consumed(const std::string& pair_id,
+                           std::string* err);
+
     bool cancel_pairing(const std::string& pair_id,
                         std::string* err);
 

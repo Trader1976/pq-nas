@@ -201,6 +201,35 @@ bool AppPairingStore::mark_consumed_device(const std::string& pair_id,
     return true;
 }
 
+bool AppPairingStore::rollback_consumed(const std::string& pair_id,
+                                        std::string* err) {
+    if (err) err->clear();
+
+    if (pair_id.empty()) {
+        if (err) *err = "empty pair_id";
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = by_pair_id_.find(pair_id);
+    if (it == by_pair_id_.end()) {
+        if (err) *err = "pair_id_not_found";
+        return false;
+    }
+
+    AppPairingSession& s = it->second;
+
+    // Do not reopen a pairing that already produced a device.
+    if (!s.consumed_device_id.empty()) {
+        if (err) *err = "pair_already_bound_to_device";
+        return false;
+    }
+
+    s.consumed = false;
+    s.consumed_at = 0;
+    return true;
+}
+
 void AppPairingStore::prune_expired(long now) {
     std::lock_guard<std::mutex> lk(mu_);
 
