@@ -444,6 +444,9 @@
 
             const row = document.createElement("div");
             row.className = "item";
+            row.dataset.path = path || "";
+            row.dataset.name = name || "";
+            row.dataset.kind = audioFile ? "audio" : (dir ? "folder" : (imageFile ? "image" : "file"));
             if (audioFile) {
                 row.dataset.nwAudio = "1";
                 row.dataset.nwName = name || "";
