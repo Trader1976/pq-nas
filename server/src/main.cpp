@@ -1647,7 +1647,48 @@ static std::string client_ip(const httplib::Request& req) {
     }
     return req.remote_addr.empty() ? "?" : req.remote_addr;
 }
+static std::string extract_named_cookie_value(const std::string& cookie_header,
+                                              const std::string& name) {
+    if (cookie_header.empty() || name.empty()) return {};
 
+    std::size_t pos = 0;
+
+    while (pos < cookie_header.size()) {
+        while (pos < cookie_header.size() &&
+               (cookie_header[pos] == ' ' ||
+                cookie_header[pos] == '\t' ||
+                cookie_header[pos] == ';')) {
+            ++pos;
+                }
+
+        const std::size_t eq = cookie_header.find('=', pos);
+        if (eq == std::string::npos) break;
+
+        std::size_t key_end = eq;
+        while (key_end > pos &&
+               (cookie_header[key_end - 1] == ' ' ||
+                cookie_header[key_end - 1] == '\t')) {
+            --key_end;
+                }
+
+        const std::string key = cookie_header.substr(pos, key_end - pos);
+
+        const std::size_t value_start = eq + 1;
+        const std::size_t semi = cookie_header.find(';', value_start);
+
+        const std::string value =
+            (semi == std::string::npos)
+                ? cookie_header.substr(value_start)
+                : cookie_header.substr(value_start, semi - value_start);
+
+        if (key == name) return value;
+
+        if (semi == std::string::npos) break;
+        pos = semi + 1;
+    }
+
+    return {};
+}
 // ----- Cookie gate: user OR admin (UsersRegistry policy) ---------------------
 // Mirrors /api/v4/me logic, but reusable for page + API gating.
 // Returns actor_fp_hex + role ("admin"|"user") on success.
@@ -1669,15 +1710,11 @@ static bool require_user_cookie_users_actor(
     }
 
     const std::string& hdr = it->second;
-    const std::string k = "pqnas_session=";
-    auto pos = hdr.find(k);
-    if (pos == std::string::npos) {
+    const std::string cookieVal = extract_named_cookie_value(hdr, "pqnas_session");
+    if (cookieVal.empty()) {
         reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing pqnas_session"}}).dump());
         return false;
     }
-    pos += k.size();
-    auto end = hdr.find(';', pos);
-    std::string cookieVal = hdr.substr(pos, (end == std::string::npos) ? std::string::npos : (end - pos));
 
     std::string fp_b64;
     long exp = 0;
@@ -18416,18 +18453,14 @@ srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const http
     	    return;
 	    }
 
-    	const std::string& hdr = it->second;
-    	const std::string k = "pqnas_session=";
-    	auto pos = hdr.find(k);
-    	if (pos == std::string::npos) {
-		    audit_fail("missing_pqnas_session");
-        	reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing pqnas_session"}}).dump());
-    	    return;
-	    }
-    	pos += k.size();
-    	auto end = hdr.find(';', pos);
-	    std::string cookieVal = hdr.substr(pos, (end == std::string::npos) ? std::string::npos : (end - pos));
-
+	    const std::string& hdr = it->second;
+        const std::string cookieVal = extract_named_cookie_value(hdr, "pqnas_session");
+        if (cookieVal.empty()) {
+            audit_fail("missing_pqnas_session");
+            reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing pqnas_session"}}).dump());
+            return;
+        }
+	    
     	std::string fp_b64;
     	long exp = 0;
     	if (!session_cookie_verify(COOKIE_KEY, cookieVal, fp_b64, exp)) {
