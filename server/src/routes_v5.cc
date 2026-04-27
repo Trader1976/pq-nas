@@ -667,12 +667,12 @@ srv.Post("/api/v5/consume", [&](const httplib::Request& req, httplib::Response& 
     // not a full "Set-Cookie:" header. The browser will ignore it unless
     // we provide "pqnas_session=<value>; Path=/; ...".
     //
-    // SameSite=None requires Secure (modern browsers).
+    // SameSite=Strict prevents cross-site POSTs from carrying pqnas_session.
     const std::string set_cookie =
         std::string("pqnas_session=") + ae.cookie_val +
         "; Path=/" +
         "; HttpOnly" +
-        "; SameSite=None" +
+        "; SameSite=Strict" +
         "; Secure";
 
     // IMPORTANT:
@@ -1015,7 +1015,7 @@ srv.Post("/api/v5/app_pair/start", [&](const httplib::Request& req, httplib::Res
         {"expires_at", out.expires_at},
         {"qr_uri", out.qr_uri},
         {"tls_pin_sha256", (ctx.tls_spki_sha256_pin ? *ctx.tls_spki_sha256_pin : std::string{})},
-        {"qr_svg", std::string("/api/v5/app_pair/qr.svg?pt=") + (ctx.url_encode ? ctx.url_encode(out.pair_token) : out.pair_token)}
+        {"qr_svg", std::string("/api/v5/app_pair/qr.svg?id=") + (ctx.url_encode ? ctx.url_encode(out.pair_id) : out.pair_id)}
     }.dump());
 });
 
@@ -1224,34 +1224,66 @@ srv.Post("/api/v5/app_devices/revoke", [&](const httplib::Request& req, httplib:
     }.dump());
 });
 
-// ---- GET /api/v5/app_pair/qr.svg?pt=... ----
+// ---- GET /api/v5/app_pair/qr.svg?id=... ----
+// Authenticated browser-only QR renderer.
+// The URL carries only pair_id. The secret pair_token is looked up server-side
+// so it does not leak into access logs, proxy logs, browser history, or Referer.
 srv.Get("/api/v5/app_pair/qr.svg", [&](const httplib::Request& req, httplib::Response& res) {
-    auto it = req.params.find("pt");
+    if (!ctx.require_user_cookie) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "missing require_user_cookie"}}.dump());
+        return;
+    }
+
+    std::string fp_hex;
+    std::string role;
+    if (!ctx.require_user_cookie(req, res, &fp_hex, &role)) {
+        return; // helper already wrote response
+    }
+
+    auto it = req.params.find("id");
     if (it == req.params.end() || it->second.empty()) {
-        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing pt"}}.dump());
+        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing id"}}.dump());
         return;
     }
 
-    if (!ctx.app_pair_build_qr_uri ||
-        !ctx.qr_svg_from_text ||
-        !ctx.origin ||
-        !ctx.app ||
-        !ctx.tls_spki_sha256_pin ||
-        ctx.tls_spki_sha256_pin->empty()) {
-        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "pair qr TLS pin not configured"}}.dump());
+    const std::string pair_id = it->second;
+
+    RoutesV5Context::AppPairStatusResult st;
+    std::string err;
+    if (!(ctx.app_pair_get && ctx.app_pair_get(pair_id, st, err))) {
+        reply_json(res, 404, json{{"ok", false}, {"error", "not_found"}, {"message", err.empty() ? "pair_id_not_found" : err}}.dump());
         return;
     }
 
-    const std::string pt = it->second;
-    const std::string qr_uri = ctx.app_pair_build_qr_uri(
-        *ctx.origin,
-        pt,
-        *ctx.app,
-        *ctx.tls_spki_sha256_pin
-    );
+    if (st.fingerprint_hex != fp_hex) {
+        reply_json(res, 403, json{{"ok", false}, {"error", "forbidden"}, {"message", "pairing belongs to another user"}}.dump());
+        return;
+    }
+
+    if (st.pair_token.empty()) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "pair_token_missing"}}.dump());
+        return;
+    }
+
+    if (!ctx.origin || !ctx.app || !ctx.tls_spki_sha256_pin || ctx.tls_spki_sha256_pin->empty()) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "tls pin not configured"}}.dump());
+        return;
+    }
+
+    const std::string qr_uri =
+        ctx.app_pair_build_qr_uri
+            ? ctx.app_pair_build_qr_uri(*ctx.origin, st.pair_token, *ctx.app, *ctx.tls_spki_sha256_pin)
+            : std::string{};
+
+    if (qr_uri.empty()) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "qr_uri_failed"}}.dump());
+        return;
+    }
 
     try {
+        if (!ctx.qr_svg_from_text) throw std::runtime_error("missing qr_svg_from_text");
         const std::string svg = ctx.qr_svg_from_text(qr_uri, 6, 4);
+
         res.status = 200;
         res.set_header("Content-Type", "image/svg+xml; charset=utf-8");
         res.set_header("Cache-Control", "no-store");

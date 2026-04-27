@@ -9549,33 +9549,38 @@ v5.app_pair_prune = [&](long now) {
     g_app_pairing.prune_expired(now);
 };
 
-v5.app_pair_start =
-    [&](const std::string& fingerprint_hex,
-        const std::string& role,
-        RoutesV5Context::AppPairStartResult& out,
-        std::string& err) -> bool {
+    v5.app_pair_start =
+        [&](const std::string& fingerprint_hex,
+            const std::string& role,
+            RoutesV5Context::AppPairStartResult& out,
+            std::string& err) -> bool {
 
-        pqnas::AppPairingSession s;
-        if (!g_app_pairing.start_pairing(fingerprint_hex, role, 300, &s, &err)) {
-            return false;
-        }
+            out = RoutesV5Context::AppPairStartResult{};
+            err.clear();
 
-        out.pair_id = s.pair_id;
-        out.pair_token = s.pair_token;
-        out.expires_at = s.expires_at;
-        if (!v5.tls_spki_sha256_pin || v5.tls_spki_sha256_pin->empty()) {
-            err = "tls pin not configured";
-            return false;
-        }
+            if (!v5.tls_spki_sha256_pin || v5.tls_spki_sha256_pin->empty()) {
+                err = "tls pin not configured";
+                return false;
+            }
 
-        out.qr_uri = pqnas::AppPairingStore::build_pair_qr_uri(
-            *v5.origin,
-            s.pair_token,
-            *v5.app,
-            *v5.tls_spki_sha256_pin,
-            v5.url_encode
-        );
-        return true;
+            pqnas::AppPairingSession s;
+            if (!g_app_pairing.start_pairing(fingerprint_hex, role, 300, &s, &err)) {
+                return false;
+            }
+
+            out.pair_id = s.pair_id;
+            out.pair_token = s.pair_token;
+            out.expires_at = s.expires_at;
+
+            out.qr_uri = pqnas::AppPairingStore::build_pair_qr_uri(
+                *v5.origin,
+                s.pair_token,
+                *v5.app,
+                *v5.tls_spki_sha256_pin,
+                v5.url_encode
+            );
+
+            return true;
     };
 
 v5.app_pair_get =
@@ -9586,9 +9591,10 @@ v5.app_pair_get =
         pqnas::AppPairingSession s;
         if (!g_app_pairing.get_by_pair_id(pair_id, &s, &err)) return false;
 
-		out.pair_id = s.pair_id;
-		out.fingerprint_hex = s.fingerprint_hex;
-		out.role = s.role;
+        out.pair_id = s.pair_id;
+        out.pair_token = s.pair_token;
+        out.fingerprint_hex = s.fingerprint_hex;
+        out.role = s.role;
 		out.issued_at = s.issued_at;
 		out.expires_at = s.expires_at;
 		out.consumed = s.consumed;

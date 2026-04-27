@@ -149,14 +149,15 @@ struct RoutesV5Context {
     };
 
 	struct AppPairStatusResult {
-    	std::string pair_id;
-	    std::string fingerprint_hex;
-    	std::string role;
-	    long issued_at = 0;
-    	long expires_at = 0;
-	    bool consumed = false;
-    	long consumed_at = 0;
-	    std::string consumed_device_id;
+		std::string pair_id;
+		std::string pair_token; // internal only: used to render QR SVG without exposing token in URL
+		std::string fingerprint_hex;
+		std::string role;
+		long issued_at = 0;
+		long expires_at = 0;
+		bool consumed = false;
+		long consumed_at = 0;
+		std::string consumed_device_id;
 	};
 
     std::function<bool(const httplib::Request&, httplib::Response&, std::string*, std::string*)> require_user_cookie;
