@@ -50,6 +50,8 @@
         sourceCandidates: [],
         sourceIndex: 0,
         scanning: false,
+        repeatMode: "off",
+        shuffle: false,
         playlists: [],
         activePlaylistId: "",
         coverByDir: Object.create(null),
@@ -87,6 +89,10 @@
     const nowSub = el("nowSub");
     const queueList = el("queueList");
     const clearQueueBtn = el("clearQueueBtn");
+    const prevBtn = el("prevBtn");
+    const nextBtn = el("nextBtn");
+    const shuffleToggle = el("shuffleToggle");
+    const repeatBtn = el("repeatBtn");
     const playlistSelect = el("playlistSelect");
     const playlistNameInput = el("playlistNameInput");
     const playlistNewBtn = el("playlistNewBtn");
@@ -1355,14 +1361,81 @@
         }
     }
 
-    audio.addEventListener("ended", () => {
+    function randomNextIndex() {
+        if (state.queue.length <= 1) return state.currentIndex;
+        let next = state.currentIndex;
+        for (let guard = 0; guard < 12 && next === state.currentIndex; guard++) {
+            next = Math.floor(Math.random() * state.queue.length);
+        }
+        return next;
+    }
+
+    function playPreviousTrack() {
+        if (!state.queue.length) return;
+
+        if (audio && audio.currentTime > 4) {
+            audio.currentTime = 0;
+            return;
+        }
+
+        const idx = state.currentIndex > 0
+            ? state.currentIndex - 1
+            : state.queue.length - 1;
+
+        playQueueIndex(idx);
+    }
+
+    function playNextTrack(manual = false) {
+        if (!state.queue.length) return;
+
+        if (state.repeatMode === "one" && !manual) {
+            audio.currentTime = 0;
+            audio.play().catch(() => {});
+            return;
+        }
+
+        if (state.shuffle) {
+            playQueueIndex(randomNextIndex());
+            return;
+        }
+
         if (state.currentIndex + 1 < state.queue.length) {
             playQueueIndex(state.currentIndex + 1);
             return;
         }
 
-        stopVisualizer("Playback ended");
+        if (state.repeatMode === "all") {
+            playQueueIndex(0);
+        }
+    }
+
+    function cycleRepeatMode() {
+        const modes = ["off", "all", "one"];
+        const cur = modes.indexOf(state.repeatMode);
+        state.repeatMode = modes[(cur + 1) % modes.length];
+
+        if (repeatBtn) {
+            repeatBtn.dataset.mode = state.repeatMode;
+            repeatBtn.textContent = `Repeat: ${state.repeatMode}`;
+            repeatBtn.classList.toggle("isActive", state.repeatMode !== "off");
+        }
+    }
+
+    audio.addEventListener("ended", () => {
+        playNextTrack(false);
     });
+
+    prevBtn?.addEventListener("click", playPreviousTrack);
+
+    nextBtn?.addEventListener("click", () => {
+        playNextTrack(true);
+    });
+
+    shuffleToggle?.addEventListener("change", () => {
+        state.shuffle = !!shuffleToggle.checked;
+    });
+
+    repeatBtn?.addEventListener("click", cycleRepeatMode);
     renderEqControls();
     initVisualizerControls();
 

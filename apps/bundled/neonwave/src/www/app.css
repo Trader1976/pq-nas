@@ -388,7 +388,22 @@ audio {
     width: 100%;
     margin: 4px 0 18px;
 }
+.transportBar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: -6px 0 16px;
+}
 
+.transportToggle {
+    padding: 6px 10px;
+}
+
+.pillBtn.isActive {
+    border-color: var(--nw-accent-border-strong);
+    background: var(--nw-accent-bg2);
+}
 .queueList {
     display: grid;
     gap: 8px;

@@ -67,6 +67,17 @@
             </div>
 
             <audio id="audio" controls preload="metadata"></audio>
+            <div class="transportBar">
+                <button id="prevBtn" class="pillBtn small" type="button">Prev</button>
+                <button id="nextBtn" class="pillBtn small" type="button">Next</button>
+
+                <label class="toggle transportToggle">
+                    <input id="shuffleToggle" type="checkbox">
+                    <span>Shuffle</span>
+                </label>
+
+                <button id="repeatBtn" class="pillBtn small" type="button" data-mode="off">Repeat: off</button>
+            </div>
 
             <div class="playlistBox">
                 <div class="playlistHead">
@@ -116,7 +127,7 @@
 
                 <div id="eqGrid" class="eqGrid"></div>
             </div>
-            
+
 
             <div class="queueHead">
                 <div class="panelTitle">Queue</div>
