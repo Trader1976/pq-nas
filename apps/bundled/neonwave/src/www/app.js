@@ -214,6 +214,41 @@
         return `/api/v4/files/${endpoint}?path=${p}`;
     }
 
+    function musicCoverUrl(path) {
+        const p = encodeURIComponent(apiPath(path));
+        return `/api/v4/music/cover?path=${p}`;
+    }
+
+    function coverUrlCandidates(ref) {
+        if (!ref) return [];
+
+        if (Array.isArray(ref)) {
+            return ref.flatMap((x) => coverUrlCandidates(x)).filter(Boolean);
+        }
+
+        const s = String(ref || "");
+        if (!s) return [];
+
+        if (s.startsWith("music:")) {
+            return [musicCoverUrl(s.slice("music:".length))];
+        }
+
+        return [
+            fileMediaUrl(s, "get"),
+            fileMediaUrl(s, "download"),
+            fileMediaUrl(s, "raw")
+        ];
+    }
+
+    function trackCoverRefs(trackPath, folderCover = "") {
+        const p = normPath(trackPath);
+        const refs = [`music:${p}`];
+
+        const f = folderCover || coverForDir(parentPath(p)) || "";
+        if (f) refs.push(f);
+
+        return refs;
+    }
     function coverForDir(dirPath) {
         return state.coverByDir[normPath(dirPath)] || "";
     }
@@ -230,11 +265,12 @@
         // Important:
         // /api/v4/files/download and /api/v4/files/raw can return 404 for normal user files.
         // /api/v4/files/get is the same endpoint that already works for audio playback.
-        const urls = [
-            fileMediaUrl(coverPath, "get"),
-            fileMediaUrl(coverPath, "download"),
-            fileMediaUrl(coverPath, "raw")
-        ];
+        const urls = coverUrlCandidates(coverPath);
+
+        if (!urls.length) {
+            node.textContent = fallbackText;
+            return;
+        }
 
         let idx = 0;
 
@@ -430,14 +466,15 @@
             const path = it.__scanTrack ? it.path : itemPath(it);
             const size = fileSizeText(it.size || it.size_bytes || it.bytes);
             const imageFile = !dir && isImageItem(it);
+            const folderCover = coverForDir(parentPath(path));
             const coverPath = it.__scanTrack
-                ? (it.cover || "")
+                ? trackCoverRefs(path, it.cover || folderCover || "")
                 : (
                     dir
                         ? coverForDir(path)
                         : (
                             audioFile
-                                ? coverForDir(parentPath(path))
+                                ? trackCoverRefs(path, folderCover)
                                 : (imageFile ? path : "")
                         )
                 );
@@ -1266,7 +1303,7 @@
 
         nowTitle.textContent = t.name;
         nowSub.textContent = t.path;
-        setCoverNode(nowCover, t.cover || coverForDir(parentPath(t.path)), "♪");
+        setCoverNode(nowCover, trackCoverRefs(t.path, t.cover || ""), "♪");
 
         state.sourceCandidates = audioUrlCandidates(t.path);
         state.sourceIndex = 0;

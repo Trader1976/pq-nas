@@ -29603,6 +29603,412 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
     reply_json(res, 200, out.dump());
 });
 
+// GET /api/v4/music/cover?path=relative/audio/file.mp3
+// Returns embedded album art if present. 404 = no embedded cover, so clients can fallback to folder.jpg/cover.jpg.
+srv.Get("/api/v4/music/cover", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+
+    auto reply = [&](int status, const json& j) {
+        res.status = status;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(j.dump(2), "application/json; charset=utf-8");
+    };
+
+    auto lower_ascii = [&](std::string s) -> std::string {
+        for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+
+    auto is_supported_audio_ext = [&](const std::string& name) -> bool {
+        const std::string n = lower_ascii(name);
+        const auto dot = n.rfind('.');
+        if (dot == std::string::npos) return false;
+        const std::string ext = n.substr(dot + 1);
+
+        return ext == "mp3"  || ext == "flac" || ext == "m4a" ||
+               ext == "aac"  || ext == "ogg"  || ext == "oga"  ||
+               ext == "opus" || ext == "wav"  || ext == "aif"  ||
+               ext == "aiff" || ext == "alac" || ext == "wma";
+    };
+
+    auto image_mime_from_bytes = [&](const std::string& buf) -> std::string {
+        if (buf.size() >= 3 &&
+            static_cast<unsigned char>(buf[0]) == 0xff &&
+            static_cast<unsigned char>(buf[1]) == 0xd8 &&
+            static_cast<unsigned char>(buf[2]) == 0xff) {
+            return "image/jpeg";
+        }
+
+        if (buf.size() >= 8 &&
+            static_cast<unsigned char>(buf[0]) == 0x89 &&
+            buf[1] == 'P' && buf[2] == 'N' && buf[3] == 'G' &&
+            static_cast<unsigned char>(buf[4]) == 0x0d &&
+            static_cast<unsigned char>(buf[5]) == 0x0a &&
+            static_cast<unsigned char>(buf[6]) == 0x1a &&
+            static_cast<unsigned char>(buf[7]) == 0x0a) {
+            return "image/png";
+        }
+
+        if (buf.size() >= 12 &&
+            buf.compare(0, 4, "RIFF") == 0 &&
+            buf.compare(8, 4, "WEBP") == 0) {
+            return "image/webp";
+        }
+
+        return "";
+    };
+
+    auto file_mtime_epoch = [&](const std::filesystem::path& p) -> std::int64_t {
+        std::error_code ec;
+        auto ft = std::filesystem::last_write_time(p, ec);
+        if (ec) return 0;
+
+        using namespace std::chrono;
+        auto sctp = time_point_cast<system_clock::duration>(
+            ft - std::filesystem::file_time_type::clock::now() + system_clock::now()
+        );
+        return static_cast<std::int64_t>(duration_cast<seconds>(sctp.time_since_epoch()).count());
+    };
+
+    auto fnv1a64 = [&](const std::string& s) -> std::uint64_t {
+        std::uint64_t h = 1469598103934665603ULL;
+        for (unsigned char c : s) {
+            h ^= static_cast<std::uint64_t>(c);
+            h *= 1099511628211ULL;
+        }
+        return h;
+    };
+
+    auto hex_u64 = [&](std::uint64_t v) -> std::string {
+        std::ostringstream oss;
+        oss << std::hex << std::nouppercase << v;
+        return oss.str();
+    };
+
+    auto read_small_file = [&](const std::filesystem::path& p, std::string* out, std::string* err) -> bool {
+        if (out) out->clear();
+        if (err) err->clear();
+
+        std::ifstream f(p, std::ios::binary);
+        if (!f.good()) {
+            if (err) *err = "open failed";
+            return false;
+        }
+
+        std::ostringstream oss;
+        oss << f.rdbuf();
+
+        if (!f.good() && !f.eof()) {
+            if (err) *err = "read failed";
+            return false;
+        }
+
+        if (out) *out = oss.str();
+        return true;
+    };
+
+    auto spawn_stdout_to_file = [&](const std::vector<std::string>& args,
+                                    const std::filesystem::path& out_path) -> int {
+        if (args.empty()) return 127;
+
+        std::vector<char*> argv;
+        argv.reserve(args.size() + 1);
+        for (const auto& s : args) argv.push_back(const_cast<char*>(s.c_str()));
+        argv.push_back(nullptr);
+
+        pid_t pid = fork();
+        if (pid < 0) return 127;
+
+        if (pid == 0) {
+            int out_fd = open(out_path.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0600);
+            if (out_fd < 0) _exit(127);
+
+            dup2(out_fd, STDOUT_FILENO);
+            close(out_fd);
+
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) {
+                dup2(devnull, STDERR_FILENO);
+                close(devnull);
+            }
+
+            execvp(argv[0], argv.data());
+            _exit(127);
+        }
+
+        int st = 0;
+        while (waitpid(pid, &st, 0) < 0) {
+            if (errno == EINTR) continue;
+            return 127;
+        }
+
+        if (WIFEXITED(st)) return WEXITSTATUS(st);
+        if (WIFSIGNALED(st)) return 128 + WTERMSIG(st);
+        return 127;
+    };
+
+    auto cache_root = [&]() -> std::filesystem::path {
+        return std::filesystem::path(pqnas::data_root_dir()).parent_path() / "cache" / "music_covers";
+    };
+
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value() || uopt->storage_state != "allocated") {
+            reply(403, {
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"}
+            });
+            return;
+        }
+    }
+
+    std::string rel_path;
+    if (req.has_param("path")) rel_path = req.get_param_value("path");
+    if (rel_path.empty()) {
+        reply(400, {
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path"}
+        });
+        return;
+    }
+
+    std::string rel_norm;
+    {
+        std::string nerr;
+        if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
+            reply(400, {
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            });
+            return;
+        }
+    }
+
+    pqnas::ResolvedExistingPath rp;
+    std::string perr;
+    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, rel_path, &rp, &perr)) {
+        reply(400, {
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        });
+        return;
+    }
+
+    const std::filesystem::path abs = rp.abs_path;
+
+    {
+        std::string serr;
+        if (!ensure_no_symlink_in_existing_path_prefix(abs, &serr)) {
+            reply(400, {
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "symlinks not supported"}
+            });
+            return;
+        }
+    }
+
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        reply(404, {
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "file not found"}
+        });
+        return;
+    }
+
+    if (std::filesystem::is_symlink(st)) {
+        reply(400, {
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "symlinks not supported"}
+        });
+        return;
+    }
+
+    if (!std::filesystem::is_regular_file(st)) {
+        reply(400, {
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "not a regular file"}
+        });
+        return;
+    }
+
+    if (!is_supported_audio_ext(abs.filename().string())) {
+        reply(415, {
+            {"ok", false},
+            {"error", "unsupported_media_type"},
+            {"message", "unsupported audio type"}
+        });
+        return;
+    }
+
+    const std::uint64_t src_bytes = pqnas::file_size_u64_safe(abs);
+    const std::int64_t src_mtime = file_mtime_epoch(abs);
+
+    const std::string key_material =
+        fp_hex + "\n" +
+        rel_norm + "\n" +
+        std::to_string((unsigned long long)src_bytes) + "\n" +
+        std::to_string((long long)src_mtime);
+
+    const std::string cover_key = hex_u64(fnv1a64(key_material));
+
+    const std::filesystem::path cache_dir = cache_root() / fp_hex;
+    const std::filesystem::path cache_abs = cache_dir / (cover_key + ".bin");
+
+    auto serve_cover = [&](bool cached) {
+        std::string buf;
+        std::string rerr;
+        if (!read_small_file(cache_abs, &buf, &rerr)) {
+            reply(500, {
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to read cached cover"}
+            });
+            return;
+        }
+
+        const std::string mime = image_mime_from_bytes(buf);
+        if (mime.empty()) {
+            std::error_code rm_ec;
+            std::filesystem::remove(cache_abs, rm_ec);
+
+            reply(404, {
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "no embedded cover art"}
+            });
+            return;
+        }
+
+        res.status = 200;
+        res.set_header("Cache-Control", cached ? "private, max-age=86400" : "private, max-age=3600");
+        res.set_header("X-Content-Type-Options", "nosniff");
+        res.set_content(std::move(buf), mime);
+    };
+
+    {
+        std::error_code cec;
+        auto cst = std::filesystem::symlink_status(cache_abs, cec);
+        if (!cec &&
+            std::filesystem::exists(cst) &&
+            !std::filesystem::is_symlink(cst) &&
+            std::filesystem::is_regular_file(cst)) {
+            serve_cover(true);
+            return;
+        }
+    }
+
+    ec.clear();
+    std::filesystem::create_directories(cache_dir, ec);
+    if (ec) {
+        reply(500, {
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to create cover cache directory"}
+        });
+        return;
+    }
+
+    const std::filesystem::path tmp_abs =
+        cache_dir / (cover_key + ".tmp." + random_b64url(8) + ".bin");
+
+    const std::vector<std::string> exes = {
+        "/usr/bin/exiftool",
+        "/usr/local/bin/exiftool",
+        "exiftool"
+    };
+
+    const std::vector<std::string> tags = {
+        "Picture",
+        "CoverArt",
+        "FrontCover",
+        "AlbumArt"
+    };
+
+    bool extracted = false;
+
+    for (const auto& exe : exes) {
+        for (const auto& tag : tags) {
+            std::error_code rm_ec;
+            std::filesystem::remove(tmp_abs, rm_ec);
+
+            const std::vector<std::string> args = {
+                exe,
+                "-b",
+                "-" + tag,
+                abs.string()
+            };
+
+            const int rc = spawn_stdout_to_file(args, tmp_abs);
+            if (rc != 0) continue;
+
+            std::string test;
+            std::string rerr;
+            if (!read_small_file(tmp_abs, &test, &rerr)) continue;
+
+            if (test.empty()) continue;
+            if (test.size() > 20ULL * 1024ULL * 1024ULL) continue;
+            if (image_mime_from_bytes(test).empty()) continue;
+
+            extracted = true;
+            break;
+        }
+
+        if (extracted) break;
+    }
+
+    if (!extracted) {
+        std::error_code rm_ec;
+        std::filesystem::remove(tmp_abs, rm_ec);
+
+        reply(404, {
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "no embedded cover art"}
+        });
+        return;
+    }
+
+    {
+        std::error_code ren_ec;
+        std::filesystem::rename(tmp_abs, cache_abs, ren_ec);
+        if (ren_ec) {
+            std::error_code cec;
+            auto cst = std::filesystem::symlink_status(cache_abs, cec);
+
+            if (!cec &&
+                std::filesystem::exists(cst) &&
+                !std::filesystem::is_symlink(cst) &&
+                std::filesystem::is_regular_file(cst)) {
+                std::error_code rm_ec;
+                std::filesystem::remove(tmp_abs, rm_ec);
+            } else {
+                std::error_code rm_ec;
+                std::filesystem::remove(tmp_abs, rm_ec);
+
+                reply(500, {
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "failed to finalize cover cache"}
+                });
+                return;
+            }
+        }
+    }
+
+    serve_cover(false);
+});
+
 srv.Get("/api/v4/gallery/thumb", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
