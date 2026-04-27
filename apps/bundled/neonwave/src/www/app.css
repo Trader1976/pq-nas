@@ -470,7 +470,42 @@ audio {
     padding: 10px;
     margin: 8px 0 18px;
 }
+.sleepBox {
+    border: 1px solid var(--nw-accent-border);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--nw-accent) 4%, transparent);
+    padding: 10px;
+    margin: 8px 0 18px;
+}
 
+.sleepHead {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 9px;
+}
+
+.sleepState {
+    color: var(--nw-dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+    border: 1px solid var(--nw-accent-border);
+    border-radius: 999px;
+    padding: 5px 9px;
+    background: color-mix(in srgb, var(--nw-panel2) 84%, transparent);
+}
+
+.sleepState.active {
+    color: var(--nw-accent);
+    background: var(--nw-accent-bg2);
+}
+
+.sleepActions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
 .playlistHead,
 .playlistControls,
 .playlistActions {

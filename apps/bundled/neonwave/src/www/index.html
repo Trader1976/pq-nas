@@ -68,6 +68,20 @@
             </div>
 
             <audio id="audio" controls preload="metadata"></audio>
+            <div class="sleepBox">
+                <div class="sleepHead">
+                    <div class="panelTitle">Sleep timer</div>
+                    <div id="sleepState" class="sleepState">Off</div>
+                </div>
+
+                <div class="sleepActions">
+                    <button class="pillBtn small" type="button" data-sleep-min="15">15 min</button>
+                    <button class="pillBtn small" type="button" data-sleep-min="30">30 min</button>
+                    <button class="pillBtn small" type="button" data-sleep-min="60">60 min</button>
+                    <button id="sleepTrackBtn" class="pillBtn small" type="button">End of track</button>
+                    <button id="sleepStopBtn" class="pillBtn small dangerSoft" type="button">Off</button>
+                </div>
+            </div>
             <div class="transportBar">
                 <button id="prevBtn" class="pillBtn small" type="button">Prev</button>
                 <button id="nextBtn" class="pillBtn small" type="button">Next</button>
@@ -143,6 +157,8 @@
 <script src="./neonwave_search.js"></script>
 <script src="./neonwave_favorites.js"></script>
 <script src="./app.js"></script>
+<script src="./neonwave_sleep_timer.js"></script>
+<script src="./neonwave_media_keys.js"></script>
 <script src="./playlists.js"></script>
 </body>
 </html>
