@@ -18,6 +18,7 @@
         "album_art.jpg", "album_art.jpeg", "album_art.png", "album_art.webp"
     ];
     const EQ_STORAGE_KEY = "pqnas_neonwave_eq_v1";
+    const PLAYLIST_STORAGE_KEY = "pqnas_neonwave_playlists_v1";
     const VIZ_STORAGE_KEY = "pqnas_neonwave_viz_v1";
 
     const EQ_BANDS = [
@@ -49,6 +50,8 @@
         sourceCandidates: [],
         sourceIndex: 0,
         scanning: false,
+        playlists: [],
+        activePlaylistId: "",
         coverByDir: Object.create(null),
         coverCheckedDirs: new Set(),
         eq: {
@@ -84,6 +87,13 @@
     const nowSub = el("nowSub");
     const queueList = el("queueList");
     const clearQueueBtn = el("clearQueueBtn");
+    const playlistSelect = el("playlistSelect");
+    const playlistNameInput = el("playlistNameInput");
+    const playlistNewBtn = el("playlistNewBtn");
+    const playlistSaveQueueBtn = el("playlistSaveQueueBtn");
+    const playlistLoadBtn = el("playlistLoadBtn");
+    const playlistDeleteBtn = el("playlistDeleteBtn");
+    const playlistStatus = el("playlistStatus");
     const eqEnabled = el("eqEnabled");
     const eqPreset = el("eqPreset");
     const eqGrid = el("eqGrid");
@@ -462,8 +472,16 @@
                 queue.textContent = "Queue";
                 queue.addEventListener("click", () => addToQueue({ name, path, cover: coverPath }));
 
+                const playlist = document.createElement("button");
+                playlist.className = "pillBtn small";
+                playlist.type = "button";
+                playlist.textContent = "Playlist";
+                playlist.title = "Add to selected playlist";
+                playlist.addEventListener("click", () => addToSelectedPlaylist({ name, path, cover: coverPath }));
+
                 actions.appendChild(play);
                 actions.appendChild(queue);
+                actions.appendChild(playlist);
             }
 
             row.appendChild(icon);
@@ -478,6 +496,202 @@
             }, 0);
         }
 }
+
+
+    function setPlaylistStatus(msg) {
+        if (playlistStatus) playlistStatus.textContent = msg;
+    }
+
+    function makePlaylistId() {
+        return "pl_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+    }
+
+    function cleanTrackForPlaylist(track) {
+        const cleanPath = normPath(track?.path || "");
+        return {
+            name: String(track?.name || cleanPath.split("/").pop() || "Track"),
+            path: cleanPath,
+            cover: track?.cover || coverForDir(parentPath(cleanPath)) || ""
+        };
+    }
+
+    function loadPlaylistsFromStorage() {
+        state.playlists = [];
+        state.activePlaylistId = "";
+
+        try {
+            const raw = localStorage.getItem(PLAYLIST_STORAGE_KEY);
+            if (!raw) return;
+
+            const j = JSON.parse(raw);
+            const lists = Array.isArray(j.playlists) ? j.playlists : [];
+
+            state.playlists = lists
+                .filter((p) => p && typeof p.name === "string")
+                .map((p) => ({
+                    id: String(p.id || makePlaylistId()),
+                    name: String(p.name || "Playlist").slice(0, 80),
+                    tracks: Array.isArray(p.tracks)
+                        ? p.tracks
+                            .filter((t) => t && t.path)
+                            .map(cleanTrackForPlaylist)
+                        : []
+                }));
+
+            state.activePlaylistId = String(j.activePlaylistId || "");
+        } catch {
+            state.playlists = [];
+            state.activePlaylistId = "";
+        }
+    }
+
+    function savePlaylistsToStorage() {
+        try {
+            localStorage.setItem(PLAYLIST_STORAGE_KEY, JSON.stringify({
+                activePlaylistId: state.activePlaylistId || "",
+                playlists: state.playlists || []
+            }));
+        } catch {
+            setPlaylistStatus("Could not save playlists. Browser storage may be full or blocked.");
+        }
+    }
+
+    function selectedPlaylist() {
+        const id = playlistSelect ? playlistSelect.value : state.activePlaylistId;
+        return (state.playlists || []).find((p) => p.id === id) || null;
+    }
+
+    function renderPlaylists() {
+        if (!playlistSelect) return;
+
+        playlistSelect.innerHTML = "";
+
+        if (!state.playlists.length) {
+            const opt = document.createElement("option");
+            opt.value = "";
+            opt.textContent = "(no playlists)";
+            playlistSelect.appendChild(opt);
+            state.activePlaylistId = "";
+            if (playlistNameInput) playlistNameInput.value = "";
+            setPlaylistStatus("Create a playlist, then save queue or add tracks.");
+            return;
+        }
+
+        state.playlists.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+
+        let activeOk = false;
+        for (const p of state.playlists) {
+            const opt = document.createElement("option");
+            opt.value = p.id;
+            opt.textContent = `${p.name} (${p.tracks.length})`;
+            playlistSelect.appendChild(opt);
+            if (p.id === state.activePlaylistId) activeOk = true;
+        }
+
+        if (!activeOk) state.activePlaylistId = state.playlists[0].id;
+        playlistSelect.value = state.activePlaylistId;
+
+        const p = selectedPlaylist();
+        if (playlistNameInput) playlistNameInput.value = p ? p.name : "";
+        if (p) setPlaylistStatus(`${p.name}: ${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"}.`);
+    }
+
+    function createPlaylist(name) {
+        const cleanName = String(name || "").trim().slice(0, 80) || `Playlist ${state.playlists.length + 1}`;
+        const p = {
+            id: makePlaylistId(),
+            name: cleanName,
+            tracks: []
+        };
+
+        state.playlists.push(p);
+        state.activePlaylistId = p.id;
+        savePlaylistsToStorage();
+        renderPlaylists();
+        setPlaylistStatus(`Created playlist: ${cleanName}`);
+        return p;
+    }
+
+    function saveCurrentQueueToPlaylist() {
+        let p = selectedPlaylist();
+
+        const typed = playlistNameInput ? playlistNameInput.value.trim() : "";
+        if (!p) {
+            p = createPlaylist(typed || "My playlist");
+        }
+
+        if (typed) p.name = typed.slice(0, 80);
+        p.tracks = state.queue.map(cleanTrackForPlaylist);
+
+        state.activePlaylistId = p.id;
+        savePlaylistsToStorage();
+        renderPlaylists();
+        setPlaylistStatus(`Saved ${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"} to ${p.name}.`);
+    }
+
+    function loadSelectedPlaylistToQueue() {
+        const p = selectedPlaylist();
+        if (!p) {
+            setPlaylistStatus("No playlist selected.");
+            return;
+        }
+
+        state.queue = p.tracks.map(cleanTrackForPlaylist);
+        state.currentIndex = -1;
+        renderQueue();
+
+        if (state.queue.length) {
+            playQueueIndex(0);
+        } else {
+            setPlaylistStatus(`${p.name} is empty.`);
+        }
+
+        setPlaylistStatus(`Loaded ${p.name}: ${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"}.`);
+    }
+
+    function deleteSelectedPlaylist() {
+        const p = selectedPlaylist();
+        if (!p) {
+            setPlaylistStatus("No playlist selected.");
+            return;
+        }
+
+        if (!confirm(`Delete playlist "${p.name}"?`)) return;
+
+        state.playlists = state.playlists.filter((x) => x.id !== p.id);
+        state.activePlaylistId = state.playlists[0]?.id || "";
+        savePlaylistsToStorage();
+        renderPlaylists();
+        setPlaylistStatus(`Deleted playlist: ${p.name}`);
+    }
+
+    function addToSelectedPlaylist(track) {
+        let p = selectedPlaylist();
+
+        if (!p) {
+            const name = prompt("Playlist name?", "My playlist");
+            if (name === null) return;
+            p = createPlaylist(name);
+        }
+
+        const clean = cleanTrackForPlaylist(track);
+
+        if (!clean.path || clean.path === "/") {
+            setPlaylistStatus("Could not add track: missing path.");
+            return;
+        }
+
+        const already = p.tracks.some((t) => normPath(t.path) === clean.path);
+        if (!already) p.tracks.push(clean);
+
+        state.activePlaylistId = p.id;
+        savePlaylistsToStorage();
+        renderPlaylists();
+
+        setPlaylistStatus(already
+            ? `Already in ${p.name}: ${clean.name}`
+            : `Added to ${p.name}: ${clean.name}`);
+    }
 
     function audioUrlCandidates(path) {
         const p = encodeURIComponent(apiPath(path));
@@ -1231,6 +1445,43 @@
         nowSub.textContent = "Choose an audio file";
         renderQueue();
     });
+
+
+    loadPlaylistsFromStorage();
+    renderPlaylists();
+
+    playlistSelect?.addEventListener("change", () => {
+        state.activePlaylistId = playlistSelect.value || "";
+        const p = selectedPlaylist();
+        if (playlistNameInput) playlistNameInput.value = p ? p.name : "";
+        savePlaylistsToStorage();
+        renderPlaylists();
+    });
+
+    playlistNameInput?.addEventListener("change", () => {
+        const p = selectedPlaylist();
+        if (!p) return;
+
+        const clean = playlistNameInput.value.trim().slice(0, 80);
+        if (!clean) {
+            playlistNameInput.value = p.name;
+            return;
+        }
+
+        p.name = clean;
+        savePlaylistsToStorage();
+        renderPlaylists();
+    });
+
+    playlistNewBtn?.addEventListener("click", () => {
+        const name = playlistNameInput?.value?.trim() || prompt("Playlist name?", "My playlist");
+        if (name === null) return;
+        createPlaylist(name);
+    });
+
+    playlistSaveQueueBtn?.addEventListener("click", saveCurrentQueueToPlaylist);
+    playlistLoadBtn?.addEventListener("click", loadSelectedPlaylistToQueue);
+    playlistDeleteBtn?.addEventListener("click", deleteSelectedPlaylist);
 
     renderQueue();
     loadPath("/");

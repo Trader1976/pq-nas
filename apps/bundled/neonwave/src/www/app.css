@@ -446,3 +446,66 @@ audio {
     display: block;
     object-fit: cover;
 }
+
+
+.playlistBox {
+    border: 1px solid var(--nw-accent-border);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--nw-accent) 4%, transparent);
+    padding: 10px;
+    margin: 8px 0 18px;
+}
+
+.playlistHead,
+.playlistControls,
+.playlistActions {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+}
+
+.playlistHead {
+    justify-content: space-between;
+    margin-bottom: 9px;
+}
+
+.playlistControls {
+    margin-bottom: 9px;
+}
+
+.playlistActions {
+    flex-wrap: wrap;
+}
+
+.playlistSelect,
+.playlistNameInput {
+    min-width: 0;
+    border: 1px solid var(--nw-accent-border);
+    background: color-mix(in srgb, var(--nw-panel2) 88%, transparent);
+    color: var(--nw-fg);
+    border-radius: 999px;
+    padding: 7px 10px;
+    outline: none;
+}
+
+.playlistSelect {
+    flex: 1.1;
+}
+
+.playlistNameInput {
+    flex: 1;
+}
+
+.playlistStatus {
+    color: var(--nw-dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 11px;
+    margin-top: 8px;
+    overflow-wrap: anywhere;
+}
+
+.pillBtn.dangerSoft {
+    border-color: color-mix(in srgb, var(--err, #ff5c7a) 55%, var(--nw-border));
+    color: var(--err, #ff5c7a);
+    background: color-mix(in srgb, var(--err, #ff5c7a) 7%, transparent);
+}

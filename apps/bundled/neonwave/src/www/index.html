@@ -53,6 +53,26 @@
             </div>
 
             <audio id="audio" controls preload="metadata"></audio>
+
+            <div class="playlistBox">
+                <div class="playlistHead">
+                    <div class="panelTitle">Playlists</div>
+                    <button id="playlistNewBtn" class="pillBtn small" type="button">New</button>
+                </div>
+
+                <div class="playlistControls">
+                    <select id="playlistSelect" class="playlistSelect"></select>
+                    <input id="playlistNameInput" class="playlistNameInput" type="text" placeholder="Playlist name">
+                </div>
+
+                <div class="playlistActions">
+                    <button id="playlistSaveQueueBtn" class="pillBtn small" type="button">Save queue</button>
+                    <button id="playlistLoadBtn" class="pillBtn small" type="button">Load</button>
+                    <button id="playlistDeleteBtn" class="pillBtn small dangerSoft" type="button">Delete</button>
+                </div>
+
+                <div id="playlistStatus" class="playlistStatus">Playlists are stored in this browser.</div>
+            </div>
             <div class="vizBox">
                 <div class="vizHead">
                     <div class="panelTitle">Visualizer</div>
