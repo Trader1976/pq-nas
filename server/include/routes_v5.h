@@ -179,6 +179,9 @@ struct RoutesV5Context {
                        std::string& out_role,
                        std::string& err)> app_pair_consume;
 
+	std::function<bool(const std::string& pair_id,
+				   std::string& err)> app_pair_rollback_consumed;
+
     std::function<bool(const std::string& pair_id,
                        const std::string& device_id,
                        std::string& err)> app_pair_mark_consumed_device;

@@ -9617,6 +9617,11 @@ v5.app_pair_consume =
         return g_app_pairing.consume_pair_token(pair_token, &out_pair_id, &out_fingerprint_hex, &out_role, &err);
     };
 
+v5.app_pair_rollback_consumed =
+    [&](const std::string& pair_id, std::string& err) -> bool {
+        return g_app_pairing.rollback_consumed(pair_id, &err);
+    };
+
 v5.app_pair_mark_consumed_device =
     [&](const std::string& pair_id, const std::string& device_id, std::string& err) -> bool {
         return g_app_pairing.mark_consumed_device(pair_id, device_id, &err);

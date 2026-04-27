@@ -1446,11 +1446,19 @@ srv.Post("/api/v5/app_pair/consume", [&](const httplib::Request& req, httplib::R
                           client_ip,
                           out,
                           merr)) {
+        std::string rollback_err;
+        const bool rolled_back =
+            ctx.app_pair_rollback_consumed
+                ? ctx.app_pair_rollback_consumed(pair_id, rollback_err)
+                : false;
+
         audit_v5_req(ctx, "v5.app_pair_consume_fail", "fail", req, [&](std::map<std::string,std::string>& f) {
             f["reason"] = merr.empty() ? "pair_mint_denied" : merr;
             f["pair_id"] = pair_id;
             f["fingerprint"] = fingerprint_hex;
             f["role"] = role;
+            f["pair_rollback"] = rolled_back ? "ok" : "fail";
+            if (!rollback_err.empty()) f["pair_rollback_err"] = rollback_err;
             if (!platform.empty()) f["platform"] = platform;
             if (!device_name.empty()) f["device_name"] = device_name;
             if (!app_version.empty()) f["app_version"] = app_version;
@@ -1467,7 +1475,6 @@ srv.Post("/api/v5/app_pair/consume", [&](const httplib::Request& req, httplib::R
         }.dump());
         return;
     }
-
     if (ctx.app_pair_mark_consumed_device) {
         std::string derr;
         if (!ctx.app_pair_mark_consumed_device(pair_id, out.device_id, derr)) {
