@@ -629,3 +629,27 @@ audio {
 .librarySearchInputWrap .librarySearchInput {
     width: 100%;
 }
+/* NeonWave favorites */
+.favBtn {
+    width: 31px;
+    height: 31px;
+    border: 1px solid var(--nw-accent-border);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--nw-accent) 5%, transparent);
+    color: var(--nw-dim);
+    cursor: pointer;
+    line-height: 1;
+    font-size: 17px;
+}
+
+.favBtn:hover {
+    background: var(--nw-accent-bg2);
+    color: var(--nw-accent);
+}
+
+.favBtn.active {
+    border-color: var(--nw-accent-border-strong);
+    background: var(--nw-accent-bg2);
+    color: var(--nw-accent);
+    text-shadow: 0 0 10px color-mix(in srgb, var(--nw-accent) 65%, transparent);
+}

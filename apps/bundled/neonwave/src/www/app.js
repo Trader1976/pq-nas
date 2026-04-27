@@ -444,7 +444,12 @@
 
             const row = document.createElement("div");
             row.className = "item";
-
+            if (audioFile) {
+                row.dataset.nwAudio = "1";
+                row.dataset.nwName = name || "";
+                row.dataset.nwPath = path || "";
+                row.dataset.nwCover = coverPath || "";
+            }
             const icon = document.createElement("div");
             icon.className = "itemIcon";
             setCoverNode(icon, coverPath, dir ? "📁" : (audioFile ? "♪" : (imageFile ? "▣" : "·")));
@@ -500,6 +505,10 @@
             window.setTimeout(() => {
                 prefetchVisibleFolderCovers().catch(() => {});
             }, 0);
+        }
+        if (window.PQNAS_NEONWAVE_FAVORITES &&
+            typeof window.PQNAS_NEONWAVE_FAVORITES.decorate === "function") {
+            window.PQNAS_NEONWAVE_FAVORITES.decorate();
         }
 }
 
@@ -1608,7 +1617,20 @@
         scanCurrent() {
             return scanAudio(state.path || "/");
         },
+        showFavorites(tracks) {
+            state.mode = "scan";
+            state.path = "Favorites";
+            state.scannedTracks = Array.isArray(tracks)
+                ? tracks.map((t) => ({
+                    name: t.name || String(t.path || "").split("/").pop() || "Track",
+                    path: normPath(t.path || "/"),
+                    cover: t.cover || coverForDir(parentPath(t.path || "/")) || ""
+                })).filter((t) => t.path && t.path !== "/")
+                : [];
 
+            renderList();
+            setStatus(`Favorites: ${state.scannedTracks.length} tracks.`);
+        },
         scanPath(path) {
             return scanAudio(path || state.path || "/");
         },
