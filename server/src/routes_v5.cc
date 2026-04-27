@@ -228,6 +228,130 @@ static bool resolve_approval_key_from_req(const RoutesV5Context& ctx,
     return false;
 }
 
+
+static std::string v5_json_string_or_empty(const nlohmann::json& j, const char* key) {
+    if (!key) return std::string{};
+
+    auto it = j.find(key);
+    if (it == j.end() || !it->is_string()) {
+        return std::string{};
+    }
+
+    return it->get<std::string>();
+}
+
+static std::string app_pair_trim_ascii_space_copy(const std::string& in) {
+    std::size_t a = 0;
+    while (a < in.size()) {
+        const unsigned char c = static_cast<unsigned char>(in[a]);
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') break;
+        ++a;
+    }
+
+    std::size_t b = in.size();
+    while (b > a) {
+        const unsigned char c = static_cast<unsigned char>(in[b - 1]);
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') break;
+        --b;
+    }
+
+    return in.substr(a, b - a);
+}
+
+static bool app_pair_has_control_chars(const std::string& s) {
+    for (unsigned char c : s) {
+        if (c < 0x20 || c == 0x7f) return true;
+    }
+    return false;
+}
+
+static bool sanitize_app_pair_text_field(const char* field,
+                                         const std::string& raw,
+                                         std::size_t max_bytes,
+                                         std::string& out,
+                                         std::string& err) {
+    out = app_pair_trim_ascii_space_copy(raw);
+
+    if (out.size() > max_bytes) {
+        err = std::string(field ? field : "field") + " too long";
+        out.clear();
+        return false;
+    }
+
+    if (app_pair_has_control_chars(out)) {
+        err = std::string(field ? field : "field") + " contains control characters";
+        out.clear();
+        return false;
+    }
+
+    return true;
+}
+
+static bool sanitize_app_pair_platform(const std::string& raw,
+                                       std::string& out,
+                                       std::string& err) {
+    if (!sanitize_app_pair_text_field("platform", raw, 24, out, err)) {
+        return false;
+    }
+
+    if (out.empty()) {
+        out = "android";
+        return true;
+    }
+
+    for (unsigned char c : out) {
+        const bool ok =
+            (c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' ||
+            c == '_' ||
+            c == '.';
+
+        if (!ok) {
+            err = "platform contains invalid characters";
+            out.clear();
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool sanitize_app_pair_token(const std::string& raw,
+                                    std::string& out,
+                                    std::string& err) {
+    out = app_pair_trim_ascii_space_copy(raw);
+
+    if (out.empty()) {
+        err = "missing pair_token";
+        return false;
+    }
+
+    if (out.size() > 128) {
+        err = "pair_token too long";
+        out.clear();
+        return false;
+    }
+
+    for (unsigned char c : out) {
+        const bool ok =
+            (c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' ||
+            c == '_';
+
+        if (!ok) {
+            err = "invalid pair_token";
+            out.clear();
+            return false;
+        }
+    }
+
+    return true;
+}
+
 void register_routes_v5(httplib::Server& srv, const RoutesV5Context& ctx) {
     // ---- POST/GET /api/v5/session ----
 	// Route group: /api/v5/session
@@ -1036,17 +1160,35 @@ srv.Post("/api/v5/app_pair/consume", [&](const httplib::Request& req, httplib::R
         return;
     }
 
-	const std::string pair_token = j.value("pair_token", std::string{});
-	const std::string device_name = j.value("device_name", std::string{});
-	std::string platform = j.value("platform", std::string{});
-	const std::string app_version = j.value("app_version", std::string{});
-	const std::string device_model = j.value("device_model", std::string{});
-	const std::string device_manufacturer = j.value("device_manufacturer", std::string{});
-	const std::string os_version = j.value("os_version", std::string{});
-	if (platform.empty()) platform = "android";
+    const std::string pair_token_raw = v5_json_string_or_empty(j, "pair_token");
+    const std::string device_name_raw = v5_json_string_or_empty(j, "device_name");
+    const std::string platform_raw = v5_json_string_or_empty(j, "platform");
+    const std::string app_version_raw = v5_json_string_or_empty(j, "app_version");
+    const std::string device_model_raw = v5_json_string_or_empty(j, "device_model");
+    const std::string device_manufacturer_raw = v5_json_string_or_empty(j, "device_manufacturer");
+    const std::string os_version_raw = v5_json_string_or_empty(j, "os_version");
 
-    if (pair_token.empty()) {
-        reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing pair_token"}}.dump());
+    std::string pair_token;
+    std::string device_name;
+    std::string platform;
+    std::string app_version;
+    std::string device_model;
+    std::string device_manufacturer;
+    std::string os_version;
+    std::string meta_err;
+
+    if (!sanitize_app_pair_token(pair_token_raw, pair_token, meta_err) ||
+        !sanitize_app_pair_text_field("device_name", device_name_raw, 96, device_name, meta_err) ||
+        !sanitize_app_pair_platform(platform_raw, platform, meta_err) ||
+        !sanitize_app_pair_text_field("app_version", app_version_raw, 48, app_version, meta_err) ||
+        !sanitize_app_pair_text_field("device_model", device_model_raw, 96, device_model, meta_err) ||
+        !sanitize_app_pair_text_field("device_manufacturer", device_manufacturer_raw, 96, device_manufacturer, meta_err) ||
+        !sanitize_app_pair_text_field("os_version", os_version_raw, 96, os_version, meta_err)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", meta_err.empty() ? "invalid pairing metadata" : meta_err}
+        }.dump());
         return;
     }
 
