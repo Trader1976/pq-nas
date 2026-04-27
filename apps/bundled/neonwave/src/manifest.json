@@ -1,0 +1,15 @@
+{
+  "id": "neonwave",
+  "name": "NeonWave",
+  "version": "1.0.0",
+  "entry": "www/index.html",
+  "icons": {
+    "win_classic": "www/icons/neonwave_win.png",
+    "cpunk_orange": "www/icons/neonwave_ora.png",
+    "dark": "www/icons/neonwave_dark.png",
+    "bright": "www/icons/neonwave_bright.png",
+    "default": "www/icons/neonwave_dark.png"
+  },
+  "api_base": "/api/v4/music",
+  "permissions": []
+}

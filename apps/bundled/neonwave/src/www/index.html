@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>DNA-Nexus • NeonWave</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="/static/theme.css">
+    <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<div class="musicApp">
+    <header class="topbar">
+        <div>
+            <h1>NeonWave</h1>
+            <div class="sub">Browse, scan, queue and play your audio library</div>
+        </div>
+
+        <div class="topActions">
+            <button id="musicFolderBtn" class="pillBtn" type="button">Music folder</button>
+            <button id="scanBtn" class="pillBtn" type="button">Scan audio</button>
+
+            <label class="toggle">
+                <input id="audioOnlyToggle" type="checkbox" checked>
+                <span>Audio only</span>
+            </label>
+
+            <button id="refreshBtn" class="pillBtn" type="button">Refresh</button>
+        </div>
+    </header>
+
+    <main class="mainGrid">
+        <section class="panel libraryPanel">
+            <div class="panelHead">
+                <div>
+                    <div class="panelTitle">Library</div>
+                    <div id="pathLine" class="pathLine">/</div>
+                </div>
+                <button id="upBtn" class="pillBtn small" type="button">Up</button>
+            </div>
+
+            <div id="statusLine" class="statusLine">Loading…</div>
+            <div id="list" class="list"></div>
+        </section>
+
+        <aside class="panel playerPanel">
+            <div class="nowPlaying">
+                <div id="nowCover" class="cover"><span>♪</span></div>
+                <div class="nowText">
+                    <div id="nowTitle" class="nowTitle">Nothing playing</div>
+                    <div id="nowSub" class="nowSub">Choose an audio file</div>
+                </div>
+            </div>
+
+            <audio id="audio" controls preload="metadata"></audio>
+
+            <div class="queueHead">
+                <div class="panelTitle">Queue</div>
+                <button id="clearQueueBtn" class="pillBtn small" type="button">Clear</button>
+            </div>
+
+            <div id="queueList" class="queueList"></div>
+        </aside>
+    </main>
+</div>
+
+<script src="./app.js"></script>
+</body>
+</html>
