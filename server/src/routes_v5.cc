@@ -352,7 +352,33 @@ static bool sanitize_app_pair_token(const std::string& raw,
     return true;
 }
 
+
+static void audit_v5_req(const RoutesV5Context& ctx,
+                         const std::string& event,
+                         const std::string& outcome,
+                         const httplib::Request& req,
+                         const std::function<void(std::map<std::string,std::string>&)>& fill) {
+    if (!ctx.audit_emit) return;
+
+    ctx.audit_emit(event, outcome, [&](std::map<std::string,std::string>& f) {
+        const std::string ip = ctx.client_ip ? ctx.client_ip(req) : req.remote_addr;
+        if (!ip.empty()) f["ip"] = ip;
+
+        const std::string ua = req_header_or_empty(req, "User-Agent");
+        if (!ua.empty()) f["ua"] = ua;
+
+        const std::string xff = req_header_or_empty(req, "X-Forwarded-For");
+        if (!xff.empty()) f["xff"] = xff;
+
+        const std::string cf_ip = req_header_or_empty(req, "CF-Connecting-IP");
+        if (!cf_ip.empty()) f["cf_ip"] = cf_ip;
+
+        if (fill) fill(f);
+    });
+}
+
 void register_routes_v5(httplib::Server& srv, const RoutesV5Context& ctx) {
+
     // ---- POST/GET /api/v5/session ----
 	// Route group: /api/v5/session
 	// Issues a signed request token (st) and correlation key (k). Inserts PendingEntry.
@@ -886,6 +912,12 @@ srv.Post("/api/v5/app_pair/start", [&](const httplib::Request& req, httplib::Res
     RoutesV5Context::AppPairStartResult out;
     std::string err;
     if (!ctx.app_pair_start(fp_hex, role, out, err)) {
+        audit_v5_req(ctx, "v5.app_pair_start_fail", "fail", req, [&](std::map<std::string,std::string>& f) {
+            f["fingerprint"] = fp_hex;
+            f["role"] = role;
+            f["reason"] = err.empty() ? "pair_start_failed" : err;
+        });
+
         reply_json(res, 500, json{
             {"ok", false},
             {"error", "server_error"},
@@ -893,6 +925,13 @@ srv.Post("/api/v5/app_pair/start", [&](const httplib::Request& req, httplib::Res
         }.dump());
         return;
     }
+
+    audit_v5_req(ctx, "v5.app_pair_start_ok", "ok", req, [&](std::map<std::string,std::string>& f) {
+        f["fingerprint"] = fp_hex;
+        f["role"] = role;
+        f["pair_id"] = out.pair_id;
+        f["expires_at"] = std::to_string(out.expires_at);
+    });
 
     reply_json(res, 200, json{
         {"ok", true},
@@ -934,19 +973,46 @@ srv.Post("/api/v5/app_pair/cancel", [&](const httplib::Request& req, httplib::Re
     RoutesV5Context::AppPairStatusResult st;
     std::string err;
     if (!ctx.app_pair_get(pair_id, st, err)) {
+        audit_v5_req(ctx, "v5.app_pair_cancel_fail", "fail", req, [&](std::map<std::string,std::string>& f) {
+            f["fingerprint"] = fp_hex;
+            f["role"] = role;
+            f["pair_id"] = pair_id;
+            f["reason"] = "pairing_not_found";
+        });
+
         reply_json(res, 404, json{{"ok", false}, {"error", "not_found"}, {"message", "pairing not found"}, {"pair_id", pair_id}}.dump());
         return;
     }
 
     if (st.fingerprint_hex != fp_hex) {
+        audit_v5_req(ctx, "v5.app_pair_cancel_fail", "fail", req, [&](std::map<std::string,std::string>& f) {
+            f["fingerprint"] = fp_hex;
+            f["role"] = role;
+            f["pair_id"] = pair_id;
+            f["reason"] = "owner_mismatch";
+        });
+
         reply_json(res, 403, json{{"ok", false}, {"error", "forbidden"}, {"message", "pairing does not belong to current user"}}.dump());
         return;
     }
 
     if (!ctx.app_pair_cancel(pair_id, err)) {
+        audit_v5_req(ctx, "v5.app_pair_cancel_fail", "fail", req, [&](std::map<std::string,std::string>& f) {
+            f["fingerprint"] = fp_hex;
+            f["role"] = role;
+            f["pair_id"] = pair_id;
+            f["reason"] = err.empty() ? "cancel_failed" : err;
+        });
+
         reply_json(res, 409, json{{"ok", false}, {"error", "not_allowed"}, {"message", err.empty() ? "cancel failed" : err}, {"pair_id", pair_id}}.dump());
         return;
     }
+
+    audit_v5_req(ctx, "v5.app_pair_cancel_ok", "ok", req, [&](std::map<std::string,std::string>& f) {
+        f["fingerprint"] = fp_hex;
+        f["role"] = role;
+        f["pair_id"] = pair_id;
+    });
 
     reply_json(res, 200, json{{"ok", true}, {"pair_id", pair_id}, {"state", "cancelled"}}.dump());
 });
@@ -1029,20 +1095,51 @@ srv.Post("/api/v5/app_devices/revoke", [&](const httplib::Request& req, httplib:
 
     pqnas::TrustedAppDevice d;
     if (!ctx.app_device_get(device_id, d)) {
+        audit_v5_req(ctx, "v5.app_device_revoke_fail", "fail", req, [&](std::map<std::string,std::string>& f) {
+            f["fingerprint"] = fp_hex;
+            f["role"] = role;
+            f["device_id"] = device_id;
+            f["reason"] = "device_not_found";
+        });
+
         reply_json(res, 404, json{{"ok", false}, {"error", "not_found"}, {"message", "device not found"}, {"device_id", device_id}}.dump());
         return;
     }
 
     if (d.fingerprint_hex != fp_hex) {
+        audit_v5_req(ctx, "v5.app_device_revoke_fail", "fail", req, [&](std::map<std::string,std::string>& f) {
+            f["fingerprint"] = fp_hex;
+            f["role"] = role;
+            f["device_id"] = device_id;
+            f["reason"] = "owner_mismatch";
+        });
+
         reply_json(res, 403, json{{"ok", false}, {"error", "forbidden"}, {"message", "device does not belong to current user"}}.dump());
         return;
     }
 
     std::string err;
     if (!ctx.app_device_revoke(device_id, err)) {
+        audit_v5_req(ctx, "v5.app_device_revoke_fail", "fail", req, [&](std::map<std::string,std::string>& f) {
+            f["fingerprint"] = fp_hex;
+            f["role"] = role;
+            f["device_id"] = device_id;
+            f["reason"] = err.empty() ? "revoke_failed" : err;
+            if (!d.platform.empty()) f["platform"] = d.platform;
+            if (!d.app_version.empty()) f["app_version"] = d.app_version;
+        });
+
         reply_json(res, 409, json{{"ok", false}, {"error", "not_allowed"}, {"message", err.empty() ? "revoke failed" : err}, {"device_id", device_id}}.dump());
         return;
     }
+
+    audit_v5_req(ctx, "v5.app_device_revoke_ok", "ok", req, [&](std::map<std::string,std::string>& f) {
+        f["fingerprint"] = fp_hex;
+        f["role"] = role;
+        f["device_id"] = device_id;
+        if (!d.platform.empty()) f["platform"] = d.platform;
+        if (!d.app_version.empty()) f["app_version"] = d.app_version;
+    });
 
     reply_json(res, 200, json{
         {"ok", true},
@@ -1156,6 +1253,10 @@ srv.Post("/api/v5/app_pair/consume", [&](const httplib::Request& req, httplib::R
     json j;
     std::string jerr;
     if (!parse_json_body(req, j, jerr)) {
+        audit_v5_req(ctx, "v5.app_pair_consume_fail", "fail", req, [&](std::map<std::string,std::string>& f) {
+            f["reason"] = jerr.empty() ? "bad_json" : jerr;
+        });
+
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", jerr}}.dump());
         return;
     }
@@ -1184,6 +1285,10 @@ srv.Post("/api/v5/app_pair/consume", [&](const httplib::Request& req, httplib::R
         !sanitize_app_pair_text_field("device_model", device_model_raw, 96, device_model, meta_err) ||
         !sanitize_app_pair_text_field("device_manufacturer", device_manufacturer_raw, 96, device_manufacturer, meta_err) ||
         !sanitize_app_pair_text_field("os_version", os_version_raw, 96, os_version, meta_err)) {
+        audit_v5_req(ctx, "v5.app_pair_consume_fail", "fail", req, [&](std::map<std::string,std::string>& f) {
+            f["reason"] = meta_err.empty() ? "invalid_pairing_metadata" : meta_err;
+        });
+
         reply_json(res, 400, json{
             {"ok", false},
             {"error", "bad_request"},
@@ -1193,6 +1298,10 @@ srv.Post("/api/v5/app_pair/consume", [&](const httplib::Request& req, httplib::R
     }
 
     if (!ctx.app_pair_consume || !ctx.consume_app_mint) {
+        audit_v5_req(ctx, "v5.app_pair_consume_fail", "fail", req, [&](std::map<std::string,std::string>& f) {
+            f["reason"] = "pair_consume_not_configured";
+        });
+
         reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "pair consume not configured"}}.dump());
         return;
     }
@@ -1200,6 +1309,13 @@ srv.Post("/api/v5/app_pair/consume", [&](const httplib::Request& req, httplib::R
     std::string pair_id, fingerprint_hex, role;
     std::string cerr;
     if (!ctx.app_pair_consume(pair_token, pair_id, fingerprint_hex, role, cerr)) {
+        audit_v5_req(ctx, "v5.app_pair_consume_fail", "fail", req, [&](std::map<std::string,std::string>& f) {
+            f["reason"] = cerr.empty() ? "pair_consume_failed" : cerr;
+            if (!pair_token.empty()) f["pair_token_sha256"] = sha256_hex(pair_token);
+            if (!platform.empty()) f["platform"] = platform;
+            if (!app_version.empty()) f["app_version"] = app_version;
+        });
+
         reply_json(res, 409, json{
             {"ok", false},
             {"error", "not_allowed"},
@@ -1222,6 +1338,20 @@ srv.Post("/api/v5/app_pair/consume", [&](const httplib::Request& req, httplib::R
                           client_ip,
                           out,
                           merr)) {
+        audit_v5_req(ctx, "v5.app_pair_consume_fail", "fail", req, [&](std::map<std::string,std::string>& f) {
+            f["reason"] = merr.empty() ? "pair_mint_denied" : merr;
+            f["pair_id"] = pair_id;
+            f["fingerprint"] = fingerprint_hex;
+            f["role"] = role;
+            if (!platform.empty()) f["platform"] = platform;
+            if (!device_name.empty()) f["device_name"] = device_name;
+            if (!app_version.empty()) f["app_version"] = app_version;
+            if (!device_model.empty()) f["device_model"] = device_model;
+            if (!device_manufacturer.empty()) f["device_manufacturer"] = device_manufacturer;
+            if (!os_version.empty()) f["os_version"] = os_version;
+            if (!client_ip.empty()) f["ip"] = client_ip;
+        });
+
         reply_json(res, 403, json{
             {"ok", false},
             {"error", "forbidden"},
@@ -1232,8 +1362,30 @@ srv.Post("/api/v5/app_pair/consume", [&](const httplib::Request& req, httplib::R
 
     if (ctx.app_pair_mark_consumed_device) {
         std::string derr;
-        ctx.app_pair_mark_consumed_device(pair_id, out.device_id, derr);
+        if (!ctx.app_pair_mark_consumed_device(pair_id, out.device_id, derr)) {
+            audit_v5_req(ctx, "v5.app_pair_consume_mark_device_fail", "fail", req, [&](std::map<std::string,std::string>& f) {
+                f["reason"] = derr.empty() ? "mark_consumed_device_failed" : derr;
+                f["pair_id"] = pair_id;
+                f["device_id"] = out.device_id;
+                f["fingerprint"] = out.fingerprint_hex.empty() ? fingerprint_hex : out.fingerprint_hex;
+                f["role"] = out.role.empty() ? role : out.role;
+            });
+        }
     }
+
+    audit_v5_req(ctx, "v5.app_pair_consume_ok", "ok", req, [&](std::map<std::string,std::string>& f) {
+        f["pair_id"] = pair_id;
+        f["device_id"] = out.device_id;
+        f["fingerprint"] = out.fingerprint_hex.empty() ? fingerprint_hex : out.fingerprint_hex;
+        f["role"] = out.role.empty() ? role : out.role;
+        if (!platform.empty()) f["platform"] = platform;
+        if (!device_name.empty()) f["device_name"] = device_name;
+        if (!app_version.empty()) f["app_version"] = app_version;
+        if (!device_model.empty()) f["device_model"] = device_model;
+        if (!device_manufacturer.empty()) f["device_manufacturer"] = device_manufacturer;
+        if (!os_version.empty()) f["os_version"] = os_version;
+        if (!client_ip.empty()) f["ip"] = client_ip;
+    });
 
     const long now = ctx.now_epoch ? ctx.now_epoch() : 0;
     reply_json(res, 200, json{
