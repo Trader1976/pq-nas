@@ -20267,12 +20267,15 @@ auto chunked_preflight_new_file = [&](const httplib::Request& req,
                                       const std::string& fp_hex,
                                       const std::string& rel_norm,
                                       std::uint64_t size_bytes,
+                                      bool overwrite,
                                       std::filesystem::path* out_abs,
                                       bool* out_tiering_write,
-                                      UploadTieringConfig* out_tier_cfg) -> bool {
+                                      UploadTieringConfig* out_tier_cfg,
+                                      std::string* out_old_physical_path) -> bool {
     if (out_abs) *out_abs = std::filesystem::path{};
     if (out_tiering_write) *out_tiering_write = false;
     if (out_tier_cfg) *out_tier_cfg = UploadTieringConfig{};
+    if (out_old_physical_path) out_old_physical_path->clear();
 
     auto fail = [&](const std::string& reason, int http, const json& body, const std::string& detail = "") -> bool {
         chunked_audit_fail(req, fp_hex, "v4.uploads_preflight_fail", reason, http, detail);
@@ -20431,27 +20434,37 @@ auto chunked_preflight_new_file = [&](const httplib::Request& req,
     }
 
     if (existing_rec.has_value() || physical_exists_at_target) {
-        json existing = json::object();
+        if (!overwrite) {
+            json existing = json::object();
 
-        if (existing_rec.has_value()) {
-            existing["size_bytes"] = existing_rec->size_bytes;
-            existing["mtime_epoch"] = existing_rec->mtime_epoch;
-            existing["tier_state"] = existing_rec->tier_state;
-            existing["current_pool"] = existing_rec->current_pool;
-            existing["physical_path"] = existing_rec->physical_path;
-        } else {
-            existing["size_bytes"] = physical_existing_size;
-            existing["mtime_epoch"] = physical_existing_mtime;
-            existing["physical_path"] = final_abs.string();
+            if (existing_rec.has_value()) {
+                existing["size_bytes"] = existing_rec->size_bytes;
+                existing["mtime_epoch"] = existing_rec->mtime_epoch;
+                existing["tier_state"] = existing_rec->tier_state;
+                existing["current_pool"] = existing_rec->current_pool;
+                existing["physical_path"] = existing_rec->physical_path;
+            } else {
+                existing["size_bytes"] = physical_existing_size;
+                existing["mtime_epoch"] = physical_existing_mtime;
+                existing["physical_path"] = final_abs.string();
+            }
+
+            return fail("file_exists", 409, json{
+                {"ok", false},
+                {"error", "file_exists"},
+                {"message", "file already exists"},
+                {"path", rel_norm},
+                {"existing", existing}
+            }, rel_norm);
         }
 
-        return fail("file_exists", 409, json{
-            {"ok", false},
-            {"error", "file_exists"},
-            {"message", "file already exists"},
-            {"path", rel_norm},
-            {"existing", existing}
-        }, rel_norm);
+        if (out_old_physical_path) {
+            if (existing_rec.has_value() && !existing_rec->physical_path.empty()) {
+                *out_old_physical_path = existing_rec->physical_path;
+            } else if (physical_exists_at_target) {
+                *out_old_physical_path = final_abs.string();
+            }
+        }
     }
 
     if (out_abs) *out_abs = final_abs;
@@ -20497,16 +20510,6 @@ srv.Post("/api/v4/uploads/start", [&](const httplib::Request& req, httplib::Resp
         overwrite = body["overwrite"].get<bool>();
     }
 
-    if (overwrite) {
-        chunked_audit_fail(req, fp_hex, "v4.uploads_start_fail", "overwrite_not_supported_phase1", 400);
-        reply_json(res, 400, json{
-            {"ok", false},
-            {"error", "bad_request"},
-            {"message", "chunked overwrite is not enabled yet"}
-        }.dump());
-        return;
-    }
-
     std::uint64_t size_bytes = 0;
     if (!chunked_json_u64(body, "size_bytes", &size_bytes)) {
         chunked_audit_fail(req, fp_hex, "v4.uploads_start_fail", "missing_size_bytes", 400);
@@ -20550,8 +20553,10 @@ srv.Post("/api/v4/uploads/start", [&](const httplib::Request& req, httplib::Resp
     std::filesystem::path ignored_abs;
     bool ignored_tiering = false;
     UploadTieringConfig ignored_tier_cfg;
-    if (!chunked_preflight_new_file(req, res, fp_hex, rel_norm, size_bytes,
-                                    &ignored_abs, &ignored_tiering, &ignored_tier_cfg)) {
+    std::string ignored_old_physical_path;
+    if (!chunked_preflight_new_file(req, res, fp_hex, rel_norm, size_bytes, overwrite,
+                                    &ignored_abs, &ignored_tiering, &ignored_tier_cfg,
+                                    &ignored_old_physical_path)) {
         return;
     }
 
@@ -20584,7 +20589,7 @@ srv.Post("/api/v4/uploads/start", [&](const httplib::Request& req, httplib::Resp
         {"size_bytes", size_bytes},
         {"chunk_size", k_chunked_upload_chunk_bytes},
         {"chunks_total", chunks_total},
-        {"overwrite", false},
+        {"overwrite", overwrite},
         {"created_epoch", now_epoch_sec()}
     };
 
@@ -20917,16 +20922,6 @@ srv.Post("/api/v4/uploads/finish", [&](const httplib::Request& req, httplib::Res
     const std::string rel_norm = meta.value("path", "");
     bool overwrite = meta.value("overwrite", false);
 
-    if (overwrite) {
-        chunked_audit_fail(req, fp_hex, "v4.uploads_finish_fail", "overwrite_not_supported_phase1", 400);
-        reply_json(res, 400, json{
-            {"ok", false},
-            {"error", "bad_request"},
-            {"message", "chunked overwrite is not enabled yet"}
-        }.dump());
-        return;
-    }
-
     std::uint64_t size_bytes = 0;
     std::uint64_t chunk_size = 0;
     std::uint64_t chunks_total = 0;
@@ -21001,8 +20996,10 @@ srv.Post("/api/v4/uploads/finish", [&](const httplib::Request& req, httplib::Res
     bool tiering_write = false;
     UploadTieringConfig tier_cfg;
 
-    if (!chunked_preflight_new_file(req, res, fp_hex, rel_norm, size_bytes,
-                                    &out_abs, &tiering_write, &tier_cfg)) {
+    std::string old_physical_path;
+    if (!chunked_preflight_new_file(req, res, fp_hex, rel_norm, size_bytes, overwrite,
+                                    &out_abs, &tiering_write, &tier_cfg,
+                                    &old_physical_path)) {
         return;
     }
 
@@ -21098,19 +21095,78 @@ srv.Post("/api/v4/uploads/finish", [&](const httplib::Request& req, httplib::Res
             std::error_code dst_ec;
             auto dst_st = std::filesystem::symlink_status(out_abs, dst_ec);
             if (!dst_ec && std::filesystem::exists(dst_st)) {
-                // Phase 1 is new-file only. Treat any race as conflict.
-                std::filesystem::remove(tmp, ec);
-                chunked_audit_fail(req, fp_hex, "v4.uploads_finish_fail", "file_exists", 409, rel_norm);
-                reply_json(res, 409, json{
-                    {"ok", false},
-                    {"error", "file_exists"},
-                    {"message", "file already exists"},
-                    {"path", rel_norm}
-                }.dump());
-                return;
+                if (std::filesystem::is_symlink(dst_st)) {
+                    std::filesystem::remove(tmp, ec);
+                    chunked_audit_fail(req, fp_hex, "v4.uploads_finish_fail", "target_symlink_not_supported", 409, out_abs.string());
+                    reply_json(res, 409, json{
+                        {"ok", false},
+                        {"error", "path_conflict"},
+                        {"message", "target path exists as a symlink"},
+                        {"path", rel_norm}
+                    }.dump());
+                    return;
+                }
+
+                if (!std::filesystem::is_regular_file(dst_st)) {
+                    std::filesystem::remove(tmp, ec);
+                    chunked_audit_fail(req, fp_hex, "v4.uploads_finish_fail", "target_not_regular_file", 409, out_abs.string());
+                    reply_json(res, 409, json{
+                        {"ok", false},
+                        {"error", "path_conflict"},
+                        {"message", "target path exists and is not a regular file"},
+                        {"path", rel_norm}
+                    }.dump());
+                    return;
+                }
+
+                if (!overwrite) {
+                    std::filesystem::remove(tmp, ec);
+                    chunked_audit_fail(req, fp_hex, "v4.uploads_finish_fail", "file_exists", 409, rel_norm);
+                    reply_json(res, 409, json{
+                        {"ok", false},
+                        {"error", "file_exists"},
+                        {"message", "file already exists"},
+                        {"path", rel_norm}
+                    }.dump());
+                    return;
+                }
+
+                if (old_physical_path.empty()) {
+                    old_physical_path = out_abs.string();
+                }
             }
+
             if (dst_ec && dst_ec != std::make_error_code(std::errc::no_such_file_or_directory)) {
                 throw std::runtime_error("target existence check failed: " + dst_ec.message());
+            }
+        }
+
+        if (overwrite && !old_physical_path.empty()) {
+            const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+
+            pqnas::PreserveLiveFileVersionParams vp;
+            vp.scope_type = "user";
+            vp.scope_id = fp_hex;
+            vp.scope_root = user_dir;
+            vp.logical_rel_path = rel_norm;
+            vp.live_abs_path = std::filesystem::path(old_physical_path);
+            vp.event_kind = "overwrite_preserve";
+            vp.actor_fp = fp_hex;
+            vp.users = &users;
+
+            pqnas::FileVersionRec vrec;
+            std::string verr;
+            if (!file_versions_index.preserve_live_file_version(vp, &vrec, &verr)) {
+                std::filesystem::remove(tmp, ec);
+
+                chunked_audit_fail(req, fp_hex, "v4.uploads_finish_fail", "version_preserve_failed", 500, verr);
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "failed to preserve previous version"},
+                    {"detail", pqnas::shorten(verr, 180)}
+                }.dump());
+                return;
             }
         }
 
@@ -21163,6 +21219,28 @@ srv.Post("/api/v4/uploads/finish", [&](const httplib::Request& req, httplib::Res
             audit_append(tev);
         }
 
+        if (!old_physical_path.empty()) {
+            const std::string new_physical_path = out_abs.string();
+            if (old_physical_path != new_physical_path) {
+                std::error_code old_rm_ec;
+                std::filesystem::remove(old_physical_path, old_rm_ec);
+                if (old_rm_ec) {
+                    try {
+                        pqnas::AuditEvent ev;
+                        ev.event = "v4.uploads_old_physical_cleanup_fail";
+                        ev.outcome = "warn";
+                        ev.f["fingerprint"] = fp_hex;
+                        ev.f["path"] = pqnas::shorten(rel_norm, 200);
+                        ev.f["old_physical_path"] = pqnas::shorten(old_physical_path, 220);
+                        ev.f["new_physical_path"] = pqnas::shorten(new_physical_path, 220);
+                        ev.f["detail"] = pqnas::shorten(old_rm_ec.message(), 180);
+                        chunked_audit_headers(req, ev);
+                        audit_append(ev);
+                    } catch (...) {}
+                }
+            }
+        }
+
         std::filesystem::remove_all(dir, ec);
 
         try {
@@ -21185,7 +21263,7 @@ srv.Post("/api/v4/uploads/finish", [&](const httplib::Request& req, httplib::Res
             {"fingerprint_hex", fp_hex},
             {"path", rel_norm},
             {"bytes", assembled_bytes},
-            {"overwrite", false}
+            {"overwrite", overwrite}
         }.dump());
         return;
 

@@ -1830,15 +1830,13 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   function shouldUseChunkedUpload(file, opts = {}) {
     const size = Number(file && file.size != null ? file.size : 0);
 
-    // Phase 1: My Files only, new-file uploads only.
-    // Workspace + overwrite support will come after the basic path is proven.
-    const overwrite = !!(opts && opts.overwrite);
+    // My Files only for now. Workspace chunking comes next.
     const inWorkspace =
         window.PQNAS_FILEMGR &&
         typeof window.PQNAS_FILEMGR.isWorkspaceScope === "function" &&
         window.PQNAS_FILEMGR.isWorkspaceScope();
 
-    return size > CHUNKED_UPLOAD_THRESHOLD_BYTES && !overwrite && !inWorkspace;
+    return size > CHUNKED_UPLOAD_THRESHOLD_BYTES && !inWorkspace;
   }
 
   async function postUploadJson(url, body) {
@@ -1968,7 +1966,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       const start = await postUploadJson("/api/v4/uploads/start", {
         path: full,
         size_bytes: size,
-        overwrite: false
+        overwrite: !!(opts && opts.overwrite)
       });
 
       uploadId = String(start.upload_id || "");
