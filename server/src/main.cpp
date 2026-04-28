@@ -1631,21 +1631,135 @@ static std::string header_value(const httplib::Request& req, const char* name) {
     return (it == req.headers.end()) ? "" : it->second;
 }
 
+static std::string audit_safe_header_value(const std::string& raw, std::size_t max_len = 512) {
+    std::string out;
+    out.reserve(std::min(raw.size(), max_len));
+
+    for (unsigned char c : raw) {
+        if (out.size() >= max_len) break;
+
+        if (c < 0x20 || c == 0x7f) {
+            out.push_back(' ');
+        } else {
+            out.push_back(static_cast<char>(c));
+        }
+    }
+
+    return out;
+}
+
+static bool parse_ipv4_u32(const std::string& ip_raw, std::uint32_t& out) {
+    std::string ip = trim_ws(ip_raw);
+
+    const std::string mapped = "::ffff:";
+    if (ip.rfind(mapped, 0) == 0) {
+        ip = ip.substr(mapped.size());
+    }
+
+    std::uint32_t parts[4] = {0, 0, 0, 0};
+    std::size_t start = 0;
+
+    for (int i = 0; i < 4; ++i) {
+        const std::size_t dot = (i == 3) ? std::string::npos : ip.find('.', start);
+        const std::size_t end = (i == 3) ? ip.size() : dot;
+
+        if (end == std::string::npos || end <= start) return false;
+
+        std::uint32_t v = 0;
+        for (std::size_t p = start; p < end; ++p) {
+            const char c = ip[p];
+            if (c < '0' || c > '9') return false;
+            v = (v * 10u) + static_cast<std::uint32_t>(c - '0');
+            if (v > 255u) return false;
+        }
+
+        parts[i] = v;
+
+        if (i < 3) {
+            if (dot == std::string::npos) return false;
+            start = dot + 1;
+        }
+    }
+
+    out = (parts[0] << 24u) | (parts[1] << 16u) | (parts[2] << 8u) | parts[3];
+    return true;
+}
+
+static bool ipv4_in_cidr(const std::string& ip, const std::string& cidr) {
+    const std::size_t slash = cidr.find('/');
+    if (slash == std::string::npos) return false;
+
+    const std::string net_s = trim_ws(cidr.substr(0, slash));
+    const std::string bits_s = trim_ws(cidr.substr(slash + 1));
+    if (bits_s.empty()) return false;
+
+    int bits = 0;
+    for (char c : bits_s) {
+        if (c < '0' || c > '9') return false;
+        bits = (bits * 10) + (c - '0');
+        if (bits > 32) return false;
+    }
+
+    std::uint32_t ip_u = 0;
+    std::uint32_t net_u = 0;
+    if (!parse_ipv4_u32(ip, ip_u) || !parse_ipv4_u32(net_s, net_u)) return false;
+
+    const std::uint32_t mask =
+        (bits == 0) ? 0u : (0xffffffffu << static_cast<unsigned>(32 - bits));
+
+    return (ip_u & mask) == (net_u & mask);
+}
+
+static bool trusted_proxy_addr(const std::string& remote_raw) {
+    const char* env = std::getenv("PQNAS_TRUSTED_PROXIES");
+    if (!env || !*env) return false;
+
+    const std::string remote = trim_ws(remote_raw);
+    const std::string list(env);
+
+    std::uint32_t remote_u = 0;
+    const bool remote_is_v4 = parse_ipv4_u32(remote, remote_u);
+
+    std::size_t start = 0;
+    while (start < list.size()) {
+        std::size_t end = list.find(',', start);
+        if (end == std::string::npos) end = list.size();
+
+        const std::string rule = trim_ws(list.substr(start, end - start));
+        if (!rule.empty()) {
+            if (remote == rule) return true;
+
+            std::uint32_t rule_u = 0;
+            if (remote_is_v4 && parse_ipv4_u32(rule, rule_u) && remote_u == rule_u) {
+                return true;
+            }
+
+            if (ipv4_in_cidr(remote, rule)) return true;
+        }
+
+        start = end + 1;
+    }
+
+    return false;
+}
+
 static std::string first_xff_ip(const std::string& xff) {
-    auto comma = xff.find(',');
+    const std::size_t comma = xff.find(',');
     return trim_ws((comma == std::string::npos) ? xff : xff.substr(0, comma));
 }
 
 static std::string client_ip(const httplib::Request& req) {
-    std::string cf = trim_ws(header_value(req, "CF-Connecting-IP"));
-    if (!cf.empty()) return cf;
+    const std::string remote = req.remote_addr.empty() ? "?" : trim_ws(req.remote_addr);
 
-    std::string xff = header_value(req, "X-Forwarded-For");
-    if (!xff.empty()) {
-        std::string ip = first_xff_ip(xff);
-        if (!ip.empty()) return ip;
+    if (trusted_proxy_addr(remote)) {
+        const std::string cf = trim_ws(header_value(req, "CF-Connecting-IP"));
+        if (!cf.empty()) return cf;
+
+        const std::string xff = first_xff_ip(header_value(req, "X-Forwarded-For"));
+        if (!xff.empty()) return xff;
     }
-    return req.remote_addr.empty() ? "?" : req.remote_addr;
+
+    return remote;
 }
 static std::string extract_named_cookie_value(const std::string& cookie_header,
                                               const std::string& name) {
@@ -1658,7 +1772,7 @@ static std::string extract_named_cookie_value(const std::string& cookie_header,
                (cookie_header[pos] == ' ' ||
                 cookie_header[pos] == '\t' ||
                 cookie_header[pos] == ';')) {
-            ++pos;
+                ++pos;
                 }
 
         const std::size_t eq = cookie_header.find('=', pos);
@@ -1668,7 +1782,7 @@ static std::string extract_named_cookie_value(const std::string& cookie_header,
         while (key_end > pos &&
                (cookie_header[key_end - 1] == ' ' ||
                 cookie_header[key_end - 1] == '\t')) {
-            --key_end;
+                --key_end;
                 }
 
         const std::string key = cookie_header.substr(pos, key_end - pos);
@@ -10717,10 +10831,10 @@ srv.Post("/api/v4/storage/pools/set-name", [&](const httplib::Request& req, http
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -10746,10 +10860,10 @@ srv.Post("/api/v4/storage/pools/set-name", [&](const httplib::Request& req, http
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -10899,10 +11013,10 @@ srv.Post("/api/v4/storage/pools/rename", [&](const httplib::Request& req, httpli
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -10928,10 +11042,10 @@ srv.Post("/api/v4/storage/pools/rename", [&](const httplib::Request& req, httpli
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -12593,10 +12707,10 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -13792,10 +13906,10 @@ srv.Post("/api/v4/raid/execute/convert-mode", [&](const httplib::Request& req, h
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -14574,10 +14688,10 @@ srv.Post("/api/v4/raid/execute/add-device", [&](const httplib::Request& req, htt
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -15121,10 +15235,10 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -15469,10 +15583,10 @@ srv.Post("/api/v4/raid/execute/remove-device", [&](const httplib::Request& req, 
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -15950,10 +16064,10 @@ srv.Post("/api/v4/raid/execute/create-pool", [&](const httplib::Request& req, ht
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -18416,10 +18530,10 @@ srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const http
 	        ev.f["reason"] = reason;
 
     	    auto it_cf = req.headers.find("CF-Connecting-IP");
-	        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+	        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
     	    auto it_xff = req.headers.find("X-Forwarded-For");
-	        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+	        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
     	    ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 	        ev.f["ua"] = audit_ua();
@@ -18437,10 +18551,10 @@ srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const http
         	ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
     	    auto it_cf = req.headers.find("CF-Connecting-IP");
-	        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+	        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         	auto it_xff = req.headers.find("X-Forwarded-For");
-    	    if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+    	    if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
 	        ev.f["ua"] = audit_ua();
     	    audit_append(ev);
@@ -18460,7 +18574,7 @@ srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const http
             reply_json(res, 401, json({{"ok",false},{"error","unauthorized"},{"message","missing pqnas_session"}}).dump());
             return;
         }
-	    
+
     	std::string fp_b64;
     	long exp = 0;
     	if (!session_cookie_verify(COOKIE_KEY, cookieVal, fp_b64, exp)) {
@@ -19960,10 +20074,10 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -19985,10 +20099,10 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -20693,10 +20807,10 @@ srv.Post("/api/v4/files/mkdir", [&](const httplib::Request& req, httplib::Respon
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -20712,10 +20826,10 @@ srv.Post("/api/v4/files/mkdir", [&](const httplib::Request& req, httplib::Respon
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -20893,10 +21007,10 @@ srv.Post("/api/v4/files/hash", [&](const httplib::Request& req, httplib::Respons
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -21068,10 +21182,10 @@ srv.Post("/api/v4/files/rmdir", [&](const httplib::Request& req, httplib::Respon
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -21378,10 +21492,10 @@ srv.Post("/api/v4/files/tree", [&](const httplib::Request& req, httplib::Respons
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -21638,10 +21752,10 @@ srv.Post("/api/v4/files/touch", [&](const httplib::Request& req, httplib::Respon
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -21895,10 +22009,10 @@ srv.Post("/api/v4/files/cat", [&](const httplib::Request& req, httplib::Response
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -22088,10 +22202,10 @@ srv.Post("/api/v4/files/save_text", [&](const httplib::Request& req, httplib::Re
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -22549,10 +22663,10 @@ srv.Get("/api/v4/files/read_text", [&](const httplib::Request& req, httplib::Res
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -22773,10 +22887,10 @@ srv.Post("/api/v4/files/write_text", [&](const httplib::Request& req, httplib::R
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -23139,10 +23253,10 @@ srv.Post("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -23491,10 +23605,10 @@ srv.Post("/api/v4/files/zip_sel", [&](const httplib::Request& req, httplib::Resp
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -24073,10 +24187,10 @@ srv.Post("/api/v4/files/rmrf", [&](const httplib::Request& req, httplib::Respons
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -24800,10 +24914,10 @@ srv.Post("/api/v4/files/search", [&](const httplib::Request& req, httplib::Respo
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -25062,10 +25176,10 @@ auto files_stat_handler = [&](const httplib::Request& req, httplib::Response& re
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -25796,10 +25910,10 @@ srv.Post("/api/v4/files/du", [&](const httplib::Request& req, httplib::Response&
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -26182,10 +26296,10 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -26204,10 +26318,10 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -26965,10 +27079,10 @@ srv.Get("/api/v4/files/list", [&](const httplib::Request& req, httplib::Response
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -26985,10 +27099,10 @@ srv.Get("/api/v4/files/list", [&](const httplib::Request& req, httplib::Response
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -27245,10 +27359,10 @@ srv.Get("/api/v4/me/storage", [&](const httplib::Request& req, httplib::Response
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
 
@@ -27275,10 +27389,10 @@ srv.Get("/api/v4/me/storage", [&](const httplib::Request& req, httplib::Response
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -27409,10 +27523,10 @@ srv.Post("/api/v4/files/exists", [&](const httplib::Request& req, httplib::Respo
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -27567,10 +27681,10 @@ srv.Post("/api/v4/files/copy", [&](const httplib::Request& req, httplib::Respons
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -28212,10 +28326,10 @@ srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response&
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -28232,10 +28346,10 @@ srv.Get("/api/v4/files/zip", [&](const httplib::Request& req, httplib::Response&
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -28655,10 +28769,10 @@ srv.Get("/api/v4/files/office_preview", [&](const httplib::Request& req, httplib
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -28674,10 +28788,10 @@ srv.Get("/api/v4/files/office_preview", [&](const httplib::Request& req, httplib
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -28924,10 +29038,10 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -28944,10 +29058,10 @@ srv.Get("/api/v4/files/get", [&](const httplib::Request& req, httplib::Response&
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -29139,10 +29253,10 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -30088,10 +30202,10 @@ srv.Get("/api/v4/gallery/thumb", [&](const httplib::Request& req, httplib::Respo
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -30108,10 +30222,10 @@ srv.Get("/api/v4/gallery/thumb", [&](const httplib::Request& req, httplib::Respo
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -30653,10 +30767,10 @@ srv.Post("/api/v4/gallery/meta/set", [&](const httplib::Request& req, httplib::R
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -31122,10 +31236,10 @@ srv.Post("/api/v4/gallery/meta/get", [&](const httplib::Request& req, httplib::R
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -31677,10 +31791,10 @@ srv.Put("/api/v4/files/put",
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -31702,10 +31816,10 @@ srv.Put("/api/v4/files/put",
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -31722,10 +31836,10 @@ srv.Put("/api/v4/files/put",
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -32399,11 +32513,11 @@ srv.Put("/api/v4/files/put",
 
                 auto it_cf = req.headers.find("CF-Connecting-IP");
                 if (it_cf != req.headers.end())
-                    tev.f["cf_ip"] = it_cf->second;
+                    tev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
                 auto it_xff = req.headers.find("X-Forwarded-For");
                 if (it_xff != req.headers.end())
-                    tev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+                    tev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
                 tev.f["ua"] = audit_ua();
 
@@ -32737,10 +32851,10 @@ srv.Post("/api/v4/snapshots/create", [&](const httplib::Request& req, httplib::R
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -32757,10 +32871,10 @@ srv.Post("/api/v4/snapshots/create", [&](const httplib::Request& req, httplib::R
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -33008,9 +33122,9 @@ srv.Get("/api/v4/snapshots/volumes", [&](const httplib::Request& req, httplib::R
         if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
         ev.f["ua"] = audit_ua();
         audit_append(ev);
     };
@@ -33069,10 +33183,10 @@ srv.Get("/api/v4/snapshots/list", [&](const httplib::Request& req, httplib::Resp
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -33088,10 +33202,10 @@ srv.Get("/api/v4/snapshots/list", [&](const httplib::Request& req, httplib::Resp
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
         audit_append(ev);
@@ -36064,9 +36178,9 @@ srv.Post("/api/v4/shares/pq/recipient/update", [&](const httplib::Request& req, 
     auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
         ev.f["ua"] = audit_ua();
     };
 
@@ -36310,9 +36424,9 @@ srv.Post("/api/v4/shares/create", [&](const httplib::Request& req, httplib::Resp
     auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
         ev.f["ua"] = audit_ua();
     };
     auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
@@ -36809,9 +36923,9 @@ srv.Post("/api/v4/shares/create", [&](const httplib::Request& req, httplib::Resp
     auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
         ev.f["ua"] = audit_ua();
     };
     auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "",
@@ -37417,10 +37531,10 @@ srv.Post("/api/v4/admin/storage/tiering/migrate_one", [&](const httplib::Request
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };
@@ -38612,9 +38726,9 @@ srv.Get(R"(/s/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httplib::Resp
     auto add_ip_headers = [&](pqnas::AuditEvent& ev) {
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
         ev.f["ua"] = audit_ua();
     };
     auto get_cookie_value = [&](const std::string& name) -> std::string {
@@ -39264,10 +39378,10 @@ srv.Post("/api/v4/gallery/meta/embedded_get", [&](const httplib::Request& req, h
         ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
 
         auto it_cf = req.headers.find("CF-Connecting-IP");
-        if (it_cf != req.headers.end()) ev.f["cf_ip"] = it_cf->second;
+        if (it_cf != req.headers.end()) ev.f["cf_ip"] = audit_safe_header_value(it_cf->second, 120);
 
         auto it_xff = req.headers.find("X-Forwarded-For");
-        if (it_xff != req.headers.end()) ev.f["xff"] = pqnas::shorten(it_xff->second, 120);
+        if (it_xff != req.headers.end()) ev.f["xff"] = audit_safe_header_value(it_xff->second, 120);
 
         ev.f["ua"] = audit_ua();
     };

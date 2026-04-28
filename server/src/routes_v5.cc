@@ -58,6 +58,23 @@ static std::string req_header_or_empty(const httplib::Request& req, const char* 
     return (it == req.headers.end()) ? std::string{} : it->second;
 }
 
+static std::string audit_safe_header_value(const std::string& raw, std::size_t max_len = 512) {
+    std::string out;
+    out.reserve(std::min(raw.size(), max_len));
+
+    for (unsigned char c : raw) {
+        if (out.size() >= max_len) break;
+
+        if (c < 0x20 || c == 0x7f) {
+            out.push_back(' ');
+        } else {
+            out.push_back(static_cast<char>(c));
+        }
+    }
+
+    return out;
+}
+
 // Normalizes base64 values that arrive via URL/query decoding.
 // Some stacks decode '+' as space in query parameters (application/x-www-form-urlencoded).
 // We reverse that and trim surrounding whitespace to keep k parsing robust.
@@ -364,13 +381,13 @@ static void audit_v5_req(const RoutesV5Context& ctx,
         const std::string ip = ctx.client_ip ? ctx.client_ip(req) : req.remote_addr;
         if (!ip.empty()) f["ip"] = ip;
 
-        const std::string ua = req_header_or_empty(req, "User-Agent");
+        const std::string ua = audit_safe_header_value(req_header_or_empty(req, "User-Agent"));
         if (!ua.empty()) f["ua"] = ua;
 
-        const std::string xff = req_header_or_empty(req, "X-Forwarded-For");
+        const std::string xff = audit_safe_header_value(req_header_or_empty(req, "X-Forwarded-For"));
         if (!xff.empty()) f["xff"] = xff;
 
-        const std::string cf_ip = req_header_or_empty(req, "CF-Connecting-IP");
+        const std::string cf_ip = audit_safe_header_value(req_header_or_empty(req, "CF-Connecting-IP"));
         if (!cf_ip.empty()) f["cf_ip"] = cf_ip;
 
         if (fill) fill(f);
@@ -775,7 +792,7 @@ srv.Post("/api/v5/consume_app", [&](const httplib::Request& req, httplib::Respon
 				if (!device_manufacturer.empty()) f["device_manufacturer"] = device_manufacturer;
 				if (!os_version.empty()) f["os_version"] = os_version;
                 if (!client_ip.empty()) f["ip"] = client_ip;
-                const std::string ua = req_header_or_empty(req, "User-Agent");
+                const std::string ua = audit_safe_header_value(req_header_or_empty(req, "User-Agent"));
                 if (!ua.empty()) f["ua"] = ua;
             });
         }
@@ -804,7 +821,7 @@ srv.Post("/api/v5/consume_app", [&](const httplib::Request& req, httplib::Respon
 			if (!device_manufacturer.empty()) f["device_manufacturer"] = device_manufacturer;
 			if (!os_version.empty()) f["os_version"] = os_version;
             if (!client_ip.empty()) f["ip"] = client_ip;
-            const std::string ua = req_header_or_empty(req, "User-Agent");
+            const std::string ua = audit_safe_header_value(req_header_or_empty(req, "User-Agent"));
             if (!ua.empty()) f["ua"] = ua;
         });
     }
@@ -854,7 +871,7 @@ srv.Post("/api/v5/token/refresh", [&](const httplib::Request& req, httplib::Resp
                 f["device_id"] = device_id;
                 f["reason"] = rerr.empty() ? "refresh_failed" : rerr;
                 if (!client_ip.empty()) f["ip"] = client_ip;
-                const std::string ua = req_header_or_empty(req, "User-Agent");
+                const std::string ua = audit_safe_header_value(req_header_or_empty(req, "User-Agent"));
                 if (!ua.empty()) f["ua"] = ua;
             });
         }
@@ -874,7 +891,7 @@ srv.Post("/api/v5/token/refresh", [&](const httplib::Request& req, httplib::Resp
             if (!out.fingerprint_hex.empty()) f["fingerprint"] = out.fingerprint_hex;
             if (!out.role.empty()) f["role"] = out.role;
             if (!client_ip.empty()) f["ip"] = client_ip;
-            const std::string ua = req_header_or_empty(req, "User-Agent");
+            const std::string ua = audit_safe_header_value(req_header_or_empty(req, "User-Agent"));
             if (!ua.empty()) f["ua"] = ua;
         });
     }
@@ -937,7 +954,7 @@ srv.Post("/api/v5/token/revoke", [&](const httplib::Request& req, httplib::Respo
                 f["reason"] = rerr.empty() ? "revoke_failed" : rerr;
                 if (!client_ip.empty()) f["ip"] = client_ip;
 
-                const std::string ua = req_header_or_empty(req, "User-Agent");
+                const std::string ua = audit_safe_header_value(req_header_or_empty(req, "User-Agent"));
                 if (!ua.empty()) f["ua"] = ua;
             });
         }
@@ -956,7 +973,7 @@ srv.Post("/api/v5/token/revoke", [&](const httplib::Request& req, httplib::Respo
             f["device_id"] = device_id;
             if (!client_ip.empty()) f["ip"] = client_ip;
 
-            const std::string ua = req_header_or_empty(req, "User-Agent");
+            const std::string ua = audit_safe_header_value(req_header_or_empty(req, "User-Agent"));
             if (!ua.empty()) f["ua"] = ua;
         });
     }
