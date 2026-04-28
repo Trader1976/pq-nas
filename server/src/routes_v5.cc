@@ -1311,6 +1311,17 @@ srv.Get("/api/v5/app_pair/qr.svg", [&](const httplib::Request& req, httplib::Res
 });
 // ---- GET /api/v5/app_pair/status?pair_id=... ----
 srv.Get("/api/v5/app_pair/status", [&](const httplib::Request& req, httplib::Response& res) {
+    if (!ctx.require_user_cookie) {
+        reply_json(res, 500, json{{"ok", false}, {"error", "server_error"}, {"message", "missing require_user_cookie"}}.dump());
+        return;
+    }
+
+    std::string fp_hex;
+    std::string role;
+    if (!ctx.require_user_cookie(req, res, &fp_hex, &role)) {
+        return; // helper already wrote response
+    }
+
     auto it = req.params.find("pair_id");
     if (it == req.params.end() || it->second.empty()) {
         reply_json(res, 400, json{{"ok", false}, {"error", "bad_request"}, {"message", "missing pair_id"}}.dump());
@@ -1337,40 +1348,49 @@ srv.Get("/api/v5/app_pair/status", [&](const httplib::Request& req, httplib::Res
         return;
     }
 
+    if (st.fingerprint_hex != fp_hex) {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "pairing belongs to another user"}
+        }.dump());
+        return;
+    }
+
     if (st.expires_at > 0 && now > st.expires_at) {
-		reply_json(res, 200, json{
-    		{"ok", true},
-		    {"state", "expired"},
-    		{"pair_id", pair_id},
-    		{"issued_at", st.issued_at},
-    		{"expires_at", st.expires_at},
-    		{"now", now}
-		}.dump());
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"state", "expired"},
+            {"pair_id", pair_id},
+            {"issued_at", st.issued_at},
+            {"expires_at", st.expires_at},
+            {"now", now}
+        }.dump());
         return;
     }
 
     if (st.consumed) {
-		reply_json(res, 200, json{
-    		{"ok", true},
-    		{"state", "consumed"},
-    		{"pair_id", pair_id},
-    		{"issued_at", st.issued_at},
-    		{"expires_at", st.expires_at},
-    		{"consumed_at", st.consumed_at},
-    		{"device_id", st.consumed_device_id},
-    		{"now", now}
-		}.dump());
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"state", "consumed"},
+            {"pair_id", pair_id},
+            {"issued_at", st.issued_at},
+            {"expires_at", st.expires_at},
+            {"consumed_at", st.consumed_at},
+            {"device_id", st.consumed_device_id},
+            {"now", now}
+        }.dump());
         return;
     }
 
-	reply_json(res, 200, json{
-	    {"ok", true},
-    	{"state", "pending"},
-    	{"pair_id", pair_id},
-	    {"issued_at", st.issued_at},
-    	{"expires_at", st.expires_at},
-    	{"now", now}
-	}.dump());
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"state", "pending"},
+        {"pair_id", pair_id},
+        {"issued_at", st.issued_at},
+        {"expires_at", st.expires_at},
+        {"now", now}
+    }.dump());
 });
 
 // ---- POST /api/v5/app_pair/consume {pair_token, device_name?, platform?, app_version?} ----
