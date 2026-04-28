@@ -1825,6 +1825,219 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
   }
 
+  const CHUNKED_UPLOAD_THRESHOLD_BYTES = 64 * 1024 * 1024;
+
+  function shouldUseChunkedUpload(file, opts = {}) {
+    const size = Number(file && file.size != null ? file.size : 0);
+
+    // Phase 1: My Files only, new-file uploads only.
+    // Workspace + overwrite support will come after the basic path is proven.
+    const overwrite = !!(opts && opts.overwrite);
+    const inWorkspace =
+        window.PQNAS_FILEMGR &&
+        typeof window.PQNAS_FILEMGR.isWorkspaceScope === "function" &&
+        window.PQNAS_FILEMGR.isWorkspaceScope();
+
+    return size > CHUNKED_UPLOAD_THRESHOLD_BYTES && !overwrite && !inWorkspace;
+  }
+
+  async function postUploadJson(url, body) {
+    const r = await fetch(url, {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify(body || {})
+    });
+
+    const text = await r.text().catch(() => "");
+    let j = null;
+    try { j = text ? JSON.parse(text) : null; } catch (_) {}
+
+    if (!r.ok || !j || j.ok !== true) {
+      const err = new Error(
+          j && (j.message || j.error)
+              ? `${j.error || ""} ${j.message || ""}`.trim()
+              : (text ? shorten(text.replace(/\s+/g, " "), 200) : `HTTP ${r.status}`)
+      );
+      err.http = r.status;
+      err.kind = j && j.error === "file_exists" ? "file_exists" : "pqnas_error";
+      err.source = "pqnas";
+      err.error = j && j.error ? j.error : "";
+      err.details = j;
+      throw err;
+    }
+
+    return j;
+  }
+
+  function xhrPutBlob(url, blob, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      activeUploadXhr = xhr;
+
+      const clearActive = () => {
+        if (activeUploadXhr === xhr) activeUploadXhr = null;
+      };
+
+      xhr.open("PUT", url, true);
+      xhr.withCredentials = true;
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.timeout = 60 * 60 * 1000;
+
+      xhr.upload.onprogress = (e) => {
+        if (!onProgress) return;
+        if (e.lengthComputable) onProgress(e.loaded, e.total);
+        else onProgress(e.loaded, blob.size || 0);
+      };
+
+      xhr.ontimeout = () => {
+        clearActive();
+        reject(Object.assign(new Error("upload chunk failed (timeout)"), { kind: "network", source: "client" }));
+      };
+
+      xhr.onerror = () => {
+        clearActive();
+        reject(Object.assign(new Error("upload chunk failed (network)"), { kind: "network", source: "client" }));
+      };
+
+      xhr.onabort = () => {
+        clearActive();
+        if (uploadCancelRequested) {
+          reject(Object.assign(new Error("upload cancelled"), { kind: "cancelled", source: "client" }));
+        } else {
+          reject(Object.assign(new Error("upload chunk aborted"), { kind: "network", source: "client" }));
+        }
+      };
+
+      xhr.onload = () => {
+        const status = xhr.status || 0;
+        const raw = String(xhr.responseText || "").trim();
+        let j = null;
+        if (raw && (raw.startsWith("{") || raw.startsWith("["))) {
+          try { j = JSON.parse(raw); } catch (_) {}
+        }
+
+        if (status >= 200 && status < 300 && j && j.ok) {
+          clearActive();
+          resolve(j);
+          return;
+        }
+
+        const err = new Error(
+            j && (j.message || j.error)
+                ? `${j.error || ""} ${j.message || ""}`.trim()
+                : (raw ? shorten(raw.replace(/\s+/g, " "), 200) : `HTTP ${status}`)
+        );
+        err.http = status;
+        err.kind = j && j.error ? j.error : "pqnas_error";
+        err.source = "pqnas";
+        err.details = j;
+        clearActive();
+        reject(err);
+      };
+
+      xhr.send(blob);
+    });
+  }
+
+  async function cancelChunkedUploadBestEffort(uploadId) {
+    if (!uploadId) return;
+    try {
+      await fetch("/api/v4/uploads/cancel", {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify({ upload_id: uploadId })
+      });
+    } catch (_) {}
+  }
+
+  async function xhrUploadFileChunkedTo(relPath, file, onProgress, opts = {}) {
+    const full = curPath ? `${curPath}/${relPath}` : relPath;
+    const size = Number(file && file.size != null ? file.size : 0);
+
+    let uploadId = "";
+    let uploadedCommitted = 0;
+
+    try {
+      const start = await postUploadJson("/api/v4/uploads/start", {
+        path: full,
+        size_bytes: size,
+        overwrite: false
+      });
+
+      uploadId = String(start.upload_id || "");
+      const chunkSize = Math.max(1, Number(start.chunk_size || CHUNKED_UPLOAD_THRESHOLD_BYTES));
+      const chunksTotal = Math.max(0, Number(start.chunks_total || Math.ceil(size / chunkSize)));
+
+      if (!uploadId || chunksTotal < 1) {
+        throw Object.assign(new Error("invalid chunked upload session"), {
+          kind: "pqnas_error",
+          source: "pqnas",
+          details: start
+        });
+      }
+
+      for (let index = 0; index < chunksTotal; index++) {
+        if (uploadCancelRequested) {
+          throw Object.assign(new Error("upload cancelled"), { kind: "cancelled", source: "client" });
+        }
+
+        const begin = index * chunkSize;
+        const end = Math.min(size, begin + chunkSize);
+        const blob = file.slice(begin, end);
+
+        const url =
+            `/api/v4/uploads/chunk?upload_id=${encodeURIComponent(uploadId)}&index=${encodeURIComponent(String(index))}`;
+
+        await xhrPutBlob(url, blob, (loaded) => {
+          const totalLoaded = uploadedCommitted + Math.max(0, Number(loaded || 0));
+          if (onProgress) onProgress(totalLoaded, size, {
+            chunkIndex: index,
+            chunksTotal,
+            chunkLoaded: loaded,
+            chunkSize: blob.size
+          });
+        });
+
+        uploadedCommitted += blob.size;
+        if (onProgress) onProgress(uploadedCommitted, size, {
+          chunkIndex: index,
+          chunksTotal,
+          chunkLoaded: blob.size,
+          chunkSize: blob.size
+        });
+      }
+
+      if (uploadCancelRequested) {
+        throw Object.assign(new Error("upload cancelled"), { kind: "cancelled", source: "client" });
+      }
+
+      const finish = await postUploadJson("/api/v4/uploads/finish", {
+        upload_id: uploadId
+      });
+
+      uploadId = "";
+      return finish;
+    } catch (e) {
+      if (uploadId) await cancelChunkedUploadBestEffort(uploadId);
+      throw e;
+    }
+  }
+
+  async function uploadFileSmartTo(relPath, file, onProgress, opts = {}) {
+    if (shouldUseChunkedUpload(file, opts)) {
+      return await xhrUploadFileChunkedTo(relPath, file, onProgress, opts);
+    }
+
+    return await xhrPutFileTo(relPath, file, onProgress, opts);
+  }
+
   function xhrPutFileTo(relPath, file, onProgress, opts = {}) {
     return new Promise((resolve, reject) => {
       const full = curPath ? `${curPath}/${relPath}` : relPath;
@@ -2073,7 +2286,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         status.textContent = `Uploading: ${rel} (${fmtSize(file.size)})`;
 
         const runUpload = async (overwrite = false) => {
-          await xhrPutFileTo(rel, file, (loaded) => {
+          await uploadFileSmartTo(rel, file, (loaded) => {
             lastLoaded = Math.max(lastLoaded, loaded || 0);
             const overall = uploadedBytesCommitted + lastLoaded;
             const pct = (overall / totalBytes) * 100;
