@@ -351,7 +351,6 @@
         }
 
         .hidden { display:none !important; }
-        #uploadSoftMax { max-width: 360px; }
 
         .modalBackdrop{
             position: fixed;
@@ -722,39 +721,11 @@
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
                     <div class="h">Uploads</div>
-
-                    <div class="pill info" id="uploadPill">
-                        <span class="k">Effective:</span>
-                        <span class="v">—</span>
-                    </div>
-
                     <span class="chev" aria-hidden="true">▸</span>
                 </div>
 
                 <div class="bd uploadsCardBody">
                     <button id="btnUploadsHelp" class="btn uploadsHelpBtn" type="button">?</button>
-
-                    <div class="row">
-                        <input id="uploadSoftMax"
-                               class="input mono"
-                               style="min-width:260px"
-                               type="number"
-                               min="1"
-                               step="1"
-                               placeholder="transport_max_upload_bytes (bytes)" />
-
-                        <button id="btnUploadSave" class="btn primary" type="button">Save upload limit</button>
-                        <button id="btnUploadReload" class="btn" type="button">Reload</button>
-                    </div>
-
-                    <div class="row">
-                        <span class="pill info" id="uploadSoftPill"><span class="k">Soft cap:</span> <span class="v mono">—</span></span>
-                        <span class="pill info" id="uploadHardPill"><span class="k">Hard cap:</span> <span class="v mono">—</span></span>
-                        <span class="pill info" id="uploadEffectivePill"><span class="k">Effective:</span> <span class="v mono">—</span></span>
-                    </div>
-
-                    <hr style="border:none; border-top:1px solid rgba(var(--fg-rgb),0.12); margin:14px 0;">
-
                     <div class="row">
                         <div style="font-weight:950;">Upload tiering</div>
                         <span class="pill info" id="tieringPill"><span class="k">Tiering:</span> <span class="v">—</span></span>
@@ -832,12 +803,6 @@
                         according to tiering policy.
                     </div>
 
-                    <div class="note">
-                        <b>Soft cap</b> is admin-configured.
-                        <b>Hard cap</b> is compiled into the server.
-                        <br>
-                        Effective cap = min(soft, hard).
-                    </div>
                 </div>
             </div>
 
@@ -987,9 +952,6 @@
         <div class="modalBd">
             <div class="note">
                 <b>Upload limits</b><br>
-                Soft cap is the admin-configured upload limit.<br>
-                Hard cap is compiled into the server.<br>
-                Effective cap = min(soft cap, hard cap).
                 <br><br>
 
                 <b>Upload tiering</b><br>
