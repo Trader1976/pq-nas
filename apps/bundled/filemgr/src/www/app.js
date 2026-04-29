@@ -213,6 +213,13 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       if (!r.ok || !j || !j.ok) return null;
       quotaInfo = j;
       quotaInfoAtMs = now;
+
+      const lim = pickUploadLimitsFromMeStorage(j);
+      if (lim) {
+        uploadLimits = lim;
+        uploadLimitsAtMs = now;
+      }
+
       return quotaInfo;
     } catch (_) {
       return null;
@@ -297,6 +304,63 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         a.listUrl === b.listUrl;
   }
 
+  const FILE_LIST_CACHE_TTL_MS = 15 * 1000;
+  const fileListCache = new Map();
+
+  function fileListCacheKeyFromSnap(snap) {
+    if (!snap) return "";
+    const scope = snap.inWorkspace ? `workspace:${snap.workspaceId}` : "user";
+    return `${scope}|${snap.listUrl}`;
+  }
+
+  function cloneListResponse(j) {
+    if (!j || typeof j !== "object") return j;
+
+    return {
+      ...j,
+      items: Array.isArray(j.items)
+          ? j.items.map((it) => it && typeof it === "object" ? { ...it } : it)
+          : []
+    };
+  }
+
+  function clearFileListCache() {
+    fileListCache.clear();
+  }
+
+  async function fetchFileListForSnapshot(snap, opts = {}) {
+    const force = opts.force === true;
+    const key = fileListCacheKeyFromSnap(snap);
+    const now = Date.now();
+
+    if (!force && key) {
+      const cached = fileListCache.get(key);
+      if (cached && (now - cached.ts) < FILE_LIST_CACHE_TTL_MS) {
+        return {
+          ...cloneListResponse(cached.body),
+          _cache: "memory"
+        };
+      }
+    }
+
+    const r = await fetch(snap.listUrl, {
+      credentials: "include",
+      cache: "no-store",
+      signal: opts.signal
+    });
+
+    const j = await r.json().catch(() => null);
+
+    if (r.ok && j && j.ok && key) {
+      fileListCache.set(key, {
+        ts: now,
+        body: cloneListResponse(j)
+      });
+    }
+
+    return j;
+  }
+
   const VIEW_KEY = "pqnas_filemgr_view_mode";
   let viewMode = "grid";
 
@@ -347,6 +411,10 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   let favoritesMap = new Map();
   let favoritesOnly = false;
 
+  const FAVORITES_CACHE_TTL_MS = 15 * 1000;
+  let favoritesLoadedOnce = false;
+  let favoritesLoadedAt = 0;
+
   function favoriteTypeNorm(type) {
     return type === "dir" ? "dir" : "file";
   }
@@ -356,7 +424,11 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const p = normalizeRelPath(relPath || "");
     return `${t}:${p}`;
   }
-  async function fetchFavoritesFromServer() {
+  async function fetchFavoritesFromServer(force = false) {
+    const now = Date.now();
+    if (!force && favoritesLoadedOnce && (now - favoritesLoadedAt) < FAVORITES_CACHE_TTL_MS) {
+      return;
+    }
     const r = await fetch("/api/v4/files/favorites", {
       method: "GET",
       credentials: "include",
@@ -376,6 +448,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       if (!p) continue;
       favoritesMap.set(`${t}:${p}`, 1);
     }
+    favoritesLoadedOnce = true;
+    favoritesLoadedAt = Date.now();
   }
   async function favoriteAddServer(relPath, type) {
     const r = await fetch("/api/v4/files/favorites/add", {
@@ -904,6 +978,30 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
   }
 
+  async function renderItemsChunked(items, mySeq, loadSnap, loadPath) {
+    if (!gridEl) return false;
+
+    const chunkSize = 250;
+    let frag = document.createDocumentFragment();
+
+    for (let i = 0; i < items.length; i++) {
+      if (mySeq !== loadSeq) return false;
+      if (!sameScopeSnapshot(loadSnap, currentScopeSnapshot(loadPath))) return false;
+
+      frag.appendChild(tile(items[i]));
+
+      if ((i + 1) % chunkSize === 0) {
+        gridEl.appendChild(frag);
+        frag = document.createDocumentFragment();
+
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+    }
+
+    gridEl.appendChild(frag);
+    return true;
+  }
+
   async function loadTrashItems() {
     if (!trashStatus) return;
 
@@ -972,7 +1070,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       setBadge("ok", "ready");
       status.textContent = `Restored: ${j.restored_rel_path || rec.original_rel_path}`;
       await loadTrashItems();
-      await load();
+      clearFileListCache();
+      await load(true);
     } catch (e) {
       setBadge("err", "error");
       if (trashStatus) {
@@ -1016,7 +1115,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       setBadge("ok", "ready");
       status.textContent = `Deleted permanently: ${rec.original_rel_path || rec.trash_id}`;
       await loadTrashItems();
-      await load();
+      clearFileListCache();
+      await load(true);
     } catch (e) {
       setBadge("err", "error");
       if (trashStatus) {
@@ -1067,7 +1167,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     trashBusy = false;
     await loadTrashItems();
-    await load();
+    clearFileListCache();
+    await load(true);
 
     if (failed > 0) {
       setBadge("warn", "partial");
@@ -1646,7 +1747,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
 
     await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
-    await load();
+    clearFileListCache();
+    await load(true);
   }
 
   function ensureUploadPill() {
@@ -2486,7 +2588,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     activeUploadXhr = null;
     uploadCancelRequested = false;
     await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
-    await load();
+    clearFileListCache();
+    await load(true);
   }
 
   function pickFiles() {
@@ -2976,7 +3079,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     setBadge("ok", "ready");
     clearSelection();
     await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
-    await load();
+    clearFileListCache();
+    await load(true);
   }
 
   async function doDelete(item) {
@@ -3022,7 +3126,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     setBadge("ok", "ready");
     clearSelection();
     await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
-    await load();
+    clearFileListCache();
+    await load(true);
   }
 
   async function doMkdirAt(relDir) {
@@ -3057,7 +3162,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     status.textContent = "Folder created.";
     clearSelection();
     await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
-    await load();
+    clearFileListCache();
+    await load(true);
   }
 
   function expiresSecFromPreset(v) {
@@ -3207,7 +3313,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             }
           }
 
-          await refreshSharesCache();
+          await refreshSharesCache(true);
           await load();
         } catch (e) {
           if (shareStatus) {
@@ -3473,6 +3579,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
   let sharesByKey = new Map();
   let sharesLoadedOnce = false;
+  const SHARES_CACHE_TTL_MS = 15 * 1000;
 
   function shareKey(type, relPath) {
     const t = (type === "dir") ? "dir" : "file";
@@ -3484,7 +3591,11 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return sharesByKey.get(shareKey(type, relPath)) || null;
   }
 
-  async function refreshSharesCache() {
+  async function refreshSharesCache(force = false) {
+    const now = Date.now();
+    if (!force && sharesLoadedOnce && (now - sharesLoadedAt) < SHARES_CACHE_TTL_MS) {
+      return;
+    }
     try {
       const api = fmApi();
       const sharesListUrl =
@@ -4536,7 +4647,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
               throw new Error(msg || "revoke failed");
             }
 
-            await refreshSharesCache();
+            await refreshSharesCache(true);
             await showProperties(item);
             return;
           } catch (e) {
@@ -4617,7 +4728,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     openPropsModal?.();
   }
 
-  async function load() {
+  async function load(forceList = false) {
+    forceList = forceList === true;
     const mySeq = ++loadSeq;
 
     if (activeLoadController) {
@@ -4654,20 +4766,16 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const sorter = sortApi();
 
     try {
-      const url = loadSnap.listUrl;
-
-      const r = await fetch(url, {
-        credentials: "include",
-        cache: "no-store",
+      const j = await fetchFileListForSnapshot(loadSnap, {
+        force: forceList,
         signal: controller.signal
       });
-      const j = await r.json().catch(() => null);
 
       if (controller.signal.aborted) return;
       if (mySeq !== loadSeq) return;
       if (!sameScopeSnapshot(loadSnap, currentScopeSnapshot(loadPath))) return;
 
-      if (!r.ok || !j || !j.ok) {
+      if (!j || !j.ok) {
         if (j && j.error === "storage_unallocated") {
           showStorageUnallocatedState(j);
           return;
@@ -4676,8 +4784,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         setBadge("err", "error");
         const msg = j && (j.message || j.error)
             ? `${j.error || ""} ${j.message || ""}`.trim()
-            : `List failed: HTTP ${r.status}`;
-        status.textContent = msg || `List failed: HTTP ${r.status}`;
+            : `List failed`;
+        status.textContent = msg || "List failed";
 
         const err = document.createElement("div");
         err.className = "tile mono";
@@ -4747,19 +4855,10 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         return;
       }
 
-      for (const it of items) gridEl.appendChild(tile(it));
-      applySelectionToDom();
+      const rendered = await renderItemsChunked(items, mySeq, loadSnap, loadPath);
+      if (!rendered) return;
 
-      fetchMeStorageFast(1200)
-          .then((ms) => {
-            if (mySeq !== loadSeq) return;
-            if (!sameScopeSnapshot(loadSnap, currentScopeSnapshot(loadPath))) return;
-            if (!ms) return;
-            if (ms.ok === false && ms.error === "storage_unallocated") {
-              showStorageUnallocatedState(ms);
-            }
-          })
-          .catch(() => {});
+      applySelectionToDom();
 
       quotaPromise
           .then((q) => {
@@ -4796,7 +4895,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
   }
 
-  refreshBtn?.addEventListener("click", load);
+  refreshBtn?.addEventListener("click", () => load(true));
   upBtn?.addEventListener("click", () => {
     curPath = parentPath(curPath);
     clearSelection();
@@ -4849,8 +4948,5 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   load().catch((e) => {
     console.warn("Initial load failed:", e);
   });
-
-  fetchFavoritesFromServer().catch((e) => {
-    console.warn("Favorites load failed:", e);
-  });
+  
 })();
