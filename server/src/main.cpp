@@ -31419,6 +31419,699 @@ srv.Get("/api/v4/music/cover", [&](const httplib::Request& req, httplib::Respons
     serve_cover(false);
 });
 
+// Fast recursive Photo Gallery helpers/routes.
+// These are intentionally lighter than /api/v4/photogallery/stats:
+// - no full EXIF refresh while searching
+// - only reads cached EXIF/GPS rows when already present
+// - returns all supported image files recursively so frontend can filter locally
+struct FastGalleryItem {
+    std::string rel_path;
+    std::string base_path;
+    std::string name;
+    std::string type; // "dir" | "file"
+
+    std::uint64_t size_bytes = 0;
+    std::int64_t mtime_unix = 0;
+
+    int rating = 0;
+    std::string tags_text;
+    std::string notes_text;
+
+    std::string capture_time_text;
+    std::int64_t capture_time_unix = 0;
+
+    double gps_latitude = 0.0;
+    double gps_longitude = 0.0;
+    double gps_altitude = 0.0;
+    bool has_gps = false;
+    bool has_gps_altitude = false;
+};
+
+auto gallery_fast_lower_ascii = [](std::string s) -> std::string {
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+};
+
+auto gallery_fast_file_ext_lower = [&](const std::string& name) -> std::string {
+    std::string n = name;
+    const auto slash = n.find_last_of("/\\");
+    if (slash != std::string::npos) n = n.substr(slash + 1);
+
+    auto lower = gallery_fast_lower_ascii(n);
+    const auto dot = lower.rfind('.');
+    if (dot == std::string::npos || dot == 0 || dot + 1 >= lower.size()) return "";
+    return lower.substr(dot + 1);
+};
+
+auto gallery_fast_is_reserved_name = [](const std::string& name) -> bool {
+    return name == ".pqnas";
+};
+
+auto gallery_fast_is_image_name = [&](const std::string& name) -> bool {
+    const std::string ext = gallery_fast_file_ext_lower(name);
+    return ext == "png"  ||
+           ext == "jpg"  ||
+           ext == "jpeg" ||
+           ext == "gif"  ||
+           ext == "webp" ||
+           ext == "svg"  ||
+           ext == "bmp"  ||
+           ext == "ico"  ||
+           ext == "tif"  ||
+           ext == "tiff" ||
+           ext == "heic" ||
+           ext == "heif" ||
+           ext == "cr2"  ||
+           ext == "cr3"  ||
+           ext == "nef"  ||
+           ext == "arw"  ||
+           ext == "raf"  ||
+           ext == "dng"  ||
+           ext == "rw2"  ||
+           ext == "orf";
+};
+
+auto gallery_fast_join_rel = [](const std::string& base, const std::string& name) -> std::string {
+    if (base.empty()) return name;
+    return base + "/" + name;
+};
+
+auto gallery_fast_parent_rel = [](const std::string& rel) -> std::string {
+    const auto pos = rel.find_last_of('/');
+    if (pos == std::string::npos) return "";
+    return rel.substr(0, pos);
+};
+
+auto gallery_fast_split_keywords_text_json = [](const std::string& s) -> json {
+    auto trim_ascii_ws_copy_local = [](std::string v) -> std::string {
+        auto is_ws = [](unsigned char c) -> bool {
+            return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+        };
+
+        std::size_t a = 0;
+        while (a < v.size() && is_ws(static_cast<unsigned char>(v[a]))) ++a;
+
+        std::size_t b = v.size();
+        while (b > a && is_ws(static_cast<unsigned char>(v[b - 1]))) --b;
+
+        return v.substr(a, b - a);
+    };
+
+    json out = json::array();
+
+    std::size_t start = 0;
+    while (start <= s.size()) {
+        const std::size_t comma = s.find(',', start);
+
+        std::string part = (comma == std::string::npos)
+            ? s.substr(start)
+            : s.substr(start, comma - start);
+
+        part = trim_ascii_ws_copy_local(part);
+        if (!part.empty()) out.push_back(part);
+
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+
+    return out;
+};
+
+auto collect_fast_gallery_tree =
+    [&](const std::string& fp_hex,
+        const std::filesystem::path& user_dir,
+        const std::string& rel_root,
+        bool include_items,
+        json* items_out,
+        std::uint64_t* dirs_out,
+        std::uint64_t* files_out,
+        std::uint64_t* bytes_out,
+        bool* truncated_out,
+        std::string* err_code,
+        std::string* err_msg) -> bool {
+
+    if (items_out) *items_out = json::array();
+    if (dirs_out) *dirs_out = 0;
+    if (files_out) *files_out = 0;
+    if (bytes_out) *bytes_out = 0;
+    if (truncated_out) *truncated_out = false;
+    if (err_code) err_code->clear();
+    if (err_msg) err_msg->clear();
+
+    constexpr std::size_t kMaxReturnedItems = 25000;
+
+    std::map<std::string, FastGalleryItem> merged;
+
+    std::filesystem::path abs_root = user_dir;
+    bool physical_root_ok = false;
+
+    if (!rel_root.empty()) {
+        std::string perr;
+        if (!pqnas::resolve_user_path_strict(user_dir, rel_root, &abs_root, &perr)) {
+            abs_root.clear();
+        }
+    }
+
+    if (!abs_root.empty()) {
+        std::error_code ec;
+        const auto root_st = std::filesystem::symlink_status(abs_root, ec);
+
+        if (!ec && std::filesystem::exists(root_st)) {
+            if (std::filesystem::is_symlink(root_st)) {
+                if (err_code) *err_code = "bad_request";
+                if (err_msg) *err_msg = "symlinks not supported";
+                return false;
+            }
+
+            if (std::filesystem::is_directory(root_st)) {
+                physical_root_ok = true;
+
+                for (std::filesystem::recursive_directory_iterator it(
+                         abs_root,
+                         std::filesystem::directory_options::skip_permission_denied,
+                         ec
+                     ), end;
+                     it != end && !ec;
+                     it.increment(ec)) {
+
+                    std::error_code ec2;
+                    const auto child_path = it->path();
+                    const auto name = child_path.filename().string();
+
+                    if (name.empty() || name == "." || name == "..") continue;
+
+                    auto child_st = std::filesystem::symlink_status(child_path, ec2);
+                    if (ec2) continue;
+
+                    if (std::filesystem::is_symlink(child_st)) {
+                        if (std::filesystem::is_directory(child_st)) {
+                            it.disable_recursion_pending();
+                        }
+                        continue;
+                    }
+
+                    if (gallery_fast_is_reserved_name(name)) {
+                        if (std::filesystem::is_directory(child_st)) {
+                            it.disable_recursion_pending();
+                        }
+                        continue;
+                    }
+
+                    std::string rel;
+                    ec2.clear();
+                    rel = std::filesystem::relative(child_path, user_dir, ec2).generic_string();
+                    if (ec2 || rel.empty()) continue;
+
+                    if (std::filesystem::is_directory(child_st)) {
+                        FastGalleryItem item;
+                        item.rel_path = rel;
+                        item.base_path = gallery_fast_parent_rel(rel);
+                        item.name = name;
+                        item.type = "dir";
+                        item.size_bytes = 0;
+                        item.mtime_unix = file_mtime_epoch_safe_local(child_path);
+
+                        merged[rel] = item;
+                        continue;
+                    }
+
+                    if (std::filesystem::is_regular_file(child_st) && gallery_fast_is_image_name(name)) {
+                        FastGalleryItem item;
+                        item.rel_path = rel;
+                        item.base_path = gallery_fast_parent_rel(rel);
+                        item.name = name;
+                        item.type = "file";
+                        item.size_bytes = file_size_u64_safe_local(child_path);
+                        item.mtime_unix = file_mtime_epoch_safe_local(child_path);
+
+                        merged[rel] = item;
+                    }
+                }
+            }
+        }
+    }
+
+    bool metadata_root_ok = false;
+
+    {
+        auto* idx = pqnas::get_file_location_index();
+        if (!idx) {
+            if (err_code) *err_code = "server_error";
+            if (err_msg) *err_msg = "metadata index missing";
+            return false;
+        }
+
+        std::vector<std::string> pending_dirs;
+        std::set<std::string> seen_dirs;
+
+        pending_dirs.push_back(rel_root);
+
+        for (std::size_t i = 0; i < pending_dirs.size(); ++i) {
+            const std::string cur = pending_dirs[i];
+            if (seen_dirs.count(cur)) continue;
+            seen_dirs.insert(cur);
+
+            std::string lerr;
+            auto rows = idx->list_immediate_children(fp_hex, cur, &lerr);
+            if (!lerr.empty()) {
+                if (err_code) *err_code = "server_error";
+                if (err_msg) *err_msg = "metadata list failed: " + pqnas::shorten(lerr, 180);
+                return false;
+            }
+
+            if (!rows.empty() && cur == rel_root) {
+                metadata_root_ok = true;
+            }
+
+            for (const auto& rec : rows) {
+                if (rec.name.empty()) continue;
+                if (gallery_fast_is_reserved_name(rec.name)) continue;
+
+                const std::string t = rec.type.empty() ? "file" : rec.type;
+                if (t != "dir" && t != "file") continue;
+                if (t == "file" && !gallery_fast_is_image_name(rec.name)) continue;
+
+                const std::string child_rel = gallery_fast_join_rel(cur, rec.name);
+
+                auto it = merged.find(child_rel);
+                if (it == merged.end()) {
+                    FastGalleryItem item;
+                    item.rel_path = child_rel;
+                    item.base_path = cur;
+                    item.name = rec.name;
+                    item.type = t;
+                    item.size_bytes = (t == "file" ? rec.size_bytes : 0);
+                    item.mtime_unix = static_cast<std::int64_t>(rec.mtime_epoch);
+
+                    merged[child_rel] = item;
+                } else {
+                    it->second.type = t;
+                    it->second.size_bytes = (t == "file" ? rec.size_bytes : 0);
+                    it->second.mtime_unix = static_cast<std::int64_t>(rec.mtime_epoch);
+                }
+
+                if (t == "dir") {
+                    pending_dirs.push_back(child_rel);
+                }
+            }
+        }
+    }
+
+    if (!physical_root_ok && !metadata_root_ok && !rel_root.empty()) {
+        if (err_code) *err_code = "not_found";
+        if (err_msg) *err_msg = "directory not found";
+        return false;
+    }
+
+    auto* gidx = pqnas::get_gallery_meta_index();
+    if (include_items && !gidx) {
+        if (err_code) *err_code = "server_error";
+        if (err_msg) *err_msg = "gallery metadata index missing";
+        return false;
+    }
+
+    if (include_items && gidx) {
+        for (auto& kv : merged) {
+            auto& item = kv.second;
+            if (item.type != "file") continue;
+
+            std::string gerr;
+            auto grec = gidx->get("user", fp_hex, item.rel_path, &gerr);
+            if (!gerr.empty()) {
+                if (err_code) *err_code = "server_error";
+                if (err_msg) *err_msg = "gallery metadata lookup failed: " + pqnas::shorten(gerr, 180);
+                return false;
+            }
+
+            if (grec.has_value()) {
+                item.rating = grec->rating;
+                item.tags_text = grec->tags_text;
+                item.notes_text = grec->notes_text;
+
+                if (grec->size_bytes > 0) {
+                    item.size_bytes = grec->size_bytes;
+                }
+                if (grec->mtime_epoch > 0) {
+                    item.mtime_unix = static_cast<std::int64_t>(grec->mtime_epoch);
+                }
+            }
+        }
+    }
+
+    sqlite3* photo_db = nullptr;
+    if (include_items) {
+        const std::filesystem::path photo_db_path =
+            std::filesystem::path(pqnas::data_root_dir()) / "photogallery_stats.sqlite3";
+
+        if (sqlite3_open(photo_db_path.string().c_str(), &photo_db) != SQLITE_OK) {
+            if (photo_db) {
+                sqlite3_close(photo_db);
+                photo_db = nullptr;
+            }
+        } else {
+            std::string schema_err;
+            if (!ensure_photo_stats_schema(photo_db, &schema_err)) {
+                sqlite3_close(photo_db);
+                photo_db = nullptr;
+            }
+        }
+    }
+
+    if (photo_db) {
+        for (auto& kv : merged) {
+            auto& item = kv.second;
+            if (item.type != "file") continue;
+
+            PhotoStatsRow row;
+            const bool have_row = load_cached_photo_stats_row(photo_db, item.rel_path, &row);
+
+            const bool cache_match =
+                have_row &&
+                row.size_bytes == item.size_bytes &&
+                row.mtime_epoch == item.mtime_unix;
+
+            if (!cache_match) continue;
+
+            item.capture_time_text = row.taken_at;
+            item.capture_time_unix = row.taken_epoch;
+
+            if (row.gps_ok) {
+                item.gps_latitude = row.gps_latitude;
+                item.gps_longitude = row.gps_longitude;
+                item.gps_altitude = row.gps_altitude;
+                item.has_gps = true;
+                item.has_gps_altitude = row.gps_altitude_ok;
+            }
+        }
+
+        sqlite3_close(photo_db);
+        photo_db = nullptr;
+    }
+
+    std::uint64_t dir_count = 0;
+    std::uint64_t file_count = 0;
+    std::uint64_t file_bytes = 0;
+
+    std::size_t returned = 0;
+
+    for (const auto& kv : merged) {
+        const auto& item = kv.second;
+
+        if (item.type == "dir") {
+            ++dir_count;
+            continue;
+        }
+
+        if (item.type != "file") continue;
+
+        ++file_count;
+        file_bytes += item.size_bytes;
+
+        if (!include_items || !items_out) continue;
+
+        if (returned >= kMaxReturnedItems) {
+            if (truncated_out) *truncated_out = true;
+            continue;
+        }
+
+        json one{
+            {"type", "file"},
+            {"name", item.name},
+            {"rel_path", item.rel_path},
+            {"path", item.rel_path},
+            {"base_path", item.base_path},
+            {"size_bytes", item.size_bytes},
+            {"mtime_unix", item.mtime_unix},
+            {"rating", item.rating},
+            {"tags_text", item.tags_text},
+            {"keywords", gallery_fast_split_keywords_text_json(item.tags_text)},
+            {"notes_text", item.notes_text},
+            {"description", item.notes_text}
+        };
+
+        if (!item.capture_time_text.empty()) {
+            one["capture_time_text"] = item.capture_time_text;
+        }
+        if (item.capture_time_unix > 0) {
+            one["capture_time_unix"] = item.capture_time_unix;
+        }
+
+        if (item.has_gps) {
+            one["has_gps"] = true;
+            one["gps_latitude"] = item.gps_latitude;
+            one["gps_longitude"] = item.gps_longitude;
+
+            if (item.has_gps_altitude) {
+                one["has_gps_altitude"] = true;
+                one["gps_altitude"] = item.gps_altitude;
+            }
+        } else {
+            one["has_gps"] = false;
+        }
+
+        items_out->push_back(std::move(one));
+        ++returned;
+    }
+
+    if (dirs_out) *dirs_out = dir_count;
+    if (files_out) *files_out = file_count;
+    if (bytes_out) *bytes_out = file_bytes;
+
+    return true;
+};
+
+// GET /api/v4/gallery/tree_stats?path=relative/dir
+srv.Get("/api/v4/gallery/tree_stats", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value()) {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "policy denied"}
+        }.dump());
+        return;
+    }
+
+    const auto& u = *uopt;
+    if (u.storage_state != "allocated") {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"},
+            {"fingerprint_hex", fp_hex},
+            {"quota_bytes", u.quota_bytes}
+        }.dump());
+        return;
+    }
+
+    std::string rel_root;
+    if (req.has_param("path")) {
+        std::string nerr;
+        if (!pqnas::normalize_user_rel_path_strict(req.get_param_value("path"), &rel_root, &nerr)) {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            }.dump());
+            return;
+        }
+    }
+
+    const bool force =
+        req.has_param("force") &&
+        (req.get_param_value("force") == "1" ||
+         req.get_param_value("force") == "true");
+
+    const std::string cache_key = fp_hex + "\n" + rel_root;
+
+    static std::mutex tree_cache_mu;
+    static std::map<std::string, std::pair<std::int64_t, json>> tree_cache;
+
+    const std::int64_t now_epoch = static_cast<std::int64_t>(std::time(nullptr));
+    constexpr std::int64_t kTreeCacheTtlSeconds = 20;
+
+    if (!force) {
+        std::lock_guard<std::mutex> lk(tree_cache_mu);
+        auto it = tree_cache.find(cache_key);
+        if (it != tree_cache.end() && now_epoch - it->second.first <= kTreeCacheTtlSeconds) {
+            json cached = it->second.second;
+            cached["cache"] = "memory";
+            reply_json(res, 200, cached.dump());
+            return;
+        }
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+
+    json unused_items = json::array();
+    std::uint64_t dirs = 0;
+    std::uint64_t files = 0;
+    std::uint64_t bytes = 0;
+    bool truncated = false;
+    std::string err_code;
+    std::string err_msg;
+
+    if (!collect_fast_gallery_tree(fp_hex,
+                                   user_dir,
+                                   rel_root,
+                                   false,
+                                   &unused_items,
+                                   &dirs,
+                                   &files,
+                                   &bytes,
+                                   &truncated,
+                                   &err_code,
+                                   &err_msg)) {
+        const int http = (err_code == "not_found") ? 404 :
+                         (err_code == "bad_request") ? 400 : 500;
+
+        reply_json(res, http, json{
+            {"ok", false},
+            {"error", err_code.empty() ? "server_error" : err_code},
+            {"message", err_msg.empty() ? "gallery tree stats failed" : err_msg}
+        }.dump());
+        return;
+    }
+
+    json out{
+        {"ok", true},
+        {"path", rel_root},
+        {"stats", {
+            {"dirs", dirs},
+            {"files", files},
+            {"file_bytes", bytes}
+        }}
+    };
+
+    {
+        std::lock_guard<std::mutex> lk(tree_cache_mu);
+        tree_cache[cache_key] = {now_epoch, out};
+    }
+
+    reply_json(res, 200, out.dump());
+});
+
+// GET /api/v4/gallery/search?path=relative/dir
+srv.Get("/api/v4/gallery/search", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value()) {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "policy denied"}
+        }.dump());
+        return;
+    }
+
+    const auto& u = *uopt;
+    if (u.storage_state != "allocated") {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"},
+            {"fingerprint_hex", fp_hex},
+            {"quota_bytes", u.quota_bytes}
+        }.dump());
+        return;
+    }
+
+    std::string rel_root;
+    if (req.has_param("path")) {
+        std::string nerr;
+        if (!pqnas::normalize_user_rel_path_strict(req.get_param_value("path"), &rel_root, &nerr)) {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            }.dump());
+            return;
+        }
+    }
+
+    const bool force =
+        req.has_param("force") &&
+        (req.get_param_value("force") == "1" ||
+         req.get_param_value("force") == "true");
+
+    const std::string cache_key = fp_hex + "\n" + rel_root;
+
+    static std::mutex search_cache_mu;
+    static std::map<std::string, std::pair<std::int64_t, json>> search_cache;
+
+    const std::int64_t now_epoch = static_cast<std::int64_t>(std::time(nullptr));
+    constexpr std::int64_t kSearchCacheTtlSeconds = 20;
+
+    if (!force) {
+        std::lock_guard<std::mutex> lk(search_cache_mu);
+        auto it = search_cache.find(cache_key);
+        if (it != search_cache.end() && now_epoch - it->second.first <= kSearchCacheTtlSeconds) {
+            json cached = it->second.second;
+            cached["cache"] = "memory";
+            reply_json(res, 200, cached.dump());
+            return;
+        }
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+
+    json items = json::array();
+    std::uint64_t dirs = 0;
+    std::uint64_t files = 0;
+    std::uint64_t bytes = 0;
+    bool truncated = false;
+    std::string err_code;
+    std::string err_msg;
+
+    if (!collect_fast_gallery_tree(fp_hex,
+                                   user_dir,
+                                   rel_root,
+                                   true,
+                                   &items,
+                                   &dirs,
+                                   &files,
+                                   &bytes,
+                                   &truncated,
+                                   &err_code,
+                                   &err_msg)) {
+        const int http = (err_code == "not_found") ? 404 :
+                         (err_code == "bad_request") ? 400 : 500;
+
+        reply_json(res, http, json{
+            {"ok", false},
+            {"error", err_code.empty() ? "server_error" : err_code},
+            {"message", err_msg.empty() ? "gallery search failed" : err_msg}
+        }.dump());
+        return;
+    }
+
+    json out{
+        {"ok", true},
+        {"path", rel_root},
+        {"items", items},
+        {"stats", {
+            {"dirs", dirs},
+            {"files", files},
+            {"file_bytes", bytes}
+        }},
+        {"truncated", truncated}
+    };
+
+    {
+        std::lock_guard<std::mutex> lk(search_cache_mu);
+        search_cache[cache_key] = {now_epoch, out};
+    }
+
+    reply_json(res, 200, out.dump());
+});
+
 srv.Get("/api/v4/gallery/thumb", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;

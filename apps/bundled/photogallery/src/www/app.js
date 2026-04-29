@@ -79,7 +79,7 @@
     let filterTimer = 0;
 
     const FOLDER_LIST_CACHE_TTL_MS = 30 * 1000;
-    const ENABLE_AUTO_TREE_STATS = false;
+    const ENABLE_AUTO_TREE_STATS = true;
 
     const folderListCache = new Map();
 
