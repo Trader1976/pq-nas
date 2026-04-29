@@ -78,6 +78,68 @@
     let searchSeq = 0;
     let filterTimer = 0;
 
+    const FOLDER_LIST_CACHE_TTL_MS = 30 * 1000;
+    const ENABLE_AUTO_TREE_STATS = false;
+
+    const folderListCache = new Map();
+
+    function folderListCacheKey(relPath) {
+        return normalizeRelPath(relPath || "");
+    }
+
+    function cloneGalleryItem(it) {
+        if (!it || typeof it !== "object") return it;
+
+        return {
+            ...it,
+            keywords: Array.isArray(it.keywords) ? it.keywords.slice() : it.keywords
+        };
+    }
+
+    function cloneGalleryItems(items) {
+        return Array.isArray(items) ? items.map(cloneGalleryItem) : [];
+    }
+
+    function clearFolderListCache() {
+        folderListCache.clear();
+    }
+
+    async function fetchGalleryList(relPath, opts = {}) {
+        const path = normalizeRelPath(relPath || "");
+        const key = folderListCacheKey(path);
+        const force = opts.force === true;
+        const now = Date.now();
+
+        if (!force) {
+            const cached = folderListCache.get(key);
+            if (cached && now - cached.ts < FOLDER_LIST_CACHE_TTL_MS) {
+                return {
+                    ...cached.response,
+                    items: cloneGalleryItems(cached.items),
+                    _cache: "memory"
+                };
+            }
+        }
+
+        const j = await fetchJson(galleryListUrl(path));
+
+        const items = cloneGalleryItems(Array.isArray(j.items) ? j.items : []);
+
+        folderListCache.set(key, {
+            ts: now,
+            response: {
+                ...j,
+                items: []
+            },
+            items
+        });
+
+        return {
+            ...j,
+            items: cloneGalleryItems(items),
+            _cache: "network"
+        };
+    }
 
     const RATING_FILTER_KEY = "pqnas_photogallery_rating_filter_v1";
 
@@ -339,7 +401,75 @@
         if (mtimeUnix) qs.set("v", String(mtimeUnix));
         return `/api/v4/gallery/thumb?${qs.toString()}`;
     }
+    let thumbObserver = null;
+    const observedThumbs = new Set();
 
+    function clearObservedThumbs() {
+        if (!thumbObserver) {
+            observedThumbs.clear();
+            return;
+        }
+
+        for (const img of observedThumbs) {
+            try {
+                thumbObserver.unobserve(img);
+            } catch (_) {}
+        }
+
+        observedThumbs.clear();
+    }
+
+    function loadDeferredThumb(img) {
+        if (!img) return;
+
+        const src = img.dataset.thumbSrc || "";
+        if (!src) return;
+
+        delete img.dataset.thumbSrc;
+
+        if (thumbObserver) {
+            try {
+                thumbObserver.unobserve(img);
+            } catch (_) {}
+            observedThumbs.delete(img);
+        }
+
+        img.src = src;
+    }
+
+    function getThumbObserver() {
+        if (!("IntersectionObserver" in window)) return null;
+
+        if (thumbObserver) return thumbObserver;
+
+        thumbObserver = new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+                if (!entry.isIntersecting) continue;
+                loadDeferredThumb(entry.target);
+            }
+        }, {
+            root: gridWrap || null,
+            rootMargin: "900px 0px",
+            threshold: 0.01
+        });
+
+        return thumbObserver;
+    }
+
+    function deferThumbLoad(img, src) {
+        if (!img || !src) return;
+
+        img.dataset.thumbSrc = src;
+
+        const observer = getThumbObserver();
+        if (!observer) {
+            requestAnimationFrame(() => loadDeferredThumb(img));
+            return;
+        }
+
+        observedThumbs.add(img);
+        observer.observe(img);
+    }
     function galleryListUrl(relPath) {
         if (!relPath) return "/api/v4/gallery/list";
         return `/api/v4/gallery/list?path=${encodeURIComponent(relPath)}`;
@@ -480,6 +610,9 @@
 
             setBadge("ok", "ready");
             setStatus(`Renamed: ${oldName} → ${newName}`);
+            clearFolderListCache();
+            resetTreeStats();
+            invalidateSearchCache();
             await load(true);
         } catch (e) {
             setBadge("err", "error");
@@ -524,6 +657,9 @@
 
             setBadge("ok", "ready");
             setStatus(`Moved to trash: ${item.name}`);
+            clearFolderListCache();
+            resetTreeStats();
+            invalidateSearchCache();
             await load(true);
         } catch (e) {
             setBadge("err", "error");
@@ -571,6 +707,9 @@
 
             setBadge("ok", "ready");
             setStatus(`Renamed folder: ${oldName} → ${newName}`);
+            clearFolderListCache();
+            resetTreeStats();
+            invalidateSearchCache();
             await load(true);
         } catch (e) {
             setBadge("err", "error");
@@ -608,6 +747,9 @@
 
             setBadge("ok", "ready");
             setStatus(`Moved folder to trash: ${item.name}`);
+            clearFolderListCache();
+            resetTreeStats();
+            invalidateSearchCache();
             await load(true);
         } catch (e) {
             setBadge("err", "error");
@@ -649,6 +791,9 @@
 
             setBadge("ok", "ready");
             setStatus(`Created folder: ${name}`);
+            clearFolderListCache();
+            resetTreeStats();
+            invalidateSearchCache();
             await load(true);
         } catch (e) {
             setBadge("err", "error");
@@ -1111,7 +1256,7 @@ async function ensureTreeStats(force = false) {
     async function walk(path) {
         if (!state.treeStats || state.treeStats.seq !== currentSeq) return;
 
-        const j = await fetchJson(galleryListUrl(path));
+        const j = await fetchGalleryList(path, { force });
         const items = Array.isArray(j.items) ? j.items : [];
 
         for (const it of items) {
@@ -1435,6 +1580,9 @@ async function ensureTreeStats(force = false) {
         }
 
         clearSelection();
+        clearFolderListCache();
+        resetTreeStats();
+        invalidateSearchCache();
         await load(true);
 
         if (failed.length) {
@@ -1689,7 +1837,7 @@ async function ensureTreeStats(force = false) {
             scannedFolders++;
             setStatus(`Searching /${path || ""} … folders: ${scannedFolders}, photos: ${out.length}`);
 
-            const j = await fetchJson(galleryListUrl(path));
+            const j = await fetchGalleryList(path, { force });
             const items = sortItems(Array.isArray(j.items) ? j.items : []);
 
             for (const it of items) {
@@ -2697,11 +2845,18 @@ async function ensureTreeStats(force = false) {
                 img.alt = item.name || "image";
 
                 const reqThumbSize = Math.max(160, Number(state.thumbSize || 160) * 2);
-                img.src = galleryThumbUrl(rel, reqThumbSize, item.mtime_unix || 0);
+
                 img.onerror = () => {
                     img.onerror = null;
-                    img.src = fileGetUrl(rel);
+                    img.classList.add("thumbError");
+                    img.removeAttribute("src");
+                    img.alt = "Thumbnail failed";
                 };
+
+                deferThumbLoad(
+                    img,
+                    galleryThumbUrl(rel, reqThumbSize, item.mtime_unix || 0)
+                );
 
                 thumbWrap.appendChild(img);
             }
@@ -3191,6 +3346,8 @@ async function ensureTreeStats(force = false) {
     }
     function renderGridBody() {
         if (!gridEl) return;
+
+        clearObservedThumbs();
         gridEl.replaceChildren();
 
         if (isSearchMode() && state.searchLoading && !state.searchLoaded) {
@@ -3273,16 +3430,20 @@ async function ensureTreeStats(force = false) {
         setStatus("Loading gallery…");
 
         try {
-            const j = await fetchJson(galleryListUrl(state.curPath));
+            const j = await fetchGalleryList(state.curPath, { force: forceSearch });
             state.items = Array.isArray(j.items) ? j.items.slice() : [];
             if (state.treeStats.basePath !== state.curPath) {
                 resetTreeStats();
             }
             refreshFooterStats();
 
-            ensureTreeStats(forceSearch)
-                .then(() => refreshFooterStats())
-                .catch(() => refreshFooterStats());
+            if (ENABLE_AUTO_TREE_STATS) {
+                ensureTreeStats(forceSearch)
+                    .then(() => refreshFooterStats())
+                    .catch(() => refreshFooterStats());
+            } else {
+                refreshFooterStats();
+            }
             renderBreadcrumb();
 
             if (forceSearch || state.searchBasePath !== state.curPath) {
