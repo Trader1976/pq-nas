@@ -340,7 +340,8 @@ static json app_launch_policy_defaults_json() {
     return json{
         {"default_launch", "embedded"},
         {"window_profile", "auto"},
-        {"allow_user_override", true}
+        {"allow_user_override", true},
+        {"admin_only", false}
     };
 }
 
@@ -370,9 +371,15 @@ static json normalize_app_launch_policy_entry(const json& in) {
             ? in["allow_user_override"].get<bool>()
             : true;
 
+    const bool admin_only =
+        (in.is_object() && in.contains("admin_only") && in["admin_only"].is_boolean())
+            ? in["admin_only"].get<bool>()
+            : false;
+
     if (app_launch_value_ok(default_launch)) out["default_launch"] = default_launch;
     if (app_window_profile_ok(window_profile)) out["window_profile"] = window_profile;
     out["allow_user_override"] = allow_user_override;
+    out["admin_only"] = admin_only;
 
     return out;
 }
@@ -10049,6 +10056,31 @@ srv.Get("/api/v4/system", [&](const httplib::Request& req, httplib::Response& re
         const std::string tail  = req.matches[3];
 
         // Root dir for this app version
+        bool adminOnlyApp = false;
+        try {
+            json pol = load_app_launch_policy_json();
+            if (pol.contains("by_app_id") &&
+                pol["by_app_id"].is_object() &&
+                pol["by_app_id"].contains(appId) &&
+                pol["by_app_id"][appId].is_object()) {
+                const json& entry = pol["by_app_id"][appId];
+                adminOnlyApp =
+                    entry.contains("admin_only") &&
+                    entry["admin_only"].is_boolean() &&
+                    entry["admin_only"].get<bool>();
+            }
+        } catch (...) {
+            adminOnlyApp = false;
+        }
+
+        if (adminOnlyApp && !is_admin_cookie(req, COOKIE_KEY, &allowlist)) {
+            res.status = 403;
+            res.set_header("Cache-Control", "no-store");
+            res.set_content(R"({"ok":false,"error":"forbidden","message":"Admin-only app"})",
+                            "application/json; charset=utf-8");
+            return;
+        }
+
         const std::string root =
             (std::filesystem::path(APPS_INSTALLED_DIR) / appId / ver).string();
 
@@ -10127,6 +10159,24 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
     out["launch_policy_by_app_id"] = json::object();
     const bool isAdmin = is_admin_cookie(req, COOKIE_KEY, &allowlist);
 
+    json appLaunchPolicy = load_app_launch_policy_json();
+    json appLaunchPolicyById = json::object();
+    if (appLaunchPolicy.contains("by_app_id") && appLaunchPolicy["by_app_id"].is_object()) {
+        appLaunchPolicyById = appLaunchPolicy["by_app_id"];
+    }
+
+    auto app_admin_only = [&](const std::string& appId) -> bool {
+        try {
+            if (!appLaunchPolicyById.contains(appId) || !appLaunchPolicyById[appId].is_object()) return false;
+            const json& entry = appLaunchPolicyById[appId];
+            return entry.contains("admin_only") && entry["admin_only"].is_boolean()
+                ? entry["admin_only"].get<bool>()
+                : false;
+        } catch (...) {
+            return false;
+        }
+    };
+
     // Bundled: apps/bundled/<id>/*.zip
         // Bundled: apps/bundled/<id>/*.zip (admin-only visibility)
         if (isAdmin) {
@@ -10165,6 +10215,10 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
 
                 const std::string appId = deApp.path().filename().string();
 
+                if (app_admin_only(appId) && !isAdmin) {
+                    continue;
+                }
+
                 for (auto& deVer : fs::directory_iterator(deApp.path(), ec)) {
                     if (ec) break;
                     if (!deVer.is_directory(ec) || ec) continue;
@@ -10191,9 +10245,10 @@ srv.Get("/static/system.js", [&](const httplib::Request&, httplib::Response& res
         }
     }
         {
-        json pol = load_app_launch_policy_json();
-        if (pol.contains("by_app_id") && pol["by_app_id"].is_object()) {
-            out["launch_policy_by_app_id"] = pol["by_app_id"];
+        for (auto it = appLaunchPolicyById.begin(); it != appLaunchPolicyById.end(); ++it) {
+            if (isAdmin || !app_admin_only(it.key())) {
+                out["launch_policy_by_app_id"][it.key()] = it.value();
+            }
         }
     }
     res.set_header("Cache-Control", "no-store");
@@ -36402,11 +36457,31 @@ srv.Get("/api/v4/users/avatar", [&](const httplib::Request& req, httplib::Respon
         reply_json(res, 200, json({{"ok",true}}).dump());
     });
 
-    srv.Get("/api/v4/apps/list", [&](const httplib::Request&, httplib::Response& res) {
+    srv.Get("/api/v4/apps/list", [&](const httplib::Request& req, httplib::Response& res) {
     json out;
     out["ok"] = true;
     out["installed"] = json::array();
     out["bundled"] = json::array();
+
+    const bool isAdmin = is_admin_cookie(req, COOKIE_KEY, &allowlist);
+
+    json appLaunchPolicy = load_app_launch_policy_json();
+    json appLaunchPolicyById = json::object();
+    if (appLaunchPolicy.contains("by_app_id") && appLaunchPolicy["by_app_id"].is_object()) {
+        appLaunchPolicyById = appLaunchPolicy["by_app_id"];
+    }
+
+    auto app_admin_only = [&](const std::string& appId) -> bool {
+        try {
+            if (!appLaunchPolicyById.contains(appId) || !appLaunchPolicyById[appId].is_object()) return false;
+            const json& entry = appLaunchPolicyById[appId];
+            return entry.contains("admin_only") && entry["admin_only"].is_boolean()
+                ? entry["admin_only"].get<bool>()
+                : false;
+        } catch (...) {
+            return false;
+        }
+    };
 
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -36420,6 +36495,10 @@ srv.Get("/api/v4/users/avatar", [&](const httplib::Request& req, httplib::Respon
 
             const std::string id = de_id.path().filename().string();
             if (!safe_app_id(id)) continue;
+
+            if (app_admin_only(id) && !isAdmin) {
+                continue;
+            }
 
             for (auto& de_ver : fs::directory_iterator(de_id.path(), ec)) {
                 if (ec) break;
@@ -36851,7 +36930,50 @@ srv.Post("/api/v4/apps/install_bundled", [&](const httplib::Request& req, httpli
         return;
     }
 
-    reply(200, {{"ok", true}, {"id", id}, {"version", ver}, {"root", rel_to_repo(dst.string())}});
+    const std::string adminOnlyHeader = req.get_header_value("X-PQNAS-Admin-Only");
+    const bool installAdminOnly =
+        adminOnlyHeader == "1" ||
+        adminOnlyHeader == "true" ||
+        adminOnlyHeader == "TRUE" ||
+        adminOnlyHeader == "yes" ||
+        adminOnlyHeader == "YES";
+
+    {
+        json pol = load_app_launch_policy_json();
+
+        if (!pol.contains("by_app_id") || !pol["by_app_id"].is_object()) {
+            pol["by_app_id"] = json::object();
+        }
+
+        json existing = json::object();
+        if (pol["by_app_id"].contains(id) && pol["by_app_id"][id].is_object()) {
+            existing = pol["by_app_id"][id];
+        }
+
+        json merged = app_launch_policy_defaults_json();
+        json normalizedExisting = normalize_app_launch_policy_entry(existing);
+        for (auto it = normalizedExisting.begin(); it != normalizedExisting.end(); ++it) {
+            merged[it.key()] = it.value();
+        }
+
+        merged["admin_only"] = installAdminOnly;
+
+        pol["by_app_id"][id] = merged;
+        pol = normalize_app_launch_policy_json(pol);
+
+        if (!save_app_launch_policy_json(pol)) {
+            reply(500, {{"ok", false}, {"error", "save_failed"}, {"message", "installed app, but failed to save app visibility policy"}});
+            return;
+        }
+    }
+
+    reply(200, json{
+        {"ok", true},
+        {"id", id},
+        {"version", ver},
+        {"root", rel_to_repo(dst.string())},
+        {"admin_only", installAdminOnly}
+    });
 });
 
 srv.Post("/api/v4/apps/launch_policy", [&](const httplib::Request& req, httplib::Response& res) {
@@ -36902,6 +37024,11 @@ srv.Post("/api/v4/apps/launch_policy", [&](const httplib::Request& req, httplib:
             ? body["allow_user_override"].get<bool>()
             : true;
 
+    const bool adminOnly =
+        (body.contains("admin_only") && body["admin_only"].is_boolean())
+            ? body["admin_only"].get<bool>()
+            : false;
+
     if (appId.empty()) {
         reply(400, {
             {"ok", false},
@@ -36937,7 +37064,8 @@ srv.Post("/api/v4/apps/launch_policy", [&](const httplib::Request& req, httplib:
     pol["by_app_id"][appId] = json{
         {"default_launch", defaultLaunch},
         {"window_profile", windowProfile},
-        {"allow_user_override", allowUserOverride}
+        {"allow_user_override", allowUserOverride},
+        {"admin_only", adminOnly}
     };
 
     pol = normalize_app_launch_policy_json(pol);

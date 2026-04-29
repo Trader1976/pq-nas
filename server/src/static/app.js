@@ -538,7 +538,8 @@
         return {
             default_launch: (p && p.default_launch) || "auto",
             window_profile: (p && p.window_profile) || "auto",
-            allow_user_override: !!(p && p.allow_user_override)
+            allow_user_override: !!(p && p.allow_user_override),
+            admin_only: !!(p && p.admin_only)
         };
     }
 

@@ -179,7 +179,7 @@
 
         .policyGrid{
             display:grid;
-            grid-template-columns: repeat(3, minmax(120px, 1fr));
+            grid-template-columns: repeat(4, minmax(120px, 1fr));
             gap:10px;
         }
 
@@ -322,6 +322,10 @@
                         </div>
 
                         <input id="zipFile" type="file" accept=".zip,application/zip" />
+                        <label class="policyChk" style="margin-top:10px">
+                            <input id="installAdminOnly" type="checkbox" />
+                            <span>Admin only — hide from normal users</span>
+                        </label>
                         <div class="row" style="margin-top:10px">
                             <button class="btn" id="installBtn" type="button">Install</button>
                         </div>

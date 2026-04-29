@@ -7,6 +7,7 @@
     const zipFile = document.getElementById("zipFile");
     const installBtn = document.getElementById("installBtn");
     const installOut = document.getElementById("installOut");
+    const installAdminOnly = document.getElementById("installAdminOnly");
     let launchPolicyByAppId = {};
 
     function setBadge(kind, text){
@@ -21,7 +22,8 @@
         return {
             default_launch: (p && p.default_launch) || "auto",
             window_profile: (p && p.window_profile) || "auto",
-            allow_user_override: !!(p && p.allow_user_override)
+            allow_user_override: !!(p && p.allow_user_override),
+            admin_only: !!(p && p.admin_only)
         };
     }
 
@@ -34,7 +36,8 @@
                 id,
                 default_launch: policy.default_launch,
                 window_profile: policy.window_profile,
-                allow_user_override: !!policy.allow_user_override
+                allow_user_override: !!policy.allow_user_override,
+                admin_only: !!policy.admin_only
             })
         });
 
@@ -85,7 +88,7 @@
             const launchMeta = document.createElement("div");
             launchMeta.className = "meta";
             launchMeta.textContent =
-                `Launch: ${pol.default_launch} · Window: ${pol.window_profile} · User override: ${pol.allow_user_override ? "yes" : "no"}`;
+                `Launch: ${pol.default_launch} · Window: ${pol.window_profile} · User override: ${pol.allow_user_override ? "yes" : "no"} · Visibility: ${pol.admin_only ? "admin only" : "all users"}`;
 
             left.appendChild(launchMeta);
 
@@ -128,18 +131,29 @@
         <span>Allow user override</span>
     </label>
 `;
-
+            const visibilityField = document.createElement("div");
+            visibilityField.className = "policyField";
+            visibilityField.innerHTML = `
+    <label class="policyLbl">Visibility</label>
+    <label class="policyChk">
+        <input type="checkbox" />
+        <span>Admin only</span>
+    </label>
+`;
             const launchSel = launchField.querySelector("select");
             const windowSel = windowField.querySelector("select");
             const overrideChk = overrideField.querySelector("input");
+            const adminOnlyChk = visibilityField.querySelector("input");
 
             launchSel.value = pol.default_launch;
             windowSel.value = pol.window_profile;
             overrideChk.checked = !!pol.allow_user_override;
+            adminOnlyChk.checked = !!pol.admin_only;
 
             policyGrid.appendChild(launchField);
             policyGrid.appendChild(windowField);
             policyGrid.appendChild(overrideField);
+            policyGrid.appendChild(visibilityField);
 
             const actions = document.createElement("div");
             actions.className = "row";
@@ -157,7 +171,8 @@
                     await saveLaunchPolicy(it.id, {
                         default_launch: launchSel.value,
                         window_profile: windowSel.value,
-                        allow_user_override: overrideChk.checked
+                        allow_user_override: overrideChk.checked,
+                        admin_only: adminOnlyChk.checked
                     });
 
                     await load();
@@ -270,7 +285,8 @@
                 credentials: "include",
                 headers: {
                     "Content-Type": "application/zip",
-                    "X-PQNAS-Filename": f.name
+                    "X-PQNAS-Filename": f.name,
+                    "X-PQNAS-Admin-Only": installAdminOnly && installAdminOnly.checked ? "1" : "0"
                 },
                 body: f
             });
@@ -291,6 +307,7 @@
             installOut.textContent = JSON.stringify(j, null, 2);
 
             zipFile.value = "";
+            if (installAdminOnly) installAdminOnly.checked = false;
             await load();
         } catch (e) {
             setBadge("err", "network");
