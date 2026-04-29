@@ -559,7 +559,7 @@
     }
 
     async function fetchServerTreeStats(rootPath, force = false) {
-        if (serverTreeStatsSupported === false && !force) {
+        if (serverTreeStatsSupported === false) {
             return null;
         }
 
@@ -586,7 +586,7 @@
     }
 
     async function fetchServerRecursiveSearchItems(rootPath, force = false) {
-        if (serverRecursiveSearchSupported === false && !force) {
+        if (serverRecursiveSearchSupported === false) {
             return null;
         }
 
