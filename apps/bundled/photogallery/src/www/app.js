@@ -83,6 +83,9 @@
 
     const folderListCache = new Map();
 
+    let serverTreeStatsSupported = null;
+    let serverRecursiveSearchSupported = null;
+
     function folderListCacheKey(relPath) {
         return normalizeRelPath(relPath || "");
     }
@@ -475,6 +478,32 @@
         return `/api/v4/gallery/list?path=${encodeURIComponent(relPath)}`;
     }
 
+    function galleryTreeStatsUrl(relPath, force = false) {
+        const qs = new URLSearchParams();
+        const path = normalizeRelPath(relPath || "");
+
+        if (path) qs.set("path", path);
+        if (force) qs.set("force", "1");
+
+        const tail = qs.toString();
+        return tail
+            ? `/api/v4/gallery/tree_stats?${tail}`
+            : "/api/v4/gallery/tree_stats";
+    }
+
+    function galleryRecursiveSearchUrl(relPath, force = false) {
+        const qs = new URLSearchParams();
+        const path = normalizeRelPath(relPath || "");
+
+        if (path) qs.set("path", path);
+        if (force) qs.set("force", "1");
+
+        const tail = qs.toString();
+        return tail
+            ? `/api/v4/gallery/search?${tail}`
+            : "/api/v4/gallery/search";
+    }
+
     async function fetchJson(url, opts = {}) {
         const r = await fetch(url, {
             credentials: "include",
@@ -489,6 +518,96 @@
             throw new Error(msg || `HTTP ${r.status}`);
         }
         return j;
+    }
+
+    function isEndpointUnsupportedError(e) {
+        const msg = String(e && e.message ? e.message : e).toLowerCase();
+
+        return (
+            msg.includes("http 404") ||
+            msg.includes("not_found") ||
+            msg.includes("not found") ||
+            msg.includes("unknown route") ||
+            msg.includes("unknown endpoint")
+        );
+    }
+
+    function normalizeServerSearchItem(it, rootPath) {
+        const root = normalizeRelPath(rootPath || "");
+        const rel = normalizeRelPath(
+            it?.rel_path ||
+            it?.path ||
+            joinPath(it?.base_path || root, it?.name || "")
+        );
+
+        const name =
+            it?.name ||
+            rel.split("/").filter(Boolean).pop() ||
+            rel ||
+            "(unnamed)";
+
+        const base = normalizeRelPath(it?.base_path || parentPath(rel));
+
+        return {
+            ...it,
+            type: "file",
+            name,
+            rel_path: rel,
+            path: rel,
+            base_path: base
+        };
+    }
+
+    async function fetchServerTreeStats(rootPath, force = false) {
+        if (serverTreeStatsSupported === false && !force) {
+            return null;
+        }
+
+        try {
+            const j = await fetchJson(galleryTreeStatsUrl(rootPath, force));
+            const s = j.stats || j.tree_stats || j;
+
+            serverTreeStatsSupported = true;
+
+            return {
+                dirs: Number(s.dirs ?? s.folder_count ?? s.folders ?? 0) || 0,
+                files: Number(s.files ?? s.file_count ?? s.photos ?? s.total_photos ?? 0) || 0,
+                fileBytes: Number(s.fileBytes ?? s.file_bytes ?? s.total_bytes ?? s.bytes ?? 0) || 0
+            };
+        } catch (e) {
+            if (isEndpointUnsupportedError(e)) {
+                serverTreeStatsSupported = false;
+                return null;
+            }
+
+            console.warn("[photogallery] server tree_stats failed, falling back to browser walk", e);
+            return null;
+        }
+    }
+
+    async function fetchServerRecursiveSearchItems(rootPath, force = false) {
+        if (serverRecursiveSearchSupported === false && !force) {
+            return null;
+        }
+
+        try {
+            const j = await fetchJson(galleryRecursiveSearchUrl(rootPath, force));
+            const raw = Array.isArray(j.items) ? j.items : [];
+
+            serverRecursiveSearchSupported = true;
+
+            return raw
+                .filter((it) => it && (!it.type || it.type === "file"))
+                .map((it) => normalizeServerSearchItem(it, rootPath));
+        } catch (e) {
+            if (isEndpointUnsupportedError(e)) {
+                serverRecursiveSearchSupported = false;
+                return null;
+            }
+
+            console.warn("[photogallery] server recursive search failed, falling back to browser walk", e);
+            return null;
+        }
     }
 
     async function galleryMetaGet(relPath) {
@@ -1232,58 +1351,75 @@
     }
 
 
-async function ensureTreeStats(force = false) {
-    const root = String(state.curPath || "");
-    const currentSeq = (state.treeStats?.seq || 0) + 1;
+    async function ensureTreeStats(force = false) {
+        const root = String(state.curPath || "");
+        const currentSeq = (state.treeStats?.seq || 0) + 1;
 
-    if (!force &&
-        state.treeStats.loaded &&
-        !state.treeStats.loading &&
-        state.treeStats.basePath === root) {
+        if (!force &&
+            state.treeStats.loaded &&
+            !state.treeStats.loading &&
+            state.treeStats.basePath === root) {
+            return state.treeStats;
+        }
+
+        state.treeStats = {
+            basePath: root,
+            loaded: false,
+            loading: true,
+            dirs: 0,
+            files: 0,
+            fileBytes: 0,
+            seq: currentSeq
+        };
+
+        const serverStats = await fetchServerTreeStats(root, force);
+
+        if (serverStats && state.treeStats && state.treeStats.seq === currentSeq) {
+            state.treeStats = {
+                basePath: root,
+                loaded: true,
+                loading: false,
+                dirs: Number(serverStats.dirs || 0),
+                files: Number(serverStats.files || 0),
+                fileBytes: Number(serverStats.fileBytes || 0),
+                seq: currentSeq
+            };
+
+            return state.treeStats;
+        }
+
+        async function walk(path) {
+            if (!state.treeStats || state.treeStats.seq !== currentSeq) return;
+
+            const j = await fetchGalleryList(path, { force });
+            const items = Array.isArray(j.items) ? j.items : [];
+
+            for (const it of items) {
+                if (it.type === "dir") {
+                    state.treeStats.dirs++;
+                } else if (it.type === "file") {
+                    state.treeStats.files++;
+                    state.treeStats.fileBytes += Number(it.size_bytes || 0) || 0;
+                }
+            }
+
+            for (const it of items) {
+                if (it.type === "dir") {
+                    await walk(joinPath(path, it.name));
+                }
+            }
+        }
+
+        await walk(root);
+
+        if (state.treeStats && state.treeStats.seq === currentSeq) {
+            state.treeStats.loading = false;
+            state.treeStats.loaded = true;
+        }
+
         return state.treeStats;
     }
 
-    state.treeStats = {
-        basePath: root,
-        loaded: false,
-        loading: true,
-        dirs: 0,
-        files: 0,
-        fileBytes: 0,
-        seq: currentSeq
-    };
-
-    async function walk(path) {
-        if (!state.treeStats || state.treeStats.seq !== currentSeq) return;
-
-        const j = await fetchGalleryList(path, { force });
-        const items = Array.isArray(j.items) ? j.items : [];
-
-        for (const it of items) {
-            if (it.type === "dir") {
-                state.treeStats.dirs++;
-            } else if (it.type === "file") {
-                state.treeStats.files++;
-                state.treeStats.fileBytes += Number(it.size_bytes || 0) || 0;
-            }
-        }
-
-        for (const it of items) {
-            if (it.type === "dir") {
-                await walk(joinPath(path, it.name));
-            }
-        }
-    }
-
-    await walk(root);
-
-    if (state.treeStats && state.treeStats.seq === currentSeq) {
-        state.treeStats.loading = false;
-        state.treeStats.loaded = true;
-    }
-
-    return state.treeStats;
-}
     function visibleItemsSummary() {
         const items = filteredItems();
 
@@ -1827,6 +1963,19 @@ async function ensureTreeStats(force = false) {
         state.searchLoaded = false;
         state.searchBasePath = root;
         state.searchItems = [];
+
+        setStatus(`Loading photo index under /${root || ""} …`);
+
+        const serverItems = await fetchServerRecursiveSearchItems(root, force);
+
+        if (mySeq !== searchSeq) throw new Error("__stale_search__");
+
+        if (serverItems) {
+            state.searchItems = serverItems;
+            state.searchLoaded = true;
+            state.searchLoading = false;
+            return state.searchItems;
+        }
 
         const out = [];
         let scannedFolders = 0;
