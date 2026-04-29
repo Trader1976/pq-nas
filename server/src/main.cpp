@@ -30676,6 +30676,15 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
         double gps_altitude = 0.0;
         bool has_gps = false;
         bool has_gps_altitude = false;
+
+        std::string exif_make;
+        std::string exif_model;
+        std::string exif_lens_model;
+        std::int64_t exif_iso = 0;
+        double exif_f_number = 0.0;
+        double exif_exposure_time = 0.0;
+        double exif_focal_length = 0.0;
+        bool exif_ok = false;
     };
 
     std::map<std::string, ListedItem> merged;
@@ -30726,7 +30735,8 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
                         }
 
                         merged[name] = ListedItem{
-                            name, "dir", 0, mtime_unix, 0, "", "", "", 0, 0.0, 0.0, 0.0, false, false
+                            name, "dir", 0, mtime_unix, 0, "", "", "", 0, 0.0, 0.0, 0.0, false, false,
+                            "", "", "", 0, 0.0, 0.0, 0.0, false
                         };
                         continue;
                     }
@@ -30749,7 +30759,8 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
                         }
 
                         merged[name] = ListedItem{
-                            name, "file", size_bytes, mtime_unix, 0, "", "", "", 0, 0.0, 0.0, 0.0, false, false
+                            name, "file", size_bytes, mtime_unix, 0, "", "", "", 0, 0.0, 0.0, 0.0, false, false,
+                            "", "", "", 0, 0.0, 0.0, 0.0, false
                         };
                     }
                 }
@@ -30810,6 +30821,14 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
                     0.0,
                     0.0,
                     false,
+                    false,
+                    "",
+                    "",
+                    "",
+                    0,
+                    0.0,
+                    0.0,
+                    0.0,
                     false
                 };
             } else {
@@ -30958,6 +30977,16 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
             if (have_row) {
                 item.capture_time_text = row.taken_at;
                 item.capture_time_unix = row.taken_epoch;
+
+item.exif_make = row.make;
+item.exif_model = row.model;
+item.exif_lens_model = row.lens_model;
+item.exif_iso = row.iso;
+item.exif_f_number = row.f_number;
+item.exif_exposure_time = row.exposure_time;
+item.exif_focal_length = row.focal_length;
+item.exif_ok = row.exif_ok;
+
                 if (row.gps_ok) {
                     item.gps_latitude = row.gps_latitude;
                     item.gps_longitude = row.gps_longitude;
@@ -30991,6 +31020,16 @@ srv.Get("/api/v4/gallery/list", [&](const httplib::Request& req, httplib::Respon
             {"gps_latitude", item.has_gps ? json(item.gps_latitude) : json(nullptr)},
             {"gps_longitude", item.has_gps ? json(item.gps_longitude) : json(nullptr)},
             {"gps_altitude", (item.has_gps && item.has_gps_altitude) ? json(item.gps_altitude) : json(nullptr)},
+            {"exif", json{
+                {"ok", item.exif_ok},
+                {"make", item.exif_make},
+                {"model", item.exif_model},
+                {"lens_model", item.exif_lens_model},
+                {"iso", item.exif_iso > 0 ? json(item.exif_iso) : json(nullptr)},
+                {"f_number", item.exif_f_number > 0.0 ? json(item.exif_f_number) : json(nullptr)},
+                {"exposure_time", item.exif_exposure_time > 0.0 ? json(item.exif_exposure_time) : json(nullptr)},
+                {"focal_length", item.exif_focal_length > 0.0 ? json(item.exif_focal_length) : json(nullptr)}
+            }},
 
             // New standardized fields
             {"imageRating", item.rating},
@@ -31468,6 +31507,15 @@ struct FastGalleryItem {
     double gps_altitude = 0.0;
     bool has_gps = false;
     bool has_gps_altitude = false;
+
+    std::string exif_make;
+    std::string exif_model;
+    std::string exif_lens_model;
+    std::int64_t exif_iso = 0;
+    double exif_f_number = 0.0;
+    double exif_exposure_time = 0.0;
+    double exif_focal_length = 0.0;
+    bool exif_ok = false;
 };
 
 auto gallery_fast_lower_ascii = [](std::string s) -> std::string {
@@ -31565,6 +31613,7 @@ auto collect_fast_gallery_tree =
         const std::filesystem::path& user_dir,
         const std::string& rel_root,
         bool include_items,
+        bool refresh_stale_exif,
         json* items_out,
         std::uint64_t* dirs_out,
         std::uint64_t* files_out,
@@ -31813,10 +31862,46 @@ auto collect_fast_gallery_tree =
                 row.size_bytes == item.size_bytes &&
                 row.mtime_epoch == item.mtime_unix;
 
-            if (!cache_match) continue;
+            if (!cache_match) {
+                if (!refresh_stale_exif) continue;
+
+                pqnas::ResolvedLogicalItem resolved;
+                std::string rerr;
+
+                if (!(pqnas::resolve_existing_user_item(users, fp_hex, item.rel_path, &resolved, &rerr) &&
+                      resolved.exists &&
+                      resolved.is_file &&
+                      resolved.has_physical_anchor)) {
+                    continue;
+                }
+
+                PhotoStatsRow fresh;
+                std::string ferr;
+
+                if (!refresh_one_photo_exif_row(photo_db,
+                                                item.rel_path,
+                                                resolved.abs_path,
+                                                item.size_bytes,
+                                                item.mtime_unix,
+                                                &fresh,
+                                                &ferr)) {
+                    continue;
+                }
+
+                row = std::move(fresh);
+            }
 
             item.capture_time_text = row.taken_at;
             item.capture_time_unix = row.taken_epoch;
+
+item.exif_make = row.make;
+item.exif_model = row.model;
+item.exif_lens_model = row.lens_model;
+item.exif_iso = row.iso;
+item.exif_f_number = row.f_number;
+item.exif_exposure_time = row.exposure_time;
+item.exif_focal_length = row.focal_length;
+item.exif_ok = row.exif_ok;
 
             if (row.gps_ok) {
                 item.gps_latitude = row.gps_latitude;
@@ -31892,6 +31977,17 @@ auto collect_fast_gallery_tree =
             one["has_gps"] = false;
         }
 
+        one["exif"] = json{
+            {"ok", item.exif_ok},
+            {"make", item.exif_make},
+            {"model", item.exif_model},
+            {"lens_model", item.exif_lens_model},
+            {"iso", item.exif_iso > 0 ? json(item.exif_iso) : json(nullptr)},
+            {"f_number", item.exif_f_number > 0.0 ? json(item.exif_f_number) : json(nullptr)},
+            {"exposure_time", item.exif_exposure_time > 0.0 ? json(item.exif_exposure_time) : json(nullptr)},
+            {"focal_length", item.exif_focal_length > 0.0 ? json(item.exif_focal_length) : json(nullptr)}
+        };
+
         items_out->push_back(std::move(one));
         ++returned;
     }
@@ -31932,9 +32028,10 @@ srv.Get("/api/v4/gallery/tree_stats", [&](const httplib::Request& req, httplib::
     }
 
     std::string rel_root;
-    if (req.has_param("path")) {
+    const std::string raw_path_param = req.has_param("path") ? req.get_param_value("path") : std::string();
+    if (!raw_path_param.empty()) {
         std::string nerr;
-        if (!pqnas::normalize_user_rel_path_strict(req.get_param_value("path"), &rel_root, &nerr)) {
+        if (!pqnas::normalize_user_rel_path_strict(raw_path_param, &rel_root, &nerr)) {
             reply_json(res, 400, json{
                 {"ok", false},
                 {"error", "bad_request"},
@@ -31984,6 +32081,7 @@ srv.Get("/api/v4/gallery/tree_stats", [&](const httplib::Request& req, httplib::
     if (!collect_fast_gallery_tree(fp_hex,
                                    user_dir,
                                    rel_root,
+                                   false,
                                    false,
                                    &unused_items,
                                    &dirs,
@@ -32103,6 +32201,7 @@ srv.Get("/api/v4/gallery/search", [&](const httplib::Request& req, httplib::Resp
                                    user_dir,
                                    rel_root,
                                    true,
+                                   force,
                                    &items,
                                    &dirs,
                                    &files,

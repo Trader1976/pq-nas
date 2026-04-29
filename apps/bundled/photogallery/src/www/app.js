@@ -2116,6 +2116,71 @@
         }
     }
 
+
+    function exifSearchText(it) {
+        const exif = it && it.exif && typeof it.exif === "object" ? it.exif : {};
+        const parts = [];
+        const add = (v) => {
+            const x = String(v == null ? "" : v).trim();
+            if (x) parts.push(x);
+        };
+
+        add(exif.make);
+        add(exif.model);
+        add(exif.lens_model);
+        add([exif.make, exif.model].map(v => String(v || "").trim()).filter(Boolean).join(" "));
+
+        const iso = Number(exif.iso || 0);
+        if (Number.isFinite(iso) && iso > 0) {
+            add(`ISO ${iso}`);
+            add(`iso ${iso}`);
+            add(String(iso));
+        }
+
+        const fnum = Number(exif.f_number || 0);
+        if (Number.isFinite(fnum) && fnum > 0) {
+            add(`f/${fnum}`);
+            add(`aperture ${fnum}`);
+        }
+
+        const focal = Number(exif.focal_length || 0);
+        if (Number.isFinite(focal) && focal > 0) {
+            add(`${focal}mm`);
+            add(`focal ${focal}`);
+        }
+
+        add(it && it.capture_time_text);
+
+        if (it && it.has_gps) {
+            add("gps");
+            add("has gps");
+            add("geotag");
+            add("location");
+        }
+
+        return parts.join(" ");
+    }
+
+    function exifPreviewText(it) {
+        const exif = it && it.exif && typeof it.exif === "object" ? it.exif : {};
+        const bits = [];
+
+        const camera = [exif.make, exif.model]
+            .map(v => String(v || "").trim())
+            .filter(Boolean)
+            .join(" ");
+
+        if (camera) bits.push(camera);
+
+        const iso = Number(exif.iso || 0);
+        if (Number.isFinite(iso) && iso > 0) bits.push(`ISO ${iso}`);
+
+        const lens = String(exif.lens_model || "").trim();
+        if (lens) bits.push(lens);
+
+        return bits.join(" • ");
+    }
+
     function filteredItems() {
         const q = String(state.filter || "").trim().toLowerCase();
         const rating = Number(state.ratingFilter);
@@ -2139,7 +2204,8 @@
                 it.name || "",
                 groupPathForItem(it),
                 Array.isArray(it.keywords) ? it.keywords.join(" ") : (it.tags_text || ""),
-                it.description || it.notes_text || ""
+                it.description || it.notes_text || "",
+                exifSearchText(it)
             ].join(" ").toLowerCase();
 
             return hay.includes(q);
@@ -3073,7 +3139,10 @@
                     ? item.keywords.join(", ")
                     : (item.tags_text || "");
 
-            tagLine.textContent = tagPreview ? shorten(tagPreview, 60) : "No metadata";
+            const exifPreview = exifPreviewText(item);
+            tagLine.textContent = tagPreview
+                ? shorten(tagPreview, 60)
+                : (exifPreview ? shorten(exifPreview, 60) : "No metadata");
             body.appendChild(tagLine);
         } else {
             const tagLine = document.createElement("div");
