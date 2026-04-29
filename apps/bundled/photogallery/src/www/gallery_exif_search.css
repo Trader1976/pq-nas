@@ -1,0 +1,90 @@
+.exifSearchPanel {
+    margin: 10px 0 14px;
+    padding: 14px;
+    border: 1px solid rgba(var(--fg-rgb), 0.14);
+    border-radius: 16px;
+    background: rgba(var(--fg-rgb), 0.045);
+}
+
+.exifSearchPanel[hidden] {
+    display: none !important;
+}
+
+.exifSearchHead {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.exifSearchTitle {
+    font-weight: 800;
+    letter-spacing: 0.01em;
+}
+
+.exifSearchSub {
+    margin-top: 3px;
+    font-size: 12px;
+    opacity: 0.72;
+}
+
+.exifSearchGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+    gap: 10px;
+}
+
+.exifSearchGrid label {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+}
+
+.exifSearchGrid label span {
+    font-size: 12px;
+    font-weight: 650;
+    opacity: 0.78;
+}
+
+#exifSearchToggleBtn.active {
+    box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.28) inset;
+}
+
+/* Keep Advanced EXIF panel compact, but prevent input overlap/overflow. */
+.exifSearchPanel {
+    width: min(720px, calc(100vw - 48px));
+    box-sizing: border-box;
+}
+
+.exifSearchGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.exifSearchGrid label {
+    min-width: 0;
+}
+
+.exifSearchGrid .input,
+.exifSearchGrid input,
+.exifSearchGrid select {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+@media (max-width: 720px) {
+    .exifSearchPanel {
+        width: 100%;
+    }
+
+    .exifSearchGrid {
+        grid-template-columns: 1fr;
+    }
+
+    .exifSearchHead {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}

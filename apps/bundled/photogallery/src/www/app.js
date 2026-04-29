@@ -77,6 +77,7 @@
     let selectionAnchorRelPath = "";
     let searchSeq = 0;
     let filterTimer = 0;
+    const externalSearchFilters = [];
 
     const FOLDER_LIST_CACHE_TTL_MS = 30 * 1000;
     const ENABLE_AUTO_TREE_STATS = true;
@@ -1921,11 +1922,51 @@
         });
     }
 
+    function activeExternalSearchFilters() {
+        return externalSearchFilters.filter((provider) => {
+            try {
+                return provider && typeof provider.isActive === "function" && provider.isActive();
+            } catch (_) {
+                return false;
+            }
+        });
+    }
+
+    function isExternalSearchActive() {
+        return activeExternalSearchFilters().length > 0;
+    }
+
+    function externalSearchSummaryText() {
+        const parts = [];
+        for (const provider of activeExternalSearchFilters()) {
+            try {
+                if (typeof provider.summary === "function") {
+                    const s = String(provider.summary() || "").trim();
+                    if (s) parts.push(s);
+                }
+            } catch (_) {}
+        }
+        return parts.join(" • ");
+    }
+
+    function itemMatchesExternalSearchFilters(it) {
+        for (const provider of activeExternalSearchFilters()) {
+            try {
+                if (typeof provider.matches === "function" && !provider.matches(it)) {
+                    return false;
+                }
+            } catch (_) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     function isSearchMode() {
         const hasText = !!String(state.filter || "").trim();
         const rf = Number(state.ratingFilter);
         const hasRating = Number.isFinite(rf) && rf >= 0;
-        return hasText || hasRating;
+        return hasText || hasRating || isExternalSearchActive();
     }
 
     function invalidateSearchCache() {
@@ -2054,8 +2095,9 @@
         const ratingTxt =
             rf < 0 ? "" :
                 (rf === 0 ? " • unrated only" : ` • ${rf}★ only`);
+        const extraTxt = externalSearchSummaryText();
         const textTxt =
-            state.filter ? ` • filter: ${state.filter}` : "";
+            `${state.filter ? ` • filter: ${state.filter}` : ""}${extraTxt ? ` • ${extraTxt}` : ""}`;
 
         const items = filteredItems();
         if (state.viewMode === "map") {
@@ -2195,6 +2237,8 @@
                 const stars = Number(it.rating || 0) || 0;
                 if (stars !== rating) return false;
             }
+
+            if (!itemMatchesExternalSearchFilters(it)) return false;
 
             if (!q) return true;
 
@@ -4138,6 +4182,23 @@
     window.PQNAS_PHOTOGALLERY.setBadge = setBadge;
     window.PQNAS_PHOTOGALLERY.getSelectedRelPaths = () => selectedRelPathsList();
     window.PQNAS_PHOTOGALLERY.clearSelection = clearSelection;
+
+    window.PQNAS_PHOTOGALLERY.registerSearchFilterProvider = function (provider) {
+        if (!provider || typeof provider.isActive !== "function" || typeof provider.matches !== "function") {
+            return () => {};
+        }
+
+        externalSearchFilters.push(provider);
+
+        return () => {
+            const idx = externalSearchFilters.indexOf(provider);
+            if (idx >= 0) externalSearchFilters.splice(idx, 1);
+        };
+    };
+
+    window.PQNAS_PHOTOGALLERY.refreshSearchFilters = function (forceSearch = false) {
+        return refreshVisibleView(!!forceSearch);
+    };
 
     window.PQNAS_PHOTOGALLERY.getCurrentPath = function () {
         return state && typeof state.curPath === "string" ? state.curPath : "";
