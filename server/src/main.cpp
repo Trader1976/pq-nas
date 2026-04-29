@@ -31418,7 +31418,30 @@ srv.Get("/api/v4/music/cover", [&](const httplib::Request& req, httplib::Respons
 
     serve_cover(false);
 });
+    auto gallery_fast_prune_cache = [](auto& cache,
+                                       std::int64_t now_epoch,
+                                       std::int64_t ttl_seconds,
+                                       std::size_t max_entries) {
+        for (auto it = cache.begin(); it != cache.end(); ) {
+            if (now_epoch - it->second.first > ttl_seconds) {
+                it = cache.erase(it);
+            } else {
+                ++it;
+            }
+        }
 
+        while (cache.size() > max_entries && !cache.empty()) {
+            auto oldest = cache.begin();
+
+            for (auto it = cache.begin(); it != cache.end(); ++it) {
+                if (it->second.first < oldest->second.first) {
+                    oldest = it;
+                }
+            }
+
+            cache.erase(oldest);
+        }
+    };
 // Fast recursive Photo Gallery helpers/routes.
 // These are intentionally lighter than /api/v4/photogallery/stats:
 // - no full EXIF refresh while searching
@@ -31933,9 +31956,12 @@ srv.Get("/api/v4/gallery/tree_stats", [&](const httplib::Request& req, httplib::
 
     const std::int64_t now_epoch = static_cast<std::int64_t>(std::time(nullptr));
     constexpr std::int64_t kTreeCacheTtlSeconds = 20;
+    constexpr std::size_t kTreeCacheMaxEntries = 256;
 
     if (!force) {
         std::lock_guard<std::mutex> lk(tree_cache_mu);
+        gallery_fast_prune_cache(tree_cache, now_epoch, kTreeCacheTtlSeconds, kTreeCacheMaxEntries);
+
         auto it = tree_cache.find(cache_key);
         if (it != tree_cache.end() && now_epoch - it->second.first <= kTreeCacheTtlSeconds) {
             json cached = it->second.second;
@@ -31989,9 +32015,9 @@ srv.Get("/api/v4/gallery/tree_stats", [&](const httplib::Request& req, httplib::
 
     {
         std::lock_guard<std::mutex> lk(tree_cache_mu);
+        gallery_fast_prune_cache(tree_cache, now_epoch, kTreeCacheTtlSeconds, kTreeCacheMaxEntries);
         tree_cache[cache_key] = {now_epoch, out};
     }
-
     reply_json(res, 200, out.dump());
 });
 
@@ -32048,9 +32074,12 @@ srv.Get("/api/v4/gallery/search", [&](const httplib::Request& req, httplib::Resp
 
     const std::int64_t now_epoch = static_cast<std::int64_t>(std::time(nullptr));
     constexpr std::int64_t kSearchCacheTtlSeconds = 20;
+    constexpr std::size_t kSearchCacheMaxEntries = 128;
 
     if (!force) {
         std::lock_guard<std::mutex> lk(search_cache_mu);
+        gallery_fast_prune_cache(search_cache, now_epoch, kSearchCacheTtlSeconds, kSearchCacheMaxEntries);
+
         auto it = search_cache.find(cache_key);
         if (it != search_cache.end() && now_epoch - it->second.first <= kSearchCacheTtlSeconds) {
             json cached = it->second.second;
@@ -32106,6 +32135,7 @@ srv.Get("/api/v4/gallery/search", [&](const httplib::Request& req, httplib::Resp
 
     {
         std::lock_guard<std::mutex> lk(search_cache_mu);
+        gallery_fast_prune_cache(search_cache, now_epoch, kSearchCacheTtlSeconds, kSearchCacheMaxEntries);
         search_cache[cache_key] = {now_epoch, out};
     }
 
