@@ -46,9 +46,22 @@
         if (mode === "app") {
             mainHost.classList.add("appHost");
             mainHost.style.overflow = "hidden";
+
+            if (homeBlurb) homeBlurb.style.display = "";
+
+            getHomeContentHost();
+            showHomeContent(false);
+
+            const dock = getAppFrameDock();
+            if (dock) dock.style.display = "";
         } else {
             mainHost.classList.add("homeHost");
             mainHost.style.overflow = "auto";
+
+            if (homeBlurb) homeBlurb.style.display = "";
+
+            showHomeContent(true);
+            hideAllCachedAppFrames();
         }
     }
 
@@ -56,6 +69,120 @@
     let installedApps = [];     // [{id, ver, name?, title?, ...}, ...]
     let meFpHex = "";           // fingerprint_hex from /api/v4/me (for desktop layout storage)
     let launchPolicyByAppId = {}; // { [appId]: { default_launch, window_profile, allow_user_override } }
+
+    const APP_FRAME_CACHE_MAX = 3;
+    const appFrameCache = new Map(); // key: "appId@ver" -> { frameWrap, frame, lastUsed }
+
+    function appFrameKey(app) {
+        return `${app.id}@${app.ver}`;
+    }
+
+    function getAppFrameDock() {
+        if (!homeBlurb) return null;
+
+        let dock = document.getElementById("appFrameDock");
+        if (dock) return dock;
+
+        dock = document.createElement("div");
+        dock.id = "appFrameDock";
+        dock.className = "appFrameDock";
+        dock.style.display = "none";
+        dock.style.width = "100%";
+        dock.style.height = "100%";
+        dock.style.minHeight = "0";
+        dock.style.overflow = "hidden";
+        dock.style.flex = "1 1 auto";
+        dock.style.display = "none";
+
+        homeBlurb.appendChild(dock);
+        return dock;
+    }
+    function getHomeContentHost() {
+        if (!homeBlurb) return null;
+
+        let host = document.getElementById("homeContent");
+        const dock = document.getElementById("appFrameDock");
+
+        if (!host) {
+            host = document.createElement("div");
+            host.id = "homeContent";
+            host.className = "homeContent";
+
+            // Important:
+            // Move existing Home/Desktop children into #homeContent so app mode can hide them.
+            const oldChildren = Array.from(homeBlurb.childNodes)
+                .filter((node) => node !== dock);
+
+            for (const node of oldChildren) {
+                host.appendChild(node);
+            }
+
+            if (dock && dock.parentElement === homeBlurb) {
+                homeBlurb.insertBefore(host, dock);
+            } else {
+                homeBlurb.appendChild(host);
+            }
+        } else {
+            // Repair older/bad DOM state: any direct child except host/dock belongs to homeContent.
+            const strayChildren = Array.from(homeBlurb.childNodes)
+                .filter((node) => node !== host && node !== dock);
+
+            for (const node of strayChildren) {
+                host.appendChild(node);
+            }
+        }
+
+        return host;
+    }
+
+    function setHomeContentHtml(html) {
+        const host = getHomeContentHost();
+        if (!host) return null;
+
+        host.innerHTML = html || "";
+
+        const dock = document.getElementById("appFrameDock");
+        if (dock && dock.parentElement !== homeBlurb) {
+            homeBlurb.appendChild(dock);
+        }
+
+        return host;
+    }
+
+    function showHomeContent(on) {
+        const host = document.getElementById("homeContent");
+        if (host) host.style.display = on ? "" : "none";
+    }
+    function hideAllCachedAppFrames() {
+        const dock = document.getElementById("appFrameDock");
+        if (dock) dock.style.display = "none";
+
+        for (const rec of appFrameCache.values()) {
+            if (rec && rec.frameWrap) rec.frameWrap.style.display = "none";
+        }
+    }
+
+    function pruneCachedAppFrames(activeKey) {
+        const entries = Array.from(appFrameCache.entries())
+            .filter(([key]) => key !== activeKey)
+            .sort((a, b) => Number(a[1].lastUsed || 0) - Number(b[1].lastUsed || 0));
+
+        while (appFrameCache.size > APP_FRAME_CACHE_MAX && entries.length) {
+            const [key, rec] = entries.shift();
+            try { rec.frameWrap.remove(); } catch (_) {}
+            appFrameCache.delete(key);
+        }
+    }
+
+    function clearCachedAppFrames() {
+        for (const rec of appFrameCache.values()) {
+            try { rec.frameWrap.remove(); } catch (_) {}
+        }
+        appFrameCache.clear();
+
+        const dock = document.getElementById("appFrameDock");
+        if (dock) dock.remove();
+    }
 
     // desktop state (icon layout + manifests)
 
@@ -1012,7 +1139,7 @@
     </div>
 `;
 
-        homeBlurb.innerHTML = `
+    const homeContent = setHomeContentHtml(`
     <div style="max-width:760px; font-family:var(--sans);">
         <h3 style="margin:0 0 8px 0; font-size:18px; font-family:inherit;">Pair a new device</h3>
         <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:14px; font-family:inherit;">
@@ -1035,7 +1162,7 @@
             ${qrBlock}
             ${devicesBlock}
     </div>
-    `;
+    `);
 
         const pairBtn = document.getElementById("pairNewDeviceBtn");
         if (pairBtn) {
@@ -1043,7 +1170,7 @@
                 startPairingFlow();
             });
         }
-        for (const btn of homeBlurb.querySelectorAll(".trustedRevokeBtn")) {
+        for (const btn of (homeContent || homeBlurb).querySelectorAll(".trustedRevokeBtn")) {
             btn.addEventListener("click", async () => {
                 const deviceId = btn.dataset.deviceId || "";
                 if (!deviceId) return;
@@ -1150,10 +1277,10 @@
             // So when returning Home, rebuild the desktop DOM if it’s missing.
             let surface = document.getElementById("desktopSurface");
             if (!surface) {
-                homeBlurb.innerHTML = `
+                setHomeContentHtml(`
                 <div id="desktopHint" style="margin-bottom:10px;"></div>
                 <div id="desktopSurface" class="desktopSurface" aria-label="Desktop"></div>
-            `;
+            `);
             }
         }
 
@@ -1216,7 +1343,7 @@
         `;
         }).join("");
 
-        homeBlurb.innerHTML = `
+        const homeContent = setHomeContentHtml(`
         <div style="max-width:760px; font-family:var(--sans);">
             <h3 style="margin:0 0 8px 0; font-size:18px; font-family:inherit;">Pending workspace invitations</h3>
             <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:14px; font-family:inherit;">
@@ -1258,9 +1385,9 @@
             ? cards
             : `<div class="mini">No pending workspace invitations.</div>`}
         </div>
-    `;
+        `);
 
-        for (const btn of homeBlurb.querySelectorAll(".workspaceInviteAcceptBtn")) {
+            for (const btn of (homeContent || homeBlurb).querySelectorAll(".workspaceInviteAcceptBtn")) {
             btn.addEventListener("click", async () => {
                 const workspaceId = btn.dataset.workspaceId || "";
                 if (!workspaceId) return;
@@ -1284,7 +1411,7 @@
             });
         }
 
-        for (const btn of homeBlurb.querySelectorAll(".workspaceInviteDeclineBtn")) {
+        for (const btn of (homeContent || homeBlurb).querySelectorAll(".workspaceInviteDeclineBtn")) {
             btn.addEventListener("click", async () => {
                 const workspaceId = btn.dataset.workspaceId || "";
                 if (!workspaceId) return;
@@ -1310,37 +1437,50 @@
     }
 
     function renderApp(app) {
-        stopPairPolling();
-        // app = {id, ver, name?}
-        currentView = `app:${app.id}@${app.ver}`;
-        currentApp = { id: app.id, ver: app.ver };
-
-        const appLabel = app.name || app.id;
-
-        setActiveNav(""); // Home not active
-        setActiveApp(app.id);
-
-        if (wsTitle) wsTitle.textContent = appLabel;
-        if (wsSubtitle) wsSubtitle.textContent = "App (embedded)";
-        if (mainPaneTitle) mainPaneTitle.textContent = appLabel;
-
-        if (!homeBlurb) return;
-
         setMainHostMode("app");
-        homeBlurb.classList.add("appHostBlurb");
 
-        homeBlurb.innerHTML = "";
+        const dock = getAppFrameDock();
+        if (!dock) return;
 
-        const frame = document.createElement("iframe");
-        frame.className = "appFrame";
-        frame.src = appUrl(app, "embedded");
+        const key = appFrameKey(app);
+        const now = Date.now();
 
-        const frameWrap = document.createElement("div");
-        frameWrap.className = "appFrameWrap";
-        frameWrap.appendChild(frame);
+        for (const rec of appFrameCache.values()) {
+            if (rec && rec.frameWrap) rec.frameWrap.style.display = "none";
+        }
 
-        homeBlurb.appendChild(frameWrap);
-        show(homeBlurb, true);
+        let rec = appFrameCache.get(key);
+
+        if (!rec) {
+            const frame = document.createElement("iframe");
+            frame.className = "appFrame";
+            frame.src = appUrl(app, "embedded");
+            frame.dataset.appId = app.id;
+            frame.dataset.appVer = app.ver;
+
+            const frameWrap = document.createElement("div");
+            frameWrap.className = "appFrameWrap";
+            frameWrap.dataset.appKey = key;
+            frameWrap.appendChild(frame);
+
+            dock.appendChild(frameWrap);
+
+            rec = {
+                frameWrap,
+                frame,
+                lastUsed: now
+            };
+
+            appFrameCache.set(key, rec);
+        }
+
+        rec.lastUsed = now;
+        rec.frameWrap.style.display = "";
+        rec.frameWrap.style.width = "100%";
+        rec.frameWrap.style.height = "100%";
+        rec.frameWrap.style.flex = "1 1 auto";
+
+        pruneCachedAppFrames(key);
     }
 
 
@@ -1474,6 +1614,8 @@
 
                     if (!r.ok || !ok) {
                         authed = false;
+                        clearCachedAppFrames();
+
                         workspaceInvites = [];
                         workspaceInvitesError = "";
                         updateWorkspaceInvitesNav();
@@ -1512,6 +1654,7 @@
 
                 // Non-JSON body
                 authed = false;
+                clearCachedAppFrames();
                 workspaceInvites = [];
                 workspaceInvitesError = "";
                 updateWorkspaceInvitesNav();
@@ -1532,6 +1675,7 @@
                 }
             } catch (e) {
                 authed = false;
+                clearCachedAppFrames();
                 workspaceInvites = [];
                 workspaceInvitesError = "";
                 updateWorkspaceInvitesNav();
