@@ -1,6 +1,8 @@
 #include "dropzone_routes.h"
 #include "storage_resolver.h"
 #include "user_quota.h"
+#include "gallery_meta.h"
+#include "file_location_index.h"
 
 #include <algorithm>
 #include <array>
@@ -276,8 +278,8 @@ static std::string sha256_hex_file_local(const std::filesystem::path& path, std:
     return hex_encode_lower_local(md, static_cast<std::size_t>(md_len));
 }
 
-// Password support is reserved for the schema/API, but public password-protected
-// uploads are intentionally blocked until the verify flow is wired end-to-end.
+// Password-protected Drop Zones store only a PBKDF2-SHA256 hash.
+// Public uploads verify the password during upload session start.
 static std::string pbkdf2_sha256_hash_password_local(
     const std::string& password,
     const std::string& salt,
@@ -313,7 +315,67 @@ static std::string pbkdf2_sha256_hash_password_local(
            salt + "$" +
            hex_encode_lower_local(out, kOutLen);
 }
+// -----------------------------------------------------------------------------
+// Password protection helpers
+// -----------------------------------------------------------------------------
+static bool constant_time_string_eq_local(const std::string& a,
+                                              const std::string& b) {
+    if (a.size() != b.size()) return false;
 
+    unsigned char diff = 0;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        diff |= static_cast<unsigned char>(a[i] ^ b[i]);
+    }
+
+    return diff == 0;
+}
+
+    static bool verify_dropzone_password_local(const std::string& stored_hash,
+                                               const std::string& password,
+                                               std::string* err) {
+    if (err) err->clear();
+
+    if (stored_hash.empty()) return true;
+    if (password.empty()) {
+        if (err) *err = "password_required";
+        return false;
+    }
+
+    const std::string prefix = "pbkdf2-sha256$120000$";
+    if (stored_hash.rfind(prefix, 0) != 0) {
+        if (err) *err = "unsupported_password_hash";
+        return false;
+    }
+
+    const std::size_t salt_begin = prefix.size();
+    const std::size_t salt_end = stored_hash.find('$', salt_begin);
+    if (salt_end == std::string::npos || salt_end <= salt_begin) {
+        if (err) *err = "bad_password_hash";
+        return false;
+    }
+
+    const std::string salt = stored_hash.substr(salt_begin, salt_end - salt_begin);
+
+    std::string hash_err;
+    const std::string candidate =
+        pbkdf2_sha256_hash_password_local(password, salt, &hash_err);
+
+    if (candidate.empty()) {
+        if (err) *err = hash_err.empty() ? "password_hash_failed" : hash_err;
+        return false;
+    }
+
+    if (!constant_time_string_eq_local(candidate, stored_hash)) {
+        if (err) *err = "bad_password";
+        return false;
+    }
+
+    return true;
+}
+
+    static std::string dz_password_from_header_local(const httplib::Request& req) {
+    return header_value_local(req, "X-DropZone-Password");
+}
 // -----------------------------------------------------------------------------
 // Input/path helpers
 // -----------------------------------------------------------------------------
@@ -729,6 +791,77 @@ static bool dz_reply_quota_error_local(const DropZoneRoutesDeps& deps,
     });
     return true;
 }
+
+
+static void dz_touch_file_indexes_best_effort_local(const DropZoneRoutesDeps& deps,
+                                                    const std::string& dropzone_id,
+                                                    const std::string& upload_id,
+                                                    const std::string& owner_fp,
+                                                    const std::string& rel_path,
+                                                    const std::filesystem::path& physical_path,
+                                                    std::uint64_t size_bytes,
+                                                    std::int64_t now_ts) {
+    if (!deps.file_locations) {
+        audit_local(deps, "public.dropzones_file_location_touch_fail", "fail", {
+            {"dropzone_id", dropzone_id},
+            {"upload_id", upload_id},
+            {"owner_fp", owner_fp},
+            {"stored_path", rel_path},
+            {"physical_path", physical_path.string()},
+            {"size_bytes", std::to_string(static_cast<unsigned long long>(size_bytes))},
+            {"reason", "file_location_index_missing"}
+        });
+    } else {
+        pqnas::FileLocationRecord frec;
+        frec.fp = owner_fp;
+        frec.logical_rel_path = rel_path;
+        frec.current_pool = "";
+        frec.physical_path = physical_path.string();
+        frec.tier_state = "capacity";
+        frec.size_bytes = size_bytes;
+        frec.mtime_epoch = now_ts;
+        frec.created_epoch = now_ts;
+        frec.updated_epoch = now_ts;
+        frec.version = 1;
+
+        std::string ferr;
+        if (!deps.file_locations->upsert_landing_file(frec, &ferr)) {
+            audit_local(deps, "public.dropzones_file_location_touch_fail", "fail", {
+                {"dropzone_id", dropzone_id},
+                {"upload_id", upload_id},
+                {"owner_fp", owner_fp},
+                {"stored_path", rel_path},
+                {"physical_path", physical_path.string()},
+                {"size_bytes", std::to_string(static_cast<unsigned long long>(size_bytes))},
+                {"reason", "upsert_file_location_failed"},
+                {"detail", ferr}
+            });
+        }
+    }
+
+    if (deps.file_facts) {
+        std::string gerr;
+        if (!deps.file_facts->touch_file_facts(
+                "user",
+                owner_fp,
+                rel_path,
+                size_bytes,
+                now_ts,
+                now_ts,
+                &gerr)) {
+            audit_local(deps, "public.dropzones_file_facts_touch_fail", "fail", {
+                {"dropzone_id", dropzone_id},
+                {"upload_id", upload_id},
+                {"owner_fp", owner_fp},
+                {"stored_path", rel_path},
+                {"size_bytes", std::to_string(static_cast<unsigned long long>(size_bytes))},
+                {"reason", "touch_file_facts_failed"},
+                {"detail", gerr}
+            });
+        }
+    }
+}
+
 void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& deps) {
     // -------------------------------------------------------------------------
     // Owner-authenticated Drop Zone management API
@@ -1243,6 +1376,19 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             return;
         }
 
+        if (!rec.password_hash.empty()) {
+            std::string perr;
+            const std::string supplied_password = dz_password_from_header_local(req);
+
+            if (!verify_dropzone_password_local(rec.password_hash, supplied_password, &perr)) {
+                reply_json_local(deps, res, 403, json{
+                    {"ok", false},
+                    {"error", "password_required"},
+                    {"message", "Valid Drop Zone password required"}
+                });
+                return;
+            }
+        }
         std::string lerr;
         const auto rows = deps.dropzone_index->list_uploads(rec.id, 200, &lerr);
 
@@ -1350,15 +1496,6 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             return;
         }
 
-        if (!rec.password_hash.empty()) {
-            reply_json_local(deps, res, 403, json{
-                {"ok", false},
-                {"error", "password_required"},
-                {"message", "password-protected uploads are not wired yet"}
-            });
-            return;
-        }
-
         auto owner_opt = deps.users->get(rec.owner_fp);
         if (!owner_opt.has_value()) {
             reply_json_local(deps, res, 410, json{
@@ -1387,7 +1524,28 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             });
             return;
         }
+        bool password_verified = false;
 
+        if (!rec.password_hash.empty()) {
+            std::string perr;
+            const std::string supplied_password = body.value("password", "");
+
+            if (!verify_dropzone_password_local(rec.password_hash, supplied_password, &perr)) {
+                audit_local(deps, "public.dropzones_uploads_start_fail", "fail", {
+                    {"dropzone_id", rec.id},
+                    {"reason", perr.empty() ? "bad_password" : perr}
+                });
+
+                reply_json_local(deps, res, 403, json{
+                    {"ok", false},
+                    {"error", "password_required"},
+                    {"message", "Valid Drop Zone password required"}
+                });
+                return;
+            }
+
+            password_verified = true;
+        }
         const std::string original_filename = body.value("filename", "upload.bin");
         const std::string safe_filename = safe_upload_filename_local(original_filename);
 
@@ -1512,6 +1670,7 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             {"chunks_total", chunks_total},
             {"uploader_name", uploader_name},
             {"uploader_message", uploader_message},
+            {"password_verified", password_verified},
             {"created_epoch", now}
         };
 
@@ -1550,7 +1709,7 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
         });
     });
 
-    srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
+srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
         [&](const httplib::Request& req,
             httplib::Response& res,
             const httplib::ContentReader& content_reader) {
@@ -1619,14 +1778,6 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             return;
         }
 
-        if (!rec.password_hash.empty()) {
-            reply_json_local(deps, res, 403, json{
-                {"ok", false},
-                {"error", "password_required"},
-                {"message", "password-protected uploads are not wired yet"}
-            });
-            return;
-        }
 
         const std::string upload_id =
             req.has_param("upload_id") ? req.get_param_value("upload_id") : "";
@@ -1701,6 +1852,15 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
                 {"ok", false},
                 {"error", "forbidden"},
                 {"message", "upload session does not match this Drop Zone"}
+            });
+            return;
+        }
+
+        if (!rec.password_hash.empty() && !meta.value("password_verified", false)) {
+            reply_json_local(deps, res, 403, json{
+                {"ok", false},
+                {"error", "password_required"},
+                {"message", "Valid Drop Zone password required"}
             });
             return;
         }
@@ -2021,15 +2181,6 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             return;
         }
 
-        if (!rec.password_hash.empty()) {
-            reply_json_local(deps, res, 403, json{
-                {"ok", false},
-                {"error", "password_required"},
-                {"message", "password-protected uploads are not wired yet"}
-            });
-            return;
-        }
-
         json body = json::parse(req.body, nullptr, false);
         if (body.is_discarded() || !body.is_object()) {
             reply_json_local(deps, res, 400, json{
@@ -2089,7 +2240,14 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             });
             return;
         }
-
+        if (!rec.password_hash.empty() && !meta.value("password_verified", false)) {
+            reply_json_local(deps, res, 403, json{
+                {"ok", false},
+                {"error", "password_required"},
+                {"message", "Valid Drop Zone password required"}
+            });
+            return;
+        }
         std::uint64_t size_bytes = 0;
         std::uint64_t chunk_size = 0;
         std::uint64_t chunks_total = 0;
@@ -2342,6 +2500,17 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             return;
         }
 
+        dz_touch_file_indexes_best_effort_local(
+            deps,
+            rec.id,
+            upload_id,
+            rec.owner_fp,
+            rel_path,
+            final_norm,
+            assembled_bytes,
+            now
+        );
+
         std::filesystem::remove_all(dir, ec);
 
         audit_local(deps, "public.dropzones_uploads_finish_ok", "ok", {
@@ -2430,12 +2599,22 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
         }
 
         if (!rec.password_hash.empty()) {
-            reply_json_local(deps, res, 403, json{
-                {"ok", false},
-                {"error", "password_required"},
-                {"message", "password-protected uploads are not wired yet"}
-            });
-            return;
+            std::string perr;
+            const std::string supplied_password = dz_password_from_header_local(req);
+
+            if (!verify_dropzone_password_local(rec.password_hash, supplied_password, &perr)) {
+                audit_local(deps, "public.dropzones_upload_fail", "fail", {
+                    {"dropzone_id", rec.id},
+                    {"reason", perr.empty() ? "bad_password" : perr}
+                });
+
+                reply_json_local(deps, res, 403, json{
+                    {"ok", false},
+                    {"error", "password_required"},
+                    {"message", "Valid Drop Zone password required"}
+                });
+                return;
+            }
         }
 
         auto owner_opt = deps.users->get(rec.owner_fp);
@@ -2620,7 +2799,16 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             });
             return;
         }
-
+        dz_touch_file_indexes_best_effort_local(
+            deps,
+            rec.id,
+            "",
+            rec.owner_fp,
+            rel_path,
+            final_norm,
+            upload_bytes,
+            now
+        );
         audit_local(deps, "public.dropzones_upload_ok", "ok", {
             {"dropzone_id", rec.id},
             {"stored_path", rel_path},
@@ -2793,6 +2981,7 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
     }
 
     input[type="text"],
+    input[type="password"],
     .fileInput {
       width: 100%;
       border: 1px solid var(--line);
@@ -2916,6 +3105,13 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
         <strong>Select files to upload</strong>
         <span>Files are uploaded one-by-one into this Drop Zone.</span>
 
+        <div id="passwordBox" class="fieldGrid" style="display:none">
+          <label>
+            Drop Zone password
+            <input id="zonePassword" type="password" maxlength="200" placeholder="Password">
+          </label>
+        </div>
+
         <div class="fieldGrid">
           <label>
             Your name <em>optional</em>
@@ -2977,7 +3173,9 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
       if (maxLen && s.length > maxLen) s = s.slice(0, maxLen);
       return s;
     }
-
+    function currentPassword() {
+      return safeHeaderText(document.getElementById("zonePassword")?.value || "", "", 200);
+    }
     function appendUploadLog(kind, text) {
       const log = document.getElementById("uploadLog");
       if (!log) return null;
@@ -3082,7 +3280,7 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
       } catch (_) {}
     }
 
-    async function uploadFileChunkedToDropZone(file, uploader, message, onProgress) {
+    async function uploadFileChunkedToDropZone(file, uploader, message, password, onProgress) {
       const size = Number(file && file.size != null ? file.size : 0);
       let uploadId = "";
       let uploadedCommitted = 0;
@@ -3094,7 +3292,8 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             filename: safeHeaderText(file.name, "upload.bin", 180),
             size_bytes: size,
             uploader_name: uploader || "",
-            uploader_message: message || ""
+            uploader_message: message || "",
+            password: password || ""
           }
         );
 
@@ -3168,11 +3367,17 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
       }
 
       if (log) log.innerHTML = "";
-      setUploadBusy(true);
 
       const uploader = safeHeaderText(document.getElementById("uploaderName")?.value || "", "", 80);
       const message = safeHeaderText(document.getElementById("uploaderMessage")?.value || "", "", 160);
+      const password = currentPassword();
 
+      if (CURRENT_INFO.password_required && !password) {
+        appendUploadLog("fail", "Enter the Drop Zone password first.");
+        return;
+      }
+
+      setUploadBusy(true);
       const maxFile = Number(CURRENT_INFO.max_file_bytes || 0);
       const maxTotal = Number(CURRENT_INFO.max_total_bytes || 0);
       let localUploaded = Number(CURRENT_INFO.bytes_uploaded || 0);
@@ -3197,7 +3402,7 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
           const row = appendUploadLog("", `${file.name}: starting chunked upload…`);
 
           try {
-            const result = await uploadFileChunkedToDropZone(file, uploader, message, (loaded, total, ctx) => {
+            const result = await uploadFileChunkedToDropZone(file, uploader, message, password, (loaded, total, ctx) => {
               const pct = total > 0 ? Math.min(100, Math.max(0, (loaded / total) * 100)) : 0;
               const chunkText = ctx && ctx.chunksTotal
                 ? `chunk ${(ctx.chunkIndex || 0) + 1}/${ctx.chunksTotal}`
@@ -3265,8 +3470,20 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
       if (!box) return;
 
       try {
+      const headers = {};
+
+      if (CURRENT_INFO && CURRENT_INFO.password_required) {
+        const pwd = currentPassword();
+        if (!pwd) {
+          box.textContent = "Enter password to show uploaded files.";
+          return;
+        }
+        headers["X-DropZone-Password"] = pwd;
+      }
+
         const res = await fetch(`/api/public/dropzones/${encodeURIComponent(TOKEN)}/uploads/list`, {
-          cache: "no-store"
+        cache: "no-store",
+        headers
         });
 
         const json = await res.json().catch(() => null);
@@ -3357,6 +3574,10 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
 
         CURRENT_INFO = json;
         document.getElementById("uploadBox").style.display = "";
+        const passwordBox = document.getElementById("passwordBox");
+        if (passwordBox) {
+          passwordBox.style.display = json.password_required ? "" : "none";
+        }
         await refreshUploadedList();
       } catch (e) {
         setStatus("bad", "Could not load Drop Zone", [

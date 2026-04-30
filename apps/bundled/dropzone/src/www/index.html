@@ -7,35 +7,109 @@
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
-  <main class="dzShell">
-    <section class="dzHero">
+<main class="dzShell">
+  <section class="dzHero">
+    <div>
+      <div class="dzKicker">DNA-Nexus Server</div>
+      <h1>Drop Zone</h1>
+      <p>
+        Secure one-way upload links for outsiders. They can upload files,
+        but they cannot browse, download, rename, or delete anything.
+      </p>
+    </div>
+
+    <button id="createBtn" class="dzPrimary" type="button">
+      Create Drop Zone
+    </button>
+  </section>
+
+  <section class="dzPanel">
+    <div class="dzPanelHead">
       <div>
-        <div class="dzKicker">DNA-Nexus Server</div>
-        <h1>Drop Zone</h1>
-        <p>
-          Secure one-way upload links for outsiders. They can upload files,
-          but they cannot browse, download, rename, or delete anything.
-        </p>
+        <h2>Active Drop Zones</h2>
+        <p id="statusLine">Loading…</p>
+      </div>
+      <button id="refreshBtn" class="dzGhost" type="button">Refresh</button>
+    </div>
+
+    <div id="zonesList" class="dzList"></div>
+  </section>
+</main>
+
+<div id="createModal" class="dzModal hidden" aria-hidden="true">
+  <div class="dzModalBackdrop" data-close-modal="1"></div>
+
+  <section class="dzModalCard" role="dialog" aria-modal="true" aria-labelledby="createTitle">
+    <div class="dzModalHead">
+      <div>
+        <h2 id="createTitle">Create Drop Zone</h2>
+        <p>Generate a secure one-way upload link.</p>
+      </div>
+      <button id="modalCloseBtn" class="dzIconBtn" type="button" aria-label="Close">×</button>
+    </div>
+
+    <form id="createForm" class="dzForm">
+      <label>
+        Name
+        <input id="zoneNameInput" name="name" type="text" maxlength="120" placeholder="Customer files">
+      </label>
+
+      <label>
+        Destination folder
+        <input id="destInput" name="destination_path" type="text" placeholder="Incoming/Drop Zones/Customer files">
+      </label>
+
+      <div class="dzGrid2">
+        <label>
+          Expires in
+          <select id="expiryInput" name="expires_in_seconds">
+            <option value="3600">1 hour</option>
+            <option value="86400" selected>24 hours</option>
+            <option value="604800">7 days</option>
+            <option value="2592000">30 days</option>
+          </select>
+        </label>
+
+        <label>
+          Password <span class="dzHint">optional</span>
+          <input id="passwordInput" name="password" type="password" placeholder="Not wired for public uploads yet">
+        </label>
       </div>
 
-      <button id="createBtn" class="dzPrimary" type="button">
-        Create Drop Zone
-      </button>
-    </section>
+      <div class="dzGrid2">
+        <label>
+          Max file size
+          <select id="maxFileInput" name="max_file_bytes">
+            <option value="0" selected>No limit</option>
+            <option value="104857600">100 MiB</option>
+            <option value="1073741824">1 GiB</option>
+            <option value="5368709120">5 GiB</option>
+            <option value="10737418240">10 GiB</option>
+          </select>
+        </label>
 
-    <section class="dzPanel">
-      <div class="dzPanelHead">
-        <div>
-          <h2>Active Drop Zones</h2>
-          <p id="statusLine">Loading…</p>
-        </div>
-        <button id="refreshBtn" class="dzGhost" type="button">Refresh</button>
+        <label>
+          Max total upload
+          <select id="maxTotalInput" name="max_total_bytes">
+            <option value="0" selected>No limit</option>
+            <option value="1073741824">1 GiB</option>
+            <option value="5368709120">5 GiB</option>
+            <option value="10737418240">10 GiB</option>
+            <option value="53687091200">50 GiB</option>
+          </select>
+        </label>
       </div>
 
-      <div id="zonesList" class="dzList"></div>
-    </section>
-  </main>
+      <div id="createResult" class="dzCreateResult hidden"></div>
 
-  <script src="./app.js"></script>
+      <div class="dzModalActions">
+        <button id="cancelCreateBtn" class="dzGhost" type="button">Cancel</button>
+        <button id="submitCreateBtn" class="dzPrimary" type="submit">Create link</button>
+      </div>
+    </form>
+  </section>
+</div>
+
+<script src="./app.js"></script>
 </body>
 </html>

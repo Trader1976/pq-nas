@@ -3,6 +3,7 @@
 #include "dropzone_index.h"
 #include "httplib.h"
 #include "users_registry.h"
+#include "file_location_index.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -11,6 +12,8 @@
 #include <string>
 
 namespace pqnas {
+
+class GalleryMetaIndex;
 
 // Dependencies injected from main.cpp into the Drop Zone route module.
 //
@@ -27,6 +30,16 @@ namespace pqnas {
 // User/root path resolution stays injected so this module does not need to know
 // how the UsersRegistry maps fingerprints to on-disk storage directories.
 struct DropZoneRoutesDeps {
+    // Metadata/facts index used by the modern file resolver.
+    // Drop Zone writes files directly, so after a successful upload we must
+    // touch file facts or File Manager read/stat may not see the new file.
+    GalleryMetaIndex* file_facts = nullptr;
+
+    // File Manager / storage resolver metadata index.
+    // Drop Zone uploads must touch this so files are openable through normal
+    // /api/v4/files routes after public upload completes.
+    FileLocationIndex* file_locations = nullptr;
+
     // User registry is used for owner auth checks and for validating that the
     // Drop Zone owner still exists, is enabled, and has allocated storage.
     UsersRegistry* users = nullptr;
@@ -82,17 +95,6 @@ struct DropZoneRoutesDeps {
                        const std::map<std::string, std::string>&)> audit_emit;
 };
 
-// Registers all Drop Zone routes onto the provided httplib server.
-//
-// Expected route groups:
-// - /api/v4/dropzones/*
-//   Owner-authenticated management endpoints.
-//
-// - /api/public/dropzones/<token>/*
-//   Public token-based info and upload endpoints.
-//
-// - /dz/<token>
-//   Public browser upload page.
 void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& deps);
 
 } // namespace pqnas
