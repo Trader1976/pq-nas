@@ -1,22 +1,64 @@
 #include "dropzone_routes.h"
 #include "storage_resolver.h"
+
+#include <algorithm>
+#include <array>
 #include <cctype>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
-#include <system_error>
-#include <algorithm>
+#include <iterator>
+#include <nlohmann/json.hpp>
 #include <openssl/evp.h>
 #include <sstream>
-#include <nlohmann/json.hpp>
-#include <array>
-#include <iterator>
 #include <stdexcept>
+#include <system_error>
 
 namespace pqnas {
 namespace {
 
 using json = nlohmann::json;
+
+// -----------------------------------------------------------------------------
+// Drop Zone route-layer architecture
+// -----------------------------------------------------------------------------
+//
+// Drop Zone has two very different surfaces:
+//
+// 1) Owner/authenticated API
+//      /api/v4/dropzones/*
+//
+//    These routes require the normal DNA-Nexus browser session cookie and are
+//    used by the owner to create/list/disable upload links.
+//
+// 2) Public token API
+//      /api/public/dropzones/<token>/*
+//      /dz/<token>
+//
+//    These routes are intentionally unauthenticated. Authorization is the
+//    high-entropy public Drop Zone token. The raw token is never stored in the
+//    index; we hash it and look up by token_hash.
+//
+// Important security rule:
+// - public responses must never expose owner_fp, token_hash, password_hash,
+//   local absolute filesystem paths, or the destination_path.
+// - owner APIs may expose destination_path because the owner already controls it.
+//
+// File writes are staged:
+// - small legacy upload path writes one request body to an atomic temp file
+// - chunked upload path writes chunk sessions under owner_root/.pqnas/...
+// - finish verifies all chunks, assembles to temp, renames into destination,
+//   then records upload metadata in SQLite
+//
+// NOTE:
+// This module uses lexical path containment checks. That is good enough for the
+// current normalized user-storage model, but future hardening should consider
+// symlink-safe openat-style writes if user-controlled symlinks are ever allowed
+// inside storage roots.
+
+// -----------------------------------------------------------------------------
+// Shared response/audit helpers
+// -----------------------------------------------------------------------------
 
 static void reply_json_local(const DropZoneRoutesDeps& deps,
                              httplib::Response& res,
@@ -41,28 +83,32 @@ static void audit_local(const DropZoneRoutesDeps& deps,
 
 static json dropzone_to_json_local(const DropZoneRec& rec) {
     return json{
-            {"id", rec.id},
-            {"name", rec.name},
-            {"destination_path", rec.destination_path},
+        {"id", rec.id},
+        {"name", rec.name},
+        {"destination_path", rec.destination_path},
 
-            {"created_epoch", rec.created_epoch},
-            {"expires_epoch", rec.expires_epoch},
-            {"last_used_epoch", rec.last_used_epoch},
+        {"created_epoch", rec.created_epoch},
+        {"expires_epoch", rec.expires_epoch},
+        {"last_used_epoch", rec.last_used_epoch},
 
-            {"max_file_bytes", rec.max_file_bytes},
-            {"max_total_bytes", rec.max_total_bytes},
-            {"bytes_uploaded", rec.bytes_uploaded},
-            {"upload_count", rec.upload_count},
+        {"max_file_bytes", rec.max_file_bytes},
+        {"max_total_bytes", rec.max_total_bytes},
+        {"bytes_uploaded", rec.bytes_uploaded},
+        {"upload_count", rec.upload_count},
 
-            {"password_required", !rec.password_hash.empty()},
-            {"disabled", rec.disabled}
+        {"password_required", !rec.password_hash.empty()},
+        {"disabled", rec.disabled}
     };
 }
+
 static std::string header_value_local(const httplib::Request& req, const char* key) {
     auto it = req.headers.find(key);
     return (it == req.headers.end()) ? std::string() : it->second;
 }
 
+// Owner-side mutating routes use normal browser cookies, so protect them with
+// Origin/Referer checks. Public token upload routes do not use cookies for auth
+// and intentionally do not require same-origin.
 static bool require_same_origin_for_cookie_mutation_local(
     const httplib::Request& req,
     httplib::Response& res,
@@ -117,6 +163,10 @@ static bool require_same_origin_for_cookie_mutation_local(
     return false;
 }
 
+// -----------------------------------------------------------------------------
+// Crypto / hashing helpers
+// -----------------------------------------------------------------------------
+
 static std::string hex_encode_lower_local(const unsigned char* data, std::size_t len) {
     static constexpr char kHex[] = "0123456789abcdef";
 
@@ -167,6 +217,63 @@ static std::string sha256_hex_string_local(const std::string& s, std::string* er
     return hex_encode_lower_local(md, static_cast<std::size_t>(md_len));
 }
 
+static std::string sha256_hex_file_local(const std::filesystem::path& path, std::string* err) {
+    if (err) err->clear();
+
+    std::ifstream f(path, std::ios::binary);
+    if (!f.good()) {
+        if (err) *err = "open file failed";
+        return {};
+    }
+
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) {
+        if (err) *err = "EVP_MD_CTX_new failed";
+        return {};
+    }
+
+    struct Guard {
+        EVP_MD_CTX* p;
+        ~Guard() { if (p) EVP_MD_CTX_free(p); }
+    } guard{ctx};
+
+    if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1) {
+        if (err) *err = "EVP_DigestInit_ex failed";
+        return {};
+    }
+
+    std::array<char, 1024 * 1024> buf{};
+
+    while (f.good()) {
+        f.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+        const std::streamsize n = f.gcount();
+
+        if (n > 0) {
+            if (EVP_DigestUpdate(ctx, buf.data(), static_cast<std::size_t>(n)) != 1) {
+                if (err) *err = "EVP_DigestUpdate failed";
+                return {};
+            }
+        }
+    }
+
+    if (!f.eof()) {
+        if (err) *err = "read file failed";
+        return {};
+    }
+
+    unsigned char md[EVP_MAX_MD_SIZE];
+    unsigned int md_len = 0;
+
+    if (EVP_DigestFinal_ex(ctx, md, &md_len) != 1) {
+        if (err) *err = "EVP_DigestFinal_ex failed";
+        return {};
+    }
+
+    return hex_encode_lower_local(md, static_cast<std::size_t>(md_len));
+}
+
+// Password support is reserved for the schema/API, but public password-protected
+// uploads are intentionally blocked until the verify flow is wired end-to-end.
 static std::string pbkdf2_sha256_hash_password_local(
     const std::string& password,
     const std::string& salt,
@@ -203,6 +310,10 @@ static std::string pbkdf2_sha256_hash_password_local(
            hex_encode_lower_local(out, kOutLen);
 }
 
+// -----------------------------------------------------------------------------
+// Input/path helpers
+// -----------------------------------------------------------------------------
+
 static std::uint64_t json_u64_local(const json& j,
                                     const char* key,
                                     std::uint64_t defv,
@@ -224,6 +335,10 @@ static std::uint64_t json_u64_local(const json& j,
 
     return defv;
 }
+
+// Public upload filenames are display/convenience input only. They must never
+// be trusted as paths. This strips path components and removes control chars.
+// Destination directory is controlled by the owner-side Drop Zone config.
 static std::string safe_upload_filename_local(std::string name) {
     for (char& c : name) {
         if (c == '\\') c = '/';
@@ -265,6 +380,8 @@ static std::string safe_upload_filename_local(std::string name) {
     return out;
 }
 
+// Lexical containment check used after normalizing owner_root and target path.
+// This prevents "../" path escapes in normalized paths.
 static bool path_has_prefix_components_local(const std::filesystem::path& root,
                                              const std::filesystem::path& child) {
     const auto rnorm = root.lexically_normal();
@@ -306,6 +423,7 @@ static std::filesystem::path unique_child_path_local(const std::filesystem::path
     return dir / ("upload-" + std::to_string(std::time(nullptr)) + "-" + filename);
 }
 
+// Legacy small-upload helper. Chunked upload path uses its own staging flow.
 static bool write_file_atomic_local(const std::filesystem::path& final_path,
                                     const std::string& data,
                                     const std::function<std::string(std::size_t)>& random_b64url,
@@ -357,12 +475,15 @@ static bool write_file_atomic_local(const std::filesystem::path& final_path,
     return true;
 }
 
+// -----------------------------------------------------------------------------
+// Public chunked-upload helpers
+// -----------------------------------------------------------------------------
 
 static constexpr std::uint64_t k_dropzone_chunk_bytes =
-    64ull * 1024ull * 1024ull; // 64 MiB, Cloudflare-safe
+    64ull * 1024ull * 1024ull; // 64 MiB, safely below common 100 MB proxy limits.
 
 static constexpr std::uint64_t k_dropzone_max_session_bytes =
-    64ull * 1024ull * 1024ull * 1024ull; // 64 GiB MVP safety cap
+    64ull * 1024ull * 1024ull * 1024ull; // 64 GiB MVP safety cap.
 
 static bool dz_upload_id_ok_local(const std::string& s) {
     if (s.size() < 16 || s.size() > 96) return false;
@@ -380,6 +501,9 @@ static bool dz_upload_id_ok_local(const std::string& s) {
     return true;
 }
 
+// Upload sessions live below the owner storage root so partially uploaded files
+// stay on the same storage volume as the final destination. This avoids
+// cross-device rename surprises and keeps cleanup scoped to the owner.
 static std::filesystem::path dz_upload_session_dir_local(const std::filesystem::path& owner_root,
                                                          const std::string& dropzone_id,
                                                          const std::string& upload_id) {
@@ -545,67 +669,14 @@ static std::uint64_t dz_expected_chunk_bytes_local(std::uint64_t size_bytes,
 
     return size_bytes - already;
 }
-static std::string sha256_hex_file_local(const std::filesystem::path& path, std::string* err) {
-    if (err) err->clear();
-
-    std::ifstream f(path, std::ios::binary);
-    if (!f.good()) {
-        if (err) *err = "open file failed";
-        return {};
-    }
-
-    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
-    if (!ctx) {
-        if (err) *err = "EVP_MD_CTX_new failed";
-        return {};
-    }
-
-    struct Guard {
-        EVP_MD_CTX* p;
-        ~Guard() { if (p) EVP_MD_CTX_free(p); }
-    } guard{ctx};
-
-    if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1) {
-        if (err) *err = "EVP_DigestInit_ex failed";
-        return {};
-    }
-
-    std::array<char, 1024 * 1024> buf{};
-
-    while (f.good()) {
-        f.read(buf.data(), static_cast<std::streamsize>(buf.size()));
-        const std::streamsize n = f.gcount();
-
-        if (n > 0) {
-            if (EVP_DigestUpdate(ctx, buf.data(), static_cast<std::size_t>(n)) != 1) {
-                if (err) *err = "EVP_DigestUpdate failed";
-                return {};
-            }
-        }
-    }
-
-    if (!f.eof()) {
-        if (err) *err = "read file failed";
-        return {};
-    }
-
-    unsigned char md[EVP_MAX_MD_SIZE];
-    unsigned int md_len = 0;
-
-    if (EVP_DigestFinal_ex(ctx, md, &md_len) != 1) {
-        if (err) *err = "EVP_DigestFinal_ex failed";
-        return {};
-    }
-
-    return hex_encode_lower_local(md, static_cast<std::size_t>(md_len));
-}
 
 } // namespace
 
 void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& deps) {
-    // MVP/stub endpoint:
-    // - authenticated user only
-    // - returns an empty list until Drop Zone persistence is added
+    // -------------------------------------------------------------------------
+    // Owner-authenticated Drop Zone management API
+    // -------------------------------------------------------------------------
+
     srv.Get("/api/v4/dropzones/list", [&](const httplib::Request& req, httplib::Response& res) {
         if (!deps.users || !deps.cookie_key || !deps.require_user_auth_users_actor) {
             reply_json_local(deps, res, 500, json{
@@ -763,8 +834,8 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
         if (expires_in < kMinExpirySec) expires_in = kMinExpirySec;
         if (expires_in > kMaxExpirySec) expires_in = kMaxExpirySec;
 
-        constexpr std::uint64_t kMaxConfiguredFileBytes = 1024ULL * 1024ULL * 1024ULL * 1024ULL;      // 1 TiB
-        constexpr std::uint64_t kMaxConfiguredTotalBytes = 10ULL * 1024ULL * 1024ULL * 1024ULL * 1024ULL; // 10 TiB
+        constexpr std::uint64_t kMaxConfiguredFileBytes = 1024ULL * 1024ULL * 1024ULL * 1024ULL;          // 1 TiB.
+        constexpr std::uint64_t kMaxConfiguredTotalBytes = 10ULL * 1024ULL * 1024ULL * 1024ULL * 1024ULL; // 10 TiB.
 
         const std::uint64_t max_file_bytes =
             json_u64_local(in, "max_file_bytes", 0, kMaxConfiguredFileBytes);
@@ -952,6 +1023,10 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
         });
     });
 
+    // -------------------------------------------------------------------------
+    // Public token API
+    // -------------------------------------------------------------------------
+
     srv.Get(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/info)", [&](const httplib::Request& req, httplib::Response& res) {
         if (!deps.dropzone_index || !deps.now_epoch) {
             reply_json_local(deps, res, 500, json{
@@ -1027,8 +1102,6 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
 
         res.set_header("Cache-Control", "no-store");
 
-        // Public-safe metadata only.
-        // Do NOT expose owner_fp, token_hash, password_hash, or destination_path.
         reply_json_local(deps, res, 200, json{
             {"ok", true},
             {"name", rec.name},
@@ -1149,8 +1222,12 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             {"uploads", uploads}
         });
     });
-    
-        srv.Post(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/start)", [&](const httplib::Request& req, httplib::Response& res) {
+
+    // -------------------------------------------------------------------------
+    // Public chunked upload API
+    // -------------------------------------------------------------------------
+
+    srv.Post(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/start)", [&](const httplib::Request& req, httplib::Response& res) {
         if (!deps.dropzone_index || !deps.now_epoch || !deps.users ||
             !deps.user_dir_for_fp || !deps.random_b64url) {
             reply_json_local(deps, res, 500, json{
@@ -2182,6 +2259,8 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
         });
     });
 
+    // Legacy one-shot upload endpoint kept for compatibility/testing. Browser UI
+    // uses chunked upload now, which avoids proxy body-size limits.
     srv.Post(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/upload)", [&](const httplib::Request& req, httplib::Response& res) {
         if (!deps.dropzone_index || !deps.now_epoch || !deps.users || !deps.user_dir_for_fp) {
             reply_json_local(deps, res, 500, json{
@@ -2429,6 +2508,14 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             {"sha256", upload.sha256}
         });
     });
+
+    // -------------------------------------------------------------------------
+    // Public browser upload page
+    // -------------------------------------------------------------------------
+    //
+    // This is embedded for MVP simplicity. If Drop Zone UI grows much more,
+    // move this page into apps/bundled/dropzone or a static resource to keep C++
+    // route code smaller.
 
     srv.Get(R"(/dz/([A-Za-z0-9_-]{20,160}))", [&](const httplib::Request& req, httplib::Response& res) {
         const std::string token = req.matches[1];
@@ -2774,7 +2861,6 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
       return row;
     }
 
-
     function setUploadBusy(on) {
       const btn = document.getElementById("uploadBtn");
       const input = document.getElementById("fileInput");
@@ -2939,7 +3025,6 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
       }
     }
 
-
     async function uploadSelectedFiles() {
       const input = document.getElementById("fileInput");
       const log = document.getElementById("uploadLog");
@@ -3036,7 +3121,6 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
         setUploadBusy(false);
       }
     }
-
 
     function fmtEpoch(epoch) {
       const n = Number(epoch || 0);
@@ -3160,9 +3244,6 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
 </body>
 </html>)HTML";
     });
-
-
 }
-
 
 } // namespace pqnas

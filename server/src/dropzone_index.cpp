@@ -2,9 +2,27 @@
 
 #include <sqlite3.h>
 
+#include <system_error>
+#include <utility>
+
 namespace pqnas {
 namespace {
 
+// DropZoneIndex is the persistence/index layer for Drop Zone links.
+//
+// Keep this file intentionally boring:
+// - no HTTP/request handling
+// - no path normalization
+// - no auth decisions
+// - no public/private response shaping
+//
+// Route code owns policy decisions. This class only stores and retrieves
+// durable Drop Zone state in SQLite.
+//
+// Important security boundary:
+// Public Drop Zone URLs are never stored directly. The database stores only
+// token_hash, so a leaked DB does not immediately reveal usable public upload
+// links. The route layer hashes incoming tokens before lookup.
 static bool exec_sql(sqlite3* db, const char* sql, std::string* err) {
     if (err) err->clear();
 
@@ -26,6 +44,8 @@ static std::string col_text(sqlite3_stmt* stmt, int col) {
     return p ? std::string(reinterpret_cast<const char*>(p)) : std::string{};
 }
 
+// Centralized row mapping keeps SELECT column ordering explicit.
+// If kSelectDropZoneColumns changes, update this mapper at the same time.
 static DropZoneRec row_to_dropzone(sqlite3_stmt* stmt) {
     DropZoneRec rec;
 
@@ -50,6 +70,8 @@ static DropZoneRec row_to_dropzone(sqlite3_stmt* stmt) {
     return rec;
 }
 
+// Reused SELECT projection for Drop Zone rows.
+// This avoids each query having its own subtly different column order.
 static const char* kSelectDropZoneColumns =
     "SELECT "
     "  id, token_hash, owner_fp, name, destination_path, password_hash, "
@@ -96,8 +118,15 @@ bool DropZoneIndex::open(std::string* err) {
         return false;
     }
 
+    // WAL lets readers continue while a writer commits an upload record.
+    // NORMAL is a good durability/performance tradeoff for this index:
+    // uploaded file bytes live on disk separately, while this DB stores link
+    // metadata, counters, and audit-friendly upload records.
     if (!exec_sql(db_, "PRAGMA journal_mode=WAL;", err)) return false;
     if (!exec_sql(db_, "PRAGMA synchronous=NORMAL;", err)) return false;
+
+    // Drop Zone uploads can finish concurrently with owner/admin list views.
+    // A busy timeout avoids immediate SQLITE_BUSY failures during short writes.
     if (!exec_sql(db_, "PRAGMA busy_timeout=5000;", err)) return false;
 
     return true;
@@ -113,6 +142,28 @@ bool DropZoneIndex::init_schema(std::string* err) {
         return false;
     }
 
+    // Schema design:
+    //
+    // drop_zones:
+    //   One row per public upload link.
+    //
+    //   token_hash is unique and is the public lookup key. The raw token is
+    //   returned once to the owner on creation and is never persisted here.
+    //
+    //   bytes_uploaded/upload_count are denormalized counters. They make list
+    //   views cheap and let the public info endpoint show progress without
+    //   scanning all uploads every time.
+    //
+    // drop_zone_uploads:
+    //   One row per completed upload.
+    //
+    //   stored_path is intentionally stored here for owner/admin workflows and
+    //   future virus-scan/quarantine tooling. The public route must not expose
+    //   stored_path; it should return only a public-safe projection such as
+    //   stored_filename, size, timestamp, and optional uploader name.
+    //
+    // scan_status is included now so malware scanning can be added later without
+    // changing the core upload-record model.
     static const char* kSchema = R"SQL(
 CREATE TABLE IF NOT EXISTS drop_zones (
     id                TEXT PRIMARY KEY,
@@ -186,6 +237,9 @@ bool DropZoneIndex::insert(const DropZoneRec& rec, std::string* err) {
         return false;
     }
 
+    // Creation is a single-row insert. Validation of owner, destination path,
+    // expiry bounds, and generated token strength belongs in the route/service
+    // layer before constructing DropZoneRec.
     static const char* kSql =
         "INSERT INTO drop_zones ("
         "  id, token_hash, owner_fp, name, destination_path, password_hash, "
@@ -268,7 +322,8 @@ std::optional<DropZoneRec> DropZoneIndex::get_by_id(const std::string& id, std::
     return rec;
 }
 
-std::optional<DropZoneRec> DropZoneIndex::get_by_token_hash(const std::string& token_hash, std::string* err) {
+std::optional<DropZoneRec> DropZoneIndex::get_by_token_hash(const std::string& token_hash,
+                                                            std::string* err) {
     std::lock_guard<std::mutex> lk(mu_);
 
     if (err) err->clear();
@@ -278,6 +333,8 @@ std::optional<DropZoneRec> DropZoneIndex::get_by_token_hash(const std::string& t
         return std::nullopt;
     }
 
+    // Public uploads resolve links by token hash only. The caller must perform
+    // disabled/expired/password checks after retrieving the row.
     const std::string sql = std::string(kSelectDropZoneColumns) + "WHERE token_hash = ?1";
 
     sqlite3_stmt* stmt = nullptr;
@@ -321,6 +378,8 @@ std::vector<DropZoneRec> DropZoneIndex::list_owner(const std::string& owner_fp,
         return out;
     }
 
+    // Clamp list queries so an admin/user page cannot accidentally pull an
+    // unbounded number of rows into memory.
     if (limit < 1) limit = 1;
     if (limit > 500) limit = 500;
 
@@ -371,6 +430,8 @@ bool DropZoneIndex::set_disabled(const std::string& id,
         return false;
     }
 
+    // Owner scoping is enforced in SQL, not just in route code. That way an
+    // accidental caller bug cannot disable another user's Drop Zone by id alone.
     static const char* kSql =
         "UPDATE drop_zones "
         "SET disabled = ?1 "
@@ -404,6 +465,7 @@ bool DropZoneIndex::set_disabled(const std::string& id,
 
     return true;
 }
+
 bool DropZoneIndex::record_upload(const DropZoneUploadRec& rec, std::string* err) {
     std::lock_guard<std::mutex> lk(mu_);
 
@@ -414,6 +476,15 @@ bool DropZoneIndex::record_upload(const DropZoneUploadRec& rec, std::string* err
         return false;
     }
 
+    // A completed upload has two pieces of DB state:
+    //   1. append immutable upload history row
+    //   2. increment Drop Zone counters
+    //
+    // Keep these in one transaction so public/owner views never observe a file
+    // history row without matching counters, or counters without a history row.
+    //
+    // BEGIN IMMEDIATE takes the write lock up front. This prevents two finishing
+    // uploads from racing the denormalized bytes_uploaded/upload_count counters.
     if (!exec_sql(db_, "BEGIN IMMEDIATE;", err)) {
         return false;
     }
@@ -510,7 +581,8 @@ bool DropZoneIndex::record_upload(const DropZoneUploadRec& rec, std::string* err
 
     return true;
 }
-    std::vector<DropZoneUploadRec> DropZoneIndex::list_uploads(const std::string& drop_zone_id,
+
+std::vector<DropZoneUploadRec> DropZoneIndex::list_uploads(const std::string& drop_zone_id,
                                                            std::size_t limit,
                                                            std::string* err) {
     std::lock_guard<std::mutex> lk(mu_);
@@ -529,6 +601,8 @@ bool DropZoneIndex::record_upload(const DropZoneUploadRec& rec, std::string* err
         return out;
     }
 
+    // Used by the public page to show "already uploaded" status. Keep this
+    // bounded. The route layer should still project only public-safe fields.
     if (limit == 0) limit = 100;
     if (limit > 500) limit = 500;
 
@@ -559,27 +633,22 @@ bool DropZoneIndex::record_upload(const DropZoneUploadRec& rec, std::string* err
         if (rc == SQLITE_ROW) {
             DropZoneUploadRec rec;
 
-            auto col_text = [&](int idx) -> std::string {
-                const unsigned char* p = sqlite3_column_text(stmt, idx);
-                return p ? reinterpret_cast<const char*>(p) : std::string{};
-            };
-
-            rec.id = col_text(0);
-            rec.drop_zone_id = col_text(1);
-            rec.original_filename = col_text(2);
-            rec.stored_filename = col_text(3);
-            rec.stored_path = col_text(4);
+            rec.id = col_text(stmt, 0);
+            rec.drop_zone_id = col_text(stmt, 1);
+            rec.original_filename = col_text(stmt, 2);
+            rec.stored_filename = col_text(stmt, 3);
+            rec.stored_path = col_text(stmt, 4);
 
             rec.size_bytes = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 5));
-            rec.sha256 = col_text(6);
-            rec.uploader_name = col_text(7);
-            rec.uploader_message = col_text(8);
+            rec.sha256 = col_text(stmt, 6);
+            rec.uploader_name = col_text(stmt, 7);
+            rec.uploader_message = col_text(stmt, 8);
 
-            rec.remote_ip = col_text(9);
-            rec.user_agent = col_text(10);
+            rec.remote_ip = col_text(stmt, 9);
+            rec.user_agent = col_text(stmt, 10);
 
             rec.created_epoch = static_cast<std::int64_t>(sqlite3_column_int64(stmt, 11));
-            rec.scan_status = col_text(12);
+            rec.scan_status = col_text(stmt, 12);
 
             out.push_back(std::move(rec));
             continue;
@@ -597,4 +666,5 @@ bool DropZoneIndex::record_upload(const DropZoneUploadRec& rec, std::string* err
     sqlite3_finalize(stmt);
     return out;
 }
+
 } // namespace pqnas
