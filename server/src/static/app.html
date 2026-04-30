@@ -130,21 +130,45 @@
             gap: 10px;
         }
 
-        .appFrameWrap{
+        .homeContent{
+            position: relative;
+            z-index: 5;
             flex: 1 1 auto;
             min-height: 0;
-            display:flex;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        .appFrameDock {
+            display: none;
+            width: 100%;
+            height: 100%;
+            min-height: 0;
+            overflow: hidden;
+            position: relative;
+            z-index: 1;
+        }
+
+        #homeBlurb.appHostBlurb .appFrameDock {
+            display: block;
+        }
+
+        .appFrameWrap{
+            display: none;
+            width: 100%;
+            height: 100%;
+            min-height: 0;
             border: 0;
             border-radius: 0;
             background: transparent;
             overflow: hidden;
         }
-        .appFrameDock {
-            width: 100%;
-            height: 100%;
-            min-height: 0;
-            overflow: hidden;
+
+        .appFrameWrap.active{
+            display: flex;
+            flex: 1 1 auto;
         }
+
         .appFrame{
             flex: 1 1 auto;
             min-height: 0;
@@ -155,6 +179,17 @@
             border-radius: 0;
             background: transparent;
             animation: appIn 180ms ease-out;
+        }
+
+        #homeBlurb:not(.appHostBlurb) .appFrameDock,
+        #homeBlurb:not(.appHostBlurb) .appFrameWrap,
+        #homeBlurb:not(.appHostBlurb) .appFrame {
+            display: none !important;
+            pointer-events: none !important;
+            visibility: hidden !important;
+            height: 0 !important;
+            min-height: 0 !important;
+            overflow: hidden !important;
         }
 
         @keyframes appIn {
@@ -217,6 +252,7 @@
 
         .desktopSurface{
             position: relative;
+            z-index: 10;
             flex: 1 1 auto;
             min-height: 260px;
             height: 100%;
@@ -228,6 +264,7 @@
 
         .desktopIcon{
             position: absolute;
+            z-index: 20;
             width: 72px;
             user-select: none;
             cursor: default;
@@ -253,6 +290,7 @@
         }
 
         .desktopIcon.selected{
+            z-index: 30;
             background: rgba(var(--fg-rgb),0.10);
             border-color: rgba(var(--fg-rgb),0.22);
             box-shadow: 0 0 18px rgba(var(--fg-rgb),0.10);
