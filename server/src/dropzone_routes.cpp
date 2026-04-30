@@ -1,5 +1,6 @@
 #include "dropzone_routes.h"
 #include "storage_resolver.h"
+#include "user_quota.h"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +14,9 @@
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
+#include <cstdint>
+#include <functional>
+#include <map>
 
 namespace pqnas {
 namespace {
@@ -505,11 +509,12 @@ static bool dz_upload_id_ok_local(const std::string& s) {
 // stay on the same storage volume as the final destination. This avoids
 // cross-device rename surprises and keeps cleanup scoped to the owner.
 static std::filesystem::path dz_upload_session_dir_local(const std::filesystem::path& owner_root,
-                                                         const std::string& dropzone_id,
-                                                         const std::string& upload_id) {
-    return owner_root /
-           ".pqnas" /
-           "dropzone_upload_sessions" /
+                                                             const std::string& owner_fp,
+                                                             const std::string& dropzone_id,
+                                                             const std::string& upload_id) {
+    return owner_root.parent_path() /
+           ".pqnas_dropzone_upload_sessions" /
+           owner_fp /
            dropzone_id /
            upload_id;
 }
@@ -671,7 +676,59 @@ static std::uint64_t dz_expected_chunk_bytes_local(std::uint64_t size_bytes,
 }
 
 } // namespace
+static bool dz_reply_quota_error_local(const DropZoneRoutesDeps& deps,
+                                       httplib::Response& res,
+                                       const std::string& event,
+                                       const std::string& dropzone_id,
+                                       const std::string& upload_id,
+                                       const std::string& owner_fp,
+                                       const std::string& rel_path,
+                                       std::uint64_t incoming_bytes,
+                                       const pqnas::QuotaCheckResult& qc) {
+    if (qc.ok) return false;
 
+    const int http = (qc.error == "quota_exceeded") ? 507 :
+                     (qc.error == "storage_unallocated") ? 403 :
+                     (qc.error == "invalid_path") ? 400 : 500;
+
+    audit_local(deps, event, "fail", {
+        {"dropzone_id", dropzone_id},
+        {"upload_id", upload_id},
+        {"owner_fp", owner_fp},
+        {"reason", qc.error},
+        {"rel_path", rel_path},
+        {"incoming_bytes", std::to_string(static_cast<unsigned long long>(incoming_bytes))},
+        {"existing_bytes", std::to_string(static_cast<unsigned long long>(qc.existing_bytes))},
+        {"used_bytes", std::to_string(static_cast<unsigned long long>(qc.used_bytes))},
+        {"quota_bytes", std::to_string(static_cast<unsigned long long>(qc.quota_bytes))},
+        {"would_used_bytes", std::to_string(static_cast<unsigned long long>(qc.would_used_bytes))}
+    });
+
+    if (qc.error == "quota_exceeded") {
+        reply_json_local(deps, res, http, json{
+            {"ok", false},
+            {"error", "quota_exceeded"},
+            {"message", "Upload cannot be completed because the destination storage limit has been reached."}
+        });
+        return true;
+    }
+
+    if (qc.error == "storage_unallocated") {
+       reply_json_local(deps, res, http, json{
+            {"ok", false},
+            {"error", "storage_unavailable"},
+            {"message", "Upload cannot be completed because the destination storage is unavailable."}
+        });
+        return true;
+    }
+
+    reply_json_local(deps, res, http, json{
+        {"ok", false},
+        {"error", "quota_check_failed"},
+        {"message", "Upload cannot be completed."}
+    });
+    return true;
+}
 void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& deps) {
     // -------------------------------------------------------------------------
     // Owner-authenticated Drop Zone management API
@@ -1393,12 +1450,33 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             });
             return;
         }
+        const std::string quota_rel_path =
+            (std::filesystem::path(rec.destination_path) / safe_filename).generic_string();
 
+        pqnas::QuotaCheckResult qc = pqnas::quota_check_for_upload_v1(
+            *deps.users,
+            rec.owner_fp,
+            owner_root,
+            quota_rel_path,
+            size_bytes
+        );
+
+        if (dz_reply_quota_error_local(deps,
+                                       res,
+                                       "public.dropzones_uploads_start_quota_fail",
+                                       rec.id,
+                                       "",
+                                       rec.owner_fp,
+                                       quota_rel_path,
+                                       size_bytes,
+                                       qc)) {
+            return;
+        }
         const std::uint64_t chunks_total =
             (size_bytes + k_dropzone_chunk_bytes - 1) / k_dropzone_chunk_bytes;
 
         const std::string upload_id = deps.random_b64url(24);
-        const std::filesystem::path dir = dz_upload_session_dir_local(owner_root, rec.id, upload_id);
+        const std::filesystem::path dir = dz_upload_session_dir_local(owner_root, rec.owner_fp, rec.id, upload_id);
 
         std::error_code ec;
         std::filesystem::create_directories(dir / "chunks", ec);
@@ -1603,7 +1681,7 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
         owner_root = owner_root.lexically_normal();
 
         const std::filesystem::path dir =
-            dz_upload_session_dir_local(owner_root, rec.id, upload_id);
+            dz_upload_session_dir_local(owner_root, rec.owner_fp, rec.id, upload_id);
 
         json meta;
         std::string rerr;
@@ -1843,7 +1921,7 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
         std::filesystem::path owner_root = deps.user_dir_for_fp(*deps.users, rec.owner_fp);
         owner_root = owner_root.lexically_normal();
 
-        const auto dir = dz_upload_session_dir_local(owner_root, rec.id, upload_id);
+        const auto dir = dz_upload_session_dir_local(owner_root, rec.owner_fp, rec.id, upload_id);
 
         std::error_code ec;
         const auto removed = std::filesystem::remove_all(dir, ec);
@@ -1988,7 +2066,7 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
         owner_root = owner_root.lexically_normal();
 
         const std::filesystem::path dir =
-            dz_upload_session_dir_local(owner_root, rec.id, upload_id);
+            dz_upload_session_dir_local(owner_root, rec.owner_fp, rec.id, upload_id);
 
         json meta;
         std::string rerr;
@@ -2127,7 +2205,32 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             });
             return;
         }
+        std::string quota_rel_path;
+        try {
+            quota_rel_path = std::filesystem::relative(final_norm, owner_root).generic_string();
+        } catch (...) {
+            quota_rel_path = (std::filesystem::path(rec.destination_path) / final_norm.filename()).generic_string();
+        }
 
+        pqnas::QuotaCheckResult qc = pqnas::quota_check_for_upload_v1(
+            *deps.users,
+            rec.owner_fp,
+            owner_root,
+            quota_rel_path,
+            size_bytes
+        );
+
+        if (dz_reply_quota_error_local(deps,
+                                       res,
+                                       "public.dropzones_uploads_finish_quota_fail",
+                                       rec.id,
+                                       upload_id,
+                                       rec.owner_fp,
+                                       quota_rel_path,
+                                       size_bytes,
+                                       qc)) {
+            return;
+        }
         const std::filesystem::path tmp =
             final_norm.parent_path() /
             (final_norm.filename().string() + ".dropzone." + deps.random_b64url(8) + ".tmp");
@@ -2431,7 +2534,32 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             });
             return;
         }
+        std::string quota_rel_path;
+        try {
+            quota_rel_path = std::filesystem::relative(final_norm, owner_root).generic_string();
+        } catch (...) {
+            quota_rel_path = (std::filesystem::path(rec.destination_path) / final_norm.filename()).generic_string();
+        }
 
+        pqnas::QuotaCheckResult qc = pqnas::quota_check_for_upload_v1(
+            *deps.users,
+            rec.owner_fp,
+            owner_root,
+            quota_rel_path,
+            upload_bytes
+        );
+
+        if (dz_reply_quota_error_local(deps,
+                                       res,
+                                       "public.dropzones_upload_quota_fail",
+                                       rec.id,
+                                       "",
+                                       rec.owner_fp,
+                                       quota_rel_path,
+                                       upload_bytes,
+                                       qc)) {
+            return;
+        }
         std::string werr;
         if (!write_file_atomic_local(final_norm, req.body, deps.random_b64url, &werr)) {
             audit_local(deps, "public.dropzones_upload_fail", "fail", {
