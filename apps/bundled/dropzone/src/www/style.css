@@ -1,0 +1,138 @@
+:root {
+  color-scheme: dark;
+  --bg: #080a0f;
+  --panel: rgba(255,255,255,.055);
+  --panel2: rgba(255,255,255,.08);
+  --text: #f3f6ff;
+  --muted: rgba(243,246,255,.66);
+  --line: rgba(255,255,255,.13);
+  --accent: #ff9f1c;
+  --good: #50fa7b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(255,159,28,.22), transparent 34rem),
+    radial-gradient(circle at bottom right, rgba(80,250,123,.10), transparent 34rem),
+    var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.dzShell {
+  width: min(1120px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 28px 0;
+}
+
+.dzHero {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: center;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: linear-gradient(135deg, rgba(255,255,255,.09), rgba(255,255,255,.035));
+  box-shadow: 0 24px 70px rgba(0,0,0,.38);
+}
+
+.dzKicker {
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+h1, h2, p {
+  margin: 0;
+}
+
+h1 {
+  margin-top: 8px;
+  font-size: clamp(34px, 5vw, 64px);
+  line-height: .95;
+}
+
+.dzHero p {
+  margin-top: 14px;
+  max-width: 680px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.dzPanel {
+  margin-top: 18px;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--panel);
+}
+
+.dzPanelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.dzPanelHead p {
+  margin-top: 5px;
+  color: var(--muted);
+}
+
+button {
+  border: 0;
+  border-radius: 14px;
+  padding: 11px 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.dzPrimary {
+  background: var(--accent);
+  color: #160d00;
+  min-width: 170px;
+}
+
+.dzGhost {
+  background: var(--panel2);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+
+.dzList {
+  margin-top: 18px;
+  display: grid;
+  gap: 12px;
+}
+
+.dzEmpty,
+.dzCard {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(0,0,0,.20);
+  padding: 16px;
+}
+
+.dzEmpty {
+  color: var(--muted);
+}
+
+.dzCardTitle {
+  font-weight: 900;
+}
+
+.dzCardMeta {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 14px;
+}

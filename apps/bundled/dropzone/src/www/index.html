@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>DNA-Nexus • Drop Zone</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <main class="dzShell">
+    <section class="dzHero">
+      <div>
+        <div class="dzKicker">DNA-Nexus Server</div>
+        <h1>Drop Zone</h1>
+        <p>
+          Secure one-way upload links for outsiders. They can upload files,
+          but they cannot browse, download, rename, or delete anything.
+        </p>
+      </div>
+
+      <button id="createBtn" class="dzPrimary" type="button">
+        Create Drop Zone
+      </button>
+    </section>
+
+    <section class="dzPanel">
+      <div class="dzPanelHead">
+        <div>
+          <h2>Active Drop Zones</h2>
+          <p id="statusLine">Loading…</p>
+        </div>
+        <button id="refreshBtn" class="dzGhost" type="button">Refresh</button>
+      </div>
+
+      <div id="zonesList" class="dzList"></div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+{
+  "id": "dropzone",
+  "name": "Drop Zone",
+  "version": "0.1.0",
+  "entry": "www/index.html",
+  "api_base": "/api/v4/dropzones",
+  "permissions": [],
+  "category": "sharing",
+  "surfaces": {
+    "desktop": {
+      "enabled": true
+    },
+    "launcher": {
+      "enabled": true
+    },
+    "sidebar": {
+      "enabled": false,
+      "user_pinnable": true,
+      "section": "sharing",
+      "label": "Drop Zone",
+      "order": 80
+    }
+  },
+  "icons": {
+    "win_classic": "www/icon.svg",
+    "cpunk_orange": "www/icon.svg",
+    "dark": "www/icon.svg",
+    "bright": "www/icon.svg",
+    "default": "www/icon.svg"
+  }
+}
