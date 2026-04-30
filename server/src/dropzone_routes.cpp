@@ -9,7 +9,6 @@
 #include <openssl/evp.h>
 #include <sstream>
 #include <nlohmann/json.hpp>
-#include <ctime>
 #include <array>
 #include <iterator>
 #include <stdexcept>
@@ -40,7 +39,7 @@ static void audit_local(const DropZoneRoutesDeps& deps,
     if (deps.audit_emit) deps.audit_emit(event, outcome, fields);
 }
 
-    static json dropzone_to_json_local(const DropZoneRec& rec) {
+static json dropzone_to_json_local(const DropZoneRec& rec) {
     return json{
             {"id", rec.id},
             {"name", rec.name},
@@ -359,14 +358,13 @@ static bool write_file_atomic_local(const std::filesystem::path& final_path,
 }
 
 
-} // namespace
 static constexpr std::uint64_t k_dropzone_chunk_bytes =
     64ull * 1024ull * 1024ull; // 64 MiB, Cloudflare-safe
 
 static constexpr std::uint64_t k_dropzone_max_session_bytes =
     64ull * 1024ull * 1024ull * 1024ull; // 64 GiB MVP safety cap
 
-[[maybe_unused]] static bool dz_upload_id_ok_local(const std::string& s) {
+static bool dz_upload_id_ok_local(const std::string& s) {
     if (s.size() < 16 || s.size() > 96) return false;
 
     for (unsigned char c : s) {
@@ -392,7 +390,7 @@ static std::filesystem::path dz_upload_session_dir_local(const std::filesystem::
            upload_id;
 }
 
-[[maybe_unused]] static std::string dz_chunk_name_local(std::uint64_t idx) {
+static std::string dz_chunk_name_local(std::uint64_t idx) {
     std::string n = std::to_string(static_cast<unsigned long long>(idx));
     if (n.size() < 8) n = std::string(8 - n.size(), '0') + n;
     return n + ".part";
@@ -443,7 +441,7 @@ static bool dz_write_json_file_local(const std::filesystem::path& path,
     return true;
 }
 
-[[maybe_unused]] static bool dz_read_json_file_local(const std::filesystem::path& path,
+static bool dz_read_json_file_local(const std::filesystem::path& path,
                                     json* out,
                                     std::string* err) {
     if (err) err->clear();
@@ -514,7 +512,7 @@ static bool dz_json_u64_local(const json& j,
     return false;
 }
 
-[[maybe_unused]] static bool dz_header_u64_local(const httplib::Request& req,
+static bool dz_header_u64_local(const httplib::Request& req,
                                 const char* name,
                                 std::uint64_t* out) {
     if (!out || !name) return false;
@@ -535,7 +533,7 @@ static bool dz_json_u64_local(const json& j,
     }
 }
 
-[[maybe_unused]] static std::uint64_t dz_expected_chunk_bytes_local(std::uint64_t size_bytes,
+static std::uint64_t dz_expected_chunk_bytes_local(std::uint64_t size_bytes,
                                                    std::uint64_t chunk_size,
                                                    std::uint64_t chunks_total,
                                                    std::uint64_t idx) {
@@ -547,7 +545,63 @@ static bool dz_json_u64_local(const json& j,
 
     return size_bytes - already;
 }
-static std::string sha256_hex_file_local(const std::filesystem::path& path, std::string* err);
+static std::string sha256_hex_file_local(const std::filesystem::path& path, std::string* err) {
+    if (err) err->clear();
+
+    std::ifstream f(path, std::ios::binary);
+    if (!f.good()) {
+        if (err) *err = "open file failed";
+        return {};
+    }
+
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) {
+        if (err) *err = "EVP_MD_CTX_new failed";
+        return {};
+    }
+
+    struct Guard {
+        EVP_MD_CTX* p;
+        ~Guard() { if (p) EVP_MD_CTX_free(p); }
+    } guard{ctx};
+
+    if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1) {
+        if (err) *err = "EVP_DigestInit_ex failed";
+        return {};
+    }
+
+    std::array<char, 1024 * 1024> buf{};
+
+    while (f.good()) {
+        f.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+        const std::streamsize n = f.gcount();
+
+        if (n > 0) {
+            if (EVP_DigestUpdate(ctx, buf.data(), static_cast<std::size_t>(n)) != 1) {
+                if (err) *err = "EVP_DigestUpdate failed";
+                return {};
+            }
+        }
+    }
+
+    if (!f.eof()) {
+        if (err) *err = "read file failed";
+        return {};
+    }
+
+    unsigned char md[EVP_MAX_MD_SIZE];
+    unsigned int md_len = 0;
+
+    if (EVP_DigestFinal_ex(ctx, md, &md_len) != 1) {
+        if (err) *err = "EVP_DigestFinal_ex failed";
+        return {};
+    }
+
+    return hex_encode_lower_local(md, static_cast<std::size_t>(md_len));
+}
+
+} // namespace
+
 void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& deps) {
     // MVP/stub endpoint:
     // - authenticated user only
@@ -611,7 +665,8 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             {"drop_zones", zones}
         });
     });
-        srv.Post("/api/v4/dropzones/create", [&](const httplib::Request& req, httplib::Response& res) {
+
+    srv.Post("/api/v4/dropzones/create", [&](const httplib::Request& req, httplib::Response& res) {
         if (!deps.users || !deps.cookie_key || !deps.require_user_auth_users_actor ||
             !deps.dropzone_index || !deps.random_b64url || !deps.now_epoch ||
             !deps.origin) {
@@ -810,7 +865,8 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             {"destination_path", rec.destination_path}
         });
     });
-        srv.Post("/api/v4/dropzones/disable", [&](const httplib::Request& req, httplib::Response& res) {
+
+    srv.Post("/api/v4/dropzones/disable", [&](const httplib::Request& req, httplib::Response& res) {
         if (!deps.users || !deps.cookie_key || !deps.require_user_auth_users_actor ||
             !deps.dropzone_index) {
             reply_json_local(deps, res, 500, json{
@@ -895,7 +951,8 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             {"disabled", disabled}
         });
     });
-        srv.Get(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/info)", [&](const httplib::Request& req, httplib::Response& res) {
+
+    srv.Get(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/info)", [&](const httplib::Request& req, httplib::Response& res) {
         if (!deps.dropzone_index || !deps.now_epoch) {
             reply_json_local(deps, res, 500, json{
                 {"ok", false},
@@ -984,7 +1041,8 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             {"password_required", !rec.password_hash.empty()}
         });
     });
-        srv.Get(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/list)", [&](const httplib::Request& req, httplib::Response& res) {
+
+    srv.Get(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/list)", [&](const httplib::Request& req, httplib::Response& res) {
         if (!deps.dropzone_index || !deps.now_epoch) {
             reply_json_local(deps, res, 500, json{
                 {"ok", false},
@@ -1336,7 +1394,8 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             {"chunks_total", chunks_total}
         });
     });
-            srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
+
+    srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
         [&](const httplib::Request& req,
             httplib::Response& res,
             const httplib::ContentReader& content_reader) {
@@ -1642,7 +1701,8 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             {"bytes", bytes_written}
         });
     });
-            srv.Post(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/cancel)", [&](const httplib::Request& req, httplib::Response& res) {
+
+    srv.Post(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/cancel)", [&](const httplib::Request& req, httplib::Response& res) {
         if (!deps.dropzone_index || !deps.users || !deps.user_dir_for_fp) {
             reply_json_local(deps, res, 500, json{
                 {"ok", false},
@@ -1739,7 +1799,8 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             {"removed_entries", removed}
         });
     });
-            srv.Post(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/finish)", [&](const httplib::Request& req, httplib::Response& res) {
+
+    srv.Post(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/finish)", [&](const httplib::Request& req, httplib::Response& res) {
         if (!deps.dropzone_index || !deps.now_epoch || !deps.users ||
             !deps.user_dir_for_fp || !deps.random_b64url) {
             reply_json_local(deps, res, 500, json{
@@ -2120,7 +2181,8 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             {"sha256", upload.sha256}
         });
     });
-        srv.Post(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/upload)", [&](const httplib::Request& req, httplib::Response& res) {
+
+    srv.Post(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/upload)", [&](const httplib::Request& req, httplib::Response& res) {
         if (!deps.dropzone_index || !deps.now_epoch || !deps.users || !deps.user_dir_for_fp) {
             reply_json_local(deps, res, 500, json{
                 {"ok", false},
@@ -2367,7 +2429,8 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             {"sha256", upload.sha256}
         });
     });
-        srv.Get(R"(/dz/([A-Za-z0-9_-]{20,160}))", [&](const httplib::Request& req, httplib::Response& res) {
+
+    srv.Get(R"(/dz/([A-Za-z0-9_-]{20,160}))", [&](const httplib::Request& req, httplib::Response& res) {
         const std::string token = req.matches[1];
 
         res.status = 200;
@@ -3101,58 +3164,5 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
 
 }
 
-static std::string sha256_hex_file_local(const std::filesystem::path& path, std::string* err) {
-    if (err) err->clear();
 
-    std::ifstream f(path, std::ios::binary);
-    if (!f.good()) {
-        if (err) *err = "open file failed";
-        return {};
-    }
-
-    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
-    if (!ctx) {
-        if (err) *err = "EVP_MD_CTX_new failed";
-        return {};
-    }
-
-    struct Guard {
-        EVP_MD_CTX* p;
-        ~Guard() { if (p) EVP_MD_CTX_free(p); }
-    } guard{ctx};
-
-    if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) != 1) {
-        if (err) *err = "EVP_DigestInit_ex failed";
-        return {};
-    }
-
-    std::array<char, 1024 * 1024> buf{};
-
-    while (f.good()) {
-        f.read(buf.data(), static_cast<std::streamsize>(buf.size()));
-        const std::streamsize n = f.gcount();
-
-        if (n > 0) {
-            if (EVP_DigestUpdate(ctx, buf.data(), static_cast<std::size_t>(n)) != 1) {
-                if (err) *err = "EVP_DigestUpdate failed";
-                return {};
-            }
-        }
-    }
-
-    if (!f.eof()) {
-        if (err) *err = "read file failed";
-        return {};
-    }
-
-    unsigned char md[EVP_MAX_MD_SIZE];
-    unsigned int md_len = 0;
-
-    if (EVP_DigestFinal_ex(ctx, md, &md_len) != 1) {
-        if (err) *err = "EVP_DigestFinal_ex failed";
-        return {};
-    }
-
-    return hex_encode_lower_local(md, static_cast<std::size_t>(md_len));
-}
 } // namespace pqnas
