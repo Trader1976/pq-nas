@@ -20199,6 +20199,40 @@ auto chunked_upload_session_dir = [&](const std::string& fp_hex,
     return chunked_upload_root() / fp_hex / upload_id;
 };
 
+auto chunked_active_temp_bytes_for_user = [&](const std::string& fp_hex) -> std::uint64_t {
+    std::uint64_t total = 0;
+
+    const std::filesystem::path root = chunked_upload_root() / fp_hex;
+
+    std::error_code ec;
+    if (!std::filesystem::exists(root, ec)) return 0;
+    if (!std::filesystem::is_directory(root, ec)) return 0;
+
+    const auto opts = std::filesystem::directory_options::skip_permission_denied;
+
+    std::filesystem::recursive_directory_iterator it(root, opts, ec);
+    const std::filesystem::recursive_directory_iterator end;
+
+    for (; !ec && it != end; it.increment(ec)) {
+        std::error_code st_ec;
+        const auto st = std::filesystem::symlink_status(it->path(), st_ec);
+        if (st_ec) continue;
+
+        if (std::filesystem::is_symlink(st)) continue;
+        if (!std::filesystem::is_regular_file(st)) continue;
+
+        const std::uint64_t n = pqnas::file_size_u64_safe(it->path());
+
+        if (std::numeric_limits<std::uint64_t>::max() - total < n) {
+            return std::numeric_limits<std::uint64_t>::max();
+        }
+
+        total += n;
+    }
+
+    return total;
+};
+
 auto chunked_upload_chunk_name = [](std::uint64_t idx) -> std::string {
     std::string n = std::to_string((unsigned long long)idx);
     if (n.size() < 8) n = std::string(8 - n.size(), '0') + n;
@@ -20830,7 +20864,21 @@ srv.Put("/api/v4/uploads/chunk",
         }.dump());
         return;
     }
-
+    const std::string rel_norm = meta.value("path", "");
+    {
+        std::string check_norm;
+        std::string nerr;
+        if (!pqnas::normalize_user_rel_path_strict(rel_norm, &check_norm, &nerr) ||
+            check_norm != rel_norm) {
+            chunked_audit_fail(req, fp_hex, "v4.uploads_chunk_fail", "invalid_path", 400, nerr);
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid upload session path"}
+            }.dump());
+            return;
+        }
+    }
     const std::uint64_t expected_bytes =
         chunked_expected_chunk_bytes(size_bytes, chunk_size, chunks_total, chunk_index);
 
@@ -20857,7 +20905,59 @@ srv.Put("/api/v4/uploads/chunk",
         }.dump());
         return;
     }
+    // Quota pressure check for temporary chunk storage.
+    //
+    // Final quota is already checked at start + finish, but chunks live under
+    // /srv/pqnas/upload_sessions instead of the user's real storage directory.
+    // Without this check, abandoned chunk sessions can fill disk while bypassing
+    // normal user quota accounting.
+        auto* upload_plm = pqnas::get_path_lock_manager();
+        auto upload_temp_quota_guard =
+            upload_plm->lock_paths(fp_hex, {"__pqnas_upload_sessions_quota__"});
 
+    std::uint64_t active_temp_bytes = chunked_active_temp_bytes_for_user(fp_hex);
+    std::uint64_t temp_pressure_bytes = active_temp_bytes;
+
+    if (std::numeric_limits<std::uint64_t>::max() - temp_pressure_bytes < expected_bytes) {
+        temp_pressure_bytes = std::numeric_limits<std::uint64_t>::max();
+    } else {
+        temp_pressure_bytes += expected_bytes;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+
+    // Use a synthetic non-existing path so quota_check_for_upload_v1 does not
+    // subtract the real destination file size. Temporary chunks are extra disk
+    // pressure even when the upload will overwrite an existing live file.
+    const std::string quota_probe_rel =
+        ".pqnas_upload_quota_probe/" + upload_id + "/" + chunked_upload_chunk_name(chunk_index);
+
+    pqnas::QuotaCheckResult temp_qc = pqnas::quota_check_for_upload_v1(
+        users,
+        fp_hex,
+        user_dir,
+        quota_probe_rel,
+        temp_pressure_bytes
+    );
+
+    if (!temp_qc.ok) {
+        chunked_audit_fail(req, fp_hex, "v4.uploads_chunk_fail",
+                           "temp_upload_quota_exceeded", 413);
+
+        if (reply_quota_error_v1(res, fp_hex, temp_qc)) return;
+
+        reply_json(res, 413, json{
+            {"ok", false},
+            {"error", temp_qc.error.empty() ? "quota_exceeded" : temp_qc.error},
+            {"message", "Upload chunk would exceed storage quota"},
+            {"used_bytes", temp_qc.used_bytes},
+            {"quota_bytes", temp_qc.quota_bytes},
+            {"active_temp_bytes", active_temp_bytes},
+            {"incoming_chunk_bytes", expected_bytes},
+            {"would_used_bytes", temp_qc.would_used_bytes}
+        }.dump());
+        return;
+    }
     std::error_code ec;
     std::filesystem::create_directories(dir / "chunks", ec);
     if (ec) {
