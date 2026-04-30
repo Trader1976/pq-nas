@@ -223,6 +223,8 @@ add_executable(pqnas_server
         server/src/trash_index.cpp
         server/src/trash_service.cpp
         server/src/trash_routes.cpp
+        server/src/dropzone_routes.cpp
+        server/src/dropzone_index.cpp
         server/src/gallery_albums.cpp
         server/src/gallery_albums_routes.cpp
 

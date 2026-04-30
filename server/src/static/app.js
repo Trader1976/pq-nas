@@ -499,6 +499,41 @@
         return null;
     }
 
+    function manifestHasSurfaces(mani) {
+        return !!(mani && typeof mani === "object" && mani.surfaces && typeof mani.surfaces === "object");
+    }
+
+    function manifestSurfaceEnabled(mani, surfaceName, fallbackEnabled) {
+        if (!mani || typeof mani !== "object") return !!fallbackEnabled;
+
+        const surfaces = mani.surfaces;
+        if (!surfaces || typeof surfaces !== "object") return !!fallbackEnabled;
+
+        const value = surfaces[surfaceName];
+
+        if (typeof value === "boolean") return value;
+
+        if (value && typeof value === "object" && typeof value.enabled === "boolean") {
+            return value.enabled;
+        }
+
+        return !!fallbackEnabled;
+    }
+
+    function appDesktopEnabled(app, mani) {
+        // Old manifests without "surfaces" stay visible on desktop.
+        if (!manifestHasSurfaces(mani)) return true;
+        return manifestSurfaceEnabled(mani, "desktop", true);
+    }
+
+    function appSidebarEnabled(app, mani) {
+        // Old manifests without "surfaces" stay visible in the sidebar.
+        if (!manifestHasSurfaces(mani)) return true;
+
+        // New manifests must opt in.
+        return manifestSurfaceEnabled(mani, "sidebar", false);
+    }
+
     function resolveIconUrl(app, mani) {
         const base = `/apps/${encodeURIComponent(app.id)}/${encodeURIComponent(app.ver)}/`;
         const bust = `?v=${encodeURIComponent(app.ver || "")}`;
@@ -936,13 +971,27 @@
         if (!authed) return;
         bindDesktopSurfaceOnce();
 
-        // We show installed apps as icons
+        // We show installed apps as icons.
+        // New manifests can opt out of desktop with surfaces.desktop.enabled=false.
+        // Old manifests without "surfaces" stay visible.
         const apps = installedApps.slice();
-
-        loadDesktopLayout();
-        ensureDefaultLayout(surface, apps);
+        const desktopApps = [];
 
         for (const app of apps) {
+            const mani = await fetchManifest(app.id, app.ver);
+
+            if (!appDesktopEnabled(app, mani)) {
+                continue;
+            }
+
+            app._manifest = mani;
+            desktopApps.push(app);
+        }
+
+        loadDesktopLayout();
+        ensureDefaultLayout(surface, desktopApps);
+
+        for (const app of desktopApps) {
             const key = layoutKeyFor(app);
             const pos = (desktopLayout && desktopLayout.items && desktopLayout.items[key]) || { x: 16, y: 16 };
 
@@ -1550,8 +1599,15 @@
             if (currentView === "home") renderDesktopIcons();
 
             clearAppsList();
+
             for (const a of usable) {
-                const label = a.name || a.title || a.id;
+                const mani = await fetchManifest(a.id, a.ver);
+
+                if (!appSidebarEnabled(a, mani)) {
+                    continue;
+                }
+
+                const label = (mani && mani.name) || a.name || a.title || a.id;
                 const href = appUrl(a, "embedded");
                 addAppNavButton(a.id, label, href);
             }

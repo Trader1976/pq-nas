@@ -159,6 +159,9 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include "trash_service.h"
 #include "trash_routes.h"
 
+// drop zone
+#include "dropzone_routes.h"
+#include "dropzone_index.h"
 
 using json = nlohmann::json;
 
@@ -9347,14 +9350,6 @@ auto maybe_auto_rotate_before_append = [&]() {
         (std::filesystem::path(users_path).parent_path() / "workspaces.json").string();
     (void)workspaces.load(workspaces_path);
 
-    pqnas::TrashRoutesDeps trash_routes_deps;
-    trash_routes_deps.users = &users;
-    trash_routes_deps.users_path = &users_path;
-    trash_routes_deps.workspaces = &workspaces;
-    trash_routes_deps.workspaces_path = &workspaces_path;
-
-    trash_routes_deps.trash_index = &trash_index;
-    trash_routes_deps.cookie_key = COOKIE_KEY;
 
     std::cerr << "[cfg] users_path=" << users_path << std::endl;
 
@@ -9363,6 +9358,26 @@ auto maybe_auto_rotate_before_append = [&]() {
         shares_path = p;
     }
     std::cerr << "[cfg] shares_path=" << shares_path << std::endl;
+
+    std::filesystem::path dropzone_db_path =
+    std::filesystem::path(users_path).parent_path() / "dropzones.sqlite3";
+
+    if (const char* p = std::getenv("PQNAS_DROPZONE_DB_PATH")) {
+        dropzone_db_path = p;
+    }
+
+    std::cerr << "[cfg] dropzone_db_path=" << dropzone_db_path.string() << std::endl;
+
+    pqnas::DropZoneIndex dropzone_index(dropzone_db_path);
+
+    {
+        std::string dzerr;
+        if (!dropzone_index.open(&dzerr) || !dropzone_index.init_schema(&dzerr)) {
+            std::cerr << "[dropzone] FATAL: failed to initialize dropzone index: "
+                      << dzerr << std::endl;
+            return 6;
+        }
+    }
 
     if (TLS_SPKI_SHA256_PIN.empty()) {
         std::cerr << "[cfg] WARNING: PQNAS_TLS_SPKI_SHA256_PIN is not configured; Android app pairing QR will fail closed." << std::endl;
@@ -9986,6 +10001,52 @@ trash_service.set_restore_unindexer(
     };
     pqnas::register_trash_routes(srv, trash_deps);
 
+    pqnas::DropZoneRoutesDeps dropzone_deps;
+    dropzone_deps.users = &users;
+    dropzone_deps.dropzone_index = &dropzone_index;
+    dropzone_deps.cookie_key = COOKIE_KEY;
+    dropzone_deps.origin = &ORIGIN;
+    dropzone_deps.random_b64url =
+        [&](std::size_t n) -> std::string {
+            return random_b64url(static_cast<int>(n));
+    };
+    dropzone_deps.now_epoch =
+        []() -> std::int64_t {
+            return static_cast<std::int64_t>(pqnas::now_epoch());
+    };
+
+    dropzone_deps.require_user_auth_users_actor =
+        [&](const httplib::Request& req,
+            httplib::Response& res,
+            const unsigned char* cookie_key,
+            pqnas::UsersRegistry* users_ptr,
+            std::string* fp_hex,
+            std::string* role) -> bool {
+            return require_user_auth_users_actor(req, res, cookie_key, users_ptr, fp_hex, role);
+    };
+
+    dropzone_deps.reply_json =
+        [&](httplib::Response& res, int code, const std::string& body) {
+            reply_json(res, code, body);
+    };
+
+    dropzone_deps.audit_emit =
+        [&](const std::string& event,
+            const std::string& outcome,
+            const std::map<std::string, std::string>& f) {
+            pqnas::AuditEvent ev;
+            ev.event = event;
+            ev.outcome = outcome;
+            for (const auto& kv : f) ev.f[kv.first] = kv.second;
+            audit_append(ev);
+    };
+
+    dropzone_deps.user_dir_for_fp =
+    [&](pqnas::UsersRegistry& users_ref, const std::string& fp_hex) -> std::filesystem::path {
+        return user_dir_for_fp(users_ref, fp_hex);
+    };
+
+    pqnas::register_dropzone_routes(srv, dropzone_deps);
     pqnas::GalleryAlbumRoutesDeps gallery_album_deps;
     gallery_album_deps.users = &users;
     gallery_album_deps.albums = &gallery_albums_index;
