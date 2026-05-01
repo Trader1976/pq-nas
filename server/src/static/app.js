@@ -47,18 +47,29 @@
             mainHost.classList.add("appHost");
             mainHost.style.overflow = "hidden";
 
-            if (homeBlurb) homeBlurb.style.display = "";
+            if (homeBlurb) {
+                homeBlurb.style.display = "";
+                homeBlurb.classList.add("appHostBlurb");
+                homeBlurb.style.overflowY = "hidden";
+                homeBlurb.style.maxHeight = "100%";
+            }
 
             getHomeContentHost();
             showHomeContent(false);
 
             const dock = getAppFrameDock();
-            if (dock) dock.style.display = "";
+            if (dock) {
+                dock.style.display = "";
+                dock.style.pointerEvents = "auto";
+            }
         } else {
             mainHost.classList.add("homeHost");
             mainHost.style.overflow = "auto";
 
-            if (homeBlurb) homeBlurb.style.display = "";
+            if (homeBlurb) {
+                homeBlurb.style.display = "";
+                homeBlurb.classList.remove("appHostBlurb");
+            }
 
             showHomeContent(true);
             hideAllCachedAppFrames();
@@ -155,10 +166,17 @@
     }
     function hideAllCachedAppFrames() {
         const dock = document.getElementById("appFrameDock");
-        if (dock) dock.style.display = "none";
+        if (dock) {
+            dock.style.display = "none";
+            dock.style.pointerEvents = "none";
+        }
 
         for (const rec of appFrameCache.values()) {
-            if (rec && rec.frameWrap) rec.frameWrap.style.display = "none";
+            if (!rec || !rec.frameWrap) continue;
+
+            rec.frameWrap.classList.remove("active");
+            rec.frameWrap.hidden = true;
+            rec.frameWrap.style.pointerEvents = "none";
         }
     }
 
@@ -1487,16 +1505,36 @@
     }
 
     function renderApp(app) {
+        stopPairPolling();
+
+        currentView = `app:${app.id}@${app.ver}`;
+        currentApp = { id: app.id, ver: app.ver };
+
+        setActiveNav("");
+        setActiveApp(app.id);
+
+        if (wsTitle) wsTitle.textContent = app.name || app.title || app.id || "App";
+        if (wsSubtitle) wsSubtitle.textContent = "Running app";
+        if (mainPaneTitle) mainPaneTitle.textContent = app.name || app.title || app.id || "App";
+
         setMainHostMode("app");
 
         const dock = getAppFrameDock();
         if (!dock) return;
 
+        dock.style.display = "";
+        dock.style.pointerEvents = "auto";
+
         const key = appFrameKey(app);
         const now = Date.now();
 
+        // Keep cached iframes alive, but only one visible/interactive.
         for (const rec of appFrameCache.values()) {
-            if (rec && rec.frameWrap) rec.frameWrap.style.display = "none";
+            if (!rec || !rec.frameWrap) continue;
+
+            rec.frameWrap.classList.remove("active");
+            rec.frameWrap.hidden = true;
+            rec.frameWrap.style.pointerEvents = "none";
         }
 
         let rec = appFrameCache.get(key);
@@ -1511,6 +1549,7 @@
             const frameWrap = document.createElement("div");
             frameWrap.className = "appFrameWrap";
             frameWrap.dataset.appKey = key;
+            frameWrap.hidden = true;
             frameWrap.appendChild(frame);
 
             dock.appendChild(frameWrap);
@@ -1525,7 +1564,10 @@
         }
 
         rec.lastUsed = now;
-        rec.frameWrap.style.display = "";
+
+        rec.frameWrap.hidden = false;
+        rec.frameWrap.classList.add("active");
+        rec.frameWrap.style.pointerEvents = "auto";
         rec.frameWrap.style.width = "100%";
         rec.frameWrap.style.height = "100%";
         rec.frameWrap.style.flex = "1 1 auto";

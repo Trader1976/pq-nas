@@ -147,6 +147,7 @@
             overflow: hidden;
             position: relative;
             z-index: 1;
+            flex: 1 1 auto;
         }
 
         #homeBlurb.appHostBlurb .appFrameDock {
@@ -167,6 +168,8 @@
         .appFrameWrap.active{
             display: flex;
             flex: 1 1 auto;
+            visibility: visible;
+            pointer-events: auto;
         }
 
         .appFrame{
@@ -181,9 +184,7 @@
             animation: appIn 180ms ease-out;
         }
 
-        #homeBlurb:not(.appHostBlurb) .appFrameDock,
-        #homeBlurb:not(.appHostBlurb) .appFrameWrap,
-        #homeBlurb:not(.appHostBlurb) .appFrame {
+        #homeBlurb:not(.appHostBlurb) .appFrameDock {
             display: none !important;
             pointer-events: none !important;
             visibility: hidden !important;
@@ -354,6 +355,7 @@
         .sidebar, .sidebar *{
             pointer-events: auto;
         }
+
     </style>
 </head>
 
