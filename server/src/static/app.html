@@ -378,7 +378,9 @@
                 <span>Workspace Invites</span>
                 <span id="nav_workspace_invites_count" class="navAlertBadge" aria-hidden="true">0</span>
             </button>
-
+            <button class="navbtn" id="nav_user_settings" type="button" style="display:none">
+                <span>Settings</span><span class="k">⚙</span>
+            </button>
             <div class="sectionLabel">Apps</div>
             <div id="appsList"></div>
 
@@ -480,6 +482,7 @@
 
         document.addEventListener("DOMContentLoaded", pickBrandLogo);
         window.addEventListener("load", pickBrandLogo);
+        window.addEventListener("pqnas-theme-changed", pickBrandLogo);
     })();
 </script>
 </body>

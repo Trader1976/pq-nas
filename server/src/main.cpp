@@ -18758,7 +18758,179 @@ srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const http
         	{"group", group}
     	}).dump());
 	});
+// GET /api/v4/user/profile
+// Normal signed-in users can read their own editable profile fields.
+srv.Get("/api/v4/user/profile", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &actor_role)) return;
 
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "users_reload_failed"},
+            {"message", "failed to reload users"}
+        }.dump());
+        return;
+    }
+
+    auto uopt = users.get(actor_fp);
+    if (!uopt.has_value()) {
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "user not found"}
+        }.dump());
+        return;
+    }
+
+    const auto& u = *uopt;
+
+    res.set_header("Cache-Control", "no-store");
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"profile", {
+            {"fingerprint", actor_fp},
+            {"role", actor_role},
+            {"status", u.status},
+            {"name", u.name},
+            {"email", u.email},
+            {"avatar_url", u.avatar_url},
+            {"group", u.group}
+        }}
+    }.dump());
+});
+
+
+// POST /api/v4/user/profile/update
+// Normal signed-in users can update only their own safe profile fields.
+// IMPORTANT: fingerprint is derived from session, never from request body.
+srv.Post("/api/v4/user/profile/update", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &actor_role)) return;
+
+    json j;
+    try {
+        j = json::parse(req.body);
+    } catch (...) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "users_reload_failed"},
+            {"message", "failed to reload users"}
+        }.dump());
+        return;
+    }
+
+    auto cur = users.get(actor_fp);
+    if (!cur.has_value()) {
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "user not found"}
+        }.dump());
+        return;
+    }
+
+    std::string name = trim_copy(j.value("name", std::string()));
+    std::string email = trim_copy(j.value("email", std::string()));
+    std::string avatar_url = trim_copy(j.value("avatar_url", std::string()));
+
+    if (name.size() > 120) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "name too long"}
+        }.dump());
+        return;
+    }
+
+    if (email.size() > 254 ||
+        email.find('\n') != std::string::npos ||
+        email.find('\r') != std::string::npos) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid email"}
+        }.dump());
+        return;
+    }
+
+    // Users may clear avatar_url, or keep/set their own internal avatar URL.
+    // Do not allow arbitrary external URLs here.
+    const std::string own_avatar_url =
+        std::string("/api/v4/users/avatar?fingerprint=") + actor_fp;
+
+    if (!avatar_url.empty() && avatar_url != own_avatar_url) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "avatar_url must be empty or your own uploaded avatar URL"}
+        }.dump());
+        return;
+    }
+
+    pqnas::UserRec u = *cur;
+
+    // Safe self-edit fields only.
+    u.name = name;
+    u.email = email;
+    u.avatar_url = avatar_url;
+
+    const bool ok_upsert = users.upsert(u);
+    const bool ok_save = ok_upsert ? users.save(users_path) : false;
+
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "user.profile_update";
+        ev.outcome = (ok_upsert && ok_save) ? "ok" : "fail";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["role"] = actor_role;
+        if (!name.empty()) ev.f["name"] = pqnas::shorten(name, 80);
+        if (!email.empty()) ev.f["email"] = pqnas::shorten(email, 120);
+        ev.f["avatar"] = avatar_url.empty() ? "empty" : "set";
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit_append(ev);
+    }
+
+    if (!ok_upsert) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "profile update failed"}
+        }.dump());
+        return;
+    }
+
+    if (!ok_save) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "users save failed"}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"profile", {
+            {"fingerprint", actor_fp},
+            {"role", actor_role},
+            {"status", u.status},
+            {"name", u.name},
+            {"email", u.email},
+            {"avatar_url", u.avatar_url},
+            {"group", u.group}
+        }}
+    }.dump());
+});
     // --- Shared verify context (used by login verification routes) ---
 VerifyLoginCommonContext c;
 
@@ -36619,7 +36791,228 @@ srv.Get("/api/v4/users/avatar", [&](const httplib::Request& req, httplib::Respon
 
         reply_json(res, 200, json({{"ok",true}}).dump());
     });
+// POST /api/v4/user/profile/avatar_upload
+// Normal signed-in users can upload only their own avatar.
+srv.Post("/api/v4/user/profile/avatar_upload", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &actor_role)) return;
 
+    if (!is_valid_fingerprint_hex(actor_fp)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid actor fingerprint"}
+        }.dump());
+        return;
+    }
+
+    json j;
+    try {
+        j = json::parse(req.body);
+    } catch (...) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    const std::string mime = j.value("mime", "");
+    const std::string b64  = j.value("data_b64", "");
+
+    if (b64.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing data"}
+        }.dump());
+        return;
+    }
+
+    std::string ext;
+    if (mime == "image/png") ext = ".png";
+    else if (mime == "image/jpeg") ext = ".jpg";
+    else if (mime == "image/webp") ext = ".webp";
+    else {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "unsupported image type"}
+        }.dump());
+        return;
+    }
+
+    std::string bytes;
+    if (!b64std_decode_to_bytes(b64, bytes)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "base64 decode failed"}
+        }.dump());
+        return;
+    }
+
+    if (bytes.size() > 256 * 1024) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "file too large"}
+        }.dump());
+        return;
+    }
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "users_reload_failed"},
+            {"message", "failed to reload users"}
+        }.dump());
+        return;
+    }
+
+    auto cur = users.get(actor_fp);
+    if (!cur.has_value()) {
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "user not found"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path dir =
+        std::filesystem::path(pqnas::data_root_dir()) / "avatars";
+
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "avatar directory create failed"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path out = dir / (actor_fp + ext);
+
+    {
+        std::ofstream o(out.string(), std::ios::binary | std::ios::trunc);
+        if (!o.good()) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "avatar write failed"}
+            }.dump());
+            return;
+        }
+
+        o.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    }
+
+    // Remove stale avatar variants so serve_avatar_for_fingerprint resolves this upload.
+    if (ext != ".png")  std::filesystem::remove(dir / (actor_fp + ".png"), ec);
+    if (ext != ".jpg")  std::filesystem::remove(dir / (actor_fp + ".jpg"), ec);
+    if (ext != ".webp") std::filesystem::remove(dir / (actor_fp + ".webp"), ec);
+
+    const std::string url =
+        std::string("/api/v4/users/avatar?fingerprint=") + actor_fp;
+
+    pqnas::UserRec u = *cur;
+    u.avatar_url = url;
+
+    const bool ok_upsert = users.upsert(u);
+    const bool ok_save = ok_upsert ? users.save(users_path) : false;
+
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "user.avatar_upload";
+        ev.outcome = (ok_upsert && ok_save) ? "ok" : "fail";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["mime"] = mime;
+        ev.f["bytes"] = std::to_string(bytes.size());
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit_append(ev);
+    }
+
+    if (!ok_upsert || !ok_save) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "avatar metadata save failed"}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"avatar_url", url}
+    }.dump());
+});
+
+
+// POST /api/v4/user/profile/avatar_remove
+// Normal signed-in users can remove only their own avatar.
+srv.Post("/api/v4/user/profile/avatar_remove", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &actor_role)) return;
+
+    if (!users.load(users_path)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "users_reload_failed"},
+            {"message", "failed to reload users"}
+        }.dump());
+        return;
+    }
+
+    auto cur = users.get(actor_fp);
+    if (!cur.has_value()) {
+        reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "user not found"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path dir =
+        std::filesystem::path(pqnas::data_root_dir()) / "avatars";
+
+    std::error_code ec;
+    std::filesystem::remove(dir / (actor_fp + ".png"), ec);
+    std::filesystem::remove(dir / (actor_fp + ".jpg"), ec);
+    std::filesystem::remove(dir / (actor_fp + ".webp"), ec);
+
+    pqnas::UserRec u = *cur;
+    u.avatar_url.clear();
+
+    const bool ok_upsert = users.upsert(u);
+    const bool ok_save = ok_upsert ? users.save(users_path) : false;
+
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "user.avatar_remove";
+        ev.outcome = (ok_upsert && ok_save) ? "ok" : "fail";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit_append(ev);
+    }
+
+    if (!ok_upsert || !ok_save) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "avatar metadata save failed"}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true}
+    }.dump());
+});
     srv.Get("/api/v4/apps/list", [&](const httplib::Request& req, httplib::Response& res) {
     json out;
     out["ok"] = true;

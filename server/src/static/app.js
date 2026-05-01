@@ -12,6 +12,7 @@
     const navTrustedDevices = document.getElementById("nav_trusted_devices");
     const navWorkspaceInvites = document.getElementById("nav_workspace_invites");
     const navWorkspaceInvitesCount = document.getElementById("nav_workspace_invites_count");
+    const navUserSettings = document.getElementById("nav_user_settings");
 
     const navAdmin = document.getElementById("nav_admin");
     const navUsers = document.getElementById("nav_users");
@@ -231,7 +232,9 @@
 
     let workspaceInvites = [];
     let workspaceInvitesError = "";
-
+    let userProfile = null;
+    let userProfileLoading = false;
+    let userProfileError = "";
     function show(el, on) {
         if (!el) return;
         el.style.display = on ? "" : "none";
@@ -287,7 +290,12 @@
     }
 
     function setActiveNav(activeId) {
-        const ids = ["nav_home", "nav_trusted_devices", "nav_workspace_invites"];
+        const ids = [
+            "nav_home",
+            "nav_trusted_devices",
+            "nav_workspace_invites",
+            "nav_user_settings"
+        ];
         for (const id of ids) {
             const b = document.getElementById(id);
             if (!b) continue;
@@ -359,6 +367,76 @@
             if (v) return v;
         } catch {}
         return "dark";
+    }
+
+    const USER_THEME_OPTIONS = [
+        {
+            id: "dark",
+            title: "DNA Dark",
+            desc: "Default dark DNA-Nexus theme."
+        },
+        {
+            id: "bright",
+            title: "Bright",
+            desc: "Light / bright DNA-Nexus theme."
+        },
+        {
+            id: "cpunk_orange",
+            title: "CPUNK Orange",
+            desc: "Cyberpunk orange theme."
+        },
+        {
+            id: "win_classic",
+            title: "Win Classic",
+            desc: "Retro desktop-style theme."
+        }
+    ];
+
+    function applyUserTheme(themeName, opts = {}) {
+        const persist = opts.persist !== false;
+        const rerender = opts.rerender !== false;
+
+        const theme = String(themeName || "dark").trim() || "dark";
+
+        try {
+            if (persist) localStorage.setItem("pqnas_theme", theme);
+        } catch {}
+
+        document.documentElement.setAttribute("data-theme", theme);
+        document.body.setAttribute("data-theme", theme);
+
+        try {
+            if (window.PQNAS_THEME && typeof window.PQNAS_THEME.apply === "function") {
+                window.PQNAS_THEME.apply(theme);
+            }
+        } catch {}
+
+        try {
+            if (typeof window.pqnasApplyTheme === "function") {
+                window.pqnasApplyTheme(theme);
+            }
+        } catch {}
+
+        try {
+            window.dispatchEvent(new CustomEvent("pqnas-theme-changed", {
+                detail: { theme }
+            }));
+        } catch {}
+
+        manifestCache.clear();
+        clearCachedAppFrames();
+
+        if (rerender) {
+            loadDesktopLayout();
+
+            if (currentView === "home") {
+                renderDesktopIcons();
+            }
+
+            if (currentView === "user_settings") {
+                renderUserSettings("Theme saved.", "ok");
+            }
+        }
     }
 
     function desktopStorageKey() {
@@ -775,7 +853,57 @@
             .replaceAll("\"", "&quot;")
             .replaceAll("'", "&#39;");
     }
+    async function apiUserGet(path) {
+        const r = await fetch(path, {
+            credentials: "include",
+            headers: { "Accept": "application/json" },
+            cache: "no-store"
+        });
 
+        const j = await r.json().catch(() => null);
+
+        if (!r.ok || !j || !j.ok) {
+            throw new Error((j && (j.message || j.error)) ? (j.message || j.error) : `HTTP ${r.status}`);
+        }
+
+        return j;
+    }
+
+    async function apiUserPost(path, body) {
+        const r = await fetch(path, {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            body: JSON.stringify(body || {})
+        });
+
+        const j = await r.json().catch(() => null);
+
+        if (!r.ok || !j || !j.ok) {
+            throw new Error((j && (j.message || j.error)) ? (j.message || j.error) : `HTTP ${r.status}`);
+        }
+
+        return j;
+    }
+
+    function fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+            const rd = new FileReader();
+
+            rd.onload = () => {
+                const s = String(rd.result || "");
+                const comma = s.indexOf(",");
+                resolve(comma >= 0 ? s.slice(comma + 1) : s);
+            };
+
+            rd.onerror = () => reject(new Error("failed to read file"));
+            rd.readAsDataURL(file);
+        });
+    }
     function middleEllipsis(s, keepLeft = 20, keepRight = 18) {
         const v = String(s == null ? "" : s);
         if (!v) return "";
@@ -1357,6 +1485,348 @@
 // Render desktop icons on Home
         renderDesktopIcons();
     }
+    async function loadUserProfile() {
+        if (!authed) {
+            userProfile = null;
+            userProfileError = "";
+            return;
+        }
+
+        userProfileLoading = true;
+        userProfileError = "";
+
+        try {
+            const j = await apiUserGet("/api/v4/user/profile");
+            userProfile = j.profile || {};
+        } catch (e) {
+            userProfile = null;
+            userProfileError = String(e && e.message ? e.message : e);
+        } finally {
+            userProfileLoading = false;
+        }
+    }
+
+    async function saveUserProfileFromSettings() {
+        const name = (document.getElementById("userProfileName")?.value || "").trim();
+        const email = (document.getElementById("userProfileEmail")?.value || "").trim();
+        const avatar_url = (document.getElementById("userProfileAvatarUrl")?.value || "").trim();
+
+        const j = await apiUserPost("/api/v4/user/profile/update", {
+            name,
+            email,
+            avatar_url
+        });
+
+        userProfile = j.profile || null;
+    }
+
+    async function uploadUserAvatarFromSettings(file) {
+        if (!file) return;
+
+        if (file.size > 256 * 1024) {
+            throw new Error("Avatar is too large. Maximum size is 256 KiB.");
+        }
+
+        const mime = file.type || "";
+        if (!["image/png", "image/jpeg", "image/webp"].includes(mime)) {
+            throw new Error("Unsupported image type. Use PNG, JPEG, or WebP.");
+        }
+
+        const data_b64 = await fileToBase64(file);
+
+        const j = await apiUserPost("/api/v4/user/profile/avatar_upload", {
+            filename: file.name || "avatar",
+            mime,
+            data_b64
+        });
+
+        await loadUserProfile();
+        return j.avatar_url || "";
+    }
+
+    async function removeUserAvatarFromSettings() {
+        await apiUserPost("/api/v4/user/profile/avatar_remove", {});
+        await loadUserProfile();
+    }
+    function renderUserSettings(messageText = "", messageKind = "") {
+        stopPairPolling();
+
+        currentView = "user_settings";
+        currentApp = null;
+
+        setActiveNav("nav_user_settings");
+        setActiveApp("");
+
+        if (wsTitle) wsTitle.textContent = "Settings";
+        if (wsSubtitle) wsSubtitle.textContent = "Personal DNA-Nexus preferences";
+        if (mainPaneTitle) mainPaneTitle.textContent = "Settings";
+
+        if (!homeBlurb) return;
+
+        setMainHostMode("home");
+        homeBlurb.classList.remove("appHostBlurb");
+
+        const activeTheme = currentThemeName();
+        if (!userProfile && !userProfileLoading && !userProfileError && authed) {
+            loadUserProfile().then(() => {
+                if (currentView === "user_settings") renderUserSettings();
+            });
+        }
+
+        const p = userProfile || {};
+
+        const profileCard = `
+    <div class="card" style="padding:14px; margin-top:12px;">
+        <h3 style="margin:0 0 8px 0; font-size:18px;">
+            Profile
+        </h3>
+
+        <div class="mini" style="line-height:1.5; margin-bottom:12px;">
+            Edit your personal profile. Role, status, quota, storage, and admin notes are not editable here.
+        </div>
+
+        ${userProfileLoading ? `
+            <div class="mini">Loading profile…</div>
+        ` : userProfileError ? `
+            <div class="bigState" style="display:block; margin-top:8px;">
+                <h3>Could not load profile</h3>
+                <p>${escapeHtml(userProfileError)}</p>
+            </div>
+        ` : `
+            <div style="display:grid; gap:10px; max-width:540px;">
+                <label>
+                    <div class="mini" style="margin-bottom:4px;">Name</div>
+                    <input
+                        id="userProfileName"
+                        type="text"
+                        value="${escapeHtml(p.name || "")}"
+                        placeholder="Your name"
+                        style="width:100%; box-sizing:border-box;"
+                    >
+                </label>
+
+                <label>
+                    <div class="mini" style="margin-bottom:4px;">Email</div>
+                    <input
+                        id="userProfileEmail"
+                        type="email"
+                        value="${escapeHtml(p.email || "")}"
+                        placeholder="you@example.com"
+                        style="width:100%; box-sizing:border-box;"
+                    >
+                </label>
+
+                <input
+                    id="userProfileAvatarUrl"
+                    type="hidden"
+                    value="${escapeHtml(p.avatar_url || "")}"
+                >
+
+                <input
+                    id="userProfileAvatarFile"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    style="display:none;"
+                >
+
+                <div style="display:flex; gap:12px; align-items:center; margin-top:4px;">
+                    ${p.avatar_url ? `
+                        <img
+                            src="${escapeHtml(p.avatar_url)}"
+                            alt="avatar"
+                            style="width:72px; height:72px; border-radius:16px; object-fit:cover; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.18);"
+                            onerror="this.style.opacity='0.35'; this.title='Avatar failed to load';"
+                        >
+                    ` : `
+                        <div style="width:72px; height:72px; border-radius:16px; display:flex; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.18); color:var(--fg-dim);">
+                            —
+                        </div>
+                    `}
+
+                    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                        <button class="btn secondary" id="userProfilePickAvatarBtn" type="button">
+                            Choose avatar
+                        </button>
+
+                        ${p.avatar_url ? `
+                            <button class="btn secondary" id="userProfileRemoveAvatarBtn" type="button">
+                                Remove avatar
+                            </button>
+                        ` : ""}
+                    </div>
+                </div>
+
+                <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
+                    <button class="btn" id="userProfileSaveBtn" type="button">
+                        Save profile
+                    </button>
+                    <button class="btn secondary" id="userProfileReloadBtn" type="button">
+                        Reload
+                    </button>
+                </div>
+            </div>
+        `}
+    </div>
+`;
+        const themeCards = USER_THEME_OPTIONS.map((t) => {
+            const checked = activeTheme === t.id ? "checked" : "";
+
+            return `
+            <label
+                style="
+                    display:block;
+                    padding:14px;
+                    border-radius:16px;
+                    border:1px solid rgba(255,255,255,0.12);
+                    background:rgba(0,0,0,0.20);
+                    cursor:pointer;
+                    margin-top:10px;
+                "
+            >
+                <div style="display:flex; gap:12px; align-items:flex-start;">
+                    <input
+                        type="radio"
+                        name="userTheme"
+                        value="${escapeHtml(t.id)}"
+                        ${checked}
+                        style="margin-top:4px;"
+                    >
+                    <div>
+                        <div style="font-weight:900;">${escapeHtml(t.title)}</div>
+                        <div class="mini">${escapeHtml(t.desc)}</div>
+                        <div class="mini" style="margin-top:4px;">Theme ID: ${escapeHtml(t.id)}</div>
+                    </div>
+                </div>
+            </label>
+        `;
+        }).join("");
+
+        const homeContent = setHomeContentHtml(`
+        <div style="max-width:760px; font-family:var(--sans);">
+            <h3 style="margin:0 0 8px 0; font-size:18px; font-family:inherit;">
+                General settings
+            </h3>
+
+            <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:14px; font-family:inherit;">
+                These settings affect your own browser. They do not change the global admin theme.
+            </div>
+
+            ${messageText ? `
+                <div class="bigState" style="display:block; margin-top:8px;">
+                    <h3>${messageKind === "ok" ? "Saved" : "Settings"}</h3>
+                    <p>${escapeHtml(messageText)}</p>
+                </div>
+            ` : ""}
+            
+        ${profileCard}
+        
+            <div class="card" style="padding:14px; margin-top:12px;">
+                <h3 style="margin:0 0 8px 0; font-size:18px;">
+                    Theme
+                </h3>
+
+                <div class="mini" style="line-height:1.5;">
+                    Choose how DNA-Nexus looks on this device.
+                </div>
+
+                <div style="margin-top:12px;">
+                    ${themeCards}
+                </div>
+
+                <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;">
+                    <button class="btn secondary" id="userThemeDefaultBtn" type="button">
+                        Use default dark theme
+                    </button>
+                </div>
+            </div>
+        </div>
+    `);
+        const profileSaveBtn = (homeContent || homeBlurb).querySelector("#userProfileSaveBtn");
+        if (profileSaveBtn) {
+            profileSaveBtn.addEventListener("click", async () => {
+                profileSaveBtn.disabled = true;
+                profileSaveBtn.textContent = "Saving…";
+
+                try {
+                    await saveUserProfileFromSettings();
+                    renderUserSettings("Profile saved.", "ok");
+                } catch (e) {
+                    renderUserSettings(`Profile save failed: ${String(e && e.message ? e.message : e)}`, "err");
+                }
+            });
+        }
+
+        const profileReloadBtn = (homeContent || homeBlurb).querySelector("#userProfileReloadBtn");
+        if (profileReloadBtn) {
+            profileReloadBtn.addEventListener("click", async () => {
+                profileReloadBtn.disabled = true;
+                profileReloadBtn.textContent = "Reloading…";
+
+                try {
+                    await loadUserProfile();
+                    renderUserSettings();
+                } catch (e) {
+                    renderUserSettings(`Profile reload failed: ${String(e && e.message ? e.message : e)}`, "err");
+                }
+            });
+        }
+
+        const pickAvatarBtn = (homeContent || homeBlurb).querySelector("#userProfilePickAvatarBtn");
+        const avatarFileInput = (homeContent || homeBlurb).querySelector("#userProfileAvatarFile");
+
+        if (pickAvatarBtn && avatarFileInput) {
+            pickAvatarBtn.addEventListener("click", () => {
+                avatarFileInput.click();
+            });
+
+            avatarFileInput.addEventListener("change", async () => {
+                const file = avatarFileInput.files && avatarFileInput.files[0];
+                if (!file) return;
+
+                pickAvatarBtn.disabled = true;
+                pickAvatarBtn.textContent = "Uploading…";
+
+                try {
+                    await uploadUserAvatarFromSettings(file);
+                    renderUserSettings("Avatar uploaded.", "ok");
+                } catch (e) {
+                    renderUserSettings(`Avatar upload failed: ${String(e && e.message ? e.message : e)}`, "err");
+                } finally {
+                    avatarFileInput.value = "";
+                }
+            });
+        }
+
+        const removeAvatarBtn = (homeContent || homeBlurb).querySelector("#userProfileRemoveAvatarBtn");
+        if (removeAvatarBtn) {
+            removeAvatarBtn.addEventListener("click", async () => {
+                if (!confirm("Remove your avatar?")) return;
+
+                removeAvatarBtn.disabled = true;
+                removeAvatarBtn.textContent = "Removing…";
+
+                try {
+                    await removeUserAvatarFromSettings();
+                    renderUserSettings("Avatar removed.", "ok");
+                } catch (e) {
+                    renderUserSettings(`Avatar remove failed: ${String(e && e.message ? e.message : e)}`, "err");
+                }
+            });
+        }
+        for (const input of (homeContent || homeBlurb).querySelectorAll('input[name="userTheme"]')) {
+            input.addEventListener("change", () => {
+                if (!input.checked) return;
+                applyUserTheme(input.value);
+            });
+        }
+
+        const defaultBtn = document.getElementById("userThemeDefaultBtn");
+        if (defaultBtn) {
+            defaultBtn.addEventListener("click", () => {
+                applyUserTheme("dark");
+            });
+        }
+    }
 
     function renderWorkspaceInvites(messageText = "", messageKind = "", inviteNotice = null) {
         stopPairPolling();
@@ -1710,16 +2180,21 @@
 
                     // signed-in vs not-signed-in nav
                     show(navLogin, !ok);
-
+                    show(navUserSettings, ok);
                     if (!r.ok || !ok) {
                         authed = false;
                         clearCachedAppFrames();
 
                         workspaceInvites = [];
                         workspaceInvitesError = "";
+
+                        userProfile = null;
+                        userProfileLoading = false;
+                        userProfileError = "";
+
                         updateWorkspaceInvitesNav();
                         updateHomeInvitesHint();
-
+                        show(navUserSettings, false);
                         const err = String(j.error || "").toLowerCase();
                         const msg = String(j.message || "");
 
@@ -1732,6 +2207,7 @@
                             setBadge("warn", "not signed in");
                             show(stateUnauth, true);
                             show(navLogin, true);
+                            show(navUserSettings, false);
                         } else {
                             setWsSubtitleSafe(`Error (${r.status || "?"})`);
                             setBadge("err", "error");
@@ -1751,11 +2227,17 @@
                     return;
                 }
 
-                // Non-JSON body
+// Non-JSON body
                 authed = false;
                 clearCachedAppFrames();
+
                 workspaceInvites = [];
                 workspaceInvitesError = "";
+
+                userProfile = null;
+                userProfileLoading = false;
+                userProfileError = "";
+
                 updateWorkspaceInvitesNav();
                 updateHomeInvitesHint();
 
@@ -1775,8 +2257,14 @@
             } catch (e) {
                 authed = false;
                 clearCachedAppFrames();
+
                 workspaceInvites = [];
                 workspaceInvitesError = "";
+
+                userProfile = null;
+                userProfileLoading = false;
+                userProfileError = "";
+
                 updateWorkspaceInvitesNav();
                 updateHomeInvitesHint();
 
@@ -1831,7 +2319,9 @@
     if (navWorkspaceInvites) navWorkspaceInvites.addEventListener("click", () => {
         renderWorkspaceInvites();
     });
-
+    if (navUserSettings) navUserSettings.addEventListener("click", () => {
+        renderUserSettings();
+    });
 // Default view
     renderHome();
 
