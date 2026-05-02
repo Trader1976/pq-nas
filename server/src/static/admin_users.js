@@ -54,6 +54,136 @@ async function apiPost(path, body) {
 
 function $(id) { return document.getElementById(id); }
 
+const ADMIN_AVATAR_MAX_BYTES = 256 * 1024;
+const ADMIN_AVATAR_TARGET_BYTES = 240 * 1024;
+const ADMIN_AVATAR_MAX_DIM = 512;
+
+function fmtBytesForAvatar(n) {
+    const x = Number(n || 0);
+    if (!Number.isFinite(x) || x <= 0) return "0 B";
+    if (x < 1024) return `${x} B`;
+    if (x < 1024 * 1024) return `${(x / 1024).toFixed(1)} KiB`;
+    return `${(x / (1024 * 1024)).toFixed(2)} MiB`;
+}
+
+function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+        const rd = new FileReader();
+
+        rd.onload = () => {
+            const s = String(rd.result || "");
+            const comma = s.indexOf(",");
+            resolve(comma >= 0 ? s.slice(comma + 1) : s);
+        };
+
+        rd.onerror = () => reject(new Error("failed to read avatar file"));
+        rd.readAsDataURL(blob);
+    });
+}
+
+function canvasToBlobSafe(canvas, type, quality) {
+    return new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => {
+            if (!blob) {
+                reject(new Error("avatar conversion failed"));
+                return;
+            }
+            resolve(blob);
+        }, type, quality);
+    });
+}
+
+function loadImageForAvatar(file) {
+    return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+
+        img.onload = () => {
+            URL.revokeObjectURL(url);
+            resolve(img);
+        };
+
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            reject(new Error("Could not read this image. Try PNG, JPEG, or WebP."));
+        };
+
+        img.src = url;
+    });
+}
+
+async function prepareAdminAvatarUploadBlob(file) {
+    if (!file) throw new Error("No avatar file selected.");
+
+    const originalMime = String(file.type || "").toLowerCase();
+
+    const directlyAllowed =
+        originalMime === "image/png" ||
+        originalMime === "image/jpeg" ||
+        originalMime === "image/webp";
+
+    if (directlyAllowed && file.size <= ADMIN_AVATAR_MAX_BYTES) {
+        return {
+            blob: file,
+            mime: originalMime,
+            note: `Using original image (${fmtBytesForAvatar(file.size)}).`
+        };
+    }
+
+    const img = await loadImageForAvatar(file);
+
+    const srcW = img.naturalWidth || img.width || 0;
+    const srcH = img.naturalHeight || img.height || 0;
+
+    if (!srcW || !srcH) {
+        throw new Error("Could not read image dimensions.");
+    }
+
+    const scale = Math.min(1, ADMIN_AVATAR_MAX_DIM / Math.max(srcW, srcH));
+    const dstW = Math.max(1, Math.round(srcW * scale));
+    const dstH = Math.max(1, Math.round(srcH * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = dstW;
+    canvas.height = dstH;
+
+    const ctx = canvas.getContext("2d", { alpha: false });
+    if (!ctx) throw new Error("Canvas is not available for avatar resize.");
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, dstW, dstH);
+    ctx.drawImage(img, 0, 0, dstW, dstH);
+
+    const qualities = [0.86, 0.78, 0.70, 0.62, 0.54, 0.46, 0.38];
+
+    let best = null;
+
+    for (const q of qualities) {
+        const blob = await canvasToBlobSafe(canvas, "image/jpeg", q);
+        best = blob;
+
+        if (blob.size <= ADMIN_AVATAR_TARGET_BYTES) {
+            return {
+                blob,
+                mime: "image/jpeg",
+                note: `Resized ${srcW}×${srcH} → ${dstW}×${dstH}, ${fmtBytesForAvatar(file.size)} → ${fmtBytesForAvatar(blob.size)}.`
+            };
+        }
+    }
+
+    if (best && best.size <= ADMIN_AVATAR_MAX_BYTES) {
+        return {
+            blob: best,
+            mime: "image/jpeg",
+            note: `Resized ${srcW}×${srcH} → ${dstW}×${dstH}, ${fmtBytesForAvatar(file.size)} → ${fmtBytesForAvatar(best.size)}.`
+        };
+    }
+
+    throw new Error(
+        `Avatar is still too large after resizing (${fmtBytesForAvatar(best ? best.size : file.size)}). Try a smaller image.`
+    );
+}
+
 function pill(status) {
     const cls = (status || "disabled");
     return `<span class="pill ${cls}">${cls}</span>`;
@@ -1368,34 +1498,40 @@ window.addEventListener("load", async () => {
         const fp = ($("fp")?.value || "").trim();
         if (!fp || fp.length < 32) {
             showToast("Select a user first (fingerprint missing).");
+            $("avatar_file").value = "";
             return;
         }
 
         try {
+            setMsg("Preparing avatar…");
+
+            const prepared = await prepareAdminAvatarUploadBlob(file);
+            const data_b64 = await blobToBase64(prepared.blob);
+
             setMsg("Uploading avatar…");
-
-            const buf = await file.arrayBuffer();
-            const bytes = new Uint8Array(buf);
-
-            let bin = "";
-            for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-            const data_b64 = btoa(bin);
 
             const body = {
                 fingerprint: fp,
-                filename: file.name || "avatar",
-                mime: file.type || "application/octet-stream",
+                filename: file.name || "avatar.jpg",
+                mime: prepared.mime,
                 data_b64,
             };
 
             const j = await apiPost("/api/v4/admin/users/avatar_upload", body);
 
             $("avatar_url").value = j.avatar_url || "";
+
             setMsg("Avatar uploaded (click Upsert to save)");
-            showToast("Avatar uploaded");
+            showToast(
+                "Avatar uploaded\n" +
+                (prepared.note ? prepared.note + "\n" : "") +
+                "Click Upsert to save this avatar URL into the user profile."
+            );
         } catch (e) {
-            setMsg("Error: " + e.message);
-            alert("Upload failed: " + e.message);
+            const msg = "Upload failed: " + (e?.message || e);
+            setMsg("Error: " + (e?.message || e));
+            alert(msg);
+            showToast(msg, 15000);
         } finally {
             $("avatar_file").value = "";
         }

@@ -235,6 +235,12 @@
     let userProfile = null;
     let userProfileLoading = false;
     let userProfileError = "";
+    let userAvatarBust = 0;
+
+    const USER_AVATAR_MAX_BYTES = 256 * 1024;
+    const USER_AVATAR_TARGET_BYTES = 240 * 1024;
+    const USER_AVATAR_MAX_DIM = 512;
+
     function show(el, on) {
         if (!el) return;
         el.style.display = on ? "" : "none";
@@ -904,6 +910,139 @@
             rd.readAsDataURL(file);
         });
     }
+    function fmtBytesForAvatar(n) {
+        const x = Number(n || 0);
+        if (!Number.isFinite(x) || x <= 0) return "0 B";
+        if (x < 1024) return `${x} B`;
+        if (x < 1024 * 1024) return `${(x / 1024).toFixed(1)} KiB`;
+        return `${(x / (1024 * 1024)).toFixed(2)} MiB`;
+    }
+
+    function canvasToBlobSafe(canvas, type, quality) {
+        return new Promise((resolve, reject) => {
+            canvas.toBlob((blob) => {
+                if (!blob) {
+                    reject(new Error("avatar conversion failed"));
+                    return;
+                }
+                resolve(blob);
+            }, type, quality);
+        });
+    }
+
+    function loadImageForAvatar(file) {
+        return new Promise((resolve, reject) => {
+            const url = URL.createObjectURL(file);
+            const img = new Image();
+
+            img.onload = () => {
+                URL.revokeObjectURL(url);
+                resolve(img);
+            };
+
+            img.onerror = () => {
+                URL.revokeObjectURL(url);
+                reject(new Error("Could not read this image. Try PNG, JPEG, or WebP."));
+            };
+
+            img.src = url;
+        });
+    }
+
+    async function prepareAvatarUploadBlob(file) {
+        if (!file) throw new Error("No avatar file selected.");
+
+        const originalMime = String(file.type || "").toLowerCase();
+
+        const directlyAllowed =
+            originalMime === "image/png" ||
+            originalMime === "image/jpeg" ||
+            originalMime === "image/webp";
+
+        /*
+          Small already-supported files can go as-is.
+          Bigger files are resized/compressed below.
+        */
+        if (directlyAllowed && file.size <= USER_AVATAR_MAX_BYTES) {
+            return {
+                blob: file,
+                mime: originalMime,
+                note: `Using original image (${fmtBytesForAvatar(file.size)}).`
+            };
+        }
+
+        const img = await loadImageForAvatar(file);
+
+        const srcW = img.naturalWidth || img.width || 0;
+        const srcH = img.naturalHeight || img.height || 0;
+
+        if (!srcW || !srcH) {
+            throw new Error("Could not read image dimensions.");
+        }
+
+        const scale = Math.min(1, USER_AVATAR_MAX_DIM / Math.max(srcW, srcH));
+        const dstW = Math.max(1, Math.round(srcW * scale));
+        const dstH = Math.max(1, Math.round(srcH * scale));
+
+        const canvas = document.createElement("canvas");
+        canvas.width = dstW;
+        canvas.height = dstH;
+
+        const ctx = canvas.getContext("2d", { alpha: false });
+        if (!ctx) throw new Error("Canvas is not available for avatar resize.");
+
+        /*
+          White background avoids black/transparent artifacts when PNGs are converted
+          to JPEG/WebP.
+        */
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, dstW, dstH);
+        ctx.drawImage(img, 0, 0, dstW, dstH);
+
+        /*
+          Use JPEG because your backend already allows image/jpeg everywhere.
+          Step quality down until it fits the backend limit.
+        */
+        const qualities = [0.86, 0.78, 0.70, 0.62, 0.54, 0.46, 0.38];
+
+        let best = null;
+
+        for (const q of qualities) {
+            const blob = await canvasToBlobSafe(canvas, "image/jpeg", q);
+            best = blob;
+
+            if (blob.size <= USER_AVATAR_TARGET_BYTES) {
+                return {
+                    blob,
+                    mime: "image/jpeg",
+                    note: `Resized ${srcW}×${srcH} → ${dstW}×${dstH}, ${fmtBytesForAvatar(file.size)} → ${fmtBytesForAvatar(blob.size)}.`
+                };
+            }
+        }
+
+        if (best && best.size <= USER_AVATAR_MAX_BYTES) {
+            return {
+                blob: best,
+                mime: "image/jpeg",
+                note: `Resized ${srcW}×${srcH} → ${dstW}×${dstH}, ${fmtBytesForAvatar(file.size)} → ${fmtBytesForAvatar(best.size)}.`
+            };
+        }
+
+        throw new Error(
+            `Avatar is still too large after resizing (${fmtBytesForAvatar(best ? best.size : file.size)}). Try a smaller image.`
+        );
+    }
+
+    function avatarUrlWithBust(url) {
+        const s = String(url || "").trim();
+        if (!s) return "";
+
+        const bust = userAvatarBust || Date.now();
+        const sep = s.includes("?") ? "&" : "?";
+
+        return `${s}${sep}v=${encodeURIComponent(String(bust))}`;
+    }
+
     function middleEllipsis(s, keepLeft = 20, keepRight = 18) {
         const v = String(s == null ? "" : s);
         if (!v) return "";
@@ -1521,32 +1660,38 @@
     }
 
     async function uploadUserAvatarFromSettings(file) {
-        if (!file) return;
+        if (!file) return "";
 
-        if (file.size > 256 * 1024) {
-            throw new Error("Avatar is too large. Maximum size is 256 KiB.");
-        }
-
-        const mime = file.type || "";
-        if (!["image/png", "image/jpeg", "image/webp"].includes(mime)) {
-            throw new Error("Unsupported image type. Use PNG, JPEG, or WebP.");
-        }
-
-        const data_b64 = await fileToBase64(file);
+        const prepared = await prepareAvatarUploadBlob(file);
+        const data_b64 = await fileToBase64(prepared.blob);
 
         const j = await apiUserPost("/api/v4/user/profile/avatar_upload", {
-            filename: file.name || "avatar",
-            mime,
+            filename: file.name || "avatar.jpg",
+            mime: prepared.mime,
             data_b64
         });
 
+        userAvatarBust = Date.now();
         await loadUserProfile();
-        return j.avatar_url || "";
+
+        if (userProfile && j.avatar_url) {
+            userProfile.avatar_url = j.avatar_url;
+        }
+
+        return {
+            avatar_url: j.avatar_url || "",
+            note: prepared.note || ""
+        };
     }
 
     async function removeUserAvatarFromSettings() {
         await apiUserPost("/api/v4/user/profile/avatar_remove", {});
+        userAvatarBust = Date.now();
         await loadUserProfile();
+
+        if (userProfile) {
+            userProfile.avatar_url = "";
+        }
     }
     function renderUserSettings(messageText = "", messageKind = "") {
         stopPairPolling();
@@ -1632,7 +1777,7 @@
                 <div style="display:flex; gap:12px; align-items:center; margin-top:4px;">
                     ${p.avatar_url ? `
                         <img
-                            src="${escapeHtml(p.avatar_url)}"
+                            src="${escapeHtml(avatarUrlWithBust(p.avatar_url))}"
                             alt="avatar"
                             style="width:72px; height:72px; border-radius:16px; object-fit:cover; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.18);"
                             onerror="this.style.opacity='0.35'; this.title='Avatar failed to load';"
@@ -1647,7 +1792,10 @@
                         <button class="btn secondary" id="userProfilePickAvatarBtn" type="button">
                             Choose avatar
                         </button>
-
+                        <div class="mini" style="margin-top:6px; line-height:1.4;">
+                            You can pick a normal photo. DNA-Nexus will resize it to a small avatar automatically.
+                            PNG, JPEG, and WebP work best.
+                        </div>
                         ${p.avatar_url ? `
                             <button class="btn secondary" id="userProfileRemoveAvatarBtn" type="button">
                                 Remove avatar
@@ -1787,10 +1935,12 @@
                 pickAvatarBtn.textContent = "Uploading…";
 
                 try {
-                    await uploadUserAvatarFromSettings(file);
-                    renderUserSettings("Avatar uploaded.", "ok");
+                    const result = await uploadUserAvatarFromSettings(file);
+                    renderUserSettings(result && result.note ? `Avatar uploaded. ${result.note}` : "Avatar uploaded.", "ok");
                 } catch (e) {
-                    renderUserSettings(`Avatar upload failed: ${String(e && e.message ? e.message : e)}`, "err");
+                    const msg = `Avatar upload failed: ${String(e && e.message ? e.message : e)}`;
+                    alert(msg);
+                    renderUserSettings(msg, "err");
                 } finally {
                     avatarFileInput.value = "";
                 }
@@ -2180,7 +2330,15 @@
 
                     // signed-in vs not-signed-in nav
                     show(navLogin, !ok);
-                    show(navUserSettings, ok);
+
+                    // Normal user settings are only for non-admin users.
+                    // Admins use /admin/settings instead.
+                    show(navUserSettings, ok && !isAdmin);
+
+                    if (ok && isAdmin && currentView === "user_settings") {
+                        renderHome();
+                    }
+
                     if (!r.ok || !ok) {
                         authed = false;
                         clearCachedAppFrames();
