@@ -37013,6 +37013,152 @@ srv.Post("/api/v4/user/profile/avatar_remove", [&](const httplib::Request& req, 
         {"ok", true}
     }.dump());
 });
+
+    // GET /api/v4/apps/has?id=dropzone
+// Authenticated app capability probe for mobile/clients.
+// Red-team posture:
+// - requires normal signed-in user auth
+// - validates id strictly
+// - does not expose filesystem paths, versions, manifest paths, or install errors
+// - returns only whether this user may use this app from mobile/client context
+srv.Get("/api/v4/apps/has", [&](const httplib::Request& req, httplib::Response& res) {
+    res.set_header("Cache-Control", "no-store");
+
+    auto reply = [&](int status, const json& j) {
+        res.status = status;
+        res.set_content(j.dump(), "application/json; charset=utf-8");
+    };
+
+    std::string actor_fp, actor_role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &actor_role)) return;
+
+    const std::string id = req.has_param("id") ? req.get_param_value("id") : "";
+
+    auto valid_capability_app_id = [](const std::string& v) -> bool {
+        if (v.empty() || v.size() > 64) return false;
+
+        for (char c : v) {
+            const bool ok =
+                (c >= 'a' && c <= 'z') ||
+                (c >= '0' && c <= '9') ||
+                c == '_' ||
+                c == '-';
+
+            if (!ok) return false;
+        }
+
+        return true;
+    };
+
+    if (!valid_capability_app_id(id) || !safe_app_id(id)) {
+        reply(400, json{
+            {"ok", false},
+            {"error", "invalid_app_id"}
+        });
+        return;
+    }
+
+    json appLaunchPolicy = load_app_launch_policy_json();
+    json appLaunchPolicyById = json::object();
+    if (appLaunchPolicy.contains("by_app_id") && appLaunchPolicy["by_app_id"].is_object()) {
+        appLaunchPolicyById = appLaunchPolicy["by_app_id"];
+    }
+
+    auto app_admin_only = [&](const std::string& appId) -> bool {
+        try {
+            if (!appLaunchPolicyById.contains(appId) || !appLaunchPolicyById[appId].is_object()) return false;
+            const json& entry = appLaunchPolicyById[appId];
+            return entry.contains("admin_only") && entry["admin_only"].is_boolean()
+                ? entry["admin_only"].get<bool>()
+                : false;
+        } catch (...) {
+            return false;
+        }
+    };
+
+    const bool actor_is_admin = (actor_role == "admin");
+    const bool allowed_by_role = !app_admin_only(id) || actor_is_admin;
+
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    bool installed = false;
+    bool mobile = false;
+
+    const fs::path app_root = fs::path(APPS_INSTALLED_DIR) / id;
+
+    if (fs::exists(app_root, ec) && fs::is_directory(app_root, ec) && !ec) {
+        for (auto& de_ver : fs::directory_iterator(app_root, ec)) {
+            if (ec) break;
+            if (!de_ver.is_directory()) continue;
+
+            const std::string ver = de_ver.path().filename().string();
+            if (!safe_app_ver(ver)) continue;
+
+            const fs::path manifest = de_ver.path() / "manifest.json";
+            if (!fs::exists(manifest, ec) || ec) continue;
+
+            installed = true;
+
+            std::string body;
+            json mj;
+            if (read_file_to_string(manifest.string(), body) && !body.empty()) {
+                try {
+                    mj = json::parse(body);
+                } catch (...) {
+                    mj = json::object();
+                }
+            }
+
+            // Future manifest-friendly mobile/surfaces handling.
+            // Default to true for installed apps so older manifests can still be used by mobile.
+            bool manifest_mobile = true;
+
+            try {
+                if (mj.is_object()) {
+                    if (mj.contains("mobile") && mj["mobile"].is_boolean()) {
+                        manifest_mobile = mj["mobile"].get<bool>();
+                    } else if (mj.contains("surfaces") && mj["surfaces"].is_object()) {
+                        const json& surfaces = mj["surfaces"];
+                        if (surfaces.contains("mobile") && surfaces["mobile"].is_boolean()) {
+                            manifest_mobile = surfaces["mobile"].get<bool>();
+                        }
+                    }
+                }
+            } catch (...) {
+                manifest_mobile = true;
+            }
+
+            if (manifest_mobile) {
+                mobile = true;
+            }
+
+            break;
+        }
+    }
+
+    const bool available = installed && mobile && allowed_by_role;
+
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.apps_has";
+        ev.outcome = "ok";
+        ev.f["actor_fp"] = actor_fp;
+        ev.f["role"] = actor_role;
+        ev.f["app_id"] = id;
+        ev.f["available"] = available ? "true" : "false";
+        ev.f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        audit_append(ev);
+    }
+
+    reply(200, json{
+        {"ok", true},
+        {"id", id},
+        {"available", available},
+        {"mobile", available}
+    });
+});
+
     srv.Get("/api/v4/apps/list", [&](const httplib::Request& req, httplib::Response& res) {
     json out;
     out["ok"] = true;
