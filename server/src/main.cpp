@@ -163,6 +163,10 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include "dropzone_routes.h"
 #include "dropzone_index.h"
 
+//Echo stack
+#include "echo_stack_routes.h"
+#include "echo_stack_index.h"
+
 using json = nlohmann::json;
 
 static void reply_json(httplib::Response& res, int code, const std::string& body_json);
@@ -9379,6 +9383,20 @@ auto maybe_auto_rotate_before_append = [&]() {
         }
     }
 
+    const std::filesystem::path echo_stack_db_path =
+        dropzone_db_path.parent_path() / "echo_stack.sqlite3";
+
+    pqnas::EchoStackIndex echo_stack_index(echo_stack_db_path);
+
+    {
+        std::string eserr;
+        if (!echo_stack_index.open(&eserr) || !echo_stack_index.init_schema(&eserr)) {
+            std::cerr << "[echostack] failed to open/init database: "
+                      << eserr << std::endl;
+            return 1;
+        }
+    }
+
     if (TLS_SPKI_SHA256_PIN.empty()) {
         std::cerr << "[cfg] WARNING: PQNAS_TLS_SPKI_SHA256_PIN is not configured; Android app pairing QR will fail closed." << std::endl;
     } else {
@@ -10049,6 +10067,54 @@ trash_service.set_restore_unindexer(
     };
 
     pqnas::register_dropzone_routes(srv, dropzone_deps);
+    pqnas::EchoStackRoutesDeps echo_deps;
+    echo_deps.users = &users;
+    echo_deps.echo_index = &echo_stack_index;
+    echo_deps.cookie_key = COOKIE_KEY;
+    echo_deps.origin = &ORIGIN;
+
+    echo_deps.random_b64url =
+        [&](std::size_t n) -> std::string {
+            return random_b64url(static_cast<int>(n));
+    };
+
+    echo_deps.now_epoch =
+        []() -> std::int64_t {
+            return static_cast<std::int64_t>(pqnas::now_epoch());
+    };
+
+    echo_deps.user_dir_for_fp =
+        [&](pqnas::UsersRegistry& users_ref, const std::string& fp_hex) -> std::filesystem::path {
+            return user_dir_for_fp(users_ref, fp_hex);
+    };
+
+    echo_deps.require_user_auth_users_actor =
+        [&](const httplib::Request& req,
+            httplib::Response& res,
+            const unsigned char* cookie_key,
+            pqnas::UsersRegistry* users_ptr,
+            std::string* fp_hex,
+            std::string* role) -> bool {
+            return require_user_auth_users_actor(req, res, cookie_key, users_ptr, fp_hex, role);
+    };
+
+    echo_deps.reply_json =
+        [&](httplib::Response& res, int code, const std::string& body) {
+            reply_json(res, code, body);
+    };
+
+    echo_deps.audit_emit =
+        [&](const std::string& event,
+            const std::string& outcome,
+            const std::map<std::string, std::string>& f) {
+            pqnas::AuditEvent ev;
+            ev.event = event;
+            ev.outcome = outcome;
+            for (const auto& kv : f) ev.f[kv.first] = kv.second;
+            audit_append(ev);
+    };
+
+    pqnas::register_echo_stack_routes(srv, echo_deps);
     pqnas::GalleryAlbumRoutesDeps gallery_album_deps;
     gallery_album_deps.users = &users;
     gallery_album_deps.albums = &gallery_albums_index;

@@ -1,0 +1,31 @@
+{
+  "id": "echostack",
+  "name": "Echo Stack",
+  "version": "0.1.0",
+  "entry": "www/index.html",
+  "api_base": "/api/v4/echostack",
+  "permissions": [],
+  "category": "knowledge",
+  "surfaces": {
+    "desktop": {
+      "enabled": true
+    },
+    "launcher": {
+      "enabled": true
+    },
+    "sidebar": {
+      "enabled": true,
+      "user_pinnable": true,
+      "section": "knowledge",
+      "label": "Echo Stack",
+      "order": 60
+    }
+  },
+  "icons": {
+    "win_classic": "www/icon.svg",
+    "cpunk_orange": "www/icon.svg",
+    "dark": "www/icon.svg",
+    "bright": "www/icon.svg",
+    "default": "www/icon.svg"
+  }
+}

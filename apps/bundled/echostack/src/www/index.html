@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>DNA-Nexus • Echo Stack</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="top">
+      <div>
+        <div class="eyebrow">DNA-Nexus</div>
+        <h1>Echo Stack</h1>
+        <p>Save links, notes, tags, and research trails on your own NAS.</p>
+      </div>
+      <div class="badge">Save the signal before it fades.</div>
+    </header>
+
+    <section class="composer">
+      <div class="row">
+        <input id="urlInput" type="url" placeholder="https://example.com/article">
+        <button id="saveBtn" type="button">Save link</button>
+      </div>
+
+      <div class="grid2">
+        <input id="titleInput" type="text" placeholder="Optional title">
+        <input id="collectionInput" type="text" placeholder="Collection, e.g. NAS docs">
+      </div>
+
+      <div class="grid2">
+        <input id="tagsInput" type="text" placeholder="Tags, e.g. nas, crypto, research">
+        <button id="archiveBtn" type="button" title="Coming in quota-safe archive patch">Save + archive later</button>
+      </div>
+
+      <textarea id="notesInput" placeholder="Notes"></textarea>
+      <div id="status" class="status">Ready.</div>
+    </section>
+
+    <section class="toolbar">
+      <input id="searchInput" type="search" placeholder="Search links, notes, tags, collections">
+      <button id="refreshBtn" type="button">Refresh</button>
+    </section>
+
+    <main id="items" class="items"></main>
+  </div>
+
+  <template id="itemTemplate">
+    <article class="item">
+      <div class="itemMain">
+        <div class="itemTitle"></div>
+        <a class="itemUrl" href="#" target="_blank" rel="noopener noreferrer"></a>
+        <div class="itemMeta"></div>
+        <textarea class="itemNotes" placeholder="Notes"></textarea>
+      </div>
+      <div class="itemActions">
+        <button class="favBtn" type="button"></button>
+        <button class="readBtn" type="button"></button>
+        <button class="saveItemBtn" type="button">Save</button>
+        <button class="deleteBtn danger" type="button">Delete</button>
+      </div>
+    </article>
+  </template>
+
+  <script src="./app.js"></script>
+</body>
+</html>
