@@ -1795,7 +1795,8 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
             }.dump());
             return;
         }
-
+        std::string get_err;
+        auto existing = deps.echo_index->get_owner_item(fp, id, &get_err);
         std::string err;
         if (!deps.echo_index->delete_owner_item(fp, id, &err)) {
             deps.reply_json(res, err == "not_found" ? 404 : 500, json{
@@ -1805,7 +1806,34 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
             }.dump());
             return;
         }
+        if (existing.has_value() && deps.user_dir_for_fp && deps.users) {
+            const std::filesystem::path user_dir = deps.user_dir_for_fp(*deps.users, fp);
 
+            std::filesystem::path item_dir_abs;
+            std::string perr;
+
+            const std::string item_rel_dir =
+                ".pqnas_echostack/items/" + existing->id;
+
+            if (pqnas::resolve_user_path_strict(user_dir, item_rel_dir, &item_dir_abs, &perr)) {
+                std::error_code ec;
+                std::filesystem::remove_all(item_dir_abs, ec);
+
+                if (ec) {
+                    audit_local(deps, "v4.echostack_delete_files_fail", "fail", {
+                        {"actor_fp", fp},
+                        {"item_id", id},
+                        {"reason", ec.message()}
+                    });
+                }
+            } else {
+                audit_local(deps, "v4.echostack_delete_files_fail", "fail", {
+                    {"actor_fp", fp},
+                    {"item_id", id},
+                    {"reason", perr.empty() ? "invalid_item_dir" : perr}
+                });
+            }
+        }
         audit_local(deps, "v4.echostack_delete_ok", "ok", {
             {"actor_fp", fp},
             {"item_id", id}
