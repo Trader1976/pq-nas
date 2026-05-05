@@ -113,7 +113,13 @@
       fav.alt = "";
       fav.loading = "lazy";
       fav.referrerPolicy = "no-referrer";
-      fav.src = item.favicon_url || faviconFromUrl(item.url);
+      const favSrc = item.favicon_url || "";
+      if (favSrc) {
+        fav.src = favSrc;
+      } else {
+        fav.style.display = "none";
+      }
+
       fav.onerror = () => {
         fav.style.display = "none";
       };

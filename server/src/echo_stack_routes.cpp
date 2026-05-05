@@ -1,4 +1,5 @@
 #include "echo_stack_routes.h"
+#include "user_quota.h"
 
 #include <nlohmann/json.hpp>
 
@@ -14,7 +15,9 @@
 #include <sstream>
 #include <sys/socket.h>
 #include <vector>
+#include <fstream>
 
+#include "echo_stack_routes.h"
 using json = nlohmann::json;
 
 namespace pqnas {
@@ -687,6 +690,370 @@ static PreviewFetchResult fetch_preview_html_local(const std::string& input_url)
     out.error = "too_many_redirects";
     return out;
 }
+struct EchoAssetFetchResult {
+    bool ok = false;
+    int http_status = 0;
+    std::string error;
+    std::string final_url;
+    std::string bytes;
+    std::string mime;
+};
+
+static std::string detect_image_mime_local(const std::string& b) {
+    if (b.size() >= 8 &&
+        static_cast<unsigned char>(b[0]) == 0x89 &&
+        b[1] == 'P' && b[2] == 'N' && b[3] == 'G') {
+        return "image/png";
+    }
+
+    if (b.size() >= 3 &&
+        static_cast<unsigned char>(b[0]) == 0xff &&
+        static_cast<unsigned char>(b[1]) == 0xd8 &&
+        static_cast<unsigned char>(b[2]) == 0xff) {
+        return "image/jpeg";
+    }
+
+    if (b.size() >= 6 &&
+        (b.rfind("GIF87a", 0) == 0 || b.rfind("GIF89a", 0) == 0)) {
+        return "image/gif";
+    }
+
+    if (b.size() >= 12 &&
+        b.rfind("RIFF", 0) == 0 &&
+        b.substr(8, 4) == "WEBP") {
+        return "image/webp";
+    }
+
+    if (b.size() >= 4 &&
+        static_cast<unsigned char>(b[0]) == 0x00 &&
+        static_cast<unsigned char>(b[1]) == 0x00 &&
+        static_cast<unsigned char>(b[2]) == 0x01 &&
+        static_cast<unsigned char>(b[3]) == 0x00) {
+        return "image/x-icon";
+    }
+
+    return "";
+}
+
+
+
+static EchoAssetFetchResult fetch_small_image_asset_local(const std::string& input_url,
+                                                          std::size_t max_bytes) {
+    static constexpr int kMaxRedirects = 4;
+
+    EchoAssetFetchResult out;
+    std::string cur_url = input_url;
+
+    if (max_bytes < 1) {
+        out.error = "bad_asset_limit";
+        return out;
+    }
+
+    for (int hop = 0; hop <= kMaxRedirects; ++hop) {
+        PreviewUrlParts p;
+        std::string perr;
+        if (!parse_preview_url_local(cur_url, &p, &perr)) {
+            out.error = perr;
+            return out;
+        }
+
+        std::string herr;
+        if (!preview_host_allowed_local(p.host, &herr)) {
+            out.error = herr;
+            return out;
+        }
+
+        httplib::Headers headers{
+            {"User-Agent", "DNA-Nexus-EchoStack/0.1"},
+            {"Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.1"},
+            {"Range", "bytes=0-" + std::to_string(max_bytes - 1)}
+        };
+
+        std::string body;
+        body.reserve(std::min<std::size_t>(max_bytes, 256 * 1024));
+
+        httplib::Result r;
+
+        if (p.scheme == "https") {
+            httplib::SSLClient cli(p.host, p.port);
+            cli.set_follow_location(false);
+            cli.set_connection_timeout(5, 0);
+            cli.set_read_timeout(8, 0);
+            cli.enable_server_certificate_verification(true);
+
+            r = cli.Get(p.target.c_str(), headers, [&](const char* data, size_t len) {
+                if (body.size() + len > max_bytes) {
+                    body.append(data, max_bytes - body.size());
+                    return false;
+                }
+                body.append(data, len);
+                return true;
+            });
+        } else {
+            httplib::Client cli(p.host, p.port);
+            cli.set_follow_location(false);
+            cli.set_connection_timeout(5, 0);
+            cli.set_read_timeout(8, 0);
+
+            r = cli.Get(p.target.c_str(), headers, [&](const char* data, size_t len) {
+                if (body.size() + len > max_bytes) {
+                    body.append(data, max_bytes - body.size());
+                    return false;
+                }
+                body.append(data, len);
+                return true;
+            });
+        }
+
+        if (!r) {
+            out.error = "asset_fetch_failed";
+            return out;
+        }
+
+        out.http_status = r->status;
+
+        if (r->status >= 300 && r->status < 400) {
+            auto loc = redirect_location_local(r);
+            if (!loc.has_value() || loc->empty()) {
+                out.error = "asset_redirect_without_location";
+                return out;
+            }
+
+            cur_url = make_absolute_url_local(p, *loc);
+            continue;
+        }
+
+        if (r->status < 200 || r->status >= 300) {
+            out.error = "asset_http_" + std::to_string(r->status);
+            return out;
+        }
+
+        if (body.empty()) {
+            out.error = "asset_empty";
+            return out;
+        }
+
+        const std::string magic_mime = detect_image_mime_local(body);
+        if (magic_mime.empty()) {
+            out.error = "asset_not_supported_image";
+            return out;
+        }
+
+        out.ok = true;
+        out.final_url = cur_url;
+        out.bytes = std::move(body);
+        out.mime = magic_mime;
+        return out;
+    }
+
+    out.error = "asset_too_many_redirects";
+    return out;
+}
+
+static bool safe_echo_asset_kind_local(const std::string& kind) {
+    return kind == "favicon" || kind == "preview";
+}
+
+static std::string echo_asset_rel_path_local(const std::string& item_id,
+                                             const std::string& kind) {
+    return ".pqnas_echostack/items/" + item_id + "/assets/" + kind + ".bin";
+}
+
+static std::string echo_asset_public_url_local(const std::string& item_id,
+                                               const std::string& kind) {
+    return "/api/v4/echostack/assets/get?id=" + item_id + "&kind=" + kind;
+}
+
+static bool write_bytes_atomic_local(const std::filesystem::path& final_abs,
+                                     const std::string& bytes,
+                                     const std::string& tmp_suffix,
+                                     std::string* err) {
+    std::error_code ec;
+    std::filesystem::create_directories(final_abs.parent_path(), ec);
+    if (ec) {
+        if (err) *err = "mkdir_failed: " + ec.message();
+        return false;
+    }
+
+    const std::filesystem::path tmp_abs =
+        final_abs.parent_path() /
+        (final_abs.filename().string() + ".tmp." + tmp_suffix);
+
+    {
+        std::ofstream o(tmp_abs, std::ios::binary | std::ios::trunc);
+        if (!o) {
+            if (err) *err = "open_tmp_failed";
+            return false;
+        }
+
+        o.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        if (!o.good()) {
+            std::filesystem::remove(tmp_abs, ec);
+            if (err) *err = "write_tmp_failed";
+            return false;
+        }
+    }
+
+    std::filesystem::remove(final_abs, ec);
+    ec.clear();
+    std::filesystem::rename(tmp_abs, final_abs, ec);
+    if (ec) {
+        std::filesystem::remove(tmp_abs, ec);
+        if (err) *err = "rename_failed: " + ec.message();
+        return false;
+    }
+
+    return true;
+}
+
+static bool post_write_quota_ok_local(const EchoStackRoutesDeps& deps,
+                                      const std::string& fp,
+                                      const std::filesystem::path& user_dir,
+                                      std::string* err) {
+    if (!deps.users) {
+        if (err) *err = "users_missing";
+        return false;
+    }
+
+    const auto uopt = deps.users->get(fp);
+    if (!uopt.has_value()) {
+        if (err) *err = "user_missing";
+        return false;
+    }
+
+    const auto& u = *uopt;
+    const std::uint64_t used = pqnas::compute_used_bytes_v1(user_dir);
+
+    if (u.quota_bytes == 0) {
+        if (used > 0) {
+            if (err) *err = "quota_exceeded";
+            return false;
+        }
+        return true;
+    }
+
+    if (used > u.quota_bytes) {
+        if (err) *err = "quota_exceeded";
+        return false;
+    }
+
+    return true;
+}
+
+static bool cache_echo_asset_local(const EchoStackRoutesDeps& deps,
+                                   const std::string& fp,
+                                   const std::filesystem::path& user_dir,
+                                   const std::string& item_id,
+                                   const std::string& kind,
+                                   const std::string& source_url,
+                                   std::size_t max_bytes,
+                                   std::string* out_public_url,
+                                   std::string* err) {
+    if (out_public_url) *out_public_url = "";
+
+    if (!safe_echo_asset_kind_local(kind)) {
+        if (err) *err = "bad_asset_kind";
+        return false;
+    }
+
+    if (source_url.empty()) {
+        if (err) *err = "empty_asset_url";
+        return false;
+    }
+
+    if (!is_http_url_local(source_url)) {
+        if (err) *err = "bad_asset_url";
+        return false;
+    }
+
+    const std::string rel = echo_asset_rel_path_local(item_id, kind);
+
+    // Preflight with the maximum possible asset size. This keeps us from writing
+    // a cache file that could exceed quota. The file is under user_dir, so the
+    // existing recursive quota scanner naturally counts it.
+    pqnas::QuotaCheckResult qc = pqnas::quota_check_for_upload_v1(
+        *deps.users,
+        fp,
+        user_dir,
+        rel,
+        static_cast<std::uint64_t>(max_bytes)
+    );
+
+    if (!qc.ok) {
+        if (err) *err = qc.error.empty() ? "quota_check_failed" : qc.error;
+        return false;
+    }
+
+    EchoAssetFetchResult fetched = fetch_small_image_asset_local(source_url, max_bytes);
+    if (!fetched.ok) {
+        if (err) *err = fetched.error.empty() ? "asset_fetch_failed" : fetched.error;
+        return false;
+    }
+
+    std::filesystem::path final_abs;
+    std::string perr;
+    if (!pqnas::resolve_user_path_strict(user_dir, rel, &final_abs, &perr)) {
+        if (err) *err = "asset_path_invalid";
+        return false;
+    }
+
+    const std::string tmp_suffix =
+        deps.random_b64url ? deps.random_b64url(8) : std::to_string(deps.now_epoch ? deps.now_epoch() : 0);
+
+    std::string werr;
+    if (!write_bytes_atomic_local(final_abs, fetched.bytes, tmp_suffix, &werr)) {
+        if (err) *err = werr;
+        return false;
+    }
+
+    std::string qerr;
+    if (!post_write_quota_ok_local(deps, fp, user_dir, &qerr)) {
+        std::error_code ec;
+        std::filesystem::remove(final_abs, ec);
+        if (err) *err = qerr.empty() ? "quota_exceeded" : qerr;
+        return false;
+    }
+
+    if (out_public_url) {
+        *out_public_url = echo_asset_public_url_local(item_id, kind);
+    }
+
+    return true;
+}
+
+static std::string read_file_bytes_small_local(const std::filesystem::path& p,
+                                               std::uint64_t max_bytes,
+                                               std::string* err) {
+    std::error_code ec;
+    const auto sz = std::filesystem::file_size(p, ec);
+    if (ec) {
+        if (err) *err = "stat_failed";
+        return "";
+    }
+
+    if (sz > max_bytes) {
+        if (err) *err = "file_too_large";
+        return "";
+    }
+
+    std::ifstream in(p, std::ios::binary);
+    if (!in) {
+        if (err) *err = "open_failed";
+        return "";
+    }
+
+    std::string out;
+    out.resize(static_cast<std::size_t>(sz));
+    if (sz > 0) {
+        in.read(out.data(), static_cast<std::streamsize>(out.size()));
+        if (!in.good()) {
+            if (err) *err = "read_failed";
+            return "";
+        }
+    }
+
+    return out;
+}
 
 static EchoStackItemRec mutable_from_json_local(const json& j,
                                                 const EchoStackItemRec& base,
@@ -879,6 +1246,81 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
             {"preview_image_url", cap_string_local(image, 4096)}
         }.dump());
     });
+    srv.Get("/api/v4/echostack/assets/get", [deps](const httplib::Request& req, httplib::Response& res) {
+        std::string fp, role;
+        if (!require_actor_local(deps, req, res, &fp, &role)) return;
+
+        const std::string id = req.has_param("id") ? req.get_param_value("id") : "";
+        const std::string kind = req.has_param("kind") ? req.get_param_value("kind") : "";
+
+        if (id.empty() || id.size() > 160 || !safe_echo_asset_kind_local(kind)) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "valid id and kind required"}
+            }.dump());
+            return;
+        }
+
+        std::string ierr;
+        auto rec = deps.echo_index->get_owner_item(fp, id, &ierr);
+        if (!rec.has_value()) {
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "Echo Stack item not found"}
+            }.dump());
+            return;
+        }
+
+        if (!deps.user_dir_for_fp) {
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "user storage resolver not configured"}
+            }.dump());
+            return;
+        }
+
+        const std::filesystem::path user_dir = deps.user_dir_for_fp(*deps.users, fp);
+        const std::string rel = echo_asset_rel_path_local(id, kind);
+
+        std::filesystem::path abs;
+        std::string perr;
+        if (!pqnas::resolve_user_path_strict(user_dir, rel, &abs, &perr)) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "invalid_path"},
+                {"message", "asset path invalid"}
+            }.dump());
+            return;
+        }
+
+        std::string rerr;
+        std::string bytes = read_file_bytes_small_local(abs, 2 * 1024 * 1024, &rerr);
+        if (!rerr.empty()) {
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "asset not found"}
+            }.dump());
+            return;
+        }
+
+        const std::string mime = detect_image_mime_local(bytes);
+        if (mime.empty()) {
+            deps.reply_json(res, 415, json{
+                {"ok", false},
+                {"error", "unsupported_media_type"},
+                {"message", "asset is not a supported cached image"}
+            }.dump());
+            return;
+        }
+
+        res.set_header("Cache-Control", "private, max-age=86400");
+        res.set_header("X-Content-Type-Options", "nosniff");
+        res.set_content(std::move(bytes), mime.c_str());
+    });
 
     srv.Post("/api/v4/echostack/items/create", [deps](const httplib::Request& req, httplib::Response& res) {
         std::string fp, role;
@@ -927,8 +1369,15 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
         r.title = json_string_local(body, "title", url, 512);
         r.description = json_string_local(body, "description", "", 2000);
         r.site_name = json_string_local(body, "site_name", "", 256);
-        r.favicon_url = json_string_local(body, "favicon_url", "", 4096);
-        r.preview_image_url = json_string_local(body, "preview_image_url", "", 4096);
+        const std::string source_favicon_url =
+            json_string_local(body, "favicon_url", "", 4096);
+        const std::string source_preview_image_url =
+            json_string_local(body, "preview_image_url", "", 4096);
+
+        // Do not store remote image URLs directly for new items. We will try to
+        // cache small image assets locally after the DB row exists.
+        r.favicon_url = "";
+        r.preview_image_url = "";
         r.tags_text = json_string_local(body, "tags_text", "", 1000);
         r.collection = json_string_local(body, "collection", "", 256);
         r.notes = json_string_local(body, "notes", "", 8000);
@@ -953,9 +1402,89 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
             return;
         }
 
+        bool cached_any = false;
+
+        if (deps.user_dir_for_fp) {
+            const std::filesystem::path user_dir = deps.user_dir_for_fp(*deps.users, fp);
+
+            std::string favicon_source = source_favicon_url;
+
+            if (favicon_source.empty()) {
+                PreviewUrlParts item_url_parts;
+                std::string perr;
+                const std::string base_url = !r.final_url.empty() ? r.final_url : r.url;
+                if (parse_preview_url_local(base_url, &item_url_parts, &perr) &&
+                    !item_url_parts.origin.empty()) {
+                    favicon_source = item_url_parts.origin + "/favicon.ico";
+                }
+            }
+
+            std::string cached_url;
+            std::string cerr;
+
+            if (!favicon_source.empty() &&
+                cache_echo_asset_local(deps,
+                                       fp,
+                                       user_dir,
+                                       r.id,
+                                       "favicon",
+                                       favicon_source,
+                                       256 * 1024,
+                                       &cached_url,
+                                       &cerr)) {
+                r.favicon_url = cached_url;
+                cached_any = true;
+            } else if (!favicon_source.empty()) {
+                audit_local(deps, "v4.echostack_asset_cache_skip", "fail", {
+                    {"actor_fp", fp},
+                    {"item_id", r.id},
+                    {"kind", "favicon"},
+                    {"reason", cerr}
+                });
+            }
+
+            cached_url.clear();
+            cerr.clear();
+
+            if (!source_preview_image_url.empty() &&
+                cache_echo_asset_local(deps,
+                                       fp,
+                                       user_dir,
+                                       r.id,
+                                       "preview",
+                                       source_preview_image_url,
+                                       2 * 1024 * 1024,
+                                       &cached_url,
+                                       &cerr)) {
+                r.preview_image_url = cached_url;
+                cached_any = true;
+            } else if (!source_preview_image_url.empty()) {
+                audit_local(deps, "v4.echostack_asset_cache_skip", "fail", {
+                    {"actor_fp", fp},
+                    {"item_id", r.id},
+                    {"kind", "preview"},
+                    {"reason", cerr}
+                });
+            }
+
+            if (cached_any) {
+                r.updated_epoch = deps.now_epoch ? deps.now_epoch() : r.updated_epoch;
+
+                std::string uerr;
+                if (!deps.echo_index->update_mutable(r, &uerr)) {
+                    audit_local(deps, "v4.echostack_asset_cache_update_fail", "fail", {
+                        {"actor_fp", fp},
+                        {"item_id", r.id},
+                        {"reason", uerr}
+                    });
+                }
+            }
+        }
+
         audit_local(deps, "v4.echostack_create_ok", "ok", {
             {"actor_fp", fp},
-            {"item_id", r.id}
+            {"item_id", r.id},
+            {"cached_assets", cached_any ? "1" : "0"}
         });
 
         deps.reply_json(res, 200, json{
