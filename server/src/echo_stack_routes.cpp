@@ -16,12 +16,32 @@
 #include <sys/socket.h>
 #include <vector>
 #include <fstream>
+#include <unordered_map>
 
-#include "echo_stack_routes.h"
+
 using json = nlohmann::json;
 
 namespace pqnas {
 namespace {
+
+static constexpr std::uint64_t kEchoArchiveMaxHtmlBytesLocal =
+    10ull * 1024ull * 1024ull;
+
+static constexpr std::uint64_t kEchoArchiveMaxTotalBytesLocal =
+    25ull * 1024ull * 1024ull;
+
+static constexpr std::uint64_t kEchoArchiveMetaReserveBytesLocal =
+    16ull * 1024ull;
+
+static constexpr std::uint64_t kEchoArchiveMaxSingleImageBytesLocal =
+    2ull * 1024ull * 1024ull;
+
+static constexpr std::size_t kEchoArchiveMaxImagesLocal = 40;
+
+static constexpr std::uint64_t kEchoArchiveMaxSingleCssBytesLocal =
+    512ull * 1024ull;
+
+static constexpr std::size_t kEchoArchiveMaxCssFilesLocal = 12;
 
 static std::string lower_ascii_local(std::string s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -723,6 +743,16 @@ static std::string detect_image_mime_local(const std::string& b) {
         b.substr(8, 4) == "WEBP") {
         return "image/webp";
     }
+    if (b.size() >= 12 && b.substr(4, 4) == "ftyp") {
+        const std::string brand = b.substr(8, 4);
+        const std::size_t avif_pos = b.find("avif", 8);
+
+        if (brand == "avif" ||
+            brand == "avis" ||
+            (avif_pos != std::string::npos && avif_pos < 32)) {
+            return "image/avif";
+            }
+    }
 
     if (b.size() >= 4 &&
         static_cast<unsigned char>(b[0]) == 0x00 &&
@@ -737,8 +767,9 @@ static std::string detect_image_mime_local(const std::string& b) {
 
 
 
-static EchoAssetFetchResult fetch_small_image_asset_local(const std::string& input_url,
-                                                          std::size_t max_bytes) {
+    static EchoAssetFetchResult fetch_small_image_asset_local(const std::string& input_url,
+                                                              std::size_t max_bytes,
+                                                              const std::string& referer = std::string()) {
     static constexpr int kMaxRedirects = 4;
 
     EchoAssetFetchResult out;
@@ -764,10 +795,13 @@ static EchoAssetFetchResult fetch_small_image_asset_local(const std::string& inp
         }
 
         httplib::Headers headers{
-            {"User-Agent", "DNA-Nexus-EchoStack/0.1"},
-            {"Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.1"},
-            {"Range", "bytes=0-" + std::to_string(max_bytes - 1)}
+        {"User-Agent", "Mozilla/5.0 DNA-Nexus-EchoStack/0.1"},
+        {"Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.1"}
         };
+
+        if (!referer.empty()) {
+            headers.emplace("Referer", referer);
+        }
 
         std::string body;
         body.reserve(std::min<std::size_t>(max_bytes, 256 * 1024));
@@ -1256,6 +1290,878 @@ static void remove_tree_best_effort_local(const std::filesystem::path& p) {
 static std::string archive_view_url_local(const std::string& item_id) {
     return "/api/v4/echostack/archive/view?id=" + item_id;
 }
+static std::string archive_asset_public_url_local(const std::string& item_id,
+                                                  const std::string& name) {
+    return "/api/v4/echostack/archive/asset?id=" + item_id + "&name=" + name;
+}
+
+static bool safe_archive_asset_name_local(const std::string& name) {
+    if (name.empty() || name.size() > 80) return false;
+    if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos) return false;
+    if (name.find("..") != std::string::npos) return false;
+
+    const bool is_img = name.rfind("img_", 0) == 0;
+    const bool is_css = name.rfind("css_", 0) == 0;
+    if (!is_img && !is_css) return false;
+
+    for (char c : name) {
+        const bool ok =
+            (c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '_' || c == '-' || c == '.';
+        if (!ok) return false;
+    }
+
+    const std::string low = lower_ascii_local(name);
+
+    if (is_css) {
+        return ends_with_local(low, ".css");
+    }
+
+    return ends_with_local(low, ".png") ||
+           ends_with_local(low, ".jpg") ||
+           ends_with_local(low, ".jpeg") ||
+           ends_with_local(low, ".gif") ||
+           ends_with_local(low, ".webp") ||
+           ends_with_local(low, ".avif") ||
+           ends_with_local(low, ".ico");
+}
+
+static std::string image_ext_for_mime_local(const std::string& mime) {
+    if (mime == "image/png") return ".png";
+    if (mime == "image/jpeg") return ".jpg";
+    if (mime == "image/gif") return ".gif";
+    if (mime == "image/webp") return ".webp";
+    if (mime == "image/x-icon") return ".ico";
+    if (mime == "image/avif") return ".avif";
+    return "";
+}
+
+static std::string html_attr_escape_local(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 16);
+
+    for (char c : s) {
+        switch (c) {
+            case '&': out += "&amp;"; break;
+            case '"': out += "&quot;"; break;
+            case '<': out += "&lt;"; break;
+            case '>': out += "&gt;"; break;
+            default: out.push_back(c); break;
+        }
+    }
+
+    return out;
+}
+
+static std::string replace_tag_attr_value_local(const std::string& tag,
+                                                const std::string& attr_name,
+                                                const std::string& new_value) {
+    const std::string low = lower_ascii_local(tag);
+    const std::string name = lower_ascii_local(attr_name);
+
+    std::size_t pos = 0;
+    while ((pos = low.find(name, pos)) != std::string::npos) {
+        const bool left_ok =
+            pos == 0 ||
+            std::isspace(static_cast<unsigned char>(low[pos - 1])) ||
+            low[pos - 1] == '<';
+
+        std::size_t p = pos + name.size();
+        while (p < low.size() && std::isspace(static_cast<unsigned char>(low[p]))) ++p;
+
+        if (!left_ok || p >= low.size() || low[p] != '=') {
+            ++pos;
+            continue;
+        }
+
+        ++p;
+        while (p < tag.size() && std::isspace(static_cast<unsigned char>(tag[p]))) ++p;
+        if (p >= tag.size()) return tag;
+
+        char quote = 0;
+        if (tag[p] == '"' || tag[p] == '\'') {
+            quote = tag[p++];
+        }
+
+        const std::size_t start = p;
+        std::size_t end = start;
+
+        if (quote) {
+            end = tag.find(quote, start);
+            if (end == std::string::npos) return tag;
+        } else {
+            while (end < tag.size() &&
+                   !std::isspace(static_cast<unsigned char>(tag[end])) &&
+                   tag[end] != '>') {
+                ++end;
+            }
+        }
+
+        const std::string escaped = html_attr_escape_local(new_value);
+        return tag.substr(0, start) + escaped + tag.substr(end);
+    }
+
+    return tag;
+}
+
+static std::string first_url_from_srcset_local(const std::string& srcset) {
+    // srcset syntax:
+    //   URL [descriptor], URL [descriptor], ...
+    //
+    // Do not split on comma first. Some CDNs, including Yle, put commas inside
+    // the URL path itself:
+    //   /crop_extract,w_2838,h_1596,x_0,y_357/...
+    std::string s = trim_copy_local(srcset);
+    if (s.empty()) return "";
+
+    std::size_t i = 0;
+    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+
+    std::size_t j = i;
+    while (j < s.size() && !std::isspace(static_cast<unsigned char>(s[j]))) ++j;
+
+    std::string url = s.substr(i, j - i);
+
+    while (!url.empty() && url.back() == ',') {
+        url.pop_back();
+    }
+
+    return trim_copy_local(url);
+}
+
+static bool candidate_image_url_from_attr_local(const std::string& raw,
+                                                const PreviewUrlParts& base,
+                                                std::string* out_abs) {
+    if (out_abs) *out_abs = "";
+
+    const std::string s = trim_copy_local(raw);
+    if (s.empty()) return false;
+
+    const std::string low = lower_ascii_local(s);
+
+    if (starts_with_local(low, "data:") ||
+        starts_with_local(low, "blob:") ||
+        starts_with_local(low, "cid:") ||
+        starts_with_local(low, "javascript:")) {
+        return false;
+    }
+
+    const std::string abs = make_absolute_url_local(base, s);
+    if (!is_http_url_local(abs)) return false;
+
+    if (out_abs) *out_abs = abs;
+    return true;
+}
+
+static void collect_image_candidate_local(const std::string& raw,
+                                          const PreviewUrlParts& base,
+                                          std::vector<std::string>* out,
+                                          std::unordered_map<std::string, bool>* seen,
+                                          std::size_t max_items) {
+    if (!out || !seen || out->size() >= max_items) return;
+
+    std::string abs;
+    if (!candidate_image_url_from_attr_local(raw, base, &abs)) return;
+
+    if ((*seen)[abs]) return;
+    (*seen)[abs] = true;
+    out->push_back(abs);
+}
+
+static std::vector<std::string> extract_img_src_urls_local(const std::string& html,
+                                                           const PreviewUrlParts& base,
+                                                           std::size_t max_items) {
+    std::vector<std::string> out;
+    std::unordered_map<std::string, bool> seen;
+
+    const std::string low = lower_ascii_local(html);
+
+    auto scan_tag = [&](const std::string& tag_name) {
+        std::size_t pos = 0;
+        const std::string needle = "<" + tag_name;
+
+        while (out.size() < max_items &&
+               (pos = low.find(needle, pos)) != std::string::npos) {
+            const std::size_t end = low.find('>', pos);
+            if (end == std::string::npos) break;
+
+            const std::string tag = html.substr(pos, end - pos + 1);
+
+            collect_image_candidate_local(tag_attr_local(tag, "src"),
+                                          base, &out, &seen, max_items);
+
+            collect_image_candidate_local(tag_attr_local(tag, "data-src"),
+                                          base, &out, &seen, max_items);
+
+            collect_image_candidate_local(tag_attr_local(tag, "data-original"),
+                                          base, &out, &seen, max_items);
+
+            collect_image_candidate_local(tag_attr_local(tag, "data-lazy-src"),
+                                          base, &out, &seen, max_items);
+
+            const std::string srcset = tag_attr_local(tag, "srcset");
+            if (!srcset.empty()) {
+                collect_image_candidate_local(first_url_from_srcset_local(srcset),
+                                              base, &out, &seen, max_items);
+            }
+
+            const std::string data_srcset = tag_attr_local(tag, "data-srcset");
+            if (!data_srcset.empty()) {
+                collect_image_candidate_local(first_url_from_srcset_local(data_srcset),
+                                              base, &out, &seen, max_items);
+            }
+
+            pos = end + 1;
+        }
+    };
+
+    scan_tag("img");
+    scan_tag("source");
+
+    return out;
+}
+
+static bool tag_has_attr_local(const std::string& tag,
+                               const std::string& attr_name) {
+    return !tag_attr_local(tag, attr_name).empty();
+}
+
+static std::string set_or_add_tag_attr_local(const std::string& tag,
+                                             const std::string& attr_name,
+                                             const std::string& value) {
+    if (tag_has_attr_local(tag, attr_name)) {
+        return replace_tag_attr_value_local(tag, attr_name, value);
+    }
+
+    const std::size_t gt = tag.rfind('>');
+    if (gt == std::string::npos) return tag;
+
+    std::size_t insert_at = gt;
+    if (insert_at > 0 && tag[insert_at - 1] == '/') {
+        --insert_at;
+    }
+
+    const std::string attr =
+        " " + attr_name + "=\"" + html_attr_escape_local(value) + "\"";
+
+    return tag.substr(0, insert_at) + attr + tag.substr(insert_at);
+}
+
+static std::string mapped_local_for_tag_local(
+    const std::string& tag,
+    const PreviewUrlParts& base,
+    const std::unordered_map<std::string, std::string>& url_to_local
+) {
+    const char* attrs[] = {
+        "src",
+        "data-src",
+        "data-original",
+        "data-lazy-src"
+    };
+
+    for (const char* attr : attrs) {
+        const std::string raw = tag_attr_local(tag, attr);
+        if (raw.empty()) continue;
+
+        std::string abs;
+        if (!candidate_image_url_from_attr_local(raw, base, &abs)) continue;
+
+        auto it = url_to_local.find(abs);
+        if (it != url_to_local.end()) return it->second;
+    }
+
+    const char* srcset_attrs[] = {
+        "srcset",
+        "data-srcset"
+    };
+
+    for (const char* attr : srcset_attrs) {
+        const std::string raw = tag_attr_local(tag, attr);
+        if (raw.empty()) continue;
+
+        const std::string first = first_url_from_srcset_local(raw);
+
+        std::string abs;
+        if (!candidate_image_url_from_attr_local(first, base, &abs)) continue;
+
+        auto it = url_to_local.find(abs);
+        if (it != url_to_local.end()) return it->second;
+    }
+
+    return "";
+}
+
+static std::string rewrite_one_image_tag_local(
+    const std::string& tag,
+    const std::string& tag_name,
+    const PreviewUrlParts& base,
+    const std::unordered_map<std::string, std::string>& url_to_local
+) {
+    const std::string local = mapped_local_for_tag_local(tag, base, url_to_local);
+    if (local.empty()) return tag;
+
+    std::string out = tag;
+
+    if (tag_name == "img") {
+        out = set_or_add_tag_attr_local(out, "src", local);
+
+        if (tag_has_attr_local(out, "srcset")) {
+            out = replace_tag_attr_value_local(out, "srcset", local);
+        }
+        if (tag_has_attr_local(out, "data-src")) {
+            out = replace_tag_attr_value_local(out, "data-src", local);
+        }
+        if (tag_has_attr_local(out, "data-original")) {
+            out = replace_tag_attr_value_local(out, "data-original", local);
+        }
+        if (tag_has_attr_local(out, "data-lazy-src")) {
+            out = replace_tag_attr_value_local(out, "data-lazy-src", local);
+        }
+        if (tag_has_attr_local(out, "data-srcset")) {
+            out = replace_tag_attr_value_local(out, "data-srcset", local);
+        }
+
+        return out;
+    }
+
+    if (tag_name == "source") {
+        if (tag_has_attr_local(out, "srcset")) {
+            out = replace_tag_attr_value_local(out, "srcset", local);
+        } else {
+            out = set_or_add_tag_attr_local(out, "srcset", local);
+        }
+
+        if (tag_has_attr_local(out, "data-srcset")) {
+            out = replace_tag_attr_value_local(out, "data-srcset", local);
+        }
+
+        return out;
+    }
+
+    return tag;
+}
+
+static std::string rewrite_img_srcs_local(
+    const std::string& html,
+    const PreviewUrlParts& base,
+    const std::unordered_map<std::string, std::string>& url_to_local
+) {
+    if (url_to_local.empty()) return html;
+
+    const std::string low = lower_ascii_local(html);
+
+    std::string out;
+    out.reserve(html.size());
+
+    std::size_t cursor = 0;
+
+    while (cursor < html.size()) {
+        const std::size_t img_pos = low.find("<img", cursor);
+        const std::size_t source_pos = low.find("<source", cursor);
+
+        std::size_t pos = std::string::npos;
+        std::string tag_name;
+
+        if (img_pos != std::string::npos &&
+            (source_pos == std::string::npos || img_pos < source_pos)) {
+            pos = img_pos;
+            tag_name = "img";
+        } else if (source_pos != std::string::npos) {
+            pos = source_pos;
+            tag_name = "source";
+        } else {
+            break;
+        }
+
+        const std::size_t end = low.find('>', pos);
+        if (end == std::string::npos) break;
+
+        out.append(html, cursor, pos - cursor);
+
+        const std::string tag = html.substr(pos, end - pos + 1);
+        out += rewrite_one_image_tag_local(tag, tag_name, base, url_to_local);
+
+        cursor = end + 1;
+    }
+
+    out.append(html, cursor, std::string::npos);
+    return out;
+}
+
+struct EchoTextAssetFetchResult {
+    bool ok = false;
+    int http_status = 0;
+    std::string error;
+    std::string final_url;
+    std::string text;
+};
+
+static bool looks_like_text_asset_local(const std::string& b) {
+    if (b.empty()) return false;
+
+    const std::size_t scan_n = std::min<std::size_t>(b.size(), 4096);
+    for (std::size_t i = 0; i < scan_n; ++i) {
+        if (b[i] == '\0') return false;
+    }
+
+    return true;
+}
+
+static EchoTextAssetFetchResult fetch_text_asset_local(const std::string& input_url,
+                                                       std::size_t max_bytes,
+                                                       const std::string& referer = std::string()) {
+    static constexpr int kMaxRedirects = 4;
+
+    EchoTextAssetFetchResult out;
+    std::string cur_url = input_url;
+
+    if (max_bytes < 1) {
+        out.error = "bad_text_asset_limit";
+        return out;
+    }
+
+    for (int hop = 0; hop <= kMaxRedirects; ++hop) {
+        PreviewUrlParts p;
+        std::string perr;
+        if (!parse_preview_url_local(cur_url, &p, &perr)) {
+            out.error = perr;
+            return out;
+        }
+
+        std::string herr;
+        if (!preview_host_allowed_local(p.host, &herr)) {
+            out.error = herr;
+            return out;
+        }
+
+        httplib::Headers headers{
+            {"User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/120.0 Safari/537.36 "
+                           "DNA-Nexus-EchoStack/0.1"},
+            {"Accept", "text/css,*/*;q=0.1"},
+            {"Accept-Language", "en-US,en;q=0.8"}
+        };
+
+        if (!referer.empty()) {
+            headers.emplace("Referer", referer);
+        }
+
+        std::string body;
+        body.reserve(std::min<std::size_t>(max_bytes, 128 * 1024));
+
+        bool too_large = false;
+        httplib::Result r;
+
+        auto receiver = [&](const char* data, size_t len) {
+            if (body.size() + len > max_bytes) {
+                const std::size_t remain = max_bytes > body.size()
+                    ? max_bytes - body.size()
+                    : 0;
+                if (remain > 0) body.append(data, remain);
+                too_large = true;
+                return false;
+            }
+
+            body.append(data, len);
+            return true;
+        };
+
+        if (p.scheme == "https") {
+            httplib::SSLClient cli(p.host, p.port);
+            cli.set_follow_location(false);
+            cli.set_connection_timeout(5, 0);
+            cli.set_read_timeout(8, 0);
+            cli.enable_server_certificate_verification(true);
+
+            r = cli.Get(p.target.c_str(), headers, receiver);
+        } else {
+            httplib::Client cli(p.host, p.port);
+            cli.set_follow_location(false);
+            cli.set_connection_timeout(5, 0);
+            cli.set_read_timeout(8, 0);
+
+            r = cli.Get(p.target.c_str(), headers, receiver);
+        }
+
+        if (too_large) {
+            out.error = "text_asset_too_large";
+            return out;
+        }
+
+        if (!r) {
+            out.error = "text_asset_fetch_failed";
+            return out;
+        }
+
+        out.http_status = r->status;
+
+        if (r->status >= 300 && r->status < 400) {
+            auto loc = redirect_location_local(r);
+            if (!loc.has_value() || loc->empty()) {
+                out.error = "text_asset_redirect_without_location";
+                return out;
+            }
+
+            cur_url = make_absolute_url_local(p, *loc);
+            continue;
+        }
+
+        if (r->status < 200 || r->status >= 300) {
+            out.error = "text_asset_http_" + std::to_string(r->status);
+            return out;
+        }
+
+        if (!looks_like_text_asset_local(body)) {
+            out.error = "text_asset_not_text";
+            return out;
+        }
+
+        out.ok = true;
+        out.final_url = cur_url;
+        out.text = std::move(body);
+        return out;
+    }
+
+    out.error = "text_asset_too_many_redirects";
+    return out;
+}
+
+static std::vector<std::string> extract_stylesheet_urls_local(const std::string& html,
+                                                              const PreviewUrlParts& base,
+                                                              std::size_t max_items) {
+    std::vector<std::string> out;
+    std::unordered_map<std::string, bool> seen;
+
+    const std::string low = lower_ascii_local(html);
+
+    std::size_t pos = 0;
+    while (out.size() < max_items &&
+           (pos = low.find("<link", pos)) != std::string::npos) {
+        const std::size_t end = low.find('>', pos);
+        if (end == std::string::npos) break;
+
+        const std::string tag = html.substr(pos, end - pos + 1);
+        const std::string rel = lower_ascii_local(tag_attr_local(tag, "rel"));
+        const std::string href = tag_attr_local(tag, "href");
+
+        if (rel.find("stylesheet") != std::string::npos && !href.empty()) {
+            std::string abs;
+            if (candidate_image_url_from_attr_local(href, base, &abs) && !seen[abs]) {
+                seen[abs] = true;
+                out.push_back(abs);
+            }
+        }
+
+        pos = end + 1;
+    }
+
+    return out;
+}
+
+static std::string rewrite_stylesheet_links_local(
+    const std::string& html,
+    const PreviewUrlParts& base,
+    const std::unordered_map<std::string, std::string>& url_to_local
+) {
+    if (url_to_local.empty()) return html;
+
+    const std::string low = lower_ascii_local(html);
+
+    std::string out;
+    out.reserve(html.size());
+
+    std::size_t cursor = 0;
+    std::size_t pos = 0;
+
+    while ((pos = low.find("<link", cursor)) != std::string::npos) {
+        const std::size_t end = low.find('>', pos);
+        if (end == std::string::npos) break;
+
+        out.append(html, cursor, pos - cursor);
+
+        std::string tag = html.substr(pos, end - pos + 1);
+        const std::string rel = lower_ascii_local(tag_attr_local(tag, "rel"));
+        const std::string href = tag_attr_local(tag, "href");
+
+        if (rel.find("stylesheet") != std::string::npos && !href.empty()) {
+            std::string abs;
+            if (candidate_image_url_from_attr_local(href, base, &abs)) {
+                auto it = url_to_local.find(abs);
+                if (it != url_to_local.end()) {
+                    tag = replace_tag_attr_value_local(tag, "href", it->second);
+                }
+            }
+        }
+
+        out += tag;
+        cursor = end + 1;
+    }
+
+    out.append(html, cursor, std::string::npos);
+    return out;
+}
+
+static std::string zero_pad4_local(std::size_t n) {
+    std::string s = std::to_string(n);
+    if (s.size() >= 4) return s;
+    return std::string(4 - s.size(), '0') + s;
+}
+
+static bool archive_css_into_staging_local(const EchoStackRoutesDeps& deps,
+                                           const std::string& fp,
+                                           const std::filesystem::path& user_dir,
+                                           const std::string& item_id,
+                                           const std::string& staging_rel_dir,
+                                           const PreviewUrlParts& final_parts,
+                                           const std::string& html_in,
+                                           std::uint64_t already_asset_bytes,
+                                           std::string* html_out,
+                                           std::size_t* out_css_count,
+                                           std::uint64_t* out_css_bytes) {
+    if (html_out) *html_out = html_in;
+    if (out_css_count) *out_css_count = 0;
+    if (out_css_bytes) *out_css_bytes = 0;
+
+    const auto candidates = extract_stylesheet_urls_local(
+        html_in,
+        final_parts,
+        kEchoArchiveMaxCssFilesLocal
+    );
+
+    if (candidates.empty()) return true;
+
+    std::unordered_map<std::string, std::string> url_to_local;
+
+    std::uint64_t total_budget_used =
+        static_cast<std::uint64_t>(html_in.size()) +
+        kEchoArchiveMetaReserveBytesLocal +
+        already_asset_bytes;
+
+    std::size_t saved_count = 0;
+    std::uint64_t saved_bytes = 0;
+
+    const std::string referer =
+        final_parts.origin.empty() ? std::string() : final_parts.origin + "/";
+
+    for (const std::string& css_url : candidates) {
+        if (total_budget_used >= kEchoArchiveMaxTotalBytesLocal) break;
+
+        EchoTextAssetFetchResult fetched = fetch_text_asset_local(
+            css_url,
+            static_cast<std::size_t>(kEchoArchiveMaxSingleCssBytesLocal),
+            referer
+        );
+
+        if (!fetched.ok) {
+            PreviewUrlParts css_parts;
+            std::string css_parse_err;
+            (void)parse_preview_url_local(css_url, &css_parts, &css_parse_err);
+
+            audit_local(deps, "v4.echostack_archive_css_skip", "fail", {
+                {"actor_fp", fp},
+                {"item_id", item_id},
+                {"reason", fetched.error.empty() ? "css_fetch_failed" : fetched.error},
+                {"css_host", css_parts.host},
+                {"css_target", cap_string_local(css_parts.target, 500)},
+                {"css_url", cap_string_local(css_url, 800)}
+            });
+            continue;
+        }
+
+        const std::uint64_t css_bytes =
+            static_cast<std::uint64_t>(fetched.text.size());
+
+        if (css_bytes == 0 ||
+            css_bytes > kEchoArchiveMaxSingleCssBytesLocal ||
+            total_budget_used + css_bytes > kEchoArchiveMaxTotalBytesLocal) {
+            audit_local(deps, "v4.echostack_archive_css_skip", "fail", {
+                {"actor_fp", fp},
+                {"item_id", item_id},
+                {"reason", "archive_total_limit"}
+            });
+            break;
+        }
+
+        const std::string local_name =
+            "css_" + zero_pad4_local(saved_count + 1) + ".css";
+
+        const std::string rel =
+            staging_rel_dir + "/assets/" + local_name;
+
+        std::filesystem::path asset_abs;
+        std::string perr;
+
+        if (!pqnas::resolve_user_path_strict(user_dir, rel, &asset_abs, &perr)) {
+            audit_local(deps, "v4.echostack_archive_css_skip", "fail", {
+                {"actor_fp", fp},
+                {"item_id", item_id},
+                {"reason", perr.empty() ? "css_path_invalid" : perr}
+            });
+            continue;
+        }
+
+        std::string werr;
+        const std::string tmp_suffix =
+            deps.random_b64url ? deps.random_b64url(8) : "tmp";
+
+        if (!write_bytes_atomic_local(asset_abs, fetched.text, tmp_suffix, &werr)) {
+            audit_local(deps, "v4.echostack_archive_css_skip", "fail", {
+                {"actor_fp", fp},
+                {"item_id", item_id},
+                {"reason", werr.empty() ? "css_write_failed" : werr}
+            });
+            continue;
+        }
+
+        url_to_local[css_url] = archive_asset_public_url_local(item_id, local_name);
+
+        ++saved_count;
+        saved_bytes += css_bytes;
+        total_budget_used += css_bytes;
+    }
+
+    if (html_out) {
+        *html_out = rewrite_stylesheet_links_local(html_in, final_parts, url_to_local);
+    }
+
+    if (out_css_count) *out_css_count = saved_count;
+    if (out_css_bytes) *out_css_bytes = saved_bytes;
+
+    return true;
+}
+
+
+static bool archive_images_into_staging_local(const EchoStackRoutesDeps& deps,
+                                              const std::string& fp,
+                                              const std::filesystem::path& user_dir,
+                                              const std::string& item_id,
+                                              const std::string& staging_rel_dir,
+                                              const PreviewUrlParts& final_parts,
+                                              const std::string& html_in,
+                                              std::string* html_out,
+                                              std::size_t* out_image_count,
+                                              std::uint64_t* out_image_bytes) {
+    if (html_out) *html_out = html_in;
+    if (out_image_count) *out_image_count = 0;
+    if (out_image_bytes) *out_image_bytes = 0;
+
+    const auto candidates = extract_img_src_urls_local(
+        html_in,
+        final_parts,
+        kEchoArchiveMaxImagesLocal
+    );
+
+    if (candidates.empty()) return true;
+
+    std::unordered_map<std::string, std::string> url_to_local;
+
+    std::uint64_t total_budget_used =
+        static_cast<std::uint64_t>(html_in.size()) + kEchoArchiveMetaReserveBytesLocal;
+
+    std::size_t saved_count = 0;
+    std::uint64_t saved_bytes = 0;
+
+    for (const std::string& image_url : candidates) {
+        if (total_budget_used >= kEchoArchiveMaxTotalBytesLocal) break;
+
+        const std::string image_referer =
+            final_parts.origin.empty() ? std::string() : final_parts.origin + "/";
+
+        EchoAssetFetchResult fetched = fetch_small_image_asset_local(
+            image_url,
+            static_cast<std::size_t>(kEchoArchiveMaxSingleImageBytesLocal),
+            image_referer
+        );
+
+        if (!fetched.ok) {
+            PreviewUrlParts img_parts;
+            std::string img_parse_err;
+            (void)parse_preview_url_local(image_url, &img_parts, &img_parse_err);
+
+            audit_local(deps, "v4.echostack_archive_image_skip", "fail", {
+                {"actor_fp", fp},
+                {"item_id", item_id},
+                {"reason", fetched.error.empty() ? "image_fetch_failed" : fetched.error},
+                {"image_host", img_parts.host},
+                {"image_target", cap_string_local(img_parts.target, 500)},
+                {"image_url", cap_string_local(image_url, 800)}
+            });
+            continue;
+        }
+
+        const std::string ext = image_ext_for_mime_local(fetched.mime);
+        if (ext.empty()) {
+            audit_local(deps, "v4.echostack_archive_image_skip", "fail", {
+                {"actor_fp", fp},
+                {"item_id", item_id},
+                {"reason", "unsupported_image_type"}
+            });
+            continue;
+        }
+
+        const std::uint64_t image_bytes =
+            static_cast<std::uint64_t>(fetched.bytes.size());
+
+        if (image_bytes == 0 ||
+            image_bytes > kEchoArchiveMaxSingleImageBytesLocal ||
+            total_budget_used + image_bytes > kEchoArchiveMaxTotalBytesLocal) {
+            audit_local(deps, "v4.echostack_archive_image_skip", "fail", {
+                {"actor_fp", fp},
+                {"item_id", item_id},
+                {"reason", "archive_total_limit"}
+            });
+            break;
+        }
+
+        const std::string local_name =
+            "img_" + zero_pad4_local(saved_count + 1) + ext;
+
+        const std::string rel =
+            staging_rel_dir + "/assets/" + local_name;
+
+        std::filesystem::path asset_abs;
+        std::string perr;
+
+        if (!pqnas::resolve_user_path_strict(user_dir, rel, &asset_abs, &perr)) {
+            audit_local(deps, "v4.echostack_archive_image_skip", "fail", {
+                {"actor_fp", fp},
+                {"item_id", item_id},
+                {"reason", perr.empty() ? "asset_path_invalid" : perr}
+            });
+            continue;
+        }
+
+        std::string werr;
+        const std::string tmp_suffix =
+            deps.random_b64url ? deps.random_b64url(8) : "tmp";
+
+        if (!write_bytes_atomic_local(asset_abs, fetched.bytes, tmp_suffix, &werr)) {
+            audit_local(deps, "v4.echostack_archive_image_skip", "fail", {
+                {"actor_fp", fp},
+                {"item_id", item_id},
+                {"reason", werr.empty() ? "asset_write_failed" : werr}
+            });
+            continue;
+        }
+
+        url_to_local[image_url] = archive_asset_public_url_local(item_id, local_name);
+
+        ++saved_count;
+        saved_bytes += image_bytes;
+        total_budget_used += image_bytes;
+    }
+
+    if (html_out) {
+        *html_out = rewrite_img_srcs_local(html_in, final_parts, url_to_local);
+    }
+
+    if (out_image_count) *out_image_count = saved_count;
+    if (out_image_bytes) *out_image_bytes = saved_bytes;
+
+    return true;
+}
 static EchoStackItemRec mutable_from_json_local(const json& j,
                                                 const EchoStackItemRec& base,
                                                 std::int64_t now) {
@@ -1318,6 +2224,96 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
             {"ok", true},
             {"items", items}
         }.dump());
+    });
+    srv.Get("/api/v4/echostack/archive/asset", [deps](const httplib::Request& req, httplib::Response& res) {
+        std::string fp, role;
+        if (!require_actor_local(deps, req, res, &fp, &role)) return;
+
+        const std::string id = req.has_param("id") ? req.get_param_value("id") : "";
+        const std::string name = req.has_param("name") ? req.get_param_value("name") : "";
+
+        if (id.empty() || id.size() > 160 || !safe_archive_asset_name_local(name)) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "valid id and asset name required"}
+            }.dump());
+            return;
+        }
+
+        std::string ierr;
+        auto rec = deps.echo_index->get_owner_item(fp, id, &ierr);
+        if (!rec.has_value() ||
+            rec->archive_status != "archived" ||
+            rec->archive_rel_dir.empty()) {
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "archive not found"}
+            }.dump());
+            return;
+        }
+
+        if (!deps.user_dir_for_fp || !deps.users) {
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "user storage resolver not configured"}
+            }.dump());
+            return;
+        }
+
+        const std::filesystem::path user_dir = deps.user_dir_for_fp(*deps.users, fp);
+        const std::string asset_rel =
+            rec->archive_rel_dir + "/assets/" + name;
+
+        std::filesystem::path asset_abs;
+        std::string perr;
+        if (!pqnas::resolve_user_path_strict(user_dir, asset_rel, &asset_abs, &perr)) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "invalid_path"},
+                {"message", "archive asset path invalid"}
+            }.dump());
+            return;
+        }
+
+        std::string rerr;
+        std::string bytes = read_file_bytes_small_local(
+            asset_abs,
+            kEchoArchiveMaxSingleImageBytesLocal,
+            &rerr
+        );
+
+        if (!rerr.empty()) {
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "archive asset not found"}
+            }.dump());
+            return;
+        }
+
+        std::string mime;
+
+        if (ends_with_local(lower_ascii_local(name), ".css")) {
+            mime = "text/css; charset=utf-8";
+        } else {
+            mime = detect_image_mime_local(bytes);
+        }
+
+        if (mime.empty()) {
+            deps.reply_json(res, 415, json{
+                {"ok", false},
+                {"error", "unsupported_media_type"},
+                {"message", "asset is not a supported archive asset"}
+            }.dump());
+            return;
+        }
+
+        res.set_header("Cache-Control", "private, max-age=86400");
+        res.set_header("X-Content-Type-Options", "nosniff");
+        res.set_content(std::move(bytes), mime.c_str());
     });
 
     srv.Get("/api/v4/echostack/items/get", [deps](const httplib::Request& req, httplib::Response& res) {
@@ -1910,19 +2906,18 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
         // - img-src only allows embedded data/blob images, not remote images
         res.set_header("Cache-Control", "private, no-store");
         res.set_header("X-Content-Type-Options", "nosniff");
-        res.set_header(
-            "Content-Security-Policy",
-            "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; "
-            "img-src data: blob:; media-src data: blob:; style-src 'unsafe-inline'; "
-            "font-src data:; frame-ancestors 'self'"
-        );
+            res.set_header(
+                "Content-Security-Policy",
+                "sandbox allow-same-origin; default-src 'none'; script-src 'none'; connect-src 'none'; "
+                "img-src 'self' data: blob:; media-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "
+                "font-src 'self' data:; frame-ancestors 'self'"
+            );
 
         res.set_content(html, "text/html; charset=utf-8");
     });
 
     srv.Post("/api/v4/echostack/items/archive", [deps](const httplib::Request& req, httplib::Response& res) {
-        static constexpr std::uint64_t kMaxArchiveHtmlBytes = 3ull * 1024ull * 1024ull;
-        static constexpr std::uint64_t kArchiveMetaReserveBytes = 16ull * 1024ull;
+
 
         std::string fp, role;
         if (!require_actor_local(deps, req, res, &fp, &role)) return;
@@ -2024,8 +3019,7 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
             return;
         }
 
-        const std::uint64_t quota_probe_bytes = kMaxArchiveHtmlBytes + kArchiveMetaReserveBytes;
-
+        const std::uint64_t quota_probe_bytes = kEchoArchiveMaxTotalBytesLocal;
         pqnas::QuotaCheckResult qc = pqnas::quota_check_for_upload_v1(
             *deps.users,
             fp,
@@ -2100,7 +3094,7 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
 
         EchoArchiveFetchResult fetched = fetch_archive_html_local(
             archive_source_url,
-            static_cast<std::size_t>(kMaxArchiveHtmlBytes)
+            static_cast<std::size_t>(kEchoArchiveMaxHtmlBytesLocal)
         );
 
         if (!fetched.ok) {
@@ -2113,9 +3107,49 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
             return;
         }
 
+        PreviewUrlParts final_parts;
+        std::string final_parse_err;
+        (void)parse_preview_url_local(fetched.final_url, &final_parts, &final_parse_err);
+
+        std::string html_to_write = fetched.html;
+        std::size_t archived_image_count = 0;
+        std::uint64_t archived_image_bytes = 0;
+
+        if (!final_parts.origin.empty()) {
+            (void)archive_images_into_staging_local(
+                deps,
+                fp,
+                user_dir,
+                rec.id,
+                staging_rel_dir,
+                final_parts,
+                fetched.html,
+                &html_to_write,
+                &archived_image_count,
+                &archived_image_bytes
+            );
+        }
+        std::size_t archived_css_count = 0;
+        std::uint64_t archived_css_bytes = 0;
+
+        if (!final_parts.origin.empty()) {
+            (void)archive_css_into_staging_local(
+                deps,
+                fp,
+                user_dir,
+                rec.id,
+                staging_rel_dir,
+                final_parts,
+                html_to_write,
+                archived_image_bytes,
+                &html_to_write,
+                &archived_css_count,
+                &archived_css_bytes
+            );
+        }
         std::string werr;
         if (!write_bytes_atomic_local(staging_html_abs,
-                                      fetched.html,
+                                      html_to_write,
                                       deps.random_b64url ? deps.random_b64url(8) : "tmp",
                                       &werr)) {
             fail_archive(500, "archive_write_failed", "failed to write archive HTML", werr);
@@ -2130,8 +3164,13 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
             {"final_url", fetched.final_url},
             {"title", rec.title},
             {"archived_epoch", archived_now},
-            {"format", "html_snapshot_v1"},
-            {"max_html_bytes", kMaxArchiveHtmlBytes}
+            {"format", "html_plus_images_css_v3"},
+            {"max_html_bytes", kEchoArchiveMaxHtmlBytesLocal},
+            {"max_total_bytes", kEchoArchiveMaxTotalBytesLocal},
+            {"image_count", archived_image_count},
+            {"image_bytes", archived_image_bytes},
+            {"css_count", archived_css_count},
+            {"css_bytes", archived_css_bytes}
         };
 
         if (!write_bytes_atomic_local(staging_meta_abs,
