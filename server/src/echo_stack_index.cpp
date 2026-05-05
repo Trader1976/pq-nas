@@ -351,6 +351,54 @@ bool EchoStackIndex::update_mutable(const EchoStackItemRec& rec, std::string* er
     return changed;
 }
 
+bool EchoStackIndex::update_archive_fields(const EchoStackItemRec& rec, std::string* err) {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
+
+    const char* sql =
+        "UPDATE echo_stack_items SET "
+        "final_url=?1, "
+        "archive_status=?2, "
+        "archive_error=?3, "
+        "archive_rel_dir=?4, "
+        "archive_bytes=?5, "
+        "archived_epoch=?6, "
+        "updated_epoch=?7 "
+        "WHERE owner_fp=?8 AND id=?9";
+
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        return false;
+    }
+
+    bind_text(st, 1, rec.final_url);
+    bind_text(st, 2, rec.archive_status);
+    bind_text(st, 3, rec.archive_error);
+    bind_text(st, 4, rec.archive_rel_dir);
+    sqlite3_bind_int64(st, 5, static_cast<sqlite3_int64>(rec.archive_bytes));
+    sqlite3_bind_int64(st, 6, static_cast<sqlite3_int64>(rec.archived_epoch));
+    sqlite3_bind_int64(st, 7, static_cast<sqlite3_int64>(rec.updated_epoch));
+    bind_text(st, 8, rec.owner_fp);
+    bind_text(st, 9, rec.id);
+
+    const int rc = sqlite3_step(st);
+    if (rc != SQLITE_DONE) {
+        if (err) *err = sqlite3_errmsg(db_);
+        sqlite3_finalize(st);
+        return false;
+    }
+
+    const bool changed = sqlite3_changes(db_) > 0;
+    sqlite3_finalize(st);
+
+    if (!changed && err) *err = "not_found";
+    return changed;
+}
+
 bool EchoStackIndex::delete_owner_item(const std::string& owner_fp,
                                        const std::string& id,
                                        std::string* err) {

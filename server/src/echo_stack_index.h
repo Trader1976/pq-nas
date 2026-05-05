@@ -65,6 +65,8 @@ public:
 
     bool update_mutable(const EchoStackItemRec& rec, std::string* err);
 
+    bool update_archive_fields(const EchoStackItemRec& rec, std::string* err);
+
     bool delete_owner_item(const std::string& owner_fp,
                            const std::string& id,
                            std::string* err);

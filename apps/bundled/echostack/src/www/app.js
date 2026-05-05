@@ -30,7 +30,9 @@
 
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) {
-      throw new Error(j.message || j.error || `HTTP ${r.status}`);
+      const reason = j.archive_error || j.error || j.message || `HTTP ${r.status}`;
+      const detail = j.message && j.message !== reason ? `${reason}: ${j.message}` : reason;
+      throw new Error(detail);
     }
     return j;
   }
@@ -63,7 +65,13 @@
     if (item.favorite) parts.push("Favorite");
 
     const archive = item.archive_status || "none";
-    parts.push(archive === "none" ? "Saved link" : `Archive: ${archive}`);
+    if (archive === "none") {
+      parts.push("Saved link");
+    } else if (archive === "failed" && item.archive_error) {
+      parts.push(`Archive: failed — ${item.archive_error}`);
+    } else {
+      parts.push(`Archive: ${archive}`);
+    }
 
     const t = fmtTime(item.created_epoch);
     if (t) parts.push(t);
@@ -104,6 +112,7 @@
       const readBtn = node.querySelector(".readBtn");
       const saveBtn = node.querySelector(".saveItemBtn");
       const deleteBtn = node.querySelector(".deleteBtn");
+      const archiveStatus = item.archive_status || "none";
 
       const head = document.createElement("div");
       head.className = "itemHead";
@@ -192,6 +201,29 @@
         });
       });
 
+      if (archiveStatus === "archived") {
+        const openArchiveBtn = document.createElement("button");
+        openArchiveBtn.type = "button";
+        openArchiveBtn.textContent = "Open archive";
+        openArchiveBtn.addEventListener("click", () => {
+          window.open(`${API}/archive/view?id=${encodeURIComponent(item.id)}`, "_blank", "noopener,noreferrer");
+        });
+        node.querySelector(".itemActions").insertBefore(openArchiveBtn, saveBtn);
+      } else if (archiveStatus === "archiving") {
+        const archivingBtn = document.createElement("button");
+        archivingBtn.type = "button";
+        archivingBtn.textContent = "Archiving…";
+        archivingBtn.disabled = true;
+        node.querySelector(".itemActions").insertBefore(archivingBtn, saveBtn);
+      } else {
+        const archiveBtn = document.createElement("button");
+        archiveBtn.type = "button";
+        archiveBtn.textContent = archiveStatus === "failed" ? "Retry archive" : "Archive";
+        archiveBtn.addEventListener("click", () => {
+          archiveItem(item.id);
+        });
+        node.querySelector(".itemActions").insertBefore(archiveBtn, saveBtn);
+      }
       saveBtn.addEventListener("click", async () => {
         await updateItem(item.id, { notes: notes.value || "" });
       });
@@ -278,13 +310,43 @@
     await loadItems();
   }
 
+  async function archiveItem(id) {
+    setStatus("Archiving page snapshot…");
+
+    try {
+      const j = await api("/items/archive", {
+        method: "POST",
+        body: JSON.stringify({ id })
+      });
+
+      if (j.already_archived) {
+        setStatus("Already archived.", "good");
+      } else {
+        setStatus("Archived.", "good");
+      }
+    } catch (e) {
+      setStatus(`Archive failed: ${e.message || String(e)}`, "bad");
+    } finally {
+      try {
+        await loadItems();
+      } catch (_) {
+        // Keep the archive error visible if refresh itself fails.
+      }
+    }
+  }
+
   function bind() {
     el("saveBtn")?.addEventListener("click", () => {
       saveNewItem().catch((e) => setStatus(e.message || String(e), "bad"));
     });
 
-    el("archiveBtn")?.addEventListener("click", () => {
-      setStatus("Archiving comes in the quota-safe archive patch.", "bad");
+    el("archiveBtn")?.addEventListener("click", async () => {
+      try {
+        await saveNewItem();
+        setStatus("Saved. Use Archive on the item card to store the HTML snapshot.", "good");
+      } catch (err) {
+        setStatus(err.message || String(err), "bad");
+      }
     });
 
     el("refreshBtn")?.addEventListener("click", () => {

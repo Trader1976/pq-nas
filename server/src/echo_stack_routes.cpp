@@ -1055,6 +1055,207 @@ static std::string read_file_bytes_small_local(const std::filesystem::path& p,
     return out;
 }
 
+struct EchoArchiveFetchResult {
+    bool ok = false;
+    int http_status = 0;
+    std::string error;
+    std::string final_url;
+    std::string html;
+};
+
+static bool looks_like_html_local(const std::string& b) {
+    if (b.empty()) return false;
+
+    const std::size_t scan_n = std::min<std::size_t>(b.size(), 4096);
+    for (std::size_t i = 0; i < scan_n; ++i) {
+        if (b[i] == '\0') return false;
+    }
+
+    const std::string low = lower_ascii_local(b.substr(0, scan_n));
+    return low.find("<!doctype") != std::string::npos ||
+           low.find("<html") != std::string::npos ||
+           low.find("<head") != std::string::npos ||
+           low.find("<body") != std::string::npos ||
+           low.find("<title") != std::string::npos;
+}
+
+static EchoArchiveFetchResult fetch_archive_html_local(const std::string& input_url,
+                                                       std::size_t max_bytes) {
+    static constexpr int kMaxRedirects = 4;
+
+    EchoArchiveFetchResult out;
+    std::string cur_url = input_url;
+
+    if (max_bytes < 1) {
+        out.error = "bad_archive_limit";
+        return out;
+    }
+
+    for (int hop = 0; hop <= kMaxRedirects; ++hop) {
+        PreviewUrlParts p;
+        std::string perr;
+        if (!parse_preview_url_local(cur_url, &p, &perr)) {
+            out.error = perr;
+            return out;
+        }
+
+        std::string herr;
+        if (!preview_host_allowed_local(p.host, &herr)) {
+            out.error = herr;
+            return out;
+        }
+
+        httplib::Headers headers{
+            {"User-Agent", "DNA-Nexus-EchoStack/0.1"},
+            {"Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1"}
+        };
+
+        std::string body;
+        body.reserve(std::min<std::size_t>(max_bytes, 512 * 1024));
+
+        bool too_large = false;
+        httplib::Result r;
+
+        auto receiver = [&](const char* data, size_t len) {
+            if (body.size() + len > max_bytes) {
+                const std::size_t remain = max_bytes > body.size()
+                    ? max_bytes - body.size()
+                    : 0;
+                if (remain > 0) body.append(data, remain);
+                too_large = true;
+                return false;
+            }
+
+            body.append(data, len);
+            return true;
+        };
+
+        if (p.scheme == "https") {
+            httplib::SSLClient cli(p.host, p.port);
+            cli.set_follow_location(false);
+            cli.set_connection_timeout(5, 0);
+            cli.set_read_timeout(12, 0);
+            cli.enable_server_certificate_verification(true);
+
+            r = cli.Get(p.target.c_str(), headers, receiver);
+        } else {
+            httplib::Client cli(p.host, p.port);
+            cli.set_follow_location(false);
+            cli.set_connection_timeout(5, 0);
+            cli.set_read_timeout(12, 0);
+
+            r = cli.Get(p.target.c_str(), headers, receiver);
+        }
+
+        if (too_large) {
+            out.error = "archive_too_large";
+            return out;
+        }
+
+        if (!r) {
+            out.error = "archive_fetch_failed";
+            return out;
+        }
+
+        out.http_status = r->status;
+
+        if (r->status >= 300 && r->status < 400) {
+            auto loc = redirect_location_local(r);
+            if (!loc.has_value() || loc->empty()) {
+                out.error = "archive_redirect_without_location";
+                return out;
+            }
+
+            cur_url = make_absolute_url_local(p, *loc);
+            continue;
+        }
+
+        if (r->status < 200 || r->status >= 300) {
+            out.error = "archive_http_" + std::to_string(r->status);
+            return out;
+        }
+
+        if (!looks_like_html_local(body)) {
+            out.error = "archive_not_html";
+            return out;
+        }
+
+        out.ok = true;
+        out.final_url = cur_url;
+        out.html = std::move(body);
+        return out;
+    }
+
+    out.error = "archive_too_many_redirects";
+    return out;
+}
+
+static std::string echo_archive_staging_rel_dir_local(const std::string& job_id) {
+    return ".pqnas_echostack/staging/" + job_id;
+}
+
+static std::string echo_archive_final_rel_dir_local(const std::string& item_id) {
+    return ".pqnas_echostack/items/" + item_id + "/archive";
+}
+
+static std::string echo_archive_html_rel_path_local(const std::string& archive_rel_dir) {
+    return archive_rel_dir + "/original.html";
+}
+
+static std::string echo_archive_meta_rel_path_local(const std::string& archive_rel_dir) {
+    return archive_rel_dir + "/meta.json";
+}
+
+static std::uint64_t dir_size_bytes_local(const std::filesystem::path& root) {
+    std::error_code ec;
+    if (!std::filesystem::exists(root, ec) || ec) return 0;
+
+    if (std::filesystem::is_regular_file(root, ec) && !ec) {
+        const auto sz = std::filesystem::file_size(root, ec);
+        return ec ? 0 : static_cast<std::uint64_t>(sz);
+    }
+
+    std::uint64_t total = 0;
+
+    std::filesystem::recursive_directory_iterator it(
+        root,
+        std::filesystem::directory_options::skip_permission_denied,
+        ec
+    );
+
+    std::filesystem::recursive_directory_iterator end;
+
+    for (; !ec && it != end; it.increment(ec)) {
+        std::error_code ec2;
+
+        if (std::filesystem::is_symlink(it->path(), ec2) && !ec2) {
+            it.disable_recursion_pending();
+            continue;
+        }
+
+        if (!std::filesystem::is_regular_file(it->path(), ec2) || ec2) {
+            continue;
+        }
+
+        const auto sz = std::filesystem::file_size(it->path(), ec2);
+        if (ec2) continue;
+
+        const std::uint64_t n = static_cast<std::uint64_t>(sz);
+        if (UINT64_MAX - total < n) return UINT64_MAX;
+        total += n;
+    }
+
+    return total;
+}
+
+static void remove_tree_best_effort_local(const std::filesystem::path& p) {
+    std::error_code ec;
+    std::filesystem::remove_all(p, ec);
+}
+
+static std::string archive_view_url_local(const std::string& item_id) {
+    return "/api/v4/echostack/archive/view?id=" + item_id;
+}
 static EchoStackItemRec mutable_from_json_local(const json& j,
                                                 const EchoStackItemRec& base,
                                                 std::int64_t now) {
@@ -1614,15 +1815,378 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
             {"ok", true}
         }.dump());
     });
-
-    srv.Post("/api/v4/echostack/items/archive", [deps](const httplib::Request& req, httplib::Response& res) {
+        srv.Get("/api/v4/echostack/archive/view", [deps](const httplib::Request& req, httplib::Response& res) {
         std::string fp, role;
         if (!require_actor_local(deps, req, res, &fp, &role)) return;
 
-        deps.reply_json(res, 501, json{
-            {"ok", false},
-            {"error", "not_implemented"},
-            {"message", "Echo Stack archiving is reserved for the quota-safe archive patch"}
+        const std::string id = req.has_param("id") ? req.get_param_value("id") : "";
+        if (id.empty() || id.size() > 160) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "id required"}
+            }.dump());
+            return;
+        }
+
+        std::string ierr;
+        auto rec = deps.echo_index->get_owner_item(fp, id, &ierr);
+        if (!rec.has_value() ||
+            rec->archive_status != "archived" ||
+            rec->archive_rel_dir.empty()) {
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "archive not found"}
+            }.dump());
+            return;
+        }
+
+        if (!deps.user_dir_for_fp || !deps.users) {
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "user storage resolver not configured"}
+            }.dump());
+            return;
+        }
+
+        const std::filesystem::path user_dir = deps.user_dir_for_fp(*deps.users, fp);
+        const std::string html_rel = echo_archive_html_rel_path_local(rec->archive_rel_dir);
+
+        std::filesystem::path html_abs;
+        std::string perr;
+        if (!pqnas::resolve_user_path_strict(user_dir, html_rel, &html_abs, &perr)) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "invalid_path"},
+                {"message", "archive path invalid"}
+            }.dump());
+            return;
+        }
+
+        std::string rerr;
+        std::string html = read_file_bytes_small_local(html_abs, 4ull * 1024ull * 1024ull, &rerr);
+        if (!rerr.empty()) {
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "archive HTML not found"}
+            }.dump());
+            return;
+        }
+
+        // Defense-in-depth:
+        // - sandbox disables scripts/forms/popups/top-navigation unless explicitly allowed
+        // - default-src none prevents the archived page from phoning home
+        // - img-src only allows embedded data/blob images, not remote images
+        res.set_header("Cache-Control", "private, no-store");
+        res.set_header("X-Content-Type-Options", "nosniff");
+        res.set_header(
+            "Content-Security-Policy",
+            "sandbox; default-src 'none'; script-src 'none'; connect-src 'none'; "
+            "img-src data: blob:; media-src data: blob:; style-src 'unsafe-inline'; "
+            "font-src data:; frame-ancestors 'self'"
+        );
+
+        res.set_content(html, "text/html; charset=utf-8");
+    });
+
+    srv.Post("/api/v4/echostack/items/archive", [deps](const httplib::Request& req, httplib::Response& res) {
+        static constexpr std::uint64_t kMaxArchiveHtmlBytes = 3ull * 1024ull * 1024ull;
+        static constexpr std::uint64_t kArchiveMetaReserveBytes = 16ull * 1024ull;
+
+        std::string fp, role;
+        if (!require_actor_local(deps, req, res, &fp, &role)) return;
+
+        if (!origin_allowed_local(deps, req)) {
+            audit_local(deps, "v4.echostack_archive_fail", "fail", {
+                {"actor_fp", fp},
+                {"reason", "origin_mismatch"}
+            });
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "origin_mismatch"},
+                {"message", "same-origin request required"}
+            }.dump());
+            return;
+        }
+
+        const json body = parse_body_json_local(req);
+        if (!body.is_object()) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid json"}
+            }.dump());
+            return;
+        }
+
+        const std::string id = json_string_local(body, "id", "", 160);
+        if (id.empty()) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "id required"}
+            }.dump());
+            return;
+        }
+
+        std::string ierr;
+        auto rec_opt = deps.echo_index->get_owner_item(fp, id, &ierr);
+        if (!rec_opt.has_value()) {
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "Echo Stack item not found"}
+            }.dump());
+            return;
+        }
+
+        EchoStackItemRec rec = *rec_opt;
+
+        if (rec.archive_status == "archiving") {
+            deps.reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "already_archiving"},
+                {"message", "Archive is already in progress"}
+            }.dump());
+            return;
+        }
+
+        if (rec.archive_status == "archived" && !rec.archive_rel_dir.empty()) {
+            deps.reply_json(res, 200, json{
+                {"ok", true},
+                {"already_archived", true},
+                {"archive_view_url", archive_view_url_local(rec.id)},
+                {"item", item_json_local(rec)}
+            }.dump());
+            return;
+        }
+
+        if (!deps.user_dir_for_fp || !deps.users) {
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "Echo Stack archive dependencies not configured"}
+            }.dump());
+            return;
+        }
+
+        const std::filesystem::path user_dir = deps.user_dir_for_fp(*deps.users, fp);
+
+        const std::string job_id =
+            "esa_" + (deps.random_b64url ? deps.random_b64url(18) : std::to_string(deps.now_epoch ? deps.now_epoch() : 0));
+
+        const std::string staging_rel_dir = echo_archive_staging_rel_dir_local(job_id);
+        const std::string staging_html_rel = echo_archive_html_rel_path_local(staging_rel_dir);
+        const std::string staging_meta_rel = echo_archive_meta_rel_path_local(staging_rel_dir);
+
+        std::filesystem::path staging_html_abs;
+        std::filesystem::path staging_meta_abs;
+        std::string perr;
+
+        if (!pqnas::resolve_user_path_strict(user_dir, staging_html_rel, &staging_html_abs, &perr) ||
+            !pqnas::resolve_user_path_strict(user_dir, staging_meta_rel, &staging_meta_abs, &perr)) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "invalid_path"},
+                {"message", "archive staging path invalid"}
+            }.dump());
+            return;
+        }
+
+        const std::uint64_t quota_probe_bytes = kMaxArchiveHtmlBytes + kArchiveMetaReserveBytes;
+
+        pqnas::QuotaCheckResult qc = pqnas::quota_check_for_upload_v1(
+            *deps.users,
+            fp,
+            user_dir,
+            staging_html_rel,
+            quota_probe_bytes
+        );
+
+        if (!qc.ok) {
+            const int http = qc.error == "quota_exceeded" ? 507 : 403;
+
+            audit_local(deps, "v4.echostack_archive_fail", "fail", {
+                {"actor_fp", fp},
+                {"item_id", id},
+                {"reason", qc.error.empty() ? "quota_check_failed" : qc.error},
+                {"incoming_bytes", std::to_string(static_cast<unsigned long long>(quota_probe_bytes))},
+                {"used_bytes", std::to_string(static_cast<unsigned long long>(qc.used_bytes))},
+                {"quota_bytes", std::to_string(static_cast<unsigned long long>(qc.quota_bytes))}
+            });
+
+            deps.reply_json(res, http, json{
+                {"ok", false},
+                {"error", qc.error.empty() ? "quota_check_failed" : qc.error},
+                {"message", qc.error == "quota_exceeded"
+                    ? "Archive would exceed storage quota"
+                    : "Archive quota check failed"},
+                {"used_bytes", qc.used_bytes},
+                {"quota_bytes", qc.quota_bytes},
+                {"incoming_bytes", quota_probe_bytes},
+                {"would_used_bytes", qc.would_used_bytes}
+            }.dump());
+            return;
+        }
+
+        const std::int64_t now1 = deps.now_epoch ? deps.now_epoch() : 0;
+
+        rec.archive_status = "archiving";
+        rec.archive_error.clear();
+        rec.updated_epoch = now1;
+
+        std::string uerr;
+        (void)deps.echo_index->update_archive_fields(rec, &uerr);
+
+        auto fail_archive = [&](int http,
+                                const std::string& code,
+                                const std::string& message,
+                                const std::string& reason) {
+            remove_tree_best_effort_local(staging_html_abs.parent_path());
+
+            rec.archive_status = "failed";
+            rec.archive_error = reason.empty() ? code : reason;
+            rec.updated_epoch = deps.now_epoch ? deps.now_epoch() : now1;
+
+            std::string ferr;
+            (void)deps.echo_index->update_archive_fields(rec, &ferr);
+
+            audit_local(deps, "v4.echostack_archive_fail", "fail", {
+                {"actor_fp", fp},
+                {"item_id", id},
+                {"reason", rec.archive_error}
+            });
+
+            deps.reply_json(res, http, json{
+                {"ok", false},
+                {"error", code},
+                {"message", message},
+                {"archive_error", rec.archive_error}
+            }.dump());
+        };
+
+        const std::string archive_source_url = !rec.final_url.empty() ? rec.final_url : rec.url;
+
+        EchoArchiveFetchResult fetched = fetch_archive_html_local(
+            archive_source_url,
+            static_cast<std::size_t>(kMaxArchiveHtmlBytes)
+        );
+
+        if (!fetched.ok) {
+            fail_archive(
+                fetched.error == "archive_too_large" ? 413 : 502,
+                fetched.error.empty() ? "archive_fetch_failed" : fetched.error,
+                "failed to fetch page archive",
+                fetched.error
+            );
+            return;
+        }
+
+        std::string werr;
+        if (!write_bytes_atomic_local(staging_html_abs,
+                                      fetched.html,
+                                      deps.random_b64url ? deps.random_b64url(8) : "tmp",
+                                      &werr)) {
+            fail_archive(500, "archive_write_failed", "failed to write archive HTML", werr);
+            return;
+        }
+
+        const std::int64_t archived_now = deps.now_epoch ? deps.now_epoch() : now1;
+
+        const json meta = {
+            {"item_id", rec.id},
+            {"url", rec.url},
+            {"final_url", fetched.final_url},
+            {"title", rec.title},
+            {"archived_epoch", archived_now},
+            {"format", "html_snapshot_v1"},
+            {"max_html_bytes", kMaxArchiveHtmlBytes}
+        };
+
+        if (!write_bytes_atomic_local(staging_meta_abs,
+                                      meta.dump(2),
+                                      deps.random_b64url ? deps.random_b64url(8) : "tmp",
+                                      &werr)) {
+            fail_archive(500, "archive_meta_write_failed", "failed to write archive metadata", werr);
+            return;
+        }
+
+        const std::filesystem::path staging_dir_abs = staging_html_abs.parent_path();
+        const std::uint64_t staged_bytes = dir_size_bytes_local(staging_dir_abs);
+
+        std::string qerr;
+        if (!post_write_quota_ok_local(deps, fp, user_dir, &qerr)) {
+            fail_archive(507, "quota_exceeded", "Archive exceeded storage quota", qerr);
+            return;
+        }
+
+        const std::string final_rel_dir = echo_archive_final_rel_dir_local(rec.id);
+        std::filesystem::path final_html_abs;
+        if (!pqnas::resolve_user_path_strict(user_dir,
+                                             echo_archive_html_rel_path_local(final_rel_dir),
+                                             &final_html_abs,
+                                             &perr)) {
+            fail_archive(400, "invalid_archive_path", "archive final path invalid", perr);
+            return;
+        }
+
+        const std::filesystem::path final_dir_abs = final_html_abs.parent_path();
+
+        std::error_code ec;
+        std::filesystem::create_directories(final_dir_abs.parent_path(), ec);
+        if (ec) {
+            fail_archive(500, "archive_mkdir_failed", "failed to create archive directory", ec.message());
+            return;
+        }
+
+        // If a stale failed archive directory exists, replace it only after staging
+        // is fully written and quota-checked.
+        std::filesystem::remove_all(final_dir_abs, ec);
+        ec.clear();
+
+        std::filesystem::rename(staging_dir_abs, final_dir_abs, ec);
+        if (ec) {
+            fail_archive(500, "archive_commit_failed", "failed to commit archive", ec.message());
+            return;
+        }
+
+        rec.final_url = fetched.final_url;
+        rec.archive_status = "archived";
+        rec.archive_error.clear();
+        rec.archive_rel_dir = final_rel_dir;
+        rec.archive_bytes = staged_bytes;
+        rec.archived_epoch = archived_now;
+        rec.updated_epoch = archived_now;
+
+        uerr.clear();
+        if (!deps.echo_index->update_archive_fields(rec, &uerr)) {
+            audit_local(deps, "v4.echostack_archive_db_update_fail", "fail", {
+                {"actor_fp", fp},
+                {"item_id", id},
+                {"reason", uerr}
+            });
+
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "archive_db_update_failed"},
+                {"message", "archive was written but database update failed"}
+            }.dump());
+            return;
+        }
+
+        audit_local(deps, "v4.echostack_archive_ok", "ok", {
+            {"actor_fp", fp},
+            {"item_id", id},
+            {"bytes", std::to_string(static_cast<unsigned long long>(staged_bytes))}
+        });
+
+        deps.reply_json(res, 200, json{
+            {"ok", true},
+            {"archive_view_url", archive_view_url_local(rec.id)},
+            {"item", item_json_local(rec)}
         }.dump());
     });
 }
