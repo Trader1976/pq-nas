@@ -252,10 +252,15 @@ target_compile_options(pqnas_server PRIVATE
         ${QRENCODE_CFLAGS_OTHER}
 )
 
+target_compile_definitions(pqnas_server PRIVATE
+        CPPHTTPLIB_OPENSSL_SUPPORT
+)
+
 target_link_libraries(pqnas_server PRIVATE
         pqnas_verify_v4
         pqnas_dna_pqcore_mlkem
         ${QRENCODE_LIBRARIES}
+        OpenSSL::SSL
         OpenSSL::Crypto
         SQLite::SQLite3
         Threads::Threads

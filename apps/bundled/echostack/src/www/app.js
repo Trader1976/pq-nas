@@ -57,6 +57,7 @@
   function metaLine(item) {
     const parts = [];
 
+    if (item.site_name) parts.push(item.site_name);
     if (item.collection) parts.push(`Collection: ${item.collection}`);
     if (item.tags_text) parts.push(`Tags: ${item.tags_text}`);
     if (item.favorite) parts.push("Favorite");
@@ -135,6 +136,40 @@
 
       url.href = item.url || "#";
       url.textContent = item.url || "";
+
+      if (item.description) {
+        const desc = document.createElement("div");
+        desc.className = "itemDescription";
+        desc.textContent = item.description;
+        url.insertAdjacentElement("afterend", desc);
+      }
+
+      if (item.preview_image_url) {
+        const previewWrap = document.createElement("a");
+        previewWrap.className = "itemPreview";
+        previewWrap.href = item.url || item.preview_image_url;
+        previewWrap.target = "_blank";
+        previewWrap.rel = "noopener noreferrer";
+
+        const previewImg = document.createElement("img");
+        previewImg.alt = "";
+        previewImg.loading = "lazy";
+        previewImg.referrerPolicy = "no-referrer";
+        previewImg.src = item.preview_image_url;
+        previewImg.onerror = () => {
+          previewWrap.remove();
+        };
+
+        previewWrap.appendChild(previewImg);
+
+        const descEl = node.querySelector(".itemDescription");
+        if (descEl) {
+          descEl.insertAdjacentElement("afterend", previewWrap);
+        } else {
+          url.insertAdjacentElement("afterend", previewWrap);
+        }
+      }
+
       meta.textContent = metaLine(item);
       notes.value = item.notes || "";
 
@@ -177,18 +212,35 @@
       return;
     }
 
+    setStatus("Fetching preview…");
+
+    let preview = {};
+    try {
+      preview = await api("/preview", {
+        method: "POST",
+        body: JSON.stringify({ url })
+      });
+    } catch (e) {
+      // Preview is best-effort. Saving the link should still work.
+      preview = {};
+    }
+
     setStatus("Saving…");
 
     await api("/items/create", {
       method: "POST",
       body: JSON.stringify({
         url,
-        title,
+        final_url: preview.final_url || "",
+        title: title || preview.title || url,
+        description: preview.description || "",
+        site_name: preview.site_name || "",
+        favicon_url: preview.favicon_url || faviconFromUrl(url),
+        preview_image_url: preview.preview_image_url || "",
         collection,
         tags_text: tags,
         notes,
-        read_state: "unread",
-        favicon_url: faviconFromUrl(url)
+        read_state: "unread"
       })
     });
 
