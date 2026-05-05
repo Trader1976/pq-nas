@@ -1,0 +1,10 @@
+html,
+body {
+    min-height: 100%;
+}
+
+body {
+    background:
+        linear-gradient(rgba(3, 7, 18, 0.72), rgba(3, 7, 18, 0.72)),
+        url("./assets/background.png") center center / cover fixed no-repeat;
+}
