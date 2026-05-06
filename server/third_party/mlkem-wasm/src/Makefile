@@ -28,13 +28,18 @@ endif
 
 # mlkem-native source and header files
 #
+# Use the authoritative vendored copy in server/third_party/mlkem-native.
+# This avoids a nested submodule/gitlink under src/mlkem-native and keeps
+# fresh clones reproducible without requiring recursive submodule setup.
+MLKEM_NATIVE_DIR ?= ../../mlkem-native
+
 # If you are not concerned about minimizing for a specific backend,
 # you can just include _all_ source files into your build.
 MLK_SOURCE=$(wildcard                    \
-	mlkem-native/mlkem/src/*.c           \
-	mlkem-native/mlkem/src/**/*.c        \
-	mlkem-native/mlkem/src/**/**/*.c     \
-	mlkem-native/mlkem/src/**/**/**/*.c)
+	$(MLKEM_NATIVE_DIR)/mlkem/src/*.c           \
+	$(MLKEM_NATIVE_DIR)/mlkem/src/**/*.c        \
+	$(MLKEM_NATIVE_DIR)/mlkem/src/**/**/*.c     \
+	$(MLKEM_NATIVE_DIR)/mlkem/src/**/**/**/*.c)
 
 # Wrapper source code
 APP_SOURCE=$(wildcard *.c)
@@ -63,6 +68,7 @@ CFLAGS := \
 	-O3 \
 	$(CFLAGS)
 
+CFLAGS += -I$(MLKEM_NATIVE_DIR)
 CFLAGS += -DMLK_CONFIG_NAMESPACE_PREFIX=mlkem
 
 BINARY_NAME_FULL_768=$(BUILD_DIR)/$(BIN)

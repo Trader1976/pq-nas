@@ -3802,6 +3802,7 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
         // - img-src only allows embedded data/blob images, not remote images
         res.set_header("Cache-Control", "private, no-store");
         res.set_header("X-Content-Type-Options", "nosniff");
+            res.set_header("X-Frame-Options", "SAMEORIGIN");
             res.set_header(
                 "Content-Security-Policy",
                 "sandbox allow-same-origin; default-src 'none'; script-src 'none'; connect-src 'none'; "

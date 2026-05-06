@@ -464,6 +464,52 @@ static bool path_has_prefix_components_local(const std::filesystem::path& root,
     return true;
 }
 
+static bool path_has_no_symlink_components_below_root_local(
+    const std::filesystem::path& root,
+    const std::filesystem::path& child,
+    std::string* err
+) {
+    if (err) err->clear();
+
+    const auto rnorm = root.lexically_normal();
+    const auto cnorm = child.lexically_normal();
+
+    if (!path_has_prefix_components_local(rnorm, cnorm)) {
+        if (err) *err = "path outside owner root";
+        return false;
+    }
+
+    auto ri = rnorm.begin();
+    auto ci = cnorm.begin();
+
+    for (; ri != rnorm.end(); ++ri, ++ci) {
+        if (ci == cnorm.end()) {
+            if (err) *err = "path shorter than owner root";
+            return false;
+        }
+    }
+
+    std::filesystem::path cur = rnorm;
+
+    for (; ci != cnorm.end(); ++ci) {
+        cur /= *ci;
+
+        std::error_code ec;
+        const auto st = std::filesystem::symlink_status(cur, ec);
+        if (ec) {
+            if (err) *err = "symlink_status failed: " + ec.message();
+            return false;
+        }
+
+        if (std::filesystem::is_symlink(st)) {
+            if (err) *err = "symlink component rejected";
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static std::filesystem::path unique_child_path_local(const std::filesystem::path& dir,
                                                      const std::string& filename) {
     std::filesystem::path base(filename);
@@ -2346,6 +2392,24 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
             return;
         }
 
+        std::string dest_symlink_err;
+        if (!path_has_no_symlink_components_below_root_local(owner_root, dest_dir, &dest_symlink_err)) {
+            audit_local(deps, "public.dropzones_finish_fail", "fail", {
+                {"dropzone_id", rec.id},
+                {"upload_id", upload_id},
+                {"owner_fp", rec.owner_fp},
+                {"reason", "destination_symlink_rejected"},
+                {"detail", dest_symlink_err}
+            });
+
+            reply_json_local(deps, res, 400, json{
+                {"ok", false},
+                {"error", "invalid_destination"},
+                {"message", "Upload destination is not safe."}
+            });
+            return;
+        }
+
         const std::string original_filename = meta.value("original_filename", "upload.bin");
         const std::string safe_filename =
             safe_upload_filename_local(meta.value("safe_filename", original_filename));
@@ -2698,6 +2762,23 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
                 {"ok", false},
                 {"error", "server_error"},
                 {"message", "failed to create destination directory"}
+            });
+            return;
+        }
+
+        std::string dest_symlink_err;
+        if (!path_has_no_symlink_components_below_root_local(owner_root, dest_dir, &dest_symlink_err)) {
+            audit_local(deps, "public.dropzones_upload_fail", "fail", {
+                {"dropzone_id", rec.id},
+                {"owner_fp", rec.owner_fp},
+                {"reason", "legacy_destination_symlink_rejected"},
+                {"detail", dest_symlink_err}
+            });
+
+            reply_json_local(deps, res, 400, json{
+                {"ok", false},
+                {"error", "invalid_destination"},
+                {"message", "Upload destination is not safe."}
             });
             return;
         }

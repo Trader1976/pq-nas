@@ -5,7 +5,7 @@
 
 #define MLK_CONFIG_API_PARAMETER_SET MLK_CONFIG_PARAMETER_SET
 #define MLK_CONFIG_API_NAMESPACE_PREFIX mlkem
-#include "mlkem-native/mlkem/mlkem_native.h"
+#include "mlkem/mlkem_native.h"
 
 
 // ML-KEM-768 wrapper functions using deterministic variants

@@ -18,6 +18,20 @@ static void bind_text(sqlite3_stmt* st, int idx, const std::string& s) {
     sqlite3_bind_text(st, idx, s.c_str(), -1, SQLITE_TRANSIENT);
 }
 
+static std::string escape_like_pattern(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() * 2);
+
+    for (char c : s) {
+        if (c == '\\' || c == '%' || c == '_') {
+            out.push_back('\\');
+        }
+        out.push_back(c);
+    }
+
+    return out;
+}
+
 static EchoStackItemRec row_to_rec(sqlite3_stmt* st) {
     EchoStackItemRec r;
     r.id                = col_text(st, 0);
@@ -262,12 +276,12 @@ FROM echo_stack_items
 WHERE owner_fp=?1
   AND (
     ?2 = ''
-    OR title LIKE ?3
-    OR url LIKE ?3
-    OR description LIKE ?3
-    OR notes LIKE ?3
-    OR tags_text LIKE ?3
-    OR collection LIKE ?3
+    OR title LIKE ?3 ESCAPE '\\'
+    OR url LIKE ?3 ESCAPE '\\'
+    OR description LIKE ?3 ESCAPE '\\'
+    OR notes LIKE ?3 ESCAPE '\\'
+    OR tags_text LIKE ?3 ESCAPE '\\'
+    OR collection LIKE ?3 ESCAPE '\\'
   )
 ORDER BY created_epoch DESC, id DESC
 LIMIT ?4
@@ -279,7 +293,7 @@ LIMIT ?4
         return out;
     }
 
-    const std::string pat = "%" + query + "%";
+    const std::string pat = "%" + escape_like_pattern(query) + "%";
 
     bind_text(st, 1, owner_fp);
     bind_text(st, 2, query);
