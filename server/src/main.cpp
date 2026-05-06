@@ -1208,6 +1208,63 @@ static void record_user_file_activity_best_effort_local(pqnas::UsersRegistry& us
     (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
 }
 
+static std::string activity_share_kind_local(const std::string& share_type) {
+    if (share_type == "dir") return "folder";
+    if (share_type == "file") return "file";
+    if (share_type == "album") return "album";
+    if (!share_type.empty()) return share_type;
+    return "share";
+}
+
+static void record_share_activity_best_effort_local(pqnas::UsersRegistry& users,
+                                                    const std::string& actor_fp,
+                                                    const std::string& event_type,
+                                                    const pqnas::ShareLink& share) {
+    if (actor_fp.empty() || event_type.empty() || share.owner_fp.empty()) return;
+
+    std::filesystem::path user_root;
+    try {
+        user_root = user_dir_for_fp(users, share.owner_fp);
+    } catch (...) {
+        return;
+    }
+
+    if (user_root.empty()) return;
+
+    const std::string share_kind = activity_share_kind_local(share.type);
+    const std::string scope_kind = share.scope_kind.empty() ? "user" : share.scope_kind;
+
+    pqnas::activity::ActivityEvent ev;
+    ev.owner_user_id = share.owner_fp;
+
+    ev.actor.user_id = actor_fp;
+    ev.actor.display_name = activity_user_display_name_local(users, actor_fp);
+    ev.actor.kind = "user";
+
+    ev.event_type = event_type;
+
+    // Deliberately do not store token/share_id/workspace_id in Activity.
+    ev.scope_type = "share";
+    ev.scope_id = "";
+
+    ev.target_kind = share_kind;
+    ev.target_path = share.path;
+    ev.target_name = activity_basename_local(share.path, share_kind);
+
+    ev.details = json{
+            {"scope_type", scope_kind},
+            {"share_kind", share_kind},
+            {"path", share.path}
+    };
+
+    if (!share.expires_at.empty()) {
+        ev.details["expires_at"] = share.expires_at;
+    }
+
+    std::string activity_err;
+    (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
+}
+
 namespace {
 
 
@@ -40007,6 +40064,7 @@ srv.Post("/api/v4/shares/create", [&](const httplib::Request& req, httplib::Resp
             audit_append(ev);
         }
     audit_ok(out);
+    record_share_activity_best_effort_local(users, fp_hex, "share.created", out);
 
     json resp = {
         {"ok", true},
@@ -40133,6 +40191,7 @@ srv.Post("/api/v4/shares/create", [&](const httplib::Request& req, httplib::Resp
         (void)share_pq.revoke_invites_for_share(token, nullptr);
 
         audit_ok(token_short);
+        record_share_activity_best_effort_local(users, fp_hex, "share.disabled", *sopt);
         reply(200, json{{"ok", true}});
 
 });

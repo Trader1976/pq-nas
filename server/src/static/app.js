@@ -2478,9 +2478,12 @@
     }
 
     function activityIconFor(type) {
-        if (type === "file.trashed") return "🗑";
-        if (type === "file.restored") return "↩";
-        if (type === "file.purged") return "✕";
+        function activityIconFor(type) {
+            if (type === "share.created") return "🔗";
+            if (type === "share.disabled") return "🚫";
+            if (type === "file.trashed") return "🗑";
+            if (type === "file.restored") return "↩";
+            if (type === "file.purged") return "✕";
         if (String(type || "").startsWith("security.")) return "◇";
         if (String(type || "").startsWith("dropzone.")) return "↓";
         return "•";
