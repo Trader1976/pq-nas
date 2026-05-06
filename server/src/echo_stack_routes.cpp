@@ -2219,6 +2219,110 @@ static bool parse_css_url_token_local(const std::string& css,
     return true;
 }
 
+
+static std::string css_unquote_raw_url_local(const std::string& raw) {
+    std::string s = trim_copy_local(raw);
+
+    if (s.size() >= 2 &&
+        ((s.front() == '"' && s.back() == '"') ||
+         (s.front() == '\'' && s.back() == '\''))) {
+        s = s.substr(1, s.size() - 2);
+    }
+
+    return trim_copy_local(s);
+}
+
+static bool css_raw_url_is_local_archive_asset_local(const std::string& raw) {
+    const std::string low = lower_ascii_local(css_unquote_raw_url_local(raw));
+
+    return starts_with_local(low, "/api/v4/echostack/archive/asset") ||
+           starts_with_local(low, "api/v4/echostack/archive/asset");
+}
+
+static bool css_url_token_is_inside_import_statement_local(const std::string& low,
+                                                           std::size_t url_pos) {
+    if (url_pos >= low.size()) return false;
+
+    std::size_t start = 0;
+
+    const std::size_t semi = low.rfind(';', url_pos);
+    const std::size_t open_brace = low.rfind('{', url_pos);
+    const std::size_t close_brace = low.rfind('}', url_pos);
+
+    auto bump_start = [&](std::size_t x) {
+        if (x != std::string::npos && x + 1 > start) start = x + 1;
+    };
+
+    bump_start(semi);
+    bump_start(open_brace);
+    bump_start(close_brace);
+
+    const std::size_t at = low.rfind("@import", url_pos);
+    return at != std::string::npos && at >= start;
+}
+
+static bool parse_css_import_statement_url_local(const std::string& css,
+                                                 const std::string& low,
+                                                 std::size_t at_pos,
+                                                 std::size_t* out_end_pos,
+                                                 std::string* out_raw_url) {
+    if (out_end_pos) *out_end_pos = std::string::npos;
+    if (out_raw_url) *out_raw_url = "";
+
+    if (at_pos + 7 > low.size() || low.compare(at_pos, 7, "@import") != 0) {
+        return false;
+    }
+
+    if (at_pos > 0) {
+        const char prev = low[at_pos - 1];
+        if (std::isalnum(static_cast<unsigned char>(prev)) ||
+            prev == '_' ||
+            prev == '-') {
+            return false;
+        }
+    }
+
+    std::size_t p = at_pos + 7;
+
+    if (p < low.size()) {
+        const char next = low[p];
+        if (std::isalnum(static_cast<unsigned char>(next)) ||
+            next == '_' ||
+            next == '-') {
+            return false;
+        }
+    }
+
+    while (p < css.size() && std::isspace(static_cast<unsigned char>(css[p]))) ++p;
+    if (p >= css.size()) return false;
+
+    std::size_t value_end = std::string::npos;
+    std::string raw;
+
+    if (p + 4 <= low.size() && low.compare(p, 4, "url(") == 0) {
+        if (!parse_css_url_token_local(css, p, &value_end, &raw)) {
+            return false;
+        }
+    } else if (css[p] == '"' || css[p] == '\'') {
+        const char quote = css[p++];
+        const std::size_t start = p;
+        const std::size_t end = css.find(quote, start);
+        if (end == std::string::npos) return false;
+
+        raw = css.substr(start, end - start);
+        value_end = end + 1;
+    } else {
+        return false;
+    }
+
+    const std::size_t semi = css.find(';', value_end);
+    if (semi == std::string::npos) return false;
+
+    if (out_end_pos) *out_end_pos = semi + 1;
+    if (out_raw_url) *out_raw_url = raw;
+    return true;
+}
+
 static std::string rewrite_css_url_assets_into_staging_local(
     const EchoStackRoutesDeps& deps,
     const std::string& fp,
@@ -2262,6 +2366,13 @@ static std::string rewrite_css_url_assets_into_staging_local(
         }
 
         out.append(css_text, cursor, pos - cursor);
+
+        if (css_url_token_is_inside_import_statement_local(low, pos) ||
+            css_raw_url_is_local_archive_asset_local(raw)) {
+            out.append(css_text, pos, token_end - pos);
+            cursor = token_end;
+            continue;
+        }
 
         std::string abs;
         if (!candidate_css_url_from_raw_local(raw, css_parts, &abs)) {
@@ -2414,6 +2525,195 @@ static std::string rewrite_css_url_assets_into_staging_local(
     return out;
 }
 
+
+static std::string rewrite_css_imports_into_staging_local(
+    const EchoStackRoutesDeps& deps,
+    const std::string& fp,
+    const std::filesystem::path& user_dir,
+    const std::string& item_id,
+    const std::string& staging_rel_dir,
+    const std::string& css_url,
+    const std::string& css_text,
+    std::uint64_t* total_budget_used,
+    std::size_t* next_asset_index,
+    std::unordered_map<std::string, std::string>* css_asset_url_to_local,
+    unsigned depth,
+    std::size_t* out_import_count,
+    std::uint64_t* out_import_bytes,
+    std::size_t* out_embedded_count,
+    std::uint64_t* out_embedded_bytes
+) {
+    if (out_import_count) *out_import_count = 0;
+    if (out_import_bytes) *out_import_bytes = 0;
+    if (out_embedded_count) *out_embedded_count = 0;
+    if (out_embedded_bytes) *out_embedded_bytes = 0;
+
+    if (depth >= 2) return css_text;
+
+    PreviewUrlParts css_parts;
+    std::string css_parse_err;
+    if (!parse_preview_url_local(css_url, &css_parts, &css_parse_err)) {
+        return css_text;
+    }
+
+    const std::string low = lower_ascii_local(css_text);
+
+    std::string out;
+    out.reserve(css_text.size() + 1024);
+
+    std::size_t cursor = 0;
+    std::size_t pos = 0;
+
+    const std::string referer =
+        css_parts.origin.empty() ? std::string() : css_parts.origin + "/";
+
+    while ((pos = low.find("@import", cursor)) != std::string::npos) {
+        std::size_t stmt_end = std::string::npos;
+        std::string raw;
+
+        if (!parse_css_import_statement_url_local(css_text, low, pos, &stmt_end, &raw)) {
+            out.append(css_text, cursor, (pos + 7) - cursor);
+            cursor = pos + 7;
+            continue;
+        }
+
+        out.append(css_text, cursor, pos - cursor);
+
+        if (css_raw_url_is_local_archive_asset_local(raw)) {
+            out.append(css_text, pos, stmt_end - pos);
+            cursor = stmt_end;
+            continue;
+        }
+
+        std::string import_url;
+        if (!candidate_css_url_from_raw_local(raw, css_parts, &import_url)) {
+            out.append(css_text, pos, stmt_end - pos);
+            cursor = stmt_end;
+            continue;
+        }
+
+        EchoTextAssetFetchResult fetched = fetch_text_asset_local(
+            import_url,
+            static_cast<std::size_t>(kEchoArchiveMaxSingleCssBytesLocal),
+            referer
+        );
+
+        if (!fetched.ok) {
+            PreviewUrlParts import_parts;
+            std::string import_parse_err;
+            (void)parse_preview_url_local(import_url, &import_parts, &import_parse_err);
+
+            audit_local(deps, "v4.echostack_archive_css_import_skip", "fail", {
+                {"actor_fp", fp},
+                {"item_id", item_id},
+                {"reason", fetched.error.empty() ? "css_import_fetch_failed" : fetched.error},
+                {"css_import_host", import_parts.host},
+                {"css_import_target", cap_string_local(import_parts.target, 500)},
+                {"css_import_url", cap_string_local(import_url, 800)}
+            });
+
+            out.append(css_text, pos, stmt_end - pos);
+            cursor = stmt_end;
+            continue;
+        }
+
+        const std::string import_base_url =
+            fetched.final_url.empty() ? import_url : fetched.final_url;
+
+        std::string import_css = fetched.text;
+
+        std::size_t nested_import_count = 0;
+        std::uint64_t nested_import_bytes = 0;
+        std::size_t nested_embedded_count = 0;
+        std::uint64_t nested_embedded_bytes = 0;
+
+        import_css = rewrite_css_imports_into_staging_local(
+            deps,
+            fp,
+            user_dir,
+            item_id,
+            staging_rel_dir,
+            import_base_url,
+            import_css,
+            total_budget_used,
+            next_asset_index,
+            css_asset_url_to_local,
+            depth + 1,
+            &nested_import_count,
+            &nested_import_bytes,
+            &nested_embedded_count,
+            &nested_embedded_bytes
+        );
+
+        if (out_import_count) *out_import_count += nested_import_count;
+        if (out_import_bytes) *out_import_bytes += nested_import_bytes;
+        if (out_embedded_count) *out_embedded_count += nested_embedded_count;
+        if (out_embedded_bytes) *out_embedded_bytes += nested_embedded_bytes;
+
+        std::size_t embedded_count = 0;
+        std::uint64_t embedded_bytes = 0;
+
+        import_css = rewrite_css_url_assets_into_staging_local(
+            deps,
+            fp,
+            user_dir,
+            item_id,
+            staging_rel_dir,
+            import_base_url,
+            import_css,
+            total_budget_used,
+            next_asset_index,
+            css_asset_url_to_local,
+            &embedded_count,
+            &embedded_bytes
+        );
+
+        if (out_embedded_count) *out_embedded_count += embedded_count;
+        if (out_embedded_bytes) *out_embedded_bytes += embedded_bytes;
+
+        const std::uint64_t import_css_bytes =
+            static_cast<std::uint64_t>(import_css.size());
+
+        if (import_css_bytes == 0 ||
+            import_css_bytes > kEchoArchiveMaxSingleCssBytesLocal ||
+            css_text.size() + import_css.size() > kEchoArchiveMaxSingleCssBytesLocal ||
+            (total_budget_used &&
+             *total_budget_used + import_css_bytes > kEchoArchiveMaxTotalBytesLocal)) {
+            audit_local(deps, "v4.echostack_archive_css_import_skip", "fail", {
+                {"actor_fp", fp},
+                {"item_id", item_id},
+                {"reason", "archive_total_limit"},
+                {"css_import_url", cap_string_local(import_url, 800)}
+            });
+
+            out.append(css_text, pos, stmt_end - pos);
+            cursor = stmt_end;
+            continue;
+        }
+
+        out += "/* Echo Stack archived CSS @import: ";
+        out += cap_string_local(import_url, 300);
+        out += " */\n";
+        out += import_css;
+        out += "\n";
+
+        if (out_import_count) ++(*out_import_count);
+        if (out_import_bytes) *out_import_bytes += import_css_bytes;
+
+        audit_local(deps, "v4.echostack_archive_css_import_ok", "success", {
+            {"actor_fp", fp},
+            {"item_id", item_id},
+            {"css_import_url", cap_string_local(import_url, 800)},
+            {"css_import_bytes", std::to_string(import_css_bytes)}
+        });
+
+        cursor = stmt_end;
+    }
+
+    out.append(css_text, cursor, std::string::npos);
+    return out;
+}
+
 static bool archive_css_into_staging_local(const EchoStackRoutesDeps& deps,
                                            const std::string& fp,
                                            const std::filesystem::path& user_dir,
@@ -2485,9 +2785,41 @@ static bool archive_css_into_staging_local(const EchoStackRoutesDeps& deps,
         const std::string css_base_url =
             fetched.final_url.empty() ? css_url : fetched.final_url;
 
-        std::size_t embedded_count_this_css = 0;
-        std::uint64_t embedded_bytes_this_css = 0;
+        std::size_t imported_css_count_this_css = 0;
+        std::uint64_t imported_css_bytes_this_css = 0;
 
+        std::size_t embedded_count_from_imports = 0;
+        std::uint64_t embedded_bytes_from_imports = 0;
+
+        // First: fetch/rewrite CSS @import files.
+        // This handles cases like:
+        //   @import url("https://p.typekit.net/p.css?...");
+        css_to_write = rewrite_css_imports_into_staging_local(
+            deps,
+            fp,
+            user_dir,
+            item_id,
+            staging_rel_dir,
+            css_base_url,
+            css_to_write,
+            &total_budget_used,
+            &css_embedded_asset_index,
+            &css_asset_url_to_local,
+            0,
+            &imported_css_count_this_css,
+            &imported_css_bytes_this_css,
+            &embedded_count_from_imports,
+            &embedded_bytes_from_imports
+        );
+
+        css_embedded_asset_count += embedded_count_from_imports;
+        css_embedded_asset_bytes += embedded_bytes_from_imports;
+
+        std::size_t embedded_count_from_main_css = 0;
+        std::uint64_t embedded_bytes_from_main_css = 0;
+
+        // Second: rewrite normal url(...) assets still present in this CSS.
+        // This handles fonts/background images directly referenced by the main CSS.
         css_to_write = rewrite_css_url_assets_into_staging_local(
             deps,
             fp,
@@ -2499,12 +2831,12 @@ static bool archive_css_into_staging_local(const EchoStackRoutesDeps& deps,
             &total_budget_used,
             &css_embedded_asset_index,
             &css_asset_url_to_local,
-            &embedded_count_this_css,
-            &embedded_bytes_this_css
+            &embedded_count_from_main_css,
+            &embedded_bytes_from_main_css
         );
 
-        css_embedded_asset_count += embedded_count_this_css;
-        css_embedded_asset_bytes += embedded_bytes_this_css;
+        css_embedded_asset_count += embedded_count_from_main_css;
+        css_embedded_asset_bytes += embedded_bytes_from_main_css;
 
         const std::uint64_t css_bytes =
             static_cast<std::uint64_t>(css_to_write.size());
@@ -3722,7 +4054,7 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
 
         const std::int64_t archived_now = deps.now_epoch ? deps.now_epoch() : now1;
 
-        const json meta = {
+        json meta = {
             {"item_id", rec.id},
             {"url", rec.url},
             {"final_url", fetched.final_url},
@@ -3737,6 +4069,12 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
             {"css_bytes", archived_css_bytes}
         };
 
+        const std::filesystem::path staging_dir_abs = staging_html_abs.parent_path();
+
+        // First pass: size of HTML + assets before meta.json exists.
+        std::uint64_t staged_bytes = dir_size_bytes_local(staging_dir_abs);
+        meta["archive_bytes"] = staged_bytes;
+
         if (!write_bytes_atomic_local(staging_meta_abs,
                                       meta.dump(2),
                                       deps.random_b64url ? deps.random_b64url(8) : "tmp",
@@ -3745,8 +4083,17 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
             return;
         }
 
-        const std::filesystem::path staging_dir_abs = staging_html_abs.parent_path();
-        const std::uint64_t staged_bytes = dir_size_bytes_local(staging_dir_abs);
+        // Second pass: include meta.json itself too.
+        staged_bytes = dir_size_bytes_local(staging_dir_abs);
+        meta["archive_bytes"] = staged_bytes;
+
+        if (!write_bytes_atomic_local(staging_meta_abs,
+                                      meta.dump(2),
+                                      deps.random_b64url ? deps.random_b64url(8) : "tmp",
+                                      &werr)) {
+            fail_archive(500, "archive_meta_write_failed", "failed to write archive metadata", werr);
+            return;
+        }
 
         std::string qerr;
         if (!post_write_quota_ok_local(deps, fp, user_dir, &qerr)) {
@@ -3790,6 +4137,7 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
         rec.archive_rel_dir = final_rel_dir;
         rec.archive_bytes = staged_bytes;
         rec.archived_epoch = archived_now;
+        rec.archive_bytes = staged_bytes;
         rec.updated_epoch = archived_now;
 
         uerr.clear();

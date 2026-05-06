@@ -47,6 +47,23 @@
     }
   }
 
+  function fmtBytes(n) {
+    const bytes = Number(n || 0);
+    if (!Number.isFinite(bytes) || bytes <= 0) return "";
+
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let value = bytes;
+    let unit = 0;
+
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit++;
+    }
+
+    if (unit === 0) return `${bytes} B`;
+    return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unit]}`;
+  }
+
   function faviconFromUrl(url) {
     try {
       const u = new URL(url);
@@ -72,6 +89,9 @@
     } else {
       parts.push(`Archive: ${archive}`);
     }
+
+    const archiveBytes = fmtBytes(item.archive_bytes);
+    if (archiveBytes) parts.push(archiveBytes);
 
     const t = fmtTime(item.created_epoch);
     if (t) parts.push(t);
