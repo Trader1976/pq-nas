@@ -338,6 +338,11 @@
             border-left: 1px solid rgba(var(--fg-rgb),0.10);
             min-width: 300px;
             max-width: 360px;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            max-height: calc(100vh - 48px);
+            overflow: hidden;
         }
 
         .activityToolbar{
@@ -346,12 +351,19 @@
             justify-content:space-between;
             gap:10px;
             margin: 8px 0 12px;
+            flex: 0 0 auto;
         }
 
         .activityList{
             display:flex;
             flex-direction:column;
             gap:10px;
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding-right: 4px;
+            overscroll-behavior: contain;
         }
 
         .activityItem{
