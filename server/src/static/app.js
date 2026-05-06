@@ -2487,6 +2487,8 @@
         if (type === "file.trashed") return "🗑";
         if (type === "file.restored") return "↩";
         if (type === "file.purged") return "✕";
+        if (type === "security.device_paired") return "◇";
+        if (type === "security.session_revoked") return "⏻";
         if (String(type || "").startsWith("security.")) return "◇";
         if (String(type || "").startsWith("dropzone.")) return "↓";
         return "•";

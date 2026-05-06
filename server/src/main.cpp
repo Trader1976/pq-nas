@@ -1209,6 +1209,89 @@ static void record_user_file_activity_best_effort_local(pqnas::UsersRegistry& us
 }
 
 
+
+static std::string activity_security_target_name_local(const std::string& name,
+                                                       const std::string& platform,
+                                                       const std::string& fallback) {
+    if (!name.empty()) return name;
+    if (!platform.empty()) return platform + " device";
+    if (!fallback.empty()) return fallback;
+    return "device";
+}
+
+static nlohmann::json activity_security_device_details_local(const std::string& device_name,
+                                                             const std::string& platform,
+                                                             const std::string& app_version,
+                                                             const std::string& device_model,
+                                                             const std::string& device_manufacturer,
+                                                             const std::string& os_version) {
+    nlohmann::json details = nlohmann::json::object();
+
+    details["scope_type"] = "security";
+
+    if (!device_name.empty()) details["device_name"] = device_name;
+    if (!platform.empty()) details["platform"] = platform;
+    if (!app_version.empty()) details["app_version"] = app_version;
+    if (!device_model.empty()) details["device_model"] = device_model;
+    if (!device_manufacturer.empty()) details["device_manufacturer"] = device_manufacturer;
+    if (!os_version.empty()) details["os_version"] = os_version;
+
+    return details;
+}
+
+static nlohmann::json activity_security_device_details_local(const pqnas::TrustedAppDevice& d) {
+    return activity_security_device_details_local(
+        d.device_name,
+        d.platform,
+        d.app_version,
+        d.device_model,
+        d.device_manufacturer,
+        d.os_version
+    );
+}
+
+static void record_security_activity_best_effort_local(pqnas::UsersRegistry& users,
+                                                       const std::string& owner_fp,
+                                                       const std::string& actor_fp,
+                                                       const std::string& event_type,
+                                                       const std::string& target_kind,
+                                                       const std::string& target_name,
+                                                       const nlohmann::json& details) {
+    if (owner_fp.empty() || event_type.empty()) return;
+
+    std::filesystem::path user_root;
+    try {
+        user_root = user_dir_for_fp(users, owner_fp);
+    } catch (...) {
+        return;
+    }
+
+    if (user_root.empty()) return;
+
+    pqnas::activity::ActivityEvent ev;
+    ev.owner_user_id = owner_fp;
+
+    ev.actor.user_id = actor_fp.empty() ? owner_fp : actor_fp;
+    ev.actor.display_name = activity_user_display_name_local(users, ev.actor.user_id);
+    ev.actor.kind = "user";
+
+    ev.event_type = event_type;
+    ev.scope_type = "security";
+
+    // Deliberately do not store device_id/session_id/tokens/full fingerprints in Activity.
+    ev.scope_id = "";
+
+    ev.target_kind = target_kind.empty() ? "security" : target_kind;
+    ev.target_name = target_name.empty() ? ev.target_kind : target_name;
+    ev.target_path = "";
+
+    ev.details = details.is_object() ? details : nlohmann::json::object();
+    ev.details["scope_type"] = "security";
+
+    std::string activity_err;
+    (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
+}
+
 static std::string activity_move_item_kind_local(const std::string& item_type) {
     if (item_type == "dir") return "folder";
     if (item_type == "folder") return "folder";
@@ -9734,6 +9817,24 @@ v5.consume_app_mint =
         out.refresh_exp = refresh_exp;
         out.fingerprint_hex = fingerprint_hex;
         out.role = is_admin ? "admin" : "user";
+
+        record_security_activity_best_effort_local(
+            users,
+            fingerprint_hex,
+            fingerprint_hex,
+            "security.device_paired",
+            "device",
+            activity_security_target_name_local(device_name, platform, "device"),
+            activity_security_device_details_local(
+                device_name,
+                platform.empty() ? "android" : platform,
+                app_version,
+                device_model,
+                device_manufacturer,
+                os_version
+            )
+        );
+
         return true;
     };
 
@@ -9793,8 +9894,33 @@ v5.consume_app_mint =
 
         err.clear();
 
+        pqnas::TrustedAppDevice device_before_revoke;
+        const bool had_device_before_revoke =
+            g_app_tokens.get_device(device_id, &device_before_revoke);
+
+        const bool was_already_revoked =
+            had_device_before_revoke && device_before_revoke.revoked;
+
         if (!g_app_tokens.revoke_refresh_token(refresh_token, device_id, &err)) {
             return false;
+        }
+
+        if (had_device_before_revoke && !was_already_revoked && !device_before_revoke.fingerprint_hex.empty()) {
+            const std::string target_name = activity_security_target_name_local(
+                device_before_revoke.device_name,
+                device_before_revoke.platform,
+                "session"
+            );
+
+            record_security_activity_best_effort_local(
+                users,
+                device_before_revoke.fingerprint_hex,
+                device_before_revoke.fingerprint_hex,
+                "security.session_revoked",
+                "session",
+                target_name,
+                activity_security_device_details_local(device_before_revoke)
+            );
         }
 
         return true;
@@ -9898,7 +10024,36 @@ v5.consume_app_mint =
 
 	v5.app_device_revoke =
     	[&](const std::string& device_id, std::string& err) -> bool {
-        	return g_app_tokens.revoke_device(device_id, &err);
+            pqnas::TrustedAppDevice device_before_revoke;
+            const bool had_device_before_revoke =
+                g_app_tokens.get_device(device_id, &device_before_revoke);
+
+            const bool was_already_revoked =
+                had_device_before_revoke && device_before_revoke.revoked;
+
+            if (!g_app_tokens.revoke_device(device_id, &err)) {
+                return false;
+            }
+
+            if (had_device_before_revoke && !was_already_revoked && !device_before_revoke.fingerprint_hex.empty()) {
+                const std::string target_name = activity_security_target_name_local(
+                    device_before_revoke.device_name,
+                    device_before_revoke.platform,
+                    "session"
+                );
+
+                record_security_activity_best_effort_local(
+                    users,
+                    device_before_revoke.fingerprint_hex,
+                    device_before_revoke.fingerprint_hex,
+                    "security.session_revoked",
+                    "session",
+                    target_name,
+                    activity_security_device_details_local(device_before_revoke)
+                );
+            }
+
+            return true;
     	};
 	// cookie minting + base64
 	v5.session_cookie_mint = [&](const unsigned char* key,

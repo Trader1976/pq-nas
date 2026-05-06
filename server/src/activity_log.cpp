@@ -251,6 +251,9 @@ std::string build_default_message(const ActivityEvent& ev) {
     }
 
     if (ev.event_type == "security.session_revoked") {
+        if (!target.empty() && target != "session") {
+            return actor + " revoked session for " + target;
+        }
         return actor + " revoked a session";
     }
 
