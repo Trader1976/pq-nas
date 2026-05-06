@@ -43,6 +43,11 @@ static constexpr std::uint64_t kEchoArchiveMaxSingleCssBytesLocal =
 
 static constexpr std::size_t kEchoArchiveMaxCssFilesLocal = 12;
 
+static constexpr std::uint64_t kEchoArchiveMaxSingleCssEmbeddedAssetBytesLocal =
+    2ull * 1024ull * 1024ull;
+
+static constexpr std::size_t kEchoArchiveMaxCssEmbeddedAssetsLocal = 40;
+
 static std::string lower_ascii_local(std::string s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
@@ -1295,14 +1300,17 @@ static std::string archive_asset_public_url_local(const std::string& item_id,
     return "/api/v4/echostack/archive/asset?id=" + item_id + "&name=" + name;
 }
 
-static bool safe_archive_asset_name_local(const std::string& name) {
+    static bool safe_archive_asset_name_local(const std::string& name) {
     if (name.empty() || name.size() > 80) return false;
     if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos) return false;
     if (name.find("..") != std::string::npos) return false;
 
     const bool is_img = name.rfind("img_", 0) == 0;
     const bool is_css = name.rfind("css_", 0) == 0;
-    if (!is_img && !is_css) return false;
+    const bool is_cssasset = name.rfind("cssasset_", 0) == 0;
+    const bool is_font = name.rfind("font_", 0) == 0;
+
+    if (!is_img && !is_css && !is_cssasset && !is_font) return false;
 
     for (char c : name) {
         const bool ok =
@@ -1319,13 +1327,21 @@ static bool safe_archive_asset_name_local(const std::string& name) {
         return ends_with_local(low, ".css");
     }
 
+    if (is_font) {
+        return ends_with_local(low, ".woff") ||
+               ends_with_local(low, ".woff2") ||
+               ends_with_local(low, ".ttf") ||
+               ends_with_local(low, ".otf");
+    }
+
     return ends_with_local(low, ".png") ||
            ends_with_local(low, ".jpg") ||
            ends_with_local(low, ".jpeg") ||
            ends_with_local(low, ".gif") ||
            ends_with_local(low, ".webp") ||
            ends_with_local(low, ".avif") ||
-           ends_with_local(low, ".ico");
+           ends_with_local(low, ".ico") ||
+           ends_with_local(low, ".svg");
 }
 
 static std::string image_ext_for_mime_local(const std::string& mime) {
@@ -1909,6 +1925,495 @@ static std::string zero_pad4_local(std::size_t n) {
     return std::string(4 - s.size(), '0') + s;
 }
 
+struct EchoBinaryAssetFetchResult {
+    bool ok = false;
+    int http_status = 0;
+    std::string error;
+    std::string final_url;
+    std::string bytes;
+};
+
+struct EchoArchiveStoredAssetType {
+    std::string ext;
+    std::string mime;
+    bool is_font = false;
+};
+
+static bool looks_like_svg_image_local(const std::string& b) {
+    if (b.empty() || b.size() > 512ull * 1024ull) return false;
+
+    const std::size_t scan_n = std::min<std::size_t>(b.size(), 2048);
+    for (std::size_t i = 0; i < scan_n; ++i) {
+        if (b[i] == '\0') return false;
+    }
+
+    std::string s = lower_ascii_local(trim_copy_local(b.substr(0, scan_n)));
+    return starts_with_local(s, "<svg") ||
+           (starts_with_local(s, "<?xml") && s.find("<svg") != std::string::npos);
+}
+
+static std::optional<EchoArchiveStoredAssetType>
+detect_css_embedded_asset_type_local(const std::string& bytes) {
+    const std::string image_mime = detect_image_mime_local(bytes);
+    const std::string image_ext = image_ext_for_mime_local(image_mime);
+    if (!image_mime.empty() && !image_ext.empty()) {
+        return EchoArchiveStoredAssetType{image_ext, image_mime, false};
+    }
+
+    if (looks_like_svg_image_local(bytes)) {
+        return EchoArchiveStoredAssetType{".svg", "image/svg+xml", false};
+    }
+
+    if (bytes.size() >= 4 &&
+        bytes[0] == 'w' && bytes[1] == 'O' && bytes[2] == 'F' && bytes[3] == '2') {
+        return EchoArchiveStoredAssetType{".woff2", "font/woff2", true};
+    }
+
+    if (bytes.size() >= 4 &&
+        bytes[0] == 'w' && bytes[1] == 'O' && bytes[2] == 'F' && bytes[3] == 'F') {
+        return EchoArchiveStoredAssetType{".woff", "font/woff", true};
+    }
+
+    if (bytes.size() >= 4 &&
+        static_cast<unsigned char>(bytes[0]) == 0x00 &&
+        static_cast<unsigned char>(bytes[1]) == 0x01 &&
+        static_cast<unsigned char>(bytes[2]) == 0x00 &&
+        static_cast<unsigned char>(bytes[3]) == 0x00) {
+        return EchoArchiveStoredAssetType{".ttf", "font/ttf", true};
+    }
+
+    if (bytes.size() >= 4 &&
+        bytes[0] == 'O' && bytes[1] == 'T' && bytes[2] == 'T' && bytes[3] == 'O') {
+        return EchoArchiveStoredAssetType{".otf", "font/otf", true};
+    }
+
+    return std::nullopt;
+}
+
+static EchoBinaryAssetFetchResult fetch_binary_asset_local(const std::string& input_url,
+                                                           std::size_t max_bytes,
+                                                           const std::string& referer = std::string()) {
+    static constexpr int kMaxRedirects = 4;
+
+    EchoBinaryAssetFetchResult out;
+    std::string cur_url = input_url;
+
+    if (max_bytes < 1) {
+        out.error = "bad_binary_asset_limit";
+        return out;
+    }
+
+    for (int hop = 0; hop <= kMaxRedirects; ++hop) {
+        PreviewUrlParts p;
+        std::string perr;
+        if (!parse_preview_url_local(cur_url, &p, &perr)) {
+            out.error = perr;
+            return out;
+        }
+
+        std::string herr;
+        if (!preview_host_allowed_local(p.host, &herr)) {
+            out.error = herr;
+            return out;
+        }
+
+        httplib::Headers headers{
+            {"User-Agent", "Mozilla/5.0 DNA-Nexus-EchoStack/0.1"},
+            {"Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,"
+                       "font/woff2,font/woff,application/font-woff,"
+                       "application/octet-stream,*/*;q=0.1"}
+        };
+
+        if (!referer.empty()) {
+            headers.emplace("Referer", referer);
+        }
+
+        std::string body;
+        body.reserve(std::min<std::size_t>(max_bytes, 256 * 1024));
+
+        bool too_large = false;
+        httplib::Result r;
+
+        auto receiver = [&](const char* data, size_t len) {
+            if (body.size() + len > max_bytes) {
+                const std::size_t remain = max_bytes > body.size()
+                    ? max_bytes - body.size()
+                    : 0;
+                if (remain > 0) body.append(data, remain);
+                too_large = true;
+                return false;
+            }
+
+            body.append(data, len);
+            return true;
+        };
+
+        if (p.scheme == "https") {
+            httplib::SSLClient cli(p.host, p.port);
+            cli.set_follow_location(false);
+            cli.set_connection_timeout(5, 0);
+            cli.set_read_timeout(8, 0);
+            cli.enable_server_certificate_verification(true);
+
+            r = cli.Get(p.target.c_str(), headers, receiver);
+        } else {
+            httplib::Client cli(p.host, p.port);
+            cli.set_follow_location(false);
+            cli.set_connection_timeout(5, 0);
+            cli.set_read_timeout(8, 0);
+
+            r = cli.Get(p.target.c_str(), headers, receiver);
+        }
+
+        if (too_large) {
+            out.error = "binary_asset_too_large";
+            return out;
+        }
+
+        if (!r) {
+            out.error = "binary_asset_fetch_failed";
+            return out;
+        }
+
+        out.http_status = r->status;
+
+        if (r->status >= 300 && r->status < 400) {
+            auto loc = redirect_location_local(r);
+            if (!loc.has_value() || loc->empty()) {
+                out.error = "binary_asset_redirect_without_location";
+                return out;
+            }
+
+            cur_url = make_absolute_url_local(p, *loc);
+            continue;
+        }
+
+        if (r->status < 200 || r->status >= 300) {
+            out.error = "binary_asset_http_" + std::to_string(r->status);
+            return out;
+        }
+
+        if (body.empty()) {
+            out.error = "binary_asset_empty";
+            return out;
+        }
+
+        out.ok = true;
+        out.final_url = cur_url;
+        out.bytes = std::move(body);
+        return out;
+    }
+
+    out.error = "binary_asset_too_many_redirects";
+    return out;
+}
+
+static std::string css_string_escape_double_quote_local(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+
+    for (char c : s) {
+        if (c == '\\' || c == '"') out.push_back('\\');
+        out.push_back(c);
+    }
+
+    return out;
+}
+
+static bool candidate_css_url_from_raw_local(const std::string& raw,
+                                             const PreviewUrlParts& base,
+                                             std::string* out_abs) {
+    if (out_abs) *out_abs = "";
+
+    std::string s = trim_copy_local(raw);
+    if (s.empty()) return false;
+
+    if ((s.size() >= 2 && s.front() == '"' && s.back() == '"') ||
+        (s.size() >= 2 && s.front() == '\'' && s.back() == '\'')) {
+        s = trim_copy_local(s.substr(1, s.size() - 2));
+    }
+
+    if (s.empty() || s[0] == '#') return false;
+
+    const std::string low = lower_ascii_local(s);
+
+    if (starts_with_local(low, "data:") ||
+        starts_with_local(low, "blob:") ||
+        starts_with_local(low, "cid:") ||
+        starts_with_local(low, "javascript:") ||
+        starts_with_local(low, "about:")) {
+        return false;
+    }
+
+    const std::string abs = make_absolute_url_local(base, s);
+    if (!is_http_url_local(abs)) return false;
+
+    if (out_abs) *out_abs = abs;
+    return true;
+}
+
+static bool parse_css_url_token_local(const std::string& css,
+                                      std::size_t url_pos,
+                                      std::size_t* out_end_pos,
+                                      std::string* out_raw) {
+    if (out_end_pos) *out_end_pos = std::string::npos;
+    if (out_raw) *out_raw = "";
+
+    std::size_t p = url_pos + 4; // after "url("
+    while (p < css.size() && std::isspace(static_cast<unsigned char>(css[p]))) ++p;
+
+    if (p >= css.size()) return false;
+
+    std::string raw;
+
+    if (css[p] == '"' || css[p] == '\'') {
+        const char quote = css[p++];
+        const std::size_t start = p;
+
+        bool escaped = false;
+        while (p < css.size()) {
+            const char c = css[p];
+
+            if (escaped) {
+                escaped = false;
+                ++p;
+                continue;
+            }
+
+            if (c == '\\') {
+                escaped = true;
+                ++p;
+                continue;
+            }
+
+            if (c == quote) break;
+
+            ++p;
+        }
+
+        if (p >= css.size()) return false;
+
+        raw = css.substr(start, p - start);
+        ++p;
+
+        while (p < css.size() && std::isspace(static_cast<unsigned char>(css[p]))) ++p;
+        if (p >= css.size() || css[p] != ')') return false;
+
+        if (out_end_pos) *out_end_pos = p + 1;
+        if (out_raw) *out_raw = raw;
+        return true;
+    }
+
+    const std::size_t start = p;
+
+    while (p < css.size() && css[p] != ')') {
+        ++p;
+    }
+
+    if (p >= css.size()) return false;
+
+    raw = trim_copy_local(css.substr(start, p - start));
+
+    if (out_end_pos) *out_end_pos = p + 1;
+    if (out_raw) *out_raw = raw;
+    return true;
+}
+
+static std::string rewrite_css_url_assets_into_staging_local(
+    const EchoStackRoutesDeps& deps,
+    const std::string& fp,
+    const std::filesystem::path& user_dir,
+    const std::string& item_id,
+    const std::string& staging_rel_dir,
+    const std::string& css_url,
+    const std::string& css_text,
+    std::uint64_t* total_budget_used,
+    std::size_t* next_asset_index,
+    std::unordered_map<std::string, std::string>* css_asset_url_to_local,
+    std::size_t* out_embedded_count,
+    std::uint64_t* out_embedded_bytes
+) {
+    if (out_embedded_count) *out_embedded_count = 0;
+    if (out_embedded_bytes) *out_embedded_bytes = 0;
+
+    PreviewUrlParts css_parts;
+    std::string css_parse_err;
+    if (!parse_preview_url_local(css_url, &css_parts, &css_parse_err)) {
+        return css_text;
+    }
+
+    const std::string low = lower_ascii_local(css_text);
+
+    std::string out;
+    out.reserve(css_text.size() + 256);
+
+    std::size_t cursor = 0;
+    std::size_t pos = 0;
+
+    const std::string referer =
+        css_parts.origin.empty() ? std::string() : css_parts.origin + "/";
+
+    while ((pos = low.find("url(", cursor)) != std::string::npos) {
+        std::size_t token_end = std::string::npos;
+        std::string raw;
+
+        if (!parse_css_url_token_local(css_text, pos, &token_end, &raw)) {
+            break;
+        }
+
+        out.append(css_text, cursor, pos - cursor);
+
+        std::string abs;
+        if (!candidate_css_url_from_raw_local(raw, css_parts, &abs)) {
+            out.append(css_text, pos, token_end - pos);
+            cursor = token_end;
+            continue;
+        }
+
+        std::string local_url;
+
+        if (css_asset_url_to_local) {
+            auto it = css_asset_url_to_local->find(abs);
+            if (it != css_asset_url_to_local->end()) {
+                local_url = it->second;
+            }
+        }
+
+        const bool have_room_for_more =
+            next_asset_index &&
+            *next_asset_index < kEchoArchiveMaxCssEmbeddedAssetsLocal &&
+            total_budget_used &&
+            *total_budget_used < kEchoArchiveMaxTotalBytesLocal;
+
+        if (local_url.empty() && have_room_for_more) {
+            EchoBinaryAssetFetchResult fetched = fetch_binary_asset_local(
+                abs,
+                static_cast<std::size_t>(kEchoArchiveMaxSingleCssEmbeddedAssetBytesLocal),
+                referer
+            );
+
+            if (!fetched.ok) {
+                PreviewUrlParts asset_parts;
+                std::string asset_parse_err;
+                (void)parse_preview_url_local(abs, &asset_parts, &asset_parse_err);
+
+                audit_local(deps, "v4.echostack_archive_css_url_skip", "fail", {
+                    {"actor_fp", fp},
+                    {"item_id", item_id},
+                    {"reason", fetched.error.empty() ? "css_url_asset_fetch_failed" : fetched.error},
+                    {"asset_host", asset_parts.host},
+                    {"asset_target", cap_string_local(asset_parts.target, 500)},
+                    {"asset_url", cap_string_local(abs, 800)}
+                });
+
+                out.append(css_text, pos, token_end - pos);
+                cursor = token_end;
+                continue;
+            }
+
+            const auto type = detect_css_embedded_asset_type_local(fetched.bytes);
+            if (!type.has_value()) {
+                audit_local(deps, "v4.echostack_archive_css_url_skip", "fail", {
+                    {"actor_fp", fp},
+                    {"item_id", item_id},
+                    {"reason", "unsupported_css_url_asset_type"},
+                    {"asset_url", cap_string_local(abs, 800)}
+                });
+
+                out.append(css_text, pos, token_end - pos);
+                cursor = token_end;
+                continue;
+            }
+
+            const std::uint64_t asset_bytes =
+                static_cast<std::uint64_t>(fetched.bytes.size());
+
+            if (asset_bytes == 0 ||
+                asset_bytes > kEchoArchiveMaxSingleCssEmbeddedAssetBytesLocal ||
+                *total_budget_used + asset_bytes > kEchoArchiveMaxTotalBytesLocal) {
+                audit_local(deps, "v4.echostack_archive_css_url_skip", "fail", {
+                    {"actor_fp", fp},
+                    {"item_id", item_id},
+                    {"reason", "archive_total_limit"},
+                    {"asset_url", cap_string_local(abs, 800)}
+                });
+
+                out.append(css_text, pos, token_end - pos);
+                cursor = token_end;
+                continue;
+            }
+
+            const std::size_t index = *next_asset_index + 1;
+            const std::string local_name =
+                std::string(type->is_font ? "font_" : "cssasset_") +
+                zero_pad4_local(index) +
+                type->ext;
+
+            const std::string rel =
+                staging_rel_dir + "/assets/" + local_name;
+
+            std::filesystem::path asset_abs;
+            std::string perr;
+
+            if (!pqnas::resolve_user_path_strict(user_dir, rel, &asset_abs, &perr)) {
+                audit_local(deps, "v4.echostack_archive_css_url_skip", "fail", {
+                    {"actor_fp", fp},
+                    {"item_id", item_id},
+                    {"reason", perr.empty() ? "css_url_asset_path_invalid" : perr}
+                });
+
+                out.append(css_text, pos, token_end - pos);
+                cursor = token_end;
+                continue;
+            }
+
+            std::string werr;
+            const std::string tmp_suffix =
+                deps.random_b64url ? deps.random_b64url(8) : "tmp";
+
+            if (!write_bytes_atomic_local(asset_abs, fetched.bytes, tmp_suffix, &werr)) {
+                audit_local(deps, "v4.echostack_archive_css_url_skip", "fail", {
+                    {"actor_fp", fp},
+                    {"item_id", item_id},
+                    {"reason", werr.empty() ? "css_url_asset_write_failed" : werr}
+                });
+
+                out.append(css_text, pos, token_end - pos);
+                cursor = token_end;
+                continue;
+            }
+
+            local_url = archive_asset_public_url_local(item_id, local_name);
+
+            if (css_asset_url_to_local) {
+                (*css_asset_url_to_local)[abs] = local_url;
+                if (!fetched.final_url.empty()) {
+                    (*css_asset_url_to_local)[fetched.final_url] = local_url;
+                }
+            }
+
+            *next_asset_index = index;
+            *total_budget_used += asset_bytes;
+
+            if (out_embedded_count) ++(*out_embedded_count);
+            if (out_embedded_bytes) *out_embedded_bytes += asset_bytes;
+        }
+
+        if (!local_url.empty()) {
+            out += "url(\"";
+            out += css_string_escape_double_quote_local(local_url);
+            out += "\")";
+        } else {
+            out.append(css_text, pos, token_end - pos);
+        }
+
+        cursor = token_end;
+    }
+
+    out.append(css_text, cursor, std::string::npos);
+    return out;
+}
+
 static bool archive_css_into_staging_local(const EchoStackRoutesDeps& deps,
                                            const std::string& fp,
                                            const std::filesystem::path& user_dir,
@@ -1933,6 +2438,11 @@ static bool archive_css_into_staging_local(const EchoStackRoutesDeps& deps,
     if (candidates.empty()) return true;
 
     std::unordered_map<std::string, std::string> url_to_local;
+    std::unordered_map<std::string, std::string> css_asset_url_to_local;
+
+    std::size_t css_embedded_asset_index = 0;
+    std::size_t css_embedded_asset_count = 0;
+    std::uint64_t css_embedded_asset_bytes = 0;
 
     std::uint64_t total_budget_used =
         static_cast<std::uint64_t>(html_in.size()) +
@@ -1970,8 +2480,34 @@ static bool archive_css_into_staging_local(const EchoStackRoutesDeps& deps,
             continue;
         }
 
+        std::string css_to_write = fetched.text;
+
+        const std::string css_base_url =
+            fetched.final_url.empty() ? css_url : fetched.final_url;
+
+        std::size_t embedded_count_this_css = 0;
+        std::uint64_t embedded_bytes_this_css = 0;
+
+        css_to_write = rewrite_css_url_assets_into_staging_local(
+            deps,
+            fp,
+            user_dir,
+            item_id,
+            staging_rel_dir,
+            css_base_url,
+            css_to_write,
+            &total_budget_used,
+            &css_embedded_asset_index,
+            &css_asset_url_to_local,
+            &embedded_count_this_css,
+            &embedded_bytes_this_css
+        );
+
+        css_embedded_asset_count += embedded_count_this_css;
+        css_embedded_asset_bytes += embedded_bytes_this_css;
+
         const std::uint64_t css_bytes =
-            static_cast<std::uint64_t>(fetched.text.size());
+            static_cast<std::uint64_t>(css_to_write.size());
 
         if (css_bytes == 0 ||
             css_bytes > kEchoArchiveMaxSingleCssBytesLocal ||
@@ -2006,7 +2542,7 @@ static bool archive_css_into_staging_local(const EchoStackRoutesDeps& deps,
         const std::string tmp_suffix =
             deps.random_b64url ? deps.random_b64url(8) : "tmp";
 
-        if (!write_bytes_atomic_local(asset_abs, fetched.text, tmp_suffix, &werr)) {
+        if (!write_bytes_atomic_local(asset_abs, css_to_write, tmp_suffix, &werr)) {
             audit_local(deps, "v4.echostack_archive_css_skip", "fail", {
                 {"actor_fp", fp},
                 {"item_id", item_id},
@@ -2028,6 +2564,15 @@ static bool archive_css_into_staging_local(const EchoStackRoutesDeps& deps,
 
     if (out_css_count) *out_css_count = saved_count;
     if (out_css_bytes) *out_css_bytes = saved_bytes;
+
+    if (css_embedded_asset_count > 0 || css_embedded_asset_bytes > 0) {
+        audit_local(deps, "v4.echostack_archive_css_url_assets_ok", "ok", {
+            {"actor_fp", fp},
+            {"item_id", item_id},
+            {"count", std::to_string(css_embedded_asset_count)},
+            {"bytes", std::to_string(static_cast<unsigned long long>(css_embedded_asset_bytes))}
+        });
+    }
 
     return true;
 }
@@ -2296,8 +2841,20 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
 
         std::string mime;
 
-        if (ends_with_local(lower_ascii_local(name), ".css")) {
+        const std::string low_name = lower_ascii_local(name);
+
+        if (ends_with_local(low_name, ".css")) {
             mime = "text/css; charset=utf-8";
+        } else if (ends_with_local(low_name, ".woff2")) {
+            mime = "font/woff2";
+        } else if (ends_with_local(low_name, ".woff")) {
+            mime = "font/woff";
+        } else if (ends_with_local(low_name, ".ttf")) {
+            mime = "font/ttf";
+        } else if (ends_with_local(low_name, ".otf")) {
+            mime = "font/otf";
+        } else if (ends_with_local(low_name, ".svg") && looks_like_svg_image_local(bytes)) {
+            mime = "image/svg+xml";
         } else {
             mime = detect_image_mime_local(bytes);
         }
@@ -2313,6 +2870,13 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
 
         res.set_header("Cache-Control", "private, max-age=86400");
         res.set_header("X-Content-Type-Options", "nosniff");
+        if (mime == "image/svg+xml") {
+            res.set_header(
+                "Content-Security-Policy",
+                "default-src 'none'; script-src 'none'; connect-src 'none'; "
+                "style-src 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'self'"
+            );
+        }
         res.set_content(std::move(bytes), mime.c_str());
     });
 
@@ -3164,7 +3728,7 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
             {"final_url", fetched.final_url},
             {"title", rec.title},
             {"archived_epoch", archived_now},
-            {"format", "html_plus_images_css_v3"},
+            {"format", "html_plus_images_css_url_assets_v4"},
             {"max_html_bytes", kEchoArchiveMaxHtmlBytesLocal},
             {"max_total_bytes", kEchoArchiveMaxTotalBytesLocal},
             {"image_count", archived_image_count},
