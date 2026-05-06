@@ -1196,10 +1196,13 @@ static void record_user_file_activity_best_effort_local(pqnas::UsersRegistry& us
         {"scope_type", "user"},
         {"original_rel_path", rel_path},
         {"item_type", ev.target_kind},
-        {"trash_id", trash_id},
         {"size_bytes", size_bytes},
         {"file_count", file_count}
     };
+
+    if (!trash_id.empty()) {
+        ev.details["trash_id"] = trash_id;
+    }
 
     std::string activity_err;
     (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
@@ -21823,6 +21826,17 @@ srv.Post("/api/v4/uploads/finish", [&](const httplib::Request& req, httplib::Res
             audit_append(ev);
         } catch (...) {}
 
+        record_user_file_activity_best_effort_local(
+            users,
+            fp_hex,
+            "file.uploaded",
+            rel_norm,
+            "file",
+            "",
+            assembled_bytes,
+            1
+        );
+
         reply_json(res, 200, json{
             {"ok", true},
             {"chunked", true},
@@ -35207,6 +35221,17 @@ srv.Put("/api/v4/files/put",
         }
 
         audit_ok(rel_path, bytes_written);
+
+        record_user_file_activity_best_effort_local(
+            users,
+            fp_hex,
+            "file.uploaded",
+            rel_norm,
+            "file",
+            "",
+            bytes_written,
+            1
+        );
 
         reply_json(res, 200, json{
             {"ok", true},
