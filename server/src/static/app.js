@@ -2483,6 +2483,7 @@
         if (type === "dropzone.created") return "▣";
         if (type === "dropzone.disabled") return "🚫";
         if (type === "folder.created") return "📁";
+        if (type === "file.moved") return "↔";
         if (type === "file.trashed") return "🗑";
         if (type === "file.restored") return "↩";
         if (type === "file.purged") return "✕";

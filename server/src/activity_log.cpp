@@ -174,6 +174,26 @@ std::string build_default_message(const ActivityEvent& ev) {
         return actor + " created folder " + target;
     }
 
+    if (ev.event_type == "file.moved") {
+        std::string from_path;
+        std::string to_path;
+
+        if (ev.details.is_object()) {
+            if (ev.details.contains("from_path") && ev.details["from_path"].is_string()) {
+                from_path = ev.details["from_path"].get<std::string>();
+            }
+            if (ev.details.contains("to_path") && ev.details["to_path"].is_string()) {
+                to_path = ev.details["to_path"].get<std::string>();
+            }
+        }
+
+        if (!from_path.empty()) {
+            return actor + " moved " + from_path + " to " + (to_path.empty() ? target : to_path);
+        }
+
+        return actor + " moved " + target;
+    }
+
     if (ev.event_type == "file.trashed") {
         return actor + " moved " + target + " to Trash";
     }

@@ -1286,6 +1286,62 @@ static void record_workspace_folder_created_activity_best_effort_local(const Wor
 }
 
 
+
+static std::string workspace_activity_move_item_kind_local(const std::string& item_type) {
+    if (item_type == "dir") return "folder";
+    if (item_type == "folder") return "folder";
+    if (item_type == "file") return "file";
+    if (!item_type.empty()) return item_type;
+    return "item";
+}
+
+static void record_workspace_file_moved_activity_best_effort_local(const WorkspaceFileRouteDeps& deps,
+                                                                   const std::string& actor_fp,
+                                                                   const std::string& workspace_id,
+                                                                   const std::string& from_rel_path,
+                                                                   const std::string& to_rel_path,
+                                                                   const std::string& item_type,
+                                                                   std::uint64_t size_bytes) {
+    if (!deps.users || actor_fp.empty() || from_rel_path.empty() || to_rel_path.empty()) return;
+
+    std::filesystem::path user_root;
+    try {
+        user_root = ::pqnas_user_dir_for_fp(*deps.users, actor_fp);
+    } catch (...) {
+        return;
+    }
+
+    if (user_root.empty()) return;
+
+    const std::string kind = workspace_activity_move_item_kind_local(item_type);
+
+    pqnas::activity::ActivityEvent ev;
+    ev.owner_user_id = actor_fp;
+
+    ev.actor.user_id = actor_fp;
+    ev.actor.display_name = workspace_activity_display_name_local(deps, actor_fp);
+    ev.actor.kind = "user";
+
+    ev.event_type = "file.moved";
+    ev.scope_type = "workspace";
+    ev.scope_id = workspace_id;
+
+    ev.target_kind = kind;
+    ev.target_path = to_rel_path;
+    ev.target_name = workspace_activity_basename_local(to_rel_path, kind);
+
+    ev.details = nlohmann::json{
+        {"scope_type", "workspace"},
+        {"from_path", from_rel_path},
+        {"to_path", to_rel_path},
+        {"item_type", kind},
+        {"size_bytes", size_bytes}
+    };
+
+    std::string activity_err;
+    (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
+}
+
 void register_workspace_file_routes(httplib::Server& srv,
                                     const WorkspaceFileRouteDeps& deps) {
     srv.Get("/api/v4/workspaces",
@@ -8112,6 +8168,15 @@ srv.Post("/api/v4/workspaces/files/move",
         }
 
         audit_ok(workspace_id, from_rel_norm, to_rel_norm, src_is_dir ? "dir" : "file", bytes);
+        record_workspace_file_moved_activity_best_effort_local(
+            deps,
+            actor_fp,
+            workspace_id,
+            from_rel_norm,
+            to_rel_norm,
+            src_is_dir ? "folder" : "file",
+            bytes
+        );
 
         deps.reply_json(res, 200, json{
             {"ok", true},

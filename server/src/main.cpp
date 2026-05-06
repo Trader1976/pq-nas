@@ -1208,6 +1208,61 @@ static void record_user_file_activity_best_effort_local(pqnas::UsersRegistry& us
     (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
 }
 
+
+static std::string activity_move_item_kind_local(const std::string& item_type) {
+    if (item_type == "dir") return "folder";
+    if (item_type == "folder") return "folder";
+    if (item_type == "file") return "file";
+    if (!item_type.empty()) return item_type;
+    return "item";
+}
+
+static void record_user_file_moved_activity_best_effort_local(pqnas::UsersRegistry& users,
+                                                              const std::string& actor_fp,
+                                                              const std::string& from_rel_path,
+                                                              const std::string& to_rel_path,
+                                                              const std::string& item_type,
+                                                              std::uint64_t size_bytes) {
+    if (actor_fp.empty() || from_rel_path.empty() || to_rel_path.empty()) return;
+
+    std::filesystem::path user_root;
+    try {
+        user_root = user_dir_for_fp(users, actor_fp);
+    } catch (...) {
+        return;
+    }
+
+    if (user_root.empty()) return;
+
+    const std::string kind = activity_move_item_kind_local(item_type);
+
+    pqnas::activity::ActivityEvent ev;
+    ev.owner_user_id = actor_fp;
+
+    ev.actor.user_id = actor_fp;
+    ev.actor.display_name = activity_user_display_name_local(users, actor_fp);
+    ev.actor.kind = "user";
+
+    ev.event_type = "file.moved";
+    ev.scope_type = "user";
+    ev.scope_id = actor_fp;
+
+    ev.target_kind = kind;
+    ev.target_path = to_rel_path;
+    ev.target_name = activity_basename_local(to_rel_path, kind);
+
+    ev.details = json{
+        {"scope_type", "user"},
+        {"from_path", from_rel_path},
+        {"to_path", to_rel_path},
+        {"item_type", kind},
+        {"size_bytes", size_bytes}
+    };
+
+    std::string activity_err;
+    (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
+}
+
 static std::string activity_share_kind_local(const std::string& share_type) {
     if (share_type == "dir") return "folder";
     if (share_type == "file") return "file";
@@ -22425,6 +22480,14 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
             }
         }
         audit_ok(from_rel, to_rel, "file", bytes);
+        record_user_file_moved_activity_best_effort_local(
+            users,
+            fp_hex,
+            from_rel_norm,
+            to_rel_norm,
+            "file",
+            bytes
+        );
         reply_json(res, 200, json{
             {"ok", true},
             {"from", from_rel},
@@ -22640,6 +22703,14 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
             }
         }
         audit_ok(from_rel, to_rel, "dir", 0);
+        record_user_file_moved_activity_best_effort_local(
+            users,
+            fp_hex,
+            from_rel_norm,
+            to_rel_norm,
+            "folder",
+            0
+        );
         reply_json(res, 200, json{
             {"ok", true},
             {"from", from_rel},
