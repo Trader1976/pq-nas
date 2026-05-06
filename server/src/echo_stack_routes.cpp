@@ -334,7 +334,9 @@ static bool ipv6_private_or_special_local(const in6_addr& a) {
 }
 
 static bool preview_host_allowed_local(const std::string& host,
-                                       std::string* err) {
+                                       std::string* err,
+                                       std::string* out_ip = nullptr) {
+    if (out_ip) out_ip->clear();
     const std::string h = lower_ascii_local(host);
 
     if (h == "localhost" ||
@@ -360,6 +362,7 @@ static bool preview_host_allowed_local(const std::string& host,
             if (err) *err = "private_ip_blocked";
             return false;
         }
+        if (out_ip) *out_ip = h;
         return true;
     }
 
@@ -369,6 +372,7 @@ static bool preview_host_allowed_local(const std::string& host,
             if (err) *err = "private_ip_blocked";
             return false;
         }
+        if (out_ip) *out_ip = h;
         return true;
     }
 
@@ -384,6 +388,8 @@ static bool preview_host_allowed_local(const std::string& host,
     }
 
     bool saw_addr = false;
+    std::string chosen_ip;
+
     for (addrinfo* it = result; it; it = it->ai_next) {
         if (!it->ai_addr) continue;
         saw_addr = true;
@@ -395,12 +401,26 @@ static bool preview_host_allowed_local(const std::string& host,
                 if (err) *err = "private_dns_result_blocked";
                 return false;
             }
+
+            if (chosen_ip.empty()) {
+                char ipbuf[INET_ADDRSTRLEN] = {};
+                if (inet_ntop(AF_INET, &sa->sin_addr, ipbuf, sizeof(ipbuf))) {
+                    chosen_ip = ipbuf;
+                }
+            }
         } else if (it->ai_family == AF_INET6) {
             auto* sa = reinterpret_cast<sockaddr_in6*>(it->ai_addr);
             if (ipv6_private_or_special_local(sa->sin6_addr)) {
                 freeaddrinfo(result);
                 if (err) *err = "private_dns_result_blocked";
                 return false;
+            }
+
+            if (chosen_ip.empty()) {
+                char ipbuf[INET6_ADDRSTRLEN] = {};
+                if (inet_ntop(AF_INET6, &sa->sin6_addr, ipbuf, sizeof(ipbuf))) {
+                    chosen_ip = ipbuf;
+                }
             }
         }
     }
@@ -412,6 +432,12 @@ static bool preview_host_allowed_local(const std::string& host,
         return false;
     }
 
+    if (chosen_ip.empty()) {
+        if (err) *err = "dns_no_usable_addresses";
+        return false;
+    }
+
+    if (out_ip) *out_ip = chosen_ip;
     return true;
 }
 
@@ -637,7 +663,8 @@ static PreviewFetchResult fetch_preview_html_local(const std::string& input_url)
         }
 
         std::string herr;
-        if (!preview_host_allowed_local(p.host, &herr)) {
+        std::string pinned_ip;
+        if (!preview_host_allowed_local(p.host, &herr, &pinned_ip)) {
             out.error = herr;
             return out;
         }
@@ -655,6 +682,7 @@ static PreviewFetchResult fetch_preview_html_local(const std::string& input_url)
 
         if (p.scheme == "https") {
             httplib::SSLClient cli(p.host, p.port);
+            if (!pinned_ip.empty()) cli.set_hostname_addr_map({{p.host, pinned_ip}});
             cli.set_follow_location(false);
             cli.set_connection_timeout(5, 0);
             cli.set_read_timeout(8, 0);
@@ -670,6 +698,7 @@ static PreviewFetchResult fetch_preview_html_local(const std::string& input_url)
             });
         } else {
             httplib::Client cli(p.host, p.port);
+            if (!pinned_ip.empty()) cli.set_hostname_addr_map({{p.host, pinned_ip}});
             cli.set_follow_location(false);
             cli.set_connection_timeout(5, 0);
             cli.set_read_timeout(8, 0);
@@ -794,7 +823,8 @@ static std::string detect_image_mime_local(const std::string& b) {
         }
 
         std::string herr;
-        if (!preview_host_allowed_local(p.host, &herr)) {
+        std::string pinned_ip;
+        if (!preview_host_allowed_local(p.host, &herr, &pinned_ip)) {
             out.error = herr;
             return out;
         }
@@ -815,6 +845,7 @@ static std::string detect_image_mime_local(const std::string& b) {
 
         if (p.scheme == "https") {
             httplib::SSLClient cli(p.host, p.port);
+            if (!pinned_ip.empty()) cli.set_hostname_addr_map({{p.host, pinned_ip}});
             cli.set_follow_location(false);
             cli.set_connection_timeout(5, 0);
             cli.set_read_timeout(8, 0);
@@ -830,6 +861,7 @@ static std::string detect_image_mime_local(const std::string& b) {
             });
         } else {
             httplib::Client cli(p.host, p.port);
+            if (!pinned_ip.empty()) cli.set_hostname_addr_map({{p.host, pinned_ip}});
             cli.set_follow_location(false);
             cli.set_connection_timeout(5, 0);
             cli.set_read_timeout(8, 0);
@@ -1139,7 +1171,8 @@ static EchoArchiveFetchResult fetch_archive_html_local(const std::string& input_
         }
 
         std::string herr;
-        if (!preview_host_allowed_local(p.host, &herr)) {
+        std::string pinned_ip;
+        if (!preview_host_allowed_local(p.host, &herr, &pinned_ip)) {
             out.error = herr;
             return out;
         }
@@ -1171,6 +1204,7 @@ static EchoArchiveFetchResult fetch_archive_html_local(const std::string& input_
 
         if (p.scheme == "https") {
             httplib::SSLClient cli(p.host, p.port);
+            if (!pinned_ip.empty()) cli.set_hostname_addr_map({{p.host, pinned_ip}});
             cli.set_follow_location(false);
             cli.set_connection_timeout(5, 0);
             cli.set_read_timeout(12, 0);
@@ -1179,6 +1213,7 @@ static EchoArchiveFetchResult fetch_archive_html_local(const std::string& input_
             r = cli.Get(p.target.c_str(), headers, receiver);
         } else {
             httplib::Client cli(p.host, p.port);
+            if (!pinned_ip.empty()) cli.set_hostname_addr_map({{p.host, pinned_ip}});
             cli.set_follow_location(false);
             cli.set_connection_timeout(5, 0);
             cli.set_read_timeout(12, 0);
@@ -1747,7 +1782,8 @@ static EchoTextAssetFetchResult fetch_text_asset_local(const std::string& input_
         }
 
         std::string herr;
-        if (!preview_host_allowed_local(p.host, &herr)) {
+        std::string pinned_ip;
+        if (!preview_host_allowed_local(p.host, &herr, &pinned_ip)) {
             out.error = herr;
             return out;
         }
@@ -1786,6 +1822,7 @@ static EchoTextAssetFetchResult fetch_text_asset_local(const std::string& input_
 
         if (p.scheme == "https") {
             httplib::SSLClient cli(p.host, p.port);
+            if (!pinned_ip.empty()) cli.set_hostname_addr_map({{p.host, pinned_ip}});
             cli.set_follow_location(false);
             cli.set_connection_timeout(5, 0);
             cli.set_read_timeout(8, 0);
@@ -1794,6 +1831,7 @@ static EchoTextAssetFetchResult fetch_text_asset_local(const std::string& input_
             r = cli.Get(p.target.c_str(), headers, receiver);
         } else {
             httplib::Client cli(p.host, p.port);
+            if (!pinned_ip.empty()) cli.set_hostname_addr_map({{p.host, pinned_ip}});
             cli.set_follow_location(false);
             cli.set_connection_timeout(5, 0);
             cli.set_read_timeout(8, 0);
@@ -2012,7 +2050,8 @@ static EchoBinaryAssetFetchResult fetch_binary_asset_local(const std::string& in
         }
 
         std::string herr;
-        if (!preview_host_allowed_local(p.host, &herr)) {
+        std::string pinned_ip;
+        if (!preview_host_allowed_local(p.host, &herr, &pinned_ip)) {
             out.error = herr;
             return out;
         }
@@ -2050,6 +2089,7 @@ static EchoBinaryAssetFetchResult fetch_binary_asset_local(const std::string& in
 
         if (p.scheme == "https") {
             httplib::SSLClient cli(p.host, p.port);
+            if (!pinned_ip.empty()) cli.set_hostname_addr_map({{p.host, pinned_ip}});
             cli.set_follow_location(false);
             cli.set_connection_timeout(5, 0);
             cli.set_read_timeout(8, 0);
@@ -2058,6 +2098,7 @@ static EchoBinaryAssetFetchResult fetch_binary_asset_local(const std::string& in
             r = cli.Get(p.target.c_str(), headers, receiver);
         } else {
             httplib::Client cli(p.host, p.port);
+            if (!pinned_ip.empty()) cli.set_hostname_addr_map({{p.host, pinned_ip}});
             cli.set_follow_location(false);
             cli.set_connection_timeout(5, 0);
             cli.set_read_timeout(8, 0);
