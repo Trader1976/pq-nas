@@ -9225,6 +9225,19 @@ auto maybe_auto_rotate_before_append = [&]() {
 	);
 
     httplib::Server srv;
+
+    const bool hsts_enabled = (ORIGIN.rfind("https://", 0) == 0);
+    if (hsts_enabled) {
+        std::cerr << "[cfg] hsts=enabled origin=" << ORIGIN << std::endl;
+    } else {
+        std::cerr << "[cfg] hsts=disabled origin=" << ORIGIN << std::endl;
+    }
+
+    srv.set_post_routing_handler([hsts_enabled](const httplib::Request&, httplib::Response& res) {
+        if (!hsts_enabled) return;
+        res.set_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    });
+
 	srv.set_payload_max_length(k_payload_max_upload_bytes);
 	srv.set_error_handler([&](const httplib::Request& req, httplib::Response& res) {
     	// Only force JSON for API endpoints
