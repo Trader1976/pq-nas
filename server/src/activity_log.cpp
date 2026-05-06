@@ -170,6 +170,10 @@ std::string build_default_message(const ActivityEvent& ev) {
         return actor + " uploaded " + target;
     }
 
+    if (ev.event_type == "folder.created") {
+        return actor + " created folder " + target;
+    }
+
     if (ev.event_type == "file.trashed") {
         return actor + " moved " + target + " to Trash";
     }

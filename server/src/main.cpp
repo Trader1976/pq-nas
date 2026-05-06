@@ -22833,7 +22833,7 @@ srv.Post("/api/v4/files/mkdir", [&](const httplib::Request& req, httplib::Respon
         }
     }
 
-    std::filesystem::create_directories(abs, ec);
+    const bool created_dir = std::filesystem::create_directories(abs, ec);
     if (ec) {
         audit_fail("mkdir_failed", 500, ec.message());
         reply_json(res, 500, json{
@@ -22860,6 +22860,19 @@ srv.Post("/api/v4/files/mkdir", [&](const httplib::Request& req, httplib::Respon
     }
 
     audit_ok(rel_path);
+
+    if (created_dir) {
+        record_user_file_activity_best_effort_local(
+            users,
+            fp_hex,
+            "folder.created",
+            rel_path,
+            "folder",
+            "",
+            0,
+            1
+        );
+    }
 
     reply_json(res, 200, json{
         {"ok", true},

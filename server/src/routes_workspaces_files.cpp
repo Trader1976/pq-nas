@@ -1244,6 +1244,48 @@ static void record_workspace_file_activity_best_effort_local(const WorkspaceFile
 }
 
 
+static void record_workspace_folder_created_activity_best_effort_local(const WorkspaceFileRouteDeps& deps,
+                                                                       const std::string& actor_fp,
+                                                                       const std::string& workspace_id,
+                                                                       const std::string& rel_path) {
+    if (!deps.users || actor_fp.empty()) return;
+
+    std::filesystem::path user_root;
+    try {
+        user_root = ::pqnas_user_dir_for_fp(*deps.users, actor_fp);
+    } catch (...) {
+        return;
+    }
+
+    if (user_root.empty()) return;
+
+    pqnas::activity::ActivityEvent ev;
+    ev.owner_user_id = actor_fp;
+
+    ev.actor.user_id = actor_fp;
+    ev.actor.display_name = workspace_activity_display_name_local(deps, actor_fp);
+    ev.actor.kind = "user";
+
+    ev.event_type = "folder.created";
+    ev.scope_type = "workspace";
+    ev.scope_id = workspace_id;
+
+    ev.target_kind = "folder";
+    ev.target_path = rel_path;
+    ev.target_name = workspace_activity_basename_local(rel_path, ev.target_kind);
+
+    ev.details = nlohmann::json{
+        {"scope_type", "workspace"},
+        {"path", rel_path},
+        {"item_type", "folder"},
+        {"file_count", 1}
+    };
+
+    std::string activity_err;
+    (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
+}
+
+
 void register_workspace_file_routes(httplib::Server& srv,
                                     const WorkspaceFileRouteDeps& deps) {
     srv.Get("/api/v4/workspaces",
@@ -4592,7 +4634,7 @@ srv.Post("/api/v4/workspaces/files/write_text",
         }
 
         std::error_code ec;
-        std::filesystem::create_directories(abs_dir, ec);
+        const bool created_dir = std::filesystem::create_directories(abs_dir, ec);
         if (ec) {
             audit_fail(workspace_id, "mkdir_failed", 500, ec.message());
             deps.reply_json(res, 500, json{
@@ -4605,6 +4647,15 @@ srv.Post("/api/v4/workspaces/files/write_text",
         }
 
         audit_ok(workspace_id, rel_norm);
+
+        if (created_dir) {
+            record_workspace_folder_created_activity_best_effort_local(
+                deps,
+                actor_fp,
+                workspace_id,
+                rel_norm
+            );
+        }
 
         deps.reply_json(res, 200, json{
             {"ok", true},
