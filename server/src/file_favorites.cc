@@ -297,6 +297,8 @@ bool favorites_move_path(const std::filesystem::path& user_dir,
                 json rec = it.value();
                 rec["path"] = new_path;
                 const std::string new_type = rec.value("type", "");
+                if (new_type != "file" && new_type != "dir") continue;
+
                 replacements.push_back({ fav_key(new_type, new_path), rec });
                 to_erase.push_back(k);
                 changed = true;

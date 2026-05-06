@@ -2820,7 +2820,11 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       ctxEl.appendChild(menuItem(`Download selection (zip) (${selectedKeys.size})`, "", () => downloadSelectionZip()));
     }
 
-    if (canWriteCurrentScope()) {
+    if (canWriteCurrentScope() && caps.move !== false) {
+      ctxEl.appendChild(menuSep());
+      ctxEl.appendChild(menuItem(`Move selection… (${selectedKeys.size})`, "", () => openMoveModalForSelection()));
+      ctxEl.appendChild(menuItem(`Move selection to trash (${selectedKeys.size})…`, "🗑", () => deleteSelection(), { danger: true }));
+    } else if (canWriteCurrentScope()) {
       ctxEl.appendChild(menuItem(`Move selection to trash (${selectedKeys.size})…`, "🗑", () => deleteSelection(), { danger: true }));
     }
   }
@@ -3081,6 +3085,824 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
     clearFileListCache();
     await load(true);
+  }
+
+  // ---- Move modal ------------------------------------------------------------
+
+  let moveModalEl = null;
+  let moveSourceLineEl = null;
+  let moveBreadcrumbEl = null;
+  let moveDirListEl = null;
+  let moveStatusEl = null;
+  let moveHereBtnEl = null;
+  let moveNewFolderBtnEl = null;
+
+  let moveItems = [];
+  let moveDestPath = "";
+  let moveBusy = false;
+  let moveLoadSeq = 0;
+
+  function basenamePath(p) {
+    const parts = normalizeRelPath(p).split("/").filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : "";
+  }
+
+  function pathEq(a, b) {
+    return normalizeRelPath(a) === normalizeRelPath(b);
+  }
+
+  function isSameOrDescendant(path, ancestor) {
+    const p = normalizeRelPath(path);
+    const a = normalizeRelPath(ancestor);
+    if (!a) return false;
+    return p === a || p.startsWith(a + "/");
+  }
+
+  function destinationInsideSelectedDir(destPath, items) {
+    const dest = normalizeRelPath(destPath);
+    for (const it of items || []) {
+      if (it && it.type === "dir" && isSameOrDescendant(dest, it.rel)) return true;
+    }
+    return false;
+  }
+
+  function moveDestinationProblem(destPath, items) {
+    const dest = normalizeRelPath(destPath);
+    const list = Array.isArray(items) ? items : [];
+
+    if (!list.length) return "Nothing selected.";
+
+    if (destinationInsideSelectedDir(dest, list)) {
+      return "Cannot move a folder into itself or one of its subfolders.";
+    }
+
+    const allAlreadyHere = list.every((it) => pathEq(parentPath(it.rel), dest));
+    if (allAlreadyHere) {
+      return "Choose a different destination folder.";
+    }
+
+    return "";
+  }
+
+  function ensureMoveModalCss() {
+    if (document.getElementById("pqnasMoveModalStyle")) return;
+
+    const style = document.createElement("style");
+    style.id = "pqnasMoveModalStyle";
+    style.textContent = `
+      .fmMoveOverlay{
+        position:fixed;
+        inset:0;
+        display:none;
+        align-items:center;
+        justify-content:center;
+        z-index:10000;
+        background:rgba(0,0,0,0.42);
+        backdrop-filter:blur(4px);
+        padding:18px;
+      }
+      .fmMoveOverlay.show{
+        display:flex;
+      }
+      .fmMoveCard{
+        width:min(720px, 96vw);
+        max-height:min(760px, 92vh);
+        display:flex;
+        flex-direction:column;
+        gap:12px;
+        border-radius:22px;
+        border:1px solid rgba(var(--fg-rgb),0.22);
+        background:var(--panel, var(--bg, Canvas));
+        color:var(--fg, CanvasText);
+        box-shadow:0 24px 80px rgba(0,0,0,0.38);
+        padding:16px;
+      }
+      .fmMoveHead{
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:12px;
+      }
+      .fmMoveTitle{
+        font-weight:900;
+        font-size:18px;
+        color:var(--fg, CanvasText);
+      }
+      .fmMoveClose{
+        border:1px solid rgba(var(--fg-rgb),0.24);
+        background:rgba(var(--fg-rgb),0.07);
+        color:var(--fg, CanvasText);
+        border-radius:12px;
+        padding:8px 10px;
+        cursor:pointer;
+      }
+      .fmMoveSource{
+        font-size:13px;
+        opacity:0.86;
+        word-break:break-word;
+        color:var(--fg, CanvasText);
+      }
+      .fmMoveBreadcrumb{
+        display:flex;
+        align-items:center;
+        flex-wrap:wrap;
+        gap:6px;
+        padding:10px;
+        border-radius:14px;
+        border:1px solid rgba(var(--fg-rgb),0.14);
+        background:rgba(var(--fg-rgb),0.045);
+        min-height:42px;
+      }
+      .fmMoveCrumb{
+        border:1px solid rgba(var(--fg-rgb),0.18);
+        background:rgba(var(--fg-rgb),0.06);
+        color:var(--fg, CanvasText);
+        border-radius:999px;
+        padding:6px 10px;
+        cursor:pointer;
+        max-width:220px;
+        overflow:hidden;
+        text-overflow:ellipsis;
+        white-space:nowrap;
+      }
+      .fmMoveCrumb.active{
+        opacity:0.70;
+        cursor:default;
+      }
+      .fmMoveSep{
+        opacity:0.55;
+        color:var(--fg, CanvasText);
+      }
+      .fmMoveDirList{
+        flex:1 1 auto;
+        min-height:220px;
+        max-height:420px;
+        overflow:auto;
+        display:flex;
+        flex-direction:column;
+        gap:8px;
+        padding:8px;
+        border-radius:16px;
+        border:1px solid rgba(var(--fg-rgb),0.14);
+        background:rgba(var(--fg-rgb),0.035);
+      }
+      .fmMoveDirRow{
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:12px;
+        width:100%;
+        text-align:left;
+        color:var(--fg, CanvasText);
+        border:1px solid rgba(var(--fg-rgb),0.14);
+        background:rgba(var(--fg-rgb),0.055);
+        border-radius:14px;
+        padding:11px 12px;
+        cursor:pointer;
+      }
+      .fmMoveDirRow:hover{
+        background:rgba(var(--fg-rgb),0.10);
+      }
+      .fmMoveDirRow[aria-disabled="true"]{
+        cursor:not-allowed;
+        opacity:0.45;
+      }
+      .fmMoveDirName{
+        min-width:0;
+        overflow:hidden;
+        text-overflow:ellipsis;
+        white-space:nowrap;
+        font-weight:800;
+        color:var(--fg, CanvasText);
+      }
+      .fmMoveDirMeta{
+        flex:0 0 auto;
+        opacity:0.70;
+        font-size:12px;
+        color:var(--fg, CanvasText);
+      }
+      .fmMoveStatus{
+        min-height:20px;
+        font-size:13px;
+        opacity:0.86;
+        word-break:break-word;
+        color:var(--fg, CanvasText);
+      }
+      .fmMoveActions{
+        display:flex;
+        justify-content:space-between;
+        align-items:center;
+        gap:10px;
+        flex-wrap:wrap;
+      }
+      .fmMoveActionGroup{
+        display:flex;
+        gap:10px;
+        align-items:center;
+        flex-wrap:wrap;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function ensureMoveModal() {
+    if (moveModalEl) return;
+
+    ensureMoveModalCss();
+
+    moveModalEl = document.createElement("div");
+    moveModalEl.className = "fmMoveOverlay";
+    moveModalEl.setAttribute("aria-hidden", "true");
+
+    moveModalEl.innerHTML = `
+      <div class="fmMoveCard" role="dialog" aria-modal="true" aria-labelledby="fmMoveTitle">
+        <div class="fmMoveHead">
+          <div id="fmMoveTitle" class="fmMoveTitle">Move</div>
+          <button type="button" class="fmMoveClose" data-move-close>Close</button>
+        </div>
+
+        <div class="fmMoveSource" data-move-source></div>
+        <div class="fmMoveBreadcrumb" data-move-breadcrumb></div>
+        <div class="fmMoveDirList" data-move-dir-list></div>
+        <div class="fmMoveStatus" data-move-status></div>
+
+        <div class="fmMoveActions">
+          <div class="fmMoveActionGroup">
+            <button type="button" class="btn secondary" data-move-new-folder>New folder here…</button>
+          </div>
+          <div class="fmMoveActionGroup">
+            <button type="button" class="btn secondary" data-move-cancel>Cancel</button>
+            <button type="button" class="btn" data-move-here>Move here</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(moveModalEl);
+
+    moveSourceLineEl = moveModalEl.querySelector("[data-move-source]");
+    moveBreadcrumbEl = moveModalEl.querySelector("[data-move-breadcrumb]");
+    moveDirListEl = moveModalEl.querySelector("[data-move-dir-list]");
+    moveStatusEl = moveModalEl.querySelector("[data-move-status]");
+    moveHereBtnEl = moveModalEl.querySelector("[data-move-here]");
+    moveNewFolderBtnEl = moveModalEl.querySelector("[data-move-new-folder]");
+
+    moveModalEl.querySelector("[data-move-close]")?.addEventListener("click", closeMoveModal);
+    moveModalEl.querySelector("[data-move-cancel]")?.addEventListener("click", closeMoveModal);
+    moveHereBtnEl?.addEventListener("click", moveHereNow);
+    moveNewFolderBtnEl?.addEventListener("click", moveCreateFolderHere);
+
+    moveModalEl.addEventListener("click", (e) => {
+      if (e.target === moveModalEl) closeMoveModal();
+    });
+  }
+
+  function openMoveModal() {
+    ensureMoveModal();
+    moveModalEl.classList.add("show");
+    moveModalEl.setAttribute("aria-hidden", "false");
+  }
+
+  function closeMoveModal() {
+    if (!moveModalEl) return;
+    moveModalEl.classList.remove("show");
+    moveModalEl.setAttribute("aria-hidden", "true");
+  }
+
+  function setMoveBusy(on) {
+    moveBusy = !!on;
+    if (moveHereBtnEl) moveHereBtnEl.disabled = moveBusy || !!moveDestinationProblem(moveDestPath, moveItems);
+    if (moveNewFolderBtnEl) {
+      moveNewFolderBtnEl.disabled =
+          moveBusy ||
+          destinationInsideSelectedDir(moveDestPath, moveItems) ||
+          !canWriteCurrentScope();
+    }
+  }
+
+  function describeMoveItems(items) {
+    const list = Array.isArray(items) ? items : [];
+    if (list.length === 1) return `Move: /${list[0].rel}`;
+
+    const names = list.slice(0, 4).map((it) => it.name || basenamePath(it.rel)).join(", ");
+    const more = list.length > 4 ? `, +${list.length - 4} more` : "";
+    return `Move ${list.length} item(s): ${names}${more}`;
+  }
+
+  async function collectAffectedSharesForMove(items) {
+    const list = Array.isArray(items) ? items : [];
+    const out = [];
+    const seen = new Set();
+
+    try {
+      await refreshSharesCache(true);
+    } catch (e) {
+      console.warn("Share refresh before move warning failed:", e);
+      return {
+        ok: false,
+        items: [],
+        error: String(e && e.message ? e.message : e)
+      };
+    }
+
+    for (const share of sharesByKey.values()) {
+      if (!share || typeof share !== "object") continue;
+      if (isShareExpired(share)) continue;
+
+      const sharePath = normalizeRelPath(share.path || "");
+      if (!sharePath) continue;
+
+      const shareType = share.type === "dir" ? "dir" : "file";
+      const token = String(share.token || "");
+      const dedupeKey = token || `${shareType}:${sharePath}:${String(share.mode || "")}`;
+      if (seen.has(dedupeKey)) continue;
+
+      let affected = false;
+
+      for (const it of list) {
+        if (!it || !it.rel) continue;
+        const src = normalizeRelPath(it.rel);
+
+        if (it.type === "dir") {
+          if (sharePath === src || sharePath.startsWith(src + "/")) {
+            affected = true;
+            break;
+          }
+        } else if (sharePath === src) {
+          affected = true;
+          break;
+        }
+      }
+
+      if (!affected) continue;
+
+      seen.add(dedupeKey);
+      out.push({
+        path: sharePath,
+        type: shareType,
+        mode: String(share.mode || share.share_mode || ""),
+        token
+      });
+    }
+
+    return {
+      ok: true,
+      items: out,
+      error: ""
+    };
+  }
+
+  function shareMoveWarningLabel(share) {
+    const mode = String(share && share.mode ? share.mode : "").toLowerCase();
+    const isPq = mode.includes("pq");
+    const kind = isPq ? "PQ share" : "Share link";
+    const path = share && share.path ? share.path : "";
+    return `${kind}: /${path}`;
+  }
+
+  function buildMoveConfirmText(destShown, affectedSharesResult) {
+    let text =
+        `Move ${moveItems.length} item(s) to:\n\n` +
+        `${destShown}\n\n` +
+        `Existing destination names will fail; nothing is overwritten.`;
+
+    if (!affectedSharesResult || affectedSharesResult.ok !== true) {
+      text +=
+          `\n\nWarning:\n` +
+          `Could not verify whether selected items have active share links.`;
+      return text;
+    }
+
+    const affected = affectedSharesResult.items || [];
+    if (!affected.length) return text;
+
+    const preview = affected.slice(0, 6).map(shareMoveWarningLabel);
+    const more = affected.length > preview.length
+        ? `\n… plus ${affected.length - preview.length} more`
+        : "";
+
+    text +=
+        `\n\nWarning:\n` +
+        `Moving these item(s) will break ${affected.length} active share/PQ share link(s). ` +
+        `The old public URLs will return Not found after the move.\n\n` +
+        preview.join("\n") +
+        more;
+
+    return text;
+  }
+
+  function renderMoveBreadcrumb() {
+    if (!moveBreadcrumbEl) return;
+
+    moveBreadcrumbEl.innerHTML = "";
+
+    const root = document.createElement("button");
+    root.type = "button";
+    root.className = "fmMoveCrumb" + (!moveDestPath ? " active" : "");
+    root.textContent = "/";
+    root.title = "Root";
+    root.disabled = !moveDestPath;
+    root.onclick = () => moveOpenPath("");
+    moveBreadcrumbEl.appendChild(root);
+
+    const parts = normalizeRelPath(moveDestPath).split("/").filter(Boolean);
+    let acc = "";
+
+    for (let i = 0; i < parts.length; i++) {
+      const sep = document.createElement("span");
+      sep.className = "fmMoveSep";
+      sep.textContent = "›";
+      moveBreadcrumbEl.appendChild(sep);
+
+      acc = acc ? `${acc}/${parts[i]}` : parts[i];
+
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "fmMoveCrumb" + (i === parts.length - 1 ? " active" : "");
+      b.textContent = parts[i];
+      b.title = "/" + acc;
+
+      const target = acc;
+      b.disabled = i === parts.length - 1;
+      b.onclick = () => moveOpenPath(target);
+
+      moveBreadcrumbEl.appendChild(b);
+    }
+  }
+
+  function renderMoveActionState() {
+    const problem = moveDestinationProblem(moveDestPath, moveItems);
+    const destShown = moveDestPath ? `/${moveDestPath}` : "/";
+
+    if (moveHereBtnEl) {
+      moveHereBtnEl.disabled = moveBusy || !!problem;
+      moveHereBtnEl.title = problem || `Move to ${destShown}`;
+    }
+
+    if (moveNewFolderBtnEl) {
+      moveNewFolderBtnEl.disabled =
+          moveBusy ||
+          destinationInsideSelectedDir(moveDestPath, moveItems) ||
+          !canWriteCurrentScope();
+    }
+
+    if (moveStatusEl && !moveBusy) {
+      moveStatusEl.textContent = problem || `Destination: ${destShown}`;
+    }
+  }
+
+  function moveDirIsBlocked(relDir) {
+    for (const it of moveItems || []) {
+      if (it && it.type === "dir" && isSameOrDescendant(relDir, it.rel)) return true;
+    }
+    return false;
+  }
+
+  function appendMoveDirRow(label, meta, onClick, opts = {}) {
+    if (!moveDirListEl) return;
+
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "fmMoveDirRow";
+
+    const disabled = !!opts.disabled;
+    row.setAttribute("aria-disabled", disabled ? "true" : "false");
+
+    const name = document.createElement("div");
+    name.className = "fmMoveDirName";
+    name.textContent = label;
+
+    const m = document.createElement("div");
+    m.className = "fmMoveDirMeta";
+    m.textContent = meta || "";
+
+    row.appendChild(name);
+    row.appendChild(m);
+
+    row.onclick = () => {
+      if (disabled) return;
+      onClick();
+    };
+
+    moveDirListEl.appendChild(row);
+  }
+
+  function renderMoveDirRows(dirs) {
+    if (!moveDirListEl) return;
+
+    moveDirListEl.innerHTML = "";
+
+    if (moveDestPath) {
+      appendMoveDirRow("..", "Parent folder", () => moveOpenPath(parentPath(moveDestPath)));
+    }
+
+    if (!dirs.length) {
+      const empty = document.createElement("div");
+      empty.className = "mono";
+      empty.style.opacity = "0.85";
+      empty.style.padding = "12px";
+      empty.textContent = "(no subfolders)";
+      moveDirListEl.appendChild(empty);
+      return;
+    }
+
+    for (const d of dirs) {
+      const dirRel = moveDestPath ? `${moveDestPath}/${d.name}` : d.name;
+      const blocked = moveDirIsBlocked(dirRel);
+
+      appendMoveDirRow(
+          d.name || "(unnamed)",
+          blocked ? "Cannot move into source" : "Folder",
+          () => moveOpenPath(dirRel),
+          { disabled: blocked }
+      );
+    }
+  }
+
+  async function moveOpenPath(path) {
+    moveDestPath = normalizeRelPath(path);
+    await loadMoveDestination();
+  }
+
+  async function loadMoveDestination() {
+    ensureMoveModal();
+
+    const mySeq = ++moveLoadSeq;
+
+    renderMoveBreadcrumb();
+    setMoveBusy(true);
+
+    if (moveDirListEl) {
+      moveDirListEl.innerHTML = "";
+      const loading = document.createElement("div");
+      loading.className = "mono";
+      loading.style.opacity = "0.72";
+      loading.style.padding = "12px";
+      loading.textContent = "Loading folders…";
+      moveDirListEl.appendChild(loading);
+    }
+
+    if (moveStatusEl) {
+      moveStatusEl.textContent = `Loading /${moveDestPath || ""}`;
+    }
+
+    try {
+      const r = await fetch(apiListUrl(moveDestPath), {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        headers: { "Accept": "application/json" }
+      });
+
+      const j = await r.json().catch(() => null);
+      if (mySeq !== moveLoadSeq) return;
+
+      if (!r.ok || !j || !j.ok || !Array.isArray(j.items)) {
+        const msg = j && (j.message || j.error)
+            ? `${j.error || ""} ${j.message || ""}`.trim()
+            : `HTTP ${r.status}`;
+        throw new Error(msg || "List failed");
+      }
+
+      const dirs = j.items
+          .filter((it) => it && it.type === "dir")
+          .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+
+      renderMoveDirRows(dirs);
+    } catch (e) {
+      if (moveDirListEl) {
+        moveDirListEl.innerHTML = "";
+        const err = document.createElement("div");
+        err.className = "mono";
+        err.style.opacity = "0.86";
+        err.style.padding = "12px";
+        err.textContent = `Folder list failed: ${String(e && e.message ? e.message : e)}`;
+        moveDirListEl.appendChild(err);
+      }
+    } finally {
+      if (mySeq === moveLoadSeq) {
+        setMoveBusy(false);
+        renderMoveActionState();
+      }
+    }
+  }
+
+  function collectSelectedMoveItems() {
+    const out = [];
+
+    for (const k of selectedKeys) {
+      const rel = keyToItemRelPath(k);
+      if (!rel) continue;
+
+      const type = String(k).startsWith("dir:") ? "dir" : "file";
+      const name = basenamePath(rel);
+
+      if (!name) continue;
+      out.push({ rel: normalizeRelPath(rel), type, name });
+    }
+
+    out.sort((a, b) => String(a.rel).localeCompare(String(b.rel)));
+    return out;
+  }
+
+  function openMoveModalForItems(items) {
+    if (!requireWritableScopeOrExplain("Move")) return;
+
+    const clean = (Array.isArray(items) ? items : [])
+        .map((it) => ({
+          rel: normalizeRelPath(it && it.rel),
+          type: it && it.type === "dir" ? "dir" : "file",
+          name: String((it && it.name) || basenamePath(it && it.rel) || "")
+        }))
+        .filter((it) => it.rel && it.name);
+
+    if (!clean.length) {
+      status.textContent = "Nothing selected.";
+      return;
+    }
+
+    moveItems = clean;
+    moveDestPath = curPath || "";
+
+    ensureMoveModal();
+    if (moveSourceLineEl) moveSourceLineEl.textContent = describeMoveItems(moveItems);
+
+    openMoveModal();
+    loadMoveDestination().catch((e) => {
+      if (moveStatusEl) moveStatusEl.textContent = `Move dialog failed: ${String(e && e.message ? e.message : e)}`;
+    });
+  }
+
+  function openMoveModalForItem(item) {
+    if (!item) return;
+
+    const rel = currentRelPathFor(item);
+    openMoveModalForItems([{
+      rel,
+      type: item.type === "dir" ? "dir" : "file",
+      name: item.name || basenamePath(rel)
+    }]);
+  }
+
+  function openMoveModalForSelection() {
+    openMoveModalForItems(collectSelectedMoveItems());
+  }
+
+  async function moveCreateFolderHere() {
+    if (!requireWritableScopeOrExplain("Create folder")) return;
+
+    if (destinationInsideSelectedDir(moveDestPath, moveItems)) {
+      if (moveStatusEl) moveStatusEl.textContent = "Cannot create destination inside the source folder.";
+      return;
+    }
+
+    const baseShown = moveDestPath ? `/${moveDestPath}` : "/";
+    const name = prompt(`New folder name in ${baseShown}:`, "New Folder");
+    if (!name) return;
+
+    if (name === "." || name === ".." || name.includes("/") || name.includes("\\")) {
+      alert("Folder name cannot contain '/', '\\', '.' or '..'.");
+      return;
+    }
+
+    const newRel = moveDestPath ? `${moveDestPath}/${name}` : name;
+
+    setMoveBusy(true);
+    if (moveStatusEl) moveStatusEl.textContent = "Creating folder…";
+
+    try {
+      const r = await fetch(apiMkdirUrl(newRel), {
+        method: "POST",
+        credentials: "include",
+        cache: "no-store"
+      });
+
+      const j = await r.json().catch(() => null);
+      if (!r.ok || !j || !j.ok) {
+        const msg = j && (j.message || j.error)
+            ? `${j.error || ""} ${j.message || ""}`.trim()
+            : `HTTP ${r.status}`;
+        throw new Error(msg || "mkdir failed");
+      }
+
+      clearFileListCache();
+      await moveOpenPath(newRel);
+    } catch (e) {
+      if (moveStatusEl) moveStatusEl.textContent = `Create folder failed: ${String(e && e.message ? e.message : e)}`;
+      setMoveBusy(false);
+      renderMoveActionState();
+    }
+  }
+
+  async function moveHereNow() {
+    if (!requireWritableScopeOrExplain("Move")) return;
+
+    const problem = moveDestinationProblem(moveDestPath, moveItems);
+    if (problem) {
+      if (moveStatusEl) moveStatusEl.textContent = problem;
+      renderMoveActionState();
+      return;
+    }
+
+    const destShown = moveDestPath ? `/${moveDestPath}` : "/";
+
+    setMoveBusy(true);
+    if (moveStatusEl) moveStatusEl.textContent = "Checking share links…";
+
+    const affectedSharesResult = await collectAffectedSharesForMove(moveItems);
+
+    setMoveBusy(false);
+    renderMoveActionState();
+
+    const ok = confirm(buildMoveConfirmText(destShown, affectedSharesResult));
+    if (!ok) return;
+
+    await moveItemsToDestination(moveItems, moveDestPath);
+  }
+
+  async function moveItemsToDestination(items, destPath) {
+    const list = Array.isArray(items) ? items.slice() : [];
+    const dest = normalizeRelPath(destPath);
+
+    if (!list.length) return;
+
+    setMoveBusy(true);
+    setBadge("warn", "moving…");
+    status.textContent = `Moving 0/${list.length}…`;
+    if (moveStatusEl) moveStatusEl.textContent = `Moving 0/${list.length}…`;
+
+    let done = 0;
+    let skipped = 0;
+    let failed = 0;
+    const failures = [];
+
+    for (const it of list) {
+      const from = normalizeRelPath(it.rel);
+      const name = it.name || basenamePath(from);
+      const to = dest ? `${dest}/${name}` : name;
+
+      if (!from || !name) {
+        skipped++;
+        continue;
+      }
+
+      if (pathEq(from, to)) {
+        skipped++;
+        continue;
+      }
+
+      try {
+        const r = await fetch(apiMoveUrl(from, to), {
+          method: "POST",
+          credentials: "include",
+          cache: "no-store",
+          body: ""
+        });
+
+        const j = await r.json().catch(() => null);
+
+        if (!r.ok || !j || !j.ok) {
+          const msg = j && (j.message || j.error)
+              ? `${j.error || ""} ${j.message || ""}`.trim()
+              : `HTTP ${r.status}`;
+          throw new Error(msg || `HTTP ${r.status}`);
+        }
+
+        done++;
+      } catch (e) {
+        failed++;
+        failures.push(`${from} → ${to} — ${String(e && e.message ? e.message : e)}`);
+      }
+
+      status.textContent = `Moving ${done + failed + skipped}/${list.length}…`;
+      if (moveStatusEl) moveStatusEl.textContent = status.textContent;
+    }
+
+    closeMoveModal();
+    clearSelection();
+
+    try {
+      await fetchFavoritesFromServer(true);
+    } catch (e) {
+      console.warn("Favorites refresh after move failed:", e);
+    }
+
+    clearFileListCache();
+    await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
+    await load(true);
+
+    if (failed > 0) {
+      setBadge("err", "partial");
+      status.textContent = `Moved ${done}/${list.length} item(s). Failed: ${failed}. Skipped: ${skipped}. See console.`;
+      console.warn("Move failures:", failures);
+    } else {
+      setBadge("ok", "ready");
+      status.textContent = skipped > 0
+          ? `Moved ${done} item(s). Skipped: ${skipped}.`
+          : `Moved ${done} item(s).`;
+    }
+
+    setMoveBusy(false);
   }
 
   async function doDelete(item) {
@@ -3726,6 +4548,9 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         }));
 
         ctxEl.appendChild(menuSep());
+        if (caps.move !== false) {
+          ctxEl.appendChild(menuItem("Move…", "", () => openMoveModalForItem(item)));
+        }
         ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
         ctxEl.appendChild(menuItem("Move to trash…", "🗑", () => doDelete(item), { danger: true }));
       }
@@ -3813,6 +4638,9 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
       if (canWrite) {
         ctxEl.appendChild(menuSep());
+        if (caps.move !== false) {
+          ctxEl.appendChild(menuItem("Move…", "", () => openMoveModalForItem(item)));
+        }
         ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
         ctxEl.appendChild(menuItem("Move to trash…", "🗑", () => doDelete(item), { danger: true }));
       }
