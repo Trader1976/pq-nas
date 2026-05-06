@@ -1,4 +1,5 @@
 #include "dropzone_routes.h"
+#include "activity_log.h"
 #include "storage_resolver.h"
 #include "user_quota.h"
 #include "gallery_meta.h"
@@ -1001,6 +1002,53 @@ static void dz_touch_file_indexes_best_effort_local(const DropZoneRoutesDeps& de
         }
     }
 }
+
+
+
+static void record_dropzone_upload_activity_best_effort_local(const DropZoneRoutesDeps& deps,
+                                                              const DropZoneRec& zone,
+                                                              const DropZoneUploadRec& upload) {
+    if (!deps.users || !deps.user_dir_for_fp || zone.owner_fp.empty()) {
+        return;
+    }
+
+    std::filesystem::path owner_root;
+    try {
+        owner_root = deps.user_dir_for_fp(*deps.users, zone.owner_fp);
+    } catch (...) {
+        return;
+    }
+
+    if (owner_root.empty()) return;
+
+    pqnas::activity::ActivityEvent ev;
+    ev.owner_user_id = zone.owner_fp;
+
+    ev.actor.kind = "guest";
+    ev.actor.display_name = upload.uploader_name;
+
+    ev.event_type = "dropzone.uploaded";
+    ev.scope_type = "dropzone";
+    ev.scope_id = zone.id;
+
+    ev.target_kind = "file";
+    ev.target_name = upload.stored_filename.empty() ? upload.original_filename : upload.stored_filename;
+    ev.target_path = upload.stored_path;
+
+    ev.details = nlohmann::json{
+        {"scope_type", "dropzone"},
+        {"dropzone_name", zone.name},
+        {"original_filename", upload.original_filename},
+        {"stored_filename", upload.stored_filename},
+        {"stored_path", upload.stored_path},
+        {"size_bytes", upload.size_bytes},
+        {"file_count", 1}
+    };
+
+    std::string activity_err;
+    (void)pqnas::activity::record_user_activity(owner_root, ev, &activity_err);
+}
+
 
 void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& deps) {
     // -------------------------------------------------------------------------
@@ -2693,6 +2741,8 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
             now
         );
 
+        record_dropzone_upload_activity_best_effort_local(deps, rec, upload);
+
         std::filesystem::remove_all(dir, ec);
 
         audit_local(deps, "public.dropzones_uploads_finish_ok", "ok", {
@@ -3012,6 +3062,9 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
             upload_bytes,
             now
         );
+
+        record_dropzone_upload_activity_best_effort_local(deps, rec, upload);
+
         audit_local(deps, "public.dropzones_upload_ok", "ok", {
             {"dropzone_id", rec.id},
             {"stored_path", rel_path},
