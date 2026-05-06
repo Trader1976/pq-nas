@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <mutex>
+#include <unordered_map>
 
 namespace pqnas {
 namespace {
@@ -221,6 +223,98 @@ static std::string sha256_hex_string_local(const std::string& s, std::string* er
     }
 
     return hex_encode_lower_local(md, static_cast<std::size_t>(md_len));
+}
+
+struct DzRateBucketLocal {
+    std::int64_t window_start = 0;
+    std::uint32_t count = 0;
+};
+
+static std::string dz_remote_addr_key_local(const httplib::Request& req) {
+    return req.remote_addr.empty() ? std::string("unknown") : req.remote_addr;
+}
+
+static bool dz_rate_limit_allow_local(const std::string& key,
+                                      std::uint32_t limit,
+                                      std::int64_t window_seconds,
+                                      std::int64_t* retry_after_seconds) {
+    if (retry_after_seconds) *retry_after_seconds = 0;
+    if (limit == 0 || window_seconds <= 0) return true;
+
+    static std::mutex mu;
+    static std::unordered_map<std::string, DzRateBucketLocal> buckets;
+    static std::uint64_t calls = 0;
+
+    const std::int64_t now = static_cast<std::int64_t>(std::time(nullptr));
+
+    std::lock_guard<std::mutex> lk(mu);
+
+    ++calls;
+    if ((calls % 512) == 0 && buckets.size() > 4096) {
+        for (auto it = buckets.begin(); it != buckets.end();) {
+            if (now - it->second.window_start > window_seconds * 4) {
+                it = buckets.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    auto& b = buckets[key];
+    if (b.window_start <= 0 || now - b.window_start >= window_seconds) {
+        b.window_start = now;
+        b.count = 0;
+    }
+
+    if (b.count >= limit) {
+        if (retry_after_seconds) {
+            const std::int64_t retry = window_seconds - (now - b.window_start);
+            *retry_after_seconds = retry > 0 ? retry : 1;
+        }
+        return false;
+    }
+
+    ++b.count;
+    return true;
+}
+
+static bool dz_public_rate_limited_local(const DropZoneRoutesDeps& deps,
+                                         const httplib::Request& req,
+                                         httplib::Response& res,
+                                         const std::string& raw_token,
+                                         const std::string& action,
+                                         std::uint32_t limit,
+                                         std::int64_t window_seconds) {
+    std::string herr;
+    std::string token_key = sha256_hex_string_local(raw_token, &herr);
+    if (token_key.empty()) {
+        token_key = "bad-token";
+    }
+
+    const std::string remote = dz_remote_addr_key_local(req);
+    const std::string key = "dropzone-public:" + action + ":" + remote + ":" + token_key;
+
+    std::int64_t retry_after = 0;
+    if (dz_rate_limit_allow_local(key, limit, window_seconds, &retry_after)) {
+        return false;
+    }
+
+    res.set_header("Retry-After", std::to_string(retry_after));
+
+    audit_local(deps, "public.dropzones_rate_limited", "fail", {
+        {"action", action},
+        {"remote_ip", remote},
+        {"retry_after_seconds", std::to_string(retry_after)}
+    });
+
+    reply_json_local(deps, res, 429, json{
+        {"ok", false},
+        {"error", "rate_limited"},
+        {"message", "Too many Drop Zone requests. Please try again later."},
+        {"retry_after_seconds", retry_after}
+    });
+
+    return true;
 }
 
 static std::string sha256_hex_file_local(const std::filesystem::path& path, std::string* err) {
@@ -1275,6 +1369,10 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
 
         const std::string token = req.matches[1];
 
+        if (dz_public_rate_limited_local(deps, req, res, token, "info", 120u, 60)) {
+            return;
+        }
+
         std::string herr;
         const std::string token_hash = sha256_hex_string_local(token, &herr);
         if (token_hash.empty()) {
@@ -1362,6 +1460,10 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
         }
 
         const std::string token = req.matches[1];
+
+        if (dz_public_rate_limited_local(deps, req, res, token, "uploads_list", 60u, 60)) {
+            return;
+        }
 
         std::string herr;
         const std::string token_hash = sha256_hex_string_local(token, &herr);
@@ -1488,6 +1590,10 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
         }
 
         const std::string token = req.matches[1];
+
+        if (dz_public_rate_limited_local(deps, req, res, token, "uploads_start", 20u, 900)) {
+            return;
+        }
 
         std::string herr;
         const std::string token_hash = sha256_hex_string_local(token, &herr);
@@ -1770,6 +1876,10 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
         }
 
         const std::string token = req.matches[1];
+
+        if (dz_public_rate_limited_local(deps, req, res, token, "uploads_chunk", 240u, 60)) {
+            return;
+        }
 
         std::string herr;
         const std::string token_hash = sha256_hex_string_local(token, &herr);
@@ -2075,6 +2185,10 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
 
         const std::string token = req.matches[1];
 
+        if (dz_public_rate_limited_local(deps, req, res, token, "uploads_cancel", 60u, 60)) {
+            return;
+        }
+
         std::string herr;
         const std::string token_hash = sha256_hex_string_local(token, &herr);
         if (token_hash.empty()) {
@@ -2173,6 +2287,10 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
         }
 
         const std::string token = req.matches[1];
+
+        if (dz_public_rate_limited_local(deps, req, res, token, "uploads_finish", 60u, 60)) {
+            return;
+        }
 
         std::string herr;
         const std::string token_hash = sha256_hex_string_local(token, &herr);
@@ -2609,6 +2727,10 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
 
         const std::string token = req.matches[1];
 
+        if (dz_public_rate_limited_local(deps, req, res, token, "legacy_upload", 30u, 900)) {
+            return;
+        }
+
         std::string herr;
         const std::string token_hash = sha256_hex_string_local(token, &herr);
         if (token_hash.empty()) {
@@ -2916,6 +3038,10 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
 
     srv.Get(R"(/dz/([A-Za-z0-9_-]{20,160}))", [&](const httplib::Request& req, httplib::Response& res) {
         const std::string token = req.matches[1];
+
+        if (dz_public_rate_limited_local(deps, req, res, token, "public_page", 120u, 60)) {
+            return;
+        }
 
         res.status = 200;
         res.set_header("Content-Type", "text/html; charset=utf-8");
