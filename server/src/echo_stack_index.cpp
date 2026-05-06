@@ -276,12 +276,12 @@ FROM echo_stack_items
 WHERE owner_fp=?1
   AND (
     ?2 = ''
-    OR title LIKE ?3 ESCAPE '\\'
-    OR url LIKE ?3 ESCAPE '\\'
-    OR description LIKE ?3 ESCAPE '\\'
-    OR notes LIKE ?3 ESCAPE '\\'
-    OR tags_text LIKE ?3 ESCAPE '\\'
-    OR collection LIKE ?3 ESCAPE '\\'
+    OR title LIKE ?3 ESCAPE '\'
+    OR url LIKE ?3 ESCAPE '\'
+    OR description LIKE ?3 ESCAPE '\'
+    OR notes LIKE ?3 ESCAPE '\'
+    OR tags_text LIKE ?3 ESCAPE '\'
+    OR collection LIKE ?3 ESCAPE '\'
   )
 ORDER BY created_epoch DESC, id DESC
 LIMIT ?4

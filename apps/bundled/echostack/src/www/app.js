@@ -10,11 +10,31 @@
     q: ""
   };
 
+  let statusDotsTimer = null;
+
   function setStatus(msg, kind) {
     const s = el("status");
     if (!s) return;
-    s.textContent = msg || "";
+
+    if (statusDotsTimer) {
+      clearInterval(statusDotsTimer);
+      statusDotsTimer = null;
+    }
+
+    const base = msg || "";
     s.className = "status" + (kind ? ` ${kind}` : "");
+
+    if (kind === "working") {
+      let dots = 0;
+      s.textContent = base;
+      statusDotsTimer = setInterval(() => {
+        dots = (dots + 1) % 4;
+        s.textContent = base + ".".repeat(dots);
+      }, 360);
+      return;
+    }
+
+    s.textContent = base;
   }
 
   async function api(path, opts = {}) {
@@ -224,6 +244,7 @@
       if (archiveStatus === "archived") {
         const openArchiveBtn = document.createElement("button");
         openArchiveBtn.type = "button";
+        openArchiveBtn.className = "archiveAction archived";
         openArchiveBtn.textContent = "Open archive";
         openArchiveBtn.addEventListener("click", () => {
           window.open(`${API}/archive/view?id=${encodeURIComponent(item.id)}`, "_blank", "noopener,noreferrer");
@@ -232,15 +253,17 @@
       } else if (archiveStatus === "archiving") {
         const archivingBtn = document.createElement("button");
         archivingBtn.type = "button";
-        archivingBtn.textContent = "Archiving…";
+        archivingBtn.className = "archiveAction archiving";
+        archivingBtn.textContent = "Archiving";
         archivingBtn.disabled = true;
         node.querySelector(".itemActions").insertBefore(archivingBtn, saveBtn);
       } else {
         const archiveBtn = document.createElement("button");
         archiveBtn.type = "button";
+        archiveBtn.className = "archiveAction ready";
         archiveBtn.textContent = archiveStatus === "failed" ? "Retry archive" : "Archive";
         archiveBtn.addEventListener("click", () => {
-          archiveItem(item.id);
+          archiveItem(item.id, archiveBtn);
         });
         node.querySelector(".itemActions").insertBefore(archiveBtn, saveBtn);
       }
@@ -330,8 +353,14 @@
     await loadItems();
   }
 
-  async function archiveItem(id) {
-    setStatus("Archiving page snapshot…");
+  async function archiveItem(id, archiveBtn) {
+    if (archiveBtn) {
+      archiveBtn.className = "archiveAction archiving";
+      archiveBtn.textContent = "Archiving";
+      archiveBtn.disabled = true;
+    }
+
+    setStatus("Archiving page snapshot", "working");
 
     try {
       const j = await api("/items/archive", {
@@ -359,15 +388,7 @@
     el("saveBtn")?.addEventListener("click", () => {
       saveNewItem().catch((e) => setStatus(e.message || String(e), "bad"));
     });
-
-    el("archiveBtn")?.addEventListener("click", async () => {
-      try {
-        await saveNewItem();
-        setStatus("Saved. Use Archive on the item card to store the HTML snapshot.", "good");
-      } catch (err) {
-        setStatus(err.message || String(err), "bad");
-      }
-    });
+    
 
     el("refreshBtn")?.addEventListener("click", () => {
       loadItems().catch((e) => setStatus(e.message || String(e), "bad"));
