@@ -198,6 +198,8 @@ add_executable(pqnas_server
         server/src/drive_health.cc
         server/src/drive_health_monitor.cc
         server/src/share_links.cc
+        server/src/activity_log.cpp
+        server/src/routes_activity.cpp
         server/src/static_serve.cc
         server/src/verify_login_common.cc
         server/src/storage_resolver.cpp

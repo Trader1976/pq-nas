@@ -27,8 +27,11 @@
     const mainPaneTitle = document.getElementById("mainPaneTitle");
     const homeBlurb = document.getElementById("homeBlurb");
 
-    const inspectorPane = document.getElementById("inspectorPane");
-    const toggleInspectorBtn = document.getElementById("toggleInspectorBtn");
+    const activityPane = document.getElementById("activityPane");
+    const toggleActivityBtn = document.getElementById("toggleActivityBtn");
+    const activityRefreshBtn = document.getElementById("activityRefreshBtn");
+    const activityList = document.getElementById("activityList");
+    const activityStatus = document.getElementById("activityStatus");
     const contentGrid = document.getElementById("contentGrid");
 
     const appsList = document.getElementById("appsList");
@@ -2445,29 +2448,157 @@
         loadApps();
     });
 
-    function setInspectorHidden(hidden) {
-        if (!inspectorPane || !toggleInspectorBtn) return;
-        inspectorPane.style.display = hidden ? "none" : "";
-        if (contentGrid) contentGrid.classList.toggle("noInspector", hidden);
-        toggleInspectorBtn.textContent = hidden ? "Show inspector" : "Hide inspector";
-        try { localStorage.setItem("pqnas_hide_inspector", hidden ? "1" : "0"); } catch {}
+    function activityFmtTime(epoch) {
+        const n = Number(epoch || 0);
+        if (!Number.isFinite(n) || n <= 0) return "";
+        try {
+            return new Date(n * 1000).toLocaleString([], {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit"
+            });
+        } catch {
+            return "";
+        }
     }
 
-    // default: hidden (or last saved choice)
+    function activityFmtBytes(v) {
+        const n = Number(v || 0);
+        if (!Number.isFinite(n) || n <= 0) return "";
+        const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+        let x = n;
+        let i = 0;
+        while (x >= 1024 && i < units.length - 1) {
+            x /= 1024;
+            i++;
+        }
+        const digits = i === 0 ? 0 : (x >= 10 ? 1 : 2);
+        return `${x.toFixed(digits)} ${units[i]}`;
+    }
+
+    function activityIconFor(type) {
+        if (type === "file.trashed") return "🗑";
+        if (type === "file.restored") return "↩";
+        if (type === "file.purged") return "✕";
+        if (String(type || "").startsWith("security.")) return "◇";
+        if (String(type || "").startsWith("dropzone.")) return "↓";
+        return "•";
+    }
+
+    function renderActivityEvents(events) {
+        if (!activityList) return;
+
+        activityList.replaceChildren();
+
+        if (!Array.isArray(events) || events.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "activityEmpty";
+            empty.textContent = "No activity yet.";
+            activityList.appendChild(empty);
+            return;
+        }
+
+        for (const ev of events) {
+            const card = document.createElement("div");
+            card.className = "activityItem";
+
+            const msg = document.createElement("div");
+            msg.className = "activityMsg";
+            msg.textContent = `${activityIconFor(ev.event_type)} ${String(ev.message || ev.event_type || "Activity")}`;
+            card.appendChild(msg);
+
+            const metaBits = [];
+            const when = activityFmtTime(ev.created_at_epoch);
+            if (when) metaBits.push(when);
+
+            const targetPath = String(ev.target_path || "");
+            if (targetPath) metaBits.push(targetPath);
+
+            const kind = String(ev.target_kind || "");
+            const size = ev.details && typeof ev.details === "object" ? activityFmtBytes(ev.details.size_bytes) : "";
+            if (kind || size) metaBits.push([kind, size].filter(Boolean).join(" · "));
+
+            if (metaBits.length) {
+                const meta = document.createElement("div");
+                meta.className = "activityMeta";
+                meta.textContent = metaBits.join(" · ");
+                card.appendChild(meta);
+            }
+
+            activityList.appendChild(card);
+        }
+    }
+
+    async function loadActivity() {
+        if (!activityList) return;
+
+        if (activityStatus) activityStatus.textContent = "Loading…";
+
+        try {
+            const r = await fetch("/api/v4/activity/list?limit=50", {
+                credentials: "include",
+                headers: { "Accept": "application/json" },
+                cache: "no-store"
+            });
+            const j = await r.json().catch(() => null);
+
+            if (!r.ok || !j || !j.ok) {
+                throw new Error((j && j.message) ? j.message : `HTTP ${r.status}`);
+            }
+
+            const events = Array.isArray(j.events) ? j.events : [];
+            renderActivityEvents(events);
+
+            if (activityStatus) {
+                activityStatus.textContent = events.length
+                    ? `${events.length} recent event${events.length === 1 ? "" : "s"}`
+                    : "No recent activity";
+            }
+        } catch (e) {
+            activityList.replaceChildren();
+
+            const err = document.createElement("div");
+            err.className = "activityEmpty";
+            err.textContent = `Could not load activity: ${String(e && e.message ? e.message : e)}`;
+            activityList.appendChild(err);
+
+            if (activityStatus) activityStatus.textContent = "Activity unavailable";
+        }
+    }
+
+    function setActivityHidden(hidden) {
+        if (!activityPane || !toggleActivityBtn) return;
+
+        activityPane.style.display = hidden ? "none" : "";
+        if (contentGrid) contentGrid.classList.toggle("noSidePane", hidden);
+
+        toggleActivityBtn.textContent = hidden ? "My Activity" : "Close Activity";
+
+        if (!hidden) loadActivity();
+
+        try { localStorage.setItem("pqnas_hide_activity", hidden ? "1" : "0"); } catch {}
+    }
+
+    // default: hidden, but remember user choice
     (() => {
         let hide = true;
         try {
-            const v = localStorage.getItem("pqnas_hide_inspector");
+            const v = localStorage.getItem("pqnas_hide_activity");
             if (v === "0") hide = false;
         } catch {}
-        setInspectorHidden(hide);
+        setActivityHidden(hide);
     })();
 
-    if (toggleInspectorBtn && inspectorPane) {
-        toggleInspectorBtn.addEventListener("click", () => {
-            const hidden = inspectorPane.style.display === "none";
-            setInspectorHidden(!hidden);
+    if (toggleActivityBtn && activityPane) {
+        toggleActivityBtn.addEventListener("click", () => {
+            const hidden = activityPane.style.display === "none";
+            setActivityHidden(!hidden);
         });
+    }
+
+    if (activityRefreshBtn) {
+        activityRefreshBtn.addEventListener("click", () => loadActivity());
     }
 
     if (navHome) navHome.addEventListener("click", () => renderHome());

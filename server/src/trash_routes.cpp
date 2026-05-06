@@ -1,5 +1,6 @@
 #include "trash_routes.h"
 
+#include "activity_log.h"
 #include "storage_resolver.h"
 #include "workspace_access_shared.h"
 
@@ -12,6 +13,71 @@ namespace pqnas {
 namespace {
 
 using json = nlohmann::json;
+
+static std::string actor_display_name_for_activity_local(const TrashRoutesDeps& deps,
+                                                         const std::string& actor_fp) {
+    if (!deps.users || actor_fp.empty()) return "";
+
+    auto rec = deps.users->get(actor_fp);
+    if (!rec.has_value()) return "";
+
+    if (!rec->name.empty()) return rec->name;
+    return "";
+}
+
+static std::string basename_for_activity_local(const std::string& rel_path,
+                                               const std::string& fallback) {
+    try {
+        const std::filesystem::path p(rel_path);
+        const std::string name = p.filename().string();
+        if (!name.empty()) return name;
+    } catch (...) {
+    }
+
+    if (!fallback.empty()) return fallback;
+    return "item";
+}
+
+static void record_trash_activity_best_effort_local(const TrashRoutesDeps& deps,
+                                                    const std::string& actor_fp,
+                                                    const TrashItemRec& rec,
+                                                    const std::string& event_type,
+                                                    const std::string& target_rel_path,
+                                                    const nlohmann::json& details) {
+    if (!deps.users || !deps.user_dir_for_fp || actor_fp.empty() || event_type.empty()) {
+        return;
+    }
+
+    std::filesystem::path user_root;
+    try {
+        user_root = deps.user_dir_for_fp(*deps.users, actor_fp);
+    } catch (...) {
+        return;
+    }
+
+    if (user_root.empty()) return;
+
+    pqnas::activity::ActivityEvent ev;
+    ev.owner_user_id = actor_fp;
+
+    ev.actor.user_id = actor_fp;
+    ev.actor.display_name = actor_display_name_for_activity_local(deps, actor_fp);
+    ev.actor.kind = "user";
+
+    ev.event_type = event_type;
+
+    ev.scope_type = rec.scope_type.empty() ? "user" : rec.scope_type;
+    ev.scope_id = rec.scope_id;
+
+    ev.target_kind = rec.item_type.empty() ? "item" : rec.item_type;
+    ev.target_path = target_rel_path.empty() ? rec.original_rel_path : target_rel_path;
+    ev.target_name = basename_for_activity_local(ev.target_path, rec.original_rel_path);
+
+    ev.details = details.is_object() ? details : nlohmann::json::object();
+
+    std::string activity_err;
+    (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
+}
 
 // Clamps client-provided list limits to a small, predictable server-side range.
 //
@@ -693,6 +759,18 @@ void register_trash_routes(httplib::Server& srv, const TrashRoutesDeps& deps) {
             {"renamed", rr.renamed ? "true" : "false"}
         });
 
+        record_trash_activity_best_effort_local(deps, actor_fp, rec, "file.restored", restored_rel_path, json{
+            {"trash_id", trash_id},
+            {"scope_type", rec.scope_type},
+            {"scope_id", rec.scope_id},
+            {"original_rel_path", rec.original_rel_path},
+            {"restored_rel_path", restored_rel_path},
+            {"renamed", rr.renamed},
+            {"item_type", rr.item_type},
+            {"size_bytes", rr.size_bytes},
+            {"file_count", rr.file_count}
+        });
+
         deps.reply_json(res, 200, json{
             {"ok", true},
             {"trash_id", rr.trash_id},
@@ -867,6 +945,16 @@ void register_trash_routes(httplib::Server& srv, const TrashRoutesDeps& deps) {
             {"scope_type", rec.scope_type},
             {"scope_id", rec.scope_id},
             {"original_rel_path", rec.original_rel_path}
+        });
+
+        record_trash_activity_best_effort_local(deps, actor_fp, rec, "file.purged", rec.original_rel_path, json{
+            {"trash_id", trash_id},
+            {"scope_type", rec.scope_type},
+            {"scope_id", rec.scope_id},
+            {"original_rel_path", rec.original_rel_path},
+            {"item_type", rec.item_type},
+            {"size_bytes", pr.size_bytes},
+            {"file_count", pr.file_count}
         });
 
         deps.reply_json(res, 200, json{

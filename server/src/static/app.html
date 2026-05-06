@@ -64,7 +64,7 @@
             }
         }
 
-        .content.noInspector{
+        .content.noSidePane{
             grid-template-columns: 1fr;
         }
 
@@ -204,7 +204,7 @@
             gap:8px;
         }
 
-        #toggleInspectorBtn{
+        #toggleActivityBtn{
             padding: 8px 12px;
             opacity: 0.92;
             font-family: var(--sans);
@@ -332,10 +332,54 @@
             z-index:1000;
         }
 
-        #inspectorPane{
+        #activityPane{
             margin-left: 24px;
             padding-left: 20px;
             border-left: 1px solid rgba(var(--fg-rgb),0.10);
+            min-width: 300px;
+            max-width: 360px;
+        }
+
+        .activityToolbar{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:10px;
+            margin: 8px 0 12px;
+        }
+
+        .activityList{
+            display:flex;
+            flex-direction:column;
+            gap:10px;
+        }
+
+        .activityItem{
+            border:1px solid rgba(var(--fg-rgb),0.14);
+            background:rgba(0,0,0,0.05);
+            border-radius:14px;
+            padding:10px 11px;
+        }
+
+        .activityMsg{
+            font-size:13px;
+            line-height:1.35;
+            font-weight:650;
+        }
+
+        .activityMeta{
+            margin-top:6px;
+            font-size:11px;
+            color:rgba(var(--fg-rgb),0.58);
+            line-height:1.35;
+            word-break:break-word;
+        }
+
+        .activityEmpty{
+            color:rgba(var(--fg-rgb),0.62);
+            font-size:13px;
+            line-height:1.45;
+            padding:10px 2px;
         }
 
         a{ color: var(--fg); }
@@ -400,9 +444,9 @@
 
         <div class="bottom">
             <div class="statusCard">
-                <button class="navbtn" id="toggleInspectorBtn" type="button" style="justify-content:center;">
-                    Show inspector
-                    <span class="k">I</span>
+                <button class="navbtn" id="toggleActivityBtn" type="button" style="justify-content:center;">
+                    My Activity
+                    <span class="k">A</span>
                 </button>
                 <div id="stateBadge" class="badge warn">checking…</div>
                 <div class="mini" id="statusLine">Loading…</div>
@@ -439,11 +483,14 @@
                 </div>
             </section>
 
-            <aside class="pane" aria-label="Inspector pane" id="inspectorPane" style="display:none">
-                <h2>Inspector</h2>
-                <pre id="out">Loading…</pre>
-                <div style="margin-top:10px; color: rgba(var(--fg-rgb),0.60); font-size: 12px;">
-                    Tip: <code>/api/v4/me</code> should return JSON.
+            <aside class="pane" aria-label="My Activity pane" id="activityPane" style="display:none">
+                <h2>My Activity</h2>
+                <div class="activityToolbar">
+                    <div class="mini" id="activityStatus">Recent account activity</div>
+                    <button class="btn secondary" id="activityRefreshBtn" type="button">Refresh</button>
+                </div>
+                <div id="activityList" class="activityList">
+                    <div class="activityEmpty">Open this panel to load your recent activity.</div>
                 </div>
             </aside>
         </div>

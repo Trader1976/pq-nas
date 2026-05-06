@@ -167,6 +167,10 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include "echo_stack_routes.h"
 #include "echo_stack_index.h"
 
+// activity
+#include "routes_activity.h"
+#include "activity_log.h"
+
 using json = nlohmann::json;
 
 static void reply_json(httplib::Response& res, int code, const std::string& body_json);
@@ -1132,6 +1136,73 @@ static std::filesystem::path user_dir_for_fp(pqnas::UsersRegistry& users, const 
 std::filesystem::path pqnas_user_dir_for_fp(pqnas::UsersRegistry& users,
                                             const std::string& fp_hex) {
     return user_dir_for_fp(users, fp_hex);
+}
+
+static std::string activity_user_display_name_local(pqnas::UsersRegistry& users,
+                                                    const std::string& fp_hex) {
+    auto rec = users.get(fp_hex);
+    if (!rec.has_value()) return "";
+    return rec->name;
+}
+
+static std::string activity_basename_local(const std::string& rel_path,
+                                           const std::string& fallback) {
+    try {
+        const std::filesystem::path p(rel_path);
+        const std::string name = p.filename().string();
+        if (!name.empty()) return name;
+    } catch (...) {
+    }
+
+    if (!fallback.empty()) return fallback;
+    return "item";
+}
+
+static void record_user_file_activity_best_effort_local(pqnas::UsersRegistry& users,
+                                                        const std::string& actor_fp,
+                                                        const std::string& event_type,
+                                                        const std::string& rel_path,
+                                                        const std::string& item_type,
+                                                        const std::string& trash_id,
+                                                        std::uint64_t size_bytes,
+                                                        std::uint64_t file_count) {
+    if (actor_fp.empty() || event_type.empty()) return;
+
+    std::filesystem::path user_root;
+    try {
+        user_root = user_dir_for_fp(users, actor_fp);
+    } catch (...) {
+        return;
+    }
+
+    if (user_root.empty()) return;
+
+    pqnas::activity::ActivityEvent ev;
+    ev.owner_user_id = actor_fp;
+
+    ev.actor.user_id = actor_fp;
+    ev.actor.display_name = activity_user_display_name_local(users, actor_fp);
+    ev.actor.kind = "user";
+
+    ev.event_type = event_type;
+    ev.scope_type = "user";
+    ev.scope_id = actor_fp;
+
+    ev.target_kind = item_type.empty() ? "item" : item_type;
+    ev.target_path = rel_path;
+    ev.target_name = activity_basename_local(rel_path, ev.target_kind);
+
+    ev.details = json{
+        {"scope_type", "user"},
+        {"original_rel_path", rel_path},
+        {"item_type", ev.target_kind},
+        {"trash_id", trash_id},
+        {"size_bytes", size_bytes},
+        {"file_count", file_count}
+    };
+
+    std::string activity_err;
+    (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
 }
 
 namespace {
@@ -9885,6 +9956,32 @@ v5.app_pair_build_qr_uri =
 	// (leave v5.sign_token_v4_ed25519 unset for now; we’ll wire once v5 verify uses it)
 
 register_routes_v5(srv, v5);
+
+    pqnas::ActivityRoutesDeps activity_deps;
+    activity_deps.users = &users;
+    activity_deps.cookie_key = COOKIE_KEY;
+
+    activity_deps.require_user_auth_users_actor =
+        [&](const httplib::Request& req,
+            httplib::Response& res,
+            const unsigned char* cookie_key,
+            pqnas::UsersRegistry* users_ptr,
+            std::string* fp_hex,
+            std::string* role) -> bool {
+            return require_user_auth_users_actor(req, res, cookie_key, users_ptr, fp_hex, role);
+    };
+
+    activity_deps.reply_json =
+        [&](httplib::Response& res, int code, const std::string& body) {
+            reply_json(res, code, body);
+    };
+
+    activity_deps.user_dir_for_fp =
+        [&](pqnas::UsersRegistry& users_ref, const std::string& fp_hex) -> std::filesystem::path {
+            return user_dir_for_fp(users_ref, fp_hex);
+    };
+
+    pqnas::register_activity_routes(srv, activity_deps);
 
 trash_service.set_restore_reindexer(
     [&](const pqnas::TrashItemRec& rec,
@@ -28265,6 +28362,17 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             }.dump());
             return;
         }
+        record_user_file_activity_best_effort_local(
+            users,
+            fp_hex,
+            "file.trashed",
+            tp.original_rel_path,
+            tp.item_type,
+            tr.trash_id,
+            tp.size_bytes,
+            tp.file_count
+        );
+
 
         {
             std::string derr;
@@ -28494,6 +28602,17 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
                 }.dump());
                 return;
             }
+        record_user_file_activity_best_effort_local(
+            users,
+            fp_hex,
+            "file.trashed",
+            tp.original_rel_path,
+            tp.item_type,
+            tr.trash_id,
+            tp.size_bytes,
+            tp.file_count
+        );
+
 
             {
                 std::string ferr;
@@ -28712,6 +28831,17 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             }.dump());
             return;
         }
+        record_user_file_activity_best_effort_local(
+            users,
+            fp_hex,
+            "file.trashed",
+            tp.original_rel_path,
+            tp.item_type,
+            tr.trash_id,
+            tp.size_bytes,
+            tp.file_count
+        );
+
 
         {
             std::string derr;

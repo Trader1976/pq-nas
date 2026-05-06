@@ -1,4 +1,5 @@
 #include "routes_workspaces_files.h"
+#include "activity_log.h"
 
 #include <cctype>
 #include <chrono>
@@ -1169,6 +1170,79 @@ bool any_file_ancestor_exists_physical(const std::filesystem::path& root,
     return false;
 }
 } // namespace
+
+
+
+static std::string workspace_activity_display_name_local(const WorkspaceFileRouteDeps& deps,
+                                                         const std::string& actor_fp) {
+    if (!deps.users || actor_fp.empty()) return "";
+
+    auto rec = deps.users->get(actor_fp);
+    if (!rec.has_value()) return "";
+
+    return rec->name;
+}
+
+static std::string workspace_activity_basename_local(const std::string& rel_path,
+                                                     const std::string& fallback) {
+    try {
+        const std::filesystem::path p(rel_path);
+        const std::string name = p.filename().string();
+        if (!name.empty()) return name;
+    } catch (...) {
+    }
+
+    if (!fallback.empty()) return fallback;
+    return "item";
+}
+
+static void record_workspace_file_activity_best_effort_local(const WorkspaceFileRouteDeps& deps,
+                                                             const std::string& actor_fp,
+                                                             const std::string& workspace_id,
+                                                             const std::string& rel_path,
+                                                             const std::string& item_type,
+                                                             const std::string& trash_id,
+                                                             std::uint64_t size_bytes,
+                                                             std::uint64_t file_count) {
+    if (!deps.users || actor_fp.empty()) return;
+
+    std::filesystem::path user_root;
+    try {
+        user_root = ::pqnas_user_dir_for_fp(*deps.users, actor_fp);
+    } catch (...) {
+        return;
+    }
+
+    if (user_root.empty()) return;
+
+    pqnas::activity::ActivityEvent ev;
+    ev.owner_user_id = actor_fp;
+
+    ev.actor.user_id = actor_fp;
+    ev.actor.display_name = workspace_activity_display_name_local(deps, actor_fp);
+    ev.actor.kind = "user";
+
+    ev.event_type = "file.trashed";
+    ev.scope_type = "workspace";
+    ev.scope_id = workspace_id;
+
+    ev.target_kind = item_type.empty() ? "item" : item_type;
+    ev.target_path = rel_path;
+    ev.target_name = workspace_activity_basename_local(rel_path, ev.target_kind);
+
+    ev.details = nlohmann::json{
+        {"scope_type", "workspace"},
+        {"original_rel_path", rel_path},
+        {"item_type", ev.target_kind},
+        {"trash_id", trash_id},
+        {"size_bytes", size_bytes},
+        {"file_count", file_count}
+    };
+
+    std::string activity_err;
+    (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
+}
+
 
 void register_workspace_file_routes(httplib::Server& srv,
                                     const WorkspaceFileRouteDeps& deps) {
@@ -7158,6 +7232,17 @@ srv.Post("/api/v4/workspaces/files/delete",
         }.dump());
         return;
     }
+
+    record_workspace_file_activity_best_effort_local(
+        deps,
+        actor_fp,
+        workspace_id,
+        tp.original_rel_path,
+        tp.item_type,
+        tr.trash_id,
+        tp.size_bytes,
+        tp.file_count
+    );
 
     const std::uint64_t removed_count = is_dir ? (tr.file_count + 1) : 1;
 
