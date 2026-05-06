@@ -1050,6 +1050,65 @@ static void record_dropzone_upload_activity_best_effort_local(const DropZoneRout
 }
 
 
+static std::string dropzone_actor_display_name_for_activity_local(const DropZoneRoutesDeps& deps,
+                                                                  const std::string& actor_fp) {
+    if (!deps.users || actor_fp.empty()) return "";
+
+    auto rec = deps.users->get(actor_fp);
+    if (!rec.has_value()) return "";
+
+    return rec->name;
+}
+
+static void record_dropzone_manage_activity_best_effort_local(const DropZoneRoutesDeps& deps,
+                                                              const DropZoneRec& zone,
+                                                              const std::string& actor_fp,
+                                                              const std::string& event_type) {
+    if (!deps.users || !deps.user_dir_for_fp || zone.owner_fp.empty() || event_type.empty()) {
+        return;
+    }
+
+    std::filesystem::path owner_root;
+    try {
+        owner_root = deps.user_dir_for_fp(*deps.users, zone.owner_fp);
+    } catch (...) {
+        return;
+    }
+
+    if (owner_root.empty()) return;
+
+    pqnas::activity::ActivityEvent ev;
+    ev.owner_user_id = zone.owner_fp;
+
+    ev.actor.user_id = actor_fp;
+    ev.actor.display_name = dropzone_actor_display_name_for_activity_local(deps, actor_fp);
+    ev.actor.kind = "user";
+
+    ev.event_type = event_type;
+    ev.scope_type = "dropzone";
+
+    // Deliberately do not store raw dropzone id/token/password details in Activity.
+    ev.scope_id = "";
+
+    ev.target_kind = "dropzone";
+    ev.target_name = zone.name.empty() ? "Drop Zone" : zone.name;
+    ev.target_path = zone.destination_path;
+
+    ev.details = nlohmann::json{
+        {"scope_type", "dropzone"},
+        {"dropzone_name", ev.target_name},
+        {"destination_path", zone.destination_path}
+    };
+
+    if (zone.expires_epoch > 0) {
+        ev.details["expires_epoch"] = zone.expires_epoch;
+    }
+
+    std::string activity_err;
+    (void)pqnas::activity::record_user_activity(owner_root, ev, &activity_err);
+}
+
+
 void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& deps) {
     // -------------------------------------------------------------------------
     // Owner-authenticated Drop Zone management API
@@ -1305,6 +1364,13 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             {"destination_path", dest_norm}
         });
 
+        record_dropzone_manage_activity_best_effort_local(
+            deps,
+            rec,
+            actor_fp,
+            "dropzone.created"
+        );
+
         reply_json_local(deps, res, 200, json{
             {"ok", true},
             {"id", id},
@@ -1393,6 +1459,19 @@ void register_dropzone_routes(httplib::Server& srv, const DropZoneRoutesDeps& de
             {"dropzone_id", id},
             {"disabled", disabled ? "true" : "false"}
         });
+
+        if (disabled) {
+            std::string get_err;
+            auto zone_opt = deps.dropzone_index->get_by_id(id, &get_err);
+            if (zone_opt.has_value() && zone_opt->owner_fp == actor_fp) {
+                record_dropzone_manage_activity_best_effort_local(
+                    deps,
+                    *zone_opt,
+                    actor_fp,
+                    "dropzone.disabled"
+                );
+            }
+        }
 
         reply_json_local(deps, res, 200, json{
             {"ok", true},

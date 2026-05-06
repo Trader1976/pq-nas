@@ -190,6 +190,14 @@ std::string build_default_message(const ActivityEvent& ev) {
         return actor + " disabled a share link for " + target;
     }
 
+    if (ev.event_type == "dropzone.created") {
+        return actor + " created Drop Zone \"" + target + "\"";
+    }
+
+    if (ev.event_type == "dropzone.disabled") {
+        return actor + " disabled Drop Zone \"" + target + "\"";
+    }
+
     if (ev.event_type == "dropzone.uploaded") {
         std::string zone_name;
         if (ev.details.is_object() && ev.details.contains("dropzone_name") && ev.details["dropzone_name"].is_string()) {
