@@ -837,6 +837,335 @@
         }
     }
 
+
+    function basenameFromRelPath(relPath) {
+        const parts = normalizeRelPath(relPath).split("/").filter(Boolean);
+        return parts.length ? parts[parts.length - 1] : "";
+    }
+
+    function itemTypeForRelPath(relPath) {
+        const norm = normalizeRelPath(relPath);
+
+        for (const tile of gridEl.querySelectorAll(".tile")) {
+            if (normalizeRelPath(tile.dataset.relPath || "") === norm) {
+                const t = String(tile.dataset.itemType || "");
+                if (t === "file" || t === "dir") return t;
+            }
+        }
+
+        for (const it of state.items || []) {
+            if (normalizeRelPath(currentRelPathFor(it)) === norm) {
+                const t = String(it.type || "");
+                if (t === "file" || t === "dir") return t;
+            }
+        }
+
+        return "file";
+    }
+
+    function isSameOrUnderPath(path, root) {
+        const p = normalizeRelPath(path);
+        const r = normalizeRelPath(root);
+        return !!r && (p === r || p.startsWith(r + "/"));
+    }
+
+    function dedupeSelectedMovePaths(paths) {
+        const sorted = paths
+            .map((p) => normalizeRelPath(p))
+            .filter(Boolean)
+            .sort((a, b) => a.localeCompare(b));
+
+        const out = [];
+        for (const p of sorted) {
+            if (!out.some((parent) => p === parent || p.startsWith(parent + "/"))) {
+                out.push(p);
+            }
+        }
+        return out;
+    }
+
+    async function movePathApi(fromRel, toRel) {
+        const r = await fetch(
+            `/api/v4/files/move?from=${encodeURIComponent(fromRel)}&to=${encodeURIComponent(toRel)}`,
+            {
+                method: "POST",
+                headers: { "Accept": "application/json" },
+                cache: "no-store"
+            }
+        );
+
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j || j.ok === false) {
+            throw new Error(j.message || j.error || `HTTP ${r.status}`);
+        }
+        return j;
+    }
+
+    async function confirmMoveMayBreakShares(targets) {
+        let shares = [];
+        try {
+            const r = await fetch("/api/v4/shares/list", {
+                headers: { "Accept": "application/json" },
+                cache: "no-store"
+            });
+            const j = await r.json().catch(() => ({}));
+            if (r.ok && j && j.ok && Array.isArray(j.shares)) {
+                shares = j.shares;
+            }
+        } catch (_) {
+            // Share warning is best-effort only. The move itself should still be usable.
+            return true;
+        }
+
+        const affected = [];
+
+        for (const s of shares) {
+            const sharePath = normalizeRelPath(String(s.path || ""));
+            const shareType = String(s.type || "");
+            if (!sharePath || shareType === "album") continue;
+
+            for (const t of targets) {
+                const from = normalizeRelPath(t.from || "");
+                const type = String(t.type || "file");
+                if (!from) continue;
+
+                if (sharePath === from || (type === "dir" && sharePath.startsWith(from + "/"))) {
+                    const mode = String(s.mode || s.share_mode || "");
+                    const pq = mode.includes("pq") || !!s.invite_url || !!s.recipient_count || Array.isArray(s.recipients);
+                    affected.push({
+                        path: sharePath,
+                        type: shareType,
+                        pq
+                    });
+                    break;
+                }
+            }
+        }
+
+        if (!affected.length) return true;
+
+        const shown = affected
+            .slice(0, 8)
+            .map((x) => `• ${x.pq ? "PQ " : ""}${x.type}: ${x.path}`)
+            .join("\n");
+
+        const more = affected.length > 8 ? `\n…plus ${affected.length - 8} more` : "";
+
+        return confirm(
+            `Warning: this move affects ${affected.length} existing share link(s).\n\n` +
+            `${shown}${more}\n\n` +
+            `Those path-based share links will no longer find the moved content after the move.\n\n` +
+            `Continue?`
+        );
+    }
+
+
+    async function pickMoveDestination(options) {
+        const o = options || {};
+        const fallbackPrompt = () => {
+            const raw = prompt(
+                `${o.title || "Move"} to which folder?\n\n` +
+                `Enter destination folder path relative to My Files.\n` +
+                `Leave empty for root.`,
+                o.initialPath || ""
+            );
+            return raw === null ? null : normalizeRelPath(raw);
+        };
+
+        const picker = window.PQNAS_FOLDER_PICKER;
+        if (!picker || typeof picker.open !== "function") {
+            return fallbackPrompt();
+        }
+
+        try {
+            const picked = await picker.open({
+                title: o.title || "Move",
+                subtitle: "Choose destination folder",
+                source: o.source || "",
+                initialPath: o.initialPath || "",
+                blockedPaths: Array.isArray(o.blockedPaths) ? o.blockedPaths : [],
+                chooseLabel: o.chooseLabel || "Move here",
+                canCreate: true
+            });
+            return picked === null ? null : normalizeRelPath(picked);
+        } catch (e) {
+            console.warn("Folder picker failed, falling back to prompt:", e);
+            return fallbackPrompt();
+        }
+    }
+
+    async function moveItem(item) {
+        if (!item) return;
+
+        const fromRel = normalizeRelPath(currentRelPathFor(item));
+        if (!fromRel) return;
+
+        const name = basenameFromRelPath(fromRel);
+        if (!name) return;
+
+        const currentParent = parentPath(fromRel);
+        const destDir = await pickMoveDestination({
+            title: `Move ${item.type === "dir" ? "folder" : "image"}`,
+            source: fromRel,
+            initialPath: currentParent,
+            blockedPaths: item.type === "dir" ? [fromRel] : [],
+            chooseLabel: "Move here"
+        });
+
+        if (destDir === null) {
+            setStatus("Move cancelled.");
+            return;
+        }
+        const toRel = destDir ? joinPath(destDir, name) : name;
+
+        if (!toRel || toRel === fromRel) {
+            setStatus("Move cancelled: destination is the same.");
+            return;
+        }
+
+        if (item.type === "dir" && isSameOrUnderPath(destDir, fromRel)) {
+            alert("Cannot move a folder into itself.");
+            setStatus("Move cancelled: destination is inside source folder.");
+            return;
+        }
+
+        const targets = [{ from: fromRel, to: toRel, type: item.type || "file" }];
+        if (!(await confirmMoveMayBreakShares(targets))) {
+            setStatus("Move cancelled.");
+            return;
+        }
+
+        if (!confirm(`Move?\n\nFrom: ${fromRel}\nTo:   ${toRel}`)) {
+            setStatus("Move cancelled.");
+            return;
+        }
+
+        try {
+            setBadge("warn", "moving…");
+            setStatus(`Moving ${name}…`);
+            await movePathApi(fromRel, toRel);
+
+            selectedRelPaths.delete(fromRel);
+            selectedRelPaths.add(toRel);
+            selectionAnchorRelPath = toRel;
+
+            setStatus(`Moved: ${fromRel} → ${toRel}`);
+            await load(true);
+        } catch (e) {
+            setBadge("err", "move failed");
+            setStatus(`Move failed: ${String(e && e.message ? e.message : e)}`);
+        }
+    }
+
+    async function moveSelection() {
+        const paths = dedupeSelectedMovePaths(selectedRelPathsList());
+        if (!paths.length) {
+            setStatus("Nothing selected.");
+            return;
+        }
+
+        const destDir = await pickMoveDestination({
+            title: `Move ${paths.length} selected item(s)`,
+            source: `${paths.length} selected item(s)`,
+            initialPath: state.curPath || "",
+            blockedPaths: paths.filter((p) => itemTypeForRelPath(p) === "dir"),
+            chooseLabel: "Move here"
+        });
+
+        if (destDir === null) {
+            setStatus("Move cancelled.");
+            return;
+        }
+
+        const targets = [];
+
+        for (const from of paths) {
+            const name = basenameFromRelPath(from);
+            if (!name) continue;
+
+            const type = itemTypeForRelPath(from);
+            const to = destDir ? joinPath(destDir, name) : name;
+
+            if (!to || to === from) continue;
+
+            if (type === "dir" && isSameOrUnderPath(destDir, from)) {
+                alert(`Cannot move folder into itself:\n\n${from}`);
+                setStatus("Move cancelled.");
+                return;
+            }
+
+            targets.push({ from, to, type });
+        }
+
+        if (!targets.length) {
+            setStatus("Move cancelled: everything is already in that destination.");
+            return;
+        }
+
+        const seenDest = new Set();
+        for (const t of targets) {
+            if (seenDest.has(t.to)) {
+                alert(`Move cancelled: multiple selected items would land on the same destination:\n\n${t.to}`);
+                setStatus("Move cancelled: duplicate destination.");
+                return;
+            }
+            seenDest.add(t.to);
+        }
+
+        if (!(await confirmMoveMayBreakShares(targets))) {
+            setStatus("Move cancelled.");
+            return;
+        }
+
+        if (!confirm(
+            `Move ${targets.length} selected item(s)?\n\n` +
+            `Destination folder: ${destDir || "/"}`
+        )) {
+            setStatus("Move cancelled.");
+            return;
+        }
+
+        setBadge("warn", "moving…");
+        setStatus(`Moving ${targets.length} selected item(s)…`);
+
+        let done = 0;
+        const failed = [];
+
+        for (const t of targets) {
+            try {
+                await movePathApi(t.from, t.to);
+                done += 1;
+            } catch (e) {
+                failed.push({
+                    from: t.from,
+                    to: t.to,
+                    error: String(e && e.message ? e.message : e)
+                });
+            }
+        }
+
+        selectedRelPaths.clear();
+        selectionAnchorRelPath = "";
+        if (typeof updateSelectionUi === "function") updateSelectionUi();
+
+        await load(true);
+
+        if (failed.length) {
+            console.warn("Photo Gallery moveSelection failures:", failed);
+            setBadge("warn", "partial move");
+            setStatus(`Moved ${done}/${targets.length}. Failed: ${failed.length}`);
+            alert(
+                `Moved ${done}/${targets.length} item(s).\n\n` +
+                `Failed:\n` +
+                failed.slice(0, 8).map((f) => `• ${f.from}: ${f.error}`).join("\n")
+            );
+        } else {
+            setBadge("ok", "moved");
+            setStatus(`Moved ${done} selected item(s).`);
+        }
+    }
+
+
     async function deleteFolder(item) {
         if (!item || item.type !== "dir") return;
 
@@ -957,6 +1286,7 @@
 
         ctxMenu.appendChild(menuItem("Download selected", () => downloadSelectionZip()));
         ctxMenu.appendChild(menuItem("Export selected with metadata…", () => exportSelectionZip()));
+        ctxMenu.appendChild(menuItem("Move selected…", () => moveSelection()));
         ctxMenu.appendChild(menuSep());
         ctxMenu.appendChild(menuItem("Clear selection", () => {
             clearSelection();
@@ -980,6 +1310,7 @@
         ctxMenu.appendChild(menuItem("Download zip", () => downloadSingleFolderZip(item)));
         ctxMenu.appendChild(menuItem("Export with metadata…", () => exportSingleItemZip(item)));
         ctxMenu.appendChild(menuSep());
+        ctxMenu.appendChild(menuItem("Move…", () => moveItem(item)));
         ctxMenu.appendChild(menuItem("Rename…", () => renameFolder(item)));
         ctxMenu.appendChild(menuItem("Move to trash…", () => deleteFolder(item), { danger: true }));
 
@@ -1060,6 +1391,7 @@
             window.PQNAS_PHOTOGALLERY_SHARES?.openForItem(item);
         }));
         ctxMenu.appendChild(menuSep());
+        ctxMenu.appendChild(menuItem("Move…", () => moveItem(item)));
         ctxMenu.appendChild(menuItem("Rename…", () => renameImage(item)));
         ctxMenu.appendChild(menuItem("Move to trash…", () => deleteImage(item), { danger: true }));
 

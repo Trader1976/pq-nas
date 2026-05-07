@@ -808,3 +808,185 @@ html[data-theme] .btn.danger:active{
             rgba(var(--fail-rgb), 1.0)
     ) !important;
 }
+
+/* ===== Shared PQ-NAS folder picker / move modal ===== */
+.fmMoveOverlay{
+    position:fixed;
+    inset:0;
+    z-index:12000;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(0,0,0,0.52);
+    backdrop-filter:blur(8px);
+}
+.fmMoveOverlay.show{
+    display:flex;
+}
+.fmMoveCard{
+    width:min(760px, calc(100vw - 28px));
+    max-height:min(760px, calc(100vh - 28px));
+    display:flex;
+    flex-direction:column;
+    border-radius:18px;
+    border:1px solid rgba(var(--fg-rgb, 255,255,255),0.16);
+    background:rgba(var(--bg-rgb, 20,20,24),0.97);
+    color:var(--fg, #f2f2f2);
+    box-shadow:0 24px 80px rgba(0,0,0,0.42);
+    overflow:hidden;
+}
+.fmMoveHead{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:14px;
+    padding:15px 16px;
+    border-bottom:1px solid rgba(var(--fg-rgb, 255,255,255),0.12);
+    background:rgba(var(--fg-rgb, 255,255,255),0.045);
+}
+.fmMoveTitle{
+    font-weight:950;
+    font-size:17px;
+    letter-spacing:.01em;
+}
+.fmMoveSub,
+.fmMoveSource{
+    color:rgba(var(--fg-rgb, 255,255,255),0.68);
+    font-size:12px;
+    line-height:1.35;
+}
+.fmMoveClose{
+    border-radius:12px;
+    border:1px solid rgba(var(--fg-rgb, 255,255,255),0.18);
+    background:rgba(var(--fg-rgb, 255,255,255),0.08);
+    color:var(--fg, #f2f2f2);
+    padding:8px 11px;
+    font:inherit;
+    font-weight:850;
+    cursor:pointer;
+}
+.fmMoveSource{
+    padding:10px 16px 0;
+    word-break:break-word;
+}
+.fmMoveBreadcrumb{
+    display:flex;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:6px;
+    padding:12px 16px;
+}
+.fmMoveCrumb{
+    border-radius:999px;
+    border:1px solid rgba(var(--fg-rgb, 255,255,255),0.16);
+    background:rgba(var(--fg-rgb, 255,255,255),0.07);
+    color:var(--fg, #f2f2f2);
+    padding:7px 10px;
+    font:inherit;
+    font-size:12px;
+    font-weight:850;
+    cursor:pointer;
+}
+.fmMoveCrumb.active,
+.fmMoveCrumb:disabled{
+    opacity:.75;
+    cursor:default;
+}
+.fmMoveSep{
+    opacity:.45;
+    font-weight:900;
+}
+.fmMoveDirList{
+    flex:1 1 auto;
+    min-height:220px;
+    overflow:auto;
+    padding:4px 16px 12px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+}
+.fmMoveDirRow{
+    width:100%;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    text-align:left;
+    border-radius:14px;
+    border:1px solid rgba(var(--fg-rgb, 255,255,255),0.13);
+    background:rgba(var(--fg-rgb, 255,255,255),0.055);
+    color:var(--fg, #f2f2f2);
+    padding:11px 12px;
+    font:inherit;
+    cursor:pointer;
+}
+.fmMoveDirRow:hover{
+    background:rgba(var(--fg-rgb, 255,255,255),0.09);
+}
+.fmMoveDirRow[aria-disabled="true"],
+.fmMoveDirRow:disabled{
+    opacity:.58;
+    cursor:default;
+}
+.fmMoveDirName{
+    font-weight:900;
+    min-width:0;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+.fmMoveDirMeta{
+    flex:0 0 auto;
+    opacity:.65;
+    font-size:12px;
+}
+.fmMoveStatus{
+    padding:0 16px 12px;
+    color:rgba(var(--fg-rgb, 255,255,255),0.72);
+    font-size:12px;
+    min-height:18px;
+}
+.fmMoveActions{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:13px 16px 15px;
+    border-top:1px solid rgba(var(--fg-rgb, 255,255,255),0.12);
+    background:rgba(var(--fg-rgb, 255,255,255),0.035);
+}
+.fmMoveActionGroup{
+    display:flex;
+    align-items:center;
+    gap:10px;
+}
+.fmMoveActions .btn{
+    white-space:nowrap;
+}
+
+html[data-theme="bright"] .fmMoveOverlay,
+html[data-theme="win_classic"] .fmMoveOverlay{
+    background:rgba(255,255,255,0.38);
+    backdrop-filter:none;
+}
+html[data-theme="bright"] .fmMoveCard{
+    background:rgba(255,255,255,0.985);
+    border-color:rgba(0,0,0,0.16);
+    box-shadow:0 20px 70px rgba(0,0,0,0.20);
+}
+html[data-theme="win_classic"] .fmMoveCard{
+    border-radius:2px;
+    background:rgb(245,245,245);
+    border:2px solid rgba(0,0,0,0.55);
+    box-shadow:6px 6px 0 rgba(0,0,0,0.22);
+}
+html[data-theme="win_classic"] .fmMoveHead,
+html[data-theme="win_classic"] .fmMoveActions{
+    background:rgba(0,0,0,0.055);
+}
+html[data-theme="win_classic"] .fmMoveClose,
+html[data-theme="win_classic"] .fmMoveCrumb,
+html[data-theme="win_classic"] .fmMoveDirRow{
+    border-radius:2px;
+}
