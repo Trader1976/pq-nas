@@ -297,9 +297,10 @@ html[data-theme="win_classic"] .rsInput{
 }
 
 .rsDurationBadge{
+  left: 10px;
+  right: auto;
+  bottom: 10px;
   position:absolute;
-  right:10px;
-  bottom:10px;
   padding:4px 8px;
   border-radius:999px;
   background:rgba(0,0,0,.68);
@@ -447,4 +448,100 @@ html[data-theme="win_classic"] .rsDetails{
   .rsMetaEditorActions{
     flex-direction:column-reverse;
   }
+}
+
+
+/* Reel Stack selection + keyboard workflow */
+.rsCard{
+  cursor:pointer;
+}
+
+.rsCard.rsSelected{
+  border-color:rgba(0,220,220,.78);
+  box-shadow:
+    0 0 0 2px rgba(0,220,220,.24),
+    0 18px 52px rgba(0,0,0,.42),
+    0 0 38px rgba(0,220,220,.16);
+}
+
+.rsCard:focus-visible{
+  outline:2px solid rgba(0,220,220,.86);
+  outline-offset:4px;
+}
+
+.rsCard.rsSelected .rsTitle{
+  color:var(--accent, #00dcdc);
+}
+
+
+/* Reel Stack favorite badge */
+.rsThumb{
+  position:relative;
+}
+
+.rsFavoriteBadge{
+  position:absolute;
+  top:10px;
+  left:10px;
+  z-index:3;
+  max-width:calc(100% - 20px);
+  padding:5px 9px;
+  border-radius:999px;
+  border:1px solid rgba(255,170,0,.72);
+  background:rgba(0,0,0,.68);
+  color:#ffb000;
+  font-size:12px;
+  font-weight:800;
+  line-height:1;
+  text-transform:uppercase;
+  letter-spacing:.04em;
+  box-shadow:0 0 18px rgba(255,150,0,.22);
+  pointer-events:none;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.rsMetaTechPanel{
+  border:1px solid rgba(var(--fg-rgb,255,255,255),.12);
+  border-radius:16px;
+  padding:14px;
+  background:rgba(0,0,0,.18);
+}
+
+.rsMetaTechTitle{
+  color:var(--accent, #00dcdc);
+  font-size:12px;
+  font-weight:900;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  margin-bottom:10px;
+}
+
+.rsMetaTechGrid{
+  display:grid;
+  grid-template-columns:minmax(110px, 180px) minmax(0, 1fr);
+  gap:8px 14px;
+}
+
+.rsMetaTechRow{
+  display:contents;
+}
+
+.rsMetaTechLabel{
+  color:rgba(var(--fg-rgb,255,255,255),.58);
+  font-size:12px;
+  font-weight:800;
+}
+
+.rsMetaTechValue{
+  color:rgba(var(--fg-rgb,255,255,255),.88);
+  font-size:12px;
+  font-family:var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  overflow-wrap:anywhere;
+}
+
+.rsMetaTechEmpty{
+  color:rgba(var(--fg-rgb,255,255,255),.58);
+  font-size:13px;
 }

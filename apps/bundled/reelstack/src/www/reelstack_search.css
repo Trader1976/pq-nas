@@ -1,0 +1,84 @@
+.rsSearchBackdrop[hidden]{
+  display:none !important;
+}
+
+.rsSearchBackdrop{
+  position:fixed;
+  inset:0;
+  z-index:9999;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+  background:rgba(0,0,0,.58);
+  backdrop-filter:blur(8px);
+}
+
+.rsSearchCard{
+  width:min(720px, 96vw);
+  border:1px solid rgba(var(--fg-rgb,255,255,255),.20);
+  border-radius:22px;
+  background:var(--modal-bg, rgba(20,20,20,.96));
+  box-shadow:0 24px 80px rgba(0,0,0,.45);
+  padding:18px;
+}
+
+.rsSearchHead{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:16px;
+  margin-bottom:18px;
+}
+
+.rsSearchHead h2{
+  margin:2px 0 6px;
+  font-size:22px;
+}
+
+.rsSearchHead p{
+  margin:0;
+  color:rgba(var(--fg-rgb,255,255,255),.68);
+  font-size:13px;
+  line-height:1.45;
+}
+
+.rsSearchKicker{
+  color:var(--accent, #00dcdc);
+  font-size:12px;
+  font-weight:900;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+}
+
+.rsSearchField{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+
+.rsSearchField span{
+  font-size:13px;
+  font-weight:800;
+}
+
+.rsSearchHints{
+  margin-top:10px;
+  color:rgba(var(--fg-rgb,255,255,255),.58);
+  font-size:12px;
+}
+
+.rsSearchHints code{
+  color:rgba(var(--fg-rgb,255,255,255),.86);
+  background:rgba(255,255,255,.07);
+  border:1px solid rgba(var(--fg-rgb,255,255,255),.10);
+  border-radius:8px;
+  padding:2px 6px;
+}
+
+.rsSearchActions{
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+  margin-top:18px;
+}

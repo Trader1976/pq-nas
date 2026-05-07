@@ -13,6 +13,7 @@
   const countText = el("countText");
   const filterInput = el("filterInput");
   const scanBtn = el("scanBtn");
+  const searchBtn = el("searchBtn");
 
   const modal = el("playerModal");
   const player = el("player");
@@ -23,6 +24,180 @@
   let allVideos = [];
   const metaCache = new Map();
   const metaInFlight = new Set();
+
+  let selectedPath = "";
+
+  function isTypingTarget(target) {
+    if (!target) return false;
+    if (target.isContentEditable) return true;
+
+    const tag = String(target.tagName || "").toUpperCase();
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  }
+
+  function reelCardNodes() {
+    return Array.from(document.querySelectorAll(".rsCard[data-rs-path]"));
+  }
+
+  function applySelectedCardStyles() {
+    for (const node of reelCardNodes()) {
+      const on = node.dataset.rsPath === selectedPath;
+      node.classList.toggle("rsSelected", on);
+      node.setAttribute("aria-selected", on ? "true" : "false");
+    }
+  }
+
+  function focusSelectedCard() {
+    if (!selectedPath) return;
+
+    const node = reelCardNodes().find(n => n.dataset.rsPath === selectedPath);
+    if (!node) return;
+
+    try {
+      node.focus({ preventScroll: true });
+      node.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch (_) {
+      node.focus();
+    }
+  }
+
+  function setSelectedPath(path, opts) {
+    selectedPath = String(path || "");
+    applySelectedCardStyles();
+
+    if (opts && opts.focus) {
+      focusSelectedCard();
+    }
+  }
+
+  function selectedVideo() {
+    if (selectedPath) {
+      const found = allVideos.find(v => v && v.path === selectedPath);
+      if (found) return found;
+    }
+
+    const visible = filteredVideos();
+    return visible.length ? visible[0] : null;
+  }
+
+  function ensureSelectionForVideos(videos) {
+    if (!Array.isArray(videos) || !videos.length) {
+      selectedPath = "";
+      return;
+    }
+
+    if (!selectedPath || !videos.some(v => v && v.path === selectedPath)) {
+      selectedPath = videos[0].path || "";
+    }
+  }
+
+  function selectedIndexIn(videos) {
+    if (!Array.isArray(videos) || !videos.length) return -1;
+    const idx = videos.findIndex(v => v && v.path === selectedPath);
+    return idx >= 0 ? idx : 0;
+  }
+
+  function reelGridColumnCount() {
+    const nodes = reelCardNodes();
+    if (!nodes.length) return 1;
+
+    const firstTop = nodes[0].getBoundingClientRect().top;
+    let count = 0;
+
+    for (const node of nodes) {
+      const top = node.getBoundingClientRect().top;
+      if (Math.abs(top - firstTop) <= 8) count++;
+      else break;
+    }
+
+    return Math.max(1, count || 1);
+  }
+
+  function moveSelection(delta) {
+    const videos = filteredVideos();
+    if (!videos.length) return;
+
+    ensureSelectionForVideos(videos);
+
+    const cur = selectedIndexIn(videos);
+    const next = Math.max(0, Math.min(videos.length - 1, cur + delta));
+    setSelectedPath(videos[next].path, { focus: true });
+  }
+
+  function handleReelStackKeydown(ev) {
+    const typing = isTypingTarget(ev.target);
+
+    if ((ev.ctrlKey || ev.metaKey) && String(ev.key || "").toLowerCase() === "s") {
+      if (metaEditor && !metaEditor.hidden) {
+        ev.preventDefault();
+        saveMetaEditor();
+      }
+      return;
+    }
+
+    if (ev.key === "Escape") {
+      if (metaEditor && !metaEditor.hidden) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closeMetaEditor();
+        return;
+      }
+
+      if (modal && !modal.hidden) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closePlayer();
+        return;
+      }
+    }
+
+    if (typing) return;
+
+    if (modal && !modal.hidden) return;
+
+    if (ev.key === " " || ev.key === "Spacebar") {
+      const v = selectedVideo();
+
+      if (metaEditor && !metaEditor.hidden) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closeMetaEditor();
+        return;
+      }
+
+      if (v) {
+        ev.preventDefault();
+        editVideoMetadata(v);
+      }
+      return;
+    }
+
+    if (metaEditor && !metaEditor.hidden) return;
+
+    const videos = filteredVideos();
+    if (!videos.length) return;
+
+    if (ev.key === "ArrowRight") {
+      ev.preventDefault();
+      moveSelection(1);
+    } else if (ev.key === "ArrowLeft") {
+      ev.preventDefault();
+      moveSelection(-1);
+    } else if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      moveSelection(reelGridColumnCount());
+    } else if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      moveSelection(-reelGridColumnCount());
+    } else if (ev.key === "Home") {
+      ev.preventDefault();
+      setSelectedPath(videos[0].path, { focus: true });
+    } else if (ev.key === "End") {
+      ev.preventDefault();
+      setSelectedPath(videos[videos.length - 1].path, { focus: true });
+    }
+  }
+
 
   function setStatus(text) {
     if (statusText) statusText.textContent = text || "";
@@ -182,7 +357,7 @@
     const u = userMetaForVideo(v);
     const bits = [];
 
-    if (u.favorite) bits.push("favorite");
+    // favorite is shown as the top-left badge, so do not repeat it in the summary line.
     if (u.watched) bits.push("watched");
     if (u.rating > 0) bits.push("★".repeat(Math.max(0, Math.min(5, Math.round(u.rating)))));
 
@@ -193,13 +368,70 @@
     return bits.join(" · ");
   }
 
+  function techMetaLines(v) {
+    const m = metaForVideo(v) || {};
+    const u = userMetaForVideo(v);
+    const lines = [];
+
+    const add = (label, value) => {
+      value = String(value === undefined || value === null ? "" : value).trim();
+      if (value) lines.push({ label, value });
+    };
+
+    add("Duration", m.duration_text || (m.duration_seconds ? `${Math.round(Number(m.duration_seconds))} sec` : ""));
+    add("Resolution", m.resolution || ((m.width && m.height) ? `${m.width}x${m.height}` : ""));
+    add("FPS", m.fps ? fmtFps(m.fps).replace(/ fps$/i, "") : "");
+    add("Video codec", [m.video_codec ? String(m.video_codec).toUpperCase() : "", m.video_codec_long].filter(Boolean).join(" — "));
+    add("Audio codec", [m.audio_codec ? String(m.audio_codec).toUpperCase() : "", m.audio_codec_long].filter(Boolean).join(" — "));
+    add("Bitrate", m.bit_rate ? fmtBitrate(m.bit_rate) : "");
+    add("Format", m.format_long || m.format || "");
+    add("Size", fmtBytes(m.size_bytes || v.size_bytes || 0));
+    add("Path", "/" + String(v.path || ""));
+    if (u.updated_epoch) add("User metadata updated", new Date(Number(u.updated_epoch) * 1000).toLocaleString());
+
+    return lines;
+  }
+
+  function fillTechnicalMetaBox(v) {
+    const box = metaEditorEl("rsMetaTechnical");
+    if (!box) return;
+
+    box.innerHTML = "";
+
+    const lines = techMetaLines(v);
+    if (!lines.length) {
+      const empty = document.createElement("div");
+      empty.className = "rsMetaTechEmpty";
+      empty.textContent = "Technical metadata is not available yet.";
+      box.appendChild(empty);
+      return;
+    }
+
+    for (const line of lines) {
+      const row = document.createElement("div");
+      row.className = "rsMetaTechRow";
+
+      const label = document.createElement("div");
+      label.className = "rsMetaTechLabel";
+      label.textContent = line.label;
+
+      const value = document.createElement("div");
+      value.className = "rsMetaTechValue";
+      value.textContent = line.value;
+
+      row.appendChild(label);
+      row.appendChild(value);
+      box.appendChild(row);
+    }
+  }
+
+
   function videoMetaSummary(v) {
     const m = metaForVideo(v);
     if (!m) return "Metadata loading…";
     if (m._error) return `Metadata unavailable: ${m._error}`;
 
     const parts = [];
-    if (m.duration_text) parts.push(m.duration_text);
     if (m.resolution) parts.push(m.resolution);
     if (m.fps) parts.push(fmtFps(m.fps));
     if (m.video_codec) parts.push(String(m.video_codec).toUpperCase());
@@ -216,6 +448,12 @@
     if (!m || m._error || !m.duration_text) return "";
     return String(m.duration_text);
   }
+
+  function favoriteBadgeText(v) {
+    const u = userMetaForVideo(v);
+    return u.favorite ? "★ favorite" : "";
+  }
+
 
   function updateMetaEls(path) {
     for (const node of document.querySelectorAll("[data-rs-title-path]")) {
@@ -240,7 +478,17 @@
         node.style.display = txt ? "" : "none";
       }
     }
-  }
+  
+    for (const node of document.querySelectorAll("[data-rs-favorite-path]")) {
+      if (node.dataset.rsFavoritePath === path) {
+        const v = allVideos.find(x => x.path === path) || { path };
+        const txt = favoriteBadgeText(v);
+        node.textContent = txt;
+        node.style.display = txt ? "" : "none";
+      }
+    }
+
+}
 
   async function ensureVideoMeta(v) {
     if (!v || !v.path) return;
@@ -417,17 +665,84 @@
     return String(filterInput && filterInput.value || "").trim().toLowerCase();
   }
 
+  function currentSearchTerms() {
+    return currentFilter()
+      .split(/\s+/)
+      .map(x => x.trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  function videoSearchHaystack(v) {
+    const m = metaForVideo(v) || {};
+    const u = userMetaForVideo(v);
+
+    return [
+      v && v.name,
+      v && v.path,
+      u.title,
+      u.tags_text,
+      Array.isArray(u.tags) ? u.tags.join(" ") : "",
+      u.notes,
+      u.watched ? "watched" : "",
+      u.favorite ? "favorite" : "",
+      u.rating ? "rating " + u.rating + " " + "★".repeat(Math.max(0, Math.min(5, Math.round(u.rating)))) : "",
+      m.duration_text,
+      m.resolution,
+      m.video_codec,
+      m.video_codec_long,
+      m.audio_codec,
+      m.audio_codec_long,
+      m.format,
+      m.format_long,
+      m.fps ? fmtFps(m.fps) : "",
+      m.bit_rate ? fmtBitrate(m.bit_rate) : ""
+    ].filter(Boolean).join(" ").toLowerCase();
+  }
+
   function filteredVideos() {
-    const q = currentFilter();
-    if (!q) return allVideos;
-    return allVideos.filter(v =>
-      String(v.name || "").toLowerCase().includes(q) ||
-      String(v.path || "").toLowerCase().includes(q)
-    );
+    const terms = currentSearchTerms();
+    if (!terms.length) return allVideos;
+
+    return allVideos.filter(v => {
+      const haystack = videoSearchHaystack(v);
+      return terms.every(term => haystack.includes(term));
+    });
+  }
+
+  function applySearchQuery(query) {
+    const q = String(query || "").trim();
+
+    if (filterInput) filterInput.value = q;
+
+    const videos = filteredVideos();
+    ensureSelectionForVideos(videos);
+    render();
+
+    if (q) {
+      setStatus(`Search "${q}" · ${videos.length} video${videos.length === 1 ? "" : "s"}`);
+    } else {
+      setStatus(`Search cleared · ${allVideos.length} video${allVideos.length === 1 ? "" : "s"}`);
+    }
+  }
+
+  function openSearchModal() {
+    const api = window.PQNAS_REELSTACK_SEARCH;
+
+    if (!api || typeof api.open !== "function") {
+      try { filterInput?.focus(); } catch (_) {}
+      return;
+    }
+
+    api.open({
+      initialQuery: currentFilter(),
+      onApply: applySearchQuery,
+      onClear: () => applySearchQuery("")
+    });
   }
 
   function render() {
     const videos = filteredVideos();
+    ensureSelectionForVideos(videos);
 
     if (countText) {
       countText.textContent = `${videos.length} video${videos.length === 1 ? "" : "s"}`;
@@ -443,6 +758,13 @@
     for (const v of videos) {
       const card = document.createElement("article");
       card.className = "rsCard";
+      card.tabIndex = 0;
+      card.dataset.rsPath = v.path || "";
+      card.setAttribute("role", "option");
+      card.setAttribute("aria-selected", (v.path === selectedPath) ? "true" : "false");
+      if (v.path === selectedPath) card.classList.add("rsSelected");
+      card.addEventListener("click", () => setSelectedPath(v.path));
+      card.addEventListener("focusin", () => setSelectedPath(v.path));
 
       const thumb = document.createElement("div");
       thumb.className = "rsThumb rsThumbPlaceholder";
@@ -472,6 +794,14 @@
       play.addEventListener("click", () => openPlayer(v));
 
       thumb.appendChild(img);
+
+      const favoriteBadge = document.createElement("div");
+      favoriteBadge.className = "rsFavoriteBadge";
+      favoriteBadge.dataset.rsFavoritePath = v.path;
+      favoriteBadge.textContent = favoriteBadgeText(v);
+      favoriteBadge.style.display = favoriteBadge.textContent ? "" : "none";
+      thumb.appendChild(favoriteBadge);
+
       const durationBadge = document.createElement("div");
       durationBadge.className = "rsDurationBadge";
       durationBadge.dataset.rsDurationPath = v.path;
@@ -640,9 +970,14 @@
         </label>
       </div>
 
+        <section class="rsMetaTechPanel rsFieldWide" aria-label="Technical video metadata">
+          <div class="rsMetaTechTitle">Technical metadata</div>
+          <div id="rsMetaTechnical" class="rsMetaTechGrid"></div>
+        </section>
+
       <div class="rsMetaEditorActions">
         <button id="rsMetaEditorCancel" class="rsBtn" type="button">Cancel</button>
-        <button id="rsMetaEditorSave" class="rsBtn primary" type="button">Save metadata</button>
+        <button id="rsMetaEditorSave" class="rsBtn primary" type="button" title="Save metadata (Ctrl+S)" aria-keyshortcuts="Control+S Meta+S">Save metadata</button>
       </div>
     `;
 
@@ -688,6 +1023,8 @@
     if (ratingEl) ratingEl.value = String(Math.max(0, Math.min(5, Number(current.rating || 0) || 0)));
     if (favoriteEl) favoriteEl.checked = !!current.favorite;
     if (watchedEl) watchedEl.checked = !!current.watched;
+
+    fillTechnicalMetaBox(v);
 
     metaEditor.hidden = false;
     window.setTimeout(() => titleEl?.focus(), 0);
@@ -756,6 +1093,7 @@
 
   async function editVideoMetadata(v) {
     if (!v || !v.path) return;
+    setSelectedPath(v.path);
 
     try {
       await ensureVideoMeta(v);
@@ -788,6 +1126,7 @@
   });
 
   scanBtn?.addEventListener("click", scanVideos);
+  searchBtn?.addEventListener("click", openSearchModal);
   filterInput?.addEventListener("input", render);
   closePlayerBtn?.addEventListener("click", closePlayer);
 
@@ -795,9 +1134,7 @@
     if (ev.target === modal) closePlayer();
   });
 
-  window.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && modal && !modal.hidden) closePlayer();
-  });
+  document.addEventListener("keydown", handleReelStackKeydown, true);
 
   setStatus("Ready.");
   render();
