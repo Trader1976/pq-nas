@@ -3705,16 +3705,25 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return out;
   }
 
-  function openMoveModalForItems(items) {
+  async function openMoveModalForItems(items) {
     if (!requireWritableScopeOrExplain("Move")) return;
 
+    const picker = window.PQNAS_FOLDER_PICKER;
+    if (!picker || typeof picker.open !== "function") {
+      status.textContent = "Move dialog failed: shared folder picker module is not loaded. Refresh the page.";
+      return;
+    }
+
     const clean = (Array.isArray(items) ? items : [])
-        .map((it) => ({
-          rel: normalizeRelPath(it && it.rel),
-          type: it && it.type === "dir" ? "dir" : "file",
-          name: String((it && it.name) || basenamePath(it && it.rel) || "")
-        }))
-        .filter((it) => it.rel && it.name);
+      .map((it) => {
+        const rawRel = it && (it.rel || it.path || it.relPath || "");
+        const rel = normalizeRelPath(rawRel || (it ? currentRelPathFor(it) : ""));
+        if (!rel) return null;
+
+        const type = String((it && it.type) || "file") === "dir" ? "dir" : "file";
+        return Object.assign({}, it || {}, { rel, type });
+      })
+      .filter(Boolean);
 
     if (!clean.length) {
       status.textContent = "Nothing selected.";
@@ -3722,15 +3731,48 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
 
     moveItems = clean;
-    moveDestPath = curPath || "";
 
-    ensureMoveModal();
-    if (moveSourceLineEl) moveSourceLineEl.textContent = describeMoveItems(moveItems);
+    const blockedPaths = clean
+      .filter((it) => it.type === "dir")
+      .map((it) => it.rel);
 
-    openMoveModal();
-    loadMoveDestination().catch((e) => {
-      if (moveStatusEl) moveStatusEl.textContent = `Move dialog failed: ${String(e && e.message ? e.message : e)}`;
+    const picked = await picker.open({
+      title: "Move",
+      subtitle: "Select destination folder",
+      source: describeMoveItems(clean),
+      initialPath: curPath || "",
+      chooseLabel: "Move here",
+      canCreate: canWriteCurrentScope(),
+      blockedPaths,
+      listUrl: (path) => apiListUrl(path || ""),
+      mkdirUrl: (path) => apiMkdirUrl(path || "")
     });
+
+    if (picked === null) {
+      status.textContent = "Move cancelled.";
+      return;
+    }
+
+    moveDestPath = normalizeRelPath(picked);
+
+    const problem = moveDestinationProblem(moveDestPath, moveItems);
+    if (problem) {
+      status.textContent = problem;
+      return;
+    }
+
+    const destShown = moveDestPath ? `/${moveDestPath}` : "/";
+
+    status.textContent = "Checking share links…";
+    const affectedSharesResult = await collectAffectedSharesForMove(moveItems);
+
+    const ok = confirm(buildMoveConfirmText(destShown, affectedSharesResult));
+    if (!ok) {
+      status.textContent = "Move cancelled.";
+      return;
+    }
+
+    await moveItemsToDestination(moveItems, moveDestPath);
   }
 
   function openMoveModalForItem(item) {
