@@ -26,6 +26,9 @@
   const metaInFlight = new Set();
 
   let selectedPath = "";
+  let shareBadgesByPath = new Map();
+  let shareBadgesLoaded = false;
+  let shareBadgesInFlight = null;
 
   function isTypingTarget(target) {
     if (!target) return false;
@@ -300,6 +303,126 @@
     }
     return j;
   }
+
+  function shareBadgePathKey(path) {
+    return String(path || "").replace(/^\/+/, "");
+  }
+
+  function shareBadgeExpiryMs(share) {
+    if (!share || typeof share !== "object") return 0;
+
+    const raw = share.expires_at_epoch ??
+      share.expires_epoch ??
+      share.expires_at ??
+      share.expiry_epoch ??
+      share.expiry;
+
+    if (raw === null || raw === undefined || raw === "" || raw === 0) return 0;
+
+    if (typeof raw === "number") {
+      return raw > 1000000000000 ? raw : raw * 1000;
+    }
+
+    const text = String(raw).trim();
+    if (!text || text === "0" || text.toLowerCase() === "never") return 0;
+
+    const numeric = Number(text);
+    if (Number.isFinite(numeric)) {
+      return numeric > 1000000000000 ? numeric : numeric * 1000;
+    }
+
+    const parsed = Date.parse(text);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function isShareBadgeExpired(share) {
+    const ms = shareBadgeExpiryMs(share);
+    return ms > 0 && ms <= Date.now();
+  }
+
+  function isRegularShareForBadge(share) {
+    if (!share || typeof share !== "object") return false;
+
+    const mode = String(
+      share.mode ||
+      share.share_mode ||
+      share.kind ||
+      share.pq_mode ||
+      ""
+    ).toLowerCase();
+
+    if (mode.includes("pq")) return false;
+    if (share.invite_url || share.pq || share.pq_manifest) return false;
+
+    return true;
+  }
+
+  function rebuildShareBadges(shares) {
+    const next = new Map();
+
+    for (const share of shares || []) {
+      if (!isRegularShareForBadge(share)) continue;
+      if (isShareBadgeExpired(share)) continue;
+
+      const type = String(share.type || share.kind || "file").toLowerCase();
+      if (type && type !== "file") continue;
+
+      const path = shareBadgePathKey(
+        share.path ||
+        share.rel_path ||
+        share.relative_path ||
+        share.file_path ||
+        ""
+      );
+
+      if (!path) continue;
+      next.set(path, share);
+    }
+
+    shareBadgesByPath = next;
+  }
+
+  async function refreshShareBadges(force) {
+    if (!force && shareBadgesLoaded) return shareBadgesByPath;
+    if (!force && shareBadgesInFlight) return shareBadgesInFlight;
+
+    shareBadgesInFlight = (async () => {
+      try {
+        const j = await apiJson("/api/v4/shares/list");
+        const shares = Array.isArray(j.shares)
+          ? j.shares
+          : Array.isArray(j.items)
+            ? j.items
+            : Array.isArray(j.data)
+              ? j.data
+              : [];
+
+        rebuildShareBadges(shares);
+        shareBadgesLoaded = true;
+      } catch (_) {
+        shareBadgesLoaded = true;
+      } finally {
+        shareBadgesInFlight = null;
+      }
+
+      return shareBadgesByPath;
+    })();
+
+    return shareBadgesInFlight;
+  }
+
+  function ensureShareBadgesLoaded() {
+    if (shareBadgesLoaded || shareBadgesInFlight) return;
+
+    refreshShareBadges(false).then(() => {
+      render();
+    }).catch(() => {});
+  }
+
+  function hasActiveRegularShare(path) {
+    return shareBadgesByPath.has(shareBadgePathKey(path));
+  }
+
 
   function fmtBitrate(n) {
     n = Number(n || 0);
@@ -754,6 +877,7 @@
   }
 
   function render() {
+    ensureShareBadgesLoaded();
     const videos = filteredVideos();
     ensureSelectionForVideos(videos);
 
@@ -879,6 +1003,14 @@
       body.appendChild(meta);
       body.appendChild(details);
       body.appendChild(actions);
+
+      if (hasActiveRegularShare(v.path)) {
+        const shared = document.createElement("div");
+        shared.className = "rsShareBadge";
+        shared.textContent = "↗ SHARED";
+        shared.title = "Regular share link active";
+        thumb.appendChild(shared);
+      }
 
       card.appendChild(thumb);
       card.appendChild(body);
@@ -1176,6 +1308,194 @@
     return ok;
   }
 
+  const shareDialogState = {
+    el: null,
+    video: null,
+    lastUrl: ""
+  };
+
+  function shareExpiresSecFromPreset(value) {
+    if (value === "1h") return 3600;
+    if (value === "24h") return 24 * 3600;
+    if (value === "7d") return 7 * 24 * 3600;
+    return 0;
+  }
+
+  function closeShareDialog() {
+    const el = shareDialogState.el;
+    if (!el) return;
+    el.hidden = true;
+    el.setAttribute("aria-hidden", "true");
+    shareDialogState.video = null;
+  }
+
+  function ensureShareDialog() {
+    if (shareDialogState.el) return shareDialogState.el;
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "rsShareModalBackdrop";
+    backdrop.hidden = true;
+    backdrop.setAttribute("aria-hidden", "true");
+
+    backdrop.innerHTML = `
+      <div class="rsShareModalCard" role="dialog" aria-modal="true" aria-labelledby="rsShareTitle">
+        <div class="rsShareModalHead">
+          <div>
+            <div class="rsShareModalKicker">Reel Stack</div>
+            <h2 id="rsShareTitle">Share link</h2>
+            <p id="rsSharePath"></p>
+          </div>
+          <button id="rsShareClose" class="rsBtn" type="button">Close</button>
+        </div>
+
+        <div class="rsShareModalBody">
+          <label class="rsShareField">
+            <span>Expiry</span>
+            <select id="rsShareExpiry" class="rsShareInput">
+              <option value="1h">1 hour</option>
+              <option value="24h" selected>24 hours</option>
+              <option value="7d">7 days</option>
+              <option value="never">Never</option>
+            </select>
+          </label>
+
+          <div class="rsShareActions">
+            <button id="rsShareCreateBtn" class="rsBtn primary" type="button">Create link</button>
+            <button id="rsShareCopyBtn" class="rsBtn" type="button" disabled>Copy link</button>
+          </div>
+
+          <div id="rsShareOutWrap" class="rsShareOutWrap" hidden>
+            <label class="rsShareField">
+              <span>Link</span>
+              <input id="rsShareOut" class="rsShareInput mono" type="text" readonly>
+            </label>
+          </div>
+
+          <div id="rsShareStatus" class="rsShareStatus mono">&nbsp;</div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(backdrop);
+
+    const closeBtn = backdrop.querySelector("#rsShareClose");
+    const createBtn = backdrop.querySelector("#rsShareCreateBtn");
+    const copyBtn = backdrop.querySelector("#rsShareCopyBtn");
+    const expiryEl = backdrop.querySelector("#rsShareExpiry");
+    const outWrap = backdrop.querySelector("#rsShareOutWrap");
+    const outEl = backdrop.querySelector("#rsShareOut");
+    const statusEl = backdrop.querySelector("#rsShareStatus");
+
+    backdrop.addEventListener("click", (ev) => {
+      if (ev.target === backdrop) closeShareDialog();
+    });
+
+    closeBtn?.addEventListener("click", closeShareDialog);
+
+    createBtn?.addEventListener("click", async () => {
+      const v = shareDialogState.video;
+      if (!v || !v.path) return;
+
+      try {
+        createBtn.disabled = true;
+        copyBtn.disabled = true;
+        shareDialogState.lastUrl = "";
+
+        if (statusEl) statusEl.textContent = `Creating share link for /${v.path}…`;
+        if (outWrap) outWrap.hidden = true;
+        if (outEl) outEl.value = "";
+
+        const expiresSec = shareExpiresSecFromPreset(expiryEl ? expiryEl.value : "24h");
+
+        const j = await apiJson("/api/v4/shares/create", {
+          method: "POST",
+          headers: {
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            path: v.path,
+            expires_sec: expiresSec,
+            mode: "standard"
+          })
+        });
+
+        const rawUrl = extractShareUrl(j);
+        if (!rawUrl) {
+          if (statusEl) statusEl.textContent = "Share created, but response did not include a link/token.";
+          return;
+        }
+
+        const fullUrl = new URL(rawUrl, window.location.origin).toString();
+        shareDialogState.lastUrl = fullUrl;
+
+        if (outEl) outEl.value = fullUrl;
+        if (outWrap) outWrap.hidden = false;
+        if (copyBtn) copyBtn.disabled = false;
+        if (statusEl) statusEl.textContent = "Link created. Use Copy link to copy it.";
+        await refreshShareBadges(true);
+        render();
+        setStatus(`Share link created for /${v.path}.`);
+      } catch (e) {
+        const msg = e && e.message ? e.message : String(e);
+        if (statusEl) statusEl.textContent = `Error: ${msg}`;
+        setStatus(`Share failed: ${msg}`);
+      } finally {
+        createBtn.disabled = false;
+      }
+    });
+
+    copyBtn?.addEventListener("click", async () => {
+      const link = outEl ? outEl.value : shareDialogState.lastUrl;
+      const ok = link ? await copyTextToClipboard(link) : false;
+
+      if (statusEl) statusEl.textContent = ok ? "Copied." : "Copy failed.";
+      if (ok) setStatus("Share link copied.");
+    });
+
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key !== "Escape") return;
+      if (!shareDialogState.el || shareDialogState.el.hidden) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      closeShareDialog();
+    }, true);
+
+    shareDialogState.el = backdrop;
+    return backdrop;
+  }
+
+  function openShareDialogForVideo(v) {
+    if (!v || !v.path) return;
+
+    const dialog = ensureShareDialog();
+    shareDialogState.video = v;
+    shareDialogState.lastUrl = "";
+
+    const pathEl = dialog.querySelector("#rsSharePath");
+    const expiryEl = dialog.querySelector("#rsShareExpiry");
+    const outWrap = dialog.querySelector("#rsShareOutWrap");
+    const outEl = dialog.querySelector("#rsShareOut");
+    const copyBtn = dialog.querySelector("#rsShareCopyBtn");
+    const statusEl = dialog.querySelector("#rsShareStatus");
+
+    if (pathEl) pathEl.textContent = "/" + v.path;
+    if (expiryEl) expiryEl.value = "24h";
+    if (outWrap) outWrap.hidden = true;
+    if (outEl) outEl.value = "";
+    if (copyBtn) copyBtn.disabled = true;
+    if (statusEl) statusEl.textContent = "Choose expiry, then create a regular share link.";
+
+    dialog.hidden = false;
+    dialog.setAttribute("aria-hidden", "false");
+
+    setTimeout(() => {
+      const btn = dialog.querySelector("#rsShareCreateBtn");
+      if (btn) btn.focus();
+    }, 0);
+  }
+
+
   async function renameVideo(v) {
     if (!v || !v.path) return;
 
@@ -1223,40 +1543,7 @@
   }
 
   async function shareVideo(v) {
-    if (!v || !v.path) return;
-
-    try {
-      setStatus(`Creating share link for /${v.path}…`);
-
-      const j = await apiJson("/api/v4/shares/create", {
-        method: "POST",
-        headers: {
-          "Accept": "application/json",
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          path: v.path,
-          type: "file",
-          expires_sec: 7 * 24 * 60 * 60
-        })
-      });
-
-      const rawUrl = extractShareUrl(j);
-      if (!rawUrl) {
-        setStatus("Share created, but response did not include a link/token.");
-        return;
-      }
-
-      const fullUrl = new URL(rawUrl, window.location.origin).toString();
-      const copied = await copyTextToClipboard(fullUrl);
-
-      setStatus(copied
-        ? `Share link copied: ${fullUrl}`
-        : `Share link created: ${fullUrl}`
-      );
-    } catch (e) {
-      setStatus(`Share failed: ${e && e.message ? e.message : String(e)}`);
-    }
+    openShareDialogForVideo(v);
   }
 
   async function deleteVideo(v) {

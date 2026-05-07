@@ -737,3 +737,170 @@ html[data-theme="win_classic"] .rsVersionBadge{
   background:rgba(0,0,0,.045);
   text-shadow:none !important;
 }
+
+/* Reel Stack regular share-link modal */
+.rsShareModalBackdrop[hidden]{
+  display:none !important;
+}
+
+.rsShareModalBackdrop{
+  position:fixed;
+  inset:0;
+  z-index:999998;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:22px;
+  background:rgba(0,0,0,.58);
+  backdrop-filter:blur(8px);
+}
+
+.rsShareModalCard{
+  width:min(620px, 100%);
+  border-radius:24px;
+  border:1px solid rgba(var(--accent-rgb,0,220,220),.30);
+  background:
+    linear-gradient(180deg, rgba(var(--accent-rgb,0,220,220),.10), rgba(0,0,0,.02)),
+    var(--modal-bg, rgba(20,20,20,.96));
+  color:var(--fg, #e8f6ff);
+  box-shadow:0 24px 90px rgba(0,0,0,.58), 0 0 28px rgba(var(--accent-rgb,0,220,220),.12);
+  overflow:hidden;
+}
+
+.rsShareModalHead{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:18px;
+  padding:20px 22px 16px;
+  border-bottom:1px solid rgba(var(--fg-rgb,255,255,255),.10);
+}
+
+.rsShareModalKicker{
+  color:var(--accent, #00dcdc);
+  font-size:12px;
+  font-weight:900;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+}
+
+.rsShareModalHead h2{
+  margin:4px 0 4px;
+  font-size:22px;
+  line-height:1.15;
+}
+
+.rsShareModalHead p{
+  margin:0;
+  max-width:440px;
+  color:rgba(var(--fg-rgb,255,255,255),.62);
+  font-size:13px;
+  font-family:var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.rsShareModalBody{
+  display:grid;
+  gap:16px;
+  padding:20px 22px 22px;
+}
+
+.rsShareField{
+  display:grid;
+  gap:8px;
+}
+
+.rsShareField span{
+  color:rgba(var(--fg-rgb,255,255,255),.70);
+  font-size:12px;
+  font-weight:900;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+}
+
+.rsShareInput{
+  width:100%;
+  box-sizing:border-box;
+  padding:11px 12px;
+  border-radius:14px;
+  border:1px solid rgba(var(--fg-rgb,255,255,255),.18);
+  background:rgba(0,0,0,.24);
+  color:var(--fg, #e8f6ff);
+  font:inherit;
+}
+
+.rsShareInput:focus{
+  outline:none;
+  border-color:rgba(var(--accent-rgb,0,220,220),.62);
+  box-shadow:0 0 0 3px rgba(var(--accent-rgb,0,220,220),.14);
+}
+
+.rsShareActions{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  align-items:center;
+}
+
+.rsShareOutWrap{
+  min-width:0;
+}
+
+.rsShareStatus{
+  min-height:18px;
+  color:rgba(var(--fg-rgb,255,255,255),.72);
+  font-size:12px;
+}
+
+html[data-theme="bright"] .rsShareModalBackdrop,
+html[data-theme="win_classic"] .rsShareModalBackdrop{
+  background:rgba(0,0,0,.28);
+}
+
+html[data-theme="bright"] .rsShareModalCard,
+html[data-theme="win_classic"] .rsShareModalCard{
+  background:var(--panel, #fff);
+  color:var(--fg, #101820);
+  border-color:rgba(var(--fg-rgb,0,0,0),.18);
+  box-shadow:0 24px 70px rgba(0,0,0,.22);
+}
+
+html[data-theme="bright"] .rsShareInput,
+html[data-theme="win_classic"] .rsShareInput{
+  background:rgba(255,255,255,.88);
+  color:var(--fg, #101820);
+  border-color:rgba(var(--fg-rgb,0,0,0),.20);
+}
+
+/* Regular public share badge on video cards */
+.rsShareBadge{
+  position:absolute;
+  top:10px;
+  right:10px;
+  z-index:4;
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  max-width:calc(100% - 20px);
+  padding:4px 8px;
+  border-radius:999px;
+  border:1px solid rgba(var(--accent-rgb,0,220,220),.55);
+  background:rgba(0,0,0,.68);
+  color:var(--accent, #00dcdc);
+  font-size:11px;
+  font-weight:900;
+  line-height:1;
+  letter-spacing:.04em;
+  box-shadow:0 8px 18px rgba(0,0,0,.30);
+  pointer-events:none;
+}
+
+html[data-theme="bright"] .rsShareBadge,
+html[data-theme="win_classic"] .rsShareBadge{
+  background:rgba(255,255,255,.88);
+  color:var(--accent, #006b8f);
+  border-color:rgba(var(--accent-rgb,0,120,170),.55);
+  box-shadow:0 4px 12px rgba(0,0,0,.16);
+}

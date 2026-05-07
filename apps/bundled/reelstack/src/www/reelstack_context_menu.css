@@ -64,3 +64,45 @@
   font-size:11px;
   font-weight:700;
 }
+
+/* Theme correction: do not use the dark cyber menu surface in light/classic themes. */
+html[data-theme="bright"] .rsContextMenu,
+html[data-theme="win_classic"] .rsContextMenu{
+  background:var(--panel, #f6f6f6);
+  color:var(--fg, #111);
+  border-color:rgba(var(--fg-rgb,0,0,0),.22);
+  box-shadow:0 16px 42px rgba(0,0,0,.20);
+  backdrop-filter:none;
+}
+
+html[data-theme="bright"] .rsContextMenuTitle,
+html[data-theme="win_classic"] .rsContextMenuTitle{
+  color:rgba(var(--fg-rgb,0,0,0),.68);
+  border-bottom-color:rgba(var(--fg-rgb,0,0,0),.12);
+}
+
+html[data-theme="bright"] .rsContextMenu button,
+html[data-theme="win_classic"] .rsContextMenu button{
+  color:var(--fg, #111);
+}
+
+html[data-theme="bright"] .rsContextMenu button:hover,
+html[data-theme="bright"] .rsContextMenu button:focus,
+html[data-theme="win_classic"] .rsContextMenu button:hover,
+html[data-theme="win_classic"] .rsContextMenu button:focus{
+  background:rgba(var(--accent-rgb,0,120,220),.14);
+  color:var(--accent, #005ea8);
+}
+
+html[data-theme="bright"] .rsContextMenu button.rsDanger:hover,
+html[data-theme="bright"] .rsContextMenu button.rsDanger:focus,
+html[data-theme="win_classic"] .rsContextMenu button.rsDanger:hover,
+html[data-theme="win_classic"] .rsContextMenu button.rsDanger:focus{
+  background:rgba(190,0,0,.12);
+  color:#b00000;
+}
+
+html[data-theme="bright"] .rsContextMenuHint,
+html[data-theme="win_classic"] .rsContextMenuHint{
+  color:rgba(var(--fg-rgb,0,0,0),.52);
+}
