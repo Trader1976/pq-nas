@@ -67,6 +67,10 @@
     return `/api/v4/files/download?path=${encodeURIComponent(path || "")}&download=1`;
   }
 
+  function fileThumbUrl(path) {
+    return `/api/v4/reelstack/thumb?path=${encodeURIComponent(path || "")}&size=480`;
+  }
+
   function videoMimeForName(name) {
     const ext = extOf(name);
     if (ext === "mp4" || ext === "m4v") return "video/mp4";
@@ -224,6 +228,19 @@
       icon.className = "rsVideoIcon";
       icon.textContent = "▶";
 
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.decoding = "async";
+      img.alt = "";
+      img.addEventListener("load", () => {
+        thumb.classList.remove("rsThumbPlaceholder");
+      });
+      img.addEventListener("error", () => {
+        try { img.remove(); } catch (_) {}
+        thumb.classList.add("rsThumbPlaceholder");
+      }, { once: true });
+      img.src = fileThumbUrl(v.path);
+
       const play = document.createElement("button");
       play.className = "rsPlay";
       play.type = "button";
@@ -231,6 +248,7 @@
       play.title = "Play";
       play.addEventListener("click", () => openPlayer(v));
 
+      thumb.appendChild(img);
       thumb.appendChild(icon);
       thumb.appendChild(play);
 

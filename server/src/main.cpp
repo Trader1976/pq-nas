@@ -33162,6 +33162,352 @@ srv.Get("/api/v4/gallery/search", [&](const httplib::Request& req, httplib::Resp
     reply_json(res, 200, out.dump());
 });
 
+
+srv.Get("/api/v4/reelstack/thumb", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    auto fail_json = [&](int http, const std::string& error, const std::string& message) {
+        reply_json(res, http, json{
+            {"ok", false},
+            {"error", error},
+            {"message", message}
+        }.dump());
+    };
+
+    auto lower_ascii = [](std::string s) {
+        for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+
+    auto supported_video_ext = [&](const std::string& name) -> bool {
+        const std::string n = lower_ascii(name);
+        const auto dot = n.rfind('.');
+        if (dot == std::string::npos || dot + 1 >= n.size()) return false;
+        const std::string ext = n.substr(dot + 1);
+        return ext == "mp4"  || ext == "m4v" ||
+               ext == "mov"  || ext == "webm" ||
+               ext == "mkv"  || ext == "avi" ||
+               ext == "wmv"  || ext == "flv" ||
+               ext == "mpeg" || ext == "mpg" ||
+               ext == "3gp"  || ext == "ogv" ||
+               ext == "ogg";
+    };
+
+    auto file_mtime_epoch = [&](const std::filesystem::path& path) -> std::int64_t {
+        std::error_code ec;
+        auto ft = std::filesystem::last_write_time(path, ec);
+        if (ec) return 0;
+
+        using namespace std::chrono;
+        auto sctp = time_point_cast<system_clock::duration>(
+            ft - std::filesystem::file_time_type::clock::now() + system_clock::now()
+        );
+        return static_cast<std::int64_t>(duration_cast<seconds>(sctp.time_since_epoch()).count());
+    };
+
+    auto fnv1a64 = [](const std::string& text) -> std::uint64_t {
+        std::uint64_t h = 1469598103934665603ULL;
+        for (unsigned char c : text) {
+            h ^= static_cast<std::uint64_t>(c);
+            h *= 1099511628211ULL;
+        }
+        return h;
+    };
+
+    auto hex_u64 = [](std::uint64_t v) -> std::string {
+        std::ostringstream oss;
+        oss << std::hex << std::nouppercase << v;
+        return oss.str();
+    };
+
+    auto read_small_file = [&](const std::filesystem::path& path,
+                               std::string* out,
+                               std::string* err) -> bool {
+        if (out) out->clear();
+        if (err) err->clear();
+
+        std::ifstream f(path, std::ios::binary);
+        if (!f.good()) {
+            if (err) *err = "open failed";
+            return false;
+        }
+
+        std::ostringstream oss;
+        oss << f.rdbuf();
+
+        if (!f.good() && !f.eof()) {
+            if (err) *err = "read failed";
+            return false;
+        }
+
+        if (out) *out = oss.str();
+        return true;
+    };
+
+    auto spawn_wait = [&](const std::vector<std::string>& args) -> int {
+        if (args.empty()) return 127;
+
+        std::vector<char*> argv;
+        argv.reserve(args.size() + 1);
+        for (const auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+        argv.push_back(nullptr);
+
+        pid_t pid = fork();
+        if (pid < 0) return 127;
+
+        if (pid == 0) {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) {
+                dup2(devnull, STDOUT_FILENO);
+                dup2(devnull, STDERR_FILENO);
+                close(devnull);
+            }
+
+            execvp(argv[0], argv.data());
+            _exit(127);
+        }
+
+        int st = 0;
+        while (waitpid(pid, &st, 0) < 0) {
+            if (errno == EINTR) continue;
+            return 127;
+        }
+
+        if (WIFEXITED(st)) return WEXITSTATUS(st);
+        if (WIFSIGNALED(st)) return 128 + WTERMSIG(st);
+        return 127;
+    };
+
+    auto generate_thumb = [&](const std::filesystem::path& src_abs,
+                              const std::filesystem::path& dst_abs,
+                              int size,
+                              std::string* err) -> bool {
+        if (err) err->clear();
+
+        const std::vector<std::string> ffmpegs = {
+            "/usr/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "ffmpeg"
+        };
+
+        const std::vector<std::string> seeks = {
+            "1.0",
+            "0.2",
+            "0"
+        };
+
+        std::vector<std::string> attempts;
+
+        for (const auto& exe : ffmpegs) {
+            for (const auto& seek : seeks) {
+                std::error_code rm_ec;
+                std::filesystem::remove(dst_abs, rm_ec);
+
+                std::vector<std::string> args = {
+                    exe,
+                    "-nostdin",
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel", "error",
+                    "-ss", seek,
+                    "-i", src_abs.string(),
+                    "-frames:v", "1",
+                    "-an",
+                    "-sn",
+                    "-vf", "scale=" + std::to_string(size) + ":-2",
+                    "-q:v", "3",
+                    dst_abs.string()
+                };
+
+                const int rc = spawn_wait(args);
+                attempts.push_back(exe + "@" + seek + "=" + std::to_string(rc));
+
+                if (rc != 0) continue;
+
+                std::error_code ec;
+                auto st = std::filesystem::symlink_status(dst_abs, ec);
+                if (!ec &&
+                    std::filesystem::exists(st) &&
+                    !std::filesystem::is_symlink(st) &&
+                    std::filesystem::is_regular_file(st) &&
+                    pqnas::file_size_u64_safe(dst_abs) > 0) {
+                    return true;
+                }
+            }
+        }
+
+        if (err) {
+            std::string joined;
+            for (size_t i = 0; i < attempts.size(); ++i) {
+                if (i) joined += ", ";
+                joined += attempts[i];
+            }
+            *err = joined;
+        }
+        return false;
+    };
+
+    auto cache_root = [&]() -> std::filesystem::path {
+        return std::filesystem::path(pqnas::data_root_dir()).parent_path()
+             / "cache"
+             / "reelstack_thumbs";
+    };
+
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value() || uopt->storage_state != "allocated") {
+            fail_json(403, "storage_unallocated", "Storage not allocated");
+            return;
+        }
+    }
+
+    const std::string rel_path = req.has_param("path") ? req.get_param_value("path") : "";
+    if (rel_path.empty()) {
+        fail_json(400, "bad_request", "missing path");
+        return;
+    }
+
+    std::string rel_norm;
+    {
+        std::string nerr;
+        if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
+            fail_json(400, "bad_request", "invalid path");
+            return;
+        }
+    }
+
+    int size = 480;
+    if (req.has_param("size")) {
+        try { size = std::stoi(req.get_param_value("size")); }
+        catch (...) { size = 480; }
+    }
+    if (size < 160) size = 160;
+    if (size > 960) size = 960;
+
+    pqnas::ResolvedExistingPath rp;
+    std::string perr;
+    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, rel_path, &rp, &perr)) {
+        fail_json(400, "bad_request", "invalid path");
+        return;
+    }
+
+    const std::filesystem::path abs = rp.abs_path;
+
+    {
+        std::string serr;
+        if (!ensure_no_symlink_in_existing_path_prefix(abs, &serr)) {
+            fail_json(400, "bad_request", "symlinks not supported");
+            return;
+        }
+    }
+
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        fail_json(404, "not_found", "file not found");
+        return;
+    }
+
+    if (std::filesystem::is_symlink(st) || !std::filesystem::is_regular_file(st)) {
+        fail_json(400, "bad_request", "not a regular file");
+        return;
+    }
+
+    if (!supported_video_ext(abs.filename().string())) {
+        fail_json(415, "unsupported_media_type", "unsupported video type");
+        return;
+    }
+
+    const std::uint64_t src_bytes = pqnas::file_size_u64_safe(abs);
+    const std::int64_t src_mtime = file_mtime_epoch(abs);
+
+    const std::string key_material =
+        fp_hex + "\n" +
+        rel_norm + "\n" +
+        std::to_string(size) + "\n" +
+        std::to_string((unsigned long long)src_bytes) + "\n" +
+        std::to_string((long long)src_mtime);
+
+    const std::string thumb_key = hex_u64(fnv1a64(key_material));
+
+    const std::filesystem::path cache_dir = cache_root() / fp_hex / std::to_string(size);
+    const std::filesystem::path cache_abs = cache_dir / (thumb_key + ".jpg");
+
+    auto serve = [&](bool cached) {
+        std::string buf;
+        std::string rerr;
+        if (!read_small_file(cache_abs, &buf, &rerr)) {
+            fail_json(500, "server_error", "failed to read thumbnail");
+            return;
+        }
+
+        pqnas::AuditEvent ev;
+        ev.event = "v4.reelstack_thumb_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_norm, 200);
+        ev.f["cached"] = cached ? "1" : "0";
+        ev.f["bytes"] = std::to_string((unsigned long long)buf.size());
+        audit_append(ev);
+
+        res.set_header("Cache-Control", "private, max-age=86400");
+        res.set_content(std::move(buf), "image/jpeg");
+    };
+
+    {
+        std::error_code cec;
+        auto cst = std::filesystem::symlink_status(cache_abs, cec);
+        if (!cec &&
+            std::filesystem::exists(cst) &&
+            !std::filesystem::is_symlink(cst) &&
+            std::filesystem::is_regular_file(cst)) {
+            serve(true);
+            return;
+        }
+    }
+
+    std::filesystem::create_directories(cache_dir, ec);
+    if (ec) {
+        fail_json(500, "server_error", "failed to create thumbnail cache directory");
+        return;
+    }
+
+    const std::filesystem::path tmp_abs =
+        cache_dir / (thumb_key + ".tmp." + random_b64url(8) + ".jpg");
+
+    std::string terr;
+    if (!generate_thumb(abs, tmp_abs, size, &terr)) {
+        std::error_code rm_ec;
+        std::filesystem::remove(tmp_abs, rm_ec);
+
+        pqnas::AuditEvent ev;
+        ev.event = "v4.reelstack_thumb_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_norm, 200);
+        ev.f["reason"] = "ffmpeg_failed";
+        ev.f["detail"] = pqnas::shorten(terr, 180);
+        audit_append(ev);
+
+        fail_json(500, "server_error", "failed to generate thumbnail");
+        return;
+    }
+
+    std::error_code ren_ec;
+    std::filesystem::rename(tmp_abs, cache_abs, ren_ec);
+    if (ren_ec) {
+        std::error_code rm_ec;
+        std::filesystem::remove(tmp_abs, rm_ec);
+        fail_json(500, "server_error", "failed to finalize thumbnail");
+        return;
+    }
+
+    serve(false);
+});
+
+
 srv.Get("/api/v4/gallery/thumb", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
