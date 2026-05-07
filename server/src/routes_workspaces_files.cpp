@@ -8040,19 +8040,34 @@ srv.Post("/api/v4/workspaces/files/move",
             return;
         }
 
-        auto to_st = std::filesystem::symlink_status(to_abs, ec);
-        if (ec) {
-            audit_fail(workspace_id, "dest_stat_failed", 500, ec.message(), from_rel, to_rel);
-            deps.reply_json(res, 500, json{
+        std::error_code parent_ec;
+        auto to_parent_st = std::filesystem::symlink_status(to_abs.parent_path(), parent_ec);
+        if (parent_ec || !std::filesystem::exists(to_parent_st) || !std::filesystem::is_directory(to_parent_st)) {
+            audit_fail(workspace_id, "dest_parent_invalid", parent_ec ? 500 : 400, parent_ec.message(), from_rel, to_rel);
+            deps.reply_json(res, parent_ec ? 500 : 400, json{
                 {"ok", false},
-                {"error", "server_error"},
-                {"message", "destination stat failed"},
-                {"detail", ec.message()}
+                {"error", parent_ec ? "server_error" : "bad_request"},
+                {"message", "destination parent folder does not exist"},
+                {"detail", parent_ec.message()}
             }.dump());
             return;
         }
 
-        const bool to_exists = std::filesystem::exists(to_st);
+        std::error_code dest_ec;
+        auto to_st = std::filesystem::symlink_status(to_abs, dest_ec);
+
+        if (dest_ec && dest_ec != std::make_error_code(std::errc::no_such_file_or_directory)) {
+            audit_fail(workspace_id, "dest_stat_failed", 500, dest_ec.message(), from_rel, to_rel);
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "destination stat failed"},
+                {"detail", dest_ec.message()}
+            }.dump());
+            return;
+        }
+
+        const bool to_exists = !dest_ec && std::filesystem::exists(to_st);
         if (to_exists) {
             if (std::filesystem::is_symlink(to_st)) {
                 audit_fail(workspace_id, "dest_is_symlink", 409, "", from_rel, to_rel);
