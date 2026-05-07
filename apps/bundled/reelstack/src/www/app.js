@@ -21,6 +21,8 @@
   const closePlayerBtn = el("closePlayerBtn");
 
   let allVideos = [];
+  const metaCache = new Map();
+  const metaInFlight = new Set();
 
   function setStatus(text) {
     if (statusText) statusText.textContent = text || "";
@@ -71,6 +73,11 @@
     return `/api/v4/reelstack/thumb?path=${encodeURIComponent(path || "")}&size=480`;
   }
 
+
+  function fileMetaUrl(path) {
+    return `/api/v4/reelstack/meta?path=${encodeURIComponent(path || "")}`;
+  }
+
   function videoMimeForName(name) {
     const ext = extOf(name);
     if (ext === "mp4" || ext === "m4v") return "video/mp4";
@@ -96,6 +103,105 @@
       throw new Error(j.message || j.error || `HTTP ${r.status}`);
     }
     return j;
+  }
+
+  function fmtBitrate(n) {
+    n = Number(n || 0);
+    if (!Number.isFinite(n) || n <= 0) return "";
+    if (n >= 1000000) return `${(n / 1000000).toFixed(1)} Mbps`;
+    if (n >= 1000) return `${(n / 1000).toFixed(0)} Kbps`;
+    return `${Math.round(n)} bps`;
+  }
+
+  function fmtFps(n) {
+    n = Number(n || 0);
+    if (!Number.isFinite(n) || n <= 0) return "";
+    return `${n.toFixed(n >= 10 ? 0 : 1)} fps`;
+  }
+
+  function metaForVideo(v) {
+    if (!v || !v.path) return null;
+    return v.meta || metaCache.get(v.path) || null;
+  }
+
+  function videoMetaSummary(v) {
+    const m = metaForVideo(v);
+    if (!m) return "Metadata loading…";
+    if (m._error) return `Metadata unavailable: ${m._error}`;
+
+    const parts = [];
+    if (m.duration_text) parts.push(m.duration_text);
+    if (m.resolution) parts.push(m.resolution);
+    if (m.fps) parts.push(fmtFps(m.fps));
+    if (m.video_codec) parts.push(String(m.video_codec).toUpperCase());
+    if (m.audio_codec) parts.push(`audio ${String(m.audio_codec).toUpperCase()}`);
+    if (m.bit_rate) parts.push(fmtBitrate(m.bit_rate));
+
+    return parts.filter(Boolean).join(" · ") || "No metadata";
+  }
+
+  function durationBadgeText(v) {
+    const m = metaForVideo(v);
+    if (!m || m._error || !m.duration_text) return "";
+    return String(m.duration_text);
+  }
+
+  function updateMetaEls(path) {
+    for (const node of document.querySelectorAll("[data-rs-meta-path]")) {
+      if (node.dataset.rsMetaPath === path) {
+        const v = allVideos.find(x => x.path === path) || { path };
+        node.textContent = videoMetaSummary(v);
+      }
+    }
+
+    for (const node of document.querySelectorAll("[data-rs-duration-path]")) {
+      if (node.dataset.rsDurationPath === path) {
+        const v = allVideos.find(x => x.path === path) || { path };
+        const txt = durationBadgeText(v);
+        node.textContent = txt;
+        node.style.display = txt ? "" : "none";
+      }
+    }
+  }
+
+  async function ensureVideoMeta(v) {
+    if (!v || !v.path) return;
+
+    if (metaCache.has(v.path)) {
+      v.meta = metaCache.get(v.path);
+      updateMetaEls(v.path);
+      return;
+    }
+
+    if (metaInFlight.has(v.path)) return;
+    metaInFlight.add(v.path);
+
+    try {
+      const j = await apiJson(fileMetaUrl(v.path));
+      metaCache.set(v.path, j);
+      v.meta = j;
+      updateMetaEls(v.path);
+    } catch (e) {
+      const err = { _error: String(e && e.message ? e.message : e) };
+      metaCache.set(v.path, err);
+      v.meta = err;
+      updateMetaEls(v.path);
+    } finally {
+      metaInFlight.delete(v.path);
+    }
+  }
+
+  function queueMetadataLoads(videos) {
+    const list = Array.isArray(videos) ? videos.slice(0, 48) : [];
+    if (!list.length) return;
+
+    window.setTimeout(() => {
+      for (const v of list) {
+        if (v && v.path && !metaCache.has(v.path)) {
+          ensureVideoMeta(v);
+        }
+      }
+    }, 0);
   }
 
   function extractItems(j) {
@@ -280,8 +386,15 @@
       play.addEventListener("click", () => openPlayer(v));
 
       thumb.appendChild(img);
+      const durationBadge = document.createElement("div");
+      durationBadge.className = "rsDurationBadge";
+      durationBadge.dataset.rsDurationPath = v.path;
+      durationBadge.textContent = durationBadgeText(v);
+      durationBadge.style.display = durationBadge.textContent ? "" : "none";
+
       thumb.appendChild(icon);
       thumb.appendChild(play);
+      thumb.appendChild(durationBadge);
 
       const body = document.createElement("div");
       body.className = "rsBody";
@@ -293,6 +406,11 @@
       const meta = document.createElement("div");
       meta.className = "rsMeta";
       meta.textContent = `${fmtBytes(v.size_bytes)} · /${v.path}`;
+
+      const details = document.createElement("div");
+      details.className = "rsDetails";
+      details.dataset.rsMetaPath = v.path;
+      details.textContent = videoMetaSummary(v);
 
       const actions = document.createElement("div");
       actions.className = "rsCardActions";
@@ -321,12 +439,15 @@
 
       body.appendChild(title);
       body.appendChild(meta);
+      body.appendChild(details);
       body.appendChild(actions);
 
       card.appendChild(thumb);
       card.appendChild(body);
       grid.appendChild(card);
     }
+
+    queueMetadataLoads(videos);
   }
 
   function openPlayer(v) {

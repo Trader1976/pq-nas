@@ -34019,6 +34019,515 @@ srv.Get("/api/v4/reelstack/thumb", [&](const httplib::Request& req, httplib::Res
 });
 
 
+
+
+srv.Get("/api/v4/reelstack/meta", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    auto fail_json = [&](int http, const std::string& error, const std::string& message) {
+        reply_json(res, http, json{
+            {"ok", false},
+            {"error", error},
+            {"message", message}
+        }.dump());
+    };
+
+    auto lower_ascii = [](std::string s) {
+        for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+
+    auto supported_video_ext = [&](const std::string& name) -> bool {
+        const std::string n = lower_ascii(name);
+        const auto dot = n.rfind('.');
+        if (dot == std::string::npos || dot + 1 >= n.size()) return false;
+        const std::string ext = n.substr(dot + 1);
+        return ext == "mp4"  || ext == "m4v" ||
+               ext == "mov"  || ext == "webm" ||
+               ext == "mkv"  || ext == "avi" ||
+               ext == "wmv"  || ext == "flv" ||
+               ext == "mpeg" || ext == "mpg" ||
+               ext == "3gp"  || ext == "ogv" ||
+               ext == "ogg";
+    };
+
+    auto file_mtime_epoch = [&](const std::filesystem::path& path) -> std::int64_t {
+        std::error_code ec;
+        auto ft = std::filesystem::last_write_time(path, ec);
+        if (ec) return 0;
+
+        using namespace std::chrono;
+        auto sctp = time_point_cast<system_clock::duration>(
+            ft - std::filesystem::file_time_type::clock::now() + system_clock::now()
+        );
+        return static_cast<std::int64_t>(duration_cast<seconds>(sctp.time_since_epoch()).count());
+    };
+
+    auto fnv1a64 = [](const std::string& text) -> std::uint64_t {
+        std::uint64_t h = 1469598103934665603ULL;
+        for (unsigned char c : text) {
+            h ^= static_cast<std::uint64_t>(c);
+            h *= 1099511628211ULL;
+        }
+        return h;
+    };
+
+    auto hex_u64 = [](std::uint64_t v) -> std::string {
+        std::ostringstream oss;
+        oss << std::hex << std::nouppercase << v;
+        return oss.str();
+    };
+
+    auto read_small_file = [&](const std::filesystem::path& path,
+                               std::string* out,
+                               std::string* err) -> bool {
+        if (out) out->clear();
+        if (err) err->clear();
+
+        std::ifstream f(path, std::ios::binary);
+        if (!f.good()) {
+            if (err) *err = "open failed";
+            return false;
+        }
+
+        std::ostringstream oss;
+        oss << f.rdbuf();
+
+        if (!f.good() && !f.eof()) {
+            if (err) *err = "read failed";
+            return false;
+        }
+
+        if (out) *out = oss.str();
+        return true;
+    };
+
+    auto write_text_atomic = [&](const std::filesystem::path& final_abs,
+                                 const std::string& body,
+                                 std::string* err) -> bool {
+        if (err) err->clear();
+
+        std::error_code ec;
+        std::filesystem::create_directories(final_abs.parent_path(), ec);
+        if (ec) {
+            if (err) *err = "create_directories failed: " + ec.message();
+            return false;
+        }
+
+        const std::filesystem::path tmp_abs =
+            final_abs.parent_path() / (final_abs.filename().string() + ".tmp." + random_b64url(8));
+
+        {
+            std::ofstream f(tmp_abs, std::ios::binary | std::ios::trunc);
+            if (!f.good()) {
+                if (err) *err = "open temp failed";
+                return false;
+            }
+            f << body;
+            if (!f.good()) {
+                std::filesystem::remove(tmp_abs, ec);
+                if (err) *err = "write temp failed";
+                return false;
+            }
+        }
+
+        std::filesystem::rename(tmp_abs, final_abs, ec);
+        if (ec) {
+            std::filesystem::remove(tmp_abs, ec);
+            if (err) *err = "rename failed: " + ec.message();
+            return false;
+        }
+
+        return true;
+    };
+
+    auto spawn_capture = [&](const std::vector<std::string>& args, std::string* out) -> int {
+        if (out) out->clear();
+        if (args.empty()) return 127;
+
+        int pipefd[2];
+        if (pipe(pipefd) != 0) return 127;
+
+        pid_t pid = fork();
+        if (pid < 0) {
+            close(pipefd[0]);
+            close(pipefd[1]);
+            return 127;
+        }
+
+        if (pid == 0) {
+            dup2(pipefd[1], STDOUT_FILENO);
+            dup2(pipefd[1], STDERR_FILENO);
+            close(pipefd[0]);
+            close(pipefd[1]);
+
+            std::vector<char*> argv;
+            argv.reserve(args.size() + 1);
+            for (const auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+            argv.push_back(nullptr);
+
+            execvp(argv[0], argv.data());
+            _exit(127);
+        }
+
+        close(pipefd[1]);
+
+        std::string captured;
+        char buf[8192];
+        for (;;) {
+            ssize_t n = read(pipefd[0], buf, sizeof(buf));
+            if (n > 0) {
+                captured.append(buf, buf + n);
+                if (captured.size() > 1024 * 1024) break;
+                continue;
+            }
+            if (n < 0 && errno == EINTR) continue;
+            break;
+        }
+
+        close(pipefd[0]);
+
+        int st = 0;
+        while (waitpid(pid, &st, 0) < 0) {
+            if (errno == EINTR) continue;
+            return 127;
+        }
+
+        if (out) *out = std::move(captured);
+
+        if (WIFEXITED(st)) return WEXITSTATUS(st);
+        if (WIFSIGNALED(st)) return 128 + WTERMSIG(st);
+        return 127;
+    };
+
+    auto scalar_to_string = [](const json& v) -> std::string {
+        try {
+            if (v.is_string()) return v.get<std::string>();
+            if (v.is_number_integer()) return std::to_string(v.get<long long>());
+            if (v.is_number_unsigned()) return std::to_string(v.get<unsigned long long>());
+            if (v.is_number_float()) {
+                std::ostringstream oss;
+                oss << v.get<double>();
+                return oss.str();
+            }
+        } catch (...) {}
+        return "";
+    };
+
+    auto json_to_double = [&](const json& v, double* out) -> bool {
+        if (out) *out = 0.0;
+        try {
+            if (v.is_number()) {
+                if (out) *out = v.get<double>();
+                return true;
+            }
+            if (v.is_string()) {
+                const std::string s = v.get<std::string>();
+                std::size_t pos = 0;
+                const double d = std::stod(s, &pos);
+                if (pos > 0) {
+                    if (out) *out = d;
+                    return true;
+                }
+            }
+        } catch (...) {}
+        return false;
+    };
+
+    auto json_to_i64 = [&](const json& v, long long* out) -> bool {
+        if (out) *out = 0;
+        try {
+            if (v.is_number_integer()) {
+                if (out) *out = v.get<long long>();
+                return true;
+            }
+            if (v.is_number_unsigned()) {
+                if (out) *out = static_cast<long long>(v.get<unsigned long long>());
+                return true;
+            }
+            if (v.is_string()) {
+                const std::string s = v.get<std::string>();
+                std::size_t pos = 0;
+                const long long d = std::stoll(s, &pos);
+                if (pos > 0) {
+                    if (out) *out = d;
+                    return true;
+                }
+            }
+        } catch (...) {}
+        return false;
+    };
+
+    auto parse_rate = [&](const std::string& text) -> double {
+        try {
+            const auto slash = text.find('/');
+            if (slash == std::string::npos) return std::stod(text);
+            const double a = std::stod(text.substr(0, slash));
+            const double b = std::stod(text.substr(slash + 1));
+            if (b <= 0.0) return 0.0;
+            return a / b;
+        } catch (...) {
+            return 0.0;
+        }
+    };
+
+    auto fmt_duration = [&](double seconds) -> std::string {
+        if (!(seconds > 0.0)) return "";
+        long long s = static_cast<long long>(seconds + 0.5);
+        const long long h = s / 3600;
+        s %= 3600;
+        const long long m = s / 60;
+        const long long sec = s % 60;
+
+        std::ostringstream oss;
+        if (h > 0) {
+            oss << h << ":";
+            oss << std::setw(2) << std::setfill('0') << m << ":";
+            oss << std::setw(2) << std::setfill('0') << sec;
+        } else {
+            oss << m << ":";
+            oss << std::setw(2) << std::setfill('0') << sec;
+        }
+        return oss.str();
+    };
+
+    auto cache_root = [&]() -> std::filesystem::path {
+        return std::filesystem::path(pqnas::data_root_dir()).parent_path()
+             / "cache"
+             / "reelstack_meta";
+    };
+
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value() || uopt->storage_state != "allocated") {
+            fail_json(403, "storage_unallocated", "Storage not allocated");
+            return;
+        }
+    }
+
+    const std::string rel_path = req.has_param("path") ? req.get_param_value("path") : "";
+    if (rel_path.empty()) {
+        fail_json(400, "bad_request", "missing path");
+        return;
+    }
+
+    std::string rel_norm;
+    {
+        std::string nerr;
+        if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
+            fail_json(400, "bad_request", "invalid path");
+            return;
+        }
+    }
+
+    pqnas::ResolvedExistingPath rp;
+    std::string perr;
+    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, rel_path, &rp, &perr)) {
+        fail_json(400, "bad_request", "invalid path");
+        return;
+    }
+
+    const std::filesystem::path abs = rp.abs_path;
+
+    {
+        std::string serr;
+        if (!ensure_no_symlink_in_existing_path_prefix(abs, &serr)) {
+            fail_json(400, "bad_request", "symlinks not supported");
+            return;
+        }
+    }
+
+    std::error_code ec;
+    auto st = std::filesystem::symlink_status(abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        fail_json(404, "not_found", "file not found");
+        return;
+    }
+
+    if (std::filesystem::is_symlink(st) || !std::filesystem::is_regular_file(st)) {
+        fail_json(400, "bad_request", "not a regular file");
+        return;
+    }
+
+    if (!supported_video_ext(abs.filename().string())) {
+        fail_json(415, "unsupported_media_type", "unsupported video type");
+        return;
+    }
+
+    const std::uint64_t src_bytes = pqnas::file_size_u64_safe(abs);
+    const std::int64_t src_mtime = file_mtime_epoch(abs);
+
+    const std::string key_material =
+        fp_hex + "\n" +
+        rel_norm + "\n" +
+        std::to_string((unsigned long long)src_bytes) + "\n" +
+        std::to_string((long long)src_mtime) + "\n" +
+        "reelstack-meta-v1";
+
+    const std::string meta_key = hex_u64(fnv1a64(key_material));
+    const std::filesystem::path cache_dir = cache_root() / fp_hex;
+    const std::filesystem::path cache_abs = cache_dir / (meta_key + ".json");
+
+    auto serve_meta = [&](json body, bool cached) {
+        body["ok"] = true;
+        body["cached"] = cached;
+
+        pqnas::AuditEvent ev;
+        ev.event = "v4.reelstack_meta_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_norm, 200);
+        ev.f["cached"] = cached ? "1" : "0";
+        audit_append(ev);
+
+        res.set_header("Cache-Control", "private, max-age=86400");
+        reply_json(res, 200, body.dump());
+    };
+
+    {
+        std::error_code cec;
+        auto cst = std::filesystem::symlink_status(cache_abs, cec);
+        if (!cec &&
+            std::filesystem::exists(cst) &&
+            !std::filesystem::is_symlink(cst) &&
+            std::filesystem::is_regular_file(cst)) {
+            std::string buf, rerr;
+            if (read_small_file(cache_abs, &buf, &rerr)) {
+                json cached = json::parse(buf, nullptr, false);
+                if (!cached.is_discarded() && cached.is_object()) {
+                    serve_meta(cached, true);
+                    return;
+                }
+            }
+        }
+    }
+
+    std::string probe_out;
+    const std::vector<std::string> args = {
+        "/usr/bin/ffprobe",
+        "-v", "error",
+        "-print_format", "json",
+        "-show_format",
+        "-show_streams",
+        abs.string()
+    };
+
+    int rc = spawn_capture(args, &probe_out);
+    if (rc != 0 || probe_out.empty()) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.reelstack_meta_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_norm, 200);
+        ev.f["reason"] = "ffprobe_failed";
+        ev.f["rc"] = std::to_string(rc);
+        ev.f["detail"] = pqnas::shorten(probe_out, 180);
+        audit_append(ev);
+
+        fail_json(500, "server_error", "failed to read video metadata");
+        return;
+    }
+
+    json probe = json::parse(probe_out, nullptr, false);
+    if (probe.is_discarded() || !probe.is_object()) {
+        fail_json(500, "server_error", "failed to parse video metadata");
+        return;
+    }
+
+    std::string format_name;
+    std::string format_long_name;
+    double duration = 0.0;
+    long long bit_rate = 0;
+
+    if (probe.contains("format") && probe["format"].is_object()) {
+        const json& fmt = probe["format"];
+
+        if (fmt.contains("format_name")) format_name = scalar_to_string(fmt["format_name"]);
+        if (fmt.contains("format_long_name")) format_long_name = scalar_to_string(fmt["format_long_name"]);
+        if (fmt.contains("duration")) (void)json_to_double(fmt["duration"], &duration);
+        if (fmt.contains("bit_rate")) (void)json_to_i64(fmt["bit_rate"], &bit_rate);
+    }
+
+    std::string video_codec;
+    std::string video_codec_long;
+    std::string audio_codec;
+    std::string audio_codec_long;
+    long long width = 0;
+    long long height = 0;
+    double fps = 0.0;
+
+    if (probe.contains("streams") && probe["streams"].is_array()) {
+        for (const auto& stream : probe["streams"]) {
+            if (!stream.is_object()) continue;
+
+            const std::string codec_type =
+                stream.contains("codec_type") ? scalar_to_string(stream["codec_type"]) : "";
+
+            if (codec_type == "video" && video_codec.empty()) {
+                if (stream.contains("codec_name")) video_codec = scalar_to_string(stream["codec_name"]);
+                if (stream.contains("codec_long_name")) video_codec_long = scalar_to_string(stream["codec_long_name"]);
+                if (stream.contains("width")) (void)json_to_i64(stream["width"], &width);
+                if (stream.contains("height")) (void)json_to_i64(stream["height"], &height);
+
+                if (stream.contains("avg_frame_rate")) {
+                    fps = parse_rate(scalar_to_string(stream["avg_frame_rate"]));
+                }
+
+                if (!(duration > 0.0) && stream.contains("duration")) {
+                    (void)json_to_double(stream["duration"], &duration);
+                }
+            }
+
+            if (codec_type == "audio" && audio_codec.empty()) {
+                if (stream.contains("codec_name")) audio_codec = scalar_to_string(stream["codec_name"]);
+                if (stream.contains("codec_long_name")) audio_codec_long = scalar_to_string(stream["codec_long_name"]);
+            }
+        }
+    }
+
+    json meta;
+    meta["path"] = rel_norm;
+    meta["name"] = abs.filename().string();
+    meta["size_bytes"] = src_bytes;
+    meta["mtime_epoch"] = src_mtime;
+
+    meta["duration_seconds"] = (duration > 0.0) ? json(duration) : json(nullptr);
+    meta["duration_text"] = fmt_duration(duration);
+
+    meta["width"] = width > 0 ? json(width) : json(nullptr);
+    meta["height"] = height > 0 ? json(height) : json(nullptr);
+    meta["resolution"] = (width > 0 && height > 0)
+        ? (std::to_string(width) + "x" + std::to_string(height))
+        : "";
+
+    meta["fps"] = (fps > 0.0) ? json(fps) : json(nullptr);
+    meta["format"] = format_name;
+    meta["format_long"] = format_long_name;
+    meta["video_codec"] = video_codec;
+    meta["video_codec_long"] = video_codec_long;
+    meta["audio_codec"] = audio_codec;
+    meta["audio_codec_long"] = audio_codec_long;
+    meta["bit_rate"] = bit_rate > 0 ? json(bit_rate) : json(nullptr);
+
+    std::string werr;
+    if (!write_text_atomic(cache_abs, meta.dump(2), &werr)) {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.reelstack_meta_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_norm, 200);
+        ev.f["reason"] = "cache_write_failed";
+        ev.f["detail"] = pqnas::shorten(werr, 180);
+        audit_append(ev);
+        // Do not fail the request; metadata is still usable.
+    }
+
+    serve_meta(meta, false);
+});
+
+
 srv.Get("/api/v4/gallery/thumb", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;

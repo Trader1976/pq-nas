@@ -280,3 +280,38 @@ html[data-theme="win_classic"] .rsInput{
 .rsThumb .rsPlay{
   z-index:2;
 }
+
+/* Reel Stack metadata v1 */
+.rsThumb{
+  position:relative;
+}
+
+.rsDetails{
+  margin-top:8px;
+  color:rgba(var(--fg-rgb),0.78);
+  font-size:12px;
+  line-height:1.35;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.rsDurationBadge{
+  position:absolute;
+  right:10px;
+  bottom:10px;
+  padding:4px 8px;
+  border-radius:999px;
+  background:rgba(0,0,0,.68);
+  color:#fff;
+  font-size:12px;
+  font-weight:800;
+  letter-spacing:.02em;
+  border:1px solid rgba(255,255,255,.18);
+  box-shadow:0 10px 22px rgba(0,0,0,.30);
+}
+
+html[data-theme="bright"] .rsDetails,
+html[data-theme="win_classic"] .rsDetails{
+  color:rgba(var(--fg-rgb),0.72);
+}
