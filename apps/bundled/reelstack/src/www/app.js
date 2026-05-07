@@ -131,62 +131,93 @@
     return extractItems(j);
   }
 
-  async function scanVideos() {
-    scanBtn.disabled = true;
-    allVideos = [];
+  function normalizeVideoItem(item) {
+    item = item || {};
+
+    const directPath = item.path || item.rel_path || item.logical_rel_path || "";
+    const path = String(directPath || "").replace(/^\/+/, "");
+    const name = item.name || item.filename || basename(path);
+
+    return {
+      name,
+      path,
+      size_bytes: Number(item.size_bytes || item.size || 0),
+      mtime_epoch: Number(item.mtime_epoch || item.modified_epoch || 0),
+      duration_seconds: Number(item.duration_seconds || 0),
+      width: Number(item.width || 0),
+      height: Number(item.height || 0),
+      source: item.source || ""
+    };
+  }
+
+  function applyIndexResponse(j, verb) {
+    const items = extractItems(j)
+      .map(normalizeVideoItem)
+      .filter(v => v.path && VIDEO_EXTS.has(extOf(v.name || v.path)));
+
+    allVideos = items;
     render();
 
-    const queue = [""];
-    let folders = 0;
-    let seen = 0;
-    const maxFolders = 2000;
+    const stats = j && j.stats ? j.stats : {};
+    const generated = Number(j && j.generated_at_epoch || 0);
+    const warningCount = Array.isArray(j && j.warnings) ? j.warnings.length : 0;
+    const truncated = !!stats.truncated;
+
+    if (!generated && !items.length) {
+      setStatus("No saved Reel Stack index yet. Click Refresh index.");
+      return;
+    }
+
+    const parts = [
+      `${verb || "Loaded"} ${items.length} video${items.length === 1 ? "" : "s"}`
+    ];
+
+    if (Number.isFinite(Number(stats.files_seen)) && Number(stats.files_seen) > 0) {
+      parts.push(`checked ${Number(stats.files_seen)} file${Number(stats.files_seen) === 1 ? "" : "s"}`);
+    }
+
+    if (generated > 0) {
+      parts.push(`indexed ${new Date(generated * 1000).toLocaleString()}`);
+    }
+
+    if (truncated) parts.push("truncated");
+    if (warningCount) parts.push(`${warningCount} warning${warningCount === 1 ? "" : "s"}`);
+
+    setStatus(parts.join(" · "));
+  }
+
+  async function loadIndex() {
+    setStatus("Loading saved Reel Stack index…");
+    const j = await apiJson("/api/v4/reelstack/index");
+    applyIndexResponse(j, "Loaded");
+  }
+
+  async function scanVideos() {
+    if (scanBtn) {
+      scanBtn.disabled = true;
+      scanBtn.textContent = "Refreshing…";
+    }
 
     try {
-      while (queue.length) {
-        const folder = queue.shift();
-        folders++;
+      setStatus("Refreshing Reel Stack index…");
 
-        if (folders > maxFolders) {
-          setStatus(`Stopped after ${maxFolders} folders. Found ${allVideos.length} videos.`);
-          break;
-        }
+      const j = await apiJson("/api/v4/reelstack/scan", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json"
+        },
+        body: "{}"
+      });
 
-        setStatus(`Scanning /${folder || ""}`);
-
-        const items = await listFolder(folder);
-
-        for (const item of items) {
-          const name = itemName(item);
-          const path = itemPath(folder, item);
-          if (!name) continue;
-
-          if (isDir(item)) {
-            queue.push(path);
-            continue;
-          }
-
-          if (!isFile(item)) continue;
-
-          seen++;
-          if (VIDEO_EXTS.has(extOf(name))) {
-            allVideos.push({
-              name,
-              path,
-              size_bytes: item.size_bytes || item.size || 0,
-              mtime_epoch: item.mtime_epoch || item.modified_epoch || 0
-            });
-          }
-        }
-
-        if (folders % 8 === 0) render();
-      }
-
-      setStatus(`Scan complete. Checked ${seen} files in ${folders} folders.`);
-      render();
+      applyIndexResponse(j, "Refreshed");
     } catch (e) {
-      setStatus(`Scan failed: ${e && e.message ? e.message : String(e)}`);
+      setStatus(`Refresh failed: ${e && e.message ? e.message : String(e)}`);
     } finally {
-      scanBtn.disabled = false;
+      if (scanBtn) {
+        scanBtn.disabled = false;
+        scanBtn.textContent = "Refresh index";
+      }
     }
   }
 
@@ -343,6 +374,11 @@
       setStatus(`Delete failed: ${e && e.message ? e.message : String(e)}`);
     }
   }
+
+  loadIndex().catch((e) => {
+    setStatus(`Could not load saved index: ${e && e.message ? e.message : String(e)}`);
+    render();
+  });
 
   scanBtn?.addEventListener("click", scanVideos);
   filterInput?.addEventListener("input", render);

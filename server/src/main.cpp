@@ -33163,6 +33163,517 @@ srv.Get("/api/v4/gallery/search", [&](const httplib::Request& req, httplib::Resp
 });
 
 
+
+// ---- Reel Stack persistent video index --------------------------------------
+// GET  /api/v4/reelstack/index
+// POST /api/v4/reelstack/scan
+//
+// The browser should not have to recursively scan the file tree every time the
+// app opens. The scan endpoint builds a per-user cached index under:
+//   <pqnas-root>/cache/reelstack_index/<fingerprint>/index.json
+//
+// Scan sources:
+// - metadata-backed logical namespace via FileLocationIndex
+// - physical user tree fallback for legacy/simple files not represented there
+//
+// This keeps landing-tier / migrated files visible while still catching older
+// direct-on-disk files.
+auto reelstack_lower_ascii_local = [](std::string text) -> std::string {
+    for (char& c : text) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return text;
+};
+
+auto reelstack_basename_local = [](const std::string& path) -> std::string {
+    std::string s = path;
+    for (char& c : s) {
+        if (c == '\\') c = '/';
+    }
+
+    while (!s.empty() && s.back() == '/') s.pop_back();
+
+    const auto pos = s.rfind('/');
+    if (pos == std::string::npos) return s;
+    return s.substr(pos + 1);
+};
+
+auto reelstack_is_video_name_local = [&](const std::string& name) -> bool {
+    const std::string n = reelstack_lower_ascii_local(name);
+    const auto dot = n.rfind('.');
+    if (dot == std::string::npos || dot + 1 >= n.size()) return false;
+
+    const std::string ext = n.substr(dot + 1);
+    return ext == "mp4"  || ext == "m4v" ||
+           ext == "mov"  || ext == "webm" ||
+           ext == "mkv"  || ext == "avi" ||
+           ext == "wmv"  || ext == "flv" ||
+           ext == "mpeg" || ext == "mpg" ||
+           ext == "3gp"  || ext == "ogv" ||
+           ext == "ogg";
+};
+
+auto reelstack_join_rel_local = [](std::string parent, std::string name) -> std::string {
+    for (char& c : parent) {
+        if (c == '\\') c = '/';
+    }
+    for (char& c : name) {
+        if (c == '\\') c = '/';
+    }
+
+    while (!parent.empty() && parent.front() == '/') parent.erase(parent.begin());
+    while (!parent.empty() && parent.back() == '/') parent.pop_back();
+
+    while (!name.empty() && name.front() == '/') name.erase(name.begin());
+    while (!name.empty() && name.back() == '/') name.pop_back();
+
+    if (parent.empty()) return name;
+    if (name.empty()) return parent;
+    return parent + "/" + name;
+};
+
+auto reelstack_reserved_rel_local = [](const std::string& rel) -> bool {
+    return rel == ".pqnas" || rel.rfind(".pqnas/", 0) == 0;
+};
+
+auto reelstack_index_path_local = [&](const std::string& fp_hex) -> std::filesystem::path {
+    return std::filesystem::path(pqnas::data_root_dir()).parent_path()
+         / "cache"
+         / "reelstack_index"
+         / fp_hex
+         / "index.json";
+};
+
+srv.Get("/api/v4/reelstack/index", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    auto reply = [&](int http, const json& body) {
+        res.status = http;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(body.dump(2), "application/json; charset=utf-8");
+    };
+
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value() || uopt->storage_state != "allocated") {
+            reply(403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"}
+            });
+            return;
+        }
+    }
+
+    const std::filesystem::path index_abs = reelstack_index_path_local(fp_hex);
+
+    std::error_code ec;
+    if (!std::filesystem::exists(index_abs, ec)) {
+        reply(200, json{
+            {"ok", true},
+            {"version", 1},
+            {"generated_at_epoch", 0},
+            {"items", json::array()},
+            {"stats", {
+                {"videos", 0},
+                {"files_seen", 0},
+                {"dirs_seen", 0},
+                {"truncated", false}
+            }},
+            {"message", "no saved Reel Stack index yet"}
+        });
+        return;
+    }
+
+    std::string body;
+    if (!read_file_to_string(index_abs.string(), body) || body.empty()) {
+        reply(500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to read Reel Stack index"}
+        });
+        return;
+    }
+
+    json j = json::parse(body, nullptr, false);
+    if (j.is_discarded() || !j.is_object()) {
+        reply(500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "Reel Stack index is corrupt"}
+        });
+        return;
+    }
+
+    j["ok"] = true;
+    if (!j.contains("version")) j["version"] = 1;
+    if (!j.contains("items") || !j["items"].is_array()) j["items"] = json::array();
+
+    reply(200, j);
+});
+
+srv.Post("/api/v4/reelstack/scan", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    if (!require_same_origin_for_cookie_mutation(req, res)) return;
+
+    auto reply = [&](int http, const json& body) {
+        res.status = http;
+        res.set_header("Cache-Control", "no-store");
+        res.set_content(body.dump(2), "application/json; charset=utf-8");
+    };
+
+    auto audit_fail = [&](const std::string& reason, int http, const std::string& detail = "") {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.reelstack_scan_fail";
+        ev.outcome = "fail";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["reason"] = reason;
+        ev.f["http"] = std::to_string(http);
+        if (!detail.empty()) ev.f["detail"] = pqnas::shorten(detail, 180);
+        audit_append(ev);
+    };
+
+    {
+        auto uopt = users.get(fp_hex);
+        if (!uopt.has_value() || uopt->storage_state != "allocated") {
+            audit_fail("storage_unallocated", 403);
+            reply(403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Storage not allocated"}
+            });
+            return;
+        }
+    }
+
+    std::string root_rel;
+    {
+        json body = json::parse(req.body, nullptr, false);
+        if (!body.is_discarded() && body.is_object()) {
+            root_rel = body.value("path", "");
+        }
+    }
+
+    if (root_rel == "." || root_rel == "./" || root_rel == "/") root_rel.clear();
+
+    std::string root_norm;
+    if (!root_rel.empty()) {
+        std::string nerr;
+        if (!pqnas::normalize_user_rel_path_strict(root_rel, &root_norm, &nerr)) {
+            audit_fail("invalid_path", 400, nerr);
+            reply(400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid path"}
+            });
+            return;
+        }
+    }
+
+    static constexpr std::uint64_t kMaxDirs = 5000;
+    static constexpr std::uint64_t kMaxFiles = 250000;
+    static constexpr std::uint64_t kMaxVideos = 50000;
+
+    std::map<std::string, json> video_map;
+
+    std::uint64_t metadata_dirs_seen = 0;
+    std::uint64_t physical_dirs_seen = 0;
+    std::uint64_t files_seen = 0;
+    bool truncated = false;
+    json warnings = json::array();
+
+    auto add_video = [&](std::string rel_path,
+                         std::uint64_t size_bytes,
+                         std::int64_t mtime_epoch,
+                         const std::string& source) {
+        for (char& c : rel_path) {
+            if (c == '\\') c = '/';
+        }
+        while (!rel_path.empty() && rel_path.front() == '/') rel_path.erase(rel_path.begin());
+
+        if (rel_path.empty()) return;
+        if (reelstack_reserved_rel_local(rel_path)) return;
+
+        const std::string name = reelstack_basename_local(rel_path);
+        if (!reelstack_is_video_name_local(name)) return;
+
+        if (video_map.size() >= kMaxVideos) {
+            truncated = true;
+            return;
+        }
+
+        if (video_map.find(rel_path) != video_map.end()) return;
+
+        video_map.emplace(rel_path, json{
+            {"name", name},
+            {"path", rel_path},
+            {"size_bytes", size_bytes},
+            {"mtime_epoch", mtime_epoch},
+            {"source", source}
+        });
+    };
+
+    // 1) Metadata-backed logical scan. This sees tiered/landing files.
+    if (auto* idx = pqnas::get_file_location_index()) {
+        std::vector<std::string> queue;
+        queue.push_back(root_norm);
+
+        std::map<std::string, bool> seen_dirs;
+        std::size_t pos = 0;
+
+        while (pos < queue.size()) {
+            if (metadata_dirs_seen >= kMaxDirs) {
+                truncated = true;
+                warnings.push_back("metadata directory scan limit reached");
+                break;
+            }
+
+            const std::string cur = queue[pos++];
+            if (seen_dirs[cur]) continue;
+            seen_dirs[cur] = true;
+            metadata_dirs_seen++;
+
+            std::string lerr;
+            auto rows = idx->list_immediate_children(fp_hex, cur, &lerr);
+            if (!lerr.empty()) {
+                warnings.push_back("metadata list failed: " + pqnas::shorten(lerr, 160));
+                break;
+            }
+
+            for (const auto& row : rows) {
+                const std::string child_rel = reelstack_join_rel_local(cur, row.name);
+                if (reelstack_reserved_rel_local(child_rel)) continue;
+
+                if (row.type == "dir") {
+                    queue.push_back(child_rel);
+                    continue;
+                }
+
+                if (row.type != "file") continue;
+
+                files_seen++;
+                if (files_seen >= kMaxFiles) {
+                    truncated = true;
+                    warnings.push_back("file scan limit reached");
+                    break;
+                }
+
+                add_video(child_rel, row.size_bytes, row.mtime_epoch, "metadata");
+            }
+
+            if (truncated) break;
+        }
+    } else {
+        warnings.push_back("file location index unavailable; using physical fallback only");
+    }
+
+    // 2) Physical fallback scan. This catches legacy/simple files not yet in metadata.
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+    std::filesystem::path physical_base = user_dir;
+
+    if (!root_norm.empty()) {
+        std::string perr;
+        if (!pqnas::resolve_user_path_strict(user_dir, root_norm, &physical_base, &perr)) {
+            physical_base.clear();
+        }
+    }
+
+    if (!physical_base.empty()) {
+        std::error_code ec;
+        auto st = std::filesystem::symlink_status(physical_base, ec);
+
+        if (!ec &&
+            std::filesystem::exists(st) &&
+            !std::filesystem::is_symlink(st) &&
+            std::filesystem::is_directory(st)) {
+
+            std::filesystem::directory_options opts =
+                std::filesystem::directory_options::skip_permission_denied;
+
+            std::filesystem::recursive_directory_iterator it(physical_base, opts, ec);
+            std::filesystem::recursive_directory_iterator end;
+
+            while (!ec && it != end) {
+                if (physical_dirs_seen >= kMaxDirs || files_seen >= kMaxFiles) {
+                    truncated = true;
+                    warnings.push_back("physical scan limit reached");
+                    break;
+                }
+
+                const std::filesystem::path p = it->path();
+
+                std::error_code rel_ec;
+                std::filesystem::path rel_fs = std::filesystem::relative(p, user_dir, rel_ec);
+                std::string rel = rel_ec ? std::string{} : rel_fs.generic_string();
+
+                if (rel.empty() || reelstack_reserved_rel_local(rel)) {
+                    std::error_code sec;
+                    auto sst = std::filesystem::symlink_status(p, sec);
+                    if (!sec && std::filesystem::is_directory(sst)) {
+                        it.disable_recursion_pending();
+                    }
+                    it.increment(ec);
+                    continue;
+                }
+
+                std::error_code sec;
+                auto sst = std::filesystem::symlink_status(p, sec);
+                if (sec || std::filesystem::is_symlink(sst)) {
+                    it.increment(ec);
+                    continue;
+                }
+
+                if (std::filesystem::is_directory(sst)) {
+                    if (p.filename().string() == ".pqnas") {
+                        it.disable_recursion_pending();
+                    } else {
+                        physical_dirs_seen++;
+                    }
+
+                    it.increment(ec);
+                    continue;
+                }
+
+                if (!std::filesystem::is_regular_file(sst)) {
+                    it.increment(ec);
+                    continue;
+                }
+
+                files_seen++;
+
+                std::uint64_t size_bytes = pqnas::file_size_u64_safe(p);
+
+                std::int64_t mtime_epoch = 0;
+                {
+                    std::error_code mt_ec;
+                    auto ft = std::filesystem::last_write_time(p, mt_ec);
+                    if (!mt_ec) {
+                        using namespace std::chrono;
+                        auto sctp = time_point_cast<system_clock::duration>(
+                            ft - std::filesystem::file_time_type::clock::now() + system_clock::now()
+                        );
+                        mtime_epoch = static_cast<std::int64_t>(
+                            duration_cast<seconds>(sctp.time_since_epoch()).count()
+                        );
+                    }
+                }
+
+                add_video(rel, size_bytes, mtime_epoch, "physical");
+
+                it.increment(ec);
+            }
+
+            if (ec) {
+                warnings.push_back("physical scan stopped: " + pqnas::shorten(ec.message(), 160));
+            }
+        }
+    }
+
+    json items = json::array();
+    for (const auto& kv : video_map) {
+        items.push_back(kv.second);
+    }
+
+    const std::int64_t now_ts = now_epoch_sec();
+
+    json out = {
+        {"ok", true},
+        {"version", 1},
+        {"generated_at_epoch", now_ts},
+        {"root", root_norm},
+        {"items", items},
+        {"stats", {
+            {"videos", static_cast<std::uint64_t>(video_map.size())},
+            {"files_seen", files_seen},
+            {"metadata_dirs_seen", metadata_dirs_seen},
+            {"physical_dirs_seen", physical_dirs_seen},
+            {"dirs_seen", metadata_dirs_seen + physical_dirs_seen},
+            {"truncated", truncated}
+        }},
+        {"warnings", warnings}
+    };
+
+    const std::filesystem::path index_abs = reelstack_index_path_local(fp_hex);
+    const std::filesystem::path index_dir = index_abs.parent_path();
+
+    std::error_code ec;
+    std::filesystem::create_directories(index_dir, ec);
+    if (ec) {
+        audit_fail("cache_mkdir_failed", 500, ec.message());
+        reply(500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to create Reel Stack index cache"}
+        });
+        return;
+    }
+
+    const std::filesystem::path tmp_abs =
+        index_dir / ("index.json.tmp." + random_b64url(8));
+
+    {
+        std::ofstream f(tmp_abs, std::ios::binary | std::ios::trunc);
+        if (!f.good()) {
+            audit_fail("cache_write_open_failed", 500);
+            reply(500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to write Reel Stack index"}
+            });
+            return;
+        }
+
+        f << out.dump(2);
+
+        if (!f.good()) {
+            std::error_code rm_ec;
+            std::filesystem::remove(tmp_abs, rm_ec);
+
+            audit_fail("cache_write_failed", 500);
+            reply(500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to write Reel Stack index"}
+            });
+            return;
+        }
+    }
+
+    std::filesystem::rename(tmp_abs, index_abs, ec);
+    if (ec) {
+        std::error_code rm_ec;
+        std::filesystem::remove(tmp_abs, rm_ec);
+
+        audit_fail("cache_rename_failed", 500, ec.message());
+        reply(500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to finalize Reel Stack index"}
+        });
+        return;
+    }
+
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.reelstack_scan_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["videos"] = std::to_string(static_cast<unsigned long long>(video_map.size()));
+        ev.f["files_seen"] = std::to_string(static_cast<unsigned long long>(files_seen));
+        ev.f["dirs_seen"] = std::to_string(static_cast<unsigned long long>(metadata_dirs_seen + physical_dirs_seen));
+        ev.f["truncated"] = truncated ? "1" : "0";
+        audit_append(ev);
+    }
+
+    reply(200, out);
+});
+
+
 srv.Get("/api/v4/reelstack/thumb", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
