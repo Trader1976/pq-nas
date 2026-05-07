@@ -10,18 +10,38 @@
 
     const appVersionEl = el("appVersion");
 
-    (async () => {
-        if (!appVersionEl) return;
-        const candidates = ["./manifest.json", "../manifest.json"];
-        for (const url of candidates) {
+    async function getAppVersion() {
+        const m = location.pathname.match(/^\/apps\/([^/]+)\/([^/]+)\//);
+        if (m && m[2]) return decodeURIComponent(m[2]);
+
+        for (const url of ["../manifest.json", "./manifest.json"]) {
             try {
-                const r = await fetch(url, { cache: "no-store" });
+                const r = await fetch(url, {
+                    cache: "no-store",
+                    headers: { "Accept": "application/json" }
+                });
                 if (!r.ok) continue;
                 const j = await r.json().catch(() => ({}));
-                const ver = (j && typeof j.version === "string") ? j.version.trim() : "";
-                if (ver) { appVersionEl.textContent = "v" + ver; return; }
+                const ver = j && typeof j.version === "string" ? j.version.trim() : "";
+                if (ver) return ver;
             } catch (_) {}
         }
+
+        return "";
+    }
+
+    (async () => {
+        if (!appVersionEl) return;
+
+        const ver = await getAppVersion();
+        if (!ver) {
+            appVersionEl.hidden = true;
+            return;
+        }
+
+        appVersionEl.textContent = `v${ver}`;
+        appVersionEl.title = `Snapshot Manager ${ver}`;
+        appVersionEl.hidden = false;
     })();
 
     const badge = el("badge");

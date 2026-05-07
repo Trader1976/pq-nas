@@ -1202,6 +1202,22 @@
         .footerStatsDimSep{
             opacity:.45;
         }
+
+        .appVersion{
+            display:inline-flex;
+            align-items:center;
+            vertical-align:middle;
+            margin-left:10px;
+            padding:4px 9px;
+            border-radius:999px;
+            border:1px solid rgba(var(--fg-rgb),0.22);
+            background:rgba(var(--fg-rgb),0.07);
+            color:rgba(var(--fg-rgb),0.78);
+            font-size:12px;
+            font-weight:900;
+            letter-spacing:.02em;
+            line-height:1.2;
+        }
     </style>
 <link rel="stylesheet" href="./bursts.css?v=4">
 <link rel="stylesheet" href="./stats.css">
@@ -1216,7 +1232,7 @@
     <div class="panel">
         <div class="bar">
             <div class="left">
-                <div class="title" id="titleLine">Photo Gallery</div>
+                <div class="title" id="titleLine"><span>Photo Gallery</span><span id="appVersion" class="appVersion"></span></div>
                 <div id="pathLine" aria-label="Breadcrumb path">/</div>
             </div>
 

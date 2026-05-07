@@ -51,6 +51,21 @@ h1 {
   line-height: 1;
 }
 
+.appVersion {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  margin-left: 10px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,159,28,.28);
+  background: rgba(255,159,28,.08);
+  color: #ffd7a0;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: .02em;
+}
+
 p {
   margin: 0;
   color: var(--dim);

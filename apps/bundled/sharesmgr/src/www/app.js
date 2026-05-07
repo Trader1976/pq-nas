@@ -118,19 +118,39 @@
         return { r, j };
     }
 
+    async function getAppVersion() {
+        const m = location.pathname.match(/^\/apps\/([^/]+)\/([^/]+)\//);
+        if (m && m[2]) return decodeURIComponent(m[2]);
+
+        for (const url of ["../manifest.json", "./manifest.json"]) {
+            try {
+                const r = await fetch(url, {
+                    cache: "no-store",
+                    headers: { "Accept": "application/json" }
+                });
+                if (!r.ok) continue;
+                const j = await r.json();
+                const ver = j && typeof j.version === "string" ? j.version.trim() : "";
+                if (ver) return ver;
+            } catch (_) {}
+        }
+
+        return "";
+    }
+
     async function loadVersion() {
         if (!appVersionEl) return;
 
         try {
-            const { r, j } = await apiJson("GET", "/api/v4/apps");
-            if (!r.ok || !j) return;
-
-            const installed = j.installed || [];
-            const me = installed.find(a => a.id === "sharesmgr");
-
-            if (me && me.version) {
-                appVersionEl.textContent = ` • v${me.version}`;
+            const ver = await getAppVersion();
+            if (!ver) {
+                appVersionEl.hidden = true;
+                return;
             }
+
+            appVersionEl.textContent = ` • v${ver}`;
+            appVersionEl.title = `Shares Manager ${ver}`;
+            appVersionEl.hidden = false;
         } catch (e) {
             console.warn("version lookup failed:", e);
         }

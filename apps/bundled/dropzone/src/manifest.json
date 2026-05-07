@@ -1,7 +1,7 @@
 {
   "id": "dropzone",
   "name": "Drop Zone",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "entry": "www/index.html",
   "api_base": "/api/v4/dropzones",
   "permissions": [],

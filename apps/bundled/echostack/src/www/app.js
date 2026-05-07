@@ -12,6 +12,43 @@
 
   let statusDotsTimer = null;
 
+  async function getAppVersion() {
+    const m = location.pathname.match(/^\/apps\/([^/]+)\/([^/]+)\//);
+    if (m && m[2]) return decodeURIComponent(m[2]);
+
+    for (const url of ["../manifest.json", "./manifest.json"]) {
+      try {
+        const r = await fetch(url, {
+          cache: "no-store",
+          headers: { "Accept": "application/json" }
+        });
+        if (!r.ok) continue;
+        const j = await r.json();
+        const ver = j && typeof j.version === "string" ? j.version.trim() : "";
+        if (ver) return ver;
+      } catch (_) {}
+    }
+
+    return "";
+  }
+
+  async function initAppVersion() {
+    const versionEl = el("appVersion");
+    if (!versionEl) return;
+
+    const ver = await getAppVersion();
+    if (!ver) {
+      versionEl.hidden = true;
+      return;
+    }
+
+    versionEl.textContent = `v${ver}`;
+    versionEl.title = `Echo Stack ${ver}`;
+    versionEl.hidden = false;
+  }
+
+  initAppVersion();
+
   function setStatus(msg, kind) {
     const s = el("status");
     if (!s) return;

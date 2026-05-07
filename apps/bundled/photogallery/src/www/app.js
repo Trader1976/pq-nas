@@ -4223,7 +4223,51 @@
         return "/api/v4/photogallery/stats";
     };
 
-    titleLine.textContent = "Photo Gallery";
+    async function getAppVersion() {
+        const m = location.pathname.match(/^\/apps\/([^/]+)\/([^/]+)\//);
+        if (m && m[2]) return decodeURIComponent(m[2]);
+
+        for (const url of ["../manifest.json", "./manifest.json"]) {
+            try {
+                const r = await fetch(url, {
+                    cache: "no-store",
+                    headers: { "Accept": "application/json" }
+                });
+                if (!r.ok) continue;
+                const j = await r.json();
+                const ver = j && typeof j.version === "string" ? j.version.trim() : "";
+                if (ver) return ver;
+            } catch (_) {}
+        }
+
+        return "";
+    }
+
+    function setPhotoGalleryTitle(version) {
+        if (!titleLine) return;
+
+        titleLine.replaceChildren();
+
+        const name = document.createElement("span");
+        name.textContent = "Photo Gallery";
+        titleLine.appendChild(name);
+
+        if (!version) return;
+
+        const versionEl = document.createElement("span");
+        versionEl.id = "appVersion";
+        versionEl.className = "appVersion";
+        versionEl.textContent = `v${version}`;
+        versionEl.title = `Photo Gallery ${version}`;
+        titleLine.appendChild(versionEl);
+    }
+
+    async function initAppVersion() {
+        const ver = await getAppVersion();
+        setPhotoGalleryTitle(ver);
+    }
+
+    initAppVersion();
     loadRatingFilterPref();
     loadThumbSizePref();
     renderBreadcrumb();

@@ -825,3 +825,19 @@ audio {
     line-height: 1.45;
     overflow-wrap: anywhere;
 }
+
+.appVersion {
+    display: inline-flex;
+    align-items: center;
+    vertical-align: middle;
+    margin-left: 8px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(var(--fg-rgb), 0.22);
+    background: rgba(var(--fg-rgb), 0.07);
+    color: rgba(var(--fg-rgb), 0.82);
+    font-size: 12px;
+    font-weight: 900;
+    letter-spacing: .02em;
+    line-height: 1.2;
+}
