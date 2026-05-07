@@ -3136,7 +3136,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
 
     const allAlreadyHere = list.every((it) => pathEq(parentPath(it.rel), dest));
-    if (allAlreadyHere) {
+    if (modeOpts.sameScope !== false && allAlreadyHere) {
       return "Choose a different destination folder.";
     }
 
@@ -3356,19 +3356,19 @@ function describeMoveItems(items) {
     openMoveModalForItems(collectSelectedMoveItems());
   }
 
-  function copyDestinationProblem(destPath, items) {
+  function copyDestinationProblem(destPath, items, modeOpts = {}) {
     const dest = normalizeRelPath(destPath);
     const list = Array.isArray(items) ? items : [];
 
     if (!list.length) return "Nothing selected.";
 
     const firstDir = list.find((it) => it && it.type === "dir");
-    if (firstDir) {
-      return "Copy currently supports files only. Folder copy comes next.";
+    if (firstDir && modeOpts.crossScope) {
+      return "Cross-scope copy currently supports files only. Folder copy comes next.";
     }
 
     const allAlreadyHere = list.every((it) => pathEq(parentPath(it.rel), dest));
-    if (allAlreadyHere) {
+    if (modeOpts.sameScope !== false && allAlreadyHere) {
       return "Choose a different destination folder.";
     }
 
@@ -3388,9 +3388,211 @@ function describeMoveItems(items) {
     return collectSelectedMoveItems();
   }
 
-  async function openCopyModalForItems(items) {
-    if (!requireWritableScopeOrExplain("Copy")) return;
+  function copyScopeIdFromSnapshot(snap) {
+    if (!snap || !snap.inWorkspace) return "user";
+    return `workspace:${String(snap.workspaceId || "")}`;
+  }
 
+  function copyScopeNameFromSnapshot(snap) {
+    if (!snap || !snap.inWorkspace) return "My Files";
+    return `Workspace ${String(snap.workspaceId || "?")}`;
+  }
+
+  function sameLogicalScopeSnapshot(a, b) {
+    if (!a || !b) return false;
+    if (!!a.inWorkspace !== !!b.inWorkspace) return false;
+    if (!a.inWorkspace) return true;
+    return String(a.workspaceId || "") === String(b.workspaceId || "");
+  }
+
+  function apiCopyScopeUrl(sourceSnap, destSnap, from, to) {
+    const qs = new URLSearchParams();
+
+    const fromScope = sourceSnap && sourceSnap.inWorkspace ? "workspace" : "user";
+    const toScope = destSnap && destSnap.inWorkspace ? "workspace" : "user";
+
+    qs.set("from_scope", fromScope);
+    qs.set("to_scope", toScope);
+
+    if (fromScope === "workspace") {
+      qs.set("from_workspace_id", String(sourceSnap.workspaceId || ""));
+    }
+    if (toScope === "workspace") {
+      qs.set("to_workspace_id", String(destSnap.workspaceId || ""));
+    }
+
+    qs.set("from", from || "");
+    qs.set("to", to || "");
+
+    return `/api/v4/files/copy_scope?${qs.toString()}`;
+  }
+
+  function workspaceListUrlForCopy(workspaceId, path) {
+    const qs = new URLSearchParams();
+    qs.set("workspace_id", workspaceId || "");
+    if (path) qs.set("path", path);
+    return `/api/v4/workspaces/files/list?${qs.toString()}`;
+  }
+
+  function workspaceMkdirUrlForCopy(workspaceId, path) {
+    const qs = new URLSearchParams();
+    qs.set("workspace_id", workspaceId || "");
+    qs.set("path", path || "");
+    return `/api/v4/workspaces/files/mkdir?${qs.toString()}`;
+  }
+
+  function userListUrlForCopy(path) {
+    return path
+        ? `/api/v4/files/list?path=${encodeURIComponent(path)}`
+        : `/api/v4/files/list`;
+  }
+
+  function userMkdirUrlForCopy(path) {
+    return `/api/v4/files/mkdir?path=${encodeURIComponent(path || "")}`;
+  }
+
+  function buildCopyDestinationScopes() {
+    const scopes = [];
+
+    scopes.push({
+      id: "user",
+      kind: "user",
+      label: "My Files",
+      canCreate: true,
+      canChoose: true,
+      listUrl: (path) => userListUrlForCopy(path || ""),
+      mkdirUrl: (path) => userMkdirUrlForCopy(path || "")
+    });
+
+    const sel = document.getElementById("scopeSelect");
+    const opts = sel && sel.options ? Array.from(sel.options) : [];
+
+    for (const opt of opts) {
+      const v = String(opt.value || "");
+      if (!v.startsWith("workspace:")) continue;
+
+      const workspaceId = v.slice("workspace:".length);
+      if (!workspaceId) continue;
+
+      const role = String(opt.dataset.role || "").toLowerCase();
+      const canWrite = role === "owner" || role === "editor";
+      if (!canWrite) continue;
+
+      const label = String(opt.dataset.name || opt.textContent || workspaceId);
+
+      scopes.push({
+        id: `workspace:${workspaceId}`,
+        kind: "workspace",
+        workspaceId,
+        label,
+        canCreate: true,
+        canChoose: true,
+        description: role ? `${label} (${role})` : label,
+        listUrl: (path) => workspaceListUrlForCopy(workspaceId, path || ""),
+        mkdirUrl: (path) => workspaceMkdirUrlForCopy(workspaceId, path || "")
+      });
+    }
+
+    return scopes;
+  }
+
+  function snapshotFromCopyScope(scope, path) {
+    const p = normalizeRelPath(path || "");
+    if (!scope || scope.kind !== "workspace") {
+      return {
+        path: p,
+        inWorkspace: false,
+        workspaceId: "",
+        listUrl: userListUrlForCopy(p)
+      };
+    }
+
+    return {
+      path: p,
+      inWorkspace: true,
+      workspaceId: String(scope.workspaceId || ""),
+      listUrl: workspaceListUrlForCopy(scope.workspaceId || "", p)
+    };
+  }
+
+  async function copyItemsToScopedDestination(items, destPath, sourceSnap, destSnap) {
+    const sameScope = sameLogicalScopeSnapshot(sourceSnap, destSnap);
+
+    if (sameScope) {
+      await copyItemsToDestination(items, destPath);
+      return;
+    }
+
+    const list = Array.isArray(items) ? items.slice() : [];
+    const dest = normalizeRelPath(destPath);
+
+    if (!list.length) return;
+
+    const firstDir = list.find((it) => it && it.type === "dir");
+    if (firstDir) {
+      throw new Error("Cross-scope copy currently supports files only.");
+    }
+
+    setBadge("warn", "copying…");
+    status.textContent = `Copying 0/${list.length}…`;
+
+    let done = 0;
+    let skipped = 0;
+    let failed = 0;
+    const failures = [];
+
+    for (const it of list) {
+      const from = normalizeRelPath(it.rel);
+      const name = it.name || basenamePath(from);
+      const to = dest ? `${dest}/${name}` : name;
+
+      if (!from || !name) {
+        skipped++;
+        continue;
+      }
+
+      try {
+        const r = await fetch(apiCopyScopeUrl(sourceSnap, destSnap, from, to), {
+          method: "POST",
+          credentials: "include",
+          cache: "no-store",
+          body: ""
+        });
+
+        const j = await r.json().catch(() => null);
+
+        if (!r.ok || !j || !j.ok) {
+          const msg = j && (j.message || j.error)
+              ? `${j.error || ""} ${j.message || ""}`.trim()
+              : `HTTP ${r.status}`;
+          throw new Error(msg || `HTTP ${r.status}`);
+        }
+
+        done++;
+      } catch (e) {
+        failed++;
+        failures.push(`${from} → ${to} — ${String(e && e.message ? e.message : e)}`);
+      }
+
+      status.textContent = `Copying ${done + failed + skipped}/${list.length}…`;
+    }
+
+    clearSelection();
+    clearFileListCache();
+    await load();
+
+    if (failed) {
+      setBadge("err", "partial");
+      status.textContent =
+          `Copied ${done}, skipped ${skipped}, failed ${failed}. ` +
+          failures.slice(0, 2).join(" | ");
+    } else {
+      setBadge("ok", "ready");
+      status.textContent = `Copied ${done} item(s).`;
+    }
+  }
+
+  async function openCopyModalForItems(items) {
     const picker = window.PQNAS_FOLDER_PICKER;
     if (!picker || typeof picker.open !== "function") {
       status.textContent = "Copy dialog failed: shared folder picker module is not loaded. Refresh the page.";
@@ -3404,7 +3606,11 @@ function describeMoveItems(items) {
         if (!rel) return null;
 
         const type = String((it && it.type) || "file") === "dir" ? "dir" : "file";
-        return Object.assign({}, it || {}, { rel, type });
+        return Object.assign({}, it || {}, {
+          rel,
+          type,
+          name: (it && it.name) || basenamePath(rel)
+        });
       })
       .filter(Boolean);
 
@@ -3413,16 +3619,26 @@ function describeMoveItems(items) {
       return;
     }
 
+    const sourceSnap = currentScopeSnapshot(curPath || "");
+    const scopes = buildCopyDestinationScopes();
+
+    if (!scopes.length) {
+      status.textContent = "No writable copy destinations available.";
+      return;
+    }
+
+    const initialScopeId = copyScopeIdFromSnapshot(sourceSnap);
+
     const picked = await picker.open({
       title: "Copy",
-      subtitle: "Select destination folder",
+      subtitle: "Select destination location and folder",
       source: describeCopyItems(clean),
+      initialScopeId,
       initialPath: curPath || "",
       chooseLabel: "Copy here",
-      canCreate: canWriteCurrentScope(),
+      canCreate: true,
       blockedPaths: [],
-      listUrl: (path) => apiListUrl(path || ""),
-      mkdirUrl: (path) => apiMkdirUrl(path || "")
+      scopes
     });
 
     if (picked === null) {
@@ -3430,8 +3646,24 @@ function describeMoveItems(items) {
       return;
     }
 
-    const destPath = normalizeRelPath(picked);
-    const problem = copyDestinationProblem(destPath, clean);
+    const pickedPath = (picked && typeof picked === "object")
+        ? picked.path
+        : picked;
+
+    const pickedScopeId = (picked && typeof picked === "object")
+        ? String(picked.scopeId || "")
+        : initialScopeId;
+
+    const destScope = scopes.find((s) => String(s.id) === pickedScopeId) || scopes[0];
+    const destPath = normalizeRelPath(pickedPath || "");
+    const destSnap = snapshotFromCopyScope(destScope, destPath);
+
+    const sameScope = sameLogicalScopeSnapshot(sourceSnap, destSnap);
+    const problem = copyDestinationProblem(destPath, clean, {
+      sameScope,
+      crossScope: !sameScope
+    });
+
     if (problem) {
       status.textContent = problem;
       return;
@@ -3440,7 +3672,7 @@ function describeMoveItems(items) {
     const destShown = destPath ? `/${destPath}` : "/";
     const ok = confirm(
         `Copy ${clean.length} item(s) to:\n\n` +
-        `${destShown}\n\n` +
+        `${destScope.label || copyScopeNameFromSnapshot(destSnap)} ${destShown}\n\n` +
         `Existing destination names will fail; nothing is overwritten.`
     );
 
@@ -3449,7 +3681,7 @@ function describeMoveItems(items) {
       return;
     }
 
-    await copyItemsToDestination(clean, destPath);
+    await copyItemsToScopedDestination(clean, destPath, sourceSnap, destSnap);
   }
 
   function openCopyModalForItem(item) {

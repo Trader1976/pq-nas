@@ -1392,6 +1392,59 @@ static void record_workspace_file_copied_activity_best_effort_local(const Worksp
     (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
 }
 
+
+static void record_copy_scope_activity_best_effort_local(const WorkspaceFileRouteDeps& deps,
+                                                         const std::string& actor_fp,
+                                                         const std::string& from_scope,
+                                                         const std::string& from_workspace_id,
+                                                         const std::string& from_rel_path,
+                                                         const std::string& to_scope,
+                                                         const std::string& to_workspace_id,
+                                                         const std::string& to_rel_path,
+                                                         std::uint64_t size_bytes) {
+    if (!deps.users || actor_fp.empty() || from_rel_path.empty() || to_rel_path.empty()) return;
+
+    std::filesystem::path user_root;
+    try {
+        user_root = ::pqnas_user_dir_for_fp(*deps.users, actor_fp);
+    } catch (...) {
+        return;
+    }
+
+    if (user_root.empty()) return;
+
+    pqnas::activity::ActivityEvent ev;
+    ev.owner_user_id = actor_fp;
+
+    ev.actor.user_id = actor_fp;
+    ev.actor.display_name = workspace_activity_display_name_local(deps, actor_fp);
+    ev.actor.kind = "user";
+
+    ev.event_type = "file.copied";
+    ev.scope_type = (to_scope == "workspace") ? "workspace" : "user";
+    ev.scope_id = (to_scope == "workspace") ? to_workspace_id : "";
+
+    ev.target_kind = "file";
+    ev.target_path = to_rel_path;
+    ev.target_name = workspace_activity_basename_local(to_rel_path, "file");
+
+    ev.details = nlohmann::json{
+        {"scope_type", ev.scope_type},
+        {"from_scope", from_scope},
+        {"to_scope", to_scope},
+        {"from_workspace_id", from_workspace_id},
+        {"to_workspace_id", to_workspace_id},
+        {"from_path", from_rel_path},
+        {"to_path", to_rel_path},
+        {"item_type", "file"},
+        {"size_bytes", size_bytes}
+    };
+
+    std::string activity_err;
+    (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
+
+}
+
 void register_workspace_file_routes(httplib::Server& srv,
                                     const WorkspaceFileRouteDeps& deps) {
     srv.Get("/api/v4/workspaces",
@@ -8471,6 +8524,17 @@ srv.Post("/api/v4/files/copy_scope",
     }
 
     audit_ok(from_norm, to_norm, src_bytes);
+    record_copy_scope_activity_best_effort_local(
+        deps,
+        actor_fp,
+        from_scope,
+        from_workspace_id,
+        from_norm,
+        to_scope,
+        to_workspace_id,
+        to_norm,
+        src_bytes
+    );
 
     deps.reply_json(res, 200, json{
         {"ok", true},

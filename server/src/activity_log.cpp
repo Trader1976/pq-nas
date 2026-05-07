@@ -197,6 +197,8 @@ std::string build_default_message(const ActivityEvent& ev) {
     if (ev.event_type == "file.copied") {
         std::string from_path;
         std::string to_path;
+        std::string from_scope;
+        std::string to_scope;
 
         if (ev.details.is_object()) {
             if (ev.details.contains("from_path") && ev.details["from_path"].is_string()) {
@@ -205,6 +207,26 @@ std::string build_default_message(const ActivityEvent& ev) {
             if (ev.details.contains("to_path") && ev.details["to_path"].is_string()) {
                 to_path = ev.details["to_path"].get<std::string>();
             }
+            if (ev.details.contains("from_scope") && ev.details["from_scope"].is_string()) {
+                from_scope = ev.details["from_scope"].get<std::string>();
+            }
+            if (ev.details.contains("to_scope") && ev.details["to_scope"].is_string()) {
+                to_scope = ev.details["to_scope"].get<std::string>();
+            }
+        }
+
+        auto scope_label = [](const std::string& s) -> std::string {
+            if (s == "user") return "My Files";
+            if (s == "workspace") return "Workspace";
+            return s;
+        };
+
+        // Cross-scope copy: keep headline compact; destination path is shown
+        // separately on the activity card.
+        if (!from_scope.empty() && !to_scope.empty() && from_scope != to_scope) {
+            return actor + " copied " + target +
+                   " from " + scope_label(from_scope) +
+                   " to " + scope_label(to_scope);
         }
 
         if (!from_path.empty()) {

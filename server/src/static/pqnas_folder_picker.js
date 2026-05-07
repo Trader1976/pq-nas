@@ -14,9 +14,11 @@
     let statusEl = null;
     let chooseBtn = null;
     let newFolderBtn = null;
+    let scopeEl = null;
 
     let resolver = null;
     let currentPath = "";
+    let activeScopeId = "";
     let busy = false;
     let loadSeq = 0;
     let opts = {};
@@ -164,12 +166,39 @@
         return `/api/v4/files/mkdir?path=${encodeURIComponent(normalizeRelPath(path))}`;
     }
 
+    function pickerScopes() {
+        return Array.isArray(opts.scopes)
+            ? opts.scopes.filter((s) => s && s.id)
+            : [];
+    }
+
+    function activeScope() {
+        const scopes = pickerScopes();
+        if (!scopes.length) return null;
+
+        let found = scopes.find((s) => String(s.id) === String(activeScopeId));
+        if (!found) {
+            found = scopes[0];
+            activeScopeId = String(found.id || "");
+        }
+        return found || null;
+    }
+
+    function activeScopeRootLabel() {
+        const sc = activeScope();
+        return sc && sc.label ? String(sc.label) : "My Files";
+    }
+
     function listUrl(path) {
+        const sc = activeScope();
+        if (sc && typeof sc.listUrl === "function") return sc.listUrl(normalizeRelPath(path));
         if (opts && typeof opts.listUrl === "function") return opts.listUrl(normalizeRelPath(path));
         return defaultListUrl(path);
     }
 
     function mkdirUrl(path) {
+        const sc = activeScope();
+        if (sc && typeof sc.mkdirUrl === "function") return sc.mkdirUrl(normalizeRelPath(path));
         if (opts && typeof opts.mkdirUrl === "function") return opts.mkdirUrl(normalizeRelPath(path));
         return defaultMkdirUrl(path);
     }
@@ -233,6 +262,7 @@ function ensureModal() {
                     <button type="button" class="fmMoveClose" data-pqfp-close>Close</button>
                 </div>
                 <div class="fmMoveSource" data-pqfp-source></div>
+                <div class="fmMoveBreadcrumb" data-pqfp-scopes></div>
                 <div class="fmMoveBreadcrumb" data-pqfp-breadcrumb></div>
                 <div class="fmMoveDirList" data-pqfp-list></div>
                 <div class="fmMoveStatus" data-pqfp-status></div>
@@ -256,6 +286,7 @@ function ensureModal() {
         titleEl = overlay.querySelector("#pqFolderPickerTitle");
         subEl = overlay.querySelector("[data-pqfp-sub]");
         sourceEl = overlay.querySelector("[data-pqfp-source]");
+        scopeEl = overlay.querySelector("[data-pqfp-scopes]");
         crumbEl = overlay.querySelector("[data-pqfp-breadcrumb]");
         listEl = overlay.querySelector("[data-pqfp-list]");
         statusEl = overlay.querySelector("[data-pqfp-status]");
@@ -281,7 +312,7 @@ function ensureModal() {
                 renderActionState();
                 return;
             }
-            close(normalizeRelPath(currentPath));
+            close(buildCloseValue());
         });
         newFolderBtn?.addEventListener("click", createFolderHere);
 
@@ -327,22 +358,103 @@ function ensureModal() {
         renderActionState();
     }
 
+    function buildCloseValue() {
+        const path = normalizeRelPath(currentPath);
+        const scopes = pickerScopes();
+        if (!scopes.length) return path;
+
+        const sc = activeScope();
+        return {
+            path,
+            scopeId: activeScopeId || (sc ? String(sc.id || "") : ""),
+            scope: sc ? {
+                id: String(sc.id || ""),
+                label: String(sc.label || ""),
+                kind: String(sc.kind || ""),
+                workspaceId: String(sc.workspaceId || "")
+            } : null
+        };
+    }
+
+    function renderScopes() {
+        if (!scopeEl) return;
+
+        clear(scopeEl);
+
+        const scopes = pickerScopes();
+        if (!scopes.length) {
+            scopeEl.style.display = "none";
+            return;
+        }
+
+        scopeEl.style.display = "flex";
+        scopeEl.style.alignItems = "center";
+        scopeEl.style.gap = "10px";
+        scopeEl.style.boxSizing = "border-box";
+        scopeEl.style.padding = "10px 14px 12px";
+        scopeEl.style.borderBottom = "1px solid rgba(0,0,0,0.10)";
+        scopeEl.style.marginBottom = "8px";
+
+        const label = document.createElement("div");
+        label.textContent = "Destination location";
+        label.style.fontWeight = "800";
+        label.style.whiteSpace = "nowrap";
+
+        const select = document.createElement("select");
+        select.className = "fmMoveScopeSelect";
+        select.disabled = busy;
+        select.style.minWidth = "220px";
+        select.style.maxWidth = "420px";
+        select.style.padding = "8px 10px";
+        select.style.borderRadius = "8px";
+        select.style.border = "1px solid rgba(0,0,0,0.22)";
+        select.style.background = "rgba(255,255,255,0.55)";
+        select.style.fontWeight = "700";
+
+        for (const sc of scopes) {
+            const id = String(sc.id || "");
+            const opt = document.createElement("option");
+            opt.value = id;
+            opt.textContent = String(sc.label || id || "Location");
+            if (id === String(activeScopeId || "")) opt.selected = true;
+            select.appendChild(opt);
+        }
+
+        select.addEventListener("change", () => {
+            activeScopeId = String(select.value || "");
+            const sc = activeScope();
+            currentPath = normalizeRelPath(sc && sc.initialPath ? sc.initialPath : "");
+            openPath(currentPath).catch((e) => {
+                setStatus(`Open location failed: ${String(e && e.message ? e.message : e)}`);
+                setBusy(false);
+                renderActionState();
+            });
+        });
+
+        scopeEl.appendChild(label);
+        scopeEl.appendChild(select);
+    }
+
     function renderActionState() {
         const problem = destinationProblem(currentPath);
         const shown = currentPath ? `/${currentPath}` : "/";
 
         if (chooseBtn) {
-            chooseBtn.disabled = busy || !!problem;
+            const sc = activeScope();
+            const scopeProblem = sc && sc.canChoose === false ? "Destination location is read-only." : "";
+            const finalProblem = scopeProblem || problem;
+            chooseBtn.disabled = busy || !!finalProblem;
             chooseBtn.textContent = opts.chooseLabel || "Choose folder";
-            chooseBtn.title = problem || `Choose ${shown}`;
+            chooseBtn.title = finalProblem || `Choose ${activeScopeRootLabel()} ${shown}`;
         }
 
         if (newFolderBtn) {
-            newFolderBtn.disabled = busy || !!problem || opts.canCreate === false;
+            const sc = activeScope();
+            newFolderBtn.disabled = busy || !!problem || opts.canCreate === false || (sc && sc.canCreate === false);
         }
 
         if (statusEl && !busy) {
-            statusEl.textContent = problem || `Destination: ${shown}`;
+            statusEl.textContent = problem || `Destination: ${activeScopeRootLabel()} ${shown}`;
         }
     }
 
@@ -365,7 +477,7 @@ function ensureModal() {
         clear(crumbEl);
         const parts = normalizeRelPath(currentPath).split("/").filter(Boolean);
 
-        appendCrumb("My Files", "", parts.length === 0);
+        appendCrumb("/", "", parts.length === 0);
 
         let acc = "";
         parts.forEach((part, idx) => {
@@ -455,9 +567,10 @@ function ensureModal() {
         ensureModal();
 
         const mySeq = ++loadSeq;
+        renderScopes();
         renderBreadcrumb();
         setBusy(true);
-        setStatus(`Loading /${currentPath || ""}`);
+        setStatus(`Loading ${activeScopeRootLabel()} /${currentPath || ""}`);
 
         clear(listEl);
         const loading = document.createElement("div");
@@ -566,7 +679,16 @@ function ensureModal() {
         }
 
         opts = Object.assign({}, openOpts || {});
-        currentPath = normalizeRelPath(opts.initialPath || "");
+
+        const scopes = pickerScopes();
+        activeScopeId = String(opts.initialScopeId || (scopes[0] ? scopes[0].id : "") || "");
+
+        const sc = activeScope();
+        currentPath = normalizeRelPath(
+            opts.initialPath ||
+            (sc && sc.initialPath) ||
+            ""
+        );
 
         if (titleEl) titleEl.textContent = opts.title || "Choose folder";
         if (subEl) subEl.textContent = opts.subtitle || "";
