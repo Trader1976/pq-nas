@@ -1,3 +1,17 @@
+# HISTORICAL DOCUMENT — PQ-NAS v0 Architecture
+
+> This document describes the original v0 proof-of-concept architecture.
+> It is no longer the active architecture for DNA-Nexus / PQ-NAS.
+>
+> Current implementation has moved far beyond this stage: app bundles, manifests,
+> desktop/launcher/sidebar surfaces, admin apps, workspaces, shares, Drop Zone,
+> Echo Stack, NeonWave, Photo Gallery, Storage Manager, Snapshot Manager,
+> Android mobile auth, v5 token flows, activity events, quotas, trash, and more.
+>
+> Keep this file only as historical context.
+
+---
+
 # PQ-NAS v0 Architecture
 
 PQ-NAS v0 is an identity-first personal storage server. It focuses on a secure access layer and minimal file operations, using DNA identity and device-mediated QR authentication instead of passwords.
