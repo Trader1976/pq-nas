@@ -790,6 +790,12 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return `/api/v4/files/move?from=${encodeURIComponent(from || "")}&to=${encodeURIComponent(to || "")}`;
   }
 
+  function apiCopyUrl(from, to) {
+    const api = fmApi();
+    if (api && typeof api.copyUrl === "function") return api.copyUrl(from || "", to || "");
+    return `/api/v4/files/copy?from=${encodeURIComponent(from || "")}&to=${encodeURIComponent(to || "")}`;
+  }
+
   function apiStatUrl(path) {
     const api = fmApi();
     if (api && typeof api.statUrl === "function") return api.statUrl(path || ".");
@@ -2820,11 +2826,14 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       ctxEl.appendChild(menuItem(`Download selection (zip) (${selectedKeys.size})`, "", () => downloadSelectionZip()));
     }
 
-    if (canWriteCurrentScope() && caps.move !== false) {
+    if (canWriteCurrentScope()) {
       ctxEl.appendChild(menuSep());
-      ctxEl.appendChild(menuItem(`Move selection… (${selectedKeys.size})`, "", () => openMoveModalForSelection()));
-      ctxEl.appendChild(menuItem(`Move selection to trash (${selectedKeys.size})…`, "🗑", () => deleteSelection(), { danger: true }));
-    } else if (canWriteCurrentScope()) {
+      if (caps.copy !== false) {
+        ctxEl.appendChild(menuItem(`Copy selection… (${selectedKeys.size})`, "", () => openCopyModalForSelection()));
+      }
+      if (caps.move !== false) {
+        ctxEl.appendChild(menuItem(`Move selection… (${selectedKeys.size})`, "", () => openMoveModalForSelection()));
+      }
       ctxEl.appendChild(menuItem(`Move selection to trash (${selectedKeys.size})…`, "🗑", () => deleteSelection(), { danger: true }));
     }
   }
@@ -3243,7 +3252,8 @@ function describeMoveItems(items) {
 
     return text;
   }
-function collectSelectedMoveItems() {
+
+  function collectSelectedMoveItems() {
     const out = [];
 
     for (const k of selectedKeys) {
@@ -3345,13 +3355,196 @@ function collectSelectedMoveItems() {
   function openMoveModalForSelection() {
     openMoveModalForItems(collectSelectedMoveItems());
   }
-async function moveItemsToDestination(items, destPath) {
+
+  function copyDestinationProblem(destPath, items) {
+    const dest = normalizeRelPath(destPath);
+    const list = Array.isArray(items) ? items : [];
+
+    if (!list.length) return "Nothing selected.";
+
+    const firstDir = list.find((it) => it && it.type === "dir");
+    if (firstDir) {
+      return "Copy currently supports files only. Folder copy comes next.";
+    }
+
+    const allAlreadyHere = list.every((it) => pathEq(parentPath(it.rel), dest));
+    if (allAlreadyHere) {
+      return "Choose a different destination folder.";
+    }
+
+    return "";
+  }
+
+  function describeCopyItems(items) {
+    const list = Array.isArray(items) ? items : [];
+    if (list.length === 1) return `Copy: /${list[0].rel}`;
+
+    const names = list.slice(0, 4).map((it) => it.name || basenamePath(it.rel)).join(", ");
+    const more = list.length > 4 ? `, +${list.length - 4} more` : "";
+    return `Copy ${list.length} item(s): ${names}${more}`;
+  }
+
+  function collectSelectedCopyItems() {
+    return collectSelectedMoveItems();
+  }
+
+  async function openCopyModalForItems(items) {
+    if (!requireWritableScopeOrExplain("Copy")) return;
+
+    const picker = window.PQNAS_FOLDER_PICKER;
+    if (!picker || typeof picker.open !== "function") {
+      status.textContent = "Copy dialog failed: shared folder picker module is not loaded. Refresh the page.";
+      return;
+    }
+
+    const clean = (Array.isArray(items) ? items : [])
+      .map((it) => {
+        const rawRel = it && (it.rel || it.path || it.relPath || "");
+        const rel = normalizeRelPath(rawRel || (it ? currentRelPathFor(it) : ""));
+        if (!rel) return null;
+
+        const type = String((it && it.type) || "file") === "dir" ? "dir" : "file";
+        return Object.assign({}, it || {}, { rel, type });
+      })
+      .filter(Boolean);
+
+    if (!clean.length) {
+      status.textContent = "Nothing selected.";
+      return;
+    }
+
+    const picked = await picker.open({
+      title: "Copy",
+      subtitle: "Select destination folder",
+      source: describeCopyItems(clean),
+      initialPath: curPath || "",
+      chooseLabel: "Copy here",
+      canCreate: canWriteCurrentScope(),
+      blockedPaths: [],
+      listUrl: (path) => apiListUrl(path || ""),
+      mkdirUrl: (path) => apiMkdirUrl(path || "")
+    });
+
+    if (picked === null) {
+      status.textContent = "Copy cancelled.";
+      return;
+    }
+
+    const destPath = normalizeRelPath(picked);
+    const problem = copyDestinationProblem(destPath, clean);
+    if (problem) {
+      status.textContent = problem;
+      return;
+    }
+
+    const destShown = destPath ? `/${destPath}` : "/";
+    const ok = confirm(
+        `Copy ${clean.length} item(s) to:\n\n` +
+        `${destShown}\n\n` +
+        `Existing destination names will fail; nothing is overwritten.`
+    );
+
+    if (!ok) {
+      status.textContent = "Copy cancelled.";
+      return;
+    }
+
+    await copyItemsToDestination(clean, destPath);
+  }
+
+  function openCopyModalForItem(item) {
+    if (!item) return;
+
+    const rel = currentRelPathFor(item);
+    openCopyModalForItems([{
+      rel,
+      type: item.type === "dir" ? "dir" : "file",
+      name: item.name || basenamePath(rel)
+    }]);
+  }
+
+  function openCopyModalForSelection() {
+    openCopyModalForItems(collectSelectedCopyItems());
+  }
+
+  async function copyItemsToDestination(items, destPath) {
+    const list = Array.isArray(items) ? items.slice() : [];
+    const dest = normalizeRelPath(destPath);
+
+    if (!list.length) return;
+
+    setBadge("warn", "copying…");
+    status.textContent = `Copying 0/${list.length}…`;
+
+    let done = 0;
+    let skipped = 0;
+    let failed = 0;
+    const failures = [];
+
+    for (const it of list) {
+      const from = normalizeRelPath(it.rel);
+      const name = it.name || basenamePath(from);
+      const to = dest ? `${dest}/${name}` : name;
+
+      if (!from || !name) {
+        skipped++;
+        continue;
+      }
+
+      if (pathEq(from, to)) {
+        skipped++;
+        continue;
+      }
+
+      try {
+        const r = await fetch(apiCopyUrl(from, to), {
+          method: "POST",
+          credentials: "include",
+          cache: "no-store",
+          body: ""
+        });
+
+        const j = await r.json().catch(() => null);
+
+        if (!r.ok || !j || !j.ok) {
+          const msg = j && (j.message || j.error)
+              ? `${j.error || ""} ${j.message || ""}`.trim()
+              : `HTTP ${r.status}`;
+          throw new Error(msg || `HTTP ${r.status}`);
+        }
+
+        done++;
+      } catch (e) {
+        failed++;
+        failures.push(`${from} → ${to} — ${String(e && e.message ? e.message : e)}`);
+      }
+
+      status.textContent = `Copying ${done + failed + skipped}/${list.length}…`;
+    }
+
+    clearSelection();
+    clearFileListCache();
+    await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
+    await load(true);
+
+    if (failed > 0) {
+      setBadge("err", "partial");
+      status.textContent = `Copied ${done}/${list.length} item(s). Failed: ${failed}. Skipped: ${skipped}. See console.`;
+      console.warn("Copy failures:", failures);
+    } else {
+      setBadge("ok", "ready");
+      status.textContent = skipped > 0
+          ? `Copied ${done} item(s). Skipped: ${skipped}.`
+          : `Copied ${done} item(s).`;
+    }
+  }
+
+  async function moveItemsToDestination(items, destPath) {
     const list = Array.isArray(items) ? items.slice() : [];
     const dest = normalizeRelPath(destPath);
 
     if (!list.length) return;
     setBadge("warn", "moving…");
-    status.textContent = `Moving 0/${list.length}…`;
     status.textContent = `Moving 0/${list.length}…`;
 
     let done = 0;
@@ -3398,7 +3591,6 @@ async function moveItemsToDestination(items, destPath) {
       }
 
       status.textContent = `Moving ${done + failed + skipped}/${list.length}…`;
-      status.textContent = status.textContent;
     }
     clearSelection();
 
@@ -4067,6 +4259,9 @@ async function moveItemsToDestination(items, destPath) {
         }));
 
         ctxEl.appendChild(menuSep());
+        if (caps.copy !== false && item.type !== "dir") {
+          ctxEl.appendChild(menuItem("Copy to…", "", () => openCopyModalForItem(item)));
+        }
         if (caps.move !== false) {
           ctxEl.appendChild(menuItem("Move…", "", () => openMoveModalForItem(item)));
         }
@@ -4157,6 +4352,9 @@ async function moveItemsToDestination(items, destPath) {
 
       if (canWrite) {
         ctxEl.appendChild(menuSep());
+        if (caps.copy !== false && item.type !== "dir") {
+          ctxEl.appendChild(menuItem("Copy to…", "", () => openCopyModalForItem(item)));
+        }
         if (caps.move !== false) {
           ctxEl.appendChild(menuItem("Move…", "", () => openMoveModalForItem(item)));
         }
@@ -5281,6 +5479,9 @@ async function moveItemsToDestination(items, destPath) {
   FM.currentRelPathFor = currentRelPathFor;
   FM.joinPath = joinPath;
   FM.apiGetUrl = apiGetUrl;
+  FM.apiCopyUrl = apiCopyUrl;
+  FM.openCopyModalForItem = openCopyModalForItem;
+  FM.openCopyModalForSelection = openCopyModalForSelection;
   FM.fmtSize = fmtSize;
   FM.setBadge = setBadge;
   FM.copyText = copyText;

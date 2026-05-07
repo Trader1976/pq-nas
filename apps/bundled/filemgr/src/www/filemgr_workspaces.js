@@ -202,6 +202,18 @@
         return `/api/v4/workspaces/files/move?${qs.toString()}`;
     }
 
+    function copyUrl(from, to) {
+        if (!isWorkspaceScope()) {
+            return `/api/v4/files/copy?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+        }
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", FM.scope.workspaceId);
+        qs.set("from", from);
+        qs.set("to", to);
+        return `/api/v4/workspaces/files/copy?${qs.toString()}`;
+    }
+    
     function applyScopeUi() {
         const caps = getCapabilities();
         const writeOk = canCurrentScopeWrite();
@@ -759,6 +771,7 @@
         getUrl,
         deleteUrl,
         moveUrl,
+        copyUrl,
         statUrl,
         statSelUrl,
         hashUrl,

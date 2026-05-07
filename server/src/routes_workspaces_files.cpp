@@ -17,8 +17,10 @@
 #include <unistd.h>
 #include <sstream>
 #include <fcntl.h>
+#include <limits>
 #include "audit_fields.h"
 #include "storage_resolver.h"
+#include "file_location_index.h"
 #include "runtime_paths.h"
 #include "user_quota.h"
 #include "file_versions.h"
@@ -7758,6 +7760,1192 @@ srv.Post("/api/v4/workspaces/files/restore_version",
     out["sha256_hex"] = rr.sha256_hex;
 
     deps.reply_json(res, 200, out.dump());
+});
+// POST /api/v4/files/copy_scope?from_scope=user|workspace&from_workspace_id=...&from=...&to_scope=user|workspace&to_workspace_id=...&to=...
+// v1: cross-scope file copy only, no overwrite, no directory copy.
+srv.Post("/api/v4/files/copy_scope",
+         [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+    if (!deps.require_user_auth_users_actor ||
+        !deps.require_user_auth_users_actor(
+            req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+        return;
+    }
+
+    if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
+    (void)actor_role;
+
+    res.set_header("Cache-Control", "no-store");
+
+    auto param = [&](const char* k) -> std::string {
+        return req.has_param(k) ? trim_copy_safe(req.get_param_value(k)) : "";
+    };
+
+    const std::string from_scope = param("from_scope");
+    const std::string to_scope = param("to_scope");
+    const std::string from_workspace_id = param("from_workspace_id");
+    const std::string to_workspace_id = param("to_workspace_id");
+
+    const std::string from_raw = req.has_param("from") ? req.get_param_value("from") : "";
+    const std::string to_raw = req.has_param("to") ? req.get_param_value("to") : "";
+
+    auto audit_fail = [&](const std::string& reason,
+                          int http,
+                          const std::string& detail = "") {
+        if (!deps.audit_emit) return;
+
+        std::map<std::string, std::string> f;
+        f["actor_fp"] = actor_fp;
+        f["reason"] = reason;
+        f["http"] = std::to_string(http);
+        f["from_scope"] = from_scope;
+        f["to_scope"] = to_scope;
+        if (!from_workspace_id.empty()) f["from_workspace_id"] = from_workspace_id;
+        if (!to_workspace_id.empty()) f["to_workspace_id"] = to_workspace_id;
+        if (!from_raw.empty()) f["from"] = from_raw;
+        if (!to_raw.empty()) f["to"] = to_raw;
+        if (!detail.empty()) f["detail"] = detail;
+        f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
+
+        deps.audit_emit("files.copy_scope_fail", "fail", f);
+    };
+
+    auto audit_ok = [&](const std::string& from_norm,
+                        const std::string& to_norm,
+                        std::uint64_t bytes) {
+        if (!deps.audit_emit) return;
+
+        std::map<std::string, std::string> f;
+        f["actor_fp"] = actor_fp;
+        f["from_scope"] = from_scope;
+        f["to_scope"] = to_scope;
+        if (!from_workspace_id.empty()) f["from_workspace_id"] = from_workspace_id;
+        if (!to_workspace_id.empty()) f["to_workspace_id"] = to_workspace_id;
+        f["from"] = from_norm;
+        f["to"] = to_norm;
+        f["type"] = "file";
+        f["bytes"] = std::to_string(static_cast<unsigned long long>(bytes));
+        f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
+
+        deps.audit_emit("files.copy_scope_ok", "ok", f);
+    };
+
+    if (!deps.users || !deps.workspaces) {
+        audit_fail("deps_missing", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "route dependencies missing"}
+        }.dump());
+        return;
+    }
+
+    if ((from_scope != "user" && from_scope != "workspace") ||
+        (to_scope != "user" && to_scope != "workspace") ||
+        from_scope == to_scope ||
+        from_raw.empty() ||
+        to_raw.empty()) {
+        audit_fail("bad_request", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "expected cross-scope copy with from_scope, to_scope, from, and to"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->load(deps.workspaces_path)) {
+        audit_fail("workspaces_reload_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "workspaces_reload_failed"},
+            {"message", "failed to reload workspaces"}
+        }.dump());
+        return;
+    }
+
+    std::string from_norm, to_norm;
+    std::string nerr1, nerr2;
+
+    if (!pqnas::normalize_user_rel_path_strict(from_raw, &from_norm, &nerr1)) {
+        audit_fail("invalid_from_path", 400, nerr1);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid from path"}
+        }.dump());
+        return;
+    }
+
+    if (!pqnas::normalize_user_rel_path_strict(to_raw, &to_norm, &nerr2)) {
+        audit_fail("invalid_to_path", 400, nerr2);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid to path"}
+        }.dump());
+        return;
+    }
+
+    auto ensure_user_storage_allocated = [&]() -> bool {
+        auto uopt = deps.users->get(actor_fp);
+        if (!uopt.has_value() || uopt->storage_state != "allocated") {
+            audit_fail("user_storage_unallocated", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "User storage not allocated"}
+            }.dump());
+            return false;
+        }
+        return true;
+    };
+
+    auto require_workspace = [&](const std::string& workspace_id,
+                                 bool need_write,
+                                 WorkspaceRec* out) -> bool {
+        if (workspace_id.empty()) {
+            audit_fail("missing_workspace_id", 400);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "missing workspace_id"}
+            }.dump());
+            return false;
+        }
+
+        auto wopt = deps.workspaces->get(workspace_id);
+        if (!wopt.has_value()) {
+            audit_fail("workspace_not_found", 404);
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "workspace not found"}
+            }.dump());
+            return false;
+        }
+
+        const WorkspaceRec& w = *wopt;
+
+        if (w.status != "enabled") {
+            audit_fail("workspace_disabled", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace disabled"}
+            }.dump());
+            return false;
+        }
+
+        auto mopt = enabled_member_for_actor(w, actor_fp);
+        if (!mopt.has_value()) {
+            audit_fail("workspace_access_denied", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace access denied"}
+            }.dump());
+            return false;
+        }
+
+        if (need_write && !(mopt->role == "owner" || mopt->role == "editor")) {
+            audit_fail("workspace_write_denied", 403, mopt->role);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace write access denied"}
+            }.dump());
+            return false;
+        }
+
+        if (w.storage_state != "allocated") {
+            audit_fail("workspace_storage_unallocated", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Workspace storage not allocated"},
+                {"workspace_id", workspace_id},
+                {"quota_bytes", w.quota_bytes}
+            }.dump());
+            return false;
+        }
+
+        if (!w.storage_pool_id.empty()) {
+            audit_fail("workspace_pool_not_supported_yet", 400, w.storage_pool_id);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "pool_not_supported_yet"},
+                {"message", "workspace copy currently supports default pool only"}
+            }.dump());
+            return false;
+        }
+
+        if (out) *out = w;
+        return true;
+    };
+
+    auto ensure_no_symlink_dir_chain = [&](const std::filesystem::path& base,
+                                           const std::filesystem::path& dir,
+                                           bool require_exists,
+                                           std::string* out_err) -> bool {
+        if (out_err) out_err->clear();
+
+        std::filesystem::path cur = base.lexically_normal();
+        const std::filesystem::path target = dir.lexically_normal();
+
+        std::error_code ec;
+        auto base_st = std::filesystem::symlink_status(cur, ec);
+        if (ec) {
+            if (out_err) *out_err = "base symlink_status failed: " + ec.message();
+            return false;
+        }
+        if (!std::filesystem::exists(base_st)) {
+            if (out_err) *out_err = "base directory missing";
+            return false;
+        }
+        if (std::filesystem::is_symlink(base_st)) {
+            if (out_err) *out_err = "base directory is symlink";
+            return false;
+        }
+        if (!std::filesystem::is_directory(base_st)) {
+            if (out_err) *out_err = "base path is not a directory";
+            return false;
+        }
+
+        const auto rel = target.lexically_relative(cur);
+        if (rel.empty() || rel == ".") return true;
+
+        for (const auto& part : rel) {
+            if (part.empty()) continue;
+            cur /= part;
+
+            ec.clear();
+            auto st = std::filesystem::symlink_status(cur, ec);
+            if (ec) {
+                if (out_err) *out_err = "symlink_status failed: " + ec.message();
+                return false;
+            }
+
+            if (!std::filesystem::exists(st)) {
+                if (require_exists) {
+                    if (out_err) *out_err = "directory missing";
+                    return false;
+                }
+                continue;
+            }
+
+            if (std::filesystem::is_symlink(st)) {
+                if (out_err) *out_err = "directory chain contains symlink";
+                return false;
+            }
+
+            if (!std::filesystem::is_directory(st)) {
+                if (out_err) *out_err = "path component is not a directory";
+                return false;
+            }
+        }
+
+        return true;
+    };
+
+    auto workspace_used_bytes = [&](const std::filesystem::path& root,
+                                    std::uint64_t* out_bytes,
+                                    std::string* out_err) -> bool {
+        if (out_bytes) *out_bytes = 0;
+        if (out_err) out_err->clear();
+
+        std::uint64_t total = 0;
+        std::error_code ec;
+
+        auto root_st = std::filesystem::symlink_status(root, ec);
+        if (ec || !std::filesystem::exists(root_st)) {
+            if (out_err) *out_err = ec ? ec.message() : "workspace root missing";
+            return false;
+        }
+
+        std::filesystem::recursive_directory_iterator it(
+            root,
+            std::filesystem::directory_options::skip_permission_denied,
+            ec
+        );
+        const std::filesystem::recursive_directory_iterator end;
+
+        if (ec) {
+            if (out_err) *out_err = ec.message();
+            return false;
+        }
+
+        for (; it != end; it.increment(ec)) {
+            if (ec) {
+                ec.clear();
+                continue;
+            }
+
+            std::error_code sec;
+            const auto st = std::filesystem::symlink_status(it->path(), sec);
+            if (sec || std::filesystem::is_symlink(st)) continue;
+
+            if (std::filesystem::is_regular_file(st)) {
+                const std::uint64_t b = pqnas::file_size_u64_safe(it->path());
+                if (std::numeric_limits<std::uint64_t>::max() - total < b) {
+                    total = std::numeric_limits<std::uint64_t>::max();
+                    break;
+                }
+                total += b;
+            }
+        }
+
+        if (out_bytes) *out_bytes = total;
+        return true;
+    };
+
+    std::filesystem::path src_abs;
+    std::filesystem::path dst_abs;
+    std::filesystem::path dst_root;
+    std::string src_type = "file";
+
+    if (from_scope == "user") {
+        if (!ensure_user_storage_allocated()) return;
+
+        pqnas::ResolvedLogicalItem src;
+        std::string rerr;
+        if (!pqnas::resolve_existing_user_item(*deps.users, actor_fp, from_norm, &src, &rerr) || !src.exists) {
+            audit_fail("source_not_found", 404, rerr);
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "source not found"}
+            }.dump());
+            return;
+        }
+
+        if (!src.is_file) {
+            audit_fail("source_not_file", 400);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "cross-scope copy supports files only"}
+            }.dump());
+            return;
+        }
+
+        src_abs = src.abs_path;
+    } else {
+        WorkspaceRec w;
+        if (!require_workspace(from_workspace_id, false, &w)) return;
+
+        const std::filesystem::path ws_root =
+            workspace_dir_for_default_pool_only(deps.users_path, w);
+
+        std::string perr;
+        if (!pqnas::resolve_user_path_strict(ws_root, from_norm, &src_abs, &perr)) {
+            audit_fail("invalid_from_path", 400, perr);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid from path"}
+            }.dump());
+            return;
+        }
+    }
+
+    std::error_code ec;
+    auto src_st = std::filesystem::symlink_status(src_abs, ec);
+    if (ec || !std::filesystem::exists(src_st)) {
+        audit_fail("source_not_found", 404, ec.message());
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "source not found"}
+        }.dump());
+        return;
+    }
+
+    if (std::filesystem::is_symlink(src_st) || !std::filesystem::is_regular_file(src_st)) {
+        audit_fail("source_not_regular_file", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "cross-scope copy supports regular files only"}
+        }.dump());
+        return;
+    }
+
+    const std::uint64_t src_bytes = pqnas::file_size_u64_safe(src_abs);
+
+    if (to_scope == "user") {
+        if (!ensure_user_storage_allocated()) return;
+
+        dst_root = ::pqnas_user_dir_for_fp(*deps.users, actor_fp);
+
+        std::string perr;
+        if (!pqnas::resolve_user_path_strict(dst_root, to_norm, &dst_abs, &perr)) {
+            audit_fail("invalid_to_path", 400, perr);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid to path"}
+            }.dump());
+            return;
+        }
+
+        auto qc = pqnas::quota_check_for_upload_v1(
+            *deps.users,
+            actor_fp,
+            dst_root,
+            to_norm,
+            src_bytes
+        );
+
+        if (!qc.ok) {
+            const int http = (qc.error == "quota_exceeded") ? 507 : 403;
+            audit_fail(qc.error.empty() ? "quota_check_failed" : qc.error, http);
+            deps.reply_json(res, http, json{
+                {"ok", false},
+                {"error", qc.error.empty() ? "quota_check_failed" : qc.error},
+                {"message", qc.error == "quota_exceeded" ? "User quota exceeded" : "copy quota check failed"},
+                {"quota_bytes", qc.quota_bytes},
+                {"used_bytes", qc.used_bytes},
+                {"incoming_bytes", qc.incoming_bytes},
+                {"would_used_bytes", qc.would_used_bytes}
+            }.dump());
+            return;
+        }
+    } else {
+        WorkspaceRec w;
+        if (!require_workspace(to_workspace_id, true, &w)) return;
+
+        dst_root = workspace_dir_for_default_pool_only(deps.users_path, w);
+
+        std::string perr;
+        if (!pqnas::resolve_user_path_strict(dst_root, to_norm, &dst_abs, &perr)) {
+            audit_fail("invalid_to_path", 400, perr);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid to path"}
+            }.dump());
+            return;
+        }
+
+        std::uint64_t used = 0;
+        std::string uerr;
+        if (!workspace_used_bytes(dst_root, &used, &uerr)) {
+            audit_fail("workspace_usage_scan_failed", 500, uerr);
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "workspace quota scan failed"},
+                {"detail", uerr}
+            }.dump());
+            return;
+        }
+
+        const bool overflow =
+            std::numeric_limits<std::uint64_t>::max() - used < src_bytes;
+        const std::uint64_t would_used = overflow
+            ? std::numeric_limits<std::uint64_t>::max()
+            : used + src_bytes;
+
+        if (w.quota_bytes == 0 || would_used > w.quota_bytes) {
+            audit_fail("workspace_quota_exceeded", 507);
+            deps.reply_json(res, 507, json{
+                {"ok", false},
+                {"error", "quota_exceeded"},
+                {"message", "Workspace quota exceeded"},
+                {"workspace_id", to_workspace_id},
+                {"quota_bytes", w.quota_bytes},
+                {"used_bytes", used},
+                {"incoming_bytes", src_bytes},
+                {"would_used_bytes", would_used}
+            }.dump());
+            return;
+        }
+    }
+
+    {
+        std::string derr;
+        if (!ensure_no_symlink_dir_chain(dst_root, dst_abs.parent_path(), false, &derr)) {
+            audit_fail("dest_parent_invalid", 409, derr);
+            deps.reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "path_conflict"},
+                {"message", "destination parent path is invalid"},
+                {"detail", derr}
+            }.dump());
+            return;
+        }
+    }
+
+    ec.clear();
+    std::filesystem::create_directories(dst_abs.parent_path(), ec);
+    if (ec) {
+        audit_fail("mkdir_failed", 500, ec.message());
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to create destination folders"},
+            {"detail", ec.message()}
+        }.dump());
+        return;
+    }
+
+    {
+        std::string derr;
+        if (!ensure_no_symlink_dir_chain(dst_root, dst_abs.parent_path(), true, &derr)) {
+            audit_fail("dest_parent_invalid", 409, derr);
+            deps.reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "path_conflict"},
+                {"message", "destination parent path is invalid"},
+                {"detail", derr}
+            }.dump());
+            return;
+        }
+    }
+
+    ec.clear();
+    auto dst_st = std::filesystem::symlink_status(dst_abs, ec);
+    if (!ec && std::filesystem::exists(dst_st)) {
+        audit_fail("dest_exists", 409);
+        deps.reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "dest_exists"},
+            {"message", "destination already exists"}
+        }.dump());
+        return;
+    }
+    if (ec && ec != std::make_error_code(std::errc::no_such_file_or_directory)) {
+        audit_fail("dest_stat_failed", 500, ec.message());
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "destination stat failed"},
+            {"detail", ec.message()}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path tmp =
+        dst_abs.parent_path() /
+        (dst_abs.filename().string() + ".tmp.copy_scope." +
+         std::to_string(static_cast<long long>(deps.now_epoch_sec ? deps.now_epoch_sec() : 0)));
+
+    ec.clear();
+    std::filesystem::copy_file(src_abs, tmp, std::filesystem::copy_options::none, ec);
+    if (ec) {
+        audit_fail("copy_failed", 500, ec.message());
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "copy failed"},
+            {"detail", ec.message()}
+        }.dump());
+        return;
+    }
+
+    ec.clear();
+    std::filesystem::rename(tmp, dst_abs, ec);
+    if (ec) {
+        std::error_code rm_ec;
+        std::filesystem::remove(tmp, rm_ec);
+
+        audit_fail("rename_failed", 500, ec.message());
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "copy failed"},
+            {"detail", ec.message()}
+        }.dump());
+        return;
+    }
+
+    if (to_scope == "user") {
+        auto* idx = pqnas::get_file_location_index();
+        if (!idx) {
+            std::error_code rm_ec;
+            std::filesystem::remove(dst_abs, rm_ec);
+
+            audit_fail("metadata_index_missing", 500);
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "metadata index missing"}
+            }.dump());
+            return;
+        }
+
+        const std::int64_t now_ts = deps.now_epoch_sec ? deps.now_epoch_sec() : 0;
+
+        pqnas::FileLocationRecord rec;
+        rec.fp = actor_fp;
+        rec.logical_rel_path = to_norm;
+        rec.current_pool = "";
+        rec.physical_path = dst_abs.string();
+        rec.tier_state = "capacity";
+        rec.size_bytes = src_bytes;
+        rec.mtime_epoch = now_ts;
+        rec.created_epoch = now_ts;
+        rec.updated_epoch = now_ts;
+        rec.version = 1;
+
+        std::string merr;
+        if (!idx->upsert_landing_file(rec, &merr)) {
+            std::error_code rm_ec;
+            std::filesystem::remove(dst_abs, rm_ec);
+
+            audit_fail("metadata_upsert_failed", 500, merr);
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "copy succeeded but metadata upsert failed"},
+                {"detail", merr}
+            }.dump());
+            return;
+        }
+
+        if (auto* gidx = pqnas::get_gallery_meta_index()) {
+            std::string gerr;
+            (void)gidx->touch_file_facts("user", actor_fp, to_norm, src_bytes, now_ts, now_ts, &gerr);
+        }
+    }
+
+    audit_ok(from_norm, to_norm, src_bytes);
+
+    deps.reply_json(res, 200, json{
+        {"ok", true},
+        {"from_scope", from_scope},
+        {"to_scope", to_scope},
+        {"from_workspace_id", from_workspace_id},
+        {"to_workspace_id", to_workspace_id},
+        {"from", from_norm},
+        {"to", to_norm},
+        {"type", src_type},
+        {"bytes", src_bytes}
+    }.dump());
+});
+
+// POST /api/v4/workspaces/files/copy?workspace_id=...&from=old/path&to=new/path
+// v1: physical filesystem only, same workspace only, no overwrite
+srv.Post("/api/v4/workspaces/files/copy",
+         [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+    if (!deps.require_user_auth_users_actor ||
+        !deps.require_user_auth_users_actor(
+            req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+        return;
+    }
+
+    if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
+    (void)actor_role;
+    res.set_header("Cache-Control", "no-store");
+
+    auto audit_fail = [&](const std::string& workspace_id,
+                          const std::string& reason,
+                          int http,
+                          const std::string& detail = "",
+                          const std::string& from_rel = "",
+                          const std::string& to_rel = "") {
+        if (!deps.audit_emit) return;
+        std::map<std::string, std::string> f;
+        f["actor_fp"] = actor_fp;
+        if (!workspace_id.empty()) f["workspace_id"] = workspace_id;
+        f["reason"] = reason;
+        f["http"] = std::to_string(http);
+        if (!from_rel.empty()) f["from"] = from_rel;
+        if (!to_rel.empty())   f["to"]   = to_rel;
+        if (!detail.empty())   f["detail"] = detail;
+        f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
+
+        deps.audit_emit("workspace.files_copy_fail", "fail", f);
+    };
+
+    auto audit_ok = [&](const std::string& workspace_id,
+                        const std::string& from_rel,
+                        const std::string& to_rel,
+                        const std::string& type,
+                        std::uint64_t bytes) {
+        if (!deps.audit_emit) return;
+        std::map<std::string, std::string> f;
+        f["actor_fp"] = actor_fp;
+        f["workspace_id"] = workspace_id;
+        f["from"] = from_rel;
+        f["to"] = to_rel;
+        f["type"] = type;
+        f["bytes"] = std::to_string(static_cast<unsigned long long>(bytes));
+        f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
+
+        deps.audit_emit("workspace.files_copy_ok", "ok", f);
+    };
+
+    if (!deps.workspaces->load(deps.workspaces_path)) {
+        audit_fail("", "workspaces_reload_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "workspaces_reload_failed"},
+            {"message", "failed to reload workspaces"}
+        }.dump());
+        return;
+    }
+
+    const std::string workspace_id =
+        req.has_param("workspace_id") ? trim_copy_safe(req.get_param_value("workspace_id")) : "";
+
+    if (workspace_id.empty()) {
+        audit_fail("", "missing_workspace_id", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing workspace_id"}
+        }.dump());
+        return;
+    }
+
+    std::string from_rel, to_rel;
+    if (req.has_param("from")) from_rel = req.get_param_value("from");
+    if (req.has_param("to"))   to_rel   = req.get_param_value("to");
+
+    if (from_rel.empty() || to_rel.empty()) {
+        audit_fail(workspace_id, "missing_from_or_to", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing from or to"}
+        }.dump());
+        return;
+    }
+
+    auto wopt = deps.workspaces->get(workspace_id);
+    if (!wopt.has_value()) {
+        audit_fail(workspace_id, "workspace_not_found", 404, "", from_rel, to_rel);
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "workspace not found"}
+        }.dump());
+        return;
+    }
+
+    const WorkspaceRec& w = *wopt;
+
+    if (w.status != "enabled") {
+        audit_fail(workspace_id, "workspace_disabled", 403, "", from_rel, to_rel);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace disabled"}
+        }.dump());
+        return;
+    }
+
+    auto mopt = enabled_member_for_actor(w, actor_fp);
+    if (!mopt.has_value()) {
+        audit_fail(workspace_id, "workspace_access_denied", 403, "", from_rel, to_rel);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace access denied"}
+        }.dump());
+        return;
+    }
+
+    if (!(mopt->role == "owner" || mopt->role == "editor")) {
+        audit_fail(workspace_id, "workspace_write_denied", 403, mopt->role, from_rel, to_rel);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace write access denied"}
+        }.dump());
+        return;
+    }
+
+    if (w.storage_state != "allocated") {
+        audit_fail(workspace_id, "storage_unallocated", 403, "", from_rel, to_rel);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Workspace storage not allocated"},
+            {"workspace_id", workspace_id},
+            {"quota_bytes", w.quota_bytes}
+        }.dump());
+        return;
+    }
+
+    if (!w.storage_pool_id.empty()) {
+        audit_fail(workspace_id, "pool_not_supported_yet", 400, w.storage_pool_id, from_rel, to_rel);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "pool_not_supported_yet"},
+            {"message", "workspace copy currently supports default pool only"}
+        }.dump());
+        return;
+    }
+
+    std::string from_rel_norm, to_rel_norm;
+    std::string nerr1, nerr2;
+
+    if (!pqnas::normalize_user_rel_path_strict(from_rel, &from_rel_norm, &nerr1)) {
+        audit_fail(workspace_id, "invalid_from_path", 400, nerr1, from_rel, to_rel);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid from path"}
+        }.dump());
+        return;
+    }
+
+    if (!pqnas::normalize_user_rel_path_strict(to_rel, &to_rel_norm, &nerr2)) {
+        audit_fail(workspace_id, "invalid_to_path", 400, nerr2, from_rel, to_rel);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid to path"}
+        }.dump());
+        return;
+    }
+
+    if (from_rel_norm == to_rel_norm) {
+        audit_fail(workspace_id, "same_path", 400, "", from_rel, to_rel);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "from and to are the same"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path ws_root =
+        workspace_dir_for_default_pool_only(deps.users_path, w);
+
+    std::filesystem::path from_abs, to_abs;
+    std::string perr1, perr2;
+
+    if (!pqnas::resolve_user_path_strict(ws_root, from_rel_norm, &from_abs, &perr1)) {
+        audit_fail(workspace_id, "invalid_from_path", 400, perr1, from_rel, to_rel);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid from path"}
+        }.dump());
+        return;
+    }
+
+    if (!pqnas::resolve_user_path_strict(ws_root, to_rel_norm, &to_abs, &perr2)) {
+        audit_fail(workspace_id, "invalid_to_path", 400, perr2, from_rel, to_rel);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid to path"}
+        }.dump());
+        return;
+    }
+
+    {
+        std::string found_ancestor;
+        if (any_file_ancestor_exists_physical(ws_root, to_rel_norm, &found_ancestor)) {
+            audit_fail(workspace_id, "dest_ancestor_is_file", 409, found_ancestor, from_rel, to_rel);
+            deps.reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "path_conflict"},
+                {"message", "destination parent path is an existing file"},
+                {"ancestor", found_ancestor}
+            }.dump());
+            return;
+        }
+    }
+
+    std::error_code ec;
+
+    auto from_st = std::filesystem::symlink_status(from_abs, ec);
+    if (ec) {
+        audit_fail(workspace_id, "source_stat_failed", 500, ec.message(), from_rel, to_rel);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "source stat failed"},
+            {"detail", ec.message()}
+        }.dump());
+        return;
+    }
+
+    if (!std::filesystem::exists(from_st)) {
+        audit_fail(workspace_id, "not_found", 404, "", from_rel, to_rel);
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "source not found"}
+        }.dump());
+        return;
+    }
+
+    if (std::filesystem::is_symlink(from_st)) {
+        audit_fail(workspace_id, "source_is_symlink", 400, "", from_rel, to_rel);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "symlinks not supported"}
+        }.dump());
+        return;
+    }
+
+    const bool src_is_dir = std::filesystem::is_directory(from_st);
+    const bool src_is_file = std::filesystem::is_regular_file(from_st);
+
+    if (!src_is_dir && !src_is_file) {
+        audit_fail(workspace_id, "unsupported_type", 400, "", from_rel, to_rel);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "unsupported source type"}
+        }.dump());
+        return;
+    }
+
+    if (src_is_dir) {
+        if (to_rel_norm == from_rel_norm ||
+            to_rel_norm.rfind(from_rel_norm + "/", 0) == 0) {
+            audit_fail(workspace_id, "dir_into_self", 400, "", from_rel, to_rel);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "cannot copy a directory into itself"}
+            }.dump());
+            return;
+        }
+    }
+
+    std::error_code dest_ec;
+    auto to_st = std::filesystem::symlink_status(to_abs, dest_ec);
+
+    if (dest_ec && dest_ec != std::make_error_code(std::errc::no_such_file_or_directory)) {
+        audit_fail(workspace_id, "dest_stat_failed", 500, dest_ec.message(), from_rel, to_rel);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "destination stat failed"},
+            {"detail", dest_ec.message()}
+        }.dump());
+        return;
+    }
+
+    if (!dest_ec && std::filesystem::exists(to_st)) {
+        audit_fail(workspace_id, "dest_exists", 409, "", from_rel, to_rel);
+        deps.reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "dest_exists"},
+            {"message", "destination already exists"}
+        }.dump());
+        return;
+    }
+
+    auto dir_bytes_recursive = [&](const std::filesystem::path& base_abs,
+                                   std::uint64_t* scanned,
+                                   bool* complete) -> std::uint64_t {
+        if (scanned) *scanned = 0;
+        if (complete) *complete = true;
+
+        std::uint64_t bytes_recursive = 0;
+        constexpr std::uint64_t kScanCap = 100000;
+
+        std::error_code walk_ec;
+        std::filesystem::directory_options opts =
+            std::filesystem::directory_options::skip_permission_denied;
+
+        for (auto it = std::filesystem::recursive_directory_iterator(base_abs, opts, walk_ec);
+             !walk_ec && it != std::filesystem::recursive_directory_iterator();
+             it.increment(walk_ec)) {
+            if (scanned) (*scanned)++;
+
+            if (scanned && *scanned > kScanCap) {
+                if (complete) *complete = false;
+                break;
+            }
+
+            std::error_code st_ec;
+            auto st = std::filesystem::symlink_status(it->path(), st_ec);
+            if (st_ec) continue;
+
+            if (std::filesystem::is_symlink(st)) {
+                if (complete) *complete = false;
+                continue;
+            }
+
+            if (std::filesystem::is_regular_file(st)) {
+                bytes_recursive += pqnas::file_size_u64_safe(it->path());
+            }
+        }
+
+        if (walk_ec && complete) *complete = false;
+        return bytes_recursive;
+    };
+
+    std::uint64_t scanned = 0;
+    bool scan_complete = true;
+
+    const std::uint64_t copy_bytes = src_is_file
+        ? pqnas::file_size_u64_safe(from_abs)
+        : dir_bytes_recursive(from_abs, &scanned, &scan_complete);
+
+    if (!scan_complete) {
+        audit_fail(workspace_id, "source_scan_incomplete", 500, "", from_rel, to_rel);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "source scan incomplete"}
+        }.dump());
+        return;
+    }
+
+    auto workspace_used_bytes = [&](const std::filesystem::path& root_abs,
+                                    std::uint64_t* scanned_out,
+                                    bool* complete_out) -> std::uint64_t {
+        if (scanned_out) *scanned_out = 0;
+        if (complete_out) *complete_out = true;
+
+        std::uint64_t total = 0;
+        constexpr std::uint64_t kScanCap = 250000;
+
+        std::error_code walk_ec;
+        std::filesystem::directory_options opts =
+            std::filesystem::directory_options::skip_permission_denied;
+
+        for (auto it = std::filesystem::recursive_directory_iterator(root_abs, opts, walk_ec);
+             !walk_ec && it != std::filesystem::recursive_directory_iterator();
+             it.increment(walk_ec)) {
+            if (scanned_out) (*scanned_out)++;
+
+            if (scanned_out && *scanned_out > kScanCap) {
+                if (complete_out) *complete_out = false;
+                break;
+            }
+
+            std::error_code st_ec;
+            auto st = std::filesystem::symlink_status(it->path(), st_ec);
+            if (st_ec) continue;
+            if (std::filesystem::is_symlink(st)) continue;
+
+            if (std::filesystem::is_regular_file(st)) {
+                total += pqnas::file_size_u64_safe(it->path());
+            }
+        }
+
+        if (walk_ec && complete_out) *complete_out = false;
+        return total;
+    };
+
+    std::uint64_t used_scan = 0;
+    bool used_complete = true;
+    const std::uint64_t used_bytes = workspace_used_bytes(ws_root, &used_scan, &used_complete);
+
+    if (!used_complete) {
+        audit_fail(workspace_id, "quota_scan_incomplete", 500, "", from_rel, to_rel);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "workspace quota scan incomplete"}
+        }.dump());
+        return;
+    }
+
+    std::uint64_t would_used_bytes = used_bytes;
+    if (std::numeric_limits<std::uint64_t>::max() - would_used_bytes < copy_bytes) {
+        would_used_bytes = std::numeric_limits<std::uint64_t>::max();
+    } else {
+        would_used_bytes += copy_bytes;
+    }
+
+    if (w.quota_bytes == 0 || would_used_bytes > w.quota_bytes) {
+        audit_fail(workspace_id, "quota_exceeded", 413, "", from_rel, to_rel);
+        deps.reply_json(res, 413, json{
+            {"ok", false},
+            {"error", "quota_exceeded"},
+            {"message", "Workspace quota exceeded"},
+            {"workspace_id", workspace_id},
+            {"used_bytes", used_bytes},
+            {"quota_bytes", w.quota_bytes},
+            {"incoming_bytes", copy_bytes},
+            {"would_used_bytes", would_used_bytes}
+        }.dump());
+        return;
+    }
+
+    std::error_code parent_ec;
+    std::filesystem::create_directories(to_abs.parent_path(), parent_ec);
+    if (parent_ec) {
+        audit_fail(workspace_id, "mkdir_failed", 500, parent_ec.message(), from_rel, to_rel);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to create destination parent"},
+            {"detail", parent_ec.message()}
+        }.dump());
+        return;
+    }
+
+    std::error_code copy_ec;
+    if (src_is_dir) {
+        std::filesystem::copy(
+            from_abs,
+            to_abs,
+            std::filesystem::copy_options::recursive |
+            std::filesystem::copy_options::skip_symlinks,
+            copy_ec
+        );
+    } else {
+        std::filesystem::copy_file(
+            from_abs,
+            to_abs,
+            std::filesystem::copy_options::none,
+            copy_ec
+        );
+    }
+
+    if (copy_ec) {
+        audit_fail(workspace_id, "copy_failed", 500, copy_ec.message(), from_rel, to_rel);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "copy failed"},
+            {"detail", copy_ec.message()}
+        }.dump());
+        return;
+    }
+
+    const std::string type = src_is_dir ? "dir" : "file";
+    audit_ok(workspace_id, from_rel_norm, to_rel_norm, type, copy_bytes);
+
+    deps.reply_json(res, 200, json{
+        {"ok", true},
+        {"workspace_id", workspace_id},
+        {"from", from_rel_norm},
+        {"to", to_rel_norm},
+        {"type", type},
+        {"bytes", copy_bytes}
+    }.dump());
 });
 
 // POST /api/v4/workspaces/files/move?workspace_id=...&from=old/path&to=new/path
