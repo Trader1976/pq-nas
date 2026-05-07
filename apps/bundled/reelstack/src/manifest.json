@@ -14,7 +14,7 @@
       "enabled": true
     },
     "sidebar": {
-      "enabled": false,
+      "enabled": true,
       "user_pinnable": true,
       "section": "media",
       "label": "Reel Stack",
@@ -27,6 +27,8 @@
     "cpunk_orange": "www/icon.svg",
     "dark": "www/icon.svg",
     "bright": "www/icon.svg",
-    "default": "www/icon.svg"
+    "default": "www/icon.svg",
+    "sidebar": "www/nav_icon.svg",
+    "nav": "www/nav_icon.svg"
   }
 }
