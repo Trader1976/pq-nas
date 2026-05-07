@@ -545,3 +545,195 @@ html[data-theme="win_classic"] .rsDetails{
   color:rgba(var(--fg-rgb,255,255,255),.58);
   font-size:13px;
 }
+
+/* Bright / Win Classic: metadata editor must follow light shell themes */
+html[data-theme="bright"] .rsMetaEditorBackdrop,
+html[data-theme="win_classic"] .rsMetaEditorBackdrop{
+  background:rgba(0,0,0,.36);
+}
+
+html[data-theme="bright"] .rsMetaEditorCard,
+html[data-theme="win_classic"] .rsMetaEditorCard{
+  background:rgba(250,250,250,.98);
+  color:#111;
+  border-color:rgba(0,0,0,.24);
+  box-shadow:0 24px 70px rgba(0,0,0,.28);
+}
+
+html[data-theme="bright"] .rsMetaEditorHead,
+html[data-theme="win_classic"] .rsMetaEditorHead{
+  background:linear-gradient(180deg, rgba(255,255,255,.96), rgba(235,235,235,.92));
+  border-bottom-color:rgba(0,0,0,.16);
+}
+
+html[data-theme="bright"] .rsMetaEditorHead h2,
+html[data-theme="win_classic"] .rsMetaEditorHead h2,
+html[data-theme="bright"] #rsMetaEditorPath,
+html[data-theme="win_classic"] #rsMetaEditorPath{
+  color:#111;
+}
+
+html[data-theme="bright"] .rsMetaEditorKicker,
+html[data-theme="win_classic"] .rsMetaEditorKicker,
+html[data-theme="bright"] .rsMetaTechTitle,
+html[data-theme="win_classic"] .rsMetaTechTitle{
+  color:#007c86;
+}
+
+html[data-theme="bright"] .rsField span,
+html[data-theme="win_classic"] .rsField span,
+html[data-theme="bright"] .rsCheckField span,
+html[data-theme="win_classic"] .rsCheckField span{
+  color:#222;
+}
+
+html[data-theme="bright"] .rsInput,
+html[data-theme="win_classic"] .rsInput{
+  background:#fff;
+  color:#111;
+  border-color:rgba(0,0,0,.25);
+}
+
+html[data-theme="bright"] .rsInput::placeholder,
+html[data-theme="win_classic"] .rsInput::placeholder{
+  color:rgba(0,0,0,.45);
+}
+
+html[data-theme="bright"] .rsCheckField,
+html[data-theme="win_classic"] .rsCheckField{
+  background:rgba(0,0,0,.035);
+  color:#111;
+  border-color:rgba(0,0,0,.18);
+}
+
+html[data-theme="bright"] .rsMetaTechPanel,
+html[data-theme="win_classic"] .rsMetaTechPanel{
+  background:rgba(0,0,0,.035);
+  border-color:rgba(0,0,0,.16);
+}
+
+html[data-theme="bright"] .rsMetaTechRow,
+html[data-theme="win_classic"] .rsMetaTechRow{
+  border-bottom-color:rgba(0,0,0,.10);
+}
+
+html[data-theme="bright"] .rsMetaTechLabel,
+html[data-theme="win_classic"] .rsMetaTechLabel{
+  color:rgba(0,0,0,.58);
+}
+
+html[data-theme="bright"] .rsMetaTechValue,
+html[data-theme="win_classic"] .rsMetaTechValue{
+  color:#111;
+}
+
+html[data-theme="win_classic"] .rsMetaEditorCard{
+  border-radius:3px;
+}
+
+html[data-theme="win_classic"] .rsMetaEditorHead,
+html[data-theme="win_classic"] .rsInput,
+html[data-theme="win_classic"] .rsCheckField,
+html[data-theme="win_classic"] .rsMetaTechPanel{
+  border-radius:2px;
+}
+
+/* Win Classic / Bright: fix Reel Stack top header/status text contrast */
+html[data-theme="win_classic"] body,
+html[data-theme="bright"] body{
+  color:#111;
+}
+
+html[data-theme="win_classic"] .rsApp,
+html[data-theme="bright"] .rsApp{
+  color:#111;
+}
+
+html[data-theme="win_classic"] h1,
+html[data-theme="bright"] h1{
+  color:#111 !important;
+}
+
+html[data-theme="win_classic"] .rsHeader,
+html[data-theme="bright"] .rsHeader,
+html[data-theme="win_classic"] .rsHeader *,
+html[data-theme="bright"] .rsHeader *{
+  color:#111;
+}
+
+html[data-theme="win_classic"] .rsHeader p,
+html[data-theme="bright"] .rsHeader p,
+html[data-theme="win_classic"] .rsSubtitle,
+html[data-theme="bright"] .rsSubtitle{
+  color:rgba(0,0,0,.68) !important;
+}
+
+html[data-theme="win_classic"] #statusText,
+html[data-theme="bright"] #statusText{
+  color:rgba(0,0,0,.62) !important;
+}
+
+html[data-theme="win_classic"] #countText,
+html[data-theme="bright"] #countText{
+  color:rgba(0,0,0,.70) !important;
+}
+
+html[data-theme="win_classic"] .rsActions .rsInput,
+html[data-theme="bright"] .rsActions .rsInput,
+html[data-theme="win_classic"] #filterInput,
+html[data-theme="bright"] #filterInput{
+  background:#fff;
+  color:#111;
+  border-color:rgba(0,0,0,.24);
+}
+
+html[data-theme="win_classic"] #filterInput::placeholder,
+html[data-theme="bright"] #filterInput::placeholder{
+  color:rgba(0,0,0,.45);
+}
+
+/* Win Classic / Bright: force Reel Stack header subtitle/status text readable */
+html[data-theme="win_classic"] .rsApp header p,
+html[data-theme="bright"] .rsApp header p,
+html[data-theme="win_classic"] .rsApp .rsSubtitle,
+html[data-theme="bright"] .rsApp .rsSubtitle,
+html[data-theme="win_classic"] .rsApp .rsTagline,
+html[data-theme="bright"] .rsApp .rsTagline,
+html[data-theme="win_classic"] .rsApp .rsLead,
+html[data-theme="bright"] .rsApp .rsLead,
+html[data-theme="win_classic"] .rsApp [class*="subtitle" i],
+html[data-theme="bright"] .rsApp [class*="subtitle" i],
+html[data-theme="win_classic"] .rsApp [class*="tagline" i],
+html[data-theme="bright"] .rsApp [class*="tagline" i]{
+  color:rgba(0,0,0,.68) !important;
+  text-shadow:none !important;
+}
+
+html[data-theme="win_classic"] .rsApp #statusText,
+html[data-theme="bright"] .rsApp #statusText{
+  color:rgba(0,0,0,.64) !important;
+  text-shadow:none !important;
+}
+
+.rsVersionBadge{
+  display:inline-flex;
+  align-items:center;
+  margin-left:8px;
+  padding:2px 7px;
+  border-radius:999px;
+  border:1px solid rgba(var(--accent-rgb,0,220,220),.32);
+  background:rgba(var(--accent-rgb,0,220,220),.08);
+  color:rgba(var(--fg-rgb,255,255,255),.72);
+  font-size:12px;
+  font-weight:800;
+  line-height:1.25;
+  vertical-align:middle;
+}
+
+html[data-theme="bright"] .rsVersionBadge,
+html[data-theme="win_classic"] .rsVersionBadge{
+  color:rgba(0,0,0,.70) !important;
+  border-color:rgba(0,0,0,.24);
+  background:rgba(0,0,0,.045);
+  text-shadow:none !important;
+}
