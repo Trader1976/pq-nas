@@ -661,3 +661,89 @@ body.shellSidebarCollapsed #appsList .navbtn > .appNavIcon > i.appNavIconGlyph,
 .desktop.shellSidebarCollapsed #appsList .navbtn > .appNavIcon > i.appNavIconGlyph{
     background-color: rgba(var(--fg-rgb),0.92) !important;
 }
+/* FINAL SOURCE OF TRUTH: detached mini sidebar collapse tab */
+.sidebar{
+    position: relative !important;
+    overflow: visible !important;
+}
+
+.sidebar::after{
+    content:"";
+    position:absolute;
+    top:0;
+    right:0;
+    bottom:0;
+    width:1px;
+    background:rgba(var(--fg-rgb),0.22);
+    pointer-events:none;
+}
+
+/*
+   Detached mini tab:
+   - smaller than previous pill
+   - sits higher
+   - moved fully outside sidebar so it does not cover the border line
+*/
+.sidebarCollapseBtn{
+    position:absolute !important;
+    top:34px !important;
+    right:-25px !important;
+
+    width:22px !important;
+    height:34px !important;
+    min-width:0 !important;
+    padding:0 !important;
+
+    display:flex !important;
+    align-items:center !important;
+    justify-content:center !important;
+
+    border:1px solid rgba(var(--fg-rgb),0.24) !important;
+    border-radius:10px !important;
+
+    background:
+            linear-gradient(180deg, rgba(var(--fg-rgb),0.10), rgba(var(--fg-rgb),0.035)),
+            rgba(var(--bg-rgb),0.92) !important;
+
+    color:var(--fg) !important;
+    font-size:14px !important;
+    font-weight:950 !important;
+    line-height:1 !important;
+
+    box-shadow:
+            0 8px 18px rgba(0,0,0,0.16),
+            inset 0 1px 0 rgba(255,255,255,0.08) !important;
+
+    cursor:pointer !important;
+    z-index:250 !important;
+    opacity:0.94 !important;
+}
+
+.sidebarCollapseBtn:hover{
+    opacity:1 !important;
+    background:
+            linear-gradient(180deg, rgba(var(--accent-rgb),0.22), rgba(var(--fg-rgb),0.045)),
+            rgba(var(--bg-rgb),0.97) !important;
+    border-color:rgba(var(--accent-rgb),0.46) !important;
+}
+
+.sidebarCollapseBtn:active{
+    transform:translateX(1px);
+}
+
+.shellSidebarCollapsed .sidebarCollapseBtn{
+    right:-25px !important;
+}
+
+html[data-theme="bright"] .sidebarCollapseBtn,
+html[data-theme="win_classic"] .sidebarCollapseBtn{
+    background:
+            linear-gradient(180deg, rgba(255,255,255,0.98), rgba(222,222,222,0.92)),
+            rgba(238,238,238,0.98) !important;
+
+    color:#111 !important;
+    border-color:rgba(0,0,0,0.24) !important;
+    box-shadow:
+            0 8px 16px rgba(0,0,0,0.14),
+            inset 0 1px 0 rgba(255,255,255,0.85) !important;
+}
