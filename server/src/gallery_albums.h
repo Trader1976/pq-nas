@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -70,6 +71,22 @@ public:
                      std::int64_t now_epoch,
                      std::string* err);
 
+    // Rewrites album item paths after user file/folder moves.
+    // Keeps path-based albums and album covers valid when photos move.
+    bool rename_one(const std::string& scope_type,
+                    const std::string& scope_id,
+                    const std::string& from_logical_rel_path,
+                    const std::string& to_logical_rel_path,
+                    std::int64_t updated_epoch,
+                    std::string* err);
+
+    bool rename_subtree(const std::string& scope_type,
+                        const std::string& scope_id,
+                        const std::string& from_prefix_rel_path,
+                        const std::string& to_prefix_rel_path,
+                        std::int64_t updated_epoch,
+                        std::string* err);
+
     bool delete_album(const std::string& scope_type,
                       const std::string& scope_id,
                       const std::string& album_id,
@@ -96,6 +113,7 @@ public:
 
 private:
     std::filesystem::path db_path_;
+    std::mutex mu_;
     sqlite3* db_ = nullptr;
 };
 

@@ -22633,6 +22633,12 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
                     audit_warn("gallery_meta_move_failed", gerr, from_rel, to_rel);
                 }
             }
+            {
+                std::string aerr;
+                if (!gallery_albums_index.rename_one("user", fp_hex, from_rel_norm, to_rel_norm, now_ts, &aerr)) {
+                    audit_warn("gallery_albums_move_failed", aerr, from_rel, to_rel);
+                }
+            }
         }
         audit_ok(from_rel, to_rel, "file", bytes);
         record_user_file_moved_activity_best_effort_local(
@@ -22854,6 +22860,12 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
             if (auto* gidx = pqnas::get_gallery_meta_index()) {
                 if (!gidx->rename_subtree("user", fp_hex, from_rel_norm, to_rel_norm, now_ts, &gerr)) {
                     audit_warn("gallery_meta_move_failed", gerr, from_rel, to_rel);
+                }
+            }
+            {
+                std::string aerr;
+                if (!gallery_albums_index.rename_subtree("user", fp_hex, from_rel_norm, to_rel_norm, now_ts, &aerr)) {
+                    audit_warn("gallery_albums_move_failed", aerr, from_rel, to_rel);
                 }
             }
         }

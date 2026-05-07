@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <mutex>
 #include <string>
 
 namespace pqnas {
@@ -84,6 +85,57 @@ static std::string trim_album_text_local(std::string s, std::size_t max_len) {
 
     if (s.size() > max_len) s.resize(max_len);
     return s;
+}
+
+static std::string sqlite_like_escape_album_local(const std::string& in) {
+    std::string out;
+    out.reserve(in.size() + 8);
+    for (char c : in) {
+        if (c == '\\' || c == '%' || c == '_') out.push_back('\\');
+        out.push_back(c);
+    }
+    return out;
+}
+
+static bool album_exec_local(sqlite3* db, const char* sql, std::string* err) {
+    char* emsg = nullptr;
+    const int rc = sqlite3_exec(db, sql, nullptr, nullptr, &emsg);
+    if (rc != SQLITE_OK) {
+        if (err) {
+            *err = emsg ? emsg : sqlite3_errmsg(db);
+        }
+        sqlite3_free(emsg);
+        return false;
+    }
+    return true;
+}
+
+static bool album_prepare_local(sqlite3* db,
+                                const char* sql,
+                                sqlite3_stmt** stmt,
+                                const char* label,
+                                std::string* err) {
+    *stmt = nullptr;
+    const int rc = sqlite3_prepare_v2(db, sql, -1, stmt, nullptr);
+    if (rc != SQLITE_OK) {
+        if (err) *err = std::string(label) + ": " + sqlite3_errmsg(db);
+        return false;
+    }
+    return true;
+}
+
+static bool album_step_done_local(sqlite3* db,
+                                  sqlite3_stmt* stmt,
+                                  const char* label,
+                                  std::string* err) {
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        if (err) *err = std::string(label) + ": " + sqlite3_errmsg(db);
+        sqlite3_finalize(stmt);
+        return false;
+    }
+    sqlite3_finalize(stmt);
+    return true;
 }
 
 static GalleryAlbumRec row_to_album_local(sqlite3_stmt* stmt) {
@@ -793,6 +845,267 @@ bool GalleryAlbumsIndex::remove_items(const std::string& scope_type,
     sqlite3_finalize(clear_cover);
     return true;
 }
+
+bool GalleryAlbumsIndex::rename_one(const std::string& scope_type,
+                                    const std::string& scope_id,
+                                    const std::string& from_logical_rel_path,
+                                    const std::string& to_logical_rel_path,
+                                    std::int64_t updated_epoch,
+                                    std::string* err) {
+    if (err) err->clear();
+    if (scope_type.empty() || scope_id.empty()) {
+        if (err) *err = "empty scope";
+        return false;
+    }
+    if (from_logical_rel_path.empty() || to_logical_rel_path.empty()) {
+        if (err) *err = "empty path";
+        return false;
+    }
+    if (from_logical_rel_path == to_logical_rel_path) return true;
+
+    std::lock_guard<std::mutex> lk(mu_);
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
+
+    if (!album_exec_local(db_, "BEGIN IMMEDIATE", err)) return false;
+    bool committed = false;
+
+    auto rollback = [&]() {
+        if (!committed) {
+            std::string ignored;
+            (void)album_exec_local(db_, "ROLLBACK", &ignored);
+        }
+    };
+
+    sqlite3_stmt* stmt = nullptr;
+
+    // Move old item rows to the new path. If a stale new-path row already exists
+    // in the same album, UPDATE OR IGNORE leaves the old row behind; the next
+    // DELETE removes that duplicate old entry.
+    const char* update_items_sql =
+        "UPDATE OR IGNORE gallery_album_items "
+        "SET logical_rel_path = ?1 "
+        "WHERE scope_type = ?2 AND scope_id = ?3 AND logical_rel_path = ?4";
+    if (!album_prepare_local(db_, update_items_sql, &stmt, "prepare update album items", err)) {
+        rollback();
+        return false;
+    }
+    sqlite3_bind_text(stmt, 1, to_logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, from_logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    if (!album_step_done_local(db_, stmt, "update album items", err)) {
+        rollback();
+        return false;
+    }
+
+    const char* delete_old_sql =
+        "DELETE FROM gallery_album_items "
+        "WHERE scope_type = ?1 AND scope_id = ?2 AND logical_rel_path = ?3";
+    if (!album_prepare_local(db_, delete_old_sql, &stmt, "prepare delete old album items", err)) {
+        rollback();
+        return false;
+    }
+    sqlite3_bind_text(stmt, 1, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, from_logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    if (!album_step_done_local(db_, stmt, "delete old album items", err)) {
+        rollback();
+        return false;
+    }
+
+    const char* update_cover_sql =
+        "UPDATE gallery_albums "
+        "SET cover_logical_rel_path = ?1, updated_epoch = ?2 "
+        "WHERE scope_type = ?3 AND scope_id = ?4 AND cover_logical_rel_path = ?5";
+    if (!album_prepare_local(db_, update_cover_sql, &stmt, "prepare update album cover", err)) {
+        rollback();
+        return false;
+    }
+    sqlite3_bind_text(stmt, 1, to_logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 2, static_cast<sqlite3_int64>(updated_epoch));
+    sqlite3_bind_text(stmt, 3, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 5, from_logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    if (!album_step_done_local(db_, stmt, "update album cover", err)) {
+        rollback();
+        return false;
+    }
+
+    const char* touch_sql =
+        "UPDATE gallery_albums "
+        "SET updated_epoch = ?1 "
+        "WHERE scope_type = ?2 AND scope_id = ?3 "
+        "  AND EXISTS ("
+        "    SELECT 1 FROM gallery_album_items i "
+        "    WHERE i.scope_type = gallery_albums.scope_type "
+        "      AND i.scope_id = gallery_albums.scope_id "
+        "      AND i.album_id = gallery_albums.album_id "
+        "      AND i.logical_rel_path = ?4"
+        "  )";
+    if (!album_prepare_local(db_, touch_sql, &stmt, "prepare touch albums", err)) {
+        rollback();
+        return false;
+    }
+    sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(updated_epoch));
+    sqlite3_bind_text(stmt, 2, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, to_logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    if (!album_step_done_local(db_, stmt, "touch albums", err)) {
+        rollback();
+        return false;
+    }
+
+    if (!album_exec_local(db_, "COMMIT", err)) {
+        rollback();
+        return false;
+    }
+    committed = true;
+    return true;
+}
+
+bool GalleryAlbumsIndex::rename_subtree(const std::string& scope_type,
+                                        const std::string& scope_id,
+                                        const std::string& from_prefix_rel_path,
+                                        const std::string& to_prefix_rel_path,
+                                        std::int64_t updated_epoch,
+                                        std::string* err) {
+    if (err) err->clear();
+    if (scope_type.empty() || scope_id.empty()) {
+        if (err) *err = "empty scope";
+        return false;
+    }
+    if (from_prefix_rel_path.empty() || to_prefix_rel_path.empty()) {
+        if (err) *err = "empty path";
+        return false;
+    }
+    if (from_prefix_rel_path == to_prefix_rel_path) return true;
+
+    const std::string from_like =
+        sqlite_like_escape_album_local(from_prefix_rel_path + "/") + "%";
+    const std::string to_like =
+        sqlite_like_escape_album_local(to_prefix_rel_path + "/") + "%";
+
+    std::lock_guard<std::mutex> lk(mu_);
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
+
+    if (!album_exec_local(db_, "BEGIN IMMEDIATE", err)) return false;
+    bool committed = false;
+
+    auto rollback = [&]() {
+        if (!committed) {
+            std::string ignored;
+            (void)album_exec_local(db_, "ROLLBACK", &ignored);
+        }
+    };
+
+    sqlite3_stmt* stmt = nullptr;
+
+    const char* update_items_sql =
+        "UPDATE OR IGNORE gallery_album_items "
+        "SET logical_rel_path = "
+        "  CASE "
+        "    WHEN logical_rel_path = ?1 THEN ?2 "
+        "    ELSE ?2 || substr(logical_rel_path, length(?1) + 1) "
+        "  END "
+        "WHERE scope_type = ?3 AND scope_id = ?4 "
+        "  AND (logical_rel_path = ?1 OR logical_rel_path LIKE ?5 ESCAPE '\\')";
+    if (!album_prepare_local(db_, update_items_sql, &stmt, "prepare update album subtree items", err)) {
+        rollback();
+        return false;
+    }
+    sqlite3_bind_text(stmt, 1, from_prefix_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, to_prefix_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 5, from_like.c_str(), -1, SQLITE_TRANSIENT);
+    if (!album_step_done_local(db_, stmt, "update album subtree items", err)) {
+        rollback();
+        return false;
+    }
+
+    // Remove any old-prefix leftovers that were skipped because a destination row
+    // already existed in that album.
+    const char* delete_old_sql =
+        "DELETE FROM gallery_album_items "
+        "WHERE scope_type = ?1 AND scope_id = ?2 "
+        "  AND (logical_rel_path = ?3 OR logical_rel_path LIKE ?4 ESCAPE '\\')";
+    if (!album_prepare_local(db_, delete_old_sql, &stmt, "prepare delete old album subtree items", err)) {
+        rollback();
+        return false;
+    }
+    sqlite3_bind_text(stmt, 1, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, from_prefix_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, from_like.c_str(), -1, SQLITE_TRANSIENT);
+    if (!album_step_done_local(db_, stmt, "delete old album subtree items", err)) {
+        rollback();
+        return false;
+    }
+
+    const char* update_cover_sql =
+        "UPDATE gallery_albums "
+        "SET cover_logical_rel_path = "
+        "  CASE "
+        "    WHEN cover_logical_rel_path = ?1 THEN ?2 "
+        "    ELSE ?2 || substr(cover_logical_rel_path, length(?1) + 1) "
+        "  END, "
+        "  updated_epoch = ?3 "
+        "WHERE scope_type = ?4 AND scope_id = ?5 "
+        "  AND (cover_logical_rel_path = ?1 OR cover_logical_rel_path LIKE ?6 ESCAPE '\\')";
+    if (!album_prepare_local(db_, update_cover_sql, &stmt, "prepare update album subtree cover", err)) {
+        rollback();
+        return false;
+    }
+    sqlite3_bind_text(stmt, 1, from_prefix_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, to_prefix_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 3, static_cast<sqlite3_int64>(updated_epoch));
+    sqlite3_bind_text(stmt, 4, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 5, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 6, from_like.c_str(), -1, SQLITE_TRANSIENT);
+    if (!album_step_done_local(db_, stmt, "update album subtree cover", err)) {
+        rollback();
+        return false;
+    }
+
+    const char* touch_sql =
+        "UPDATE gallery_albums "
+        "SET updated_epoch = ?1 "
+        "WHERE scope_type = ?2 AND scope_id = ?3 "
+        "  AND EXISTS ("
+        "    SELECT 1 FROM gallery_album_items i "
+        "    WHERE i.scope_type = gallery_albums.scope_type "
+        "      AND i.scope_id = gallery_albums.scope_id "
+        "      AND i.album_id = gallery_albums.album_id "
+        "      AND (i.logical_rel_path = ?4 OR i.logical_rel_path LIKE ?5 ESCAPE '\\')"
+        "  )";
+    if (!album_prepare_local(db_, touch_sql, &stmt, "prepare touch subtree albums", err)) {
+        rollback();
+        return false;
+    }
+    sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(updated_epoch));
+    sqlite3_bind_text(stmt, 2, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, to_prefix_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 5, to_like.c_str(), -1, SQLITE_TRANSIENT);
+    if (!album_step_done_local(db_, stmt, "touch subtree albums", err)) {
+        rollback();
+        return false;
+    }
+
+    if (!album_exec_local(db_, "COMMIT", err)) {
+        rollback();
+        return false;
+    }
+    committed = true;
+    return true;
+}
+
 
 void set_gallery_albums_index(GalleryAlbumsIndex* idx) {
     g_gallery_albums_index = idx;
