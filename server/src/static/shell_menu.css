@@ -636,3 +636,28 @@ body.shellSidebarCollapsed #appsList .navbtn > .appNavIcon > i.appNavIconGlyph,
     opacity:1 !important;
     background-color:rgba(var(--fg-rgb),0.92) !important;
 }
+
+/* Sidebar app icons v2:
+   app.js now injects a real <i class="appNavIconGlyph"> mask child.
+   Disable the older ::before mask renderer; without --app-nav-icon-url it can
+   draw solid blocks in Firefox / classic themes. */
+.sidebar .navbtn .appNavIcon.hasMaskIcon::before,
+body.shellSidebarCollapsed #appsList .navbtn > .appNavIcon.hasMaskIcon::before,
+.desktop.shellSidebarCollapsed #appsList .navbtn > .appNavIcon.hasMaskIcon::before{
+    content: none !important;
+    display: none !important;
+}
+
+.sidebar .navbtn .appNavIcon > i.appNavIconGlyph{
+    -webkit-mask-repeat: no-repeat !important;
+    mask-repeat: no-repeat !important;
+    -webkit-mask-position: center !important;
+    mask-position: center !important;
+    -webkit-mask-size: contain !important;
+    mask-size: contain !important;
+}
+
+body.shellSidebarCollapsed #appsList .navbtn > .appNavIcon > i.appNavIconGlyph,
+.desktop.shellSidebarCollapsed #appsList .navbtn > .appNavIcon > i.appNavIconGlyph{
+    background-color: rgba(var(--fg-rgb),0.92) !important;
+}
