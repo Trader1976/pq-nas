@@ -2324,7 +2324,7 @@
 
                 const label = (mani && mani.name) || a.name || a.title || a.id;
                 const href = appUrl(a, "embedded");
-                addAppNavButton(a.id, label, href, resolveSidebarIconUrl(a, a._manifest));
+                addAppNavButton(a.id, label, href, resolveSidebarIconUrl(a, mani));
             }
 
             if (currentApp) {
