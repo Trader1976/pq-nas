@@ -312,3 +312,327 @@ a:hover{ text-shadow: 0 0 10px rgba(var(--fg-rgb),0.25); }
 .sidebar { pointer-events: auto; }
 .sidebar, .sidebar * { pointer-events: auto; }
 .workspace { pointer-events: auto; }
+/* Collapsible shell sidebar */
+.sidebarCollapseBtn{
+    position:absolute;
+    top: 14px;
+    right: -13px;
+    z-index: 30;
+    width: 26px;
+    height: 38px;
+    border-radius: 999px;
+    border: 1px solid rgba(var(--fg-rgb),0.20);
+    background: rgba(0,0,0,0.34);
+    color: var(--fg);
+    font-weight: 950;
+    cursor: pointer;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.22);
+}
+
+.sidebarCollapseBtn:hover{
+    background: rgba(var(--fg-rgb),0.10);
+    border-color: rgba(var(--fg-rgb),0.32);
+}
+
+.desktop.shellSidebarCollapsed{
+    grid-template-columns: 76px 1fr;
+}
+
+.shellSidebarCollapsed .sidebar{
+    width: 76px;
+    min-width: 76px;
+}
+
+.shellSidebarCollapsed .sidebar .brand{
+    justify-content:center;
+    padding: 18px 8px 12px;
+}
+
+.shellSidebarCollapsed .sidebar .brand > div:not(.logoDot),
+.shellSidebarCollapsed .sidebar .brand h1,
+.shellSidebarCollapsed .sidebar .brand .sub,
+.shellSidebarCollapsed .sidebar .brandLogo,
+.shellSidebarCollapsed .sidebar .sectionLabel,
+.shellSidebarCollapsed .sidebar .statusCard .mini,
+.shellSidebarCollapsed .sidebar .statusCard .badge,
+.shellSidebarCollapsed .sidebar .navbtn > span:not(.k):not(.navAlertBadge){
+    display:none !important;
+}
+
+.shellSidebarCollapsed .sidebar .logoDot{
+    width: 20px;
+    height: 20px;
+}
+
+.shellSidebarCollapsed .sidebar .nav{
+    padding: 8px 8px 12px;
+    align-items: stretch;
+}
+
+.shellSidebarCollapsed .sidebar .navbtn{
+    justify-content:center;
+    padding: 10px 8px;
+    gap: 0;
+    min-width: 0;
+}
+
+.shellSidebarCollapsed .sidebar .navbtn .k{
+    display:inline-flex;
+    margin: 0;
+    min-width: 30px;
+    min-height: 26px;
+    padding: 4px 7px;
+    font-size: 13px;
+}
+
+.shellSidebarCollapsed .sidebar .navAlertBadge{
+    position:absolute;
+    right: 8px;
+    top: 5px;
+}
+
+.shellSidebarCollapsed .sidebar .bottom{
+    padding: 8px;
+}
+
+.shellSidebarCollapsed .sidebar .statusCard{
+    padding: 8px;
+    min-height: 44px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+}
+
+.shellSidebarCollapsed .sidebarCollapseBtn{
+    right: -13px;
+}
+
+@media (max-width: 980px){
+    .desktop.shellSidebarCollapsed{
+        grid-template-columns: 1fr;
+    }
+
+    .shellSidebarCollapsed .sidebar{
+        width: auto;
+        min-width: 0;
+    }
+
+    .sidebarCollapseBtn{
+        display:none;
+    }
+}
+
+/* Sidebar shortcut pills were visual-only; hide them in expanded mode. */
+.sidebar .navbtn .k{
+    display:none;
+}
+
+/* Real app icons in sidebar app buttons. Replaces the old triangle hint. */
+.sidebar .navbtn .appNavIcon{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:28px;
+    height:28px;
+    min-width:28px;
+    min-height:28px;
+    padding:3px;
+    border-radius:9px;
+    border:1px solid rgba(var(--fg-rgb),0.16);
+    background: rgba(255,255,255,0.08);
+    overflow:hidden;
+}
+
+.sidebar .navbtn .appNavIcon img{
+    width:100%;
+    height:100%;
+    object-fit:contain;
+    display:block;
+}
+
+.sidebar .navbtn .appNavIconFallback{
+    font-size:11px;
+    font-weight:950;
+    letter-spacing:.02em;
+    color:rgba(var(--fg-rgb),0.82);
+}
+
+.shellSidebarCollapsed .sidebar .navbtn .appNavIcon{
+    display:inline-flex;
+    width:34px;
+    height:34px;
+    min-width:34px;
+    min-height:34px;
+    border-radius:12px;
+    padding:4px;
+}
+
+/* Sidebar monochrome SVG masks */
+.sidebar .navbtn .appNavIcon{
+    width:24px;
+    height:24px;
+    min-width:24px;
+    min-height:24px;
+    padding:0;
+    border:0;
+    background: transparent;
+}
+
+.sidebar .navbtn .appNavIconGlyph{
+    display:block;
+    width:18px;
+    height:18px;
+    background: rgba(var(--fg-rgb),0.62);
+}
+
+.sidebar .navbtn:hover .appNavIconGlyph,
+.sidebar .navbtn.active .appNavIconGlyph{
+    background: rgba(var(--fg-rgb),0.94);
+}
+
+.shellSidebarCollapsed .sidebar .navbtn .appNavIcon{
+    width:34px;
+    height:34px;
+    min-width:34px;
+    min-height:34px;
+    border-radius:12px;
+    border:1px solid rgba(var(--fg-rgb),0.14);
+    background: rgba(var(--fg-rgb),0.045);
+}
+
+.shellSidebarCollapsed .sidebar .navbtn .appNavIconGlyph{
+    width:22px;
+    height:22px;
+}
+
+.shellSidebarCollapsed .sidebar .navbtn .appNavIconGlyph{
+    display:block !important;
+}
+
+/* FINAL OVERRIDE: collapsed app sidebar glyph visibility */
+body.shellSidebarCollapsed .sidebar .navbtn > .appNavIcon,
+.desktop.shellSidebarCollapsed .sidebar .navbtn > .appNavIcon{
+    display:inline-flex !important;
+    align-items:center !important;
+    justify-content:center !important;
+    width:34px !important;
+    height:34px !important;
+    min-width:34px !important;
+    min-height:34px !important;
+    padding:0 !important;
+    border-radius:12px !important;
+    border:1px solid rgba(var(--fg-rgb),0.16) !important;
+    background:rgba(var(--fg-rgb),0.055) !important;
+    overflow:hidden !important;
+}
+
+body.shellSidebarCollapsed .sidebar .navbtn > .appNavIcon > .appNavIconGlyph,
+.desktop.shellSidebarCollapsed .sidebar .navbtn > .appNavIcon > .appNavIconGlyph{
+    display:block !important;
+    width:22px !important;
+    height:22px !important;
+    min-width:22px !important;
+    min-height:22px !important;
+    opacity:1 !important;
+    background:rgba(var(--fg-rgb),0.92) !important;
+}
+
+/* FINAL SOURCE OF TRUTH: sidebar app icon masks drawn on visible parent */
+.sidebar .navbtn .appNavIcon.hasMaskIcon::before{
+    content:"";
+    display:block !important;
+    width:18px;
+    height:18px;
+    min-width:18px;
+    min-height:18px;
+    background:rgba(var(--fg-rgb),0.68);
+    -webkit-mask: var(--app-nav-icon-url) center / contain no-repeat;
+    mask: var(--app-nav-icon-url) center / contain no-repeat;
+}
+
+.sidebar .navbtn:hover .appNavIcon.hasMaskIcon::before,
+.sidebar .navbtn.active .appNavIcon.hasMaskIcon::before{
+    background:rgba(var(--fg-rgb),0.96);
+}
+
+body.shellSidebarCollapsed #appsList .navbtn > .appNavIcon.hasMaskIcon::before,
+.desktop.shellSidebarCollapsed #appsList .navbtn > .appNavIcon.hasMaskIcon::before{
+    display:block !important;
+    width:22px !important;
+    height:22px !important;
+    min-width:22px !important;
+    min-height:22px !important;
+    background:rgba(var(--fg-rgb),0.92) !important;
+}
+
+/* FINAL FIREFOX-SAFE MASK RULES for app sidebar icons */
+.sidebar .navbtn .appNavIcon.hasMaskIcon{
+    display:inline-flex !important;
+    align-items:center !important;
+    justify-content:center !important;
+}
+
+.sidebar .navbtn .appNavIcon.hasMaskIcon::before{
+    content:"";
+    display:block !important;
+    width:18px !important;
+    height:18px !important;
+    min-width:18px !important;
+    min-height:18px !important;
+    opacity:1 !important;
+    background-color:rgba(var(--fg-rgb),0.78) !important;
+
+    -webkit-mask-image: var(--app-nav-icon-url) !important;
+    -webkit-mask-repeat: no-repeat !important;
+    -webkit-mask-position: center !important;
+    -webkit-mask-size: contain !important;
+
+    mask-image: var(--app-nav-icon-url) !important;
+    mask-repeat: no-repeat !important;
+    mask-position: center !important;
+    mask-size: contain !important;
+}
+
+.sidebar .navbtn:hover .appNavIcon.hasMaskIcon::before,
+.sidebar .navbtn.active .appNavIcon.hasMaskIcon::before{
+    background-color:rgba(var(--fg-rgb),0.96) !important;
+}
+
+body.shellSidebarCollapsed #appsList .navbtn > .appNavIcon.hasMaskIcon::before,
+.desktop.shellSidebarCollapsed #appsList .navbtn > .appNavIcon.hasMaskIcon::before{
+    width:22px !important;
+    height:22px !important;
+    min-width:22px !important;
+    min-height:22px !important;
+    background-color:rgba(var(--fg-rgb),0.92) !important;
+}
+
+/* FINAL ROBUST APP NAV GLYPH: real <i> child, not pseudo-element */
+.sidebar .navbtn .appNavIcon > i.appNavIconGlyph{
+    display:block !important;
+    width:18px !important;
+    height:18px !important;
+    min-width:18px !important;
+    min-height:18px !important;
+    opacity:1 !important;
+    background-color:rgba(var(--fg-rgb),0.78) !important;
+}
+
+.sidebar .navbtn:hover .appNavIcon > i.appNavIconGlyph,
+.sidebar .navbtn.active .appNavIcon > i.appNavIconGlyph{
+    background-color:rgba(var(--fg-rgb),0.96) !important;
+}
+
+body.shellSidebarCollapsed #appsList .navbtn > .appNavIcon > i.appNavIconGlyph,
+.desktop.shellSidebarCollapsed #appsList .navbtn > .appNavIcon > i.appNavIconGlyph{
+    display:block !important;
+    width:22px !important;
+    height:22px !important;
+    min-width:22px !important;
+    min-height:22px !important;
+    opacity:1 !important;
+    background-color:rgba(var(--fg-rgb),0.92) !important;
+}

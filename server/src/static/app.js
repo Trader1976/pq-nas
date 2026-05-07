@@ -335,23 +335,56 @@
             pairPollTimer = null;
         }
     }
-    function addAppNavButton(appId, label, href) {
+    function appNavFallback(label, appId) {
+        const raw = String(label || appId || "?").trim();
+        const words = raw.split(/\s+/).filter(Boolean);
+        if (words.length >= 2) {
+            return (words[0][0] + words[1][0]).toUpperCase();
+        }
+        return raw.slice(0, 2).toUpperCase();
+    }
+
+    function addAppNavButton(appId, label, href, iconUrl) {
         if (!appsList) return;
 
         const a = document.createElement("a");
         a.className = "navbtn";
-        a.href = href; // we will preventDefault and render iframe
+        a.href = href;
         a.dataset.appid = appId;
+        a.title = label || appId || "App";
 
         const left = document.createElement("span");
         left.textContent = label;
 
-        const k = document.createElement("span");
-        k.className = "k";
-        k.textContent = "▶";
+        const icon = document.createElement("span");
+        icon.className = "k appNavIcon";
+        icon.setAttribute("aria-hidden", "true");
+
+        if (iconUrl) {
+            const safeUrl = String(iconUrl).replaceAll('"', "%22");
+            icon.classList.add("hasMaskIcon");
+
+            const glyph = document.createElement("i");
+            glyph.className = "appNavIconGlyph";
+            glyph.setAttribute("aria-hidden", "true");
+            glyph.style.webkitMaskImage = `url("${safeUrl}")`;
+            glyph.style.maskImage = `url("${safeUrl}")`;
+            glyph.style.webkitMaskRepeat = "no-repeat";
+            glyph.style.maskRepeat = "no-repeat";
+            glyph.style.webkitMaskPosition = "center";
+            glyph.style.maskPosition = "center";
+            glyph.style.webkitMaskSize = "contain";
+            glyph.style.maskSize = "contain";
+            icon.appendChild(glyph);
+        } else {
+            const fallback = document.createElement("span");
+            fallback.className = "appNavIconFallback";
+            fallback.textContent = appNavFallback(label, appId);
+            icon.appendChild(fallback);
+        }
 
         a.appendChild(left);
-        a.appendChild(k);
+        a.appendChild(icon);
 
         a.addEventListener("click", (ev) => {
             ev.preventDefault();
@@ -665,6 +698,23 @@
         }
 
         return base + "www/icon.png" + bust;
+    }
+
+    function resolveSidebarIconUrl(app, mani) {
+        const base = `/apps/${encodeURIComponent(app.id)}/${encodeURIComponent(app.ver)}/`;
+        const bust = `?v=${encodeURIComponent(app.ver || "")}`;
+        const withBust = (rel) => base + String(rel || "").replace(/^\/+/, "") + bust;
+
+        if (mani && mani.icons && typeof mani.icons === "object") {
+            if (mani.icons.sidebar) return withBust(mani.icons.sidebar);
+            if (mani.icons.nav) return withBust(mani.icons.nav);
+        }
+
+        if (mani && typeof mani.sidebar_icon === "string" && mani.sidebar_icon.trim()) {
+            return withBust(mani.sidebar_icon.trim());
+        }
+
+        return withBust("www/nav_icon.svg");
     }
 
     function appUrl(app, hostMode = "") {
@@ -2274,7 +2324,7 @@
 
                 const label = (mani && mani.name) || a.name || a.title || a.id;
                 const href = appUrl(a, "embedded");
-                addAppNavButton(a.id, label, href);
+                addAppNavButton(a.id, label, href, resolveSidebarIconUrl(a, a._manifest));
             }
 
             if (currentApp) {
