@@ -1344,6 +1344,54 @@ static void record_workspace_file_moved_activity_best_effort_local(const Workspa
     (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
 }
 
+
+static void record_workspace_file_copied_activity_best_effort_local(const WorkspaceFileRouteDeps& deps,
+                                                                    const std::string& actor_fp,
+                                                                    const std::string& workspace_id,
+                                                                    const std::string& from_rel_path,
+                                                                    const std::string& to_rel_path,
+                                                                    const std::string& item_type,
+                                                                    std::uint64_t size_bytes) {
+    if (!deps.users || actor_fp.empty() || from_rel_path.empty() || to_rel_path.empty()) return;
+
+    std::filesystem::path user_root;
+    try {
+        user_root = ::pqnas_user_dir_for_fp(*deps.users, actor_fp);
+    } catch (...) {
+        return;
+    }
+
+    if (user_root.empty()) return;
+
+    const std::string kind = workspace_activity_move_item_kind_local(item_type);
+
+    pqnas::activity::ActivityEvent ev;
+    ev.owner_user_id = actor_fp;
+
+    ev.actor.user_id = actor_fp;
+    ev.actor.display_name = workspace_activity_display_name_local(deps, actor_fp);
+    ev.actor.kind = "user";
+
+    ev.event_type = "file.copied";
+    ev.scope_type = "workspace";
+    ev.scope_id = workspace_id;
+
+    ev.target_kind = kind;
+    ev.target_path = to_rel_path;
+    ev.target_name = workspace_activity_basename_local(to_rel_path, kind);
+
+    ev.details = nlohmann::json{
+        {"scope_type", "workspace"},
+        {"from_path", from_rel_path},
+        {"to_path", to_rel_path},
+        {"item_type", kind},
+        {"size_bytes", size_bytes}
+    };
+
+    std::string activity_err;
+    (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
+}
+
 void register_workspace_file_routes(httplib::Server& srv,
                                     const WorkspaceFileRouteDeps& deps) {
     srv.Get("/api/v4/workspaces",
@@ -8762,6 +8810,8 @@ srv.Post("/api/v4/workspaces/files/copy",
         return;
     }
 
+    bool source_scan_saw_symlink = false;
+
     auto dir_bytes_recursive = [&](const std::filesystem::path& base_abs,
                                    std::uint64_t* scanned,
                                    bool* complete) -> std::uint64_t {
@@ -8790,6 +8840,7 @@ srv.Post("/api/v4/workspaces/files/copy",
             if (st_ec) continue;
 
             if (std::filesystem::is_symlink(st)) {
+                source_scan_saw_symlink = true;
                 if (complete) *complete = false;
                 continue;
             }
@@ -8811,6 +8862,16 @@ srv.Post("/api/v4/workspaces/files/copy",
         : dir_bytes_recursive(from_abs, &scanned, &scan_complete);
 
     if (!scan_complete) {
+        if (source_scan_saw_symlink) {
+            audit_fail(workspace_id, "source_contains_symlink", 400, "", from_rel, to_rel);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "symlink_not_supported"},
+                {"message", "source tree contains symlink"}
+            }.dump());
+            return;
+        }
+
         audit_fail(workspace_id, "source_scan_incomplete", 500, "", from_rel, to_rel);
         deps.reply_json(res, 500, json{
             {"ok", false},
@@ -8916,15 +8977,29 @@ srv.Post("/api/v4/workspaces/files/copy",
             copy_ec
         );
     } else {
-        std::filesystem::copy_file(
+        const bool copied = std::filesystem::copy_file(
             from_abs,
             to_abs,
             std::filesystem::copy_options::none,
             copy_ec
         );
+
+        if (!copy_ec && !copied) {
+            copy_ec = std::make_error_code(std::errc::file_exists);
+        }
     }
 
     if (copy_ec) {
+        if (copy_ec == std::make_error_code(std::errc::file_exists)) {
+            audit_fail(workspace_id, "dest_exists", 409, copy_ec.message(), from_rel, to_rel);
+            deps.reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "dest_exists"},
+                {"message", "destination already exists"}
+            }.dump());
+            return;
+        }
+
         audit_fail(workspace_id, "copy_failed", 500, copy_ec.message(), from_rel, to_rel);
         deps.reply_json(res, 500, json{
             {"ok", false},
@@ -8937,6 +9012,15 @@ srv.Post("/api/v4/workspaces/files/copy",
 
     const std::string type = src_is_dir ? "dir" : "file";
     audit_ok(workspace_id, from_rel_norm, to_rel_norm, type, copy_bytes);
+    record_workspace_file_copied_activity_best_effort_local(
+        deps,
+        actor_fp,
+        workspace_id,
+        from_rel_norm,
+        to_rel_norm,
+        src_is_dir ? "folder" : "file",
+        copy_bytes
+    );
 
     deps.reply_json(res, 200, json{
         {"ok", true},
