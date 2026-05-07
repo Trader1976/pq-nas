@@ -33244,6 +33244,346 @@ auto reelstack_index_path_local = [&](const std::string& fp_hex) -> std::filesys
          / "index.json";
 };
 
+
+std::mutex reelstack_meta_db_mu;
+
+auto reelstack_trim_copy = [](std::string text) -> std::string {
+    auto is_ws = [](unsigned char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    };
+
+    std::size_t a = 0;
+    while (a < text.size() && is_ws(static_cast<unsigned char>(text[a]))) ++a;
+
+    std::size_t b = text.size();
+    while (b > a && is_ws(static_cast<unsigned char>(text[b - 1]))) --b;
+
+    return text.substr(a, b - a);
+};
+
+auto reelstack_clamp_text = [](std::string text, std::size_t max_bytes) -> std::string {
+    if (text.size() > max_bytes) text.resize(max_bytes);
+    return text;
+};
+
+auto reelstack_split_tags_text =
+    [&](const std::string& tags_text) -> json {
+        json out = json::array();
+
+        std::size_t start = 0;
+        while (start <= tags_text.size()) {
+            const std::size_t comma = tags_text.find(',', start);
+            std::string part = (comma == std::string::npos)
+                ? tags_text.substr(start)
+                : tags_text.substr(start, comma - start);
+
+            part = reelstack_trim_copy(part);
+            if (!part.empty()) {
+                bool seen = false;
+                for (const auto& existing : out) {
+                    if (existing.is_string() && existing.get<std::string>() == part) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (!seen) out.push_back(part);
+            }
+
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+
+        return out;
+    };
+
+auto reelstack_tags_text_from_json =
+    [&](const json& value) -> std::string {
+        if (value.is_string()) {
+            return reelstack_clamp_text(reelstack_trim_copy(value.get<std::string>()), 1000);
+        }
+
+        if (!value.is_array()) return "";
+
+        std::string out;
+        for (const auto& item : value) {
+            if (!item.is_string()) continue;
+
+            std::string tag = reelstack_trim_copy(item.get<std::string>());
+            if (tag.empty()) continue;
+            tag = reelstack_clamp_text(tag, 80);
+
+            if (!out.empty()) out += ", ";
+            out += tag;
+        }
+
+        return reelstack_clamp_text(out, 1000);
+    };
+
+auto reelstack_user_meta_default =
+    [&](const std::string& rel_norm) -> json {
+        return json{
+            {"path", rel_norm},
+            {"title", ""},
+            {"tags_text", ""},
+            {"tags", json::array()},
+            {"notes", ""},
+            {"rating", 0},
+            {"watched", false},
+            {"favorite", false},
+            {"poster_rel_path", ""},
+            {"created_epoch", 0},
+            {"updated_epoch", 0}
+        };
+    };
+
+auto reelstack_meta_db_path = [&]() -> std::filesystem::path {
+    return std::filesystem::path(pqnas::data_root_dir()).parent_path()
+         / "config"
+         / "reelstack_meta.sqlite3";
+};
+
+auto reelstack_open_meta_db =
+    [&](sqlite3** out_db, std::string* err) -> bool {
+        if (out_db) *out_db = nullptr;
+        if (err) err->clear();
+
+        const std::filesystem::path db_path = reelstack_meta_db_path();
+
+        std::error_code ec;
+        std::filesystem::create_directories(db_path.parent_path(), ec);
+        if (ec) {
+            if (err) *err = "create config dir failed: " + ec.message();
+            return false;
+        }
+
+        sqlite3* db = nullptr;
+        if (sqlite3_open(db_path.string().c_str(), &db) != SQLITE_OK) {
+            if (err) *err = db ? sqlite3_errmsg(db) : "sqlite open failed";
+            if (db) sqlite3_close(db);
+            return false;
+        }
+
+        sqlite3_busy_timeout(db, 5000);
+
+        const char* schema = R"SQL(
+CREATE TABLE IF NOT EXISTS reelstack_meta (
+    scope_type        TEXT NOT NULL,
+    scope_id          TEXT NOT NULL,
+    logical_rel_path  TEXT NOT NULL,
+    title             TEXT NOT NULL DEFAULT '',
+    tags_text         TEXT NOT NULL DEFAULT '',
+    notes_text        TEXT NOT NULL DEFAULT '',
+    rating            INTEGER NOT NULL DEFAULT 0,
+    watched           INTEGER NOT NULL DEFAULT 0,
+    favorite          INTEGER NOT NULL DEFAULT 0,
+    poster_rel_path   TEXT NOT NULL DEFAULT '',
+    created_epoch     INTEGER NOT NULL,
+    updated_epoch     INTEGER NOT NULL,
+    PRIMARY KEY (scope_type, scope_id, logical_rel_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reelstack_meta_scope_rating
+ON reelstack_meta(scope_type, scope_id, rating);
+
+CREATE INDEX IF NOT EXISTS idx_reelstack_meta_scope_watched
+ON reelstack_meta(scope_type, scope_id, watched);
+
+CREATE INDEX IF NOT EXISTS idx_reelstack_meta_scope_favorite
+ON reelstack_meta(scope_type, scope_id, favorite);
+)SQL";
+
+        char* errmsg = nullptr;
+        const int rc = sqlite3_exec(db, schema, nullptr, nullptr, &errmsg);
+        if (rc != SQLITE_OK) {
+            if (err) *err = errmsg ? errmsg : sqlite3_errmsg(db);
+            if (errmsg) sqlite3_free(errmsg);
+            sqlite3_close(db);
+            return false;
+        }
+
+        if (out_db) *out_db = db;
+        return true;
+    };
+
+auto reelstack_read_user_meta =
+    [&](const std::string& fp_hex,
+        const std::string& rel_norm,
+        json* out,
+        std::string* err) -> bool {
+        if (out) *out = reelstack_user_meta_default(rel_norm);
+        if (err) err->clear();
+
+        std::lock_guard<std::mutex> lk(reelstack_meta_db_mu);
+
+        sqlite3* db = nullptr;
+        if (!reelstack_open_meta_db(&db, err)) return false;
+
+        const char* sql =
+            "SELECT title, tags_text, notes_text, rating, watched, favorite, "
+            "       poster_rel_path, created_epoch, updated_epoch "
+            "FROM reelstack_meta "
+            "WHERE scope_type = 'user' AND scope_id = ?1 AND logical_rel_path = ?2 "
+            "LIMIT 1";
+
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) != SQLITE_OK) {
+            if (err) *err = sqlite3_errmsg(db);
+            sqlite3_close(db);
+            return false;
+        }
+
+        sqlite3_bind_text(st, 1, fp_hex.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 2, rel_norm.c_str(), -1, SQLITE_TRANSIENT);
+
+        const int rc = sqlite3_step(st);
+        if (rc == SQLITE_DONE) {
+            sqlite3_finalize(st);
+            sqlite3_close(db);
+            return true;
+        }
+
+        if (rc != SQLITE_ROW) {
+            if (err) *err = sqlite3_errmsg(db);
+            sqlite3_finalize(st);
+            sqlite3_close(db);
+            return false;
+        }
+
+        auto col_text = [&](int idx) -> std::string {
+            const unsigned char* p = sqlite3_column_text(st, idx);
+            return p ? reinterpret_cast<const char*>(p) : "";
+        };
+
+        const std::string tags_text = col_text(1);
+
+        json meta = reelstack_user_meta_default(rel_norm);
+        meta["title"] = col_text(0);
+        meta["tags_text"] = tags_text;
+        meta["tags"] = reelstack_split_tags_text(tags_text);
+        meta["notes"] = col_text(2);
+        meta["rating"] = sqlite3_column_int(st, 3);
+        meta["watched"] = sqlite3_column_int(st, 4) != 0;
+        meta["favorite"] = sqlite3_column_int(st, 5) != 0;
+        meta["poster_rel_path"] = col_text(6);
+        meta["created_epoch"] = static_cast<std::int64_t>(sqlite3_column_int64(st, 7));
+        meta["updated_epoch"] = static_cast<std::int64_t>(sqlite3_column_int64(st, 8));
+
+        if (out) *out = std::move(meta);
+
+        sqlite3_finalize(st);
+        sqlite3_close(db);
+        return true;
+    };
+
+auto reelstack_write_user_meta =
+    [&](const std::string& fp_hex,
+        const std::string& rel_norm,
+        const std::string& title_in,
+        const std::string& tags_text_in,
+        const std::string& notes_in,
+        int rating_in,
+        bool watched_in,
+        bool favorite_in,
+        json* out,
+        std::string* err) -> bool {
+        if (err) err->clear();
+
+        std::string title = reelstack_clamp_text(reelstack_trim_copy(title_in), 240);
+        std::string tags_text = reelstack_clamp_text(reelstack_trim_copy(tags_text_in), 1000);
+        std::string notes = reelstack_clamp_text(notes_in, 8000);
+
+        int rating = rating_in;
+        if (rating < 0) rating = 0;
+        if (rating > 5) rating = 5;
+
+        const std::int64_t now_ts = static_cast<std::int64_t>(std::time(nullptr));
+
+        {
+            std::lock_guard<std::mutex> lk(reelstack_meta_db_mu);
+
+            sqlite3* db = nullptr;
+            if (!reelstack_open_meta_db(&db, err)) return false;
+
+            const char* sql =
+                "INSERT INTO reelstack_meta ("
+                "  scope_type, scope_id, logical_rel_path, title, tags_text, notes_text, "
+                "  rating, watched, favorite, poster_rel_path, created_epoch, updated_epoch"
+                ") VALUES ("
+                "  'user', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, '', ?9, ?10"
+                ") "
+                "ON CONFLICT(scope_type, scope_id, logical_rel_path) DO UPDATE SET "
+                "  title = excluded.title, "
+                "  tags_text = excluded.tags_text, "
+                "  notes_text = excluded.notes_text, "
+                "  rating = excluded.rating, "
+                "  watched = excluded.watched, "
+                "  favorite = excluded.favorite, "
+                "  updated_epoch = excluded.updated_epoch";
+
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) != SQLITE_OK) {
+                if (err) *err = sqlite3_errmsg(db);
+                sqlite3_close(db);
+                return false;
+            }
+
+            sqlite3_bind_text(st, 1, fp_hex.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(st, 2, rel_norm.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(st, 3, title.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(st, 4, tags_text.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(st, 5, notes.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int(st, 6, rating);
+            sqlite3_bind_int(st, 7, watched_in ? 1 : 0);
+            sqlite3_bind_int(st, 8, favorite_in ? 1 : 0);
+            sqlite3_bind_int64(st, 9, static_cast<sqlite3_int64>(now_ts));
+            sqlite3_bind_int64(st, 10, static_cast<sqlite3_int64>(now_ts));
+
+            const int rc = sqlite3_step(st);
+            if (rc != SQLITE_DONE) {
+                if (err) *err = sqlite3_errmsg(db);
+                sqlite3_finalize(st);
+                sqlite3_close(db);
+                return false;
+            }
+
+            sqlite3_finalize(st);
+            sqlite3_close(db);
+        }
+
+        if (out) {
+            json meta = reelstack_user_meta_default(rel_norm);
+            meta["title"] = title;
+            meta["tags_text"] = tags_text;
+            meta["tags"] = reelstack_split_tags_text(tags_text);
+            meta["notes"] = notes;
+            meta["rating"] = rating;
+            meta["watched"] = watched_in;
+            meta["favorite"] = favorite_in;
+            meta["updated_epoch"] = now_ts;
+            *out = std::move(meta);
+        }
+
+        return true;
+    };
+
+auto reelstack_is_supported_video_name = [](const std::string& name) -> bool {
+    std::string n = name;
+    for (char& c : n) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    const auto dot = n.rfind('.');
+    if (dot == std::string::npos || dot + 1 >= n.size()) return false;
+
+    const std::string ext = n.substr(dot + 1);
+    return ext == "mp4"  || ext == "m4v" ||
+           ext == "mov"  || ext == "webm" ||
+           ext == "mkv"  || ext == "avi" ||
+           ext == "wmv"  || ext == "flv" ||
+           ext == "mpeg" || ext == "mpg" ||
+           ext == "3gp"  || ext == "ogv" ||
+           ext == "ogg";
+};
+
+
 srv.Get("/api/v4/reelstack/index", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
@@ -34525,6 +34865,196 @@ srv.Get("/api/v4/reelstack/meta", [&](const httplib::Request& req, httplib::Resp
     }
 
     serve_meta(meta, false);
+});
+
+
+
+srv.Get("/api/v4/reelstack/user_meta", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    auto fail = [&](int http, const std::string& error, const std::string& message) {
+        reply_json(res, http, json{
+            {"ok", false},
+            {"error", error},
+            {"message", message}
+        }.dump());
+    };
+
+    const std::string rel_path = req.has_param("path") ? req.get_param_value("path") : "";
+    if (rel_path.empty()) {
+        fail(400, "bad_request", "missing path");
+        return;
+    }
+
+    std::string rel_norm;
+    {
+        std::string nerr;
+        if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
+            fail(400, "bad_request", "invalid path");
+            return;
+        }
+    }
+
+    pqnas::ResolvedExistingPath rp;
+    std::string perr;
+    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, rel_norm, &rp, &perr)) {
+        fail(404, "not_found", "video not found");
+        return;
+    }
+
+    if (!reelstack_is_supported_video_name(rp.abs_path.filename().string())) {
+        fail(415, "unsupported_media_type", "unsupported video type");
+        return;
+    }
+
+    json meta;
+    std::string merr;
+    if (!reelstack_read_user_meta(fp_hex, rel_norm, &meta, &merr)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to read Reel Stack metadata"},
+            {"detail", pqnas::shorten(merr, 180)}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", rel_norm},
+        {"meta", meta}
+    }.dump());
+});
+
+srv.Post("/api/v4/reelstack/meta/set", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    if (!require_same_origin_for_cookie_mutation(req, res)) return;
+
+    auto fail = [&](int http, const std::string& error, const std::string& message, const std::string& detail = "") {
+        json body{
+            {"ok", false},
+            {"error", error},
+            {"message", message}
+        };
+        if (!detail.empty()) body["detail"] = pqnas::shorten(detail, 180);
+        reply_json(res, http, body.dump());
+    };
+
+    json body = json::parse(req.body, nullptr, false);
+    if (body.is_discarded() || !body.is_object()) {
+        fail(400, "bad_request", "invalid json");
+        return;
+    }
+
+    const std::string rel_path = body.value("path", "");
+    if (rel_path.empty()) {
+        fail(400, "bad_request", "missing path");
+        return;
+    }
+
+    std::string rel_norm;
+    {
+        std::string nerr;
+        if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
+            fail(400, "bad_request", "invalid path", nerr);
+            return;
+        }
+    }
+
+    pqnas::ResolvedExistingPath rp;
+    std::string perr;
+    if (!pqnas::resolve_existing_user_file_path(users, fp_hex, rel_norm, &rp, &perr)) {
+        fail(404, "not_found", "video not found", perr);
+        return;
+    }
+
+    if (!reelstack_is_supported_video_name(rp.abs_path.filename().string())) {
+        fail(415, "unsupported_media_type", "unsupported video type");
+        return;
+    }
+
+    const json& src =
+        (body.contains("meta") && body["meta"].is_object())
+            ? body["meta"]
+            : body;
+
+    auto get_string = [&](const char* key) -> std::string {
+        if (src.contains(key) && src[key].is_string()) return src[key].get<std::string>();
+        return "";
+    };
+
+    auto get_int = [&](const char* key, int fallback) -> int {
+        if (!src.contains(key)) return fallback;
+        try {
+            if (src[key].is_number_integer()) return src[key].get<int>();
+            if (src[key].is_number()) return static_cast<int>(src[key].get<double>());
+            if (src[key].is_string()) return std::stoi(src[key].get<std::string>());
+        } catch (...) {
+        }
+        return fallback;
+    };
+
+    auto get_bool = [&](const char* key, bool fallback) -> bool {
+        if (!src.contains(key)) return fallback;
+        if (src[key].is_boolean()) return src[key].get<bool>();
+        if (src[key].is_number_integer()) return src[key].get<int>() != 0;
+        if (src[key].is_string()) {
+            std::string v = src[key].get<std::string>();
+            for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            v = reelstack_trim_copy(v);
+            return v == "1" || v == "true" || v == "yes" || v == "y" || v == "watched" || v == "favorite";
+        }
+        return fallback;
+    };
+
+    std::string tags_text;
+    if (src.contains("tags_text")) {
+        tags_text = reelstack_tags_text_from_json(src["tags_text"]);
+    } else if (src.contains("tags")) {
+        tags_text = reelstack_tags_text_from_json(src["tags"]);
+    }
+
+    std::string notes = get_string("notes");
+    if (notes.empty()) notes = get_string("description");
+
+    json meta;
+    std::string merr;
+    if (!reelstack_write_user_meta(fp_hex,
+                                   rel_norm,
+                                   get_string("title"),
+                                   tags_text,
+                                   notes,
+                                   get_int("rating", 0),
+                                   get_bool("watched", false),
+                                   get_bool("favorite", false),
+                                   &meta,
+                                   &merr)) {
+        fail(500, "server_error", "failed to save Reel Stack metadata", merr);
+        return;
+    }
+
+    {
+        pqnas::AuditEvent ev;
+        ev.event = "v4.reelstack_meta_set_ok";
+        ev.outcome = "ok";
+        ev.f["fingerprint"] = fp_hex;
+        ev.f["path"] = pqnas::shorten(rel_norm, 200);
+        ev.f["rating"] = std::to_string(meta.value("rating", 0));
+        ev.f["watched"] = meta.value("watched", false) ? "1" : "0";
+        ev.f["favorite"] = meta.value("favorite", false) ? "1" : "0";
+        audit_append(ev);
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"path", rel_norm},
+        {"meta", meta}
+    }.dump());
 });
 
 

@@ -315,3 +315,136 @@ html[data-theme="bright"] .rsDetails,
 html[data-theme="win_classic"] .rsDetails{
   color:rgba(var(--fg-rgb),0.72);
 }
+
+
+/* Reel Stack user metadata edit controls */
+.rsCardActions{
+  flex-wrap: wrap;
+}
+
+
+/* Reel Stack metadata editor */
+.rsMetaEditorBackdrop[hidden]{
+  display:none !important;
+}
+
+.rsMetaEditorBackdrop{
+  position:fixed;
+  inset:0;
+  z-index:100000;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+  background:rgba(0,0,0,.72);
+  backdrop-filter:blur(8px);
+}
+
+.rsMetaEditorCard{
+  width:min(760px, calc(100vw - 48px));
+  max-height:calc(100vh - 48px);
+  overflow:auto;
+  border:1px solid rgba(0,220,220,.32);
+  border-radius:24px;
+  background:var(--panel-bg, rgba(3,8,14,.98));
+  color:var(--fg, #eafcff);
+  box-shadow:0 24px 90px rgba(0,0,0,.62), 0 0 44px rgba(0,220,220,.08);
+}
+
+.rsMetaEditorHead{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:18px;
+  padding:22px 22px 14px;
+  border-bottom:1px solid rgba(0,220,220,.16);
+}
+
+.rsMetaEditorHead h2{
+  margin:3px 0 4px;
+  font-size:24px;
+  line-height:1.15;
+}
+
+.rsMetaEditorHead p{
+  margin:0;
+  color:var(--muted, rgba(234,252,255,.62));
+  font-size:13px;
+  word-break:break-all;
+}
+
+.rsMetaEditorKicker{
+  color:var(--accent, #00dcdc);
+  font-size:12px;
+  font-weight:800;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+}
+
+.rsMetaEditorGrid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:16px;
+  padding:20px 22px;
+}
+
+.rsField{
+  display:flex;
+  flex-direction:column;
+  gap:7px;
+}
+
+.rsFieldWide{
+  grid-column:1 / -1;
+}
+
+.rsField span,
+.rsCheckField span{
+  color:var(--muted, rgba(234,252,255,.70));
+  font-size:13px;
+  font-weight:700;
+}
+
+.rsField textarea.rsInput{
+  min-height:140px;
+  resize:vertical;
+  line-height:1.45;
+}
+
+.rsCheckField{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-height:44px;
+  padding:10px 12px;
+  border:1px solid rgba(0,220,220,.18);
+  border-radius:14px;
+  background:rgba(255,255,255,.035);
+}
+
+.rsCheckField input{
+  width:18px;
+  height:18px;
+  accent-color:var(--accent, #00dcdc);
+}
+
+.rsMetaEditorActions{
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+  padding:0 22px 22px;
+}
+
+@media (max-width:720px){
+  .rsMetaEditorGrid{
+    grid-template-columns:1fr;
+  }
+
+  .rsMetaEditorHead{
+    flex-direction:column;
+  }
+
+  .rsMetaEditorActions{
+    flex-direction:column-reverse;
+  }
+}

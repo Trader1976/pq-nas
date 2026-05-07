@@ -78,6 +78,14 @@
     return `/api/v4/reelstack/meta?path=${encodeURIComponent(path || "")}`;
   }
 
+  function fileUserMetaUrl(path) {
+    return `/api/v4/reelstack/user_meta?path=${encodeURIComponent(path || "")}`;
+  }
+
+  function fileUserMetaSetUrl() {
+    return "/api/v4/reelstack/meta/set";
+  }
+
   function videoMimeForName(name) {
     const ext = extOf(name);
     if (ext === "mp4" || ext === "m4v") return "video/mp4";
@@ -124,6 +132,67 @@
     return v.meta || metaCache.get(v.path) || null;
   }
 
+  function defaultUserMeta() {
+    return {
+      title: "",
+      tags: [],
+      tags_text: "",
+      notes: "",
+      rating: 0,
+      watched: false,
+      favorite: false
+    };
+  }
+
+  function normalizeUserMeta(meta) {
+    const out = defaultUserMeta();
+    if (!meta || typeof meta !== "object") return out;
+
+    out.title = String(meta.title || "");
+    out.tags_text = String(meta.tags_text || "");
+    out.notes = String(meta.notes || "");
+    out.rating = Math.max(0, Math.min(5, Number(meta.rating || 0) || 0));
+    out.watched = !!meta.watched;
+    out.favorite = !!meta.favorite;
+
+    if (Array.isArray(meta.tags)) {
+      out.tags = meta.tags.map(x => String(x || "").trim()).filter(Boolean);
+    } else if (out.tags_text) {
+      out.tags = out.tags_text.split(",").map(x => x.trim()).filter(Boolean);
+    }
+
+    if (!out.tags_text && out.tags.length) out.tags_text = out.tags.join(", ");
+
+    return out;
+  }
+
+  function userMetaForVideo(v) {
+    const m = metaForVideo(v);
+    if (!m || m._error) return defaultUserMeta();
+    return normalizeUserMeta(m.user || m.user_meta || {});
+  }
+
+  function videoDisplayTitle(v) {
+    const u = userMetaForVideo(v);
+    const title = String(u.title || "").trim();
+    return title || String(v && v.name || basename(v && v.path || "") || "Video");
+  }
+
+  function userMetaSummaryBits(v) {
+    const u = userMetaForVideo(v);
+    const bits = [];
+
+    if (u.favorite) bits.push("favorite");
+    if (u.watched) bits.push("watched");
+    if (u.rating > 0) bits.push("★".repeat(Math.max(0, Math.min(5, Math.round(u.rating)))));
+
+    if (u.tags && u.tags.length) {
+      bits.push(u.tags.slice(0, 3).map(t => "#" + t).join(" "));
+    }
+
+    return bits.join(" · ");
+  }
+
   function videoMetaSummary(v) {
     const m = metaForVideo(v);
     if (!m) return "Metadata loading…";
@@ -137,7 +206,9 @@
     if (m.audio_codec) parts.push(`audio ${String(m.audio_codec).toUpperCase()}`);
     if (m.bit_rate) parts.push(fmtBitrate(m.bit_rate));
 
-    return parts.filter(Boolean).join(" · ") || "No metadata";
+    const tech = parts.filter(Boolean).join(" · ");
+    const userBits = userMetaSummaryBits(v);
+    return [userBits, tech].filter(Boolean).join(" · ") || "No metadata";
   }
 
   function durationBadgeText(v) {
@@ -147,6 +218,13 @@
   }
 
   function updateMetaEls(path) {
+    for (const node of document.querySelectorAll("[data-rs-title-path]")) {
+      if (node.dataset.rsTitlePath === path) {
+        const v = allVideos.find(x => x.path === path) || { path };
+        node.textContent = videoDisplayTitle(v);
+      }
+    }
+
     for (const node of document.querySelectorAll("[data-rs-meta-path]")) {
       if (node.dataset.rsMetaPath === path) {
         const v = allVideos.find(x => x.path === path) || { path };
@@ -177,9 +255,17 @@
     metaInFlight.add(v.path);
 
     try {
-      const j = await apiJson(fileMetaUrl(v.path));
-      metaCache.set(v.path, j);
-      v.meta = j;
+      const [tech, userResp] = await Promise.all([
+        apiJson(fileMetaUrl(v.path)),
+        apiJson(fileUserMetaUrl(v.path)).catch(() => ({ ok: false, meta: null }))
+      ]);
+
+      const merged = Object.assign({}, tech || {});
+      merged.user = normalizeUserMeta(userResp && userResp.meta ? userResp.meta : null);
+      merged.user_meta = merged.user;
+
+      metaCache.set(v.path, merged);
+      v.meta = merged;
       updateMetaEls(v.path);
     } catch (e) {
       const err = { _error: String(e && e.message ? e.message : e) };
@@ -401,7 +487,9 @@
 
       const title = document.createElement("div");
       title.className = "rsTitle";
-      title.textContent = v.name;
+      title.dataset.rsTitlePath = v.path;
+      title.textContent = videoDisplayTitle(v);
+      title.title = v.name;
 
       const meta = document.createElement("div");
       meta.className = "rsMeta";
@@ -427,6 +515,12 @@
       dl.href = fileDownloadUrl(v.path);
       dl.download = v.name;
 
+      const editBtn = document.createElement("button");
+      editBtn.className = "rsBtn";
+      editBtn.type = "button";
+      editBtn.textContent = "Edit";
+      editBtn.addEventListener("click", () => editVideoMetadata(v));
+
       const delBtn = document.createElement("button");
       delBtn.className = "rsBtn";
       delBtn.type = "button";
@@ -435,6 +529,7 @@
 
       actions.appendChild(openBtn);
       actions.appendChild(dl);
+      actions.appendChild(editBtn);
       actions.appendChild(delBtn);
 
       body.appendChild(title);
@@ -479,6 +574,197 @@
     player.load();
     modal.hidden = true;
   }
+
+  let metaEditor = null;
+  let metaEditVideo = null;
+
+  function ensureMetaEditor() {
+    if (metaEditor) return metaEditor;
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "rsMetaEditorBackdrop";
+    backdrop.hidden = true;
+
+    const card = document.createElement("div");
+    card.className = "rsMetaEditorCard";
+    card.setAttribute("role", "dialog");
+    card.setAttribute("aria-modal", "true");
+    card.setAttribute("aria-label", "Edit Reel Stack metadata");
+
+    card.innerHTML = `
+      <div class="rsMetaEditorHead">
+        <div>
+          <div class="rsMetaEditorKicker">Reel Stack metadata</div>
+          <h2>Edit video</h2>
+          <p id="rsMetaEditorPath"></p>
+        </div>
+        <button id="rsMetaEditorClose" class="rsBtn" type="button">Close</button>
+      </div>
+
+      <div class="rsMetaEditorGrid">
+        <label class="rsField rsFieldWide">
+          <span>Title</span>
+          <input id="rsMetaTitle" class="rsInput" type="text" maxlength="240" placeholder="Blank = filename">
+        </label>
+
+        <label class="rsField rsFieldWide">
+          <span>Tags</span>
+          <input id="rsMetaTags" class="rsInput" type="text" maxlength="1000" placeholder="family, archive, drone">
+        </label>
+
+        <label class="rsField">
+          <span>Rating</span>
+          <select id="rsMetaRating" class="rsInput">
+            <option value="0">No rating</option>
+            <option value="1">★</option>
+            <option value="2">★★</option>
+            <option value="3">★★★</option>
+            <option value="4">★★★★</option>
+            <option value="5">★★★★★</option>
+          </select>
+        </label>
+
+        <label class="rsCheckField">
+          <input id="rsMetaFavorite" type="checkbox">
+          <span>Favorite</span>
+        </label>
+
+        <label class="rsCheckField">
+          <input id="rsMetaWatched" type="checkbox">
+          <span>Watched</span>
+        </label>
+
+        <label class="rsField rsFieldWide">
+          <span>Notes</span>
+          <textarea id="rsMetaNotes" class="rsInput" maxlength="8000" rows="7" placeholder="Add notes about this video…"></textarea>
+        </label>
+      </div>
+
+      <div class="rsMetaEditorActions">
+        <button id="rsMetaEditorCancel" class="rsBtn" type="button">Cancel</button>
+        <button id="rsMetaEditorSave" class="rsBtn primary" type="button">Save metadata</button>
+      </div>
+    `;
+
+    backdrop.appendChild(card);
+    document.body.appendChild(backdrop);
+
+    const close = () => closeMetaEditor();
+
+    backdrop.addEventListener("click", (ev) => {
+      if (ev.target === backdrop) close();
+    });
+
+    card.querySelector("#rsMetaEditorClose")?.addEventListener("click", close);
+    card.querySelector("#rsMetaEditorCancel")?.addEventListener("click", close);
+    card.querySelector("#rsMetaEditorSave")?.addEventListener("click", saveMetaEditor);
+
+    metaEditor = backdrop;
+    return metaEditor;
+  }
+
+  function metaEditorEl(id) {
+    return metaEditor ? metaEditor.querySelector("#" + id) : null;
+  }
+
+  function openMetaEditorFor(v) {
+    ensureMetaEditor();
+    metaEditVideo = v;
+
+    const current = userMetaForVideo(v);
+
+    const pathEl = metaEditorEl("rsMetaEditorPath");
+    const titleEl = metaEditorEl("rsMetaTitle");
+    const tagsEl = metaEditorEl("rsMetaTags");
+    const notesEl = metaEditorEl("rsMetaNotes");
+    const ratingEl = metaEditorEl("rsMetaRating");
+    const favoriteEl = metaEditorEl("rsMetaFavorite");
+    const watchedEl = metaEditorEl("rsMetaWatched");
+
+    if (pathEl) pathEl.textContent = "/" + (v.path || "");
+    if (titleEl) titleEl.value = current.title || "";
+    if (tagsEl) tagsEl.value = current.tags_text || (current.tags || []).join(", ");
+    if (notesEl) notesEl.value = current.notes || "";
+    if (ratingEl) ratingEl.value = String(Math.max(0, Math.min(5, Number(current.rating || 0) || 0)));
+    if (favoriteEl) favoriteEl.checked = !!current.favorite;
+    if (watchedEl) watchedEl.checked = !!current.watched;
+
+    metaEditor.hidden = false;
+    window.setTimeout(() => titleEl?.focus(), 0);
+  }
+
+  function closeMetaEditor() {
+    if (!metaEditor) return;
+    metaEditor.hidden = true;
+    metaEditVideo = null;
+  }
+
+  async function saveMetaEditor() {
+    const v = metaEditVideo;
+    if (!v || !v.path || !metaEditor) return;
+
+    const titleEl = metaEditorEl("rsMetaTitle");
+    const tagsEl = metaEditorEl("rsMetaTags");
+    const notesEl = metaEditorEl("rsMetaNotes");
+    const ratingEl = metaEditorEl("rsMetaRating");
+    const favoriteEl = metaEditorEl("rsMetaFavorite");
+    const watchedEl = metaEditorEl("rsMetaWatched");
+    const saveBtn = metaEditorEl("rsMetaEditorSave");
+
+    let rating = Number.parseInt(String(ratingEl?.value || "0"), 10);
+    if (!Number.isFinite(rating)) rating = 0;
+    rating = Math.max(0, Math.min(5, rating));
+
+    try {
+      if (saveBtn) saveBtn.disabled = true;
+      setStatus(`Saving metadata for /${v.path}…`);
+
+      const j = await apiJson(fileUserMetaSetUrl(), {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          path: v.path,
+          title: titleEl ? titleEl.value : "",
+          tags_text: tagsEl ? tagsEl.value : "",
+          notes: notesEl ? notesEl.value : "",
+          rating,
+          watched: watchedEl ? watchedEl.checked : false,
+          favorite: favoriteEl ? favoriteEl.checked : false
+        })
+      });
+
+      const merged = Object.assign({}, metaCache.get(v.path) || v.meta || {});
+      merged.user = normalizeUserMeta(j.meta || {});
+      merged.user_meta = merged.user;
+
+      metaCache.set(v.path, merged);
+      v.meta = merged;
+
+      closeMetaEditor();
+      updateMetaEls(v.path);
+      render();
+      setStatus(`Saved metadata for /${v.path}`);
+    } catch (e) {
+      setStatus(`Metadata save failed: ${e && e.message ? e.message : String(e)}`);
+    } finally {
+      if (saveBtn) saveBtn.disabled = false;
+    }
+  }
+
+  async function editVideoMetadata(v) {
+    if (!v || !v.path) return;
+
+    try {
+      await ensureVideoMeta(v);
+      openMetaEditorFor(v);
+    } catch (e) {
+      setStatus(`Metadata load failed: ${e && e.message ? e.message : String(e)}`);
+    }
+  }
+
 
   async function deleteVideo(v) {
     if (!v || !v.path) return;
