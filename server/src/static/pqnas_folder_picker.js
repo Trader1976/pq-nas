@@ -4,6 +4,8 @@
     const api = window.PQNAS_FOLDER_PICKER = window.PQNAS_FOLDER_PICKER || {};
 
     let overlay = null;
+    let cardEl = null;
+    let dragHandleEl = null;
     let titleEl = null;
     let subEl = null;
     let sourceEl = null;
@@ -18,6 +20,9 @@
     let busy = false;
     let loadSeq = 0;
     let opts = {};
+
+    let dragState = null;
+    let resizeBound = false;
 
     function normalizeRelPath(p) {
         return String(p || "")
@@ -67,6 +72,85 @@
             }
         }
         return "";
+    }
+
+    function clampCardPosition(left, top, width, height) {
+        const margin = 12;
+        const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
+        const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
+
+        const maxLeft = Math.max(margin, vw - width - margin);
+        const maxTop = Math.max(margin, vh - height - margin);
+
+        return {
+            left: Math.min(Math.max(margin, left), maxLeft),
+            top: Math.min(Math.max(margin, top), maxTop)
+        };
+    }
+
+    function clampExistingCardPosition() {
+        if (!cardEl) return;
+        if (!cardEl.style.left || !cardEl.style.top) return;
+
+        const r = cardEl.getBoundingClientRect();
+        const pos = clampCardPosition(r.left, r.top, r.width, r.height);
+        cardEl.style.left = `${pos.left}px`;
+        cardEl.style.top = `${pos.top}px`;
+    }
+
+    function beginDrag(ev) {
+        if (!cardEl) return;
+        if (ev.button !== undefined && ev.button !== 0) return;
+
+        const target = ev.target;
+        if (target && target.closest && target.closest("button, a, input, select, textarea")) {
+            return;
+        }
+
+        const r = cardEl.getBoundingClientRect();
+        dragState = {
+            pointerId: ev.pointerId,
+            dx: ev.clientX - r.left,
+            dy: ev.clientY - r.top
+        };
+
+        cardEl.style.position = "fixed";
+        cardEl.style.left = `${r.left}px`;
+        cardEl.style.top = `${r.top}px`;
+        cardEl.style.right = "auto";
+        cardEl.style.bottom = "auto";
+        cardEl.style.margin = "0";
+        cardEl.style.transform = "none";
+        cardEl.classList.add("dragging");
+
+        try { cardEl.setPointerCapture(ev.pointerId); } catch (_) {}
+        ev.preventDefault();
+    }
+
+    function dragMove(ev) {
+        if (!dragState || !cardEl) return;
+        if (ev.pointerId !== dragState.pointerId) return;
+
+        const r = cardEl.getBoundingClientRect();
+        const pos = clampCardPosition(
+            ev.clientX - dragState.dx,
+            ev.clientY - dragState.dy,
+            r.width,
+            r.height
+        );
+
+        cardEl.style.left = `${pos.left}px`;
+        cardEl.style.top = `${pos.top}px`;
+        ev.preventDefault();
+    }
+
+    function endDrag(ev) {
+        if (!dragState || !cardEl) return;
+        if (ev.pointerId !== dragState.pointerId) return;
+
+        try { cardEl.releasePointerCapture(ev.pointerId); } catch (_) {}
+        dragState = null;
+        cardEl.classList.remove("dragging");
     }
 
     function defaultListUrl(path) {
@@ -166,6 +250,9 @@ function ensureModal() {
 
         document.body.appendChild(overlay);
 
+        cardEl = overlay.querySelector(".fmMoveCard");
+        dragHandleEl = overlay.querySelector(".fmMoveHead");
+
         titleEl = overlay.querySelector("#pqFolderPickerTitle");
         subEl = overlay.querySelector("[data-pqfp-sub]");
         sourceEl = overlay.querySelector("[data-pqfp-source]");
@@ -174,6 +261,16 @@ function ensureModal() {
         statusEl = overlay.querySelector("[data-pqfp-status]");
         chooseBtn = overlay.querySelector("[data-pqfp-choose]");
         newFolderBtn = overlay.querySelector("[data-pqfp-new-folder]");
+
+        dragHandleEl?.addEventListener("pointerdown", beginDrag);
+        cardEl?.addEventListener("pointermove", dragMove);
+        cardEl?.addEventListener("pointerup", endDrag);
+        cardEl?.addEventListener("pointercancel", endDrag);
+
+        if (!resizeBound) {
+            resizeBound = true;
+            window.addEventListener("resize", clampExistingCardPosition);
+        }
 
         overlay.querySelector("[data-pqfp-close]")?.addEventListener("click", () => close(null));
         overlay.querySelector("[data-pqfp-cancel]")?.addEventListener("click", () => close(null));
@@ -477,6 +574,8 @@ function ensureModal() {
 
         overlay.classList.add("show");
         overlay.setAttribute("aria-hidden", "false");
+
+        requestAnimationFrame(clampExistingCardPosition);
 
         setTimeout(() => {
             try { chooseBtn?.focus(); } catch (_) {}

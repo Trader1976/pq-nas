@@ -990,3 +990,28 @@ html[data-theme="win_classic"] .fmMoveCrumb,
 html[data-theme="win_classic"] .fmMoveDirRow{
     border-radius:2px;
 }
+
+/* Shared folder picker: movable floating dialog used by File Manager + Photo Gallery move. */
+.pqFolderPicker.fmMoveOverlay{
+    background: transparent;
+    pointer-events: none;
+}
+
+.pqFolderPicker .fmMoveCard{
+    pointer-events: auto;
+}
+
+.pqFolderPicker .fmMoveHead{
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+}
+
+.pqFolderPicker .fmMoveCard.dragging .fmMoveHead{
+    cursor: grabbing;
+}
+
+.pqFolderPicker .fmMoveHead button,
+.pqFolderPicker .fmMoveActions button{
+    cursor: pointer;
+}
