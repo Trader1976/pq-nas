@@ -1,0 +1,259 @@
+:root{
+  color-scheme: dark;
+}
+
+body{
+  margin:0;
+  min-height:100vh;
+  color:var(--fg, #f5f5f5);
+  background:
+    radial-gradient(circle at top left, rgba(255,159,28,.22), transparent 34rem),
+    radial-gradient(circle at bottom right, rgba(255,80,20,.12), transparent 28rem),
+    var(--bg, #080808);
+  font-family:var(--sans, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+}
+
+.rsApp{
+  padding:22px;
+  box-sizing:border-box;
+}
+
+.rsTop{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:18px;
+  flex-wrap:wrap;
+  margin-bottom:16px;
+}
+
+.rsBrand{
+  display:flex;
+  align-items:center;
+  gap:14px;
+}
+
+.rsBrand img{
+  width:54px;
+  height:54px;
+  border-radius:16px;
+  box-shadow:0 12px 30px rgba(0,0,0,.35);
+}
+
+.rsBrand h1{
+  margin:0;
+  font-size:28px;
+  letter-spacing:.02em;
+}
+
+.rsBrand p{
+  margin:3px 0 0;
+  color:var(--muted, rgba(255,255,255,.68));
+}
+
+.rsActions{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.rsInput{
+  min-width:240px;
+  border:1px solid rgba(var(--fg-rgb,255,255,255),.22);
+  border-radius:14px;
+  padding:11px 13px;
+  color:var(--fg,#fff);
+  background:rgba(0,0,0,.28);
+  outline:none;
+}
+
+.rsBtn{
+  border:1px solid rgba(var(--fg-rgb,255,255,255),.24);
+  border-radius:14px;
+  padding:10px 13px;
+  color:var(--fg,#fff);
+  background:rgba(255,255,255,.08);
+  cursor:pointer;
+  font-weight:750;
+}
+
+.rsBtn:hover{
+  background:rgba(255,255,255,.13);
+}
+
+.rsBtn.primary{
+  border-color:rgba(255,159,28,.65);
+  background:linear-gradient(180deg, rgba(255,159,28,.28), rgba(255,100,0,.18));
+}
+
+.rsStatus{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  color:var(--muted, rgba(255,255,255,.68));
+  margin-bottom:14px;
+}
+
+.rsGrid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));
+  gap:14px;
+}
+
+.rsCard{
+  border:1px solid rgba(var(--fg-rgb,255,255,255),.14);
+  border-radius:20px;
+  background:rgba(0,0,0,.24);
+  overflow:hidden;
+  box-shadow:0 16px 38px rgba(0,0,0,.20);
+}
+
+.rsThumb{
+  position:relative;
+  aspect-ratio:16/9;
+  background:#050505;
+  overflow:hidden;
+}
+
+.rsThumb video{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+}
+
+.rsPlay{
+  position:absolute;
+  inset:auto 10px 10px auto;
+  border-radius:999px;
+  padding:9px 12px;
+  background:rgba(0,0,0,.68);
+  border:1px solid rgba(255,255,255,.24);
+}
+
+.rsBody{
+  padding:12px;
+}
+
+.rsTitle{
+  font-weight:900;
+  line-height:1.25;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.rsMeta{
+  margin-top:5px;
+  font-size:12px;
+  color:var(--muted, rgba(255,255,255,.64));
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.rsCardActions{
+  display:flex;
+  gap:8px;
+  margin-top:11px;
+}
+
+.rsCardActions .rsBtn{
+  padding:8px 10px;
+  font-size:12px;
+}
+
+.rsEmpty{
+  margin:70px auto 0;
+  max-width:520px;
+  text-align:center;
+  color:var(--muted, rgba(255,255,255,.70));
+}
+
+.rsEmpty h2{
+  color:var(--fg,#fff);
+}
+
+.rsModal{
+  position:fixed;
+  inset:0;
+  z-index:10000;
+  background:rgba(0,0,0,.72);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+}
+
+.rsModal[hidden]{
+  display:none !important;
+}
+
+.rsModalCard{
+  width:min(1100px, 96vw);
+  max-height:92vh;
+  border:1px solid rgba(var(--fg-rgb,255,255,255),.20);
+  border-radius:22px;
+  background:var(--modal-bg, rgba(20,20,20,.96));
+  overflow:hidden;
+  box-shadow:0 24px 80px rgba(0,0,0,.45);
+}
+
+.rsModalHead{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:14px;
+  padding:12px 14px;
+  border-bottom:1px solid rgba(var(--fg-rgb,255,255,255),.12);
+}
+
+.rsMuted{
+  color:var(--muted, rgba(255,255,255,.62));
+  font-size:12px;
+}
+
+#player{
+  width:100%;
+  max-height:calc(92vh - 70px);
+  display:block;
+  background:#000;
+}
+
+html[data-theme="bright"] body,
+html[data-theme="win_classic"] body{
+  background:var(--bg,#f4f4f4);
+}
+
+html[data-theme="bright"] .rsCard,
+html[data-theme="bright"] .rsInput,
+html[data-theme="win_classic"] .rsCard,
+html[data-theme="win_classic"] .rsInput{
+  background:rgba(255,255,255,.78);
+}
+
+/* Reel Stack V1: do not preload every video just to draw thumbnails.
+   Real video streaming should happen only in the player modal. */
+.rsThumbPlaceholder{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(255,159,28,.22), transparent 34%),
+    linear-gradient(135deg, rgba(0,0,0,.95), rgba(30,30,30,.98));
+}
+
+.rsVideoIcon{
+  width:54px;
+  height:54px;
+  border-radius:18px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border:1px solid rgba(255,159,28,.45);
+  color:rgba(255,159,28,.95);
+  background:rgba(0,0,0,.42);
+  box-shadow:0 18px 46px rgba(0,0,0,.35);
+  font-weight:900;
+}

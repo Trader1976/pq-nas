@@ -1,0 +1,32 @@
+{
+  "id": "reelstack",
+  "name": "Reel Stack",
+  "version": "1.0.0",
+  "entry": "www/index.html",
+  "api_base": "/api/v4/files",
+  "permissions": [],
+  "category": "media",
+  "surfaces": {
+    "desktop": {
+      "enabled": true
+    },
+    "launcher": {
+      "enabled": true
+    },
+    "sidebar": {
+      "enabled": false,
+      "user_pinnable": true,
+      "section": "media",
+      "label": "Reel Stack",
+      "order": 70
+    },
+    "mobile": false
+  },
+  "icons": {
+    "win_classic": "www/icon.svg",
+    "cpunk_orange": "www/icon.svg",
+    "dark": "www/icon.svg",
+    "bright": "www/icon.svg",
+    "default": "www/icon.svg"
+  }
+}
