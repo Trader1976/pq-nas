@@ -241,7 +241,7 @@
   }
 
   function fileDownloadUrl(path) {
-    return `/api/v4/files/download?path=${encodeURIComponent(path || "")}&download=1`;
+    return `/api/v4/files/get?path=${encodeURIComponent(path || "")}&download=1`;
   }
 
   function fileThumbUrl(path) {
@@ -272,6 +272,19 @@
 
   function fileDeleteUrl(path) {
     return `/api/v4/files/delete?path=${encodeURIComponent(path)}`;
+  }
+
+  function fileMoveUrl(from, to) {
+    const qs = new URLSearchParams();
+    qs.set("from", from || "");
+    qs.set("to", to || "");
+    return `/api/v4/files/move?${qs.toString()}`;
+  }
+
+  function dirnameOf(path) {
+    const s = String(path || "").replace(/^\/+|\/+$/g, "");
+    const i = s.lastIndexOf("/");
+    return i >= 0 ? s.slice(0, i) : "";
   }
 
   async function apiJson(url, opts) {
@@ -1104,6 +1117,148 @@
   }
 
 
+
+  function extractShareUrl(j) {
+    if (!j || typeof j !== "object") return "";
+
+    const direct = [
+      j.url,
+      j.share_url,
+      j.public_url,
+      j.full_url,
+      j.link
+    ].find(x => typeof x === "string" && x.trim());
+
+    if (direct) return direct.trim();
+
+    const share = j.share && typeof j.share === "object" ? j.share : null;
+    if (share) {
+      const nested = [
+        share.url,
+        share.share_url,
+        share.public_url,
+        share.full_url,
+        share.link
+      ].find(x => typeof x === "string" && x.trim());
+
+      if (nested) return nested.trim();
+
+      if (share.token) return `/s/${encodeURIComponent(String(share.token))}`;
+    }
+
+    if (j.token) return `/s/${encodeURIComponent(String(j.token))}`;
+    return "";
+  }
+
+  async function copyTextToClipboard(text) {
+    text = String(text || "");
+    if (!text) return false;
+
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch (_) {}
+
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    ta.style.top = "0";
+    document.body.appendChild(ta);
+    ta.select();
+
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (_) { ok = false; }
+    ta.remove();
+    return ok;
+  }
+
+  async function renameVideo(v) {
+    if (!v || !v.path) return;
+
+    const oldPath = String(v.path || "");
+    const oldName = basename(oldPath);
+    const nextNameRaw = prompt("Rename video", oldName);
+
+    if (nextNameRaw === null) return;
+
+    const nextName = String(nextNameRaw || "").trim();
+    if (!nextName || nextName === oldName) return;
+
+    if (nextName.includes("/") || nextName.includes("\\")) {
+      setStatus("Rename failed: filename must not contain slashes.");
+      return;
+    }
+
+    const parent = dirnameOf(oldPath);
+    const nextPath = joinPath(parent, nextName);
+
+    if (nextPath === oldPath) return;
+
+    try {
+      setStatus(`Renaming /${oldPath}…`);
+
+      await apiJson(fileMoveUrl(oldPath, nextPath), { method: "POST" });
+
+      const cached = metaCache.get(oldPath);
+      if (cached) {
+        metaCache.delete(oldPath);
+        metaCache.set(nextPath, cached);
+      }
+
+      v.path = nextPath;
+      v.name = nextName;
+
+      setSelectedPath(nextPath);
+      render();
+
+      setStatus(`Renamed to /${nextPath}. Refreshing index…`);
+      await scanVideos();
+    } catch (e) {
+      setStatus(`Rename failed: ${e && e.message ? e.message : String(e)}`);
+    }
+  }
+
+  async function shareVideo(v) {
+    if (!v || !v.path) return;
+
+    try {
+      setStatus(`Creating share link for /${v.path}…`);
+
+      const j = await apiJson("/api/v4/shares/create", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          path: v.path,
+          type: "file",
+          expires_sec: 7 * 24 * 60 * 60
+        })
+      });
+
+      const rawUrl = extractShareUrl(j);
+      if (!rawUrl) {
+        setStatus("Share created, but response did not include a link/token.");
+        return;
+      }
+
+      const fullUrl = new URL(rawUrl, window.location.origin).toString();
+      const copied = await copyTextToClipboard(fullUrl);
+
+      setStatus(copied
+        ? `Share link copied: ${fullUrl}`
+        : `Share link created: ${fullUrl}`
+      );
+    } catch (e) {
+      setStatus(`Share failed: ${e && e.message ? e.message : String(e)}`);
+    }
+  }
+
   async function deleteVideo(v) {
     if (!v || !v.path) return;
 
@@ -1119,6 +1274,30 @@
       setStatus(`Delete failed: ${e && e.message ? e.message : String(e)}`);
     }
   }
+
+
+  function videoByPath(path) {
+    path = String(path || "");
+    return allVideos.find(v => v && v.path === path) || null;
+  }
+
+  window.PQNAS_REELSTACK_APP = {
+    videoByPath,
+    selectedVideo,
+    selectPath: setSelectedPath,
+    setStatus,
+    openPlayer,
+    editMetadata: editVideoMetadata,
+    renameVideo,
+    shareVideo,
+    deleteVideo,
+    downloadUrl: fileDownloadUrl,
+    refreshIndex: scanVideos
+  };
+
+  window.dispatchEvent(new CustomEvent("pqnas-reelstack-ready", {
+    detail: window.PQNAS_REELSTACK_APP
+  }));
 
   loadIndex().catch((e) => {
     setStatus(`Could not load saved index: ${e && e.message ? e.message : String(e)}`);

@@ -1,0 +1,66 @@
+.rsContextMenu{
+  position:fixed;
+  z-index:999999;
+  min-width:210px;
+  padding:8px;
+  border-radius:16px;
+  border:1px solid rgba(var(--accent-rgb,0,220,220),.34);
+  background:
+    linear-gradient(180deg, rgba(var(--accent-rgb,0,220,220),.10), rgba(0,0,0,.02)),
+    rgba(4,8,14,.96);
+  box-shadow:0 20px 70px rgba(0,0,0,.55), 0 0 24px rgba(var(--accent-rgb,0,220,220),.12);
+  backdrop-filter: blur(14px);
+}
+
+.rsContextMenu[hidden]{
+  display:none !important;
+}
+
+.rsContextMenuTitle{
+  padding:8px 10px 7px;
+  color:rgba(var(--fg-rgb,255,255,255),.62);
+  font-size:12px;
+  font-weight:800;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  border-bottom:1px solid rgba(var(--fg-rgb,255,255,255),.08);
+  margin-bottom:6px;
+}
+
+.rsContextMenu button{
+  width:100%;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  padding:9px 10px;
+  border:0;
+  border-radius:12px;
+  background:transparent;
+  color:var(--fg, #e8f6ff);
+  font:inherit;
+  font-size:13px;
+  font-weight:800;
+  text-align:left;
+  cursor:pointer;
+}
+
+.rsContextMenu button:hover,
+.rsContextMenu button:focus{
+  outline:none;
+  background:rgba(var(--accent-rgb,0,220,220),.14);
+  color:var(--accent, #00dcdc);
+}
+
+.rsContextMenu button.rsDanger:hover,
+.rsContextMenu button.rsDanger:focus{
+  background:rgba(255,80,80,.14);
+  color:#ff7777;
+}
+
+.rsContextMenuHint{
+  color:rgba(var(--fg-rgb,255,255,255),.42);
+  font-size:11px;
+  font-weight:700;
+}
