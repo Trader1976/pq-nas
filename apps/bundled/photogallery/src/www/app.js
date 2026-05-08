@@ -108,6 +108,36 @@
         folderListCache.clear();
     }
 
+    function pqnasGalleryInternalTopName(item) {
+        if (!item || typeof item !== "object") return "";
+
+        const name = String(item.name || item.basename || "").trim();
+        const rel = String(
+            item.rel_path ||
+            item.logical_rel_path ||
+            item.path ||
+            item.rel ||
+            ""
+        ).replace(/^\/+/, "");
+
+        const first = rel ? String(rel.split("/")[0] || "").trim() : "";
+        return first || name;
+    }
+
+    function isInternalPqnasGalleryEntry(item) {
+        const top = pqnasGalleryInternalTopName(item);
+        if (!top) return false;
+
+        // Hide app/private metadata folders from user-facing gallery views.
+        // Examples: .pqnas_activity, .pqnas_echostack, .pqnas_photogallery, etc.
+        return top === ".pqnas" || top.startsWith(".pqnas_");
+    }
+
+    function filterInternalPqnasGalleryItems(items) {
+        if (!Array.isArray(items)) return [];
+        return items.filter((item) => !isInternalPqnasGalleryEntry(item));
+    }
+
     async function fetchGalleryList(relPath, opts = {}) {
         const path = normalizeRelPath(relPath || "");
         const key = folderListCacheKey(path);
@@ -127,7 +157,7 @@
 
         const j = await fetchJson(galleryListUrl(path));
 
-        const items = cloneGalleryItems(Array.isArray(j.items) ? j.items : []);
+        const items = cloneGalleryItems(filterInternalPqnasGalleryItems(Array.isArray(j.items) ? j.items : []));
 
         folderListCache.set(key, {
             ts: now,
@@ -593,7 +623,7 @@
 
         try {
             const j = await fetchJson(galleryRecursiveSearchUrl(rootPath, force));
-            const raw = Array.isArray(j.items) ? j.items : [];
+            const raw = filterInternalPqnasGalleryItems(Array.isArray(j.items) ? j.items : []);
 
             serverRecursiveSearchSupported = true;
 
@@ -1725,7 +1755,7 @@
             if (!state.treeStats || state.treeStats.seq !== currentSeq) return;
 
             const j = await fetchGalleryList(path, { force });
-            const items = Array.isArray(j.items) ? j.items : [];
+            const items = filterInternalPqnasGalleryItems(Array.isArray(j.items) ? j.items : []);
 
             for (const it of items) {
                 if (it.type === "dir") {
@@ -2360,7 +2390,7 @@
             setStatus(`Searching /${path || ""} … folders: ${scannedFolders}, photos: ${out.length}`);
 
             const j = await fetchGalleryList(path, { force });
-            const items = sortItems(Array.isArray(j.items) ? j.items : []);
+            const items = sortItems(filterInternalPqnasGalleryItems(Array.isArray(j.items) ? j.items : []));
 
             for (const it of items) {
                 const rel = joinPath(path, it.name);
@@ -4025,7 +4055,7 @@
 
         try {
             const j = await fetchGalleryList(state.curPath, { force: forceSearch });
-            state.items = Array.isArray(j.items) ? j.items.slice() : [];
+            state.items = filterInternalPqnasGalleryItems(Array.isArray(j.items) ? j.items : []);
             if (state.treeStats.basePath !== state.curPath) {
                 resetTreeStats();
             }

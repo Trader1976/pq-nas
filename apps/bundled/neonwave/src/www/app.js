@@ -1,6 +1,39 @@
 (() => {
     "use strict";
 
+    function pqnasNeonwaveInternalTopName(item) {
+        if (!item || typeof item !== "object") return "";
+
+        const name = String(item.name || item.basename || item.title || "").trim();
+        const rel = String(
+            item.rel_path ||
+            item.logical_rel_path ||
+            item.path ||
+            item.rel ||
+            item.folder ||
+            item.dir ||
+            ""
+        ).replace(/^\/+/, "");
+
+        const first = rel ? String(rel.split("/")[0] || "").trim() : "";
+        return first || name;
+    }
+
+    function isInternalPqnasNeonwaveEntry(item) {
+        const top = pqnasNeonwaveInternalTopName(item);
+        if (!top) return false;
+
+        // Hide app/private metadata folders from user-facing Neonwave views.
+        // Examples: .pqnas_activity, .pqnas_echostack, .pqnas_photogallery, etc.
+        return top === ".pqnas" || top.startsWith(".pqnas_");
+    }
+
+    function filterInternalPqnasNeonwaveItems(items) {
+        if (!Array.isArray(items)) return [];
+        return items.filter((item) => !isInternalPqnasNeonwaveEntry(item));
+    }
+
+
     const AUDIO_EXTS = new Set([
         "mp3", "wav", "flac", "m4a", "aac", "ogg", "oga", "opus",
         "aif", "aiff", "alac", "wma"
@@ -438,10 +471,18 @@
     }
 
     function extractItems(j) {
-        if (Array.isArray(j.items)) return j.items;
-        if (Array.isArray(j.entries)) return j.entries;
-        if (Array.isArray(j.files)) return j.files;
-        return [];
+        let raw = [];
+        if (Array.isArray(j.items)) {
+            raw = j.items;
+        } else if (Array.isArray(j.entries)) {
+            raw = j.entries;
+        } else if (Array.isArray(j.files)) {
+            raw = j.files;
+        }
+
+        // Hide PQ-NAS private/app metadata directories from Neonwave.
+        // Examples: .pqnas_activity, .pqnas_echostack, .pqnas_photogallery
+        return filterInternalPqnasNeonwaveItems(raw);
     }
 
     async function loadPath(path) {
