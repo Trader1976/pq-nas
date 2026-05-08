@@ -1408,16 +1408,25 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   }
 
-  function openUploadConflictModal() {
+    function openUploadConflictModal() {
     if (!uploadConflictModal) return;
+
+    // Avoid stacking the new upload progress modal over the old conflict modal.
+    setFileMgrUploadProgressVisible(false);
+
     uploadConflictModal.classList.add("show");
     uploadConflictModal.setAttribute("aria-hidden", "false");
   }
 
-  function closeUploadConflictModal() {
+    function closeUploadConflictModal() {
     if (!uploadConflictModal) return;
     uploadConflictModal.classList.remove("show");
     uploadConflictModal.setAttribute("aria-hidden", "true");
+
+    // Restore progress modal after conflict dialog closes, if upload is still active.
+    if (uploadProg && uploadProg.style.display !== "none") {
+      setFileMgrUploadProgressVisible(true);
+    }
   }
 
   function describeExistingConflict(existing) {
@@ -1489,12 +1498,18 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       };
 
       const cleanup = () => {
+        if (activeUploadConflictCancel === onCancel) {
+          activeUploadConflictCancel = null;
+        }
+
         uploadConflictOkBtn?.removeEventListener("click", onOk);
         uploadConflictCancelBtn?.removeEventListener("click", onCancel);
         uploadConflictClose?.removeEventListener("click", onCancel);
         uploadConflictModal?.removeEventListener("click", onBackdrop);
         document.removeEventListener("keydown", onKey);
       };
+
+      activeUploadConflictCancel = onCancel;
 
       uploadConflictOkBtn?.addEventListener("click", onOk);
       uploadConflictCancelBtn?.addEventListener("click", onCancel);
@@ -1675,10 +1690,223 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return true;
   }
 
+  let fmUploadModalTotals = {
+    fileCount: 0,
+    totalBytes: 0
+  };
+
+  function ensureFileMgrUploadProgressModal() {
+    let backdrop = document.getElementById("fmUploadProgressBackdrop");
+    if (backdrop) return backdrop;
+
+    backdrop = document.createElement("div");
+    backdrop.id = "fmUploadProgressBackdrop";
+    backdrop.className = "fmUploadProgressBackdrop";
+    backdrop.hidden = true;
+
+    backdrop.innerHTML = `
+      <div class="fmUploadProgressCard" role="dialog" aria-modal="true" aria-labelledby="fmUploadProgressTitle">
+        <div class="fmUploadProgressHead">
+          <div>
+            <div class="fmUploadProgressKicker">DNA-Nexus upload</div>
+            <h2 id="fmUploadProgressTitle">Uploading files</h2>
+            <p id="fmUploadProgressSub">Preparing upload…</p>
+          </div>
+          <button id="fmUploadProgressCancelTop" class="fmUploadProgressClose" type="button">Cancel</button>
+        </div>
+
+        <div class="fmUploadProgressBody">
+          <div class="fmUploadProgressFile" id="fmUploadProgressFile">Waiting…</div>
+
+          <div class="fmUploadProgressRow">
+            <div id="fmUploadProgressText" class="fmUploadProgressText">0 B / 0 B</div>
+            <div id="fmUploadProgressPct" class="fmUploadProgressPct">0%</div>
+          </div>
+
+          <div class="fmUploadProgressBar" aria-hidden="true">
+            <div id="fmUploadProgressFill" class="fmUploadProgressFill"></div>
+          </div>
+
+          <div id="fmUploadProgressMeta" class="fmUploadProgressMeta">Ready.</div>
+        </div>
+
+        <div class="fmUploadProgressFoot">
+          <button id="fmUploadProgressCancel" class="fmUploadProgressBtn secondary" type="button">Cancel upload</button>
+          <button id="fmUploadProgressCloseBtn" class="fmUploadProgressBtn primary" type="button" hidden>Close</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(backdrop);
+
+    const requestCancel = () => cancelCurrentUpload();
+
+    backdrop.querySelector("#fmUploadProgressCancel")?.addEventListener("click", requestCancel);
+    backdrop.querySelector("#fmUploadProgressCancelTop")?.addEventListener("click", requestCancel);
+    backdrop.querySelector("#fmUploadProgressCloseBtn")?.addEventListener("click", () => {
+      backdrop.hidden = true;
+    });
+
+    return backdrop;
+  }
+
+  function openFileMgrUploadProgressModal(fileCount, totalBytes) {
+    fmUploadModalTotals = {
+      fileCount: Number(fileCount || 0),
+      totalBytes: Number(totalBytes || 0)
+    };
+
+    const backdrop = ensureFileMgrUploadProgressModal();
+
+    const sub = backdrop.querySelector("#fmUploadProgressSub");
+    const fileEl = backdrop.querySelector("#fmUploadProgressFile");
+    const textEl = backdrop.querySelector("#fmUploadProgressText");
+    const pctEl = backdrop.querySelector("#fmUploadProgressPct");
+    const fillEl = backdrop.querySelector("#fmUploadProgressFill");
+    const metaEl = backdrop.querySelector("#fmUploadProgressMeta");
+    const close = backdrop.querySelector("#fmUploadProgressCloseBtn");
+    const cancel = backdrop.querySelector("#fmUploadProgressCancel");
+    const cancelTop = backdrop.querySelector("#fmUploadProgressCancelTop");
+
+    if (sub) {
+      const n = fmUploadModalTotals.fileCount;
+      sub.textContent = `${n} file${n === 1 ? "" : "s"} · ${fmtSize(fmUploadModalTotals.totalBytes)} total`;
+    }
+
+    if (fileEl) {
+      fileEl.textContent = "Preparing upload…";
+      fileEl.classList.remove("fmUploadProgressOk", "fmUploadProgressFail");
+    }
+
+    if (textEl) textEl.textContent = `0 B / ${fmtSize(fmUploadModalTotals.totalBytes)}`;
+    if (pctEl) pctEl.textContent = "0%";
+    if (fillEl) fillEl.style.width = "0%";
+    if (metaEl) metaEl.textContent = "Ready.";
+
+    if (close) close.hidden = true;
+    if (cancel) {
+      cancel.hidden = false;
+      cancel.disabled = false;
+      cancel.textContent = "Cancel upload";
+    }
+    if (cancelTop) {
+      cancelTop.hidden = false;
+      cancelTop.disabled = false;
+      cancelTop.textContent = "Cancel";
+    }
+
+    backdrop.hidden = false;
+  }
+
+  function setFileMgrUploadProgressVisible(show) {
+    const backdrop = document.getElementById("fmUploadProgressBackdrop");
+    if (!backdrop) return;
+
+    if (!show) {
+      backdrop.hidden = true;
+    } else {
+      backdrop.hidden = false;
+    }
+  }
+
+  function classifyFileMgrUploadModalKind(text, pillKind) {
+    const k = String(pillKind || "").trim().toLowerCase();
+    if (k) return k;
+
+    const t = String(text || "").toLowerCase();
+    if (t.includes("failed") || t.includes("error") || t.includes("quota") || t.includes("too large")) return "err";
+    if (t.includes("cancelled") || t.includes("skipped") || t.includes("conflict")) return "warn";
+    if (t.includes("finished") || t.includes("uploaded")) return "ok";
+    return "";
+  }
+
+  function updateFileMgrUploadProgressModal(pct, text, pillText = "", pillKind = "") {
+    const backdrop = document.getElementById("fmUploadProgressBackdrop");
+    if (!backdrop || backdrop.hidden) return;
+
+    pct = Math.max(0, Math.min(100, Number(pct || 0)));
+
+    const fileEl = backdrop.querySelector("#fmUploadProgressFile");
+    const textEl = backdrop.querySelector("#fmUploadProgressText");
+    const pctEl = backdrop.querySelector("#fmUploadProgressPct");
+    const fillEl = backdrop.querySelector("#fmUploadProgressFill");
+    const metaEl = backdrop.querySelector("#fmUploadProgressMeta");
+
+    const shownText = String(text || "Uploading…");
+    const kind = classifyFileMgrUploadModalKind(shownText, pillKind);
+
+    if (fileEl) {
+      fileEl.textContent = shownText;
+      fileEl.classList.toggle("fmUploadProgressOk", kind === "ok");
+      fileEl.classList.toggle("fmUploadProgressFail", kind === "err");
+    }
+
+    if (textEl) {
+      const loaded = Math.round((pct / 100) * Math.max(0, fmUploadModalTotals.totalBytes || 0));
+      textEl.textContent = `${fmtSize(loaded)} / ${fmtSize(fmUploadModalTotals.totalBytes || 0)}`;
+    }
+
+    if (pctEl) pctEl.textContent = `${Math.round(pct)}%`;
+    if (fillEl) fillEl.style.width = `${pct.toFixed(1)}%`;
+
+    if (metaEl) {
+      metaEl.textContent = String(pillText || "").trim() || "Uploading…";
+      metaEl.classList.toggle("fmUploadProgressMetaErr", kind === "err");
+    }
+  }
+
+  function updateFileMgrUploadProgressCancelable(on) {
+    const backdrop = document.getElementById("fmUploadProgressBackdrop");
+    if (!backdrop) return;
+
+    const cancel = backdrop.querySelector("#fmUploadProgressCancel");
+    const cancelTop = backdrop.querySelector("#fmUploadProgressCancelTop");
+    const close = backdrop.querySelector("#fmUploadProgressCloseBtn");
+
+    if (cancel) {
+      cancel.hidden = !on;
+      cancel.disabled = !on;
+      if (on) cancel.textContent = "Cancel upload";
+    }
+
+    if (cancelTop) {
+      cancelTop.hidden = !on;
+      cancelTop.disabled = !on;
+      if (on) cancelTop.textContent = "Cancel";
+    }
+
+    if (close) close.hidden = !!on;
+  }
+
+  function markFileMgrUploadCancelling() {
+    const backdrop = document.getElementById("fmUploadProgressBackdrop");
+    if (!backdrop) return;
+
+    const cancel = backdrop.querySelector("#fmUploadProgressCancel");
+    const cancelTop = backdrop.querySelector("#fmUploadProgressCancelTop");
+    const metaEl = backdrop.querySelector("#fmUploadProgressMeta");
+
+    if (cancel) {
+      cancel.disabled = true;
+      cancel.textContent = "Cancelling…";
+    }
+
+    if (cancelTop) {
+      cancelTop.disabled = true;
+      cancelTop.textContent = "Cancelling…";
+    }
+
+    if (metaEl) metaEl.textContent = "Cancelling upload…";
+  }
+
   function showUploadProgress(show) {
-    if (!uploadProg) return;
-    uploadProg.style.display = show ? "block" : "none";
-    uploadProg.setAttribute("aria-hidden", show ? "false" : "true");
+    if (uploadProg) {
+      uploadProg.style.display = show ? "block" : "none";
+      uploadProg.setAttribute("aria-hidden", show ? "false" : "true");
+    }
+
+    setFileMgrUploadProgressVisible(!!show);
+
     if (!show) {
       if (uploadProgFill) uploadProgFill.style.width = "0%";
       if (uploadProgPct) uploadProgPct.textContent = "0%";
@@ -1817,6 +2045,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (uploadProgPct) uploadProgPct.textContent = `${Math.round(pct)}%`;
     if (uploadProgText && text != null) uploadProgText.textContent = String(text);
 
+    updateFileMgrUploadProgressModal(pct, text, pillText, pillKind);
+
     if (uploadProgPill) {
       const t = (pillText || "").trim();
       if (!t) {
@@ -1832,10 +2062,74 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   let lastUploadError = null;
   let activeUploadXhr = null;
   let uploadCancelRequested = false;
+  let activeUploadConflictCancel = null;
 
   function extractHttpStatusFromMsg(msg) {
     const m = String(msg || "").match(/\bHTTP\s+(\d{3})\b/i);
     return m ? Number(m[1]) : 0;
+  }
+
+  function uploadErrorBlob(errLike) {
+    const parts = [];
+
+    const push = (x) => {
+      if (x === undefined || x === null) return;
+      if (typeof x === "string") {
+        parts.push(x);
+        return;
+      }
+
+      try {
+        parts.push(JSON.stringify(x));
+      } catch (_) {}
+    };
+
+    push(errLike && errLike.message ? errLike.message : errLike);
+    push(errLike && errLike.error);
+    push(errLike && errLike.kind);
+    push(errLike && errLike.source);
+    push(errLike && errLike.details);
+
+    return parts.join(" ").toLowerCase();
+  }
+
+  function isUploadQuotaError(errLike) {
+    const low = uploadErrorBlob(errLike);
+
+    return low.includes("quota_exceeded") ||
+      low.includes("quota exceeded") ||
+      low.includes("user quota exceeded") ||
+      low.includes("storage quota") ||
+      low.includes("workspace quota") ||
+      low.includes("user quota") ||
+      low.includes("insufficient quota") ||
+      low.includes("insufficient storage") ||
+      low.includes("storage limit") ||
+      low.includes("not enough space");
+  }
+
+  function uploadQuotaDetailText(errLike) {
+    const j = errLike && errLike.details && typeof errLike.details === "object"
+      ? errLike.details
+      : null;
+
+    if (!j) return "Quota exceeded";
+
+    const parts = [];
+
+    if (j.used_bytes != null && j.quota_bytes != null) {
+      parts.push(`used ${fmtSize(j.used_bytes)} / ${fmtSize(j.quota_bytes)}`);
+    }
+
+    if (j.incoming_bytes != null) {
+      parts.push(`incoming ${fmtSize(j.incoming_bytes)}`);
+    }
+
+    if (j.existing_bytes != null && Number(j.existing_bytes || 0) > 0) {
+      parts.push(`replacing ${fmtSize(j.existing_bytes)}`);
+    }
+
+    return parts.length ? `Quota exceeded: ${parts.join(" · ")}` : "Quota exceeded";
   }
 
   function classifyUploadSummary(errLike) {
@@ -1843,14 +2137,40 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const http = (errLike && Number.isFinite(errLike.http)) ? errLike.http : extractHttpStatusFromMsg(msg);
     const low = msg.toLowerCase();
 
+    if (errLike && errLike.kind === "workspace_large_upload_not_chunked_yet") return "Workspace quota/upload limit exceeded";
+    if (errLike && errLike.error === "workspace_upload_limit") return "Workspace quota/upload limit exceeded";
     if (errLike && errLike.error === "file_exists") return "File already exists";
     if (errLike && errLike.kind === "file_exists") return "File already exists";
     if (low.includes("file already exists")) return "File already exists";
-    if (low.includes("quota exceeded") || low.includes("quota_exceeded")) return "Quota exceeded";
+    if (isUploadQuotaError(errLike)) return "Quota exceeded";
     if (http === 400 || low.includes("gateway") || low.includes("before pq-nas")) return "Gateway rejected before PQ-NAS";
-    if (http === 413 || low.includes("too large")) return "Upload too large (server limit)";
+    if (http === 413 || low.includes("too large")) return "Quota/upload limit exceeded";
     if (http >= 400) return `Upload failed (HTTP ${http})`;
     return "Upload failed";
+  }
+
+  function uploadModalFailureText(summary, msg) {
+    summary = String(summary || "Upload failed").trim();
+    msg = String(msg || "").trim();
+
+    if (!msg) return summary;
+    if (msg.toLowerCase() === summary.toLowerCase()) return summary;
+
+    // Keep quota/workspace reasons visible in the main modal line.
+    return `${summary}: ${msg}`;
+  }
+
+  function uploadModalFailureMeta(e, rel, msg) {
+    if (typeof isUploadQuotaError === "function" && isUploadQuotaError(e)) {
+      return typeof uploadQuotaDetailText === "function"
+        ? uploadQuotaDetailText(e)
+        : "Quota exceeded";
+    }
+
+    msg = String(msg || "").trim();
+    if (msg) return msg;
+
+    return rel ? `Last: ${rel}` : "Upload failed";
   }
 
   function showUploadErrorDetailsModal() {
@@ -1898,13 +2218,24 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   }
 
   function setUploadCancelable(on) {
-    if (!uploadCancelBtn) return;
-    uploadCancelBtn.classList.toggle("hidden", !on);
-    uploadCancelBtn.disabled = !on;
+    if (uploadCancelBtn) {
+      uploadCancelBtn.classList.toggle("hidden", !on);
+      uploadCancelBtn.disabled = !on;
+    }
+
+    updateFileMgrUploadProgressCancelable(!!on);
   }
 
-  function cancelCurrentUpload() {
+    function cancelCurrentUpload() {
     uploadCancelRequested = true;
+    markFileMgrUploadCancelling();
+
+    if (activeUploadConflictCancel) {
+      try { activeUploadConflictCancel(); } catch (_) {}
+    }
+
+    closeUploadConflictModal();
+
     if (activeUploadXhr) {
       try { activeUploadXhr.abort(); } catch (_) {}
     }
@@ -1935,6 +2266,27 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
   const CHUNKED_UPLOAD_THRESHOLD_BYTES = 64 * 1024 * 1024;
 
+  function isWorkspaceUploadScope() {
+    try {
+      if (
+        window.PQNAS_FILEMGR &&
+        typeof window.PQNAS_FILEMGR.isWorkspaceScope === "function" &&
+        window.PQNAS_FILEMGR.isWorkspaceScope()
+      ) {
+        return true;
+      }
+    } catch (_) {}
+
+    try {
+      const snap = typeof currentScopeSnapshot === "function" ? currentScopeSnapshot() : null;
+      if (snap && (snap.scope === "workspace" || snap.scope_type === "workspace" || snap.workspace_id || snap.workspaceId)) {
+        return true;
+      }
+    } catch (_) {}
+
+    return false;
+  }
+
   function shouldUseChunkedUpload(file, opts = {}) {
     const size = Number(file && file.size != null ? file.size : 0);
 
@@ -1945,6 +2297,23 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         window.PQNAS_FILEMGR.isWorkspaceScope();
 
     return size > CHUNKED_UPLOAD_THRESHOLD_BYTES && !inWorkspace;
+  }
+
+  function assertWorkspaceLargeUploadSupported(file) {
+    const size = Number(file && file.size != null ? file.size : 0);
+
+    if (!isWorkspaceUploadScope()) return;
+    if (size <= CHUNKED_UPLOAD_THRESHOLD_BYTES) return;
+
+    const err = new Error(
+      `Workspace quota/upload limit exceeded. This large file is ${fmtSize(size)}. ` +
+      `Workspace uploads are not chunked yet, so large files cannot be uploaded to workspaces until workspace chunked upload is added.`
+    );
+
+    err.kind = "workspace_large_upload_not_chunked_yet";
+    err.source = "client";
+    err.error = "workspace_upload_limit";
+    throw err;
   }
 
   async function postUploadJson(url, body) {
@@ -1970,7 +2339,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
               : (text ? shorten(text.replace(/\s+/g, " "), 200) : `HTTP ${r.status}`)
       );
       err.http = r.status;
-      err.kind = j && j.error === "file_exists" ? "file_exists" : "pqnas_error";
+      err.kind = j && j.error ? String(j.error) : "pqnas_error";
       err.source = "pqnas";
       err.error = j && j.error ? j.error : "";
       err.details = j;
@@ -2137,6 +2506,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   }
 
   async function uploadFileSmartTo(relPath, file, onProgress, opts = {}) {
+    assertWorkspaceLargeUploadSupported(file);
+
     if (shouldUseChunkedUpload(file, opts)) {
       return await xhrUploadFileChunkedTo(relPath, file, onProgress, opts);
     }
@@ -2180,6 +2551,23 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
       xhr.onerror = () => {
         clearActive();
+
+        const size = Number(file && file.size != null ? file.size : 0);
+        if (isWorkspaceUploadScope() && size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
+          reject(Object.assign(
+            new Error(
+              `Workspace quota/upload limit exceeded. This large file is ${fmtSize(size)}. ` +
+              `Workspace uploads are not chunked yet, so the request can fail before PQ-NAS returns a normal error.`
+            ),
+            {
+              kind: "workspace_large_upload_not_chunked_yet",
+              source: "client",
+              error: "workspace_upload_limit"
+            }
+          ));
+          return;
+        }
+
         reject(Object.assign(new Error("upload failed (network)"), { kind: "network", source: "client" }));
       };
 
@@ -2221,16 +2609,12 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
           return;
         }
 
-        if (j && j.error === "quota_exceeded") {
-          const used = (j.used_bytes != null) ? fmtSize(j.used_bytes) : "?";
-          const quota = (j.quota_bytes != null) ? fmtSize(j.quota_bytes) : "?";
-          const incoming = (j.incoming_bytes != null) ? fmtSize(j.incoming_bytes) : "?";
-          const existing = (j.existing_bytes != null) ? fmtSize(j.existing_bytes) : "?";
-
-          const err = new Error(`Quota exceeded: used ${used} / ${quota}. Upload ${incoming} (replacing ${existing}).`);
+        if (j && isUploadQuotaError({ message: j.message || "", error: j.error || "", details: j })) {
+          const err = new Error(uploadQuotaDetailText({ details: j }));
           err.http = status;
-          err.kind = "quota";
+          err.kind = "quota_exceeded";
           err.source = "pqnas";
+          err.error = j.error || "quota_exceeded";
           err.details = j;
           clearActive();
           reject(err);
@@ -2250,10 +2634,10 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         if (status === 413) {
           const size = fmtSize(file && file.size != null ? file.size : 0);
           const limit = getEffectiveUploadLimitBytes();
-          const limTxt = (limit > 0) ? ` Limit is ${fmtSize(limit)}.` : "";
-          const err = new Error(`Upload too large (HTTP 413). File size ${size}.${limTxt}`);
+          const limTxt = (limit > 0) ? ` Current upload limit is ${fmtSize(limit)}.` : "";
+          const err = new Error(`Quota/upload limit exceeded. File size ${size}.${limTxt}`);
           err.http = 413;
-          err.kind = "pqnas_limit";
+          err.kind = "quota_or_upload_limit";
           err.source = "pqnas";
           clearActive();
           reject(err);
@@ -2373,6 +2757,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     setUploadPillClickable(false);
     uploadCancelRequested = false;
     activeUploadXhr = null;
+
+    openFileMgrUploadProgressModal(totalFiles, totalBytes);
     setUploadCancelable(true);
 
     showUploadProgress(true);
@@ -2528,6 +2914,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
           http,
           kind,
           source: errSource,
+          error: e && e.error ? e.error : "",
+          details: e && e.details ? e.details : null,
           atMs: Date.now()
         };
 
@@ -2536,15 +2924,16 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
         const isHardStop =
             (summary === "Quota exceeded") ||
-            (summary === "Upload too large (server limit)") ||
+            (summary === "Quota/upload limit exceeded") ||
             (summary === "Gateway rejected before PQ-NAS");
 
         const pct = isHardStop ? 100 : (uploadedBytesCommitted / totalBytes) * 100;
 
-        const pillText = `Last: ${rel}`;
+        const pillText = uploadModalFailureMeta(e, rel, msg);
+
         setUploadProgress(
             pct,
-            summary,
+            uploadModalFailureText(summary, msg),
             pillText,
             "err"
         );
@@ -2558,11 +2947,17 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
       const pct = (uploadedBytesCommitted > 0) ? (uploadedBytesCommitted / totalBytes) * 100 : 100;
       const lastSummary = lastUploadError ? lastUploadError.summary : "Upload failed";
-      const pillText = lastUploadError && lastUploadError.file ? `Last: ${lastUploadError.file}` : "";
+      const pillText = lastUploadError
+          ? uploadModalFailureMeta(lastUploadError, lastUploadError.file, lastUploadError.message)
+          : "";
+
+      const finalLine = lastUploadError
+          ? uploadModalFailureText(lastSummary, lastUploadError.message)
+          : `Upload finished • Uploaded ${doneFiles}/${totalFiles} • Skipped ${skippedFiles} • Failed ${failedFiles} • ${lastSummary}`;
 
       setUploadProgress(
           pct,
-          `Upload finished • Uploaded ${doneFiles}/${totalFiles} • Skipped ${skippedFiles} • Failed ${failedFiles} • ${lastSummary}`,
+          finalLine,
           pillText,
           "err"
       );

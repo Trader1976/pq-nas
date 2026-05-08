@@ -1211,6 +1211,253 @@
       color: var(--fm-scope-chip-text);
     }
     .hidden{ display:none !important; }
+
+    /* Shared-style upload progress modal, first used by File Manager */
+    .fmUploadProgressBackdrop{
+      position:fixed;
+      inset:0;
+      z-index:1000001;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:24px;
+      background:rgba(0,0,0,.62);
+      backdrop-filter:blur(8px);
+    }
+
+    .fmUploadProgressBackdrop[hidden]{
+      display:none !important;
+    }
+
+    .fmUploadProgressCard{
+      width:min(620px, calc(100vw - 48px));
+      overflow:hidden;
+      border-radius:24px;
+      border:1px solid rgba(var(--accent-rgb),.28);
+      background:
+        linear-gradient(180deg, rgba(var(--accent-rgb),.10), rgba(0,0,0,.02)),
+        rgba(5,10,18,.98);
+      color:var(--fg);
+      box-shadow:0 28px 100px rgba(0,0,0,.60), 0 0 36px rgba(var(--accent-rgb),.12);
+    }
+
+    .fmUploadProgressHead{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:16px;
+      padding:20px 22px 16px;
+      border-bottom:1px solid rgba(var(--fg-rgb),.10);
+    }
+
+    .fmUploadProgressKicker{
+      color:var(--accent);
+      font-size:12px;
+      font-weight:900;
+      letter-spacing:.08em;
+      text-transform:uppercase;
+    }
+
+    .fmUploadProgressHead h2{
+      margin:4px 0 4px;
+      font-size:22px;
+      line-height:1.15;
+    }
+
+    .fmUploadProgressHead p{
+      margin:0;
+      color:rgba(var(--fg-rgb),.68);
+      font-size:13px;
+    }
+
+    .fmUploadProgressClose{
+      border:1px solid rgba(var(--fg-rgb),.16);
+      border-radius:14px;
+      padding:8px 10px;
+      background:rgba(255,255,255,.04);
+      color:var(--fg);
+      font-weight:800;
+      cursor:pointer;
+    }
+
+    .fmUploadProgressBody{
+      padding:20px 22px;
+    }
+
+    .fmUploadProgressFile{
+      margin-bottom:14px;
+      font-weight:900;
+      font-size:15px;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+
+    .fmUploadProgressOk{
+      color:#66f0a4;
+    }
+
+    .fmUploadProgressFail{
+      color:#ff8a8a;
+    }
+
+    .fmUploadProgressRow{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:14px;
+      margin-bottom:8px;
+    }
+
+    .fmUploadProgressText,
+    .fmUploadProgressPct,
+    .fmUploadProgressMeta{
+      color:rgba(var(--fg-rgb),.72);
+      font-size:13px;
+      font-weight:850;
+    }
+
+    .fmUploadProgressPct{
+      flex:0 0 auto;
+    }
+
+    .fmUploadProgressBar{
+      height:12px;
+      overflow:hidden;
+      border-radius:999px;
+      border:1px solid rgba(var(--fg-rgb),.12);
+      background:rgba(0,0,0,.32);
+    }
+
+    .fmUploadProgressFill{
+      width:0%;
+      height:100%;
+      border-radius:999px;
+      background:
+        linear-gradient(90deg, rgba(var(--accent-rgb),.74), rgba(255,138,28,.92));
+      transition:width .16s ease;
+    }
+
+    .fmUploadProgressMeta{
+      margin-top:10px;
+      color:rgba(var(--fg-rgb),.56);
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+
+    .fmUploadProgressMetaErr{
+      color:#ff8a8a;
+    }
+
+    .fmUploadProgressFoot{
+      display:flex;
+      justify-content:flex-end;
+      gap:10px;
+      padding:16px 22px 20px;
+      border-top:1px solid rgba(var(--fg-rgb),.10);
+    }
+
+    .fmUploadProgressBtn{
+      border-radius:14px;
+      padding:10px 14px;
+      font:inherit;
+      font-weight:900;
+      cursor:pointer;
+    }
+
+    .fmUploadProgressBtn.secondary{
+      background:rgba(255,255,255,.04);
+      color:var(--fg);
+      border:1px solid rgba(var(--fg-rgb),.16);
+    }
+
+    .fmUploadProgressBtn.primary{
+      background:var(--accent);
+      color:#061014;
+      border:1px solid rgba(var(--accent-rgb),.68);
+    }
+
+    html[data-theme="bright"] .fmUploadProgressBackdrop,
+    html[data-theme="win_classic"] .fmUploadProgressBackdrop{
+      background:rgba(20,24,32,.36);
+    }
+
+    html[data-theme="bright"] .fmUploadProgressCard,
+    html[data-theme="win_classic"] .fmUploadProgressCard{
+      background:#f8fafc !important;
+      color:#10131a !important;
+      border-color:rgba(20,24,32,.16) !important;
+      box-shadow:0 26px 90px rgba(20,24,32,.24) !important;
+    }
+
+    html[data-theme="bright"] .fmUploadProgressHead,
+    html[data-theme="bright"] .fmUploadProgressFoot,
+    html[data-theme="win_classic"] .fmUploadProgressHead,
+    html[data-theme="win_classic"] .fmUploadProgressFoot{
+      border-color:rgba(20,24,32,.12) !important;
+    }
+
+    html[data-theme="bright"] .fmUploadProgressKicker,
+    html[data-theme="win_classic"] .fmUploadProgressKicker{
+      color:#006d78 !important;
+    }
+
+    html[data-theme="bright"] .fmUploadProgressHead p,
+    html[data-theme="bright"] .fmUploadProgressText,
+    html[data-theme="bright"] .fmUploadProgressPct,
+    html[data-theme="bright"] .fmUploadProgressMeta,
+    html[data-theme="win_classic"] .fmUploadProgressHead p,
+    html[data-theme="win_classic"] .fmUploadProgressText,
+    html[data-theme="win_classic"] .fmUploadProgressPct,
+    html[data-theme="win_classic"] .fmUploadProgressMeta{
+      color:#4a5568 !important;
+    }
+
+    html[data-theme="bright"] .fmUploadProgressFile,
+    html[data-theme="win_classic"] .fmUploadProgressFile{
+      color:#10131a !important;
+    }
+
+    html[data-theme="bright"] .fmUploadProgressOk,
+    html[data-theme="win_classic"] .fmUploadProgressOk{
+      color:#087a3d !important;
+    }
+
+    html[data-theme="bright"] .fmUploadProgressFail,
+    html[data-theme="bright"] .fmUploadProgressMetaErr,
+    html[data-theme="win_classic"] .fmUploadProgressFail,
+    html[data-theme="win_classic"] .fmUploadProgressMetaErr{
+      color:#b00000 !important;
+    }
+
+    html[data-theme="bright"] .fmUploadProgressBar,
+    html[data-theme="win_classic"] .fmUploadProgressBar{
+      background:#e5eaf2 !important;
+      border-color:rgba(20,24,32,.14) !important;
+    }
+
+    html[data-theme="bright"] .fmUploadProgressFill,
+    html[data-theme="win_classic"] .fmUploadProgressFill{
+      background:linear-gradient(90deg, #00a6b2, #ff8a1c) !important;
+    }
+
+    html[data-theme="bright"] .fmUploadProgressClose,
+    html[data-theme="bright"] .fmUploadProgressBtn.secondary,
+    html[data-theme="win_classic"] .fmUploadProgressClose,
+    html[data-theme="win_classic"] .fmUploadProgressBtn.secondary{
+      background:#ffffff !important;
+      color:#10131a !important;
+      border-color:rgba(20,24,32,.18) !important;
+    }
+
+    html[data-theme="bright"] .fmUploadProgressBtn.primary,
+    html[data-theme="win_classic"] .fmUploadProgressBtn.primary{
+      background:#ff8a1c !important;
+      color:#111827 !important;
+      border-color:rgba(180,94,0,.38) !important;
+    }
+
   </style>
   <link rel="stylesheet" href="./file_versions_ui.css">
   <link rel="stylesheet" href="./filemgr_storage_insights.css">
