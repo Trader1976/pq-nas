@@ -106,3 +106,684 @@ html[data-theme="bright"] .rsContextMenuHint,
 html[data-theme="win_classic"] .rsContextMenuHint{
   color:rgba(var(--fg-rgb,0,0,0),.52);
 }
+
+/* Reel Stack context menu bright/win_classic contrast fix */
+html[data-theme="bright"] .rsContextMenu,
+html[data-theme="bright"] .rsCtxMenu,
+html[data-theme="bright"] .reelContextMenu,
+html[data-theme="bright"] [data-rs-context-menu],
+html[data-theme="win_classic"] .rsContextMenu,
+html[data-theme="win_classic"] .rsCtxMenu,
+html[data-theme="win_classic"] .reelContextMenu,
+html[data-theme="win_classic"] [data-rs-context-menu]{
+  background:#f8fafc !important;
+  color:#10131a !important;
+  border:1px solid rgba(20,24,32,0.22) !important;
+  box-shadow:0 22px 60px rgba(20,24,32,0.22) !important;
+  backdrop-filter:none !important;
+  -webkit-backdrop-filter:none !important;
+}
+
+html[data-theme="bright"] .rsContextMenu *,
+html[data-theme="bright"] .rsCtxMenu *,
+html[data-theme="bright"] .reelContextMenu *,
+html[data-theme="bright"] [data-rs-context-menu] *,
+html[data-theme="win_classic"] .rsContextMenu *,
+html[data-theme="win_classic"] .rsCtxMenu *,
+html[data-theme="win_classic"] .reelContextMenu *,
+html[data-theme="win_classic"] [data-rs-context-menu] *{
+  color:#10131a !important;
+  text-shadow:none !important;
+}
+
+html[data-theme="bright"] .rsContextMenu button,
+html[data-theme="bright"] .rsCtxMenu button,
+html[data-theme="bright"] .reelContextMenu button,
+html[data-theme="bright"] [data-rs-context-menu] button,
+html[data-theme="win_classic"] .rsContextMenu button,
+html[data-theme="win_classic"] .rsCtxMenu button,
+html[data-theme="win_classic"] .reelContextMenu button,
+html[data-theme="win_classic"] [data-rs-context-menu] button{
+  background:transparent !important;
+  color:#10131a !important;
+}
+
+html[data-theme="bright"] .rsContextMenu button:hover,
+html[data-theme="bright"] .rsCtxMenu button:hover,
+html[data-theme="bright"] .reelContextMenu button:hover,
+html[data-theme="bright"] [data-rs-context-menu] button:hover,
+html[data-theme="win_classic"] .rsContextMenu button:hover,
+html[data-theme="win_classic"] .rsCtxMenu button:hover,
+html[data-theme="win_classic"] .reelContextMenu button:hover,
+html[data-theme="win_classic"] [data-rs-context-menu] button:hover{
+  background:#e9eef6 !important;
+}
+
+.rsContextMenuSep{
+  height:1px;
+  margin:6px 6px;
+  background:rgba(var(--fg-rgb,255,255,255),.10);
+}
+
+html[data-theme="bright"] .rsContextMenuSep,
+html[data-theme="win_classic"] .rsContextMenuSep{
+  background:rgba(20,24,32,.14) !important;
+}
+
+
+/* Reel Stack custom upload destination modal */
+.rsUploadDestBackdrop{
+  position:fixed;
+  inset:0;
+  z-index:1000000;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+  background:rgba(0,0,0,.58);
+  backdrop-filter:blur(8px);
+}
+
+.rsUploadDestBackdrop[hidden]{
+  display:none !important;
+}
+
+.rsUploadDestCard{
+  width:min(640px, calc(100vw - 48px));
+  max-height:calc(100vh - 48px);
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
+  border-radius:24px;
+  border:1px solid rgba(var(--accent-rgb,0,220,220),.28);
+  background:
+    linear-gradient(180deg, rgba(var(--accent-rgb,0,220,220),.10), rgba(0,0,0,.02)),
+    rgba(5,10,18,.97);
+  color:var(--fg,#e8f6ff);
+  box-shadow:0 28px 100px rgba(0,0,0,.58), 0 0 36px rgba(var(--accent-rgb,0,220,220),.12);
+}
+
+.rsUploadDestHead{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:16px;
+  padding:20px 22px 16px;
+  border-bottom:1px solid rgba(var(--fg-rgb,255,255,255),.10);
+}
+
+.rsUploadDestKicker{
+  color:var(--accent,#00dcdc);
+  font-size:12px;
+  font-weight:900;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+}
+
+.rsUploadDestHead h2{
+  margin:4px 0 4px;
+  font-size:22px;
+  line-height:1.15;
+}
+
+.rsUploadDestHead p{
+  margin:0;
+  color:rgba(var(--fg-rgb,255,255,255),.68);
+  font-size:13px;
+}
+
+.rsUploadDestClose{
+  border:1px solid rgba(var(--fg-rgb,255,255,255),.16);
+  border-radius:14px;
+  padding:8px 10px;
+  background:rgba(255,255,255,.04);
+  color:var(--fg,#e8f6ff);
+  font-weight:800;
+  cursor:pointer;
+}
+
+.rsUploadDestBody{
+  padding:18px 22px;
+  overflow:auto;
+}
+
+.rsUploadDestField{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+
+.rsUploadDestField span,
+.rsUploadDestQuickTitle{
+  color:rgba(var(--fg-rgb,255,255,255),.74);
+  font-size:13px;
+  font-weight:900;
+}
+
+.rsUploadDestField input{
+  width:100%;
+  box-sizing:border-box;
+  border-radius:16px;
+  border:1px solid rgba(var(--accent-rgb,0,220,220),.32);
+  background:rgba(0,0,0,.28);
+  color:var(--fg,#e8f6ff);
+  padding:12px 14px;
+  font:inherit;
+  font-weight:800;
+  outline:none;
+}
+
+.rsUploadDestField input:focus{
+  border-color:rgba(var(--accent-rgb,0,220,220),.82);
+  box-shadow:0 0 0 4px rgba(var(--accent-rgb,0,220,220),.14);
+}
+
+.rsUploadDestHint{
+  margin-top:8px;
+  color:rgba(var(--fg-rgb,255,255,255),.58);
+  font-size:12px;
+}
+
+.rsUploadDestQuickTitle{
+  margin-top:18px;
+  margin-bottom:10px;
+}
+
+.rsUploadDestQuick{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+
+.rsUploadDestQuick button{
+  max-width:100%;
+  border:1px solid rgba(var(--fg-rgb,255,255,255),.14);
+  border-radius:999px;
+  background:rgba(255,255,255,.05);
+  color:var(--fg,#e8f6ff);
+  padding:7px 10px;
+  font:inherit;
+  font-size:12px;
+  font-weight:850;
+  cursor:pointer;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.rsUploadDestQuick button:hover,
+.rsUploadDestQuick button:focus{
+  background:rgba(var(--accent-rgb,0,220,220),.14);
+  color:var(--accent,#00dcdc);
+  outline:none;
+}
+
+.rsUploadDestFoot{
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+  padding:16px 22px 20px;
+  border-top:1px solid rgba(var(--fg-rgb,255,255,255),.10);
+}
+
+.rsUploadDestBtn{
+  border-radius:14px;
+  padding:10px 14px;
+  font:inherit;
+  font-weight:900;
+  cursor:pointer;
+}
+
+.rsUploadDestBtn.secondary{
+  background:rgba(255,255,255,.04);
+  color:var(--fg,#e8f6ff);
+  border:1px solid rgba(var(--fg-rgb,255,255,255),.16);
+}
+
+.rsUploadDestBtn.primary{
+  background:var(--accent,#00dcdc);
+  color:#061014;
+  border:1px solid rgba(var(--accent-rgb,0,220,220),.68);
+}
+
+html[data-theme="bright"] .rsUploadDestBackdrop,
+html[data-theme="win_classic"] .rsUploadDestBackdrop{
+  background:rgba(20,24,32,.36);
+}
+
+html[data-theme="bright"] .rsUploadDestCard,
+html[data-theme="win_classic"] .rsUploadDestCard{
+  background:#f8fafc !important;
+  color:#10131a !important;
+  border-color:rgba(20,24,32,.16) !important;
+  box-shadow:0 26px 90px rgba(20,24,32,.24) !important;
+}
+
+html[data-theme="bright"] .rsUploadDestHead,
+html[data-theme="bright"] .rsUploadDestFoot,
+html[data-theme="win_classic"] .rsUploadDestHead,
+html[data-theme="win_classic"] .rsUploadDestFoot{
+  border-color:rgba(20,24,32,.12) !important;
+}
+
+html[data-theme="bright"] .rsUploadDestKicker,
+html[data-theme="win_classic"] .rsUploadDestKicker{
+  color:#006d78 !important;
+}
+
+html[data-theme="bright"] .rsUploadDestHead p,
+html[data-theme="bright"] .rsUploadDestHint,
+html[data-theme="win_classic"] .rsUploadDestHead p,
+html[data-theme="win_classic"] .rsUploadDestHint{
+  color:#4a5568 !important;
+}
+
+html[data-theme="bright"] .rsUploadDestField span,
+html[data-theme="bright"] .rsUploadDestQuickTitle,
+html[data-theme="win_classic"] .rsUploadDestField span,
+html[data-theme="win_classic"] .rsUploadDestQuickTitle{
+  color:#263244 !important;
+}
+
+html[data-theme="bright"] .rsUploadDestField input,
+html[data-theme="win_classic"] .rsUploadDestField input{
+  background:#ffffff !important;
+  color:#10131a !important;
+  border-color:rgba(20,24,32,.20) !important;
+}
+
+html[data-theme="bright"] .rsUploadDestClose,
+html[data-theme="bright"] .rsUploadDestBtn.secondary,
+html[data-theme="bright"] .rsUploadDestQuick button,
+html[data-theme="win_classic"] .rsUploadDestClose,
+html[data-theme="win_classic"] .rsUploadDestBtn.secondary,
+html[data-theme="win_classic"] .rsUploadDestQuick button{
+  background:#ffffff !important;
+  color:#10131a !important;
+  border-color:rgba(20,24,32,.18) !important;
+}
+
+html[data-theme="bright"] .rsUploadDestQuick button:hover,
+html[data-theme="bright"] .rsUploadDestQuick button:focus,
+html[data-theme="win_classic"] .rsUploadDestQuick button:hover,
+html[data-theme="win_classic"] .rsUploadDestQuick button:focus{
+  background:#e9eef6 !important;
+  color:#003d4a !important;
+}
+
+html[data-theme="bright"] .rsUploadDestBtn.primary,
+html[data-theme="win_classic"] .rsUploadDestBtn.primary{
+  background:#ff8a1c !important;
+  color:#111827 !important;
+  border-color:rgba(180,94,0,.38) !important;
+}
+
+
+/* Reel Stack upload destination folder browser */
+.rsUploadDestBrowserCard{
+  width:min(760px, calc(100vw - 48px));
+}
+
+.rsUploadBrowserBox{
+  margin-top:18px;
+  border:1px solid rgba(var(--fg-rgb,255,255,255),.12);
+  border-radius:18px;
+  overflow:hidden;
+  background:rgba(0,0,0,.14);
+}
+
+.rsUploadBrowserTop{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:12px 14px;
+  border-bottom:1px solid rgba(var(--fg-rgb,255,255,255),.10);
+}
+
+.rsUploadBrowserLabel{
+  color:rgba(var(--fg-rgb,255,255,255),.74);
+  font-size:12px;
+  font-weight:900;
+}
+
+.rsUploadBrowserCrumb{
+  margin-top:3px;
+  color:var(--accent,#00dcdc);
+  font-size:13px;
+  font-weight:900;
+  max-width:420px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.rsUploadBrowserActions{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
+
+.rsUploadBrowserActions button{
+  border:1px solid rgba(var(--fg-rgb,255,255,255),.14);
+  border-radius:12px;
+  padding:7px 9px;
+  background:rgba(255,255,255,.04);
+  color:var(--fg,#e8f6ff);
+  font:inherit;
+  font-size:12px;
+  font-weight:900;
+  cursor:pointer;
+}
+
+.rsUploadBrowserActions button:disabled{
+  opacity:.45;
+  cursor:not-allowed;
+}
+
+.rsUploadBrowserList{
+  max-height:260px;
+  overflow:auto;
+  padding:8px;
+}
+
+.rsUploadBrowserRow{
+  width:100%;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:9px 10px;
+  border:0;
+  border-radius:12px;
+  background:transparent;
+  color:var(--fg,#e8f6ff);
+  text-align:left;
+  cursor:pointer;
+}
+
+.rsUploadBrowserRow:hover,
+.rsUploadBrowserRow:focus{
+  outline:none;
+  background:rgba(var(--accent-rgb,0,220,220),.14);
+}
+
+.rsUploadBrowserIcon{
+  flex:0 0 auto;
+  font-size:17px;
+}
+
+.rsUploadBrowserText{
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
+
+.rsUploadBrowserText strong,
+.rsUploadBrowserText small{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.rsUploadBrowserText strong{
+  font-size:13px;
+  font-weight:900;
+}
+
+.rsUploadBrowserText small{
+  color:rgba(var(--fg-rgb,255,255,255),.52);
+  font-size:11px;
+  font-weight:700;
+}
+
+.rsUploadBrowserEmpty{
+  padding:18px 12px;
+  color:rgba(var(--fg-rgb,255,255,255),.62);
+  font-size:13px;
+  font-weight:800;
+  text-align:center;
+}
+
+html[data-theme="bright"] .rsUploadBrowserBox,
+html[data-theme="win_classic"] .rsUploadBrowserBox{
+  background:#ffffff !important;
+  border-color:rgba(20,24,32,.14) !important;
+}
+
+html[data-theme="bright"] .rsUploadBrowserTop,
+html[data-theme="win_classic"] .rsUploadBrowserTop{
+  border-color:rgba(20,24,32,.12) !important;
+}
+
+html[data-theme="bright"] .rsUploadBrowserLabel,
+html[data-theme="win_classic"] .rsUploadBrowserLabel{
+  color:#263244 !important;
+}
+
+html[data-theme="bright"] .rsUploadBrowserCrumb,
+html[data-theme="win_classic"] .rsUploadBrowserCrumb{
+  color:#006d78 !important;
+}
+
+html[data-theme="bright"] .rsUploadBrowserActions button,
+html[data-theme="win_classic"] .rsUploadBrowserActions button{
+  background:#f8fafc !important;
+  color:#10131a !important;
+  border-color:rgba(20,24,32,.18) !important;
+}
+
+html[data-theme="bright"] .rsUploadBrowserRow,
+html[data-theme="win_classic"] .rsUploadBrowserRow{
+  color:#10131a !important;
+}
+
+html[data-theme="bright"] .rsUploadBrowserRow:hover,
+html[data-theme="bright"] .rsUploadBrowserRow:focus,
+html[data-theme="win_classic"] .rsUploadBrowserRow:hover,
+html[data-theme="win_classic"] .rsUploadBrowserRow:focus{
+  background:#e9eef6 !important;
+}
+
+html[data-theme="bright"] .rsUploadBrowserText small,
+html[data-theme="win_classic"] .rsUploadBrowserText small,
+html[data-theme="bright"] .rsUploadBrowserEmpty,
+html[data-theme="win_classic"] .rsUploadBrowserEmpty{
+  color:#5b6575 !important;
+}
+
+@media (max-width:760px){
+  .rsUploadBrowserTop{
+    align-items:flex-start;
+    flex-direction:column;
+  }
+
+  .rsUploadBrowserActions{
+    justify-content:flex-start;
+  }
+
+  .rsUploadBrowserCrumb{
+    max-width:calc(100vw - 96px);
+  }
+}
+
+
+/* Reel Stack upload progress + cancel modal */
+.rsUploadProgressBackdrop{
+  position:fixed;
+  inset:0;
+  z-index:1000001;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+  background:rgba(0,0,0,.62);
+  backdrop-filter:blur(8px);
+}
+
+.rsUploadProgressBackdrop[hidden]{
+  display:none !important;
+}
+
+.rsUploadProgressCard{
+  width:min(620px, calc(100vw - 48px));
+  overflow:hidden;
+  border-radius:24px;
+  border:1px solid rgba(var(--accent-rgb,0,220,220),.28);
+  background:
+    linear-gradient(180deg, rgba(var(--accent-rgb,0,220,220),.10), rgba(0,0,0,.02)),
+    rgba(5,10,18,.98);
+  color:var(--fg,#e8f6ff);
+  box-shadow:0 28px 100px rgba(0,0,0,.60), 0 0 36px rgba(var(--accent-rgb,0,220,220),.12);
+}
+
+.rsUploadProgressHead{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:16px;
+  padding:20px 22px 16px;
+  border-bottom:1px solid rgba(var(--fg-rgb,255,255,255),.10);
+}
+
+.rsUploadProgressHead h2{
+  margin:4px 0 4px;
+  font-size:22px;
+  line-height:1.15;
+}
+
+.rsUploadProgressHead p{
+  margin:0;
+  color:rgba(var(--fg-rgb,255,255,255),.68);
+  font-size:13px;
+}
+
+.rsUploadProgressBody{
+  padding:20px 22px;
+}
+
+.rsUploadProgressFile{
+  margin-bottom:14px;
+  font-weight:900;
+  font-size:15px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.rsUploadProgressOk{
+  color:#66f0a4;
+}
+
+.rsUploadProgressFail{
+  color:#ff8a8a;
+}
+
+.rsUploadProgressRow{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  margin-bottom:8px;
+}
+
+.rsUploadProgressText,
+.rsUploadProgressPct,
+.rsUploadProgressMeta{
+  color:rgba(var(--fg-rgb,255,255,255),.72);
+  font-size:13px;
+  font-weight:850;
+}
+
+.rsUploadProgressPct{
+  flex:0 0 auto;
+}
+
+.rsUploadProgressBar{
+  height:12px;
+  overflow:hidden;
+  border-radius:999px;
+  border:1px solid rgba(var(--fg-rgb,255,255,255),.12);
+  background:rgba(0,0,0,.32);
+}
+
+.rsUploadProgressFill{
+  width:0%;
+  height:100%;
+  border-radius:999px;
+  background:
+    linear-gradient(90deg, rgba(var(--accent-rgb,0,220,220),.74), rgba(255,138,28,.92));
+  transition:width .16s ease;
+}
+
+.rsUploadProgressMeta{
+  margin-top:10px;
+  color:rgba(var(--fg-rgb,255,255,255),.56);
+}
+
+.rsUploadProgressFoot{
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+  padding:16px 22px 20px;
+  border-top:1px solid rgba(var(--fg-rgb,255,255,255),.10);
+}
+
+html[data-theme="bright"] .rsUploadProgressBackdrop,
+html[data-theme="win_classic"] .rsUploadProgressBackdrop{
+  background:rgba(20,24,32,.36);
+}
+
+html[data-theme="bright"] .rsUploadProgressCard,
+html[data-theme="win_classic"] .rsUploadProgressCard{
+  background:#f8fafc !important;
+  color:#10131a !important;
+  border-color:rgba(20,24,32,.16) !important;
+  box-shadow:0 26px 90px rgba(20,24,32,.24) !important;
+}
+
+html[data-theme="bright"] .rsUploadProgressHead,
+html[data-theme="bright"] .rsUploadProgressFoot,
+html[data-theme="win_classic"] .rsUploadProgressHead,
+html[data-theme="win_classic"] .rsUploadProgressFoot{
+  border-color:rgba(20,24,32,.12) !important;
+}
+
+html[data-theme="bright"] .rsUploadProgressHead p,
+html[data-theme="bright"] .rsUploadProgressText,
+html[data-theme="bright"] .rsUploadProgressPct,
+html[data-theme="bright"] .rsUploadProgressMeta,
+html[data-theme="win_classic"] .rsUploadProgressHead p,
+html[data-theme="win_classic"] .rsUploadProgressText,
+html[data-theme="win_classic"] .rsUploadProgressPct,
+html[data-theme="win_classic"] .rsUploadProgressMeta{
+  color:#4a5568 !important;
+}
+
+html[data-theme="bright"] .rsUploadProgressFile,
+html[data-theme="win_classic"] .rsUploadProgressFile{
+  color:#10131a !important;
+}
+
+html[data-theme="bright"] .rsUploadProgressOk,
+html[data-theme="win_classic"] .rsUploadProgressOk{
+  color:#087a3d !important;
+}
+
+html[data-theme="bright"] .rsUploadProgressFail,
+html[data-theme="win_classic"] .rsUploadProgressFail{
+  color:#b00000 !important;
+}
+
+html[data-theme="bright"] .rsUploadProgressBar,
+html[data-theme="win_classic"] .rsUploadProgressBar{
+  background:#e5eaf2 !important;
+  border-color:rgba(20,24,32,.14) !important;
+}
+
+html[data-theme="bright"] .rsUploadProgressFill,
+html[data-theme="win_classic"] .rsUploadProgressFill{
+  background:linear-gradient(90deg, #00a6b2, #ff8a1c) !important;
+}

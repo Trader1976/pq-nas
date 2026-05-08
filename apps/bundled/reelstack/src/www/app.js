@@ -303,6 +303,10 @@
     return `/api/v4/files/move?${qs.toString()}`;
   }
 
+  function fileStatUrl(path) {
+    return `/api/v4/files/stat?path=${encodeURIComponent(path || "")}`;
+  }
+
   function dirnameOf(path) {
     const s = String(path || "").replace(/^\/+|\/+$/g, "");
     const i = s.lastIndexOf("/");
@@ -596,6 +600,62 @@
 
     return list;
   }
+
+  function dateBucketForMs(ms) {
+    ms = Number(ms || 0);
+    if (!Number.isFinite(ms) || ms <= 0) {
+      return { key: "unknown", label: "Unknown date" };
+    }
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const day = 24 * 60 * 60 * 1000;
+
+    if (ms >= today) return { key: "today", label: "Today" };
+    if (ms >= today - day) return { key: "yesterday", label: "Yesterday" };
+    if (ms >= today - 7 * day) return { key: "this_week", label: "This week" };
+    if (ms >= today - 30 * day) return { key: "this_month", label: "This month" };
+    return { key: "older", label: "Older" };
+  }
+
+  function videoGroupInfo(v, mode) {
+    mode = normalizeViewMode(mode);
+
+    if (mode === "folders") {
+      const label = videoFolderLabel(v);
+      return { key: "folder:" + label, label };
+    }
+
+    if (mode === "recent_added") {
+      const bucket = dateBucketForMs(videoAddedMs(v));
+      return { key: "added:" + bucket.key, label: bucket.label };
+    }
+
+    if (mode === "recent_watched") {
+      const bucket = dateBucketForMs(Number(watchProgressForVideo(v).updated_at || 0));
+      return { key: "watched:" + bucket.key, label: bucket.label };
+    }
+
+    return null;
+  }
+
+  function videoGroupCounts(videos, mode) {
+    const counts = new Map();
+
+    for (const v of videos || []) {
+      const info = videoGroupInfo(v, mode);
+      if (!info || !info.key) continue;
+      counts.set(info.key, (counts.get(info.key) || 0) + 1);
+    }
+
+    return counts;
+  }
+
+  function groupCountLabel(n) {
+    n = Number(n || 0);
+    return `${n} video${n === 1 ? "" : "s"}`;
+  }
+
 
   async function apiJson(url, opts) {
     const r = await fetch(url, Object.assign({
@@ -933,6 +993,54 @@
 
 }
 
+  function looksLikeMissingVideoError(e) {
+    const msg = String(e && e.message ? e.message : e || "").toLowerCase();
+
+    return msg.includes("not_found") ||
+      msg.includes("not found") ||
+      msg.includes("video not found") ||
+      msg.includes("path not found") ||
+      msg.includes("invalid path");
+  }
+
+  async function videoPathMissingByStat(path) {
+    if (!path) return false;
+
+    try {
+      const j = await apiJson(fileStatUrl(path));
+      return !j || j.ok === false || j.exists === false;
+    } catch (e) {
+      const msg = String(e && e.message ? e.message : e || "").toLowerCase();
+      return msg.includes("not_found") ||
+        msg.includes("not found") ||
+        msg.includes("path not found");
+    }
+  }
+
+  function removeStaleMissingVideo(path, reason) {
+    path = String(path || "");
+    if (!path) return false;
+
+    const before = allVideos.length;
+    allVideos = allVideos.filter(v => v && v.path !== path);
+
+    metaCache.delete(path);
+    metaInFlight.delete(path);
+
+    if (selectedPath === path) {
+      selectedPath = "";
+    }
+
+    const removed = allVideos.length !== before;
+    if (removed) {
+      render();
+      setStatus(`Removed stale missing video from Reel Stack: /${path}`);
+      console.warn("Reel Stack removed stale missing video", { path, reason });
+    }
+
+    return removed;
+  }
+
   async function ensureVideoMeta(v) {
     if (!v || !v.path) return;
 
@@ -948,8 +1056,18 @@
     try {
       const [tech, userResp] = await Promise.all([
         apiJson(fileMetaUrl(v.path)),
-        apiJson(fileUserMetaUrl(v.path)).catch(() => ({ ok: false, meta: null }))
+        apiJson(fileUserMetaUrl(v.path)).catch((e) => {
+          if (looksLikeMissingVideoError(e)) {
+            return { ok: false, meta: null, _missing_video: true, _error: String(e && e.message ? e.message : e) };
+          }
+          return { ok: false, meta: null };
+        })
       ]);
+
+      if (userResp && userResp._missing_video && await videoPathMissingByStat(v.path)) {
+        removeStaleMissingVideo(v.path, userResp._error || "user metadata reported missing video");
+        return;
+      }
 
       const merged = Object.assign({}, tech || {});
       merged.user = normalizeUserMeta(userResp && userResp.meta ? userResp.meta : null);
@@ -959,6 +1077,11 @@
       v.meta = merged;
       updateMetaEls(v.path);
     } catch (e) {
+      if (looksLikeMissingVideoError(e) && await videoPathMissingByStat(v.path)) {
+        removeStaleMissingVideo(v.path, e && e.message ? e.message : String(e));
+        return;
+      }
+
       const err = { _error: String(e && e.message ? e.message : e) };
       metaCache.set(v.path, err);
       v.meta = err;
@@ -1199,23 +1322,32 @@
 
     if (!grid) return;
     grid.innerHTML = "";
-    let lastFolderLabel = "";
+    const groupCounts = videoGroupCounts(videos, currentViewMode);
+    let lastGroupKey = "";
 
-    if (emptyState) {
+if (emptyState) {
       emptyState.style.display = allVideos.length ? "none" : "";
     }
 
     for (const v of videos) {
-      if (currentViewMode === "folders") {
-        const folderLabel = videoFolderLabel(v);
-        if (folderLabel !== lastFolderLabel) {
-          lastFolderLabel = folderLabel;
+      const groupInfo = videoGroupInfo(v, currentViewMode);
+      if (groupInfo && groupInfo.key && groupInfo.key !== lastGroupKey) {
+        lastGroupKey = groupInfo.key;
 
-          const group = document.createElement("div");
-          group.className = "rsGroupHeader";
-          group.textContent = folderLabel;
-          grid.appendChild(group);
-        }
+        const group = document.createElement("div");
+        group.className = "rsGroupHeader";
+
+        const groupName = document.createElement("span");
+        groupName.className = "rsGroupHeaderName";
+        groupName.textContent = groupInfo.label;
+
+        const groupCount = document.createElement("span");
+        groupCount.className = "rsGroupHeaderCount";
+        groupCount.textContent = groupCountLabel(groupCounts.get(groupInfo.key) || 0);
+
+        group.appendChild(groupName);
+        group.appendChild(groupCount);
+        grid.appendChild(group);
       }
 
       const card = document.createElement("article");
