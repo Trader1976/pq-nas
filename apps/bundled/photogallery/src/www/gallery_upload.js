@@ -139,10 +139,221 @@
         dropOverlay.setAttribute("aria-hidden", show ? "false" : "true");
     }
 
+
+    let pgUploadModalTotals = {
+        fileCount: 0,
+        totalBytes: 0
+    };
+
+    function ensurePhotoUploadProgressModal() {
+        let backdrop = document.getElementById("pgUploadProgressBackdrop");
+        if (backdrop) return backdrop;
+
+        backdrop = document.createElement("div");
+        backdrop.id = "pgUploadProgressBackdrop";
+        backdrop.className = "pgUploadProgressBackdrop";
+        backdrop.hidden = true;
+
+        backdrop.innerHTML = `
+            <div class="pgUploadProgressCard" role="dialog" aria-modal="true" aria-labelledby="pgUploadProgressTitle">
+                <div class="pgUploadProgressHead">
+                    <div>
+                        <div class="pgUploadProgressKicker">DNA-Nexus upload</div>
+                        <h2 id="pgUploadProgressTitle">Uploading photos</h2>
+                        <p id="pgUploadProgressSub">Preparing upload…</p>
+                    </div>
+                    <button id="pgUploadProgressCancelTop" class="pgUploadProgressClose" type="button">Cancel</button>
+                </div>
+
+                <div class="pgUploadProgressBody">
+                    <div class="pgUploadProgressFile" id="pgUploadProgressFile">Waiting…</div>
+
+                    <div class="pgUploadProgressRow">
+                        <div id="pgUploadProgressText" class="pgUploadProgressText">0 B / 0 B</div>
+                        <div id="pgUploadProgressPct" class="pgUploadProgressPct">0%</div>
+                    </div>
+
+                    <div class="pgUploadProgressBar" aria-hidden="true">
+                        <div id="pgUploadProgressFill" class="pgUploadProgressFill"></div>
+                    </div>
+
+                    <div id="pgUploadProgressMeta" class="pgUploadProgressMeta">Ready.</div>
+                </div>
+
+                <div class="pgUploadProgressFoot">
+                    <button id="pgUploadProgressCancel" class="pgUploadProgressBtn secondary" type="button">Cancel upload</button>
+                    <button id="pgUploadProgressCloseBtn" class="pgUploadProgressBtn primary" type="button" hidden>Close</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(backdrop);
+
+        const requestCancel = () => cancelCurrentUpload();
+
+        backdrop.querySelector("#pgUploadProgressCancel")?.addEventListener("click", requestCancel);
+        backdrop.querySelector("#pgUploadProgressCancelTop")?.addEventListener("click", requestCancel);
+        backdrop.querySelector("#pgUploadProgressCloseBtn")?.addEventListener("click", () => {
+            backdrop.hidden = true;
+        });
+
+        return backdrop;
+    }
+
+    function openPhotoUploadProgressModal(fileCount, totalBytes) {
+        pgUploadModalTotals = {
+            fileCount: Number(fileCount || 0),
+            totalBytes: Number(totalBytes || 0)
+        };
+
+        const backdrop = ensurePhotoUploadProgressModal();
+
+        const sub = backdrop.querySelector("#pgUploadProgressSub");
+        const fileEl = backdrop.querySelector("#pgUploadProgressFile");
+        const textEl = backdrop.querySelector("#pgUploadProgressText");
+        const pctEl = backdrop.querySelector("#pgUploadProgressPct");
+        const fillEl = backdrop.querySelector("#pgUploadProgressFill");
+        const metaEl = backdrop.querySelector("#pgUploadProgressMeta");
+        const close = backdrop.querySelector("#pgUploadProgressCloseBtn");
+        const cancel = backdrop.querySelector("#pgUploadProgressCancel");
+        const cancelTop = backdrop.querySelector("#pgUploadProgressCancelTop");
+
+        if (sub) {
+            const n = pgUploadModalTotals.fileCount;
+            sub.textContent = `${n} photo${n === 1 ? "" : "s"} · ${fmtSize(pgUploadModalTotals.totalBytes)} total`;
+        }
+
+        if (fileEl) {
+            fileEl.textContent = "Preparing upload…";
+            fileEl.classList.remove("pgUploadProgressOk", "pgUploadProgressFail");
+        }
+
+        if (textEl) textEl.textContent = `0 B / ${fmtSize(pgUploadModalTotals.totalBytes)}`;
+        if (pctEl) pctEl.textContent = "0%";
+        if (fillEl) fillEl.style.width = "0%";
+        if (metaEl) {
+            metaEl.textContent = "Ready.";
+            metaEl.classList.remove("pgUploadProgressMetaErr");
+        }
+
+        if (close) close.hidden = true;
+        if (cancel) {
+            cancel.hidden = false;
+            cancel.disabled = false;
+            cancel.textContent = "Cancel upload";
+        }
+        if (cancelTop) {
+            cancelTop.hidden = false;
+            cancelTop.disabled = false;
+            cancelTop.textContent = "Cancel";
+        }
+
+        backdrop.hidden = false;
+    }
+
+    function setPhotoUploadProgressVisible(show) {
+        const backdrop = document.getElementById("pgUploadProgressBackdrop");
+        if (!backdrop) return;
+        backdrop.hidden = !show;
+    }
+
+    function classifyPhotoUploadModalKind(text, pillKind) {
+        const k = String(pillKind || "").trim().toLowerCase();
+        if (k) return k;
+
+        const t = String(text || "").toLowerCase();
+        if (t.includes("failed") || t.includes("error") || t.includes("quota") || t.includes("too large")) return "err";
+        if (t.includes("cancelled") || t.includes("skipped") || t.includes("conflict")) return "warn";
+        if (t.includes("finished") || t.includes("uploaded")) return "ok";
+        return "";
+    }
+
+    function updatePhotoUploadProgressModal(pct, text, pillText = "", pillKind = "") {
+        const backdrop = document.getElementById("pgUploadProgressBackdrop");
+        if (!backdrop || backdrop.hidden) return;
+
+        pct = Math.max(0, Math.min(100, Number(pct || 0)));
+
+        const fileEl = backdrop.querySelector("#pgUploadProgressFile");
+        const textEl = backdrop.querySelector("#pgUploadProgressText");
+        const pctEl = backdrop.querySelector("#pgUploadProgressPct");
+        const fillEl = backdrop.querySelector("#pgUploadProgressFill");
+        const metaEl = backdrop.querySelector("#pgUploadProgressMeta");
+
+        const shownText = String(text || "Uploading…");
+        const kind = classifyPhotoUploadModalKind(shownText, pillKind);
+
+        if (fileEl) {
+            fileEl.textContent = shownText;
+            fileEl.classList.toggle("pgUploadProgressOk", kind === "ok");
+            fileEl.classList.toggle("pgUploadProgressFail", kind === "err");
+        }
+
+        if (textEl) {
+            const loaded = Math.round((pct / 100) * Math.max(0, pgUploadModalTotals.totalBytes || 0));
+            textEl.textContent = `${fmtSize(loaded)} / ${fmtSize(pgUploadModalTotals.totalBytes || 0)}`;
+        }
+
+        if (pctEl) pctEl.textContent = `${Math.round(pct)}%`;
+        if (fillEl) fillEl.style.width = `${pct.toFixed(1)}%`;
+
+        if (metaEl) {
+            metaEl.textContent = String(pillText || "").trim() || "Uploading…";
+            metaEl.classList.toggle("pgUploadProgressMetaErr", kind === "err");
+        }
+    }
+
+    function updatePhotoUploadProgressCancelable(on) {
+        const backdrop = document.getElementById("pgUploadProgressBackdrop");
+        if (!backdrop) return;
+
+        const cancel = backdrop.querySelector("#pgUploadProgressCancel");
+        const cancelTop = backdrop.querySelector("#pgUploadProgressCancelTop");
+        const close = backdrop.querySelector("#pgUploadProgressCloseBtn");
+
+        if (cancel) {
+            cancel.hidden = !on;
+            cancel.disabled = !on;
+            if (on) cancel.textContent = "Cancel upload";
+        }
+
+        if (cancelTop) {
+            cancelTop.hidden = !on;
+            cancelTop.disabled = !on;
+            if (on) cancelTop.textContent = "Cancel";
+        }
+
+        if (close) close.hidden = !!on;
+    }
+
+    function markPhotoUploadCancelling() {
+        const backdrop = document.getElementById("pgUploadProgressBackdrop");
+        if (!backdrop) return;
+
+        const cancel = backdrop.querySelector("#pgUploadProgressCancel");
+        const cancelTop = backdrop.querySelector("#pgUploadProgressCancelTop");
+        const metaEl = backdrop.querySelector("#pgUploadProgressMeta");
+
+        if (cancel) {
+            cancel.disabled = true;
+            cancel.textContent = "Cancelling…";
+        }
+
+        if (cancelTop) {
+            cancelTop.disabled = true;
+            cancelTop.textContent = "Cancelling…";
+        }
+
+        if (metaEl) metaEl.textContent = "Cancelling upload…";
+    }
+
     function showUploadProgress(show) {
-        if (!uploadProg) return;
-        uploadProg.style.display = show ? "block" : "none";
-        uploadProg.setAttribute("aria-hidden", show ? "false" : "true");
+        if (uploadProg) {
+            uploadProg.style.display = show ? "block" : "none";
+            uploadProg.setAttribute("aria-hidden", show ? "false" : "true");
+        }
+
+        setPhotoUploadProgressVisible(!!show);
 
         if (!show) {
             if (uploadProgFill) uploadProgFill.style.width = "0%";
@@ -156,10 +367,13 @@
         }
     }
 
-    function setUploadCancelable(on) {
-        if (!uploadCancelBtn) return;
-        uploadCancelBtn.classList.toggle("hidden", !on);
-        uploadCancelBtn.disabled = !on;
+        function setUploadCancelable(on) {
+        if (uploadCancelBtn) {
+            uploadCancelBtn.classList.toggle("hidden", !on);
+            uploadCancelBtn.disabled = !on;
+        }
+
+        updatePhotoUploadProgressCancelable(!!on);
     }
 
     function setUploadProgress(pct, text, pillText = "", pillKind = "") {
@@ -168,6 +382,8 @@
         if (uploadProgFill) uploadProgFill.style.width = `${pct.toFixed(1)}%`;
         if (uploadProgPct) uploadProgPct.textContent = `${Math.round(pct)}%`;
         if (uploadProgText && text != null) uploadProgText.textContent = String(text);
+
+        updatePhotoUploadProgressModal(pct, text, pillText, pillKind);
 
         if (uploadProgPill) {
             const t = String(pillText || "").trim();
@@ -499,6 +715,8 @@
         let conflictActionAll = "";
 
         uploadCancelRequested = false;
+
+        openPhotoUploadProgressModal(items.length, totalBytes);
         activeUploadXhr = null;
 
         showUploadProgress(true);
@@ -678,11 +896,9 @@
         folderPick.click();
     }
 
-    function cancelCurrentUpload() {
+        function cancelCurrentUpload() {
         uploadCancelRequested = true;
-        if (activeUploadXhr) {
-            try { activeUploadXhr.abort(); } catch (_) {}
-        }
+        markPhotoUploadCancelling();
     }
 
     uploadCancelBtn?.addEventListener("click", cancelCurrentUpload);
