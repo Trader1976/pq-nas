@@ -20,13 +20,16 @@
     const workspaceMembersStatus = document.getElementById("workspaceMembersStatus");
     const workspaceMembersList = document.getElementById("workspaceMembersList");
     const workspaceMembersClose = document.getElementById("workspaceMembersClose");
+    const workspaceCreateSharedBtn = document.getElementById("workspaceCreateSharedBtn");
     const SCOPE_KEY = "pqnas_filemgr_scope_v1";
 
     FM.scope = FM.scope || {
         mode: "user",            // "user" | "workspace"
         workspaceId: "",
         workspaceName: "",
-        workspaceRole: ""
+        workspaceRole: "",
+        workspaceKind: "",
+        workspaceDisplayKind: ""
     };
 
     const workspaceEditorSessionId =
@@ -45,6 +48,8 @@
             FM.scope.workspaceId = String(j.workspaceId || "");
             FM.scope.workspaceName = String(j.workspaceName || "");
             FM.scope.workspaceRole = String(j.workspaceRole || "");
+            FM.scope.workspaceKind = String(j.workspaceKind || "");
+            FM.scope.workspaceDisplayKind = String(j.workspaceDisplayKind || "");
         } catch (_) {}
     }
 
@@ -54,7 +59,9 @@
                 mode: FM.scope.mode,
                 workspaceId: FM.scope.workspaceId,
                 workspaceName: FM.scope.workspaceName,
-                workspaceRole: FM.scope.workspaceRole
+                workspaceRole: FM.scope.workspaceRole,
+                workspaceKind: FM.scope.workspaceKind,
+                workspaceDisplayKind: FM.scope.workspaceDisplayKind
             }));
         } catch (_) {}
     }
@@ -64,6 +71,8 @@
         FM.scope.workspaceId = "";
         FM.scope.workspaceName = "";
         FM.scope.workspaceRole = "";
+        FM.scope.workspaceKind = "";
+        FM.scope.workspaceDisplayKind = "";
         saveScope();
     }
 
@@ -75,6 +84,20 @@
         if (!isWorkspaceScope()) return true;
         return FM.scope.workspaceRole === "owner" || FM.scope.workspaceRole === "editor";
     }
+
+    function isCurrentScopePersonalSharedSpace() {
+        return isWorkspaceScope() && String(FM.scope.workspaceKind || "") === "personal";
+    }
+
+    function currentWorkspaceKindLabel() {
+        if (!isWorkspaceScope()) return "";
+        return isCurrentScopePersonalSharedSpace() ? "Shared Space" : "Workspace";
+    }
+
+    function canCurrentScopeManageMembers() {
+        return isCurrentScopePersonalSharedSpace() && FM.scope.workspaceRole === "owner";
+    }
+
 
     function getCapabilities() {
         if (!isWorkspaceScope()) {
@@ -435,6 +458,27 @@
         return j;
     }
 
+    async function apiCreateSharedSpace(name, notes) {
+        const r = await fetch("/api/v4/workspaces/create", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            credentials: "include",
+            body: JSON.stringify({
+                name,
+                notes: notes || ""
+            })
+        });
+
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j || !j.ok) {
+            throw new Error(j.message || j.error || ("HTTP " + r.status));
+        }
+        return j;
+    }
+
     async function fetchWorkspaces() {
         const r = await fetch("/api/v4/workspaces", {
             method: "GET",
@@ -489,15 +533,28 @@
         const optUser = document.createElement("option");
         optUser.value = "user";
         optUser.textContent = "My files";
+        optUser.dataset.kind = "user";
+        optUser.dataset.displayKind = "my_files";
+        optUser.dataset.role = "";
+        optUser.dataset.name = "My files";
         scopeSelect.appendChild(optUser);
 
         for (const ws of workspaces) {
             if (!ws || !ws.workspace_id) continue;
+
+            const kind = String(ws.kind || "admin");
+            const displayKind = String(ws.display_kind || "");
+            const isSharedSpace = kind === "personal" || displayKind === "shared_space";
+            const name = String(ws.name || ws.workspace_id);
+            const label = isSharedSpace ? `Shared Space · ${name}` : `Workspace · ${name}`;
+
             const opt = document.createElement("option");
             opt.value = `workspace:${ws.workspace_id}`;
-            opt.textContent = ws.name || ws.workspace_id;
-            opt.dataset.role = ws.role || "";
-            opt.dataset.name = ws.name || "";
+            opt.textContent = label;
+            opt.dataset.name = name;
+            opt.dataset.role = String(ws.role || "");
+            opt.dataset.kind = kind;
+            opt.dataset.displayKind = displayKind;
             scopeSelect.appendChild(opt);
         }
 
@@ -505,7 +562,19 @@
             const want = `workspace:${FM.scope.workspaceId}`;
             const found = Array.from(scopeSelect.options).some((o) => o.value === want);
             scopeSelect.value = found ? want : "user";
-            if (!found) resetToUserScope();
+
+            if (!found) {
+                resetToUserScope();
+            } else {
+                const opt = scopeSelect.selectedOptions && scopeSelect.selectedOptions[0];
+                if (opt) {
+                    FM.scope.workspaceName = String(opt.dataset.name || opt.textContent || "");
+                    FM.scope.workspaceRole = String(opt.dataset.role || "");
+                    FM.scope.workspaceKind = String(opt.dataset.kind || "admin");
+                    FM.scope.workspaceDisplayKind = String(opt.dataset.displayKind || "");
+                    saveScope();
+                }
+            }
         } else {
             scopeSelect.value = "user";
         }
@@ -516,7 +585,7 @@
             const workspaces = await fetchWorkspaces();
 
             if (scopeBar) {
-                scopeBar.classList.toggle("hidden", workspaces.length === 0);
+                scopeBar.classList.remove("hidden");
             }
 
             populateScopeSelect(workspaces);
@@ -542,81 +611,387 @@
         return "";
     }
 
-    function renderWorkspaceMembers(items) {
+    async function apiInviteWorkspaceMember(workspaceId, fingerprint, role) {
+        const r = await fetch("/api/v4/workspaces/members/invite", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            credentials: "include",
+            body: JSON.stringify({
+                workspace_id: workspaceId,
+                fingerprint,
+                role: role || "viewer"
+            })
+        });
+
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j || !j.ok) {
+            throw new Error(j.message || j.error || ("HTTP " + r.status));
+        }
+        return j;
+    }
+
+    async function apiSetWorkspaceMemberRole(workspaceId, fingerprint, role) {
+        const r = await fetch("/api/v4/workspaces/members/set_role", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            credentials: "include",
+            body: JSON.stringify({
+                workspace_id: workspaceId,
+                fingerprint,
+                role: role || "viewer"
+            })
+        });
+
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j || !j.ok) {
+            throw new Error(j.message || j.error || ("HTTP " + r.status));
+        }
+        return j;
+    }
+
+    async function apiRemoveWorkspaceMember(workspaceId, fingerprint) {
+        const r = await fetch("/api/v4/workspaces/members/remove", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            credentials: "include",
+            body: JSON.stringify({
+                workspace_id: workspaceId,
+                fingerprint
+            })
+        });
+
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j || !j.ok) {
+            throw new Error(j.message || j.error || ("HTTP " + r.status));
+        }
+        return j;
+    }
+
+    function statusClass(status) {
+        const s = String(status || "").toLowerCase();
+        if (s === "enabled") return "ok";
+        if (s === "invited") return "invited";
+        if (s === "disabled") return "danger";
+        return "";
+    }
+
+    function styleWorkspaceMemberPill(el) {
+        if (!el) return;
+        el.style.display = "inline-flex";
+        el.style.alignItems = "center";
+        el.style.justifyContent = "center";
+        el.style.minHeight = "28px";
+        el.style.padding = "6px 12px";
+        el.style.borderRadius = "999px";
+        el.style.lineHeight = "1.15";
+        el.style.fontSize = "12px";
+        el.style.fontWeight = "900";
+        el.style.whiteSpace = "nowrap";
+    }
+
+    function renderWorkspaceMembers(members) {
         if (!workspaceMembersList) return;
 
-        if (!Array.isArray(items) || !items.length) {
-            workspaceMembersList.innerHTML = `<div class="mono" style="opacity:.8;">No members.</div>`;
+        const canManage = canCurrentScopeManageMembers();
+        const workspaceId = FM.scope.workspaceId || "";
+
+        workspaceMembersList.innerHTML = "";
+
+        if (!Array.isArray(members) || !members.length) {
+            const empty = document.createElement("div");
+            empty.className = "mono";
+            empty.style.opacity = ".8";
+            empty.textContent = "No members.";
+            workspaceMembersList.appendChild(empty);
             return;
         }
 
-        const escHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
-            "&": "&amp;",
-            "<": "&lt;",
-            ">": "&gt;",
-            "\"": "&quot;",
-            "'": "&#39;"
-        }[c]));
+        function addLine(parent, label, value) {
+            const div = document.createElement("div");
+            div.style.fontSize = "12px";
 
-        workspaceMembersList.innerHTML = items.map((m) => {
+            const b = document.createElement("b");
+            b.textContent = label;
+            div.appendChild(b);
+
+            div.appendChild(document.createTextNode(" " + (value || "—")));
+            parent.appendChild(div);
+        }
+
+        async function reloadMembers() {
+            await openWorkspaceMembersModal();
+        }
+
+        for (const m of members) {
             const fp = String(m.fingerprint || "");
-            const name = String(m.name || "");
-            const avatarUrl = String(m.avatar_url || "").trim();
-            const role = String(m.role || "");
+            const role = String(m.role || "viewer");
             const status = String(m.status || "");
-            const addedAt = String(m.added_at || "");
-            const addedBy = String(m.added_by || "");
-            const respondedAt = String(m.responded_at || "");
-            const respondedBy = String(m.responded_by || "");
+            const name = String(m.name || m.display_name || m.email || "");
+            const avatar = String(m.avatar_url || "");
+            const label = name || (fp ? fp.slice(0, 18) + "…" : "Member");
 
-            const respondedBits = [];
-            if (respondedAt) respondedBits.push(`responded ${respondedAt}`);
-            if (respondedBy) respondedBits.push(`by ${respondedBy}`);
+            const row = document.createElement("div");
+            row.className = "memberRow";
+            row.dataset.fingerprint = fp;
+            row.style.display = "grid";
+            row.style.gap = "10px";
+            row.style.padding = "12px";
+            row.style.border = "1px solid rgba(var(--fg-rgb),0.14)";
+            row.style.borderRadius = "14px";
+            row.style.background = "rgba(255,255,255,0.035)";
 
-            const identityHtml = name
-                ? `
-                <div style="min-width:0;">
-                  <div style="font-weight:900; overflow-wrap:anywhere;">${escHtml(name)}</div>
-                  <div class="wsMemberFp mono" style="opacity:.78;">${escHtml(fp)}</div>
-                </div>
-              `
-                : `<div class="wsMemberFp mono">${escHtml(fp)}</div>`;
+            const top = document.createElement("div");
+            top.style.display = "grid";
+            top.style.gridTemplateColumns = "48px minmax(0,1fr)";
+            top.style.gap = "12px";
+            top.style.alignItems = "start";
 
-            const avatarHtml = avatarUrl
-                ? `
-                <img
-                  src="${escHtml(avatarUrl)}"
-                  alt=""
-                  style="width:56px; height:56px; border-radius:14px; object-fit:cover; border:1px solid rgba(var(--fg-rgb),0.14); background:rgba(0,0,0,0.12); flex:0 0 auto;"
-                />
-              `
-                : `
-                <div
-                  style="width:56px; height:56px; border-radius:14px; border:1px solid rgba(var(--fg-rgb),0.12); background:rgba(0,0,0,0.10); display:flex; align-items:center; justify-content:center; font-size:24px; opacity:.72; flex:0 0 auto;"
-                >👤</div>
-              `;
+            const avatarWrap = document.createElement("div");
+            if (avatar) {
+                const img = document.createElement("img");
+                img.src = avatar;
+                img.alt = "";
+                img.style.width = "48px";
+                img.style.height = "48px";
+                img.style.borderRadius = "12px";
+                img.style.objectFit = "cover";
+                img.style.border = "1px solid rgba(var(--fg-rgb),0.18)";
+                avatarWrap.appendChild(img);
+            } else {
+                const blank = document.createElement("div");
+                blank.style.width = "48px";
+                blank.style.height = "48px";
+                blank.style.borderRadius = "12px";
+                blank.style.border = "1px solid rgba(var(--fg-rgb),0.18)";
+                blank.style.background = "rgba(255,255,255,0.06)";
+                avatarWrap.appendChild(blank);
+            }
 
-            return `
-            <div class="wsMemberCard">
-              <div style="display:flex; gap:12px; align-items:flex-start;">
-                ${avatarHtml}
+            const info = document.createElement("div");
+            info.style.minWidth = "0";
 
-                <div style="min-width:0; flex:1 1 auto;">
-                  <div class="wsMemberHead">
-                    ${identityHtml}
-                    <span class="badge ${memberStatusClass(status)}">${escHtml(status || "?")}</span>
-                  </div>
+            const head = document.createElement("div");
+            head.style.display = "flex";
+            head.style.gap = "8px";
+            head.style.alignItems = "center";
+            head.style.justifyContent = "space-between";
+            head.style.flexWrap = "wrap";
 
-                  <div class="wsMemberMeta">
-                    <div><span class="k">Role</span> <span class="v">${escHtml(role || "?")}</span></div>
-                    <div><span class="k">Added</span> <span class="v">${escHtml(addedAt || "?")}${addedBy ? ` by ${escHtml(addedBy)}` : ""}</span></div>
-                    ${respondedBits.length ? `<div><span class="k">Response</span> <span class="v">${escHtml(respondedBits.join(" "))}</span></div>` : ""}
-                  </div>
-                </div>
-              </div>
+            const title = document.createElement("div");
+            title.style.fontWeight = "900";
+            title.textContent = label;
+            head.appendChild(title);
+
+            const pills = document.createElement("div");
+            pills.style.display = "flex";
+            pills.style.gap = "8px";
+            pills.style.alignItems = "center";
+            pills.style.flexWrap = "wrap";
+
+            const statusPill = document.createElement("span");
+            statusPill.className = "pill " + statusClass(status);
+            statusPill.textContent = status || "unknown";
+            styleWorkspaceMemberPill(statusPill);
+            pills.appendChild(statusPill);
+
+            const rolePill = document.createElement("span");
+            rolePill.className = "pill";
+            rolePill.textContent = role;
+            styleWorkspaceMemberPill(rolePill);
+            pills.appendChild(rolePill);
+
+            head.appendChild(pills);
+            info.appendChild(head);
+
+            const fpLine = document.createElement("div");
+            fpLine.className = "mono";
+            fpLine.style.opacity = ".78";
+            fpLine.style.fontSize = "12px";
+            fpLine.style.overflowWrap = "anywhere";
+            fpLine.style.marginTop = "4px";
+            fpLine.textContent = fp;
+            info.appendChild(fpLine);
+
+            const meta = document.createElement("div");
+            meta.style.marginTop = "10px";
+            meta.style.display = "grid";
+            meta.style.gap = "4px";
+            addLine(meta, "Added", String(m.added_at || "—"));
+            addLine(meta, "Response", String(m.responded_at || "—"));
+            info.appendChild(meta);
+
+            top.appendChild(avatarWrap);
+            top.appendChild(info);
+            row.appendChild(top);
+
+            if (canManage && fp) {
+                const controls = document.createElement("div");
+                controls.style.display = "flex";
+                controls.style.gap = "8px";
+                controls.style.alignItems = "center";
+                controls.style.flexWrap = "wrap";
+                controls.style.paddingTop = "8px";
+                controls.style.borderTop = "1px solid rgba(var(--fg-rgb),0.10)";
+
+                const sel = document.createElement("select");
+                sel.style.minWidth = "130px";
+                for (const r of ["viewer", "editor", "owner"]) {
+                    const opt = document.createElement("option");
+                    opt.value = r;
+                    opt.textContent = r;
+                    opt.selected = (r === role);
+                    sel.appendChild(opt);
+                }
+                controls.appendChild(sel);
+
+                const apply = document.createElement("button");
+                apply.className = "btn secondary";
+                apply.type = "button";
+                apply.textContent = "Apply role";
+                apply.addEventListener("click", async () => {
+                    const old = apply.textContent;
+                    apply.disabled = true;
+                    apply.textContent = "Applying…";
+                    try {
+                        await apiSetWorkspaceMemberRole(workspaceId, fp, String(sel.value || "viewer"));
+                        await reloadMembers();
+                    } catch (e) {
+                        if (workspaceMembersStatus) workspaceMembersStatus.textContent = "Role update failed: " + String(e && e.message ? e.message : e);
+                        apply.disabled = false;
+                        apply.textContent = old;
+                    }
+                });
+                controls.appendChild(apply);
+
+                if (status !== "enabled") {
+                    const reinvite = document.createElement("button");
+                    reinvite.className = "btn secondary";
+                    reinvite.type = "button";
+                    reinvite.textContent = "Re-invite";
+                    reinvite.addEventListener("click", async () => {
+                        const old = reinvite.textContent;
+                        reinvite.disabled = true;
+                        reinvite.textContent = "Re-inviting…";
+                        try {
+                            await apiInviteWorkspaceMember(workspaceId, fp, String(sel.value || "viewer"));
+                            await reloadMembers();
+                        } catch (e) {
+                            if (workspaceMembersStatus) workspaceMembersStatus.textContent = "Re-invite failed: " + String(e && e.message ? e.message : e);
+                            reinvite.disabled = false;
+                            reinvite.textContent = old;
+                        }
+                    });
+                    controls.appendChild(reinvite);
+                }
+
+                const remove = document.createElement("button");
+                remove.className = "btn danger";
+                remove.type = "button";
+                remove.textContent = "Remove";
+                remove.addEventListener("click", async () => {
+                    if (!confirm("Remove member from Shared Space?\n\n" + fp)) return;
+
+                    const old = remove.textContent;
+                    remove.disabled = true;
+                    remove.textContent = "Removing…";
+                    try {
+                        await apiRemoveWorkspaceMember(workspaceId, fp);
+                        await reloadMembers();
+                    } catch (e) {
+                        if (workspaceMembersStatus) workspaceMembersStatus.textContent = "Remove failed: " + String(e && e.message ? e.message : e);
+                        remove.disabled = false;
+                        remove.textContent = old;
+                    }
+                });
+                controls.appendChild(remove);
+
+                row.appendChild(controls);
+            }
+
+            workspaceMembersList.appendChild(row);
+        }
+    }
+
+    function ensureSharedSpaceInvitePanel() {
+        if (!workspaceMembersModal || document.getElementById("sharedSpaceInvitePanel")) return;
+
+        const body = workspaceMembersModal.querySelector(".modalBody");
+        if (!body || !workspaceMembersList) return;
+
+        const panel = document.createElement("div");
+        panel.id = "sharedSpaceInvitePanel";
+        panel.style.cssText = "display:none; margin-bottom:12px; padding:10px; border:1px solid rgba(var(--fg-rgb),0.16); border-radius:14px; background:rgba(255,255,255,0.035);";
+        panel.innerHTML = `
+            <div style="font-weight:900; margin-bottom:8px;">Invite member</div>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                <input id="sharedSpaceInviteFp" class="mono" placeholder="Fingerprint" style="flex:1; min-width:260px;" />
+                <select id="sharedSpaceInviteRole" style="min-width:120px;">
+                    <option value="viewer">viewer</option>
+                    <option value="editor" selected>editor</option>
+                    <option value="owner">owner</option>
+                </select>
+                <button id="sharedSpaceInviteBtn" class="btn" type="button">Invite</button>
+            </div>
+            <div class="mono" style="opacity:.7; font-size:12px; margin-top:8px;">
+                The invited user will see this under Shared Space invites.
             </div>
         `;
-        }).join("");
+
+        body.insertBefore(panel, workspaceMembersList);
+
+        const inviteBtn = panel.querySelector("#sharedSpaceInviteBtn");
+        inviteBtn?.addEventListener("click", async () => {
+            const fpEl = panel.querySelector("#sharedSpaceInviteFp");
+            const roleEl = panel.querySelector("#sharedSpaceInviteRole");
+            const fp = String(fpEl?.value || "").trim();
+            const role = String(roleEl?.value || "viewer").trim();
+            const workspaceId = FM.scope.workspaceId || "";
+
+            if (!workspaceId || !fp) {
+                if (workspaceMembersStatus) workspaceMembersStatus.textContent = "Invite failed: missing fingerprint.";
+                return;
+            }
+
+            const old = inviteBtn.textContent;
+            inviteBtn.disabled = true;
+            inviteBtn.textContent = "Inviting…";
+
+            try {
+                await apiInviteWorkspaceMember(workspaceId, fp, role);
+                if (fpEl) fpEl.value = "";
+                await openWorkspaceMembersModal();
+            } catch (e) {
+                if (workspaceMembersStatus) {
+                    workspaceMembersStatus.textContent = `Invite failed: ${String(e && e.message ? e.message : e)}`;
+                }
+            } finally {
+                inviteBtn.disabled = false;
+                inviteBtn.textContent = old;
+            }
+        });
+    }
+
+    function updateLegacyWorkspaceManagementFooter() {
+        if (!workspaceMembersModal) return;
+
+        const canManage = canCurrentScopeManageMembers();
+        const footers = Array.from(workspaceMembersModal.querySelectorAll(".modalBody > div, .modalBody > section"));
+
+        for (const el of footers) {
+            const text = String(el.textContent || "");
+            if (text.includes("Workspace member changes are managed outside File Manager")) {
+                el.style.display = canManage ? "none" : "";
+            }
+        }
     }
 
     async function openWorkspaceMembersModal() {
@@ -627,7 +1002,7 @@
         workspaceMembersModal.setAttribute("aria-hidden", "false");
 
         if (workspaceMembersTitle) {
-            workspaceMembersTitle.textContent = "Workspace members";
+            workspaceMembersTitle.textContent = canCurrentScopeManageMembers() ? "Manage Shared Space members" : `${currentWorkspaceKindLabel()} members`;
         }
         if (workspaceMembersSub) {
             workspaceMembersSub.textContent = `${FM.scope.workspaceName || FM.scope.workspaceId}`;
@@ -635,6 +1010,15 @@
         if (workspaceMembersStatus) {
             workspaceMembersStatus.textContent = "Loading members…";
         }
+        ensureSharedSpaceInvitePanel();
+
+        const invitePanel = document.getElementById("sharedSpaceInvitePanel");
+        if (invitePanel) {
+            invitePanel.style.display = canCurrentScopeManageMembers() ? "block" : "none";
+        }
+
+        updateLegacyWorkspaceManagementFooter();
+
         if (workspaceMembersList) {
             workspaceMembersList.innerHTML = "";
         }
@@ -659,6 +1043,273 @@
         if (!isWorkspaceScope()) return;
         await openWorkspaceMembersModal();
     });
+
+    function ensureCreateSharedSpaceModalStyle() {
+        if (document.getElementById("sharedSpaceCreateModalWideStyle")) return;
+
+        const st = document.createElement("style");
+        st.id = "sharedSpaceCreateModalWideStyle";
+        st.textContent = `
+            #sharedSpaceCreateModal .modalCard{
+                width: min(760px, calc(100vw - 48px)) !important;
+                max-width: 760px !important;
+            }
+            #sharedSpaceCreateModal .modalBody{
+                padding: 18px !important;
+            }
+            #sharedSpaceCreateModal .ssCreateForm{
+                display: grid !important;
+                gap: 16px !important;
+                width: 100% !important;
+                max-width: none !important;
+            }
+            #sharedSpaceCreateModal .ssFormField{
+                display: grid !important;
+                gap: 8px !important;
+                width: 100% !important;
+                max-width: none !important;
+                min-width: 0 !important;
+            }
+            #sharedSpaceCreateModal .ssInput,
+            #sharedSpaceCreateModal .ssTextarea{
+                display: block !important;
+                width: 100% !important;
+                max-width: none !important;
+                min-width: 0 !important;
+                box-sizing: border-box !important;
+                padding: 11px 12px !important;
+                border-radius: 12px !important;
+                border: 1px solid rgba(var(--fg-rgb),0.24) !important;
+                background: rgba(255,255,255,0.06) !important;
+                color: var(--fg) !important;
+                font-size: 14px !important;
+            }
+            #sharedSpaceCreateModal .ssInput{
+                min-height: 44px !important;
+            }
+            #sharedSpaceCreateModal .ssTextarea{
+                min-height: 125px !important;
+                resize: vertical !important;
+                line-height: 1.35 !important;
+                font-family: var(--sans) !important;
+            }
+        `;
+        document.head.appendChild(st);
+    }
+
+    function openCreateSharedSpaceModal() {
+        return new Promise((resolve) => {
+            // Important: File Manager iframes can stay alive in the shell.
+            // Remove any older/narrow modal DOM before creating the current one.
+            const oldModal = document.getElementById("sharedSpaceCreateModal");
+            if (oldModal) oldModal.remove();
+
+            ensureCreateSharedSpaceModalStyle();
+
+            const modal = document.createElement("div");
+            modal.id = "sharedSpaceCreateModal";
+            modal.className = "modal";
+            modal.setAttribute("aria-hidden", "true");
+
+            modal.innerHTML = `
+                <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="sharedSpaceCreateTitle">
+                    <div class="modalHead">
+                        <div>
+                            <div id="sharedSpaceCreateTitle" class="modalTitle">New Shared Space</div>
+                            <div class="modalSub mono">Create a private collaboration space</div>
+                        </div>
+                        <button class="btn secondary" type="button" data-ss-cancel>Close</button>
+                    </div>
+
+                    <div class="modalBody">
+                        <div class="ssCreateForm">
+                            <label class="ssFormField">
+                                <span style="font-weight:900;">Name</span>
+                                <input class="ssInput"
+                                       data-ss-name
+                                       maxlength="80"
+                                       autocomplete="off"
+                                       placeholder="Family photos, Project files, Trip planning…" />
+                            </label>
+
+                            <label class="ssFormField">
+                                <span style="font-weight:900;">Notes <span style="opacity:.65; font-weight:700;">optional</span></span>
+                                <textarea class="ssTextarea"
+                                          data-ss-notes
+                                          maxlength="300"
+                                          rows="4"
+                                          placeholder="What is this Shared Space for?"></textarea>
+                            </label>
+
+                            <div data-ss-status class="mono" style="min-height:18px; opacity:.85;"></div>
+                        </div>
+                    </div>
+
+                    <div class="modalFoot" style="display:flex; justify-content:flex-end; gap:10px;">
+                        <button class="btn secondary" type="button" data-ss-cancel>Cancel</button>
+                        <button class="btn" type="button" data-ss-create>Create Shared Space</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(modal);
+
+            const nameInput = modal.querySelector("[data-ss-name]");
+            const notesInput = modal.querySelector("[data-ss-notes]");
+            const statusEl = modal.querySelector("[data-ss-status]");
+            const createBtn = modal.querySelector("[data-ss-create]");
+            const cancelBtns = modal.querySelectorAll("[data-ss-cancel]");
+
+            // Force modal form sizing directly. Some global File Manager/theme
+            // control styles can otherwise keep inputs at their old small width.
+            const card = modal.querySelector(".modalCard");
+            const body = modal.querySelector(".modalBody");
+            const form = modal.querySelector(".ssCreateForm");
+
+            function forceStyle(el, props) {
+                if (!el) return;
+                for (const [k, v] of Object.entries(props)) {
+                    el.style.setProperty(k, v, "important");
+                }
+            }
+
+            forceStyle(card, {
+                "width": "min(760px, calc(100vw - 48px))",
+                "max-width": "760px"
+            });
+
+            forceStyle(body, {
+                "display": "block",
+                "width": "100%",
+                "max-width": "none",
+                "padding": "18px"
+            });
+
+            forceStyle(form, {
+                "display": "grid",
+                "gap": "16px",
+                "width": "100%",
+                "max-width": "none",
+                "min-width": "0"
+            });
+
+            for (const label of modal.querySelectorAll(".ssFormField")) {
+                forceStyle(label, {
+                    "display": "grid",
+                    "gap": "8px",
+                    "width": "100%",
+                    "max-width": "none",
+                    "min-width": "0"
+                });
+            }
+
+            forceStyle(nameInput, {
+                "display": "block",
+                "width": "100%",
+                "max-width": "none",
+                "min-width": "0",
+                "box-sizing": "border-box",
+                "min-height": "44px",
+                "padding": "11px 12px",
+                "font-size": "14px"
+            });
+
+            forceStyle(notesInput, {
+                "display": "block",
+                "width": "100%",
+                "max-width": "none",
+                "min-width": "0",
+                "box-sizing": "border-box",
+                "min-height": "125px",
+                "padding": "11px 12px",
+                "font-size": "14px",
+                "line-height": "1.35",
+                "resize": "vertical"
+            });
+
+            let done = false;
+
+            function close(result) {
+                if (done) return;
+                done = true;
+                modal.classList.remove("show");
+                modal.setAttribute("aria-hidden", "true");
+                modal.remove();
+                resolve(result || null);
+            }
+
+            function submit() {
+                const name = String(nameInput?.value || "").trim();
+                const notes = String(notesInput?.value || "").trim();
+
+                if (!name) {
+                    if (statusEl) statusEl.textContent = "Shared Space name is required.";
+                    nameInput?.focus();
+                    return;
+                }
+
+                close({ name, notes });
+            }
+
+            createBtn?.addEventListener("click", submit);
+
+            for (const btn of cancelBtns) {
+                btn.addEventListener("click", () => close(null));
+            }
+
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) close(null);
+            });
+
+            modal.addEventListener("keydown", (ev) => {
+                if (ev.key === "Escape") close(null);
+                if (ev.key === "Enter" && ev.ctrlKey) submit();
+            });
+
+            modal.classList.add("show");
+            modal.setAttribute("aria-hidden", "false");
+
+            setTimeout(() => nameInput?.focus(), 30);
+        });
+    }
+
+    workspaceCreateSharedBtn?.addEventListener("click", async () => {
+        const payload = await openCreateSharedSpaceModal();
+        if (!payload) return;
+
+        const old = workspaceCreateSharedBtn.textContent;
+        workspaceCreateSharedBtn.disabled = true;
+        workspaceCreateSharedBtn.textContent = "Creating…";
+
+        try {
+            const j = await apiCreateSharedSpace(payload.name, payload.notes);
+            const ws = j && j.workspace ? j.workspace : null;
+            if (!ws || !ws.workspace_id) {
+                throw new Error("create response did not include workspace");
+            }
+
+            FM.scope.mode = "workspace";
+            FM.scope.workspaceId = String(ws.workspace_id || "");
+            FM.scope.workspaceName = String(ws.name || ws.workspace_id || "");
+            FM.scope.workspaceRole = String(ws.role || "owner");
+            FM.scope.workspaceKind = String(ws.kind || "personal");
+            saveScope();
+
+            const workspaces = await fetchWorkspaces().catch(() => []);
+            if (scopeBar) scopeBar.classList.remove("hidden");
+            populateScopeSelect(workspaces);
+            applyScopeUi();
+
+            if (FM.clearSelection) FM.clearSelection();
+            if (FM.setPathAndLoad) FM.setPathAndLoad("");
+        } catch (e) {
+            alert("Create Shared Space failed:\\n" + String(e && e.message ? e.message : e));
+        } finally {
+            workspaceCreateSharedBtn.disabled = false;
+            workspaceCreateSharedBtn.textContent = old;
+        }
+    });
+
 
     workspaceMembersClose?.addEventListener("click", () => {
         closeWorkspaceMembersModal();
@@ -717,7 +1368,7 @@
             const workspaces = await fetchWorkspaces();
 
             if (scopeBar) {
-                scopeBar.classList.toggle("hidden", workspaces.length === 0);
+                scopeBar.classList.remove("hidden");
             }
 
             populateScopeSelect(workspaces);
@@ -735,6 +1386,8 @@
                     FM.scope.workspaceId = workspaceId;
                     FM.scope.workspaceName = opt ? String(opt.dataset.name || opt.textContent || "") : "";
                     FM.scope.workspaceRole = opt ? String(opt.dataset.role || "") : "";
+                    FM.scope.workspaceKind = opt ? String(opt.dataset.kind || "admin") : "admin";
+                    FM.scope.workspaceDisplayKind = opt ? String(opt.dataset.displayKind || "") : "";
                     saveScope();
                 } else {
                     resetToUserScope();
@@ -751,7 +1404,17 @@
             }
         } catch (e) {
             console.warn("Workspace switcher init failed:", e);
-            if (scopeBar) scopeBar.classList.add("hidden");
+
+            // Fail open during UI/runtime issues: users should still see the
+            // Location bar and the New Shared Space button instead of the whole
+            // workspace toolbar disappearing.
+            if (scopeBar) scopeBar.classList.remove("hidden");
+            if (scopeRole) {
+                scopeRole.textContent = "Workspace UI error";
+                scopeRole.classList.remove("hidden");
+                scopeRole.title = String(e && e.message ? e.message : e);
+            }
+
             resetToUserScope();
             applyScopeUi();
         }
@@ -759,6 +1422,8 @@
     FM.isWorkspaceScope = isWorkspaceScope;
     FM.getWorkspaceId = () => FM.scope.workspaceId || "";
     FM.getWorkspaceRole = () => FM.scope.workspaceRole || "";
+    FM.getWorkspaceKind = () => FM.scope.workspaceKind || "";
+    FM.isPersonalSharedSpaceScope = isCurrentScopePersonalSharedSpace;
     FM.canCurrentScopeWrite = canCurrentScopeWrite;
     FM.getCapabilities = getCapabilities;
     FM.getWorkspaceEditorSessionId = () => workspaceEditorSessionId;
