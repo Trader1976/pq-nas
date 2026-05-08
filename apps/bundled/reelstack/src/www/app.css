@@ -927,3 +927,49 @@ html[data-theme="win_classic"] .rsMeta,
 html[data-theme="win_classic"] .rsDetails{
   color:rgba(var(--fg-rgb,0,0,0),.62);
 }
+
+
+/* Reel Stack browsing modes */
+.rsViewModeLabel{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+}
+
+.rsViewModeLabelText{
+  color:var(--muted);
+  font-size:13px;
+  white-space:nowrap;
+}
+
+.rsSelect{
+  min-width:170px;
+  cursor:pointer;
+}
+
+.rsGroupHeader{
+  grid-column:1 / -1;
+  margin:18px 0 2px;
+  padding:10px 12px;
+  border:1px solid rgba(var(--fg-rgb),0.12);
+  border-radius:14px;
+  background:rgba(0,0,0,0.22);
+  color:var(--fg);
+  font-weight:800;
+  letter-spacing:0.01em;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  box-shadow:0 10px 26px rgba(0,0,0,0.16);
+}
+
+@media (max-width:760px){
+  .rsViewModeLabel{
+    width:100%;
+  }
+
+  .rsViewModeLabel .rsSelect{
+    flex:1 1 auto;
+    min-width:0;
+  }
+}

@@ -5,6 +5,19 @@
     "mp4", "m4v", "mov", "webm", "mkv", "avi", "wmv", "flv", "mpeg", "mpg", "3gp"
   ]);
 
+  const VIEW_MODE_KEY = "pqnas_reelstack_view_mode_v1";
+  const WATCH_PROGRESS_KEY = "pqnas_reelstack_watch_progress_v1";
+
+  const VIEW_MODES = new Map([
+    ["all", "All videos"],
+    ["folders", "By folder"],
+    ["recent_added", "Recently added"],
+    ["recent_watched", "Recently watched"],
+    ["favorites", "Favorites"],
+    ["unrated", "Unrated"],
+    ["missing_thumbnails", "Missing thumbnails"]
+  ]);
+
   const el = (id) => document.getElementById(id);
 
   const grid = el("grid");
@@ -12,6 +25,7 @@
   const statusText = el("statusText");
   const countText = el("countText");
   const filterInput = el("filterInput");
+  const viewModeSelect = el("viewModeSelect");
   const scanBtn = el("scanBtn");
   const searchBtn = el("searchBtn");
 
@@ -24,6 +38,11 @@
   let allVideos = [];
   const metaCache = new Map();
   const metaInFlight = new Set();
+
+  let watchProgressCache = null;
+  let currentPlayerVideo = null;
+  let lastPlayerProgressSaveMs = 0;
+  let currentViewMode = normalizeViewMode(safeLocalStorageGet(VIEW_MODE_KEY, "all"));
 
   let selectedPath = "";
   let shareBadgesByPath = new Map();
@@ -288,6 +307,294 @@
     const s = String(path || "").replace(/^\/+|\/+$/g, "");
     const i = s.lastIndexOf("/");
     return i >= 0 ? s.slice(0, i) : "";
+  }
+
+  function safeLocalStorageGet(key, fallback) {
+    try {
+      const value = window.localStorage.getItem(key);
+      return value === null || value === undefined ? fallback : value;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function safeLocalStorageSet(key, value) {
+    try {
+      window.localStorage.setItem(key, String(value));
+    } catch (_) {}
+  }
+
+  function normalizeViewMode(mode) {
+    mode = String(mode || "").trim();
+    return VIEW_MODES.has(mode) ? mode : "all";
+  }
+
+  function viewModeLabel(mode) {
+    return VIEW_MODES.get(normalizeViewMode(mode)) || "All videos";
+  }
+
+  function syncViewModeSelect() {
+    if (!viewModeSelect) return;
+    if (viewModeSelect.value !== currentViewMode) {
+      viewModeSelect.value = currentViewMode;
+    }
+  }
+
+  function setViewMode(mode) {
+    currentViewMode = normalizeViewMode(mode);
+    safeLocalStorageSet(VIEW_MODE_KEY, currentViewMode);
+    syncViewModeSelect();
+    render();
+
+    const n = filteredVideos().length;
+    setStatus(`View: ${viewModeLabel(currentViewMode)} · ${n} video${n === 1 ? "" : "s"}`);
+  }
+
+  function sortableTitle(v) {
+    return videoDisplayTitle(v).toLocaleLowerCase();
+  }
+
+  function compareTitle(a, b) {
+    return sortableTitle(a).localeCompare(sortableTitle(b), undefined, { sensitivity: "base" });
+  }
+
+  function videoFolderLabel(v) {
+    const dir = dirnameOf(v && v.path || "");
+    return dir ? "/" + dir : "/";
+  }
+
+  function epochLikeToMs(value) {
+    if (value === null || value === undefined || value === "") return 0;
+
+    if (typeof value === "number") {
+      if (!Number.isFinite(value) || value <= 0) return 0;
+      return value > 1000000000000 ? value : value * 1000;
+    }
+
+    const text = String(value).trim();
+    if (!text) return 0;
+
+    const numeric = Number(text);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      return numeric > 1000000000000 ? numeric : numeric * 1000;
+    }
+
+    const parsed = Date.parse(text);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function videoAddedMs(v) {
+    const m = metaForVideo(v) || {};
+    const candidates = [
+      v && v.added_epoch,
+      v && v.created_epoch,
+      v && v.mtime_epoch,
+      v && v.modified_epoch,
+      v && v.updated_epoch,
+      v && v.mtime,
+      v && v.modified,
+      v && v.last_modified,
+      m.added_epoch,
+      m.created_epoch,
+      m.mtime_epoch,
+      m.modified_epoch,
+      m.updated_epoch,
+      m.mtime,
+      m.modified,
+      m.last_modified
+    ];
+
+    for (const candidate of candidates) {
+      const ms = epochLikeToMs(candidate);
+      if (ms > 0) return ms;
+    }
+
+    return 0;
+  }
+
+  function videoProgressKey(path) {
+    return String(path || "").replace(/^\/+/, "");
+  }
+
+  function readWatchProgressMap() {
+    if (watchProgressCache && typeof watchProgressCache === "object") return watchProgressCache;
+
+    try {
+      const raw = window.localStorage.getItem(WATCH_PROGRESS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      watchProgressCache = parsed && typeof parsed === "object" ? parsed : {};
+    } catch (_) {
+      watchProgressCache = {};
+    }
+
+    return watchProgressCache;
+  }
+
+  function writeWatchProgressMap(map) {
+    watchProgressCache = map && typeof map === "object" ? map : {};
+
+    try {
+      const entries = Object.entries(watchProgressCache)
+        .sort((a, b) => Number(b[1]?.updated_at || 0) - Number(a[1]?.updated_at || 0))
+        .slice(0, 500);
+
+      window.localStorage.setItem(WATCH_PROGRESS_KEY, JSON.stringify(Object.fromEntries(entries)));
+    } catch (_) {}
+  }
+
+  function watchProgressForVideo(v) {
+    const key = videoProgressKey(v && v.path || "");
+    if (!key) return {};
+    const map = readWatchProgressMap();
+    const item = map[key];
+    return item && typeof item === "object" ? item : {};
+  }
+
+  function recordWatchProgress(path, position, duration, completed) {
+    const key = videoProgressKey(path);
+    if (!key) return;
+
+    position = Number(position || 0);
+    duration = Number(duration || 0);
+
+    if (!Number.isFinite(position) || position < 0) return;
+    if (!Number.isFinite(duration) || duration < 0) duration = 0;
+
+    const map = readWatchProgressMap();
+    map[key] = {
+      position,
+      duration,
+      completed: !!completed,
+      updated_at: Date.now()
+    };
+
+    writeWatchProgressMap(map);
+  }
+
+  function maybeSavePlayerProgress(force, completed) {
+    if (!currentPlayerVideo || !player) return;
+
+    const now = Date.now();
+    if (!force && now - lastPlayerProgressSaveMs < 4000) return;
+    lastPlayerProgressSaveMs = now;
+
+    const position = Number(player.currentTime || 0);
+    const duration = Number(player.duration || 0);
+
+    if (!Number.isFinite(position) || position <= 0) return;
+
+    const effectivelyCompleted =
+      !!completed ||
+      (Number.isFinite(duration) && duration > 0 && duration - position <= 4);
+
+    recordWatchProgress(currentPlayerVideo.path, position, duration, effectivelyCompleted);
+  }
+
+  function restorePlayerProgress() {
+    if (!currentPlayerVideo || !player) return;
+
+    const progress = watchProgressForVideo(currentPlayerVideo);
+    if (progress.completed) return;
+
+    const position = Number(progress.position || 0);
+    const duration = Number(player.duration || progress.duration || 0);
+
+    if (!Number.isFinite(position) || position <= 3) return;
+    if (Number.isFinite(duration) && duration > 0 && duration - position <= 6) return;
+
+    try {
+      player.currentTime = position;
+    } catch (_) {}
+  }
+
+  function isFavoriteVideo(v) {
+    const u = userMetaForVideo(v);
+    return !!u.favorite || Number(u.rating || 0) >= 4;
+  }
+
+  function isUnratedVideo(v) {
+    const u = userMetaForVideo(v);
+    return Number(u.rating || 0) <= 0;
+  }
+
+  function metaSaysThumbnailExists(m) {
+    if (!m || typeof m !== "object" || m._error) return false;
+
+    const positiveBooleans = [
+      "has_thumbnail",
+      "thumbnail_ok",
+      "thumb_ok",
+      "poster_ok",
+      "thumbnail_generated",
+      "generated_thumbnail",
+      "generated_thumb"
+    ];
+
+    for (const key of positiveBooleans) {
+      if (m[key] === true) return true;
+    }
+
+    const positiveStrings = [
+      "thumbnail_path",
+      "thumb_path",
+      "poster_path",
+      "thumbnail",
+      "thumb",
+      "poster"
+    ];
+
+    for (const key of positiveStrings) {
+      if (String(m[key] || "").trim()) return true;
+    }
+
+    const status = String(m.thumbnail_status || m.thumb_status || "").toLowerCase();
+    if (["ok", "ready", "generated", "present", "available"].includes(status)) return true;
+
+    return false;
+  }
+
+  function isMissingThumbnailVideo(v) {
+    const m = metaForVideo(v);
+    return !metaSaysThumbnailExists(m);
+  }
+
+  function applyViewMode(videos, mode) {
+    const list = Array.isArray(videos) ? videos.slice() : [];
+    mode = normalizeViewMode(mode);
+
+    if (mode === "folders") {
+      return list.sort((a, b) => {
+        const byFolder = videoFolderLabel(a).localeCompare(videoFolderLabel(b), undefined, { sensitivity: "base" });
+        return byFolder || compareTitle(a, b);
+      });
+    }
+
+    if (mode === "recent_added") {
+      return list.sort((a, b) => {
+        const byAdded = videoAddedMs(b) - videoAddedMs(a);
+        return byAdded || compareTitle(a, b);
+      });
+    }
+
+    if (mode === "recent_watched") {
+      return list
+        .filter(v => Number(watchProgressForVideo(v).updated_at || 0) > 0)
+        .sort((a, b) => Number(watchProgressForVideo(b).updated_at || 0) - Number(watchProgressForVideo(a).updated_at || 0));
+    }
+
+    if (mode === "favorites") {
+      return list.filter(isFavoriteVideo).sort(compareTitle);
+    }
+
+    if (mode === "unrated") {
+      return list.filter(isUnratedVideo).sort(compareTitle);
+    }
+
+    if (mode === "missing_thumbnails") {
+      return list.filter(isMissingThumbnailVideo).sort(compareTitle);
+    }
+
+    return list;
   }
 
   async function apiJson(url, opts) {
@@ -835,7 +1142,7 @@
     ].filter(Boolean).join(" ").toLowerCase();
   }
 
-  function filteredVideos() {
+  function filteredVideosSearchOnly() {
     const terms = currentSearchTerms();
     if (!terms.length) return allVideos;
 
@@ -844,6 +1151,11 @@
       return terms.every(term => haystack.includes(term));
     });
   }
+
+  function filteredVideos() {
+    return applyViewMode(filteredVideosSearchOnly(), currentViewMode);
+  }
+
 
   function applySearchQuery(query) {
     const q = String(query || "").trim();
@@ -887,12 +1199,25 @@
 
     if (!grid) return;
     grid.innerHTML = "";
+    let lastFolderLabel = "";
 
     if (emptyState) {
       emptyState.style.display = allVideos.length ? "none" : "";
     }
 
     for (const v of videos) {
+      if (currentViewMode === "folders") {
+        const folderLabel = videoFolderLabel(v);
+        if (folderLabel !== lastFolderLabel) {
+          lastFolderLabel = folderLabel;
+
+          const group = document.createElement("div");
+          group.className = "rsGroupHeader";
+          group.textContent = folderLabel;
+          grid.appendChild(group);
+        }
+      }
+
       const card = document.createElement("article");
       card.className = "rsCard";
       card.tabIndex = 0;
@@ -1033,6 +1358,8 @@
 
   function openPlayer(v) {
     if (!modal || !player) return;
+    currentPlayerVideo = v || null;
+    lastPlayerProgressSaveMs = 0;
 
     player.pause();
     player.innerHTML = "";
@@ -1054,6 +1381,8 @@
 
   function closePlayer() {
     if (!modal || !player) return;
+    maybeSavePlayerProgress(true, false);
+    currentPlayerVideo = null;
     player.pause();
     player.innerHTML = "";
     player.removeAttribute("src");
@@ -1605,6 +1934,14 @@
   scanBtn?.addEventListener("click", scanVideos);
   searchBtn?.addEventListener("click", openSearchModal);
   filterInput?.addEventListener("input", render);
+  viewModeSelect?.addEventListener("change", () => setViewMode(viewModeSelect.value));
+  player?.addEventListener("loadedmetadata", restorePlayerProgress);
+  player?.addEventListener("timeupdate", () => maybeSavePlayerProgress(false, false));
+  player?.addEventListener("ended", () => {
+    maybeSavePlayerProgress(true, true);
+    if (currentViewMode === "recent_watched") render();
+  });
+  syncViewModeSelect();
   closePlayerBtn?.addEventListener("click", closePlayer);
 
   modal?.addEventListener("click", (ev) => {

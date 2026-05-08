@@ -23,6 +23,18 @@
       </div>
 
       <div class="rsActions">
+        <label class="rsViewModeLabel" for="viewModeSelect">
+          <span class="rsViewModeLabelText">View</span>
+          <select id="viewModeSelect" class="rsInput rsSelect">
+            <option value="all">All videos</option>
+            <option value="folders">By folder</option>
+            <option value="recent_added">Recently added</option>
+            <option value="recent_watched">Recently watched</option>
+            <option value="favorites">Favorites</option>
+            <option value="unrated">Unrated</option>
+            <option value="missing_thumbnails">Missing thumbnails</option>
+          </select>
+        </label>
         <input id="filterInput" class="rsInput" type="search" placeholder="Filter videos…">
                 <button id="searchBtn" class="rsBtn" type="button" title="Open search">Search</button>
 <button id="scanBtn" class="rsBtn primary" type="button">Refresh index</button>
