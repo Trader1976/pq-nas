@@ -471,6 +471,238 @@ bool FileVersionsIndex::preserve_live_file_version(const PreserveLiveFileVersion
     return true;
 }
 
+
+bool FileVersionsIndex::scope_stats(const std::string& scope_type,
+                                    const std::string& scope_id,
+                                    FileVersionsScopeStats* out,
+                                    std::string* err) {
+    if (err) err->clear();
+    if (out) *out = FileVersionsScopeStats{};
+
+    if (!out) {
+        if (err) *err = "out is null";
+        return false;
+    }
+
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
+
+    if (!is_valid_scope_type_local(scope_type)) {
+        if (err) *err = "invalid scope_type";
+        return false;
+    }
+
+    if (scope_id.empty()) {
+        if (err) *err = "empty scope_id";
+        return false;
+    }
+
+    static const char* kSql =
+        "SELECT COUNT(*), COALESCE(SUM(bytes), 0) "
+        "FROM file_versions "
+        "WHERE scope_type = ?1 AND scope_id = ?2";
+
+    sqlite3_stmt* stmt = nullptr;
+    const int rc_prep = sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr);
+    if (rc_prep != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        return false;
+    }
+
+    sqlite3_bind_text(stmt, 1, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        if (err) *err = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        return false;
+    }
+
+    out->versions_count = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 0));
+    out->versions_bytes = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 1));
+
+    sqlite3_finalize(stmt);
+    return true;
+}
+
+
+bool FileVersionsIndex::delete_versions_for_scope_path(const std::string& scope_type,
+                                                       const std::string& scope_id,
+                                                       const std::filesystem::path& scope_root,
+                                                       const std::string& logical_rel_path,
+                                                       bool recursive,
+                                                       FileVersionsDeleteResult* out,
+                                                       std::string* err) {
+    if (err) err->clear();
+    if (out) *out = FileVersionsDeleteResult{};
+
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
+
+    if (!is_valid_scope_type_local(scope_type)) {
+        if (err) *err = "invalid scope_type";
+        return false;
+    }
+
+    if (scope_id.empty()) {
+        if (err) *err = "empty scope_id";
+        return false;
+    }
+
+    if (scope_root.empty()) {
+        if (err) *err = "empty scope_root";
+        return false;
+    }
+
+    if (logical_rel_path.empty()) {
+        if (err) *err = "empty logical_rel_path";
+        return false;
+    }
+
+    struct Row {
+        std::string version_id;
+        std::uint64_t bytes = 0;
+        std::string blob_rel_path;
+    };
+
+    std::vector<Row> rows;
+    const std::string child_prefix = logical_rel_path + "/";
+
+    static const char* kSelectExact =
+        "SELECT version_id, bytes, blob_rel_path "
+        "FROM file_versions "
+        "WHERE scope_type = ?1 AND scope_id = ?2 AND logical_rel_path = ?3";
+
+    static const char* kSelectRecursive =
+        "SELECT version_id, bytes, blob_rel_path "
+        "FROM file_versions "
+        "WHERE scope_type = ?1 AND scope_id = ?2 "
+        "AND (logical_rel_path = ?3 OR substr(logical_rel_path, 1, ?4) = ?5)";
+
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = recursive ? kSelectRecursive : kSelectExact;
+    int rc_prep = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    if (rc_prep != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        return false;
+    }
+
+    sqlite3_bind_text(stmt, 1, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    if (recursive) {
+        sqlite3_bind_int64(stmt, 4, static_cast<sqlite3_int64>(child_prefix.size()));
+        sqlite3_bind_text(stmt, 5, child_prefix.c_str(), -1, SQLITE_TRANSIENT);
+    }
+
+    while (true) {
+        const int rc = sqlite3_step(stmt);
+        if (rc == SQLITE_DONE) break;
+        if (rc != SQLITE_ROW) {
+            if (err) *err = sqlite3_errmsg(db_);
+            sqlite3_finalize(stmt);
+            return false;
+        }
+
+        Row r;
+        if (const unsigned char* t = sqlite3_column_text(stmt, 0)) {
+            r.version_id = reinterpret_cast<const char*>(t);
+        }
+        r.bytes = static_cast<std::uint64_t>(sqlite3_column_int64(stmt, 1));
+        if (const unsigned char* t = sqlite3_column_text(stmt, 2)) {
+            r.blob_rel_path = reinterpret_cast<const char*>(t);
+        }
+
+        if (!r.version_id.empty()) rows.push_back(std::move(r));
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (rows.empty()) {
+        return true;
+    }
+
+    const std::filesystem::path scope_root_norm = scope_root.lexically_normal();
+    const std::filesystem::path versions_blob_root =
+        (scope_root_norm / ".pqnas" / "versions" / "blobs").lexically_normal();
+
+    FileVersionsDeleteResult result;
+
+    for (const auto& row : rows) {
+        if (row.blob_rel_path.empty()) continue;
+
+        const std::filesystem::path blob_abs =
+            (scope_root_norm / std::filesystem::path(row.blob_rel_path)).lexically_normal();
+
+        const auto rel_to_blob_root = blob_abs.lexically_relative(versions_blob_root);
+        if (rel_to_blob_root.empty()) {
+            if (err) *err = "version blob path escapes versions root";
+            return false;
+        }
+        for (const auto& part : rel_to_blob_root) {
+            if (part == "..") {
+                if (err) *err = "version blob path escapes versions root";
+                return false;
+            }
+        }
+
+        std::error_code ec;
+        const bool removed = std::filesystem::remove(blob_abs, ec);
+        if (ec) {
+            if (err) *err = "remove version blob failed: " + ec.message();
+            return false;
+        }
+        if (!removed) {
+            result.blobs_missing++;
+        }
+
+        result.versions_deleted++;
+        result.bytes_deleted += row.bytes;
+    }
+
+    static const char* kDeleteExact =
+        "DELETE FROM file_versions "
+        "WHERE scope_type = ?1 AND scope_id = ?2 AND logical_rel_path = ?3";
+
+    static const char* kDeleteRecursive =
+        "DELETE FROM file_versions "
+        "WHERE scope_type = ?1 AND scope_id = ?2 "
+        "AND (logical_rel_path = ?3 OR substr(logical_rel_path, 1, ?4) = ?5)";
+
+    sqlite3_stmt* del = nullptr;
+    const char* dsql = recursive ? kDeleteRecursive : kDeleteExact;
+    const int rc_del_prep = sqlite3_prepare_v2(db_, dsql, -1, &del, nullptr);
+    if (rc_del_prep != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        return false;
+    }
+
+    sqlite3_bind_text(del, 1, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(del, 2, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(del, 3, logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    if (recursive) {
+        sqlite3_bind_int64(del, 4, static_cast<sqlite3_int64>(child_prefix.size()));
+        sqlite3_bind_text(del, 5, child_prefix.c_str(), -1, SQLITE_TRANSIENT);
+    }
+
+    const int rc_del = sqlite3_step(del);
+    if (rc_del != SQLITE_DONE) {
+        if (err) *err = sqlite3_errmsg(db_);
+        sqlite3_finalize(del);
+        return false;
+    }
+
+    sqlite3_finalize(del);
+
+    if (out) *out = result;
+    return true;
+}
+
 std::vector<FileVersionRec> FileVersionsIndex::list_versions_for_path(const std::string& scope_type,
                                                                       const std::string& scope_id,
                                                                       const std::string& logical_rel_path,

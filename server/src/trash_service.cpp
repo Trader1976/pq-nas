@@ -388,6 +388,10 @@ void TrashService::set_restore_unindexer(RestoreUnindexFn fn) {
     restore_unindexer_ = std::move(fn);
 }
 
+void TrashService::set_purge_cleanup(PurgeCleanupFn fn) {
+    purge_cleanup_ = std::move(fn);
+}
+
 // Derives the storage root by walking upward from a concrete payload path using the
 // number of path components present in the logical relative path.
 //
@@ -876,6 +880,22 @@ bool TrashService::purge_from_trash(const PurgeParams& p,
         return false;
     }
 
+    std::uint64_t versions_deleted = 0;
+    std::uint64_t version_bytes_deleted = 0;
+    std::uint64_t version_blobs_missing = 0;
+    std::string version_cleanup_error;
+
+    if (purge_cleanup_) {
+        std::string cerr;
+        if (!purge_cleanup_(rec,
+                            &versions_deleted,
+                            &version_bytes_deleted,
+                            &version_blobs_missing,
+                            &cerr)) {
+            version_cleanup_error = cerr.empty() ? "purge cleanup failed" : cerr;
+        }
+    }
+
     const std::int64_t now_ts = now_epoch_local();
     std::string serr;
     if (!index_->set_restore_status_if_current(p.trash_id, "purging", "purged", now_ts, &serr)) {
@@ -887,6 +907,10 @@ bool TrashService::purge_from_trash(const PurgeParams& p,
         out->trash_id = rec.trash_id;
         out->size_bytes = rec.size_bytes;
         out->file_count = rec.file_count;
+        out->versions_deleted = versions_deleted;
+        out->version_bytes_deleted = version_bytes_deleted;
+        out->version_blobs_missing = version_blobs_missing;
+        out->version_cleanup_error = version_cleanup_error;
     }
 
     return true;

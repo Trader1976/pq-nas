@@ -13,7 +13,10 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   let lastStats = {
     count: 0,
     bytes: 0,
-    nextPurgeAfterEpoch: 0
+    nextPurgeAfterEpoch: 0,
+    versionsCount: 0,
+    versionsBytes: 0,
+    versionsLoaded: false
   };
 
   function el(id) {
@@ -63,6 +66,35 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
 
     return `/api/v4/trash/list?${qs.toString()}`;
+  }
+
+  function versionsSummaryUrl() {
+    if (isWorkspaceScope()) {
+      const qs = new URLSearchParams();
+      qs.set("workspace_id", getWorkspaceId());
+      return `/api/v4/workspaces/files/versions/summary?${qs.toString()}`;
+    }
+    return `/api/v4/files/versions/summary`;
+  }
+
+  async function fetchVersionStats() {
+    const r = await fetch(versionsSummaryUrl(), {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "Accept": "application/json" }
+    });
+
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok) {
+      throw new Error((j && (j.message || j.error)) || `HTTP ${r.status}`);
+    }
+
+    return {
+      versionsCount: Number(j.versions_count || 0),
+      versionsBytes: Number(j.versions_bytes || 0),
+      versionsLoaded: true
+    };
   }
 
   async function fetchTrashStats() {
@@ -186,8 +218,13 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
 
     if (versionsEl) {
-      versionsEl.textContent = "Versions: separate";
-      versionsEl.title = "Version storage needs a dedicated backend summary endpoint.";
+      if (stats && stats.versionsLoaded) {
+        versionsEl.textContent = `Versions use: ${fmtSize(stats.versionsBytes || 0)}`;
+        versionsEl.title = `${stats.versionsCount || 0} preserved file version(s)`;
+      } else {
+        versionsEl.textContent = "Versions: —";
+        versionsEl.title = "Version storage summary unavailable.";
+      }
     }
   }
 
@@ -208,7 +245,21 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     refreshing = true;
 
     try {
-      const stats = await fetchTrashStats();
+      const trashStats = await fetchTrashStats();
+
+      let versionStats = {
+        versionsCount: lastStats.versionsCount || 0,
+        versionsBytes: lastStats.versionsBytes || 0,
+        versionsLoaded: false
+      };
+
+      try {
+        versionStats = await fetchVersionStats();
+      } catch (e) {
+        console.warn("[filemgr storage insights] version stats failed:", e);
+      }
+
+      const stats = { ...trashStats, ...versionStats };
       lastRefreshAt = Date.now();
       applyStats(stats);
       return stats;
@@ -249,7 +300,14 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (scopeSelect) {
       scopeSelect.addEventListener("change", () => {
         lastRefreshAt = 0;
-        lastStats = { count: 0, bytes: 0, nextPurgeAfterEpoch: 0 };
+        lastStats = {
+          count: 0,
+          bytes: 0,
+          nextPurgeAfterEpoch: 0,
+          versionsCount: 0,
+          versionsBytes: 0,
+          versionsLoaded: false
+        };
         setTimeout(() => refresh(true), 350);
       });
     }

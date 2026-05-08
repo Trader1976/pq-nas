@@ -7467,6 +7467,101 @@ srv.Post("/api/v4/workspaces/files/delete",
     }.dump());
 });
 
+
+srv.Get("/api/v4/workspaces/files/versions/summary",
+        [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+    if (!deps.require_user_auth_users_actor ||
+        !deps.require_user_auth_users_actor(
+            req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+        return;
+    }
+
+    (void)actor_role;
+    res.set_header("Cache-Control", "no-store");
+
+    auto* vix = deps.file_versions;
+    if (!vix) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "file versions index missing"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->load(deps.workspaces_path)) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "workspaces_reload_failed"},
+            {"message", "failed to reload workspaces"}
+        }.dump());
+        return;
+    }
+
+    const std::string workspace_id =
+        req.has_param("workspace_id") ? trim_copy_safe(req.get_param_value("workspace_id")) : "";
+    if (workspace_id.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing workspace_id"}
+        }.dump());
+        return;
+    }
+
+    auto wopt = deps.workspaces->get(workspace_id);
+    if (!wopt.has_value()) {
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "workspace not found"}
+        }.dump());
+        return;
+    }
+
+    const WorkspaceRec& w = *wopt;
+    if (w.status != "enabled") {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace disabled"}
+        }.dump());
+        return;
+    }
+
+    auto mopt = enabled_member_for_actor(w, actor_fp);
+    if (!mopt.has_value()) {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace access denied"}
+        }.dump());
+        return;
+    }
+
+    pqnas::FileVersionsScopeStats stats;
+    std::string serr;
+    if (!vix->scope_stats("workspace", workspace_id, &stats, &serr)) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to summarize file versions"},
+            {"detail", pqnas::shorten(serr, 180)}
+        }.dump());
+        return;
+    }
+
+    deps.reply_json(res, 200, json{
+        {"ok", true},
+        {"scope_type", "workspace"},
+        {"scope_id", workspace_id},
+        {"workspace_id", workspace_id},
+        {"versions_count", stats.versions_count},
+        {"versions_bytes", stats.versions_bytes}
+    }.dump());
+});
+
 srv.Get("/api/v4/workspaces/files/versions/list",
         [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp, actor_role;

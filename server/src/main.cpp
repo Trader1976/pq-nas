@@ -10674,6 +10674,71 @@ trash_service.set_restore_unindexer(
             (void)idx->erase(rec.scope_id, restored_rel_path, &uerr);
         }
     });
+
+    trash_service.set_purge_cleanup(
+        [&](const pqnas::TrashItemRec& rec,
+            std::uint64_t* versions_deleted,
+            std::uint64_t* version_bytes_deleted,
+            std::uint64_t* version_blobs_missing,
+            std::string* err) -> bool {
+            if (versions_deleted) *versions_deleted = 0;
+            if (version_bytes_deleted) *version_bytes_deleted = 0;
+            if (version_blobs_missing) *version_blobs_missing = 0;
+            if (err) err->clear();
+
+            if (rec.scope_type != "user" && rec.scope_type != "workspace") {
+                return true;
+            }
+            if (rec.scope_id.empty() || rec.original_rel_path.empty()) {
+                return true;
+            }
+
+            std::filesystem::path scope_root;
+            if (rec.scope_type == "user") {
+                scope_root = user_dir_for_fp(users, rec.scope_id);
+            } else {
+                if (!workspaces.load(workspaces_path)) {
+                    if (err) *err = "failed to reload workspaces";
+                    return false;
+                }
+
+                auto wopt = workspaces.get(rec.scope_id);
+                if (!wopt.has_value()) {
+                    if (err) *err = "workspace not found";
+                    return false;
+                }
+
+                const auto& w = *wopt;
+                if (!w.storage_pool_id.empty()) {
+                    if (err) *err = "workspace version cleanup currently supports default pool only";
+                    return false;
+                }
+
+                scope_root = std::filesystem::path(pqnas::data_root_dir()) / w.root_rel;
+            }
+
+            pqnas::FileVersionsDeleteResult dr;
+            std::string derr;
+            const bool recursive = (rec.item_type == "dir");
+
+            if (!file_versions_index.delete_versions_for_scope_path(
+                    rec.scope_type,
+                    rec.scope_id,
+                    scope_root,
+                    rec.original_rel_path,
+                    recursive,
+                    &dr,
+                    &derr)) {
+                if (err) *err = derr;
+                return false;
+            }
+
+            if (versions_deleted) *versions_deleted = dr.versions_deleted;
+            if (version_bytes_deleted) *version_bytes_deleted = dr.bytes_deleted;
+            if (version_blobs_missing) *version_blobs_missing = dr.blobs_missing;
+            return true;
+        });
+
     pqnas::TrashRoutesDeps trash_deps;
     trash_deps.users = &users;
     trash_deps.users_path = &users_path;
@@ -37880,6 +37945,35 @@ srv.Get("/api/v4/files/versions/list", [&](const httplib::Request& req, httplib:
     }
 
     reply_json(res, 200, out.dump());
+});
+
+
+srv.Get("/api/v4/files/versions/summary", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    res.set_header("Cache-Control", "no-store");
+
+    pqnas::FileVersionsScopeStats stats;
+    std::string serr;
+    if (!file_versions_index.scope_stats("user", fp_hex, &stats, &serr)) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to summarize file versions"},
+            {"detail", pqnas::shorten(serr, 180)}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"scope_type", "user"},
+        {"scope_id", fp_hex},
+        {"versions_count", stats.versions_count},
+        {"versions_bytes", stats.versions_bytes}
+    }.dump());
 });
 
 srv.Post("/api/v4/files/restore_version", [&](const httplib::Request& req, httplib::Response& res) {

@@ -123,6 +123,11 @@ public:
         std::string trash_id;
         std::uint64_t size_bytes = 0;
         std::uint64_t file_count = 0;
+
+        std::uint64_t versions_deleted = 0;
+        std::uint64_t version_bytes_deleted = 0;
+        std::uint64_t version_blobs_missing = 0;
+        std::string version_cleanup_error;
     };
 
     // Moves a live payload into the internal trash tree and writes its metadata row.
@@ -186,11 +191,21 @@ public:
         const TrashItemRec&,
         const std::string& restored_rel_path)>;
 
+    using PurgeCleanupFn = std::function<bool(
+        const TrashItemRec&,
+        std::uint64_t* versions_deleted,
+        std::uint64_t* version_bytes_deleted,
+        std::uint64_t* version_blobs_missing,
+        std::string* err)>;
+
     // Installs the restore metadata rebuild callback.
     void set_restore_reindexer(RestoreReindexFn fn);
 
     // Installs the restore metadata rollback callback.
     void set_restore_unindexer(RestoreUnindexFn fn);
+
+    // Installs the permanent-purge cleanup callback.
+    void set_purge_cleanup(PurgeCleanupFn fn);
 
     // Infers the storage root by walking upward from a concrete payload path using the
     // number of path components present in the logical relative path.
@@ -222,6 +237,7 @@ private:
     // Optional integration hooks for rebuilding/removing live metadata around restore.
     RestoreReindexFn restore_reindexer_;
     RestoreUnindexFn restore_unindexer_;
+    PurgeCleanupFn purge_cleanup_;
 };
 
 } // namespace pqnas

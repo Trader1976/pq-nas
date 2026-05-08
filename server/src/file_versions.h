@@ -48,6 +48,18 @@ struct PreserveLiveFileVersionParams {
     const UsersRegistry* users = nullptr; // optional, for actor name snapshot
 };
 
+struct FileVersionsScopeStats {
+    std::uint64_t versions_count = 0;
+    std::uint64_t versions_bytes = 0;
+};
+
+struct FileVersionsDeleteResult {
+    std::uint64_t versions_deleted = 0;
+    std::uint64_t bytes_deleted = 0;
+    std::uint64_t blobs_missing = 0;
+};
+
+
 class FileVersionsIndex {
 public:
     explicit FileVersionsIndex(const std::filesystem::path& db_path);
@@ -71,6 +83,19 @@ public:
                                                        const std::string& logical_rel_path,
                                                        std::size_t limit,
                                                        std::string* err);
+
+    bool scope_stats(const std::string& scope_type,
+                     const std::string& scope_id,
+                     FileVersionsScopeStats* out,
+                     std::string* err);
+
+    bool delete_versions_for_scope_path(const std::string& scope_type,
+                                        const std::string& scope_id,
+                                        const std::filesystem::path& scope_root,
+                                        const std::string& logical_rel_path,
+                                        bool recursive,
+                                        FileVersionsDeleteResult* out,
+                                        std::string* err);
 
     static std::filesystem::path version_blob_abs_path(const std::filesystem::path& scope_root,
                                                        const std::string& blob_rel_path);
