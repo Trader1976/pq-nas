@@ -144,6 +144,13 @@ static json trash_item_to_json_local(const TrashItemRec& rec) {
 // auditing is wired in this process/context.
 //
 // This keeps the route implementation decoupled from the concrete audit backend.
+
+static std::string shorten_trash_route_local(const std::string& s, std::size_t max_len) {
+    if (s.size() <= max_len) return s;
+    if (max_len <= 3) return s.substr(0, max_len);
+    return s.substr(0, max_len - 3) + "...";
+}
+
 static void audit_local(const TrashRoutesDeps& deps,
                         const std::string& event,
                         const std::string& outcome,
@@ -944,7 +951,11 @@ void register_trash_routes(httplib::Server& srv, const TrashRoutesDeps& deps) {
             {"trash_id", trash_id},
             {"scope_type", rec.scope_type},
             {"scope_id", rec.scope_id},
-            {"original_rel_path", rec.original_rel_path}
+            {"original_rel_path", rec.original_rel_path},
+            {"versions_deleted", std::to_string(pr.versions_deleted)},
+            {"version_bytes_deleted", std::to_string(pr.version_bytes_deleted)},
+            {"version_blobs_missing", std::to_string(pr.version_blobs_missing)},
+            {"version_cleanup_error", shorten_trash_route_local(pr.version_cleanup_error, 240)}
         });
 
         record_trash_activity_best_effort_local(deps, actor_fp, rec, "file.purged", rec.original_rel_path, json{
@@ -954,14 +965,22 @@ void register_trash_routes(httplib::Server& srv, const TrashRoutesDeps& deps) {
             {"original_rel_path", rec.original_rel_path},
             {"item_type", rec.item_type},
             {"size_bytes", pr.size_bytes},
-            {"file_count", pr.file_count}
+            {"file_count", pr.file_count},
+            {"versions_deleted", pr.versions_deleted},
+            {"version_bytes_deleted", pr.version_bytes_deleted},
+            {"version_blobs_missing", pr.version_blobs_missing},
+            {"version_cleanup_error", pr.version_cleanup_error}
         });
 
         deps.reply_json(res, 200, json{
             {"ok", true},
             {"trash_id", pr.trash_id},
             {"size_bytes", pr.size_bytes},
-            {"file_count", pr.file_count}
+            {"file_count", pr.file_count},
+            {"versions_deleted", pr.versions_deleted},
+            {"version_bytes_deleted", pr.version_bytes_deleted},
+            {"version_blobs_missing", pr.version_blobs_missing},
+            {"version_cleanup_error", pr.version_cleanup_error}
         }.dump());
     });
 }

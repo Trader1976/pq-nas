@@ -45550,6 +45550,12 @@ srv.Get(R"(/pq/invite/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httpl
             ev.f["source_tier_state"] = rec.source_tier_state;
             ev.f["size_bytes"] = std::to_string(pr.size_bytes);
             ev.f["file_count"] = std::to_string(pr.file_count);
+            ev.f["versions_deleted"] = std::to_string(pr.versions_deleted);
+            ev.f["version_bytes_deleted"] = std::to_string(pr.version_bytes_deleted);
+            ev.f["version_blobs_missing"] = std::to_string(pr.version_blobs_missing);
+            if (!pr.version_cleanup_error.empty()) {
+                ev.f["version_cleanup_error"] = pqnas::shorten(pr.version_cleanup_error, 240);
+            }
             ev.f["deleted_epoch"] = std::to_string(rec.deleted_epoch);
             ev.f["purge_after_epoch"] = std::to_string(rec.purge_after_epoch);
             audit_append(ev);
