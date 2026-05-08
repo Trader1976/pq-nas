@@ -92,6 +92,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   // ---- Soft quota (UI-only) ---------------------------------------------------
   let quotaInfo = null;
   let quotaInfoAtMs = 0;
+  let quotaInfoScopeKey = "";
   const QUOTA_TTL_MS = 15 * 1000;
   let trashItemsCache = [];
   let trashBusy = false;
@@ -196,29 +197,156 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return `${Math.round(p * 100)}%`;
   }
 
+  function currentQuotaScopeInfo() {
+    const fm = window.PQNAS_FILEMGR || null;
+
+    const inWorkspace =
+        fm &&
+        typeof fm.isWorkspaceScope === "function" &&
+        fm.isWorkspaceScope();
+
+    if (inWorkspace && typeof fm.getWorkspaceId === "function") {
+      const workspaceId = String(fm.getWorkspaceId() || "").trim();
+      if (workspaceId) {
+        return {
+          kind: "workspace",
+          key: `workspace:${workspaceId}`,
+          workspaceId
+        };
+      }
+    }
+
+    return {
+      kind: "user",
+      key: "user",
+      workspaceId: ""
+    };
+  }
+
+  function normalizeQuotaPayloadForScope(j, scope) {
+    if (!j || typeof j !== "object") return null;
+
+    const out = Object.assign({}, j);
+    out.ok = true;
+    out.scope_kind = scope && scope.kind ? String(scope.kind) : "user";
+
+    if (scope && scope.workspaceId) {
+      out.workspace_id = String(scope.workspaceId || "");
+    }
+
+    const usedRaw =
+        out.used_bytes ??
+        out.storage_used_bytes ??
+        out.bytes_used ??
+        out.used ??
+        0;
+
+    const quotaRaw =
+        out.quota_bytes ??
+        out.storage_quota_bytes ??
+        out.quota ??
+        0;
+
+    out.used_bytes = Number(usedRaw || 0);
+    out.quota_bytes = Number(quotaRaw || 0);
+
+    if (!out.quota_state) {
+      const pct = out.quota_bytes > 0 ? (out.used_bytes / out.quota_bytes) : 0;
+      out.quota_state = quotaStateFromPct(pct);
+    }
+
+    return out;
+  }
+
+  async function fetchWorkspaceQuotaInfo(scope) {
+    if (!scope || !scope.workspaceId) return null;
+
+    const r = await fetch("/api/v4/workspaces", {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: { "Accept": "application/json" }
+    });
+
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok) return null;
+
+    const list = Array.isArray(j.workspaces)
+        ? j.workspaces
+        : Array.isArray(j.items)
+            ? j.items
+            : [];
+
+    const want = String(scope.workspaceId || "");
+    const ws = list.find((x) => String(
+      x && (
+        x.workspace_id ||
+        x.workspaceId ||
+        x.id ||
+        ""
+      )
+    ) === want);
+
+    if (!ws) return null;
+
+    return normalizeQuotaPayloadForScope({
+      ok: true,
+      scope_kind: "workspace",
+      workspace_id: want,
+      workspace_name: ws.name || ws.workspace_name || "",
+      storage_state: ws.storage_state || "",
+      quota_bytes: ws.quota_bytes || 0,
+      used_bytes: ws.used_bytes ?? ws.storage_used_bytes ?? 0,
+      storage_used_bytes: ws.storage_used_bytes ?? ws.used_bytes ?? 0,
+      pool_id: ws.pool_id || ws.storage_pool_id || ""
+    }, scope);
+  }
+
   async function refreshQuotaInfoIfNeeded(force = false) {
     if (storageBlocked) return null;
 
     const now = Date.now();
-    if (!force && quotaInfo && (now - quotaInfoAtMs) < QUOTA_TTL_MS) return quotaInfo;
+    const scope = currentQuotaScopeInfo();
+
+    if (
+      !force &&
+      quotaInfo &&
+      quotaInfoScopeKey === scope.key &&
+      (now - quotaInfoAtMs) < QUOTA_TTL_MS
+    ) {
+      return quotaInfo;
+    }
 
     try {
-      const r = await fetch("/api/v4/me/storage", {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-        headers: { "Accept": "application/json" }
-      });
-      const j = await r.json().catch(() => null);
-      if (!r.ok || !j || !j.ok) return null;
+      let j = null;
+
+      if (scope.kind === "workspace") {
+        j = await fetchWorkspaceQuotaInfo(scope);
+      } else {
+        const r = await fetch("/api/v4/me/storage", {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+          headers: { "Accept": "application/json" }
+        });
+
+        j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) return null;
+
+        const lim = pickUploadLimitsFromMeStorage(j);
+        if (lim) {
+          uploadLimits = lim;
+          uploadLimitsAtMs = now;
+        }
+
+        j = normalizeQuotaPayloadForScope(j, scope);
+      }
+
+      if (!j || !j.ok) return null;
+
       quotaInfo = j;
       quotaInfoAtMs = now;
-
-      const lim = pickUploadLimitsFromMeStorage(j);
-      if (lim) {
-        uploadLimits = lim;
-        uploadLimitsAtMs = now;
-      }
+      quotaInfoScopeKey = scope.key;
 
       return quotaInfo;
     } catch (_) {
@@ -238,13 +366,26 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   function applyQuotaUi(q) {
     if (!q || typeof q !== "object") { hideQuotaLine(); return; }
 
+    const scopeKind = String(q.scope_kind || q.scope || "").toLowerCase();
+    const isWorkspaceQuota = scopeKind === "workspace";
+
     const quotaBytes = Number(q.quota_bytes || 0);
-    const usedBytes  = Number(q.used_bytes || 0);
-    if (!quotaBytes) { hideQuotaLine(); return; }
+    const usedBytes  = Number(q.used_bytes ?? q.storage_used_bytes ?? 0);
+    const storageState = String(q.storage_state || "").toLowerCase();
+
+    if (!quotaBytes) {
+      if (isWorkspaceQuota && storageState && storageState !== "allocated") {
+        showQuotaLine("warn", "Workspace storage not allocated");
+      } else {
+        hideQuotaLine();
+      }
+      return;
+    }
 
     const pct = quotaBytes > 0 ? (usedBytes / quotaBytes) : 0;
     const state = String(q.quota_state || quotaStateFromPct(pct));
-    const text = `Storage: ${fmtSize(usedBytes)} / ${fmtSize(quotaBytes)} (${fmtPct01(pct)})`;
+    const label = isWorkspaceQuota ? "Workspace storage" : "Storage";
+    const text = `${label}: ${fmtSize(usedBytes)} / ${fmtSize(quotaBytes)} (${fmtPct01(pct)})`;
 
     const uploadingNow = uploadProg && uploadProg.style.display !== "none";
     if (uploadingNow) {
@@ -254,12 +395,12 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     if (state === "over") {
       setBadge("err", "storage");
-      showQuotaLine("err", `Over quota (soft): ${text}`);
+      showQuotaLine("err", `${isWorkspaceQuota ? "Workspace over quota" : "Over quota (soft)"}: ${text}`);
       return;
     }
     if (state === "danger") {
       setBadge("warn", "storage");
-      showQuotaLine("warn", `Nearly full: ${text}`);
+      showQuotaLine("warn", `${isWorkspaceQuota ? "Workspace nearly full" : "Nearly full"}: ${text}`);
       return;
     }
 
