@@ -904,3 +904,26 @@ html[data-theme="win_classic"] .rsShareBadge{
   border-color:rgba(var(--accent-rgb,0,120,170),.55);
   box-shadow:0 4px 12px rgba(0,0,0,.16);
 }
+
+/* Show real filename when the visible card title is a custom Reel Stack title. */
+.rsFileNameLine{
+  margin-top:4px;
+  color:rgba(var(--fg-rgb,255,255,255),.68);
+  font-size:12px;
+  font-weight:800;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+html[data-theme="bright"] .rsFileNameLine,
+html[data-theme="win_classic"] .rsFileNameLine{
+  color:rgba(var(--fg-rgb,0,0,0),.72);
+}
+
+html[data-theme="bright"] .rsMeta,
+html[data-theme="bright"] .rsDetails,
+html[data-theme="win_classic"] .rsMeta,
+html[data-theme="win_classic"] .rsDetails{
+  color:rgba(var(--fg-rgb,0,0,0),.62);
+}

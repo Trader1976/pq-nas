@@ -955,8 +955,18 @@
       const title = document.createElement("div");
       title.className = "rsTitle";
       title.dataset.rsTitlePath = v.path;
-      title.textContent = videoDisplayTitle(v);
-      title.title = v.name;
+      const displayTitle = videoDisplayTitle(v);
+      const actualName = v.name || basename(v.path);
+      title.textContent = displayTitle;
+      title.title = v.path ? `/${v.path}` : actualName;
+
+      const fileNameLine = document.createElement("div");
+      fileNameLine.className = "rsFileNameLine";
+      fileNameLine.dataset.rsFileNamePath = v.path;
+      const showFileNameLine = !!(displayTitle && actualName && displayTitle !== actualName);
+      fileNameLine.textContent = showFileNameLine ? actualName : "";
+      fileNameLine.title = v.path ? `/${v.path}` : actualName;
+      fileNameLine.style.display = showFileNameLine ? "" : "none";
 
       const meta = document.createElement("div");
       meta.className = "rsMeta";
@@ -1000,6 +1010,7 @@
       actions.appendChild(delBtn);
 
       body.appendChild(title);
+      body.appendChild(fileNameLine);
       body.appendChild(meta);
       body.appendChild(details);
       body.appendChild(actions);

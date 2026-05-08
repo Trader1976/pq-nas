@@ -131,6 +131,328 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 
 //favorites
 #include "file_favorites.h"
+
+// Reel Stack user metadata is path-keyed in /config/reelstack_meta.sqlite3.
+// These helpers are intentionally best-effort hooks for File Manager move/delete
+// paths, matching the existing favorites/gallery metadata lifecycle.
+static std::mutex g_reelstack_meta_path_hooks_mu;
+
+static std::filesystem::path reelstack_meta_db_path_hooks_local() {
+    return std::filesystem::path(pqnas::data_root_dir()).parent_path()
+         / "config"
+         / "reelstack_meta.sqlite3";
+}
+
+static std::string reelstack_like_escape_path_hooks_local(const std::string& in) {
+    std::string out;
+    out.reserve(in.size() + 8);
+    for (char c : in) {
+        if (c == '\\' || c == '%' || c == '_') out.push_back('\\');
+        out.push_back(c);
+    }
+    return out;
+}
+
+static bool reelstack_meta_open_existing_db_path_hooks_local(sqlite3** out_db,
+                                                            std::string* err) {
+    if (out_db) *out_db = nullptr;
+    if (err) err->clear();
+
+    const std::filesystem::path db_path = reelstack_meta_db_path_hooks_local();
+
+    std::error_code ec;
+    if (!std::filesystem::exists(db_path, ec)) {
+        return true; // Reel Stack metadata DB has not been created yet; no-op.
+    }
+    if (ec) {
+        if (err) *err = "stat reelstack meta db failed: " + ec.message();
+        return false;
+    }
+
+    sqlite3* db = nullptr;
+    if (sqlite3_open(db_path.string().c_str(), &db) != SQLITE_OK) {
+        if (err) *err = db ? sqlite3_errmsg(db) : "sqlite open failed";
+        if (db) sqlite3_close(db);
+        return false;
+    }
+
+    sqlite3_busy_timeout(db, 5000);
+    if (out_db) *out_db = db;
+    return true;
+}
+
+static bool reelstack_meta_exec_sql_path_hooks_local(sqlite3* db,
+                                                    const char* sql,
+                                                    std::string* err) {
+    char* errmsg = nullptr;
+    const int rc = sqlite3_exec(db, sql, nullptr, nullptr, &errmsg);
+    if (rc != SQLITE_OK) {
+        if (err) *err = errmsg ? errmsg : sqlite3_errmsg(db);
+        if (errmsg) sqlite3_free(errmsg);
+        return false;
+    }
+    return true;
+}
+
+static bool reelstack_meta_rename_one_path_local(const std::string& scope_type,
+                                                 const std::string& scope_id,
+                                                 const std::string& from_rel,
+                                                 const std::string& to_rel,
+                                                 std::int64_t now_epoch,
+                                                 std::string* err) {
+    if (err) err->clear();
+    if (scope_type.empty() || scope_id.empty() || from_rel.empty() || to_rel.empty()) return true;
+    if (from_rel == to_rel) return true;
+
+    std::lock_guard<std::mutex> lk(g_reelstack_meta_path_hooks_mu);
+
+    sqlite3* db = nullptr;
+    if (!reelstack_meta_open_existing_db_path_hooks_local(&db, err)) return false;
+    if (!db) return true;
+
+    auto rollback = [&]() {
+        std::string ignored;
+        (void)reelstack_meta_exec_sql_path_hooks_local(db, "ROLLBACK;", &ignored);
+    };
+
+    if (!reelstack_meta_exec_sql_path_hooks_local(db, "BEGIN IMMEDIATE;", err)) {
+        sqlite3_close(db);
+        return false;
+    }
+
+    {
+        const char* sql =
+            "DELETE FROM reelstack_meta "
+            "WHERE scope_type = ?1 AND scope_id = ?2 AND logical_rel_path = ?3";
+
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) != SQLITE_OK) {
+            if (err) *err = sqlite3_errmsg(db);
+            rollback();
+            sqlite3_close(db);
+            return false;
+        }
+
+        sqlite3_bind_text(st, 1, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 2, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 3, to_rel.c_str(), -1, SQLITE_TRANSIENT);
+
+        const int rc = sqlite3_step(st);
+        if (rc != SQLITE_DONE) {
+            if (err) *err = sqlite3_errmsg(db);
+            sqlite3_finalize(st);
+            rollback();
+            sqlite3_close(db);
+            return false;
+        }
+
+        sqlite3_finalize(st);
+    }
+
+    {
+        const char* sql =
+            "UPDATE reelstack_meta "
+            "SET logical_rel_path = ?4, updated_epoch = ?5 "
+            "WHERE scope_type = ?1 AND scope_id = ?2 AND logical_rel_path = ?3";
+
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) != SQLITE_OK) {
+            if (err) *err = sqlite3_errmsg(db);
+            rollback();
+            sqlite3_close(db);
+            return false;
+        }
+
+        sqlite3_bind_text(st, 1, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 2, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 3, from_rel.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 4, to_rel.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(st, 5, static_cast<sqlite3_int64>(now_epoch));
+
+        const int rc = sqlite3_step(st);
+        if (rc != SQLITE_DONE) {
+            if (err) *err = sqlite3_errmsg(db);
+            sqlite3_finalize(st);
+            rollback();
+            sqlite3_close(db);
+            return false;
+        }
+
+        sqlite3_finalize(st);
+    }
+
+    if (!reelstack_meta_exec_sql_path_hooks_local(db, "COMMIT;", err)) {
+        rollback();
+        sqlite3_close(db);
+        return false;
+    }
+
+    sqlite3_close(db);
+    return true;
+}
+
+static bool reelstack_meta_rename_subtree_path_local(const std::string& scope_type,
+                                                     const std::string& scope_id,
+                                                     const std::string& from_rel,
+                                                     const std::string& to_rel,
+                                                     std::int64_t now_epoch,
+                                                     std::string* err) {
+    if (err) err->clear();
+    if (scope_type.empty() || scope_id.empty() || from_rel.empty() || to_rel.empty()) return true;
+    if (from_rel == to_rel) return true;
+
+    std::lock_guard<std::mutex> lk(g_reelstack_meta_path_hooks_mu);
+
+    sqlite3* db = nullptr;
+    if (!reelstack_meta_open_existing_db_path_hooks_local(&db, err)) return false;
+    if (!db) return true;
+
+    const std::string from_pattern = reelstack_like_escape_path_hooks_local(from_rel + "/") + "%";
+    const std::string to_pattern = reelstack_like_escape_path_hooks_local(to_rel + "/") + "%";
+    const int tail_start = static_cast<int>(from_rel.size()) + 1; // SQLite substr is 1-indexed.
+
+    auto rollback = [&]() {
+        std::string ignored;
+        (void)reelstack_meta_exec_sql_path_hooks_local(db, "ROLLBACK;", &ignored);
+    };
+
+    if (!reelstack_meta_exec_sql_path_hooks_local(db, "BEGIN IMMEDIATE;", err)) {
+        sqlite3_close(db);
+        return false;
+    }
+
+    {
+        const char* sql =
+            "DELETE FROM reelstack_meta "
+            "WHERE scope_type = ?1 AND scope_id = ?2 "
+            "  AND (logical_rel_path = ?3 OR logical_rel_path LIKE ?4 ESCAPE '\\')";
+
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) != SQLITE_OK) {
+            if (err) *err = sqlite3_errmsg(db);
+            rollback();
+            sqlite3_close(db);
+            return false;
+        }
+
+        sqlite3_bind_text(st, 1, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 2, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 3, to_rel.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 4, to_pattern.c_str(), -1, SQLITE_TRANSIENT);
+
+        const int rc = sqlite3_step(st);
+        if (rc != SQLITE_DONE) {
+            if (err) *err = sqlite3_errmsg(db);
+            sqlite3_finalize(st);
+            rollback();
+            sqlite3_close(db);
+            return false;
+        }
+
+        sqlite3_finalize(st);
+    }
+
+    {
+        const char* sql =
+            "UPDATE reelstack_meta "
+            "SET logical_rel_path = CASE "
+            "    WHEN logical_rel_path = ?3 THEN ?4 "
+            "    ELSE ?4 || substr(logical_rel_path, ?5) "
+            "  END, "
+            "  updated_epoch = ?6 "
+            "WHERE scope_type = ?1 AND scope_id = ?2 "
+            "  AND (logical_rel_path = ?3 OR logical_rel_path LIKE ?7 ESCAPE '\\')";
+
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) != SQLITE_OK) {
+            if (err) *err = sqlite3_errmsg(db);
+            rollback();
+            sqlite3_close(db);
+            return false;
+        }
+
+        sqlite3_bind_text(st, 1, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 2, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 3, from_rel.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(st, 4, to_rel.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(st, 5, tail_start);
+        sqlite3_bind_int64(st, 6, static_cast<sqlite3_int64>(now_epoch));
+        sqlite3_bind_text(st, 7, from_pattern.c_str(), -1, SQLITE_TRANSIENT);
+
+        const int rc = sqlite3_step(st);
+        if (rc != SQLITE_DONE) {
+            if (err) *err = sqlite3_errmsg(db);
+            sqlite3_finalize(st);
+            rollback();
+            sqlite3_close(db);
+            return false;
+        }
+
+        sqlite3_finalize(st);
+    }
+
+    if (!reelstack_meta_exec_sql_path_hooks_local(db, "COMMIT;", err)) {
+        rollback();
+        sqlite3_close(db);
+        return false;
+    }
+
+    sqlite3_close(db);
+    return true;
+}
+
+static bool reelstack_meta_remove_under_prefix_path_local(const std::string& scope_type,
+                                                          const std::string& scope_id,
+                                                          const std::string& rel,
+                                                          const std::string& item_type,
+                                                          std::string* err) {
+    if (err) err->clear();
+    if (scope_type.empty() || scope_id.empty() || rel.empty()) return true;
+
+    std::lock_guard<std::mutex> lk(g_reelstack_meta_path_hooks_mu);
+
+    sqlite3* db = nullptr;
+    if (!reelstack_meta_open_existing_db_path_hooks_local(&db, err)) return false;
+    if (!db) return true;
+
+    const bool is_dir = (item_type == "dir" || item_type == "folder");
+    const std::string pattern = reelstack_like_escape_path_hooks_local(rel + "/") + "%";
+
+    const char* sql_dir =
+        "DELETE FROM reelstack_meta "
+        "WHERE scope_type = ?1 AND scope_id = ?2 "
+        "  AND (logical_rel_path = ?3 OR logical_rel_path LIKE ?4 ESCAPE '\\')";
+
+    const char* sql_file =
+        "DELETE FROM reelstack_meta "
+        "WHERE scope_type = ?1 AND scope_id = ?2 AND logical_rel_path = ?3";
+
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db, is_dir ? sql_dir : sql_file, -1, &st, nullptr) != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db);
+        sqlite3_close(db);
+        return false;
+    }
+
+    sqlite3_bind_text(st, 1, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 2, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(st, 3, rel.c_str(), -1, SQLITE_TRANSIENT);
+    if (is_dir) sqlite3_bind_text(st, 4, pattern.c_str(), -1, SQLITE_TRANSIENT);
+
+    const int rc = sqlite3_step(st);
+    if (rc != SQLITE_DONE) {
+        if (err) *err = sqlite3_errmsg(db);
+        sqlite3_finalize(st);
+        sqlite3_close(db);
+        return false;
+    }
+
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    return true;
+}
+
+
 #include "storage_resolver.h"
 
 //apps
@@ -22640,6 +22962,12 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
                 }
             }
         }
+        {
+            std::string rerr;
+            if (!reelstack_meta_rename_one_path_local("user", fp_hex, from_rel_norm, to_rel_norm, now_ts, &rerr)) {
+                audit_warn("reelstack_meta_move_failed", rerr, from_rel, to_rel);
+            }
+        }
         audit_ok(from_rel, to_rel, "file", bytes);
         record_user_file_moved_activity_best_effort_local(
             users,
@@ -22867,6 +23195,12 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
                 if (!gallery_albums_index.rename_subtree("user", fp_hex, from_rel_norm, to_rel_norm, now_ts, &aerr)) {
                     audit_warn("gallery_albums_move_failed", aerr, from_rel, to_rel);
                 }
+            }
+        }
+        {
+            std::string rerr;
+            if (!reelstack_meta_rename_subtree_path_local("user", fp_hex, from_rel_norm, to_rel_norm, now_ts, &rerr)) {
+                audit_warn("reelstack_meta_move_failed", rerr, from_rel, to_rel);
             }
         }
         audit_ok(from_rel, to_rel, "dir", 0);
@@ -28724,6 +29058,12 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
                 }
             }
         }
+        {
+            std::string rerr;
+            if (!reelstack_meta_remove_under_prefix_path_local("user", fp_hex, rel_norm, "file", &rerr)) {
+                audit_warn("reelstack_meta_cleanup_failed", rerr, rel_norm);
+            }
+        }
 
         audit_ok(rel_path, "file", freed_bytes);
         reply_json(res, 200, json{
@@ -28948,6 +29288,12 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
                     if (!gidx->erase_subtree("user", fp_hex, rel_norm, &gerr)) {
                         audit_warn("gallery_meta_cleanup_failed", gerr, rel_norm);
                     }
+                }
+            }
+            {
+                std::string rerr;
+                if (!reelstack_meta_remove_under_prefix_path_local("user", fp_hex, rel_norm, "dir", &rerr)) {
+                    audit_warn("reelstack_meta_cleanup_failed", rerr, rel_norm);
                 }
             }
 
