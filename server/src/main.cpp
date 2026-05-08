@@ -10675,6 +10675,24 @@ trash_service.set_restore_unindexer(
         }
     });
 
+    pqnas::set_quota_extra_used_bytes_provider(
+        [&](const std::string& scope_type,
+            const std::string& scope_id,
+            std::uint64_t* out_bytes,
+            std::string* err) -> bool {
+            if (out_bytes) *out_bytes = 0;
+            if (err) err->clear();
+
+            if (scope_type != "user") {
+                return true;
+            }
+            if (scope_id.empty()) {
+                return true;
+            }
+
+            return trash_index.sum_active_scope_bytes("user", scope_id, out_bytes, err);
+        });
+
     trash_service.set_purge_cleanup(
         [&](const pqnas::TrashItemRec& rec,
             std::uint64_t* versions_deleted,
@@ -29990,6 +30008,8 @@ srv.Get("/api/v4/me/storage", [&](const httplib::Request& req, httplib::Response
     out["storage_state"] = u.storage_state.empty() ? "" : u.storage_state;
     out["quota_bytes"] = (std::uint64_t)u.quota_bytes;
     out["used_bytes"] = (std::uint64_t)0;
+    out["live_bytes"] = (std::uint64_t)0;
+    out["trash_bytes"] = (std::uint64_t)0;
     out["used_percent"] = 0.0;
     out["warn_level"] = "ok";
     out["partial"] = false;
@@ -30043,6 +30063,19 @@ srv.Get("/api/v4/me/storage", [&](const httplib::Request& req, httplib::Response
         ).count();
         if (elapsed >= TIME_CAP_MS) { partial = true; break; }
 
+        // skip internal quota metadata
+        {
+            std::error_code qec;
+            const auto rel = it->path().lexically_relative(user_dir.lexically_normal());
+            auto rit = rel.begin();
+            if (rit != rel.end() && rit->string() == ".pqnas_activity") {
+                if (it->is_directory(qec) && !qec) {
+                    it.disable_recursion_pending();
+                }
+                continue;
+            }
+        }
+
         std::error_code ec2;
         if (it->is_regular_file(ec2) && !ec2) {
             ec2.clear();
@@ -30052,16 +30085,35 @@ srv.Get("/api/v4/me/storage", [&](const httplib::Request& req, httplib::Response
     }
     if (ec) partial = true;
 
-    out["used_bytes"] = (std::uint64_t)used;
+    const std::uint64_t live_bytes = used;
+
+    std::uint64_t trash_bytes = 0;
+    std::string trash_sum_err;
+    if (!trash_index.sum_active_scope_bytes("user", fp_hex, &trash_bytes, &trash_sum_err)) {
+        partial = true;
+        out["trash_bytes_error"] = pqnas::shorten(trash_sum_err, 180);
+        trash_bytes = 0;
+    }
+
+    std::uint64_t effective_used = live_bytes;
+    if (std::numeric_limits<std::uint64_t>::max() - effective_used < trash_bytes) {
+        effective_used = std::numeric_limits<std::uint64_t>::max();
+    } else {
+        effective_used += trash_bytes;
+    }
+
+    out["live_bytes"] = (std::uint64_t)live_bytes;
+    out["trash_bytes"] = (std::uint64_t)trash_bytes;
+    out["used_bytes"] = (std::uint64_t)effective_used;
     out["scanned_entries"] = (std::uint64_t)entries;
     out["partial"] = partial;
 
     // used_percent (quota==0 => define as 0, but warn if used>0)
     double pct = 0.0;
     if (u.quota_bytes > 0) {
-        pct = (double)used * 100.0 / (double)u.quota_bytes;
+        pct = (double)effective_used * 100.0 / (double)u.quota_bytes;
     } else {
-        pct = (used > 0) ? 100.0 : 0.0;
+        pct = (effective_used > 0) ? 100.0 : 0.0;
     }
     out["used_percent"] = pct;
 

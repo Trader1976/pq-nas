@@ -3,8 +3,45 @@
 #include <algorithm>
 #include <cctype>
 #include <system_error>
+#include <utility>
+#include <limits>
 
 namespace pqnas {
+
+namespace {
+QuotaExtraUsedBytesProvider& quota_extra_used_bytes_provider_local() {
+    static QuotaExtraUsedBytesProvider fn;
+    return fn;
+}
+
+bool is_quota_internal_metadata_path_local(const std::filesystem::path& user_dir,
+                                           const std::filesystem::path& p) {
+    std::error_code ec;
+    const auto rel = p.lexically_relative(user_dir.lexically_normal());
+    if (rel.empty()) return false;
+
+    auto it = rel.begin();
+    if (it == rel.end()) return false;
+
+    const std::string first = it->string();
+
+    // Per-user activity DB is DNA-Nexus metadata, not user content.
+    // It should not reduce user quota just because the system records actions.
+    if (first == ".pqnas_activity") return true;
+
+    return false;
+}
+
+void add_saturating_local(std::uint64_t* base, std::uint64_t extra) {
+    if (!base) return;
+    if (std::numeric_limits<std::uint64_t>::max() - *base < extra) {
+        *base = std::numeric_limits<std::uint64_t>::max();
+    } else {
+        *base += extra;
+    }
+}
+} // namespace
+
 
 /*
 ================================================================================
@@ -72,6 +109,10 @@ Versioning note:
 ================================================================================
 */
 
+
+void set_quota_extra_used_bytes_provider(QuotaExtraUsedBytesProvider fn) {
+    quota_extra_used_bytes_provider_local() = std::move(fn);
+}
 
 //------------------------------------------------------------------------------
 // Relative path policy gate
@@ -236,16 +277,28 @@ std::uint64_t compute_used_bytes_v1(const std::filesystem::path& user_dir) {
     if (!std::filesystem::exists(user_dir, ec)) return 0;
     ec.clear();
 
-    for (std::filesystem::recursive_directory_iterator it(user_dir, ec), end;
+    for (std::filesystem::recursive_directory_iterator it(
+             user_dir,
+             std::filesystem::directory_options::skip_permission_denied,
+             ec
+         ), end;
          it != end && !ec;
          it.increment(ec)) {
         if (ec) break;
+
+        if (is_quota_internal_metadata_path_local(user_dir, it->path())) {
+            std::error_code dec;
+            if (it->is_directory(dec) && !dec) {
+                it.disable_recursion_pending();
+            }
+            continue;
+        }
 
         std::error_code ec2;
         if (it->is_regular_file(ec2) && !ec2) {
             std::error_code ec3;
             auto sz = it->file_size(ec3);
-            if (!ec3) total += (std::uint64_t)sz;
+            if (!ec3) total += static_cast<std::uint64_t>(sz);
         }
     }
     return total;
@@ -312,8 +365,20 @@ QuotaCheckResult quota_check_for_upload_v1(const UsersRegistry& users,
         return r;
     }
 
-    // Best-effort used-bytes computation
-    r.used_bytes = compute_used_bytes_v1(user_dir);
+    // Best-effort used-bytes computation.
+    // live_bytes excludes internal metadata such as .pqnas_activity.
+    // extra_used_bytes accounts for quota-owned data outside user_dir, currently active Trash.
+    r.live_bytes = compute_used_bytes_v1(user_dir);
+    r.used_bytes = r.live_bytes;
+
+    if (auto& extra_fn = quota_extra_used_bytes_provider_local()) {
+        std::uint64_t extra = 0;
+        std::string extra_err;
+        if (extra_fn("user", fp_hex, &extra, &extra_err)) {
+            r.extra_used_bytes = extra;
+            add_saturating_local(&r.used_bytes, extra);
+        }
+    }
 
     // If overwriting an existing file, subtract it from used before adding incoming.
     r.existing_bytes = file_size_u64_safe(r.abs_path);
