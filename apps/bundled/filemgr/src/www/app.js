@@ -855,6 +855,26 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return `${base}/${name}`;
   }
 
+
+  function isInternalPqnasFileManagerEntry(item) {
+    if (!item || typeof item !== "object") return false;
+
+    const rawName = String(item.name || item.filename || "").trim();
+    const rawPath = String(item.path || item.rel || item.rel_path || "").trim();
+    const leaf = (rawName || rawPath).split("/").filter(Boolean).pop() || "";
+
+    // Hide PQ-NAS owned per-user/app metadata folders from normal File Manager.
+    // Do not hide all dotfiles; user-created .env/.ssh/etc. may be legitimate.
+    return leaf === ".pqnas_activity" ||
+           leaf === ".pqnas_echostack" ||
+           leaf.startsWith(".pqnas_");
+  }
+
+  function filterInternalPqnasFileManagerEntries(items) {
+    if (!Array.isArray(items)) return [];
+    return items.filter((it) => !isInternalPqnasFileManagerEntry(it));
+  }
+
   function parentPath(p) {
     if (!p) return "";
     const i = p.lastIndexOf("/");
@@ -1126,6 +1146,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   }
 
   async function renderItemsChunked(items, mySeq, loadSnap, loadPath) {
+    items = filterInternalPqnasFileManagerEntries(items);
     if (!gridEl) return false;
 
     const chunkSize = 250;
