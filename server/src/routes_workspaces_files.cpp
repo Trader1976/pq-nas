@@ -1629,7 +1629,56 @@ void register_workspace_file_routes(httplib::Server& srv,
         return;
     }
 
+    // Personal Shared Spaces are reserved from the creator's own user allocation.
+    //
+    // This keeps normal users from creating shared storage unless the admin has
+    // allocated storage for that user first. v1 supports default-pool personal
+    // Shared Spaces only, matching the current workspace storage implementation.
+    const UserRec* owner_user = nullptr;
+    for (const auto& ukv : deps.users->snapshot()) {
+        const auto& u = ukv.second;
+        const std::string ufp = u.fingerprint.empty() ? ukv.first : u.fingerprint;
+        if (ufp == actor_fp) {
+            owner_user = &u;
+            break;
+        }
+    }
+
+    if (!owner_user || owner_user->status != "enabled") {
+        audit_fail("owner_user_not_enabled", 403);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "owner_user_not_enabled"},
+            {"message", "shared space owner must be an enabled user"}
+        }.dump());
+        return;
+    }
+
+    if (owner_user->storage_state != "allocated") {
+        audit_fail("owner_storage_unallocated", 403);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Shared Space creation requires allocated personal storage"},
+            {"quota_bytes", owner_user->quota_bytes}
+        }.dump());
+        return;
+    }
+
+    if (!owner_user->storage_pool_id.empty()) {
+        audit_fail("owner_pool_not_supported_yet", 400, owner_user->storage_pool_id);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "owner_pool_not_supported_yet"},
+            {"message", "personal Shared Space creation currently supports default-pool owners only"},
+            {"pool_id", owner_user->storage_pool_id}
+        }.dump());
+        return;
+    }
+
     std::size_t personal_owned_count = 0;
+    std::uint64_t personal_workspace_quota_reserved_from_owner = 0;
+
     for (const auto& kv : deps.workspaces->snapshot()) {
         const WorkspaceRec& w = kv.second;
         if (w.status != "enabled") continue;
@@ -1638,7 +1687,38 @@ void register_workspace_file_routes(httplib::Server& srv,
         auto mopt = enabled_member_for_actor(w, actor_fp);
         if (mopt.has_value() && mopt->role == "owner") {
             ++personal_owned_count;
+
+            if (std::numeric_limits<std::uint64_t>::max() -
+                    personal_workspace_quota_reserved_from_owner < w.quota_bytes) {
+                personal_workspace_quota_reserved_from_owner =
+                    std::numeric_limits<std::uint64_t>::max();
+            } else {
+                personal_workspace_quota_reserved_from_owner += w.quota_bytes;
+            }
         }
+    }
+
+    std::uint64_t would_reserve_from_owner = personal_workspace_quota_reserved_from_owner;
+    if (std::numeric_limits<std::uint64_t>::max() -
+            would_reserve_from_owner < kPersonalWorkspaceDefaultQuotaBytes) {
+        would_reserve_from_owner = std::numeric_limits<std::uint64_t>::max();
+    } else {
+        would_reserve_from_owner += kPersonalWorkspaceDefaultQuotaBytes;
+    }
+
+    if (owner_user->quota_bytes == 0 ||
+        would_reserve_from_owner > static_cast<std::uint64_t>(owner_user->quota_bytes)) {
+        audit_fail("owner_quota_insufficient", 409);
+        deps.reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "owner_quota_insufficient"},
+            {"message", "shared space quota would exceed the owner's personal allocation"},
+            {"requested_quota_bytes", kPersonalWorkspaceDefaultQuotaBytes},
+            {"owner_quota_bytes", owner_user->quota_bytes},
+            {"owner_reserved_shared_space_quota_bytes", personal_workspace_quota_reserved_from_owner},
+            {"owner_would_reserved_shared_space_quota_bytes", would_reserve_from_owner}
+        }.dump());
+        return;
     }
 
     if (personal_owned_count >= kPersonalWorkspaceMaxPerOwner) {
@@ -1917,6 +1997,700 @@ srv.Get("/api/v4/workspaces/members",
 
     deps.reply_json(res, 200, out.dump());
 });
+
+    // POST /api/v4/workspaces/members/invite
+    //
+    // Owner-only member invitation for user-created Shared Spaces.
+    //
+    // v1 policy:
+    // - only kind="personal"
+    // - actor must be an enabled owner
+    // - target must be an existing enabled user
+    // - target starts as status="invited"
+    // - existing disabled/invited member can be re-invited/updated
+    srv.Post("/api/v4/workspaces/members/invite",
+        [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+    if (!deps.require_user_auth_users_actor ||
+        !deps.require_user_auth_users_actor(
+            req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+        return;
+    }
+
+    if (!deps.origin || deps.origin->empty()) {
+        res.status = 500;
+        res.set_header("Content-Type", "application/json");
+        res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+        return;
+    }
+
+    if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
+    (void)actor_role;
+    res.set_header("Cache-Control", "no-store");
+
+    auto audit_fail = [&](const std::string& workspace_id,
+                          const std::string& reason,
+                          int http,
+                          const std::string& detail = "") {
+        if (!deps.audit_emit) return;
+        std::map<std::string, std::string> f;
+        f["actor_fp"] = actor_fp;
+        if (!workspace_id.empty()) f["workspace_id"] = workspace_id;
+        f["reason"] = reason;
+        f["http"] = std::to_string(http);
+        if (!detail.empty()) f["detail"] = detail;
+        f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
+        deps.audit_emit("workspace.personal_member_invite_fail", "fail", f);
+    };
+
+    auto audit_ok = [&](const std::string& workspace_id,
+                        const std::string& target_fp,
+                        const std::string& role,
+                        const std::string& status) {
+        if (!deps.audit_emit) return;
+        std::map<std::string, std::string> f;
+        f["actor_fp"] = actor_fp;
+        f["workspace_id"] = workspace_id;
+        f["target_fp"] = target_fp;
+        f["role"] = role;
+        f["status"] = status;
+        f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
+        deps.audit_emit("workspace.personal_member_invited", "ok", f);
+    };
+
+    json j;
+    try {
+        j = req.body.empty() ? json::object() : json::parse(req.body);
+    } catch (...) {
+        audit_fail("", "bad_json", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    const std::string workspace_id = trim_copy_safe(j.value("workspace_id", ""));
+    const std::string target_fp =
+        trim_copy_safe(j.value("fingerprint", j.value("target_fingerprint", "")));
+    const std::string role = normalize_workspace_role_copy(j.value("role", "viewer"));
+
+    if (workspace_id.empty()) {
+        audit_fail("", "missing_workspace_id", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing workspace_id"}
+        }.dump());
+        return;
+    }
+
+    if (target_fp.empty()) {
+        audit_fail(workspace_id, "missing_fingerprint", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing fingerprint"}
+        }.dump());
+        return;
+    }
+
+    if (target_fp == actor_fp) {
+        audit_fail(workspace_id, "cannot_invite_self", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "cannot invite yourself"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->load(deps.workspaces_path)) {
+        audit_fail(workspace_id, "workspaces_reload_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "workspaces_reload_failed"},
+            {"message", "failed to reload workspaces"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.users || !deps.users->load(deps.users_path)) {
+        audit_fail(workspace_id, "users_reload_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "users_reload_failed"},
+            {"message", "failed to reload users"}
+        }.dump());
+        return;
+    }
+
+    auto wopt = deps.workspaces->get(workspace_id);
+    if (!wopt.has_value()) {
+        audit_fail(workspace_id, "workspace_not_found", 404);
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "workspace not found"}
+        }.dump());
+        return;
+    }
+
+    const WorkspaceRec& w = *wopt;
+
+    if (w.status != "enabled") {
+        audit_fail(workspace_id, "workspace_disabled", 403);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace disabled"}
+        }.dump());
+        return;
+    }
+
+    const std::string kind = w.kind.empty() ? "admin" : w.kind;
+    if (kind != "personal") {
+        audit_fail(workspace_id, "not_personal_workspace", 403);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "only personal Shared Spaces can be managed here"}
+        }.dump());
+        return;
+    }
+
+    auto actor_member = enabled_member_for_actor(w, actor_fp);
+    if (!actor_member.has_value() || actor_member->role != "owner") {
+        audit_fail(workspace_id, "owner_required", 403);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "only Shared Space owners can invite members"}
+        }.dump());
+        return;
+    }
+
+    bool target_enabled_user = false;
+    for (const auto& ukv : deps.users->snapshot()) {
+        const auto& u = ukv.second;
+        const std::string ufp = u.fingerprint.empty() ? ukv.first : u.fingerprint;
+        if (ufp == target_fp && u.status == "enabled") {
+            target_enabled_user = true;
+            break;
+        }
+    }
+
+    if (!target_enabled_user) {
+        audit_fail(workspace_id, "target_user_not_enabled", 403, target_fp);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "target_user_not_enabled"},
+            {"message", "fingerprint must refer to an enabled user"}
+        }.dump());
+        return;
+    }
+
+    auto existing = deps.workspaces->get_member(workspace_id, target_fp);
+    if (existing.has_value() && existing->status == "enabled") {
+        audit_fail(workspace_id, "already_member", 409, target_fp);
+        deps.reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "already_member"},
+            {"message", "user is already an enabled member"}
+        }.dump());
+        return;
+    }
+
+    const std::int64_t now_epoch =
+        deps.now_epoch_sec ? deps.now_epoch_sec() : 0;
+    const std::string now_iso = iso_utc_from_epoch_sec(now_epoch);
+
+    WorkspaceMemberRec member;
+    member.fingerprint = target_fp;
+    member.role = role;
+    member.status = "invited";
+    member.added_at = now_iso;
+    member.added_by = actor_fp;
+    member.responded_at.clear();
+    member.responded_by.clear();
+
+    if (existing.has_value() && !existing->added_at.empty()) {
+        member.added_at = existing->added_at;
+        member.added_by = existing->added_by.empty() ? actor_fp : existing->added_by;
+    }
+
+    if (!deps.workspaces->add_or_update_member(workspace_id, member)) {
+        audit_fail(workspace_id, "add_or_update_member_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to invite workspace member"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->save(deps.workspaces_path)) {
+        audit_fail(workspace_id, "save_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to save workspaces"}
+        }.dump());
+        return;
+    }
+
+    auto w2 = deps.workspaces->get(workspace_id);
+    auto actor2 = deps.workspaces->get_member(workspace_id, actor_fp);
+    auto member2 = deps.workspaces->get_member(workspace_id, target_fp);
+    if (!w2.has_value() || !actor2.has_value() || !member2.has_value()) {
+        audit_fail(workspace_id, "reload_after_invite_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to reload workspace after invite"}
+        }.dump());
+        return;
+    }
+
+    audit_ok(workspace_id, target_fp, member2->role, member2->status);
+
+    deps.reply_json(res, 200, json{
+        {"ok", true},
+        {"workspace", workspace_to_user_json(*w2, *actor2, deps.users_path)},
+        {"member", workspace_member_to_user_json(*member2, deps.users)}
+    }.dump());
+});
+
+    // POST /api/v4/workspaces/members/remove
+    //
+    // Owner-only member removal for user-created Shared Spaces.
+    srv.Post("/api/v4/workspaces/members/remove",
+        [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+    if (!deps.require_user_auth_users_actor ||
+        !deps.require_user_auth_users_actor(
+            req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+        return;
+    }
+
+    if (!deps.origin || deps.origin->empty()) {
+        res.status = 500;
+        res.set_header("Content-Type", "application/json");
+        res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+        return;
+    }
+
+    if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
+    (void)actor_role;
+    res.set_header("Cache-Control", "no-store");
+
+    auto audit_fail = [&](const std::string& workspace_id,
+                          const std::string& reason,
+                          int http,
+                          const std::string& detail = "") {
+        if (!deps.audit_emit) return;
+        std::map<std::string, std::string> f;
+        f["actor_fp"] = actor_fp;
+        if (!workspace_id.empty()) f["workspace_id"] = workspace_id;
+        f["reason"] = reason;
+        f["http"] = std::to_string(http);
+        if (!detail.empty()) f["detail"] = detail;
+        f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
+        deps.audit_emit("workspace.personal_member_remove_fail", "fail", f);
+    };
+
+    auto audit_ok = [&](const std::string& workspace_id,
+                        const std::string& target_fp) {
+        if (!deps.audit_emit) return;
+        std::map<std::string, std::string> f;
+        f["actor_fp"] = actor_fp;
+        f["workspace_id"] = workspace_id;
+        f["target_fp"] = target_fp;
+        f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
+        deps.audit_emit("workspace.personal_member_removed", "ok", f);
+    };
+
+    json j;
+    try {
+        j = req.body.empty() ? json::object() : json::parse(req.body);
+    } catch (...) {
+        audit_fail("", "bad_json", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    const std::string workspace_id = trim_copy_safe(j.value("workspace_id", ""));
+    const std::string target_fp =
+        trim_copy_safe(j.value("fingerprint", j.value("target_fingerprint", "")));
+
+    if (workspace_id.empty() || target_fp.empty()) {
+        audit_fail(workspace_id, "missing_workspace_or_fingerprint", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing workspace_id or fingerprint"}
+        }.dump());
+        return;
+    }
+
+    if (target_fp == actor_fp) {
+        audit_fail(workspace_id, "cannot_remove_self", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "use Leave Workspace instead of removing yourself"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->load(deps.workspaces_path)) {
+        audit_fail(workspace_id, "workspaces_reload_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "workspaces_reload_failed"},
+            {"message", "failed to reload workspaces"}
+        }.dump());
+        return;
+    }
+
+    auto wopt = deps.workspaces->get(workspace_id);
+    if (!wopt.has_value()) {
+        audit_fail(workspace_id, "workspace_not_found", 404);
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "workspace not found"}
+        }.dump());
+        return;
+    }
+
+    const WorkspaceRec& w = *wopt;
+
+    if (w.status != "enabled") {
+        audit_fail(workspace_id, "workspace_disabled", 403);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace disabled"}
+        }.dump());
+        return;
+    }
+
+    const std::string kind = w.kind.empty() ? "admin" : w.kind;
+    if (kind != "personal") {
+        audit_fail(workspace_id, "not_personal_workspace", 403);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "only personal Shared Spaces can be managed here"}
+        }.dump());
+        return;
+    }
+
+    auto actor_member = enabled_member_for_actor(w, actor_fp);
+    if (!actor_member.has_value() || actor_member->role != "owner") {
+        audit_fail(workspace_id, "owner_required", 403);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "only Shared Space owners can remove members"}
+        }.dump());
+        return;
+    }
+
+    auto target_member = deps.workspaces->get_member(workspace_id, target_fp);
+    if (!target_member.has_value()) {
+        audit_fail(workspace_id, "member_not_found", 404, target_fp);
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "member not found"}
+        }.dump());
+        return;
+    }
+
+    if (target_member->status == "enabled" &&
+        target_member->role == "owner" &&
+        count_enabled_owners_local(w) <= 1) {
+        audit_fail(workspace_id, "last_enabled_owner_cannot_be_removed", 409);
+        deps.reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "last_owner_cannot_be_removed"},
+            {"message", "cannot remove the last enabled owner"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->remove_member(workspace_id, target_fp)) {
+        audit_fail(workspace_id, "remove_member_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to remove workspace member"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->save(deps.workspaces_path)) {
+        audit_fail(workspace_id, "save_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to save workspaces"}
+        }.dump());
+        return;
+    }
+
+    auto w2 = deps.workspaces->get(workspace_id);
+    auto actor2 = deps.workspaces->get_member(workspace_id, actor_fp);
+    if (!w2.has_value() || !actor2.has_value()) {
+        audit_fail(workspace_id, "reload_after_remove_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to reload workspace after removal"}
+        }.dump());
+        return;
+    }
+
+    audit_ok(workspace_id, target_fp);
+
+    deps.reply_json(res, 200, json{
+        {"ok", true},
+        {"workspace", workspace_to_user_json(*w2, *actor2, deps.users_path)},
+        {"removed_fingerprint", target_fp}
+    }.dump());
+});
+
+    // POST /api/v4/workspaces/members/set_role
+    //
+    // Owner-only member role update for user-created Shared Spaces.
+    srv.Post("/api/v4/workspaces/members/set_role",
+        [&](const httplib::Request& req, httplib::Response& res) {
+    std::string actor_fp, actor_role;
+    if (!deps.require_user_auth_users_actor ||
+        !deps.require_user_auth_users_actor(
+            req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+        return;
+    }
+
+    if (!deps.origin || deps.origin->empty()) {
+        res.status = 500;
+        res.set_header("Content-Type", "application/json");
+        res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+        return;
+    }
+
+    if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
+    (void)actor_role;
+    res.set_header("Cache-Control", "no-store");
+
+    auto audit_fail = [&](const std::string& workspace_id,
+                          const std::string& reason,
+                          int http,
+                          const std::string& detail = "") {
+        if (!deps.audit_emit) return;
+        std::map<std::string, std::string> f;
+        f["actor_fp"] = actor_fp;
+        if (!workspace_id.empty()) f["workspace_id"] = workspace_id;
+        f["reason"] = reason;
+        f["http"] = std::to_string(http);
+        if (!detail.empty()) f["detail"] = detail;
+        f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
+        deps.audit_emit("workspace.personal_member_role_fail", "fail", f);
+    };
+
+    auto audit_ok = [&](const std::string& workspace_id,
+                        const std::string& target_fp,
+                        const std::string& role) {
+        if (!deps.audit_emit) return;
+        std::map<std::string, std::string> f;
+        f["actor_fp"] = actor_fp;
+        f["workspace_id"] = workspace_id;
+        f["target_fp"] = target_fp;
+        f["role"] = role;
+        f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        auto it_cf = req.headers.find("CF-Connecting-IP");
+        if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+        auto it_xff = req.headers.find("X-Forwarded-For");
+        if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
+        deps.audit_emit("workspace.personal_member_role_changed", "ok", f);
+    };
+
+    json j;
+    try {
+        j = req.body.empty() ? json::object() : json::parse(req.body);
+    } catch (...) {
+        audit_fail("", "bad_json", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    const std::string workspace_id = trim_copy_safe(j.value("workspace_id", ""));
+    const std::string target_fp =
+        trim_copy_safe(j.value("fingerprint", j.value("target_fingerprint", "")));
+    const std::string new_role = normalize_workspace_role_copy(j.value("role", "viewer"));
+
+    if (workspace_id.empty() || target_fp.empty()) {
+        audit_fail(workspace_id, "missing_workspace_or_fingerprint", 400);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing workspace_id or fingerprint"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->load(deps.workspaces_path)) {
+        audit_fail(workspace_id, "workspaces_reload_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "workspaces_reload_failed"},
+            {"message", "failed to reload workspaces"}
+        }.dump());
+        return;
+    }
+
+    auto wopt = deps.workspaces->get(workspace_id);
+    if (!wopt.has_value()) {
+        audit_fail(workspace_id, "workspace_not_found", 404);
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "workspace not found"}
+        }.dump());
+        return;
+    }
+
+    const WorkspaceRec& w = *wopt;
+
+    if (w.status != "enabled") {
+        audit_fail(workspace_id, "workspace_disabled", 403);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace disabled"}
+        }.dump());
+        return;
+    }
+
+    const std::string kind = w.kind.empty() ? "admin" : w.kind;
+    if (kind != "personal") {
+        audit_fail(workspace_id, "not_personal_workspace", 403);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "only personal Shared Spaces can be managed here"}
+        }.dump());
+        return;
+    }
+
+    auto actor_member = enabled_member_for_actor(w, actor_fp);
+    if (!actor_member.has_value() || actor_member->role != "owner") {
+        audit_fail(workspace_id, "owner_required", 403);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "only Shared Space owners can change member roles"}
+        }.dump());
+        return;
+    }
+
+    auto target_member = deps.workspaces->get_member(workspace_id, target_fp);
+    if (!target_member.has_value()) {
+        audit_fail(workspace_id, "member_not_found", 404, target_fp);
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "member not found"}
+        }.dump());
+        return;
+    }
+
+    if (target_member->status == "enabled" &&
+        target_member->role == "owner" &&
+        new_role != "owner" &&
+        count_enabled_owners_local(w) <= 1) {
+        audit_fail(workspace_id, "last_enabled_owner_cannot_be_demoted", 409);
+        deps.reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "last_owner_cannot_be_demoted"},
+            {"message", "cannot demote the last enabled owner"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->set_member_role(workspace_id, target_fp, new_role)) {
+        audit_fail(workspace_id, "set_member_role_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to update workspace member role"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->save(deps.workspaces_path)) {
+        audit_fail(workspace_id, "save_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to save workspaces"}
+        }.dump());
+        return;
+    }
+
+    auto w2 = deps.workspaces->get(workspace_id);
+    auto actor2 = deps.workspaces->get_member(workspace_id, actor_fp);
+    auto member2 = deps.workspaces->get_member(workspace_id, target_fp);
+    if (!w2.has_value() || !actor2.has_value() || !member2.has_value()) {
+        audit_fail(workspace_id, "reload_after_role_change_failed", 500);
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to reload workspace after role change"}
+        }.dump());
+        return;
+    }
+
+    audit_ok(workspace_id, target_fp, member2->role);
+
+    deps.reply_json(res, 200, json{
+        {"ok", true},
+        {"workspace", workspace_to_user_json(*w2, *actor2, deps.users_path)},
+        {"member", workspace_member_to_user_json(*member2, deps.users)}
+    }.dump());
+});
+
     srv.Post("/api/v4/workspaces/leave",
          [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp, actor_role;
