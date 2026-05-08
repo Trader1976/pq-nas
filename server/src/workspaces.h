@@ -31,6 +31,7 @@ struct WorkspaceRec {
     std::string name;
     std::string status;    // enabled | disabled
     std::string notes;
+    std::string kind;      // admin | personal
 
     std::string created_at;
     std::string created_by;
@@ -88,6 +89,7 @@ private:
 // ----- normalization / conversion helpers -----------------------------------
 
 std::string normalize_workspace_status_copy(const std::string& s);
+std::string normalize_workspace_kind_copy(const std::string& s);
 std::string normalize_workspace_role_copy(const std::string& s);
 std::string normalize_workspace_member_status_copy(const std::string& s);
 std::string normalize_workspace_storage_state_copy(const std::string& s);

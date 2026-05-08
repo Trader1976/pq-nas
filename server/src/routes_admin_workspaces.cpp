@@ -324,6 +324,7 @@ bool quota_gb_json_to_bytes(const json& j,
         out["name"] = w.name;
         out["status"] = w.status;
         out["notes"] = w.notes;
+        out["kind"] = w.kind.empty() ? "admin" : w.kind;
 
         out["created_at"] = w.created_at;
         out["created_by"] = w.created_by;
@@ -736,6 +737,7 @@ srv.Post("/api/v4/admin/workspaces/create",
     w.name = name;
     w.status = "enabled";
     w.notes = notes;
+    w.kind = "admin";
 
     w.created_at = now_iso;
     w.created_by = actor_fp;

@@ -966,6 +966,8 @@ json workspace_to_user_json(const WorkspaceRec& w,
     out["name"] = w.name;
     out["notes"] = w.notes;
     out["status"] = w.status;
+    out["kind"] = w.kind.empty() ? "admin" : w.kind;
+    out["display_kind"] = (w.kind == "personal") ? "shared_space" : "workspace";
 
     out["role"] = actor_member.role;
 
@@ -1029,6 +1031,8 @@ json workspace_to_user_json(const WorkspaceRec& w,
 
     out["workspace_id"] = w.workspace_id;
     out["name"] = w.name;
+    out["kind"] = w.kind.empty() ? "admin" : w.kind;
+    out["display_kind"] = (w.kind == "personal") ? "shared_space" : "workspace";
     out["notes"] = w.notes;
     out["status"] = actor_member.status;
     out["role"] = actor_member.role;

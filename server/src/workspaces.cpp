@@ -99,6 +99,15 @@ std::string normalize_workspace_status_copy(const std::string& s) {
     return (v == "disabled") ? "disabled" : "enabled";
 }
 
+std::string normalize_workspace_kind_copy(const std::string& s) {
+    std::string v = trim_copy_safe(s);
+    for (char& ch : v) {
+        if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+    }
+    if (v == "personal") return "personal";
+    return "admin";
+}
+
 std::string normalize_workspace_role_copy(const std::string& s) {
     const std::string v = lower_ascii_copy(trim_copy_safe(s));
     if (v == "owner") return "owner";
@@ -157,6 +166,7 @@ void normalize_workspace_rec_v1(WorkspaceRec* w) {
     w->name = trim_copy_safe(w->name);
     w->status = normalize_workspace_status_copy(w->status);
     w->notes = trim_copy_safe(w->notes);
+    w->kind = normalize_workspace_kind_copy(w->kind);
 
     w->created_at = trim_copy_safe(w->created_at);
     w->created_by = trim_copy_safe(w->created_by);
@@ -232,6 +242,7 @@ WorkspaceRec workspace_from_json_v1(const json& j) {
     w.name = j.value("name", "");
     w.status = j.value("status", "enabled");
     w.notes = j.value("notes", "");
+    w.kind = j.value("kind", "admin");
 
     w.created_at = j.value("created_at", "");
     w.created_by = j.value("created_by", "");
@@ -279,6 +290,7 @@ json workspace_to_json_v1(const WorkspaceRec& in_w) {
         {"name", w.name},
         {"status", w.status},
         {"notes", w.notes},
+        {"kind", w.kind},
         {"created_at", w.created_at},
         {"created_by", w.created_by},
         {"storage_state", w.storage_state},
