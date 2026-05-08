@@ -307,7 +307,28 @@
         }
 
         .okBox.show{ display:block; }
-    </style>
+    
+        .workspaceActions{
+            display:flex;
+            align-items:center;
+            justify-content:flex-end;
+            gap:10px;
+            flex-wrap:wrap;
+            min-width:260px;
+        }
+
+        .workspaceActions .btn,
+        .workspaceActions .pill{
+            flex:0 0 auto;
+        }
+
+        .workspaceQuotaBtn{
+            display:inline-flex !important;
+            visibility:visible !important;
+            opacity:1 !important;
+        }
+
+</style>
 </head>
 
 <body>
@@ -416,7 +437,7 @@
 </div>
 
 <script src="/static/admin_badges.js"></script>
-<script src="/static/admin_workspaces.js"></script>
+<script src="/static/admin_workspaces.js?v=workspace-quota-20260508"></script>
 <script src="/static/shell_sidebar.js"></script>
 </body>
 </html>

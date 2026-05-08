@@ -202,6 +202,26 @@
         return j;
     }
 
+    async function apiUpdateWorkspaceQuota(workspaceId, quotaGb) {
+        const r = await fetch("/api/v4/admin/workspaces/quota", {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                workspace_id: workspaceId,
+                quota_gb: quotaGb
+            })
+        });
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            throw new Error((j && (j.message || j.error || j.detail))
+                ? [j.error, j.message, j.detail].filter(Boolean).join(" ")
+                : `HTTP ${r.status}`);
+        }
+        return j;
+    }
+
     function memberRowHtml(ws, m) {
         const fp = escapeHtml(m.fingerprint || "");
         const role = escapeHtml(m.role || "viewer");
@@ -262,6 +282,10 @@
 
     function workspaceCardHtml(ws) {
         const members = Array.isArray(ws.members) ? ws.members : [];
+        const quotaBytes = Number(ws.quota_bytes || 0);
+        const usedBytes = Number((ws.storage_used_bytes != null ? ws.storage_used_bytes : ws.used_bytes) || 0);
+        const quotaGiB = quotaBytes > 0 ? (quotaBytes / (1024 * 1024 * 1024)) : 0;
+        const quotaGiBText = quotaGiB > 0 ? (Math.round(quotaGiB * 100) / 100) : 0;
         const membersHtml = members.length
             ? members.map((m) => memberRowHtml(ws, m)).join("")
             : `<div class="hint">No members.</div>`;
@@ -273,8 +297,17 @@
                         <div class="workspaceName">${escapeHtml(ws.name || ws.workspace_id || "Workspace")}</div>
                         <div class="hint mono" style="margin-top:6px;">${escapeHtml(ws.workspace_id || "")}</div>
                     </div>
-                    <div class="row">
+                    <div class="workspaceActions">
                         <span class="pill ${pillStatusClass(ws.status)}">${escapeHtml(ws.status || "?")}</span>
+                        <button class="btn secondary workspaceQuotaBtn"
+                                type="button"
+                                data-workspace-id="${escapeHtml(ws.workspace_id || "")}"
+                                data-workspace-name="${escapeHtml(ws.name || ws.workspace_id || "Workspace")}"
+                                data-workspace-quota-gb="${escapeHtml(String(quotaGiBText))}"
+                                data-workspace-quota-bytes="${escapeHtml(String(quotaBytes))}"
+                                data-workspace-used-bytes="${escapeHtml(String(usedBytes))}">
+                            Edit quota
+                        </button>
                         ${canDeleteWorkspace(ws) ? `
                             <button class="btn secondary workspaceRenameBtn"
                                     type="button"
@@ -309,7 +342,10 @@
                     <div class="v mono">${escapeHtml(ws.pool_id || ws.storage_pool_id || "default")}</div>
 
                     <div class="k">Quota</div>
-                    <div class="v">${fmtSize(ws.quota_bytes || 0)}</div>
+                    <div class="v">${fmtSize(quotaBytes)}</div>
+
+                    <div class="k">Used</div>
+                    <div class="v">${fmtSize(usedBytes)}</div>
 
                     <div class="k">Root</div>
                     <div class="v mono">${escapeHtml(ws.root_rel || "—")}</div>
@@ -389,6 +425,52 @@
                 }
             });
         }
+        for (const btn of document.querySelectorAll(".workspaceQuotaBtn")) {
+            btn.addEventListener("click", async () => {
+                const workspaceId = btn.dataset.workspaceId || "";
+                const workspaceName = btn.dataset.workspaceName || workspaceId;
+                const oldQuotaGb = Number(btn.dataset.workspaceQuotaGb || 0);
+                const usedBytes = Number(btn.dataset.workspaceUsedBytes || 0);
+                if (!workspaceId) return;
+
+                const nextText = prompt(
+                    `New workspace quota in GiB:\n\n` +
+                    `Workspace: ${workspaceName}\n` +
+                    `Current usage: ${fmtSize(usedBytes)}\n\n` +
+                    `Quota cannot be smaller than current usage.`,
+                    String(Number.isFinite(oldQuotaGb) ? oldQuotaGb : 0)
+                );
+                if (nextText == null) return;
+
+                const quotaGb = Number(String(nextText).trim().replace(",", "."));
+                if (!Number.isFinite(quotaGb) || quotaGb < 0) {
+                    setMsg("Quota update failed: quota must be a number >= 0.");
+                    return;
+                }
+
+                const requestedBytes = Math.round(quotaGb * 1024 * 1024 * 1024);
+                if (requestedBytes < usedBytes) {
+                    setMsg(`Quota update failed: requested quota ${fmtSize(requestedBytes)} is below current usage ${fmtSize(usedBytes)}.`);
+                    return;
+                }
+
+                const old = btn.textContent;
+                btn.disabled = true;
+                btn.textContent = "Saving…";
+
+                try {
+                    await apiUpdateWorkspaceQuota(workspaceId, quotaGb);
+                    setMsg(`Updated quota for ${workspaceName}: ${fmtSize(requestedBytes)}`);
+                    await load();
+                } catch (e) {
+                    setMsg(`Quota update failed: ${String(e && e.message ? e.message : e)}`);
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = old;
+                }
+            });
+        }
+
         for (const btn of document.querySelectorAll(".workspaceDeleteBtn")) {
             btn.addEventListener("click", async () => {
                 const workspaceId = btn.dataset.workspaceId || "";
