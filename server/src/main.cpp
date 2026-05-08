@@ -588,6 +588,8 @@ const std::string STATIC_APP_JS              = static_path("app.js");
 const std::string STATIC_USERS_HTML          = static_path("admin_users.html");
 const std::string STATIC_ADMIN_WORKSPACES_HTML = static_path("admin_workspaces.html");
 const std::string STATIC_ADMIN_WORKSPACES_JS   = static_path("admin_workspaces.js");
+const std::string STATIC_ADMIN_STATS_HTML      = static_path("admin_stats.html");
+const std::string STATIC_ADMIN_STATS_JS        = static_path("admin_stats.js");
 const std::string STATIC_USERS_JS            = static_path("admin_users.js");
 const std::string STATIC_WAIT_APPROVAL_HTML  = static_path("wait_approval.html");
 const std::string STATIC_WAIT_APPROVAL_JS    = static_path("wait_approval.js");
@@ -20012,6 +20014,741 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
     	res.set_header("Cache-Control", "no-store");
 	    res.set_content(body, "application/javascript; charset=utf-8");
 	});
+
+
+    // -------------------------------------------------------------------------
+    // Admin Statistics SQLite snapshot cache
+    // -------------------------------------------------------------------------
+    const std::filesystem::path admin_stats_db_path =
+        std::filesystem::path(users_path).parent_path() / "admin_stats.sqlite3";
+
+    auto admin_stats_sql_exec_local =
+        [](sqlite3* db, const char* sql, std::string* err) -> bool {
+            char* msg = nullptr;
+            const int rc = sqlite3_exec(db, sql, nullptr, nullptr, &msg);
+            if (rc != SQLITE_OK) {
+                if (err) {
+                    *err = msg ? msg : sqlite3_errmsg(db);
+                }
+                if (msg) sqlite3_free(msg);
+                return false;
+            }
+            return true;
+        };
+
+    auto admin_stats_init_db_local =
+        [&](sqlite3* db, std::string* err) -> bool {
+            if (!admin_stats_sql_exec_local(db, "PRAGMA journal_mode=WAL;", err)) return false;
+            if (!admin_stats_sql_exec_local(db, "PRAGMA busy_timeout=5000;", err)) return false;
+
+            const char* sql = R"SQL(
+CREATE TABLE IF NOT EXISTS admin_stats_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    generated_at_epoch INTEGER NOT NULL,
+    generated_at_iso TEXT NOT NULL,
+    files_total_count INTEGER NOT NULL DEFAULT 0,
+    files_total_bytes INTEGER NOT NULL DEFAULT 0,
+    files_average_bytes INTEGER NOT NULL DEFAULT 0,
+    files_largest_bytes INTEGER NOT NULL DEFAULT 0,
+    users_total INTEGER NOT NULL DEFAULT 0,
+    users_enabled INTEGER NOT NULL DEFAULT 0,
+    users_admins INTEGER NOT NULL DEFAULT 0,
+    workspaces_total INTEGER NOT NULL DEFAULT 0,
+    workspaces_enabled INTEGER NOT NULL DEFAULT 0,
+    workspaces_user_created INTEGER NOT NULL DEFAULT 0,
+    workspaces_admin_created INTEGER NOT NULL DEFAULT 0,
+    snapshot_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_stats_snapshots_generated
+ON admin_stats_snapshots(generated_at_epoch DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS admin_stats_buckets (
+    snapshot_id INTEGER NOT NULL,
+    bucket_kind TEXT NOT NULL,
+    bucket_key TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY(snapshot_id) REFERENCES admin_stats_snapshots(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_stats_buckets_snapshot_kind
+ON admin_stats_buckets(snapshot_id, bucket_kind, position);
+)SQL";
+
+            return admin_stats_sql_exec_local(db, sql, err);
+        };
+
+    auto admin_stats_json_u64_local =
+        [](const json& j, const char* key) -> std::uint64_t {
+            try {
+                if (!j.is_object() || !j.contains(key)) return 0;
+                const auto& v = j.at(key);
+                if (v.is_number_unsigned()) return v.get<std::uint64_t>();
+                if (v.is_number_integer()) {
+                    const auto n = v.get<long long>();
+                    return n > 0 ? static_cast<std::uint64_t>(n) : 0;
+                }
+            } catch (...) {
+            }
+            return 0;
+        };
+
+    auto admin_stats_bind_u64_local =
+        [](sqlite3_stmt* st, int idx, std::uint64_t v) {
+            const auto max_i64 =
+                static_cast<std::uint64_t>(std::numeric_limits<sqlite3_int64>::max());
+            if (v > max_i64) v = max_i64;
+            sqlite3_bind_int64(st, idx, static_cast<sqlite3_int64>(v));
+        };
+
+    auto admin_stats_save_snapshot_local =
+        [&](const json& snap, std::string* err) -> bool {
+            if (err) err->clear();
+
+            sqlite3* db = nullptr;
+            if (sqlite3_open(admin_stats_db_path.string().c_str(), &db) != SQLITE_OK) {
+                if (err) *err = db ? sqlite3_errmsg(db) : "sqlite open failed";
+                if (db) sqlite3_close(db);
+                return false;
+            }
+
+            auto close_db = [&]() {
+                if (db) {
+                    sqlite3_close(db);
+                    db = nullptr;
+                }
+            };
+
+            if (!admin_stats_init_db_local(db, err)) {
+                close_db();
+                return false;
+            }
+
+            if (!admin_stats_sql_exec_local(db, "BEGIN IMMEDIATE;", err)) {
+                close_db();
+                return false;
+            }
+
+            auto rollback = [&]() {
+                std::string ignored;
+                admin_stats_sql_exec_local(db, "ROLLBACK;", &ignored);
+            };
+
+            const json files_j = snap.value("files", json::object());
+            const json users_j = snap.value("users", json::object());
+            const json workspaces_j = snap.value("workspaces", json::object());
+
+            const char* ins_sql = R"SQL(
+INSERT INTO admin_stats_snapshots (
+    generated_at_epoch,
+    generated_at_iso,
+    files_total_count,
+    files_total_bytes,
+    files_average_bytes,
+    files_largest_bytes,
+    users_total,
+    users_enabled,
+    users_admins,
+    workspaces_total,
+    workspaces_enabled,
+    workspaces_user_created,
+    workspaces_admin_created,
+    snapshot_json
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14);
+)SQL";
+
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(db, ins_sql, -1, &st, nullptr) != SQLITE_OK) {
+                if (err) *err = sqlite3_errmsg(db);
+                rollback();
+                close_db();
+                return false;
+            }
+
+            const std::int64_t generated =
+                snap.value("generated_at_epoch", static_cast<std::int64_t>(0));
+            const std::string generated_iso =
+                snap.value("generated_at_iso", std::string());
+
+            sqlite3_bind_int64(st, 1, static_cast<sqlite3_int64>(generated));
+            sqlite3_bind_text(st, 2, generated_iso.c_str(), -1, SQLITE_TRANSIENT);
+            admin_stats_bind_u64_local(st, 3, admin_stats_json_u64_local(files_j, "total_count"));
+            admin_stats_bind_u64_local(st, 4, admin_stats_json_u64_local(files_j, "total_bytes"));
+            admin_stats_bind_u64_local(st, 5, admin_stats_json_u64_local(files_j, "average_bytes"));
+            admin_stats_bind_u64_local(st, 6, admin_stats_json_u64_local(files_j, "largest_bytes"));
+            admin_stats_bind_u64_local(st, 7, admin_stats_json_u64_local(users_j, "total"));
+            admin_stats_bind_u64_local(st, 8, admin_stats_json_u64_local(users_j, "enabled"));
+            admin_stats_bind_u64_local(st, 9, admin_stats_json_u64_local(users_j, "admins"));
+            admin_stats_bind_u64_local(st, 10, admin_stats_json_u64_local(workspaces_j, "total"));
+            admin_stats_bind_u64_local(st, 11, admin_stats_json_u64_local(workspaces_j, "enabled"));
+            admin_stats_bind_u64_local(st, 12, admin_stats_json_u64_local(workspaces_j, "user_created"));
+            admin_stats_bind_u64_local(st, 13, admin_stats_json_u64_local(workspaces_j, "admin_created"));
+
+            const std::string snap_text = snap.dump();
+            sqlite3_bind_text(st, 14, snap_text.c_str(), -1, SQLITE_TRANSIENT);
+
+            if (sqlite3_step(st) != SQLITE_DONE) {
+                if (err) *err = sqlite3_errmsg(db);
+                sqlite3_finalize(st);
+                rollback();
+                close_db();
+                return false;
+            }
+            sqlite3_finalize(st);
+
+            const sqlite3_int64 snapshot_id = sqlite3_last_insert_rowid(db);
+
+            const char* bucket_sql = R"SQL(
+INSERT INTO admin_stats_buckets (
+    snapshot_id, bucket_kind, bucket_key, position, count, bytes
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6);
+)SQL";
+
+            auto insert_bucket_rows = [&](const char* kind,
+                                          const json& arr,
+                                          const char* key_name) -> bool {
+                if (!arr.is_array()) return true;
+
+                int pos = 0;
+                for (const auto& row : arr) {
+                    if (!row.is_object()) continue;
+
+                    sqlite3_stmt* bst = nullptr;
+                    if (sqlite3_prepare_v2(db, bucket_sql, -1, &bst, nullptr) != SQLITE_OK) {
+                        if (err) *err = sqlite3_errmsg(db);
+                        return false;
+                    }
+
+                    const std::string key = row.value(key_name, std::string());
+                    sqlite3_bind_int64(bst, 1, snapshot_id);
+                    sqlite3_bind_text(bst, 2, kind, -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_text(bst, 3, key.c_str(), -1, SQLITE_TRANSIENT);
+                    sqlite3_bind_int(bst, 4, pos++);
+                    admin_stats_bind_u64_local(bst, 5, admin_stats_json_u64_local(row, "count"));
+                    admin_stats_bind_u64_local(bst, 6, admin_stats_json_u64_local(row, "bytes"));
+
+                    const bool ok = (sqlite3_step(bst) == SQLITE_DONE);
+                    if (!ok && err) *err = sqlite3_errmsg(db);
+                    sqlite3_finalize(bst);
+                    if (!ok) return false;
+                }
+
+                return true;
+            };
+
+            if (!insert_bucket_rows("mime", snap.value("top_mime_types", json::array()), "mime") ||
+                !insert_bucket_rows("extension", snap.value("top_extensions", json::array()), "extension") ||
+                !insert_bucket_rows("scope", snap.value("files_by_scope", json::array()), "scope")) {
+                rollback();
+                close_db();
+                return false;
+            }
+
+            if (!admin_stats_sql_exec_local(db, "COMMIT;", err)) {
+                rollback();
+                close_db();
+                return false;
+            }
+
+            close_db();
+            return true;
+        };
+
+    auto admin_stats_load_latest_snapshot_local =
+        [&](json* out, std::string* err) -> bool {
+            if (out) *out = json::object();
+            if (err) err->clear();
+
+            sqlite3* db = nullptr;
+            if (sqlite3_open(admin_stats_db_path.string().c_str(), &db) != SQLITE_OK) {
+                if (err) *err = db ? sqlite3_errmsg(db) : "sqlite open failed";
+                if (db) sqlite3_close(db);
+                return false;
+            }
+
+            if (!admin_stats_init_db_local(db, err)) {
+                sqlite3_close(db);
+                return false;
+            }
+
+            const char* sql =
+                "SELECT snapshot_json FROM admin_stats_snapshots "
+                "ORDER BY generated_at_epoch DESC, id DESC LIMIT 1;";
+
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) != SQLITE_OK) {
+                if (err) *err = sqlite3_errmsg(db);
+                sqlite3_close(db);
+                return false;
+            }
+
+            const int rc = sqlite3_step(st);
+            if (rc != SQLITE_ROW) {
+                sqlite3_finalize(st);
+                sqlite3_close(db);
+                if (err) *err = "no stored admin statistics snapshot";
+                return false;
+            }
+
+            const unsigned char* txt = sqlite3_column_text(st, 0);
+            const std::string body = txt ? reinterpret_cast<const char*>(txt) : "";
+
+            sqlite3_finalize(st);
+            sqlite3_close(db);
+
+            json parsed = json::parse(body, nullptr, false);
+            if (parsed.is_discarded() || !parsed.is_object()) {
+                if (err) *err = "stored admin statistics snapshot JSON is invalid";
+                return false;
+            }
+
+            parsed["snapshot_source"] = "sqlite";
+            parsed["stats_cache"] = {
+                {"enabled", true},
+                {"db", "admin_stats.sqlite3"}
+            };
+
+            if (out) *out = std::move(parsed);
+            return true;
+        };
+
+
+    // -------------------------------------------------------------------------
+    // Admin Statistics page/API
+    // -------------------------------------------------------------------------
+    srv.Get("/admin/stats", [&](const httplib::Request& req, httplib::Response& res) {
+        std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+        const std::string body = slurp_file(STATIC_ADMIN_STATS_HTML);
+        if (body.empty()) {
+            res.status = 404;
+            res.set_content("missing admin_stats.html", "text/plain");
+            return;
+        }
+        res.set_content(body, "text/html; charset=utf-8");
+    });
+
+    srv.Get("/static/admin_stats.js", [&](const httplib::Request&, httplib::Response& res) {
+        const std::string body = slurp_file(STATIC_ADMIN_STATS_JS);
+        if (body.empty()) {
+            res.status = 404;
+            res.set_content("missing admin_stats.js", "text/plain");
+            return;
+        }
+        res.set_content(body, "application/javascript; charset=utf-8");
+    });
+
+    srv.Get("/api/v4/admin/stats/summary", [&](const httplib::Request& req, httplib::Response& res) {
+        std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+        const bool force_refresh =
+            req.has_param("refresh") &&
+            (req.get_param_value("refresh") == "1" ||
+             req.get_param_value("refresh") == "true" ||
+             req.get_param_value("refresh") == "now");
+
+        if (!force_refresh) {
+            json cached;
+            std::string cache_err;
+            if (admin_stats_load_latest_snapshot_local(&cached, &cache_err)) {
+                reply_json(res, 200, cached.dump());
+                return;
+            }
+            // No snapshot yet: fall through and build the first one.
+        }
+
+        auto now_epoch_local = []() -> std::int64_t {
+            return static_cast<std::int64_t>(std::time(nullptr));
+        };
+
+        auto iso_utc_from_epoch_local = [](std::int64_t epoch) -> std::string {
+            std::time_t tt = static_cast<std::time_t>(epoch);
+            std::tm tm{};
+#if defined(_WIN32)
+            gmtime_s(&tm, &tt);
+#else
+            gmtime_r(&tt, &tm);
+#endif
+            char buf[128];
+            const int n = std::snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+                                        tm.tm_year + 1900,
+                                        tm.tm_mon + 1,
+                                        tm.tm_mday,
+                                        tm.tm_hour,
+                                        tm.tm_min,
+                                        tm.tm_sec);
+            if (n <= 0 || static_cast<std::size_t>(n) >= sizeof(buf)) {
+                return std::string();
+            }
+            return std::string(buf);
+        };
+
+        auto add_u64_sat_local = [](std::uint64_t a, std::uint64_t b) -> std::uint64_t {
+            if (std::numeric_limits<std::uint64_t>::max() - a < b) {
+                return std::numeric_limits<std::uint64_t>::max();
+            }
+            return a + b;
+        };
+
+        auto lower_ascii_local = [](std::string v) -> std::string {
+            for (char& c : v) {
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            }
+            return v;
+        };
+
+        auto mime_from_extension_local = [&](std::string ext) -> std::string {
+            ext = lower_ascii_local(ext);
+            if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
+            if (ext == ".png") return "image/png";
+            if (ext == ".gif") return "image/gif";
+            if (ext == ".webp") return "image/webp";
+            if (ext == ".avif") return "image/avif";
+            if (ext == ".svg") return "image/svg+xml";
+            if (ext == ".bmp") return "image/bmp";
+            if (ext == ".ico") return "image/x-icon";
+            if (ext == ".heic") return "image/heic";
+            if (ext == ".heif") return "image/heif";
+            if (ext == ".rw2") return "image/x-panasonic-rw2";
+            if (ext == ".raw") return "image/x-raw";
+            if (ext == ".cr2") return "image/x-canon-cr2";
+            if (ext == ".nef") return "image/x-nikon-nef";
+            if (ext == ".arw") return "image/x-sony-arw";
+            if (ext == ".dng") return "image/x-adobe-dng";
+
+            if (ext == ".mp4" || ext == ".m4v") return "video/mp4";
+            if (ext == ".mov") return "video/quicktime";
+            if (ext == ".webm") return "video/webm";
+            if (ext == ".mkv") return "video/x-matroska";
+            if (ext == ".avi") return "video/x-msvideo";
+            if (ext == ".3gp") return "video/3gpp";
+
+            if (ext == ".mp3") return "audio/mpeg";
+            if (ext == ".m4a") return "audio/mp4";
+            if (ext == ".aac") return "audio/aac";
+            if (ext == ".wav") return "audio/wav";
+            if (ext == ".ogg") return "audio/ogg";
+            if (ext == ".opus") return "audio/opus";
+            if (ext == ".flac") return "audio/flac";
+            if (ext == ".mpc") return "audio/x-musepack";
+
+            if (ext == ".pdf") return "application/pdf";
+            if (ext == ".txt" || ext == ".log") return "text/plain";
+            if (ext == ".md" || ext == ".markdown") return "text/markdown";
+            if (ext == ".html" || ext == ".htm") return "text/html";
+            if (ext == ".css") return "text/css";
+            if (ext == ".js" || ext == ".mjs") return "application/javascript";
+            if (ext == ".json") return "application/json";
+            if (ext == ".xml") return "application/xml";
+            if (ext == ".csv") return "text/csv";
+
+            if (ext == ".zip") return "application/zip";
+            if (ext == ".deb") return "application/vnd.debian.binary-package";
+            if (ext == ".tar") return "application/x-tar";
+            if (ext == ".gz") return "application/gzip";
+            if (ext == ".tgz") return "application/gzip";
+            if (ext == ".7z") return "application/x-7z-compressed";
+            if (ext == ".rar") return "application/vnd.rar";
+
+            if (ext == ".doc") return "application/msword";
+            if (ext == ".docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+            if (ext == ".xls") return "application/vnd.ms-excel";
+            if (ext == ".xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            if (ext == ".ppt") return "application/vnd.ms-powerpoint";
+            if (ext == ".pptx") return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+
+            return "application/octet-stream";
+        };
+
+        struct AdminStatsBucketLocal {
+            std::uint64_t count = 0;
+            std::uint64_t bytes = 0;
+        };
+
+        struct AdminStatsFilesLocal {
+            std::uint64_t total_count = 0;
+            std::uint64_t total_bytes = 0;
+            std::uint64_t largest_bytes = 0;
+            std::uint64_t scanned_roots = 0;
+            std::uint64_t skipped_roots = 0;
+            std::map<std::string, AdminStatsBucketLocal> by_mime;
+            std::map<std::string, AdminStatsBucketLocal> by_ext;
+            std::map<std::string, AdminStatsBucketLocal> by_scope;
+            std::vector<std::string> warnings;
+        };
+
+        auto add_bucket_local = [&](std::map<std::string, AdminStatsBucketLocal>& m,
+                                    const std::string& key,
+                                    std::uint64_t bytes) {
+            auto& b = m[key.empty() ? "(none)" : key];
+            b.count = add_u64_sat_local(b.count, 1);
+            b.bytes = add_u64_sat_local(b.bytes, bytes);
+        };
+
+        AdminStatsFilesLocal fs;
+
+        auto should_skip_admin_stats_path_local = [](const std::filesystem::path& p) -> bool {
+            const std::string name = p.filename().string();
+
+            // Keep v1 focused on live/user-visible content and skip internal bookkeeping.
+            return name == ".pqnas_activity" ||
+                   name == ".pqnas_upload_sessions" ||
+                   name == ".pqnas_tmp" ||
+                   name == ".tmp";
+        };
+
+        auto scan_root_local = [&](const std::filesystem::path& root,
+                                   const std::string& scope_label) {
+            std::error_code ec;
+            if (!std::filesystem::exists(root, ec) || ec) {
+                fs.skipped_roots = add_u64_sat_local(fs.skipped_roots, 1);
+                return;
+            }
+
+            if (!std::filesystem::is_directory(root, ec) || ec) {
+                fs.skipped_roots = add_u64_sat_local(fs.skipped_roots, 1);
+                return;
+            }
+
+            fs.scanned_roots = add_u64_sat_local(fs.scanned_roots, 1);
+
+            const auto opts =
+                std::filesystem::directory_options::skip_permission_denied;
+
+            std::filesystem::recursive_directory_iterator it(root, opts, ec);
+            std::filesystem::recursive_directory_iterator end;
+
+            if (ec) {
+                fs.warnings.push_back("failed to start scan for " + scope_label + ": " + ec.message());
+                return;
+            }
+
+            for (; it != end; it.increment(ec)) {
+                if (ec) {
+                    fs.warnings.push_back("scan warning for " + scope_label + ": " + ec.message());
+                    ec.clear();
+                    continue;
+                }
+
+                const std::filesystem::path cur = it->path();
+
+                if (should_skip_admin_stats_path_local(cur)) {
+                    if (it->is_directory(ec)) {
+                        it.disable_recursion_pending();
+                    }
+                    ec.clear();
+                    continue;
+                }
+
+                std::error_code sec;
+                const auto st = it->symlink_status(sec);
+                if (sec) continue;
+                if (std::filesystem::is_symlink(st)) continue;
+                if (!std::filesystem::is_regular_file(st)) continue;
+
+                std::error_code sz_ec;
+                const auto sz0 = std::filesystem::file_size(cur, sz_ec);
+                if (sz_ec) {
+                    fs.warnings.push_back("file size warning for " + scope_label + ": " + sz_ec.message());
+                    continue;
+                }
+
+                const std::uint64_t sz = static_cast<std::uint64_t>(sz0);
+                fs.total_count = add_u64_sat_local(fs.total_count, 1);
+                fs.total_bytes = add_u64_sat_local(fs.total_bytes, sz);
+                if (sz > fs.largest_bytes) fs.largest_bytes = sz;
+
+                std::string ext = cur.extension().string();
+                ext = lower_ascii_local(ext);
+                if (ext.empty()) ext = "(none)";
+
+                const std::string mime = mime_from_extension_local(ext);
+
+                add_bucket_local(fs.by_mime, mime, sz);
+                add_bucket_local(fs.by_ext, ext, sz);
+                add_bucket_local(fs.by_scope, scope_label, sz);
+            }
+        };
+
+        if (!users.load(users_path)) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "users_reload_failed"},
+                {"message", "failed to reload users"}
+            }.dump());
+            return;
+        }
+
+        // Best-effort reload; keep serving stats even if workspace metadata reload fails.
+        const bool workspaces_loaded_for_stats = workspaces.load(workspaces_path);
+        if (!workspaces_loaded_for_stats) {
+            fs.warnings.push_back("failed to reload workspaces metadata");
+        }
+
+        json workspaces_j = {
+            {"total", 0},
+            {"enabled", 0},
+            {"disabled", 0},
+            {"user_created", 0},
+            {"admin_created", 0},
+            {"enabled_members", 0},
+            {"total_members", 0},
+            {"quota_bytes", 0}
+        };
+
+        if (workspaces_loaded_for_stats) {
+            for (const auto& kv : workspaces.snapshot()) {
+                const auto& w = kv.second;
+
+                workspaces_j["total"] = workspaces_j.value("total", 0) + 1;
+
+                if (w.status == "enabled") {
+                    workspaces_j["enabled"] = workspaces_j.value("enabled", 0) + 1;
+                } else {
+                    workspaces_j["disabled"] = workspaces_j.value("disabled", 0) + 1;
+                }
+
+                for (const auto& m : w.members) {
+                    workspaces_j["total_members"] = workspaces_j.value("total_members", 0) + 1;
+                    if (m.status == "enabled") {
+                        workspaces_j["enabled_members"] = workspaces_j.value("enabled_members", 0) + 1;
+                    }
+                }
+
+                // Exact source:
+                // - admin-created workspace routes store kind="admin"
+                // - user-created Shared Space routes store kind="personal"
+                if (w.kind == "personal") {
+                    workspaces_j["user_created"] = workspaces_j.value("user_created", 0) + 1;
+                } else {
+                    workspaces_j["admin_created"] = workspaces_j.value("admin_created", 0) + 1;
+                }
+
+                workspaces_j["quota_bytes"] =
+                    add_u64_sat_local(workspaces_j.value("quota_bytes", std::uint64_t{0}),
+                                      static_cast<std::uint64_t>(w.quota_bytes));
+            }
+        }
+
+        json users_j = {
+            {"total", 0},
+            {"enabled", 0},
+            {"disabled", 0},
+            {"revoked", 0},
+            {"admins", 0},
+            {"storage_allocated", 0},
+            {"quota_bytes", 0}
+        };
+
+        for (const auto& kv : users.snapshot()) {
+            const auto& u = kv.second;
+
+            users_j["total"] = users_j.value("total", 0) + 1;
+
+            if (u.status == "enabled") users_j["enabled"] = users_j.value("enabled", 0) + 1;
+            else if (u.status == "revoked") users_j["revoked"] = users_j.value("revoked", 0) + 1;
+            else users_j["disabled"] = users_j.value("disabled", 0) + 1;
+
+            if (u.role == "admin" && u.status == "enabled") {
+                users_j["admins"] = users_j.value("admins", 0) + 1;
+            }
+
+            if (u.storage_state == "allocated") {
+                users_j["storage_allocated"] = users_j.value("storage_allocated", 0) + 1;
+                users_j["quota_bytes"] =
+                    add_u64_sat_local(users_j.value("quota_bytes", std::uint64_t{0}),
+                                      static_cast<std::uint64_t>(u.quota_bytes));
+
+                scan_root_local(user_dir_for_fp(users, u.fingerprint), "user");
+            }
+        }
+
+        const std::filesystem::path default_data_root = std::filesystem::path(pqnas::data_root_dir());
+
+        for (const auto& kv : workspaces.snapshot()) {
+            const auto& w = kv.second;
+            if (w.status != "enabled") continue;
+            if (w.root_rel.empty()) continue;
+
+            scan_root_local(default_data_root / w.root_rel, "workspace");
+        }
+
+        auto top_array_local = [](const std::map<std::string, AdminStatsBucketLocal>& m,
+                                  const std::string& name_key,
+                                  std::size_t limit) -> json {
+            std::vector<std::pair<std::string, AdminStatsBucketLocal>> rows(m.begin(), m.end());
+
+            std::sort(rows.begin(), rows.end(),
+                      [](const auto& a, const auto& b) {
+                          if (a.second.bytes != b.second.bytes) return a.second.bytes > b.second.bytes;
+                          if (a.second.count != b.second.count) return a.second.count > b.second.count;
+                          return a.first < b.first;
+                      });
+
+            json out = json::array();
+            std::size_t n = 0;
+            for (const auto& row : rows) {
+                if (n++ >= limit) break;
+                out.push_back({
+                    {name_key, row.first},
+                    {"count", row.second.count},
+                    {"bytes", row.second.bytes}
+                });
+            }
+            return out;
+        };
+
+        const std::uint64_t average_bytes =
+            fs.total_count > 0 ? (fs.total_bytes / fs.total_count) : 0;
+
+        const std::int64_t now_ts = now_epoch_local();
+
+        json out = {
+            {"ok", true},
+            {"generated_at_epoch", now_ts},
+            {"generated_at_iso", iso_utc_from_epoch_local(now_ts)},
+            {"method", "live filesystem scan"},
+            {"note", "MIME types are extension-based in this v1 implementation."},
+            {"users", users_j},
+            {"workspaces", workspaces_j},
+            {"files", {
+                {"total_count", fs.total_count},
+                {"total_bytes", fs.total_bytes},
+                {"average_bytes", average_bytes},
+                {"largest_bytes", fs.largest_bytes},
+                {"scanned_roots", fs.scanned_roots},
+                {"skipped_roots", fs.skipped_roots}
+            }},
+            {"top_mime_types", top_array_local(fs.by_mime, "mime", 10)},
+            {"top_extensions", top_array_local(fs.by_ext, "extension", 10)},
+            {"files_by_scope", top_array_local(fs.by_scope, "scope", 10)},
+            {"warnings", fs.warnings}
+        };
+
+        out["snapshot_source"] = force_refresh ? "live_refresh" : "live_initial";
+
+        {
+            std::string save_err;
+            if (!admin_stats_save_snapshot_local(out, &save_err)) {
+                if (!out.contains("warnings") || !out["warnings"].is_array()) {
+                    out["warnings"] = json::array();
+                }
+                out["warnings"].push_back("failed to save admin statistics snapshot: " + save_err);
+            } else {
+                out["stats_cache"] = {
+                    {"enabled", true},
+                    {"db", "admin_stats.sqlite3"}
+                };
+            }
+        }
+
+        reply_json(res, 200, out.dump());
+    });
+
     pqnas::AdminWorkspaceRouteDeps admin_ws_deps;
     admin_ws_deps.users = &users;
     admin_ws_deps.workspaces = &workspaces;

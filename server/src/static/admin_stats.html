@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>DNA-Nexus NAS — Admin Statistics</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+
+    <link rel="stylesheet" href="/static/theme.css">
+    <link rel="stylesheet" href="/static/shell_menu.css">
+    <script src="/static/theme.js"></script>
+
+    <style>
+        body{
+            margin:0;
+            min-height:100vh;
+            color:var(--fg);
+            background:
+                radial-gradient(circle at top left, rgba(var(--accent-rgb),0.18), transparent 32%),
+                var(--bg);
+            font-family:var(--sans);
+        }
+
+        .layout{
+            display:grid;
+            grid-template-columns:260px 1fr;
+            min-height:100vh;
+        }
+
+        .side{
+            border-right:1px solid rgba(var(--fg-rgb),0.12);
+            background:rgba(0,0,0,0.18);
+            padding:22px 18px;
+        }
+
+        .brand h1{
+            margin:0;
+            font-size:22px;
+            letter-spacing:.02em;
+        }
+
+        .brand .sub{
+            margin-top:4px;
+            color:var(--muted);
+            font-size:13px;
+        }
+
+        .nav{
+            display:flex;
+            flex-direction:column;
+            gap:8px;
+            margin-top:24px;
+        }
+
+        .sectionLabel{
+            color:var(--muted);
+            font-size:12px;
+            text-transform:uppercase;
+            letter-spacing:.12em;
+            margin:10px 0 4px;
+        }
+
+        .navbtn{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            padding:11px 12px;
+            border-radius:14px;
+            color:var(--fg);
+            text-decoration:none;
+            border:1px solid rgba(var(--fg-rgb),0.10);
+            background:rgba(255,255,255,0.035);
+        }
+
+        .navbtn:hover,
+        .navbtn.active{
+            border-color:rgba(var(--accent-rgb),0.48);
+            background:rgba(var(--accent-rgb),0.14);
+        }
+
+        .navbtn .k{
+            color:var(--muted);
+            font-size:12px;
+        }
+
+        .main{
+            padding:26px;
+            min-width:0;
+        }
+
+        .topbar{
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:18px;
+            margin-bottom:18px;
+        }
+
+        .title{
+            font-size:28px;
+            font-weight:900;
+        }
+
+        .sub{
+            color:var(--muted);
+            font-size:13px;
+            margin-top:4px;
+        }
+
+        .badge{
+            border:1px solid rgba(var(--fg-rgb),0.16);
+            border-radius:999px;
+            padding:7px 10px;
+            color:var(--muted);
+            background:rgba(255,255,255,0.04);
+            font-size:12px;
+            white-space:nowrap;
+        }
+
+        .toolbar{
+            display:flex;
+            gap:10px;
+            align-items:center;
+            flex-wrap:wrap;
+            margin:14px 0 18px;
+        }
+
+        button{
+            border:1px solid rgba(var(--fg-rgb),0.20);
+            border-radius:12px;
+            background:rgba(var(--accent-rgb),0.16);
+            color:var(--fg);
+            padding:10px 14px;
+            font-weight:800;
+            cursor:pointer;
+        }
+
+        button:disabled{
+            opacity:.55;
+            cursor:not-allowed;
+        }
+
+        .status{
+            color:var(--muted);
+            font-size:13px;
+        }
+
+        .grid{
+            display:grid;
+            grid-template-columns:repeat(4, minmax(150px, 1fr));
+            gap:14px;
+            margin-bottom:18px;
+        }
+
+        .card,
+        .pane{
+            border:1px solid rgba(var(--fg-rgb),0.12);
+            border-radius:20px;
+            background:rgba(255,255,255,0.045);
+            box-shadow:0 12px 40px rgba(0,0,0,0.18);
+        }
+
+        .card{
+            padding:16px;
+        }
+
+        .card .label{
+            color:var(--muted);
+            font-size:12px;
+            text-transform:uppercase;
+            letter-spacing:.10em;
+        }
+
+        .card .value{
+            margin-top:8px;
+            font-size:25px;
+            font-weight:950;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }
+
+        .card .mini{
+            margin-top:6px;
+            color:var(--muted);
+            font-size:12px;
+        }
+
+        .panes{
+            display:grid;
+            grid-template-columns:1fr 1fr;
+            gap:14px;
+        }
+
+        .pane{
+            padding:16px;
+            overflow:hidden;
+        }
+
+        .pane h2{
+            margin:0 0 12px;
+            font-size:17px;
+        }
+
+        table{
+            width:100%;
+            border-collapse:collapse;
+            font-size:13px;
+        }
+
+        th,
+        td{
+            text-align:left;
+            padding:9px 8px;
+            border-bottom:1px solid rgba(var(--fg-rgb),0.09);
+            vertical-align:top;
+        }
+
+        th{
+            color:var(--muted);
+            font-size:12px;
+            text-transform:uppercase;
+            letter-spacing:.08em;
+        }
+
+        td.num,
+        th.num{
+            text-align:right;
+            font-variant-numeric:tabular-nums;
+            white-space:nowrap;
+        }
+
+        .mono{
+            font-family:var(--mono);
+        }
+
+        .warn{
+            color:#ffcc66;
+        }
+
+        @media (max-width: 1000px){
+            .layout{ grid-template-columns:1fr; }
+            .side{ border-right:0; border-bottom:1px solid rgba(var(--fg-rgb),0.12); }
+            .grid{ grid-template-columns:repeat(2, minmax(140px, 1fr)); }
+            .panes{ grid-template-columns:1fr; }
+        }
+
+        @media (max-width: 560px){
+            .grid{ grid-template-columns:1fr; }
+            .topbar{ flex-direction:column; }
+        }
+    </style>
+</head>
+<body>
+<div class="layout">
+    <aside class="side">
+        <div class="brand">
+            <h1>Admin</h1>
+            <div class="sub">Statistics • storage overview</div>
+        </div>
+
+        <nav class="nav" aria-label="Admin navigation">
+            <div class="sectionLabel">Admin</div>
+            <a class="navbtn" href="/admin"><span>Overview</span><span class="k">A</span></a>
+            <a class="navbtn" href="/admin/users"><span>Users</span><span class="k">U</span></a>
+            <a class="navbtn" href="/admin/workspaces"><span>Workspaces</span><span class="k">W</span></a>
+            <a class="navbtn active" href="/admin/stats"><span>Statistics</span><span class="k">Σ</span></a>
+            <a class="navbtn" href="/admin/apps"><span>Apps</span><span class="k">P</span></a>
+            <a class="navbtn" href="/system"><span>System</span><span class="k">M</span></a>
+            <a class="navbtn" href="/admin/audit"><span>Audit</span><span class="k">L</span></a>
+            <a class="navbtn" href="/admin/settings"><span>Settings</span><span class="k">S</span></a>
+        </nav>
+    </aside>
+
+    <main class="main">
+        <div class="topbar">
+            <div>
+                <div class="title">Admin Statistics</div>
+                <div class="sub">Live overview of users, files, storage, extensions, and extension-based MIME groups.</div>
+            </div>
+            <div id="roleBadge" class="badge">role: ?</div>
+        </div>
+
+        <div class="toolbar">
+            <button id="refreshBtn" type="button">Refresh statistics</button>
+            <span id="status" class="status">Loading…</span>
+        </div>
+
+        <section class="grid" aria-label="Summary cards">
+            <div class="card">
+                <div class="label">Users</div>
+                <div id="cardUsers" class="value">—</div>
+                <div id="cardUsersMini" class="mini">—</div>
+            </div>
+            <div class="card">
+                <div class="label">Files</div>
+                <div id="cardFiles" class="value">—</div>
+                <div id="cardFilesMini" class="mini">—</div>
+            </div>
+            <div class="card">
+                <div class="label">Total size</div>
+                <div id="cardBytes" class="value">—</div>
+                <div id="cardBytesMini" class="mini">—</div>
+            </div>
+            <div class="card">
+                <div class="label">Workspaces</div>
+                <div id="cardWorkspaces" class="value">—</div>
+                <div id="cardWorkspacesMini" class="mini">—</div>
+            </div>
+        </section>
+
+        <section class="panes">
+            <div class="pane">
+                <h2>Top MIME types</h2>
+                <table>
+                    <thead>
+                    <tr>
+                        <th>MIME</th>
+                        <th class="num">Files</th>
+                        <th class="num">Bytes</th>
+                    </tr>
+                    </thead>
+                    <tbody id="mimeRows">
+                    <tr><td colspan="3">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pane">
+                <h2>Top file extensions</h2>
+                <table>
+                    <thead>
+                    <tr>
+                        <th>Extension</th>
+                        <th class="num">Files</th>
+                        <th class="num">Bytes</th>
+                    </tr>
+                    </thead>
+                    <tbody id="extRows">
+                    <tr><td colspan="3">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pane">
+                <h2>Files by scope</h2>
+                <table>
+                    <thead>
+                    <tr>
+                        <th>Scope</th>
+                        <th class="num">Files</th>
+                        <th class="num">Bytes</th>
+                    </tr>
+                    </thead>
+                    <tbody id="scopeRows">
+                    <tr><td colspan="3">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pane">
+                <h2>Scan details</h2>
+                <table>
+                    <tbody id="detailRows">
+                    <tr><td>Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+</div>
+
+<script src="/static/admin_badges.js"></script>
+<script src="/static/admin_stats.js?v=20260508"></script>
+</body>
+</html>
