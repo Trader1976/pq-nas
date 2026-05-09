@@ -20,6 +20,50 @@ std::string trim_copy_safe(const std::string& s) {
     return s.substr(a, b - a);
 }
 
+std::string header_value_local(const httplib::Request& req, const char* key) {
+    auto it = req.headers.find(key);
+    return (it == req.headers.end()) ? std::string{} : it->second;
+}
+
+bool require_same_origin_for_cookie_mutation_local(
+    const httplib::Request& req,
+    httplib::Response& res,
+    const WorkspaceExternalSessionRouteDeps& deps
+) {
+    if (!deps.origin || deps.origin->empty()) {
+        res.status = 500;
+        res.set_header("Content-Type", "application/json");
+        res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
+        return false;
+    }
+
+    const std::string origin = header_value_local(req, "Origin");
+    if (!origin.empty()) {
+        if (origin == *deps.origin) return true;
+
+        res.status = 403;
+        res.set_header("Content-Type", "application/json");
+        res.body = R"({"ok":false,"error":"forbidden","message":"origin mismatch"})";
+        return false;
+    }
+
+    const std::string referer = header_value_local(req, "Referer");
+    if (!referer.empty()) {
+        const std::string allowed_prefix = *deps.origin + "/";
+        if (referer == *deps.origin || referer.rfind(allowed_prefix, 0) == 0) return true;
+
+        res.status = 403;
+        res.set_header("Content-Type", "application/json");
+        res.body = R"({"ok":false,"error":"forbidden","message":"origin mismatch"})";
+        return false;
+    }
+
+    res.status = 403;
+    res.set_header("Content-Type", "application/json");
+    res.body = R"({"ok":false,"error":"forbidden","message":"origin required"})";
+    return false;
+}
+
 long json_long_default(const json& j, const char* key, long defv) {
     auto it = j.find(key);
     if (it == j.end()) return defv;
@@ -277,6 +321,123 @@ void register_workspace_external_session_routes(
             }.dump());
         }
     });
+
+    // POST /api/v4/workspaces/external-sessions/consume
+    //
+    // Turns an approved external QR session into a workspace-scoped browser
+    // cookie. The cookie is not a normal DNA-Nexus login cookie.
+    srv.Post("/api/v4/workspaces/external-sessions/consume",
+             [&](const httplib::Request& req, httplib::Response& res) {
+        if (!deps.reply_json || !deps.external_sessions ||
+            !deps.cookie_key || !deps.session_cookie_mint || !deps.b64_std) {
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "external session consume route not fully configured"}
+            }.dump());
+            return;
+        }
+
+        if (!require_same_origin_for_cookie_mutation_local(req, res, deps)) return;
+
+        json j;
+        try {
+            j = json::parse(req.body.empty() ? "{}" : req.body);
+        } catch (...) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid json"}
+            }.dump());
+            return;
+        }
+
+        const std::string session_id = trim_copy_safe(j.value("session_id", ""));
+        if (!is_valid_workspace_external_session_id(session_id)) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "missing or invalid session_id"}
+            }.dump());
+            return;
+        }
+
+        const long now = deps.now_epoch_sec ? static_cast<long>(deps.now_epoch_sec()) : 0L;
+        deps.external_sessions->mark_expired_pending(now);
+
+        auto sess = deps.external_sessions->get(session_id);
+        if (!sess.has_value()) {
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "session_not_found"},
+                {"message", "session not found"}
+            }.dump());
+            return;
+        }
+
+        if (sess->status != "approved") {
+            deps.reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "session_not_approved"},
+                {"message", "session is not approved"},
+                {"status", sess->status}
+            }.dump());
+            return;
+        }
+
+        if (sess->approved_fingerprint.empty() || sess->workspace_role.empty()) {
+            deps.reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "session_incomplete"},
+                {"message", "approved session is incomplete"}
+            }.dump());
+            return;
+        }
+
+        const long cookie_ttl = 8 * 3600;
+        const long exp = now + cookie_ttl;
+
+        const std::string workspace_claim =
+            "external|" + sess->workspace_id + "|" +
+            sess->approved_fingerprint + "|" +
+            sess->workspace_role;
+
+        const std::string claim_b64 = deps.b64_std(
+            reinterpret_cast<const unsigned char*>(workspace_claim.data()),
+            workspace_claim.size()
+        );
+
+        std::string cookie_val;
+        if (!deps.session_cookie_mint(deps.cookie_key, claim_b64, now, exp, cookie_val)) {
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to mint workspace session"}
+            }.dump());
+            return;
+        }
+
+        res.set_header(
+            "Set-Cookie",
+            "pqnas_workspace_session=" + cookie_val +
+            "; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=" + std::to_string(cookie_ttl)
+        );
+
+        audit_session_event(deps, "workspace.external_session_consumed", "ok", {
+            {"session_id", sess->session_id},
+            {"workspace_id", sess->workspace_id},
+            {"role", sess->workspace_role},
+            {"fingerprint", sess->approved_fingerprint}
+        });
+
+        deps.reply_json(res, 200, json{
+            {"ok", true},
+            {"workspace_id", sess->workspace_id},
+            {"workspace_role", sess->workspace_role},
+            {"expires_at_epoch", exp}
+        }.dump());
+    });
+
 
     srv.Get("/api/v4/workspaces/external-sessions/status",
             [&](const httplib::Request& req, httplib::Response& res) {

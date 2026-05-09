@@ -28,6 +28,15 @@ struct WorkspaceExternalSessionRouteDeps {
 
     const std::string* origin = nullptr;
     const std::string* app = nullptr;
+    const unsigned char* cookie_key = nullptr;
+
+    std::function<bool(const unsigned char* cookie_key,
+                       const std::string& fp_b64,
+                       long iat,
+                       long exp,
+                       std::string& out_cookie_val)> session_cookie_mint;
+
+    std::function<std::string(const unsigned char* data, size_t len)> b64_std;
 
     WorkspaceExternalSessionReplyJsonFn reply_json;
     WorkspaceExternalSessionAuditEmitFn audit_emit;

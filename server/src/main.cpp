@@ -21138,6 +21138,19 @@ ws_external_session_deps.external_sessions = &workspace_external_sessions;
 ws_external_session_deps.workspaces_path = workspaces_path;
 ws_external_session_deps.origin = &ORIGIN;
 ws_external_session_deps.app = &APP_NAME;
+ws_external_session_deps.cookie_key = COOKIE_KEY;
+ws_external_session_deps.session_cookie_mint =
+    [&](const unsigned char* cookie_key,
+        const std::string& fp_b64,
+        long iat,
+        long exp,
+        std::string& out_cookie_val) -> bool {
+        return session_cookie_mint(cookie_key, fp_b64, iat, exp, out_cookie_val);
+    };
+ws_external_session_deps.b64_std =
+    [&](const unsigned char* data, size_t len) {
+        return pqnas::b64_std(data, len);
+    };
 ws_external_session_deps.reply_json = [](httplib::Response& res, int status, const std::string& body) {
     reply_json(res, status, body);
 };
