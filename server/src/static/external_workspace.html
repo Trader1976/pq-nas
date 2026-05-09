@@ -1287,6 +1287,7 @@
     let pickerMode = "move";
     let pickerItem = null;
     let pickerDrag = null;
+    const hashCache = new Map();
 
     function setStatus(text, kind) {
         statusEl.textContent = text || "";
@@ -1572,6 +1573,58 @@
         return `/api/v4/workspaces/files/stat?${qs.toString()}`;
     }
 
+    function hashUrl(relPath) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", normalizeRelPath(relPath));
+        qs.set("algo", "sha256");
+        return `/api/v4/workspaces/files/hash?${qs.toString()}`;
+    }
+
+    function hashCacheKey(relPath, mtimeEpoch, sizeBytes) {
+        return [
+            workspaceId,
+            normalizeRelPath(relPath),
+            String(mtimeEpoch || 0),
+            String(sizeBytes || 0)
+        ].join("|");
+    }
+
+    function pickSha256FromHashResponse(j) {
+        if (!j || typeof j !== "object") return "";
+        if (typeof j.digest_hex === "string" && j.digest_hex) return j.digest_hex;
+        if (typeof j.sha256 === "string" && j.sha256) return j.sha256;
+        if (j.hashes && typeof j.hashes.sha256 === "string") return j.hashes.sha256;
+        if (j.digests && typeof j.digests.sha256 === "string") return j.digests.sha256;
+        if (typeof j.hash === "string" && j.hash) return j.hash;
+        return "";
+    }
+
+    async function fetchSha256ForRelPath(relPath) {
+        const p = normalizeRelPath(relPath);
+        if (!p) throw new Error("missing path");
+
+        const r = await fetch(hashUrl(p), {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Accept": "application/json" },
+            body: ""
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            const msg = j && (j.message || j.error)
+                ? `${j.error || ""} ${j.message || ""}`.trim()
+                : `HTTP ${r.status}`;
+            throw new Error(msg || `HTTP ${r.status}`);
+        }
+
+        const sha256 = pickSha256FromHashResponse(j);
+        if (!sha256) throw new Error("server did not return sha256");
+        return { sha256, raw:j };
+    }
+
     async function showProperties(item) {
         if (!item) return;
 
@@ -1638,6 +1691,58 @@
             if (st.bytes != null) addPropsRow("Size", fmtSize(st.bytes));
             if (st.mime) addPropsRow("MIME", st.mime);
             if (typeof st.is_text === "boolean") addPropsRow("Looks like text", st.is_text ? "Yes" : "No");
+
+            const kEl = document.createElement("div");
+            kEl.className = "k";
+            kEl.textContent = "SHA-256";
+
+            const vEl = document.createElement("div");
+            vEl.className = "v";
+            vEl.innerHTML = "";
+            vEl.style.display = "flex";
+            vEl.style.gap = "10px";
+            vEl.style.alignItems = "center";
+            vEl.style.flexWrap = "wrap";
+
+            const line = document.createElement("div");
+            line.className = "mono";
+            line.style.wordBreak = "break-all";
+            line.style.opacity = "0.92";
+            line.textContent = "Computing…";
+
+            const btnCopy = miniCopyButton(() => line.textContent);
+            btnCopy.disabled = true;
+
+            vEl.appendChild(line);
+            vEl.appendChild(btnCopy);
+
+            propsBody.appendChild(kEl);
+            propsBody.appendChild(vEl);
+
+            const cacheKey = hashCacheKey(rel, st.mtime_epoch, st.bytes);
+            const cached = hashCache.get(cacheKey);
+
+            if (cached && cached.sha256) {
+                line.textContent = cached.sha256;
+                btnCopy.disabled = false;
+            } else {
+                const expectedPath = propsPath ? propsPath.textContent : (st.path_norm || ("/" + rel));
+
+                fetchSha256ForRelPath(rel)
+                    .then((out) => {
+                        hashCache.set(cacheKey, { sha256:out.sha256, raw:out.raw, atMs:Date.now() });
+
+                        const nowPath = propsPath ? propsPath.textContent : "";
+                        if (nowPath && nowPath !== expectedPath) return;
+
+                        line.textContent = out.sha256;
+                        btnCopy.disabled = false;
+                    })
+                    .catch((e) => {
+                        line.textContent = `Error: ${String(e && e.message ? e.message : e)}`;
+                        line.style.opacity = "0.85";
+                    });
+            }
         }
 
         if (isDir) {
