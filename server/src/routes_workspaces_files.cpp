@@ -4627,19 +4627,42 @@ srv.Get("/api/v4/workspaces/members",
 srv.Post("/api/v4/workspaces/files/write_text",
              [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp, actor_role;
-        if (!deps.require_user_auth_users_actor ||
-            !deps.require_user_auth_users_actor(
-                req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+        bool actor_is_external = false;
+
+        if (!deps.origin || deps.origin->empty()) {
+            res.status = 500;
+            res.set_header("Content-Type", "application/json");
+            res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
             return;
         }
-                 if (!deps.origin || deps.origin->empty()) {
-              res.status = 500;
-              res.set_header("Content-Type", "application/json");
-              res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
-              return;
-          }
 
         if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
+
+        std::string auth_workspace_id =
+            req.has_param("workspace_id") ? trim_copy_safe(req.get_param_value("workspace_id")) : "";
+
+        if (auth_workspace_id.empty() && !req.body.empty()) {
+            json auth_in = json::parse(req.body, nullptr, false);
+            if (!auth_in.is_discarded() && auth_in.is_object()) {
+                auth_workspace_id = trim_copy_safe(auth_in.value("workspace_id", ""));
+            }
+        }
+
+        if (auth_workspace_id.empty()) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "missing workspace_id"}
+            }.dump());
+            return;
+        }
+
+        if (!require_workspace_file_actor_for_workspace_local(
+                deps, req, res, auth_workspace_id,
+                &actor_fp, &actor_role, &actor_is_external)) {
+            return;
+        }
+
         (void)actor_role;
         res.set_header("Cache-Control", "no-store");
 
@@ -4747,6 +4770,16 @@ srv.Post("/api/v4/workspaces/files/write_text",
                 {"ok", false},
                 {"error", "forbidden"},
                 {"message", "workspace access denied"}
+            }.dump());
+            return;
+        }
+
+        if (actor_is_external && mopt->member_kind != "external") {
+            audit_fail(workspace_id, "external_member_kind_mismatch", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace external access denied"}
             }.dump());
             return;
         }
@@ -5530,9 +5563,30 @@ srv.Post("/api/v4/workspaces/files/write_text",
     srv.Post("/api/v4/workspaces/files/stat_sel",
              [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp, actor_role;
-        if (!deps.require_user_auth_users_actor ||
-            !deps.require_user_auth_users_actor(
-                req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+        bool actor_is_external = false;
+
+        std::string auth_workspace_id =
+            req.has_param("workspace_id") ? trim_copy_safe(req.get_param_value("workspace_id")) : "";
+
+        if (auth_workspace_id.empty() && !req.body.empty()) {
+            json auth_in = json::parse(req.body, nullptr, false);
+            if (!auth_in.is_discarded() && auth_in.is_object()) {
+                auth_workspace_id = trim_copy_safe(auth_in.value("workspace_id", ""));
+            }
+        }
+
+        if (auth_workspace_id.empty()) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "missing workspace_id"}
+            }.dump());
+            return;
+        }
+
+        if (!require_workspace_file_actor_for_workspace_local(
+                deps, req, res, auth_workspace_id,
+                &actor_fp, &actor_role, &actor_is_external)) {
             return;
         }
 

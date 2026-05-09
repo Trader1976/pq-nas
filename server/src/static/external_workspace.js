@@ -1,0 +1,2704 @@
+(() => {
+    "use strict";
+
+    const params = new URLSearchParams(location.search);
+    const workspaceId = String(params.get("workspace_id") || "").trim();
+
+    const shell = document.getElementById("shell");
+    const fileSurface = document.getElementById("fileSurface");
+    const workspacePill = document.getElementById("workspacePill");
+    const rolePill = document.getElementById("rolePill");
+    const accessPill = document.getElementById("accessPill");
+    const accessSub = document.getElementById("accessSub");
+    const qrBox = document.getElementById("qrBox");
+    const statusEl = document.getElementById("status");
+    const filesEl = document.getElementById("files");
+    const fileSub = document.getElementById("fileSub");
+    const breadcrumbsEl = document.getElementById("breadcrumbs");
+    const uploadBox = document.getElementById("uploadBox");
+    const uploadFile = document.getElementById("uploadFile");
+    const editorTools = document.getElementById("editorTools");
+    const newFolderName = document.getElementById("newFolderName");
+    const btnUpload = document.getElementById("btnUpload");
+    const btnToggleUpload = document.getElementById("btnToggleUpload");
+    const btnNewQr = document.getElementById("btnNewQr");
+    const btnRefreshFiles = document.getElementById("btnRefreshFiles");
+    const btnReload = document.getElementById("btnReload");
+    const btnUp = document.getElementById("btnUp");
+    const btnNewFolder = document.getElementById("btnNewFolder");
+    const emptyContextMenu = document.getElementById("emptyContextMenu");
+    const itemContextMenu = document.getElementById("itemContextMenu");
+    const selectionContextMenu = document.getElementById("selectionContextMenu");
+    const propsModal = document.getElementById("propsModal");
+    const propsTitle = document.getElementById("propsTitle");
+    const propsPath = document.getElementById("propsPath");
+    const propsBody = document.getElementById("propsBody");
+    const propsClose = document.getElementById("propsClose");
+    const textPreviewModal = document.getElementById("textPreviewModal");
+    const textPreviewTitle = document.getElementById("textPreviewTitle");
+    const textPreviewPath = document.getElementById("textPreviewPath");
+    const textPreviewMeta = document.getElementById("textPreviewMeta");
+    const textPreviewBody = document.getElementById("textPreviewBody");
+    const textPreviewClose = document.getElementById("textPreviewClose");
+    const textEditModal = document.getElementById("textEditModal");
+    const textEditCard = document.getElementById("textEditCard");
+    const textEditHead = document.getElementById("textEditHead");
+    const textEditTitle = document.getElementById("textEditTitle");
+    const textEditPath = document.getElementById("textEditPath");
+    const textEditInfo = document.getElementById("textEditInfo");
+    const textEditStatus = document.getElementById("textEditStatus");
+    const textEditArea = document.getElementById("textEditArea");
+    const textEditClose = document.getElementById("textEditClose");
+    const textEditReloadBtn = document.getElementById("textEditReloadBtn");
+    const textEditFindToggleBtn = document.getElementById("textEditFindToggleBtn");
+    const textEditFindBar = document.getElementById("textEditFindBar");
+    const textEditFindInput = document.getElementById("textEditFindInput");
+    const textEditFindPrevBtn = document.getElementById("textEditFindPrevBtn");
+    const textEditFindNextBtn = document.getElementById("textEditFindNextBtn");
+    const textEditFindCaseBtn = document.getElementById("textEditFindCaseBtn");
+    const textEditFindStatus = document.getElementById("textEditFindStatus");
+    const textEditFindCloseBtn = document.getElementById("textEditFindCloseBtn");
+    const textEditSaveBtn = document.getElementById("textEditSaveBtn");
+    const extPickerOverlay = document.getElementById("extPickerOverlay");
+    const extPickerCard = extPickerOverlay ? extPickerOverlay.querySelector(".extPickerCard") : null;
+    const extPickerHead = extPickerOverlay ? extPickerOverlay.querySelector(".extPickerHead") : null;
+    const extPickerTitle = document.getElementById("extPickerTitle");
+    const extPickerSub = document.getElementById("extPickerSub");
+    const extPickerSource = document.getElementById("extPickerSource");
+    const extPickerCrumbs = document.getElementById("extPickerCrumbs");
+    const extPickerList = document.getElementById("extPickerList");
+    const extPickerDest = document.getElementById("extPickerDest");
+    const extPickerStatus = document.getElementById("extPickerStatus");
+    const extPickerClose = document.getElementById("extPickerClose");
+    const extPickerCancel = document.getElementById("extPickerCancel");
+    const extPickerChoose = document.getElementById("extPickerChoose");
+    const extPickerNewFolder = document.getElementById("extPickerNewFolder");
+
+    let currentSessionId = "";
+    let pollTimer = null;
+    let currentPath = "";
+    let canEdit = false;
+    let currentRole = "";
+    let signedIn = false;
+    let uploadOpen = false;
+    let contextItem = null;
+    let pickerResolve = null;
+    let pickerPath = "";
+    let pickerMode = "move";
+    let pickerItem = null;
+    let pickerDrag = null;
+    const hashCache = new Map();
+    let textEditState = null;
+    let textEditDrag = null;
+    let textEditFindMatchCase = false;
+    let textEditFindMatches = [];
+    let textEditFindIndex = -1;
+
+    function setStatus(text, kind) {
+        statusEl.textContent = text || "";
+        statusEl.classList.toggle("good", kind === "good");
+        statusEl.classList.toggle("bad", kind === "bad");
+    }
+
+    function escapeHtml(s) {
+        return String(s == null ? "" : s)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll("\"", "&quot;")
+            .replaceAll("'", "&#39;");
+    }
+
+    function fmtSize(n) {
+        const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+        let v = Number(n || 0);
+        let i = 0;
+        while (v >= 1024 && i < units.length - 1) {
+            v /= 1024;
+            i++;
+        }
+        return i === 0 ? `${v | 0} ${units[i]}` : `${v.toFixed(1)} ${units[i]}`;
+    }
+
+    function fmtTime(epoch) {
+        const n = Number(epoch || 0);
+        if (!Number.isFinite(n) || n <= 0) return "";
+        try {
+            return new Date(n * 1000).toLocaleString();
+        } catch (_) {
+            return "";
+        }
+    }
+
+    async function apiJson(path, opts = {}) {
+        const r = await fetch(path, {
+            credentials: "include",
+            cache: "no-store",
+            ...opts,
+            headers: {
+                "Accept": "application/json",
+                ...(opts.headers || {})
+            }
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            const msg = j && (j.message || j.error) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`;
+            throw new Error(msg);
+        }
+        return j;
+    }
+
+    function normalizeRelPath(p) {
+        let v = String(p || "").trim();
+        v = v.replaceAll("\\", "/");
+        while (v.startsWith("/")) v = v.slice(1);
+        while (v.endsWith("/") && v.length > 1) v = v.slice(0, -1);
+        if (v === "." || v === "/") return "";
+        return v;
+    }
+
+    function childPath(base, name) {
+        const b = normalizeRelPath(base);
+        const n = normalizeRelPath(name);
+        return b ? `${b}/${n}` : n;
+    }
+
+    function parentPath(p) {
+        const v = normalizeRelPath(p);
+        const i = v.lastIndexOf("/");
+        if (i < 0) return "";
+        return v.slice(0, i);
+    }
+
+    function downloadUrl(relPath) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", normalizeRelPath(relPath));
+        return `/api/v4/workspaces/files/get?${qs.toString()}`;
+    }
+
+    function deleteUrl(relPath) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", normalizeRelPath(relPath));
+        return `/api/v4/workspaces/files/delete?${qs.toString()}`;
+    }
+
+    function syncUploadPanel() {
+        if (uploadBox) uploadBox.classList.toggle("hidden", !canEdit || !uploadOpen);
+        if (btnToggleUpload) btnToggleUpload.textContent = uploadOpen ? "Hide upload" : "Upload";
+    }
+
+    function applyAccessInfo(j) {
+        signedIn = true;
+        currentRole = String(j.role || "");
+        canEdit = !!j.can_edit;
+
+        const roleLabel = currentRole ? currentRole[0].toUpperCase() + currentRole.slice(1) : "Member";
+        const accessLabel = canEdit ? "Editor access" : "View-only access";
+
+        rolePill.textContent = `Role: ${roleLabel}`;
+        rolePill.classList.remove("hidden", "edit", "readonly");
+        rolePill.classList.add(canEdit ? "edit" : "readonly");
+
+        accessPill.textContent = accessLabel;
+        accessPill.classList.remove("good", "edit", "readonly");
+        accessPill.classList.add(canEdit ? "edit" : "readonly");
+
+        if (editorTools) editorTools.classList.toggle("hidden", !canEdit);
+        if (!canEdit) uploadOpen = false;
+        syncUploadPanel();
+
+        if (fileSub) {
+            fileSub.textContent = canEdit
+                ? "You can browse, download, upload, and create folders in this workspace."
+                : "You can browse and download files in this workspace.";
+        }
+    }
+
+    function hideContextMenus() {
+        if (emptyContextMenu) emptyContextMenu.classList.add("hidden");
+        if (itemContextMenu) itemContextMenu.classList.add("hidden");
+        if (selectionContextMenu) selectionContextMenu.classList.add("hidden");
+        contextItem = null;
+    }
+
+
+    function resetMarqueeVisual() {
+        const boxes = document.querySelectorAll(".marqueeBox, .selectionBox, .selectionRect, #marqueeBox, #selectionBox, #selectionRect");
+        boxes.forEach((box) => {
+            box.classList.add("hidden");
+            box.style.display = "none";
+            box.style.left = "0px";
+            box.style.top = "0px";
+            box.style.width = "0px";
+            box.style.height = "0px";
+        });
+    }
+
+    function placeContextMenu(menu, x, y) {
+        if (!menu) return;
+        menu.classList.remove("hidden");
+
+        const pad = 8;
+        const rect = menu.getBoundingClientRect();
+        let left = x;
+        let top = y;
+
+        if (left + rect.width + pad > window.innerWidth) {
+            left = Math.max(pad, window.innerWidth - rect.width - pad);
+        }
+        if (top + rect.height + pad > window.innerHeight) {
+            top = Math.max(pad, window.innerHeight - rect.height - pad);
+        }
+
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+    }
+
+    function showPlaceholder(label) {
+        setStatus(`${label} is not enabled for external workspace access yet.`, "bad");
+    }
+
+    function itemFromRow(row) {
+        if (!row) return null;
+        const isDir = row.hasAttribute("data-dir");
+        const rel = isDir ? (row.dataset.dir || "") : (row.dataset.file || "");
+        return {
+            isDir,
+            rel,
+            name: row.dataset.name || rel.split("/").pop() || "item",
+            type: row.dataset.type || (isDir ? "dir" : "file"),
+            size: row.dataset.size || "",
+            mtime: row.dataset.mtime || ""
+        };
+    }
+
+    function kvRow(k, v) {
+        const kEl = document.createElement("div");
+        kEl.className = "k";
+        kEl.textContent = k;
+
+        const vEl = document.createElement("div");
+        vEl.className = "v mono";
+        vEl.textContent = v == null ? "" : String(v);
+
+        return [kEl, vEl];
+    }
+
+    function openPropsModal() {
+        if (!propsModal) return;
+        propsModal.classList.add("show");
+        propsModal.setAttribute("aria-hidden", "false");
+    }
+
+    function closePropsModal() {
+        if (!propsModal) return;
+        propsModal.classList.remove("show");
+        propsModal.setAttribute("aria-hidden", "true");
+    }
+
+    const TEXT_PREVIEW_EXTS = new Set([
+        "txt", "text", "log", "md", "markdown", "rst",
+        "json", "jsonl", "xml", "html", "htm", "css", "scss", "sass",
+        "js", "mjs", "cjs", "ts", "tsx", "jsx",
+        "c", "cc", "cpp", "cxx", "h", "hh", "hpp", "hxx",
+        "java", "kt", "kts", "go", "rs", "py", "rb", "php", "pl", "pm", "lua",
+        "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd",
+        "ini", "cfg", "conf", "cnf", "env", "properties",
+        "yaml", "yml", "toml", "sql", "csv", "tsv",
+        "cmake", "mk", "make", "gradle", "dockerfile",
+        "service", "timer", "socket", "desktop", "rules",
+        "srt", "vtt", "svg"
+    ]);
+
+    const TEXT_PREVIEW_SPECIAL_NAMES = new Set([
+        "makefile", "dockerfile", "cmakelists.txt",
+        "readme", "license", "copying", "changelog",
+        ".gitignore", ".gitattributes", ".editorconfig", ".env"
+    ]);
+
+    function isTextPreviewableName(name) {
+        const n = String(name || "").trim().toLowerCase();
+        if (!n) return false;
+        if (TEXT_PREVIEW_SPECIAL_NAMES.has(n)) return true;
+
+        const clean = n.split("?")[0].split("#")[0];
+        const i = clean.lastIndexOf(".");
+        if (i < 0 || i === clean.length - 1) return false;
+
+        return TEXT_PREVIEW_EXTS.has(clean.slice(i + 1));
+    }
+
+    function textPreviewUrl(relPath) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", normalizeRelPath(relPath));
+        return `/api/v4/workspaces/files/read_text?${qs.toString()}`;
+    }
+
+    function openTextPreviewModal() {
+        if (!textPreviewModal) return;
+        textPreviewModal.classList.add("show");
+        textPreviewModal.setAttribute("aria-hidden", "false");
+    }
+
+    function closeTextPreviewModal() {
+        if (!textPreviewModal) return;
+        textPreviewModal.classList.remove("show");
+        textPreviewModal.setAttribute("aria-hidden", "true");
+    }
+
+    function pickTextPreviewBody(j) {
+        if (!j || typeof j !== "object") return "";
+        for (const key of ["text", "content", "body", "data"]) {
+            if (typeof j[key] === "string") return j[key];
+        }
+        return "";
+    }
+
+    async function openTextPreview(item) {
+        if (!item || item.isDir) {
+            showPlaceholder("Preview");
+            return;
+        }
+
+        const rel = normalizeRelPath(item.rel || "");
+        const name = item.name || basenameFromPath(rel);
+
+        if (!isTextPreviewableName(name)) {
+            setStatus("Preview is enabled for text/code files only.", "bad");
+            return;
+        }
+
+        if (textPreviewTitle) textPreviewTitle.textContent = "Text preview";
+        if (textPreviewPath) textPreviewPath.textContent = "/" + rel;
+        if (textPreviewMeta) textPreviewMeta.textContent = "Loading…";
+        if (textPreviewBody) textPreviewBody.textContent = "";
+
+        openTextPreviewModal();
+
+        let j = null;
+        try {
+            j = await apiJson(textPreviewUrl(rel));
+        } catch (e) {
+            if (textPreviewMeta) textPreviewMeta.textContent = "Preview failed.";
+            if (textPreviewBody) textPreviewBody.textContent = String(e && e.message ? e.message : e);
+            throw e;
+        }
+
+        const body = pickTextPreviewBody(j);
+        const bits = [];
+
+        if (j.bytes != null) bits.push(fmtSize(j.bytes));
+        else if (item.size) bits.push(fmtSize(item.size));
+
+        if (j.mime) bits.push(String(j.mime));
+        if (j.mtime_epoch) bits.push("Modified " + fmtUnixLocal(j.mtime_epoch));
+        else if (item.mtime) bits.push("Modified " + fmtUnixLocal(item.mtime));
+
+        if (j.sha256) bits.push("SHA-256 " + String(j.sha256).slice(0, 16) + "…");
+
+        if (textPreviewMeta) textPreviewMeta.textContent = bits.join(" · ") || "Text file";
+        if (textPreviewBody) textPreviewBody.textContent = body;
+    }
+
+
+    async function copyText(text) {
+        const value = String(text || "");
+        if (!value) return false;
+
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(value);
+                return true;
+            }
+        } catch (_) {}
+
+        try {
+            const ta = document.createElement("textarea");
+            ta.value = value;
+            ta.setAttribute("readonly", "readonly");
+            ta.style.position = "fixed";
+            ta.style.left = "-9999px";
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand("copy");
+            ta.remove();
+            return !!ok;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function miniCopyButton(getTextFn) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "propsMiniBtn";
+        b.textContent = "Copy";
+        b.onclick = async () => {
+            const text = getTextFn ? String(getTextFn() || "") : "";
+            const ok = text ? await copyText(text) : false;
+            b.textContent = ok ? "Copied" : "Copy failed";
+            setTimeout(() => { b.textContent = "Copy"; }, 1100);
+        };
+        return b;
+    }
+
+    function addPropsRow(k, v, opts = {}) {
+        if (!propsBody) return;
+        if (v === undefined || v === null || v === "") return;
+
+        const [kEl, vEl] = kvRow(k, v);
+
+        if (opts.copy) {
+            vEl.textContent = "";
+            vEl.classList.remove("mono");
+            const wrap = document.createElement("div");
+            wrap.className = "propsValueRow";
+
+            const line = document.createElement("span");
+            line.className = "mono";
+            line.textContent = String(v);
+
+            wrap.appendChild(line);
+            wrap.appendChild(miniCopyButton(() => line.textContent));
+            vEl.appendChild(wrap);
+        }
+
+        propsBody.appendChild(kEl);
+        propsBody.appendChild(vEl);
+    }
+
+    function fmtUnixLocal(sec) {
+        if (!sec) return "";
+        const d = new Date(Number(sec) * 1000);
+        if (isNaN(d.getTime())) return String(sec);
+
+        const pad2 = (n) => String(n).padStart(2, "0");
+        return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+    }
+
+    function permsFromOctal(modeStr) {
+        if (!modeStr || typeof modeStr !== "string") return "";
+        const s = modeStr.trim();
+        if (!/^[0-7]{3,4}$/.test(s)) return "";
+        const oct = s.length === 4 ? s.slice(1) : s;
+        const bits = oct.split("").map((c) => parseInt(c, 8));
+        if (bits.length !== 3 || bits.some((x) => Number.isNaN(x))) return "";
+
+        const rwx = (b) => {
+            const r = (b & 4) ? "r" : "-";
+            const w = (b & 2) ? "w" : "-";
+            const x = (b & 1) ? "x" : "-";
+            return r + w + x;
+        };
+
+        return rwx(bits[0]) + rwx(bits[1]) + rwx(bits[2]);
+    }
+
+    function statUrl(relPath) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", normalizeRelPath(relPath) || ".");
+        return `/api/v4/workspaces/files/stat?${qs.toString()}`;
+    }
+
+    function hashUrl(relPath) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", normalizeRelPath(relPath));
+        qs.set("algo", "sha256");
+        return `/api/v4/workspaces/files/hash?${qs.toString()}`;
+    }
+
+    function hashCacheKey(relPath, mtimeEpoch, sizeBytes) {
+        return [
+            workspaceId,
+            normalizeRelPath(relPath),
+            String(mtimeEpoch || 0),
+            String(sizeBytes || 0)
+        ].join("|");
+    }
+
+    function pickSha256FromHashResponse(j) {
+        if (!j || typeof j !== "object") return "";
+        if (typeof j.digest_hex === "string" && j.digest_hex) return j.digest_hex;
+        if (typeof j.sha256 === "string" && j.sha256) return j.sha256;
+        if (j.hashes && typeof j.hashes.sha256 === "string") return j.hashes.sha256;
+        if (j.digests && typeof j.digests.sha256 === "string") return j.digests.sha256;
+        if (typeof j.hash === "string" && j.hash) return j.hash;
+        return "";
+    }
+
+    async function fetchSha256ForRelPath(relPath) {
+        const p = normalizeRelPath(relPath);
+        if (!p) throw new Error("missing path");
+
+        const r = await fetch(hashUrl(p), {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Accept": "application/json" },
+            body: ""
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            const msg = j && (j.message || j.error)
+                ? `${j.error || ""} ${j.message || ""}`.trim()
+                : `HTTP ${r.status}`;
+            throw new Error(msg || `HTTP ${r.status}`);
+        }
+
+        const sha256 = pickSha256FromHashResponse(j);
+        if (!sha256) throw new Error("server did not return sha256");
+        return { sha256, raw:j };
+    }
+
+
+    function writeTextUrl(relPath) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", normalizeRelPath(relPath));
+        return `/api/v4/workspaces/files/write_text?${qs.toString()}`;
+    }
+
+    function pickTextFromReadResponse(j) {
+        if (!j || typeof j !== "object") return "";
+        if (typeof j.text === "string") return j.text;
+        if (typeof j.content === "string") return j.content;
+        if (typeof j.body === "string") return j.body;
+        if (typeof j.data === "string") return j.data;
+        return "";
+    }
+
+    function setTextEditStatus(msg, kind) {
+        if (!textEditStatus) return;
+        textEditStatus.textContent = msg || "";
+        textEditStatus.style.color = kind === "bad"
+            ? "var(--bad)"
+            : (kind === "good" ? "var(--good)" : "");
+    }
+
+    function textEditDirty() {
+        return !!(textEditState && textEditArea && textEditArea.value !== textEditState.originalText);
+    }
+
+    function syncTextEditDirty() {
+        if (!textEditSaveBtn || !textEditArea || !textEditState) return;
+
+        const dirty = textEditDirty();
+        textEditSaveBtn.disabled = !canEdit || !dirty || textEditArea.readOnly;
+
+        if (textEditInfo) {
+            const bytes = new Blob([textEditArea.value || ""]).size;
+            const dirtyText = dirty ? "modified" : "clean";
+            textEditInfo.textContent = `${fmtSize(bytes)} in editor · ${dirtyText}`;
+        }
+    }
+
+    function openTextEditorModal() {
+        if (!textEditModal) return;
+        textEditModal.classList.add("show");
+        textEditModal.setAttribute("aria-hidden", "false");
+        setTimeout(() => {
+            try { textEditArea && textEditArea.focus({ preventScroll:true }); } catch (_) {}
+        }, 0);
+    }
+
+    function closeTextEditor(force = false) {
+        if (!force && textEditDirty()) {
+            const ok = confirm("Close text editor?\n\nUnsaved changes will be lost.");
+            if (!ok) return false;
+        }
+
+        if (textEditModal) {
+            textEditModal.classList.remove("show");
+            textEditModal.setAttribute("aria-hidden", "true");
+        }
+
+        textEditState = null;
+        textEditFindMatches = [];
+        textEditFindIndex = -1;
+        return true;
+    }
+
+    function textEditorClampPosition(left, top) {
+        if (!textEditCard) return { left, top };
+        const rect = textEditCard.getBoundingClientRect();
+        const pad = 6;
+        return {
+            left: Math.min(Math.max(pad, left), Math.max(pad, window.innerWidth - rect.width - pad)),
+            top: Math.min(Math.max(pad, top), Math.max(pad, window.innerHeight - rect.height - pad))
+        };
+    }
+
+    function beginTextEditorDrag(ev) {
+        if (!textEditCard || !textEditHead) return;
+        if (ev.button !== 0) return;
+        if (ev.target.closest("button, input, textarea, select, a")) return;
+
+        const rect = textEditCard.getBoundingClientRect();
+        textEditDrag = {
+            pointerId: ev.pointerId,
+            dx: ev.clientX - rect.left,
+            dy: ev.clientY - rect.top
+        };
+
+        textEditCard.classList.add("dragging");
+        textEditCard.style.position = "fixed";
+        textEditCard.style.left = `${rect.left}px`;
+        textEditCard.style.top = `${rect.top}px`;
+        textEditCard.style.transform = "none";
+
+        try { textEditHead.setPointerCapture(ev.pointerId); } catch (_) {}
+        ev.preventDefault();
+    }
+
+    function moveTextEditorDrag(ev) {
+        if (!textEditDrag || !textEditCard) return;
+        if (ev.pointerId !== textEditDrag.pointerId) return;
+
+        const pos = textEditorClampPosition(
+            ev.clientX - textEditDrag.dx,
+            ev.clientY - textEditDrag.dy
+        );
+
+        textEditCard.style.left = `${pos.left}px`;
+        textEditCard.style.top = `${pos.top}px`;
+        textEditCard.style.transform = "none";
+    }
+
+    function endTextEditorDrag(ev) {
+        if (!textEditDrag) return;
+        if (ev.pointerId !== textEditDrag.pointerId) return;
+
+        if (textEditCard) textEditCard.classList.remove("dragging");
+        try { textEditHead && textEditHead.releasePointerCapture(ev.pointerId); } catch (_) {}
+        textEditDrag = null;
+    }
+
+    function resetTextEditorPosition() {
+        if (!textEditCard) return;
+        textEditCard.style.position = "";
+        textEditCard.style.left = "";
+        textEditCard.style.top = "";
+        textEditCard.style.transform = "";
+    }
+
+    async function openTextEditor(item) {
+        if (!item || !item.rel) return;
+
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        const rel = normalizeRelPath(item.rel);
+        const name = item.name || basenameFromPath(rel);
+
+        if (!isTextPreviewableName(name)) {
+            setStatus("Text editor is only enabled for text/code files.", "bad");
+            return;
+        }
+
+        if (textEditDirty()) {
+            const ok = confirm("Open another file?\n\nUnsaved changes in the current editor will be lost.");
+            if (!ok) return;
+        }
+
+        resetTextEditorPosition();
+
+        if (textEditTitle) textEditTitle.textContent = "Edit text file";
+        if (textEditPath) textEditPath.textContent = "/" + rel;
+        if (textEditArea) {
+            textEditArea.value = "";
+            textEditArea.readOnly = true;
+        }
+        setTextEditStatus("Loading…");
+
+        openTextEditorModal();
+
+        const j = await apiJson(textPreviewUrl(rel));
+        const text = pickTextFromReadResponse(j);
+
+        textEditState = {
+            item,
+            rel,
+            originalText: text,
+            mtimeEpoch: Number(j.mtime_epoch || j.mtime_unix || 0),
+            sha256: pickSha256FromHashResponse(j)
+        };
+
+        if (textEditArea) {
+            textEditArea.value = text;
+            textEditArea.readOnly = false;
+        }
+
+        const bytes = j.bytes != null ? Number(j.bytes) : new Blob([text]).size;
+        if (textEditInfo) textEditInfo.textContent = `${fmtSize(bytes)} · ${j.mime || "text"} · editable`;
+        setTextEditStatus("Ready.", "good");
+        syncTextEditDirty();
+        updateTextEditorFind();
+    }
+
+    async function reloadTextEditor() {
+        if (!textEditState) return;
+        if (textEditDirty()) {
+            const ok = confirm("Reload from server?\n\nUnsaved changes will be lost.");
+            if (!ok) return;
+        }
+
+        const item = textEditState.item || {
+            rel: textEditState.rel,
+            name: basenameFromPath(textEditState.rel),
+            isDir: false
+        };
+
+        await openTextEditor(item);
+    }
+
+    async function saveTextEditor() {
+        if (!canEdit) {
+            setTextEditStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+        if (!textEditState || !textEditArea) return;
+
+        const rel = normalizeRelPath(textEditState.rel);
+        const text = textEditArea.value;
+
+        setTextEditStatus("Saving…");
+        if (textEditSaveBtn) textEditSaveBtn.disabled = true;
+
+        const body = {
+            workspace_id: workspaceId,
+            path: rel,
+            text
+        };
+
+        if (textEditState.mtimeEpoch) body.expected_mtime_epoch = textEditState.mtimeEpoch;
+        if (textEditState.sha256) body.expected_sha256 = textEditState.sha256;
+
+        const j = await apiJson(writeTextUrl(rel), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        });
+
+        textEditState.originalText = text;
+        textEditState.mtimeEpoch = Number(j.mtime_epoch || j.new_mtime_epoch || textEditState.mtimeEpoch || 0);
+        textEditState.sha256 = j.sha256 || j.new_sha256 || j.digest_hex || textEditState.sha256 || "";
+
+        setTextEditStatus("Saved.", "good");
+        syncTextEditDirty();
+        await loadFiles(currentPath);
+    }
+
+    function updateTextEditorFind() {
+        if (!textEditArea || !textEditFindInput || !textEditFindStatus) return;
+
+        const qRaw = textEditFindInput.value || "";
+        if (!qRaw) {
+            textEditFindMatches = [];
+            textEditFindIndex = -1;
+            textEditFindStatus.textContent = "";
+            return;
+        }
+
+        const hay = textEditFindMatchCase ? textEditArea.value : textEditArea.value.toLowerCase();
+        const needle = textEditFindMatchCase ? qRaw : qRaw.toLowerCase();
+
+        const matches = [];
+        let pos = 0;
+        while (needle && pos <= hay.length) {
+            const i = hay.indexOf(needle, pos);
+            if (i < 0) break;
+            matches.push(i);
+            pos = i + Math.max(1, needle.length);
+            if (matches.length > 5000) break;
+        }
+
+        textEditFindMatches = matches;
+
+        if (!matches.length) {
+            textEditFindIndex = -1;
+            textEditFindStatus.textContent = "0/0";
+            return;
+        }
+
+        if (textEditFindIndex < 0 || textEditFindIndex >= matches.length) {
+            textEditFindIndex = 0;
+        }
+
+        const start = matches[textEditFindIndex];
+        textEditArea.focus({ preventScroll:true });
+        textEditArea.setSelectionRange(start, start + qRaw.length);
+        textEditFindStatus.textContent = `${textEditFindIndex + 1}/${matches.length}`;
+    }
+
+    function stepTextEditorFind(delta) {
+        if (!textEditFindMatches.length) {
+            updateTextEditorFind();
+            return;
+        }
+
+        textEditFindIndex += delta;
+        if (textEditFindIndex < 0) textEditFindIndex = textEditFindMatches.length - 1;
+        if (textEditFindIndex >= textEditFindMatches.length) textEditFindIndex = 0;
+        updateTextEditorFind();
+    }
+
+    function showTextEditorFind() {
+        if (!textEditFindBar) return;
+        textEditFindBar.classList.remove("hidden");
+        setTimeout(() => {
+            try {
+                textEditFindInput && textEditFindInput.focus({ preventScroll:true });
+                textEditFindInput && textEditFindInput.select();
+            } catch (_) {}
+        }, 0);
+        updateTextEditorFind();
+    }
+
+    function hideTextEditorFind() {
+        if (textEditFindBar) textEditFindBar.classList.add("hidden");
+        textEditFindMatches = [];
+        textEditFindIndex = -1;
+        if (textEditFindStatus) textEditFindStatus.textContent = "";
+        try { textEditArea && textEditArea.focus({ preventScroll:true }); } catch (_) {}
+    }
+
+    async function showProperties(item) {
+        if (!item) return;
+
+        const rel = normalizeRelPath(item.rel || "");
+        const name = item.name || basenameFromPath(rel);
+        const isDirHint = !!item.isDir;
+
+        if (propsTitle) propsTitle.textContent = isDirHint ? "Folder properties" : "File properties";
+        if (propsPath) propsPath.textContent = "/" + rel;
+        if (propsBody) propsBody.innerHTML = "";
+
+        addPropsRow("Name", name);
+        addPropsRow("Type", isDirHint ? "Folder" : "File");
+        addPropsRow("Path", "/" + rel, { copy:true });
+        if (!isDirHint) addPropsRow("Size", fmtSize(item.size || 0));
+        if (item.mtime) addPropsRow("Modified", fmtUnixLocal(item.mtime));
+        addPropsRow("Details", "Loading…");
+
+        openPropsModal();
+
+        let st = null;
+        try {
+            st = await apiJson(statUrl(rel));
+        } catch (e) {
+            st = {
+                ok:false,
+                error:"client_error",
+                message:String(e && e.message ? e.message : e)
+            };
+        }
+
+        if (!propsBody) return;
+        propsBody.innerHTML = "";
+
+        if (!st || !st.ok) {
+            addPropsRow("Name", name);
+            addPropsRow("Type", isDirHint ? "Folder" : "File");
+            addPropsRow("Path", "/" + rel, { copy:true });
+            addPropsRow("Error", st && (st.message || st.error) ? `${st.error || "error"}: ${st.message || ""}`.trim() : "Failed to load properties");
+            return;
+        }
+
+        const isDir = st.type === "dir";
+        const isFile = st.type === "file";
+
+        if (propsTitle) {
+            propsTitle.textContent = isDir ? "Folder properties" : (isFile ? "File properties" : "Item properties");
+        }
+        if (propsPath) propsPath.textContent = st.path_norm || ("/" + rel);
+
+        addPropsRow("Name", st.name || name);
+        addPropsRow("Type", isDir ? "Folder" : (isFile ? "File" : "Other"));
+        addPropsRow("Path", st.path_norm || ("/" + rel), { copy:true });
+        addPropsRow("Workspace ID", st.workspace_id || workspaceId, { copy:true });
+
+        if (st.mode_octal) {
+            const rwx = permsFromOctal(st.mode_octal);
+            addPropsRow("Permissions", rwx ? `${st.mode_octal} (${rwx})` : st.mode_octal);
+        }
+
+        if (st.mtime_epoch) addPropsRow("Modified", fmtUnixLocal(st.mtime_epoch));
+
+        if (isFile) {
+            if (st.bytes != null) addPropsRow("Size", fmtSize(st.bytes));
+            if (st.mime) addPropsRow("MIME", st.mime);
+            if (typeof st.is_text === "boolean") addPropsRow("Looks like text", st.is_text ? "Yes" : "No");
+
+            const kEl = document.createElement("div");
+            kEl.className = "k";
+            kEl.textContent = "SHA-256";
+
+            const vEl = document.createElement("div");
+            vEl.className = "v";
+            vEl.innerHTML = "";
+            vEl.style.display = "flex";
+            vEl.style.gap = "10px";
+            vEl.style.alignItems = "center";
+            vEl.style.flexWrap = "wrap";
+
+            const line = document.createElement("div");
+            line.className = "mono";
+            line.style.wordBreak = "break-all";
+            line.style.opacity = "0.92";
+            line.textContent = "Computing…";
+
+            const btnCopy = miniCopyButton(() => line.textContent);
+            btnCopy.disabled = true;
+
+            vEl.appendChild(line);
+            vEl.appendChild(btnCopy);
+
+            propsBody.appendChild(kEl);
+            propsBody.appendChild(vEl);
+
+            const cacheKey = hashCacheKey(rel, st.mtime_epoch, st.bytes);
+            const cached = hashCache.get(cacheKey);
+
+            if (cached && cached.sha256) {
+                line.textContent = cached.sha256;
+                btnCopy.disabled = false;
+            } else {
+                const expectedPath = propsPath ? propsPath.textContent : (st.path_norm || ("/" + rel));
+
+                fetchSha256ForRelPath(rel)
+                    .then((out) => {
+                        hashCache.set(cacheKey, { sha256:out.sha256, raw:out.raw, atMs:Date.now() });
+
+                        const nowPath = propsPath ? propsPath.textContent : "";
+                        if (nowPath && nowPath !== expectedPath) return;
+
+                        line.textContent = out.sha256;
+                        btnCopy.disabled = false;
+                    })
+                    .catch((e) => {
+                        line.textContent = `Error: ${String(e && e.message ? e.message : e)}`;
+                        line.style.opacity = "0.85";
+                    });
+            }
+        }
+
+        if (isDir) {
+            if (st.children) {
+                const parts = [];
+                if (st.children.files != null) parts.push(`${st.children.files} files`);
+                if (st.children.dirs != null) parts.push(`${st.children.dirs} folders`);
+                if (st.children.other != null && st.children.other !== 0) parts.push(`${st.children.other} other`);
+                addPropsRow("Children", parts.join(", "));
+            }
+
+            if (st.bytes_recursive != null) addPropsRow("Size (recursive)", fmtSize(st.bytes_recursive));
+            if (st.recursive_scanned_entries != null) addPropsRow("Scanned entries", String(st.recursive_scanned_entries));
+            if (typeof st.recursive_complete === "boolean") addPropsRow("Scan complete", st.recursive_complete ? "Yes" : "No");
+            if (st.scan_cap != null) addPropsRow("Scan cap", String(st.scan_cap));
+            if (st.time_cap_ms != null) addPropsRow("Time cap", `${st.time_cap_ms} ms`);
+        }
+
+        {
+            const kEl = document.createElement("div");
+            kEl.className = "k";
+            kEl.textContent = "Details";
+
+            const vEl = document.createElement("div");
+            vEl.className = "v";
+            const details = document.createElement("details");
+            details.style.width = "100%";
+
+            const summary = document.createElement("summary");
+            summary.textContent = "Raw JSON";
+            summary.style.cursor = "pointer";
+            summary.style.userSelect = "none";
+
+            const pre = document.createElement("pre");
+            pre.className = "mono pre";
+            pre.textContent = JSON.stringify(st, null, 2);
+
+            details.appendChild(summary);
+            details.appendChild(pre);
+            vEl.appendChild(details);
+
+            propsBody.appendChild(kEl);
+            propsBody.appendChild(vEl);
+        }
+    }
+
+    function renderBreadcrumbs() {
+        const p = normalizeRelPath(currentPath);
+        const parts = p ? p.split("/").filter(Boolean) : [];
+
+        const html = [];
+        html.push(`<button class="crumb" type="button" data-crumb="">Workspace root</button>`);
+
+        let acc = "";
+        for (const part of parts) {
+            acc = acc ? `${acc}/${part}` : part;
+            html.push(`<span class="crumbSep">/</span>`);
+            html.push(`<button class="crumb" type="button" data-crumb="${escapeHtml(acc)}">${escapeHtml(part)}</button>`);
+        }
+
+        breadcrumbsEl.innerHTML = html.join("");
+        btnUp.disabled = !p;
+    }
+
+    function showSignedInState() {
+        if (shell) shell.classList.add("signedIn");
+
+        if (accessSub) {
+            accessSub.textContent = "You are signed in with DNA Connect. Use a new QR only when this session expires or you want to sign in again.";
+        }
+        qrBox.innerHTML = `
+            <div class="hint" style="text-align:center; color:#444;">
+                Workspace session is active.<br>
+                Use “New sign-in QR” only when you want to sign in again.
+            </div>
+        `;
+    }
+
+    async function startSession() {
+        if (!workspaceId) {
+            setStatus("Missing workspace_id in URL.", "bad");
+            qrBox.innerHTML = `<div class="hint">Missing workspace_id.</div>`;
+            return;
+        }
+
+        clearInterval(pollTimer);
+        currentSessionId = "";
+        signedIn = false;
+        canEdit = false;
+        uploadOpen = false;
+        syncUploadPanel();
+        if (shell) shell.classList.remove("signedIn");
+
+        if (accessSub) {
+            accessSub.textContent = "Scan the QR code with DNA Connect to prove your identity and open this workspace.";
+        }
+
+        setStatus("Creating a fresh QR login session…");
+
+        const j = await apiJson("/api/v4/workspaces/external-sessions/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workspace_id: workspaceId })
+        });
+
+        currentSessionId = String(j.session && j.session.session_id || "");
+        const qrPath = String(j.qr_svg || "");
+
+        if (!currentSessionId || !qrPath) {
+            throw new Error("Server did not return session QR.");
+        }
+
+        qrBox.innerHTML = `<img alt="DNA Connect QR" src="${escapeHtml(qrPath)}">`;
+        setStatus("Scan the QR with DNA Connect. Waiting for approval…");
+
+        pollTimer = setInterval(() => pollStatus().catch((e) => {
+            setStatus(`Status check failed: ${e.message || e}`, "bad");
+        }), 1800);
+    }
+
+    async function pollStatus() {
+        if (!currentSessionId) return;
+
+        const j = await apiJson(`/api/v4/workspaces/external-sessions/status?session_id=${encodeURIComponent(currentSessionId)}`);
+        const s = j.session || {};
+        const state = String(s.status || "");
+
+        if (state === "approved") {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            setStatus("QR approved. Opening workspace…", "good");
+            await consumeSession();
+            await loadFiles();
+            return;
+        }
+
+        if (state === "denied" || state === "expired") {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            setStatus(`Login ${state}: ${s.reason || "try a new QR"}`, "bad");
+            return;
+        }
+
+        setStatus("Waiting for DNA Connect scan…");
+    }
+
+    async function consumeSession() {
+        if (!currentSessionId) throw new Error("missing session id");
+
+        await apiJson("/api/v4/workspaces/external-sessions/consume", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session_id: currentSessionId })
+        });
+
+        showSignedInState();
+        setStatus("Workspace session ready.", "good");
+    }
+
+    async function loadFiles(pathOverride) {
+        resetMarqueeVisual();
+        if (!workspaceId) return;
+
+        if (typeof pathOverride === "string") {
+            currentPath = normalizeRelPath(pathOverride);
+        }
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        if (currentPath) qs.set("path", currentPath);
+
+        const j = await apiJson(`/api/v4/workspaces/files/list?${qs.toString()}`);
+        applyAccessInfo(j);
+        renderBreadcrumbs();
+
+        const items = Array.isArray(j.items) ? j.items.slice() : [];
+        const pathLabel = currentPath || "workspace root";
+        const countLabel = `${items.length} item${items.length === 1 ? "" : "s"} in ${pathLabel}.`;
+        if (fileSub && !canEdit) {
+            fileSub.textContent = `View-only access. ${countLabel}`;
+        } else if (fileSub && canEdit) {
+            fileSub.textContent = `Editor access. ${countLabel}`;
+        }
+
+        items.sort((a, b) => {
+            const ad = String(a.type || "").toLowerCase() === "dir" || a.is_dir === true;
+            const bd = String(b.type || "").toLowerCase() === "dir" || b.is_dir === true;
+            if (ad !== bd) return ad ? -1 : 1;
+            return String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity:"base" });
+        });
+
+        const rows = [];
+
+        if (!items.length) {
+            filesEl.innerHTML = `<div class="empty">This folder is empty.</div>`;
+            return;
+        }
+
+        for (const it of items) {
+            const name = String(it.name || it.path || "item");
+            const type = String(it.type || (it.is_dir ? "dir" : "file")).toLowerCase();
+            const isDir = type === "dir" || type === "folder" || it.is_dir === true;
+            const rel = childPath(currentPath, name);
+            const mtime = fmtTime(it.mtime_unix);
+            const size = isDir ? "Folder" : fmtSize(it.size_bytes || it.size || it.bytes || 0);
+            const meta = mtime ? `${size} · ${mtime}` : size;
+
+            if (isDir) {
+                rows.push(`
+                    <div class="fileRow clickable" data-dir="${escapeHtml(rel)}" data-name="${escapeHtml(name)}" data-type="dir" data-size="0" data-mtime="${escapeHtml(it.mtime_unix || "")}" title="${escapeHtml(name)}">
+                        <div class="fileMain">
+                            <div class="fileIcon">📁</div>
+                            <div class="fileText">
+                                <div class="fileName">${escapeHtml(name)}</div>
+                                <div class="fileMeta">${escapeHtml(meta)}</div>
+                            </div>
+                        </div>
+                    </div>
+                `);
+            } else {
+                rows.push(`
+                    <div class="fileRow clickable" data-file="${escapeHtml(rel)}" data-name="${escapeHtml(name)}" data-type="file" data-size="${escapeHtml(it.size_bytes || it.size || it.bytes || 0)}" data-mtime="${escapeHtml(it.mtime_unix || "")}" title="${escapeHtml(name)}">
+                        <div class="fileMain">
+                            <div class="fileIcon">📄</div>
+                            <div class="fileText">
+                                <div class="fileName">${escapeHtml(name)}</div>
+                                <div class="fileMeta">${escapeHtml(meta)}</div>
+                            </div>
+                        </div>
+                        <a class="downloadLink" href="${escapeHtml(downloadUrl(rel))}" download>Download</a>
+                    </div>
+                `);
+            }
+        }
+
+        filesEl.innerHTML = rows.join("");
+    }
+
+    async function uploadSelectedFile() {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        const f = uploadFile && uploadFile.files && uploadFile.files[0];
+        if (!f) {
+            setStatus("Choose a file first.", "bad");
+            return;
+        }
+
+        const targetPath = childPath(currentPath, f.name);
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", targetPath);
+        qs.set("overwrite", "1");
+
+        setStatus(`Uploading ${f.name}…`);
+
+        const r = await fetch(`/api/v4/workspaces/files/put?${qs.toString()}`, {
+            method: "PUT",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Accept": "application/json" },
+            body: f
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            const msg = j && (j.message || j.error) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`;
+            throw new Error(msg);
+        }
+
+        if (uploadFile) uploadFile.value = "";
+        setStatus(`Uploaded ${f.name}.`, "good");
+        await loadFiles(currentPath);
+    }
+
+    function basenameFromPath(rel) {
+        const v = normalizeRelPath(rel);
+        if (!v) return "";
+        const i = v.lastIndexOf("/");
+        return i < 0 ? v : v.slice(i + 1);
+    }
+
+    function validateSimpleRelPathInput(pathText) {
+        const v = normalizeRelPath(pathText);
+        if (!v) return { ok:false, message:"Path cannot be empty." };
+        if (v.includes("\\")) return { ok:false, message:"Use forward slashes, not backslashes." };
+
+        const parts = v.split("/").filter(Boolean);
+        for (const part of parts) {
+            if (part === "." || part === "..") {
+                return { ok:false, message:"Path cannot contain . or .. segments." };
+            }
+        }
+
+        return { ok:true, path:v };
+    }
+
+    function resetFolderPickerPosition() {
+        if (!extPickerCard) return;
+        extPickerCard.style.left = "50%";
+        extPickerCard.style.top = "22px";
+        extPickerCard.style.transform = "translateX(-50%)";
+    }
+
+    function clampPickerPosition(left, top) {
+        if (!extPickerCard) return { left, top };
+
+        const rect = extPickerCard.getBoundingClientRect();
+        const pad = 6;
+
+        const maxLeft = Math.max(pad, window.innerWidth - rect.width - pad);
+        const maxTop = Math.max(pad, window.innerHeight - rect.height - pad);
+
+        return {
+            left: Math.min(Math.max(pad, left), maxLeft),
+            top: Math.min(Math.max(pad, top), maxTop)
+        };
+    }
+
+    function beginFolderPickerDrag(ev) {
+        if (!extPickerCard || !extPickerHead) return;
+        if (ev.button !== 0) return;
+        if (ev.target.closest("button, input, textarea, select, a")) return;
+
+        const rect = extPickerCard.getBoundingClientRect();
+        pickerDrag = {
+            pointerId: ev.pointerId,
+            dx: ev.clientX - rect.left,
+            dy: ev.clientY - rect.top
+        };
+
+        extPickerCard.classList.add("dragging");
+        extPickerCard.style.left = `${rect.left}px`;
+        extPickerCard.style.top = `${rect.top}px`;
+        extPickerCard.style.transform = "none";
+
+        try { extPickerHead.setPointerCapture(ev.pointerId); } catch (_) {}
+        ev.preventDefault();
+    }
+
+    function moveFolderPickerDrag(ev) {
+        if (!pickerDrag || !extPickerCard) return;
+        if (ev.pointerId !== pickerDrag.pointerId) return;
+
+        const pos = clampPickerPosition(
+            ev.clientX - pickerDrag.dx,
+            ev.clientY - pickerDrag.dy
+        );
+
+        extPickerCard.style.left = `${pos.left}px`;
+        extPickerCard.style.top = `${pos.top}px`;
+        extPickerCard.style.transform = "none";
+    }
+
+    function endFolderPickerDrag(ev) {
+        if (!pickerDrag) return;
+        if (ev.pointerId !== pickerDrag.pointerId) return;
+
+        if (extPickerCard) extPickerCard.classList.remove("dragging");
+        try { extPickerHead && extPickerHead.releasePointerCapture(ev.pointerId); } catch (_) {}
+        pickerDrag = null;
+    }
+
+    function pickerDestLabel() {
+        return `Destination: Workspace ${pickerPath ? "/" + pickerPath : "/"}`;
+    }
+
+    function renderPickerCrumbs() {
+        if (!extPickerCrumbs) return;
+        const parts = normalizeRelPath(pickerPath).split("/").filter(Boolean);
+        const rows = [];
+        rows.push(`<button class="extPickerCrumb" type="button" data-path="">/</button>`);
+        let acc = "";
+        for (const part of parts) {
+            acc = acc ? `${acc}/${part}` : part;
+            rows.push(`<button class="extPickerCrumb" type="button" data-path="${escapeHtml(acc)}">${escapeHtml(part)}</button>`);
+        }
+        extPickerCrumbs.innerHTML = rows.join("");
+    }
+
+    async function loadPickerFolder(path) {
+        pickerPath = normalizeRelPath(path);
+        if (extPickerStatus) extPickerStatus.textContent = "Loading folders...";
+        renderPickerCrumbs();
+        if (extPickerDest) extPickerDest.textContent = pickerDestLabel();
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        if (pickerPath) qs.set("path", pickerPath);
+
+        const j = await apiJson(`/api/v4/workspaces/files/list?${qs.toString()}`);
+        const items = Array.isArray(j.items) ? j.items : [];
+        const dirs = items
+            .filter((it) => {
+                const type = String(it.type || (it.is_dir ? "dir" : "file")).toLowerCase();
+                return type === "dir" || type === "folder" || it.is_dir === true;
+            })
+            .map((it) => String(it.name || it.path || ""))
+            .filter(Boolean)
+            .sort((a, b) => a.localeCompare(b));
+
+        const rows = [];
+
+        if (pickerPath) {
+            rows.push(`
+                <button class="extPickerDirRow" type="button" data-path="${escapeHtml(parentPath(pickerPath))}">
+                    <span class="extPickerDirName">..</span>
+                    <span class="extPickerDirMeta">Parent</span>
+                </button>
+            `);
+        }
+
+        for (const name of dirs) {
+            const rel = childPath(pickerPath, name);
+
+            // Prevent picking inside selected folder when moving a folder.
+            let disabled = false;
+            if (pickerMode === "move" && pickerItem && pickerItem.isDir) {
+                const src = normalizeRelPath(pickerItem.rel);
+                disabled = rel === src || rel.startsWith(src + "/");
+            }
+
+            rows.push(`
+                <button class="extPickerDirRow" type="button" data-path="${escapeHtml(rel)}" ${disabled ? "disabled" : ""}>
+                    <span class="extPickerDirName">${escapeHtml(name)}</span>
+                    <span class="extPickerDirMeta">Folder</span>
+                </button>
+            `);
+        }
+
+        if (!rows.length) {
+            rows.push(`<div class="hint" style="padding:12px;">No folders here.</div>`);
+        }
+
+        extPickerList.innerHTML = rows.join("");
+        if (extPickerStatus) extPickerStatus.textContent = "";
+    }
+
+    function openFolderPicker(opts) {
+        return new Promise((resolve) => {
+            pickerResolve = resolve;
+            pickerMode = opts.mode || "move";
+            pickerItem = opts.item || null;
+            pickerPath = normalizeRelPath(opts.initialPath || currentPath || "");
+
+            if (extPickerTitle) extPickerTitle.textContent = pickerMode === "copy" ? "Copy" : "Move";
+            if (extPickerSub) extPickerSub.textContent = "Select destination folder";
+            if (extPickerSource) {
+                const rel = pickerItem && pickerItem.rel ? pickerItem.rel : "";
+                extPickerSource.textContent = `${pickerMode === "copy" ? "Copy" : "Move"}: /${rel}`;
+            }
+            if (extPickerChoose) extPickerChoose.textContent = pickerMode === "copy" ? "Copy here" : "Move here";
+            if (extPickerStatus) extPickerStatus.textContent = "";
+
+            extPickerOverlay.classList.add("show");
+            extPickerOverlay.setAttribute("aria-hidden", "false");
+            resetFolderPickerPosition();
+
+            loadPickerFolder(pickerPath).catch((e) => {
+                if (extPickerStatus) extPickerStatus.textContent = `Folder list failed: ${e.message || e}`;
+            });
+        });
+    }
+
+    function closeFolderPicker(value) {
+        if (extPickerOverlay) {
+            extPickerOverlay.classList.remove("show");
+            extPickerOverlay.setAttribute("aria-hidden", "true");
+        }
+
+        const resolve = pickerResolve;
+        pickerResolve = null;
+        if (resolve) resolve(value);
+    }
+
+    async function chooseFolderForItem(item, mode) {
+        if (!item || !item.rel) return null;
+
+        const picked = await openFolderPicker({
+            mode,
+            item,
+            initialPath: parentPath(item.rel)
+        });
+
+        if (picked === null) return null;
+
+        const name = basenameFromPath(item.rel);
+        const destFolder = normalizeRelPath(picked || "");
+        return destFolder ? `${destFolder}/${name}` : name;
+    }
+
+    async function trashItem(item) {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        if (!item || !item.rel) {
+            setStatus("No item selected.", "bad");
+            return;
+        }
+
+        const kind = item.isDir ? "folder" : "file";
+        const label = item.rel || item.name || "selected item";
+        const ok = confirm(
+            `Move ${kind} to trash?\n\n/${label}\n\n` +
+            `The owner can restore it from Trash until retention expires.`
+        );
+
+        if (!ok) {
+            setStatus("Move to trash cancelled.");
+            return;
+        }
+
+        setStatus(`Moving ${item.name || label} to trash…`);
+
+        await apiJson(deleteUrl(item.rel), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: ""
+        });
+
+        setStatus(`Moved ${item.name || label} to trash.`, "good");
+        hideContextMenus();
+        await loadFiles(currentPath);
+    }
+
+    async function copyItem(item) {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        if (!item || !item.rel) {
+            setStatus("No item selected.", "bad");
+            return;
+        }
+
+        const oldPath = normalizeRelPath(item.rel);
+        const oldName = basenameFromPath(oldPath);
+
+        const targetPath = await chooseFolderForItem(item, "copy");
+        if (targetPath === null) {
+            setStatus("Copy cancelled.");
+            return;
+        }
+
+        if (targetPath === oldPath) {
+            setStatus("Choose a different destination folder.", "bad");
+            return;
+        }
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("from", oldPath);
+        qs.set("to", targetPath);
+
+        setStatus(`Copying ${oldName}…`);
+
+        await apiJson(`/api/v4/workspaces/files/copy?${qs.toString()}`, {
+            method: "POST"
+        });
+
+        setStatus(`Copied ${oldName}.`, "good");
+        await loadFiles(currentPath);
+    }
+
+    async function moveItem(item) {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        if (!item || !item.rel) {
+            setStatus("No item selected.", "bad");
+            return;
+        }
+
+        const oldPath = normalizeRelPath(item.rel);
+        const oldName = basenameFromPath(oldPath);
+
+        const targetPath = await chooseFolderForItem(item, "move");
+        if (targetPath === null) {
+            setStatus("Move cancelled.");
+            return;
+        }
+
+        if (targetPath === oldPath) {
+            setStatus("Choose a different destination folder.", "bad");
+            return;
+        }
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("from", oldPath);
+        qs.set("to", targetPath);
+
+        setStatus(`Moving ${oldName}…`);
+
+        await apiJson(`/api/v4/workspaces/files/move?${qs.toString()}`, {
+            method: "POST"
+        });
+
+        setStatus(`Moved ${oldName}.`, "good");
+        await loadFiles(currentPath);
+    }
+
+    async function renameItem(item) {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        if (!item || !item.rel) {
+            setStatus("No item selected.", "bad");
+            return;
+        }
+
+        const oldName = basenameFromPath(item.rel);
+        const nextName = prompt("Rename item", oldName);
+        if (nextName == null) return;
+
+        const cleanName = String(nextName || "").trim();
+        if (!cleanName) {
+            setStatus("Name cannot be empty.", "bad");
+            return;
+        }
+
+        if (cleanName === "." || cleanName === ".." || cleanName.includes("/") || cleanName.includes("\\")) {
+            setStatus("Use a simple name without slashes.", "bad");
+            return;
+        }
+
+        if (cleanName === oldName) {
+            setStatus("Name did not change.");
+            return;
+        }
+
+        const parent = parentPath(item.rel);
+        const targetPath = childPath(parent, cleanName);
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("from", item.rel);
+        qs.set("to", targetPath);
+
+        setStatus(`Renaming ${oldName}…`);
+
+        await apiJson(`/api/v4/workspaces/files/move?${qs.toString()}`, {
+            method: "POST"
+        });
+
+        setStatus(`Renamed ${oldName} to ${cleanName}.`, "good");
+        await loadFiles(currentPath);
+    }
+
+    async function createFolder() {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        const raw = String(newFolderName.value || "").trim();
+        if (!raw) {
+            setStatus("Enter a folder name.", "bad");
+            newFolderName.focus();
+            return;
+        }
+
+        if (raw === "." || raw === ".." || raw.includes("/") || raw.includes("\\")) {
+            setStatus("Use a simple folder name without slashes.", "bad");
+            newFolderName.focus();
+            return;
+        }
+
+        const targetPath = childPath(currentPath, raw);
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", targetPath);
+
+        setStatus(`Creating folder ${raw}…`);
+
+        await apiJson(`/api/v4/workspaces/files/mkdir?${qs.toString()}`, {
+            method: "POST"
+        });
+
+        newFolderName.value = "";
+        setStatus(`Created folder ${raw}.`, "good");
+        await loadFiles(currentPath);
+    }
+
+    // ---- Selection model -----------------------------------------------------
+    const selectedKeys = new Set();
+    let selectionAnchorKey = "";
+    let keyboardFocusKey = "";
+    let selectionScopePath = "";
+    let marqueeState = null;
+
+    if (filesEl) {
+        filesEl.tabIndex = 0;
+        filesEl.setAttribute("role", "listbox");
+        filesEl.setAttribute("aria-multiselectable", "true");
+    }
+
+    function selectableRows() {
+        if (!filesEl) return [];
+        return Array.from(filesEl.querySelectorAll(".fileRow"))
+            .filter((row) => row && (row.dataset.file || row.dataset.dir) && row.dataset.name);
+    }
+
+    function isSelectionTypingTarget(el) {
+        if (!el) return false;
+        const tag = String(el.tagName || "").toLowerCase();
+        return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
+    }
+
+    function isInteractiveSelectionTarget(el) {
+        if (!el || !el.closest) return false;
+        return !!el.closest(
+            "button,a,input,label,select,textarea," +
+            ".fileRow,.contextMenu,.extPickerOverlay,.modal,.qrBox,.uploadBox"
+        );
+    }
+
+    function rowKey(row) {
+        if (!row) return "";
+        if (row.dataset.dir) return "dir:" + normalizeRelPath(row.dataset.dir);
+        if (row.dataset.file) return "file:" + normalizeRelPath(row.dataset.file);
+        return "";
+    }
+
+    function rowByKey(key) {
+        return selectableRows().find((row) => rowKey(row) === key) || null;
+    }
+
+    function itemFromKey(key) {
+        const row = rowByKey(key);
+        return row ? itemFromRow(row) : null;
+    }
+
+    function selectedItems() {
+        const rows = selectableRows();
+        const out = [];
+        for (const row of rows) {
+            const key = rowKey(row);
+            if (!selectedKeys.has(key)) continue;
+            const item = itemFromRow(row);
+            if (item && item.rel) out.push(item);
+        }
+        return out;
+    }
+
+    function setKeyboardFocus(key) {
+        keyboardFocusKey = key || "";
+        for (const row of selectableRows()) {
+            row.classList.toggle("keyboardFocus", rowKey(row) === keyboardFocusKey);
+        }
+    }
+
+    function clearSelection() {
+        selectedKeys.clear();
+        selectionAnchorKey = "";
+        keyboardFocusKey = "";
+        syncSelectionUi();
+    }
+
+    function syncSelectionUi() {
+        if (selectionScopePath !== currentPath) {
+            selectedKeys.clear();
+            selectionAnchorKey = "";
+            keyboardFocusKey = "";
+            selectionScopePath = currentPath;
+        }
+
+        const visible = new Set();
+        for (const row of selectableRows()) visible.add(rowKey(row));
+
+        for (const key of Array.from(selectedKeys)) {
+            if (!visible.has(key)) selectedKeys.delete(key);
+        }
+
+        if (keyboardFocusKey && !visible.has(keyboardFocusKey)) keyboardFocusKey = "";
+        if (selectionAnchorKey && !visible.has(selectionAnchorKey)) selectionAnchorKey = "";
+
+        for (const row of selectableRows()) {
+            const key = rowKey(row);
+            const on = selectedKeys.has(key);
+            row.classList.toggle("selected", on);
+            row.classList.toggle("keyboardFocus", key === keyboardFocusKey);
+            row.setAttribute("aria-selected", on ? "true" : "false");
+        }
+
+        if (selectedKeys.size > 0) {
+            setStatus(`${selectedKeys.size} item${selectedKeys.size === 1 ? "" : "s"} selected.`);
+        }
+    }
+
+    function selectOnlyKey(key) {
+        if (!key) return;
+        selectionScopePath = currentPath;
+        selectedKeys.clear();
+        selectedKeys.add(key);
+        selectionAnchorKey = key;
+        setKeyboardFocus(key);
+        syncSelectionUi();
+    }
+
+    function toggleKey(key) {
+        if (!key) return;
+        selectionScopePath = currentPath;
+        if (selectedKeys.has(key)) selectedKeys.delete(key);
+        else selectedKeys.add(key);
+        selectionAnchorKey = key;
+        setKeyboardFocus(key);
+        syncSelectionUi();
+    }
+
+    function selectRangeToKey(key, additive) {
+        const rows = selectableRows();
+        const keys = rows.map(rowKey).filter(Boolean);
+        if (!key || !keys.includes(key)) return;
+
+        const anchor = selectionAnchorKey && keys.includes(selectionAnchorKey)
+            ? selectionAnchorKey
+            : key;
+
+        const a = keys.indexOf(anchor);
+        const b = keys.indexOf(key);
+        const lo = Math.min(a, b);
+        const hi = Math.max(a, b);
+
+        if (!additive) selectedKeys.clear();
+        for (let i = lo; i <= hi; i++) selectedKeys.add(keys[i]);
+
+        setKeyboardFocus(key);
+        syncSelectionUi();
+    }
+
+    function openItem(item) {
+        if (!item) return;
+        if (item.isDir) {
+            clearSelection();
+            loadFiles(item.rel).catch((e) => setStatus(`Open folder failed: ${e.message || e}`, "bad"));
+            return;
+        }
+        // Open text files in editor/preview instead of immediate download.
+        if (isTextPreviewableName(item.name || item.rel || "")) {
+            if (canEdit) {
+                openTextEditor(item).catch((e) => setStatus(`Text editor failed: ${e.message || e}`, "bad"));
+            } else {
+                openTextPreview(item).catch((e) => setStatus(`Preview failed: ${e.message || e}`, "bad"));
+            }
+            return;
+        }
+
+        location.href = downloadUrl(item.rel);
+    }
+
+    function openSelectedPrimary() {
+        const items = selectedItems();
+        if (items.length !== 1) {
+            setStatus(items.length ? "Use the context menu for multiple selected items." : "No item selected.");
+            return;
+        }
+        openItem(items[0]);
+    }
+
+    function handleSelectionKeyboard(ev) {
+        if (!signedIn) return false;
+        if (isSelectionTypingTarget(ev.target)) return false;
+
+        const rows = selectableRows();
+        if (!rows.length) return false;
+
+        const keys = rows.map(rowKey).filter(Boolean);
+        let idx = keyboardFocusKey ? keys.indexOf(keyboardFocusKey) : -1;
+        if (idx < 0 && selectedKeys.size) idx = keys.indexOf(Array.from(selectedKeys).at(-1));
+        if (idx < 0) idx = 0;
+
+        let next = idx;
+        const pageStep = Math.max(1, Math.min(12, Math.floor(rows.length / 3)));
+
+        if (ev.key === "ArrowDown" || ev.key === "ArrowRight") {
+            next = Math.min(keys.length - 1, idx + 1);
+        } else if (ev.key === "ArrowUp" || ev.key === "ArrowLeft") {
+            next = Math.max(0, idx - 1);
+        } else if (ev.key === "PageDown") {
+            next = Math.min(keys.length - 1, idx + pageStep);
+        } else if (ev.key === "PageUp") {
+            next = Math.max(0, idx - pageStep);
+        } else if (ev.key === "Home") {
+            next = 0;
+        } else if (ev.key === "End") {
+            next = keys.length - 1;
+        } else if (ev.key === "Enter") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            openSelectedPrimary();
+            return true;
+        } else if (ev.key === "Escape") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            clearSelection();
+            hideContextMenus();
+            setStatus("Selection cleared.");
+            return true;
+        } else {
+            return false;
+        }
+
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        const nextKey = keys[next];
+        if (ev.shiftKey) selectRangeToKey(nextKey, false);
+        else selectOnlyKey(nextKey);
+
+        const row = rowByKey(nextKey);
+        if (row) row.scrollIntoView({ block: "nearest" });
+        return true;
+    }
+
+    async function trashSelectedItems() {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        const items = selectedItems();
+        if (!items.length) {
+            setStatus("No items selected.", "bad");
+            return;
+        }
+
+        const ok = confirm(
+            `Move ${items.length} selected item${items.length === 1 ? "" : "s"} to trash?\n\n` +
+            `The owner can restore them from Trash until retention expires.`
+        );
+        if (!ok) {
+            setStatus("Move to trash cancelled.");
+            return;
+        }
+
+        let done = 0;
+        let failed = 0;
+        const errors = [];
+
+        for (const item of items) {
+            try {
+                await apiJson(deleteUrl(item.rel), {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: ""
+                });
+                done++;
+            } catch (e) {
+                failed++;
+                errors.push(`${item.rel}: ${e.message || e}`);
+            }
+            setStatus(`Moving to trash ${done + failed}/${items.length}…`);
+        }
+
+        clearSelection();
+        hideContextMenus();
+        await loadFiles(currentPath);
+
+        if (failed) {
+            setStatus(`Moved ${done}, failed ${failed}. ${errors.slice(0, 2).join(" | ")}`, "bad");
+        } else {
+            setStatus(`Moved ${done} item${done === 1 ? "" : "s"} to trash.`, "good");
+        }
+    }
+
+    function showSelectionContextMenu(x, y) {
+        if (!selectionContextMenu) return;
+
+        const count = selectedKeys.size;
+        const openBtn = selectionContextMenu.querySelector('[data-action="multi-open"]');
+        const editorOnly = selectionContextMenu.querySelectorAll('[data-action="multi-copy"], [data-action="multi-move"], [data-action="multi-trash"]');
+
+        if (openBtn) openBtn.disabled = count !== 1;
+        editorOnly.forEach((btn) => { btn.disabled = !canEdit; });
+
+        placeContextMenu(selectionContextMenu, x, y);
+    }
+
+    filesEl.addEventListener("click", (ev) => {
+        const row = ev.target.closest(".fileRow");
+        if (!row || !filesEl.contains(row)) return;
+        if (ev.target.closest("a,button,input,label,select,textarea")) return;
+
+        const key = rowKey(row);
+        if (!key) return;
+
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+
+        if (ev.shiftKey) {
+            selectRangeToKey(key, ev.ctrlKey || ev.metaKey);
+        } else if (ev.ctrlKey || ev.metaKey) {
+            toggleKey(key);
+        } else {
+            selectOnlyKey(key);
+        }
+
+        filesEl.focus({ preventScroll: true });
+    }, true);
+
+    filesEl.addEventListener("dblclick", (ev) => {
+        const row = ev.target.closest(".fileRow");
+        if (!row || !filesEl.contains(row)) return;
+        if (ev.target.closest("a,button,input,label,select,textarea")) return;
+
+        const item = itemFromRow(row);
+        if (!item) return;
+
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+
+        openItem(item);
+    }, true);
+
+    filesEl.addEventListener("keydown", (ev) => {
+        handleSelectionKeyboard(ev);
+    });
+
+    filesEl.addEventListener("contextmenu", (ev) => {
+        const row = ev.target.closest(".fileRow");
+
+        if (row && filesEl.contains(row)) {
+            const key = rowKey(row);
+            if (!key) return;
+
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+
+            if (!selectedKeys.has(key)) {
+                selectOnlyKey(key);
+            } else {
+                setKeyboardFocus(key);
+                syncSelectionUi();
+            }
+
+            if (selectedKeys.size > 1) {
+                showSelectionContextMenu(ev.clientX, ev.clientY);
+                return;
+            }
+
+            contextItem = itemFromRow(row);
+            if (!contextItem) return;
+
+            const openBtn = itemContextMenu.querySelector('[data-action="open"]');
+            const downloadBtn = itemContextMenu.querySelector('[data-action="download"]');
+            const previewBtn = itemContextMenu.querySelector('[data-action="preview"]');
+            const editorOnly = itemContextMenu.querySelectorAll('[data-action="copy"], [data-action="move"], [data-action="rename"], [data-action="trash-item"]');
+
+            if (contextItem.isDir) {
+                if (openBtn) openBtn.textContent = "Open folder";
+                if (downloadBtn) downloadBtn.innerHTML = 'Download folder <span class="contextHint">zip soon</span>';
+                if (previewBtn) {
+                    previewBtn.innerHTML = 'Open preview <span class="contextHint">text files</span>';
+                    previewBtn.disabled = true;
+                }
+            } else {
+                const canTextPreview = isTextPreviewableName(contextItem.name || contextItem.rel || "");
+                if (openBtn) openBtn.textContent = "Open original";
+                if (downloadBtn) downloadBtn.textContent = "Download";
+                if (previewBtn) {
+                    previewBtn.innerHTML = canTextPreview
+                        ? "Open text preview"
+                        : 'Open preview <span class="contextHint">text files</span>';
+                    previewBtn.disabled = !canTextPreview;
+                }
+            }
+
+            editorOnly.forEach((btn) => { btn.disabled = !canEdit; });
+            placeContextMenu(itemContextMenu, ev.clientX, ev.clientY);
+            return;
+        }
+
+        // Let the existing empty-area context menu handler run.
+    }, true);
+
+    // Marquee selection is handled by the viewport-wide pointerdown handler below.
+    // Keep only one marquee implementation so focus/selection state cannot fight itself.
+
+
+    function handleSelectionKeyboardViewportFix(ev) {
+        if (!signedIn) return false;
+        const target = ev.target;
+        if (target) {
+            const tag = String(target.tagName || "").toLowerCase();
+            if (tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable) {
+                return false;
+            }
+        }
+
+        const rows = selectableRows();
+        if (!rows.length) return false;
+
+        const visualRows = rows.slice().sort((a, b) => {
+            const ra = a.getBoundingClientRect();
+            const rb = b.getBoundingClientRect();
+            const dy = ra.top - rb.top;
+            if (Math.abs(dy) > 8) return dy;
+            return ra.left - rb.left;
+        });
+
+        const keys = visualRows.map(rowKey).filter(Boolean);
+        if (!keys.length) return false;
+
+        let idx = keyboardFocusKey ? keys.indexOf(keyboardFocusKey) : -1;
+        if (idx < 0 && selectedKeys.size) idx = keys.indexOf(Array.from(selectedKeys).at(-1));
+        if (idx < 0) idx = 0;
+
+        const firstTop = visualRows[0].getBoundingClientRect().top;
+        let cols = 0;
+        for (const row of visualRows) {
+            const r = row.getBoundingClientRect();
+            if (Math.abs(r.top - firstTop) <= 12) cols++;
+        }
+        cols = Math.max(1, cols || 1);
+
+        let next = idx;
+        if (ev.key === "ArrowRight") {
+            next = Math.min(keys.length - 1, idx + 1);
+        } else if (ev.key === "ArrowLeft") {
+            next = Math.max(0, idx - 1);
+        } else if (ev.key === "ArrowDown") {
+            next = Math.min(keys.length - 1, idx + cols);
+        } else if (ev.key === "ArrowUp") {
+            next = Math.max(0, idx - cols);
+        } else if (ev.key === "PageDown") {
+            next = Math.min(keys.length - 1, idx + cols * 3);
+        } else if (ev.key === "PageUp") {
+            next = Math.max(0, idx - cols * 3);
+        } else if (ev.key === "Home") {
+            next = 0;
+        } else if (ev.key === "End") {
+            next = keys.length - 1;
+        } else if (ev.key === "Enter") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            openSelectedPrimary();
+            return true;
+        } else if (ev.key === "Escape") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            clearSelection();
+            hideContextMenus();
+            setStatus("Selection cleared.");
+            return true;
+        } else {
+            return false;
+        }
+
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        const nextKey = keys[next];
+        if (ev.shiftKey) selectRangeToKey(nextKey, false);
+        else selectOnlyKey(nextKey);
+
+        const row = rowByKey(nextKey);
+        if (row) row.scrollIntoView({ block: "nearest", inline: "nearest" });
+        return true;
+    }
+
+    window.addEventListener("keydown", (ev) => {
+        handleSelectionKeyboardViewportFix(ev);
+    }, true);
+
+
+
+    function isViewportMarqueeBlockedTarget(el) {
+        if (!el) return false;
+
+        const tag = String(el.tagName || "").toLowerCase();
+        if (tag === "button" || tag === "a" || tag === "input" || tag === "label" ||
+            tag === "select" || tag === "textarea" || el.isContentEditable) {
+            return true;
+        }
+
+        if (!el.closest) return false;
+
+        return !!el.closest(
+            ".fileRow,.contextMenu,.extPickerOverlay,.extPickerCard,.modal," +
+            ".qrBox,.uploadBox,.toolbarGroup,.toolbar,.pathBar,.crumbs," +
+            ".accessPanel,.rolePill,.accessPill"
+        );
+    }
+
+    window.addEventListener("pointerdown", (ev) => {
+        if (!signedIn) return;
+        if (ev.button !== 0) return;
+        if (isViewportMarqueeBlockedTarget(ev.target)) return;
+
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        hideContextMenus();
+        if (filesEl) filesEl.focus({ preventScroll: true });
+
+        const box = document.createElement("div");
+        box.className = "selectionBox";
+        document.body.appendChild(box);
+
+        marqueeState = {
+            startX: ev.clientX,
+            startY: ev.clientY,
+            lastX: ev.clientX,
+            lastY: ev.clientY,
+            box,
+            additive: ev.ctrlKey || ev.metaKey,
+            base: new Set(selectedKeys)
+        };
+
+        let moved = false;
+
+        const updateBox = () => {
+            if (!marqueeState) return;
+
+            const x1 = Math.min(marqueeState.startX, marqueeState.lastX);
+            const y1 = Math.min(marqueeState.startY, marqueeState.lastY);
+            const x2 = Math.max(marqueeState.startX, marqueeState.lastX);
+            const y2 = Math.max(marqueeState.startY, marqueeState.lastY);
+
+            if (Math.abs(x2 - x1) > 4 || Math.abs(y2 - y1) > 4) moved = true;
+
+            box.style.left = `${x1}px`;
+            box.style.top = `${y1}px`;
+            box.style.width = `${Math.max(1, x2 - x1)}px`;
+            box.style.height = `${Math.max(1, y2 - y1)}px`;
+
+            const selRect = { left:x1, top:y1, right:x2, bottom:y2 };
+
+            selectedKeys.clear();
+            if (marqueeState.additive) {
+                for (const k of marqueeState.base) selectedKeys.add(k);
+            }
+
+            for (const row of selectableRows()) {
+                const r = row.getBoundingClientRect();
+                const hit = !(
+                    r.right < selRect.left ||
+                    r.left > selRect.right ||
+                    r.bottom < selRect.top ||
+                    r.top > selRect.bottom
+                );
+
+                if (!hit) continue;
+
+                const key = rowKey(row);
+                if (!key) continue;
+
+                selectedKeys.add(key);
+                selectionAnchorKey = key;
+                keyboardFocusKey = key;
+            }
+
+            syncSelectionUi();
+        };
+
+        const onMove = (moveEv) => {
+            if (!marqueeState) return;
+            marqueeState.lastX = moveEv.clientX;
+            marqueeState.lastY = moveEv.clientY;
+            updateBox();
+        };
+
+        const onUp = () => {
+            if (marqueeState && marqueeState.box) marqueeState.box.remove();
+
+            if (!moved && !(ev.ctrlKey || ev.metaKey)) {
+                clearSelection();
+            }
+
+            marqueeState = null;
+            window.removeEventListener("pointermove", onMove, true);
+            window.removeEventListener("pointerup", onUp, true);
+            syncSelectionUi();
+        };
+
+        window.addEventListener("pointermove", onMove, true);
+        window.addEventListener("pointerup", onUp, true);
+
+        updateBox();
+    }, true);
+
+
+    const selectionObserver = new MutationObserver(() => syncSelectionUi());
+    selectionObserver.observe(filesEl, { childList: true, subtree: false });
+
+    selectionContextMenu?.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("button[data-action]");
+        if (!btn || btn.disabled) return;
+
+        const action = btn.dataset.action || "";
+        hideContextMenus();
+
+        if (action === "multi-clear") {
+            clearSelection();
+            setStatus("Selection cleared.");
+            return;
+        }
+
+        if (action === "multi-open") {
+            openSelectedPrimary();
+            return;
+        }
+
+        if (action === "multi-trash") {
+            trashSelectedItems().catch((e) => setStatus(`Move to trash failed: ${e.message || e}`, "bad"));
+            return;
+        }
+
+        if (action === "multi-download") return showPlaceholder("Download selection");
+        if (action === "multi-copy") return showPlaceholder("Copy selected");
+        if (action === "multi-move") return showPlaceholder("Move selected");
+    });
+
+    filesEl.addEventListener("click", (ev) => {
+        if (ev.target.closest("a")) return;
+
+        const rowDir = ev.target.closest(".fileRow[data-dir]");
+        if (rowDir) {
+            loadFiles(rowDir.dataset.dir || "").catch((e) => setStatus(`Open folder failed: ${e.message || e}`, "bad"));
+            return;
+        }
+
+        const rowFile = ev.target.closest(".fileRow[data-file]");
+        if (rowFile) {
+            location.href = downloadUrl(rowFile.dataset.file || "");
+        }
+    });
+
+    fileSurface.addEventListener("contextmenu", (ev) => {
+        if (ev.target.closest(".contextMenu")) return;
+
+        // Keep normal browser context menu for text/file inputs so paste/select still works.
+        if (ev.target.closest("input, textarea, select")) return;
+
+        ev.preventDefault();
+
+        const row = ev.target.closest(".fileRow");
+        hideContextMenus();
+
+        if (row) {
+            contextItem = itemFromRow(row);
+
+            const openBtn = itemContextMenu.querySelector('[data-action="open"]');
+            const downloadBtn = itemContextMenu.querySelector('[data-action="download"]');
+            const previewBtn = itemContextMenu.querySelector('[data-action="preview"]');
+            const editorOnly = itemContextMenu.querySelectorAll('[data-action="copy"], [data-action="move"], [data-action="rename"], [data-action="trash-item"]');
+
+            if (contextItem && contextItem.isDir) {
+                openBtn.textContent = "Open folder";
+                downloadBtn.textContent = "Download folder (zip)";
+                previewBtn.innerHTML = 'Open preview <span class="contextHint">text files</span>';
+                previewBtn.disabled = true;
+                downloadBtn.disabled = true;
+            } else {
+                const canTextPreview = isTextPreviewableName(contextItem && (contextItem.name || contextItem.rel) || "");
+                openBtn.textContent = "Open original";
+                downloadBtn.textContent = "Download";
+                previewBtn.innerHTML = canTextPreview
+                    ? "Open text preview"
+                    : 'Open preview <span class="contextHint">text files</span>';
+                previewBtn.disabled = !canTextPreview;
+                downloadBtn.disabled = false;
+            }
+
+            editorOnly.forEach((btn) => { btn.disabled = !canEdit; });
+            placeContextMenu(itemContextMenu, ev.clientX, ev.clientY);
+            return;
+        }
+
+        const editorOnly = emptyContextMenu.querySelectorAll('[data-action="upload"], [data-action="upload-folder"], [data-action="new-folder"]');
+        editorOnly.forEach((btn) => { btn.disabled = !canEdit; });
+        placeContextMenu(emptyContextMenu, ev.clientX, ev.clientY);
+    });
+
+    breadcrumbsEl.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-crumb]");
+        if (!btn) return;
+        loadFiles(btn.dataset.crumb || "").catch((e) => setStatus(`Open path failed: ${e.message || e}`, "bad"));
+    });
+
+    emptyContextMenu.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-action]");
+        if (!btn || btn.disabled) return;
+
+        const action = btn.dataset.action;
+        hideContextMenus();
+
+        if (action === "upload") {
+            if (!canEdit) return setStatus("This workspace session is view-only.", "bad");
+            uploadOpen = true;
+            syncUploadPanel();
+            uploadFile && uploadFile.click();
+            return;
+        }
+
+        if (action === "new-folder") {
+            if (!canEdit) return setStatus("This workspace session is view-only.", "bad");
+            newFolderName && newFolderName.focus();
+            return;
+        }
+
+        if (action === "refresh") {
+            refreshCurrent();
+            return;
+        }
+
+        if (action === "upload-folder") return showPlaceholder("Upload folder");
+        if (action === "zip-folder") return showPlaceholder("Download current folder as zip");
+        if (action === "trash") return showPlaceholder("Trash");
+    });
+
+    itemContextMenu.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-action]");
+        if (!btn || btn.disabled || !contextItem) return;
+
+        const action = btn.dataset.action;
+        const item = contextItem;
+        hideContextMenus();
+
+        if (action === "open") {
+            if (item.isDir) {
+                loadFiles(item.rel).catch((e) => setStatus(`Open folder failed: ${e.message || e}`, "bad"));
+            } else {
+                window.open(downloadUrl(item.rel), "_blank", "noopener");
+            }
+            return;
+        }
+
+        if (action === "download") {
+            if (item.isDir) return showPlaceholder("Download folder as zip");
+            location.href = downloadUrl(item.rel);
+            return;
+        }
+
+        if (action === "properties") {
+            showProperties(item).catch((e) => setStatus(`Properties failed: ${e.message || e}`, "bad"));
+            return;
+        }
+
+        if (action === "preview") {
+            openTextPreview(item).catch((e) => setStatus(`Preview failed: ${e.message || e}`, "bad"));
+            return;
+        }
+
+        if (action === "edit-text") {
+            openTextEditor(item).catch((e) => setStatus(`Text editor failed: ${e.message || e}`, "bad"));
+            return;
+        }
+        if (action === "versions") return showPlaceholder("Versions");
+        if (action === "share") return showPlaceholder("Create share link");
+        if (action === "copy") {
+            copyItem(item).catch((e) => setStatus(`Copy failed: ${e.message || e}`, "bad"));
+            return;
+        }
+        if (action === "move") {
+            moveItem(item).catch((e) => setStatus(`Move failed: ${e.message || e}`, "bad"));
+            return;
+        }
+        if (action === "rename") {
+            renameItem(item).catch((e) => setStatus(`Rename failed: ${e.message || e}`, "bad"));
+            return;
+        }
+        if (action === "trash-item") {
+            trashItem(item).catch((e) => setStatus(`Move to trash failed: ${e.message || e}`, "bad"));
+            return;
+        }
+    });
+
+    document.addEventListener("click", (ev) => {
+        if (ev.target.closest(".contextMenu")) return;
+        hideContextMenus();
+    });
+
+    document.addEventListener("keydown", (ev) => {
+        if (ev.key !== "Escape") return;
+        if (textEditModal && textEditModal.classList.contains("show")) {
+            closeTextEditor();
+            return;
+        }
+        if (propsModal && propsModal.classList.contains("show")) {
+            closePropsModal();
+            return;
+        }
+        if (textPreviewModal && textPreviewModal.classList.contains("show")) {
+            closeTextPreviewModal();
+            return;
+        }
+        if (extPickerOverlay && extPickerOverlay.classList.contains("show")) {
+            closeFolderPicker(null);
+            return;
+        }
+        hideContextMenus();
+    });
+
+    window.addEventListener("resize", hideContextMenus);
+    window.addEventListener("scroll", hideContextMenus, true);
+
+    propsClose.addEventListener("click", closePropsModal);
+    propsModal.addEventListener("click", (ev) => {
+        if (ev.target === propsModal) closePropsModal();
+    });
+
+    textPreviewClose.addEventListener("click", closeTextPreviewModal);
+    textPreviewModal.addEventListener("click", (ev) => {
+        if (ev.target === textPreviewModal) closeTextPreviewModal();
+    });
+
+    extPickerHead.addEventListener("pointerdown", beginFolderPickerDrag);
+    extPickerHead.addEventListener("pointermove", moveFolderPickerDrag);
+    extPickerHead.addEventListener("pointerup", endFolderPickerDrag);
+    extPickerHead.addEventListener("pointercancel", endFolderPickerDrag);
+
+    window.addEventListener("resize", () => {
+        if (!extPickerOverlay || !extPickerOverlay.classList.contains("show") || !extPickerCard) return;
+        const rect = extPickerCard.getBoundingClientRect();
+        const pos = clampPickerPosition(rect.left, rect.top);
+        extPickerCard.style.left = `${pos.left}px`;
+        extPickerCard.style.top = `${pos.top}px`;
+        extPickerCard.style.transform = "none";
+    });
+
+    extPickerList.addEventListener("click", (ev) => {
+        const row = ev.target.closest("[data-path]");
+        if (!row || row.disabled) return;
+        loadPickerFolder(row.dataset.path || "").catch((e) => {
+            if (extPickerStatus) extPickerStatus.textContent = `Open folder failed: ${e.message || e}`;
+        });
+    });
+
+    extPickerCrumbs.addEventListener("click", (ev) => {
+        const crumb = ev.target.closest("[data-path]");
+        if (!crumb) return;
+        loadPickerFolder(crumb.dataset.path || "").catch((e) => {
+            if (extPickerStatus) extPickerStatus.textContent = `Open folder failed: ${e.message || e}`;
+        });
+    });
+
+    extPickerChoose.addEventListener("click", () => {
+        closeFolderPicker(pickerPath);
+    });
+
+    extPickerCancel.addEventListener("click", () => closeFolderPicker(null));
+    extPickerClose.addEventListener("click", () => closeFolderPicker(null));
+
+    extPickerNewFolder.addEventListener("click", async () => {
+        if (!canEdit) {
+            if (extPickerStatus) extPickerStatus.textContent = "This workspace session is view-only.";
+            return;
+        }
+
+        const name = prompt("New folder name");
+        if (name == null) return;
+
+        const clean = String(name || "").trim();
+        if (!clean || clean === "." || clean === ".." || clean.includes("/") || clean.includes("\\")) {
+            if (extPickerStatus) extPickerStatus.textContent = "Use a simple folder name without slashes.";
+            return;
+        }
+
+        const target = childPath(pickerPath, clean);
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", target);
+
+        try {
+            if (extPickerStatus) extPickerStatus.textContent = "Creating folder...";
+            await apiJson(`/api/v4/workspaces/files/mkdir?${qs.toString()}`, { method:"POST" });
+            await loadPickerFolder(target);
+        } catch (e) {
+            if (extPickerStatus) extPickerStatus.textContent = `Create folder failed: ${e.message || e}`;
+        }
+    });
+
+
+    if (textEditArea) {
+        textEditArea.addEventListener("input", () => {
+            syncTextEditDirty();
+            updateTextEditorFind();
+        });
+
+        textEditArea.addEventListener("keydown", (ev) => {
+            if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") {
+                ev.preventDefault();
+                saveTextEditor().catch((e) => setTextEditStatus(`Save failed: ${e.message || e}`, "bad"));
+                return;
+            }
+
+            if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "f") {
+                ev.preventDefault();
+                showTextEditorFind();
+                return;
+            }
+
+            if (ev.key === "Tab") {
+                ev.preventDefault();
+                const start = textEditArea.selectionStart || 0;
+                const end = textEditArea.selectionEnd || 0;
+                const value = textEditArea.value || "";
+                textEditArea.value = value.slice(0, start) + "    " + value.slice(end);
+                textEditArea.setSelectionRange(start + 4, start + 4);
+                syncTextEditDirty();
+            }
+        });
+    }
+
+    if (textEditClose) textEditClose.addEventListener("click", () => closeTextEditor());
+    if (textEditReloadBtn) textEditReloadBtn.addEventListener("click", () => {
+        reloadTextEditor().catch((e) => setTextEditStatus(`Reload failed: ${e.message || e}`, "bad"));
+    });
+    if (textEditSaveBtn) textEditSaveBtn.addEventListener("click", () => {
+        saveTextEditor().catch((e) => setTextEditStatus(`Save failed: ${e.message || e}`, "bad"));
+    });
+
+    if (textEditFindToggleBtn) textEditFindToggleBtn.addEventListener("click", showTextEditorFind);
+    if (textEditFindCloseBtn) textEditFindCloseBtn.addEventListener("click", hideTextEditorFind);
+    if (textEditFindInput) {
+        textEditFindInput.addEventListener("input", () => {
+            textEditFindIndex = 0;
+            updateTextEditorFind();
+        });
+        textEditFindInput.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter") {
+                ev.preventDefault();
+                stepTextEditorFind(ev.shiftKey ? -1 : 1);
+            } else if (ev.key === "Escape") {
+                ev.preventDefault();
+                hideTextEditorFind();
+            }
+        });
+    }
+    if (textEditFindPrevBtn) textEditFindPrevBtn.addEventListener("click", () => stepTextEditorFind(-1));
+    if (textEditFindNextBtn) textEditFindNextBtn.addEventListener("click", () => stepTextEditorFind(1));
+    if (textEditFindCaseBtn) textEditFindCaseBtn.addEventListener("click", () => {
+        textEditFindMatchCase = !textEditFindMatchCase;
+        textEditFindCaseBtn.classList.toggle("active", textEditFindMatchCase);
+        textEditFindCaseBtn.textContent = textEditFindMatchCase ? "Aa✓" : "Aa";
+        textEditFindIndex = 0;
+        updateTextEditorFind();
+    });
+
+    if (textEditModal) {
+        textEditModal.addEventListener("click", (ev) => {
+            if (ev.target === textEditModal) closeTextEditor();
+        });
+    }
+
+    if (textEditHead) {
+        textEditHead.addEventListener("pointerdown", beginTextEditorDrag);
+        textEditHead.addEventListener("pointermove", moveTextEditorDrag);
+        textEditHead.addEventListener("pointerup", endTextEditorDrag);
+        textEditHead.addEventListener("pointercancel", endTextEditorDrag);
+    }
+
+    btnUp.addEventListener("click", () => {
+        loadFiles(parentPath(currentPath)).catch((e) => setStatus(`Open parent failed: ${e.message || e}`, "bad"));
+    });
+
+    btnToggleUpload.addEventListener("click", () => {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+        uploadOpen = !uploadOpen;
+        syncUploadPanel();
+    });
+
+    btnUpload.addEventListener("click", () => {
+        uploadSelectedFile().catch((e) => setStatus(`Upload failed: ${e.message || e}`, "bad"));
+    });
+
+    btnNewFolder.addEventListener("click", () => {
+        createFolder().catch((e) => setStatus(`Create folder failed: ${e.message || e}`, "bad"));
+    });
+
+    newFolderName.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+            ev.preventDefault();
+            createFolder().catch((e) => setStatus(`Create folder failed: ${e.message || e}`, "bad"));
+        }
+    });
+
+    btnNewQr.addEventListener("click", () => {
+        startSession().catch((e) => setStatus(`Failed to start QR session: ${e.message || e}`, "bad"));
+    });
+
+    function refreshCurrent() {
+        loadFiles(currentPath).catch((e) => setStatus(`File refresh failed: ${e.message || e}`, "bad"));
+    }
+
+    btnRefreshFiles.addEventListener("click", refreshCurrent);
+    btnReload.addEventListener("click", refreshCurrent);
+
+    workspacePill.textContent = `workspace_id: ${workspaceId || "missing"}`;
+    renderBreadcrumbs();
+
+    // Try existing external cookie first. If it fails, show QR.
+    loadFiles()
+        .then(() => {
+            showSignedInState();
+            setStatus("Existing workspace session is active.", "good");
+        })
+        .catch(() => startSession().catch((e) => setStatus(`Failed to start QR session: ${e.message || e}`, "bad")));
+})();

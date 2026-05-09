@@ -1,0 +1,1499 @@
+:root{
+            --bg:#070707;
+            --card:rgba(18,18,18,.88);
+            --card2:rgba(255,255,255,.045);
+            --fg:#f4f4f4;
+            --muted:#a8a8a8;
+            --line:rgba(255,255,255,.14);
+            --line2:rgba(255,138,28,.35);
+            --accent:#ff8a1c;
+            --bad:#ff5c5c;
+            --good:#57d68d;
+            --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;
+            --sans:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+        }
+
+        *{ box-sizing:border-box; }
+
+        body{
+            margin:0;
+            min-height:100vh;
+            background:
+                radial-gradient(circle at 0% 0%, rgba(255,138,28,.22), transparent 30%),
+                radial-gradient(circle at 85% 90%, rgba(255,138,28,.08), transparent 34%),
+                linear-gradient(180deg, rgba(80,32,8,.46), rgba(0,0,0,.88) 170px),
+                var(--bg);
+            color:var(--fg);
+            font-family:var(--sans);
+            padding:0;
+        }
+
+        .shell{
+            width:100%;
+            min-height:100vh;
+            display:grid;
+            grid-template-columns: 300px minmax(0,1fr);
+            gap:0;
+            align-items:stretch;
+        }
+
+        .card{
+            background:rgba(12,12,12,.72);
+            border:0;
+            border-radius:0;
+            box-shadow:none;
+            backdrop-filter: blur(10px);
+            overflow:hidden;
+        }
+
+        .shell > .card:first-child{
+            border-right:1px solid rgba(255,138,28,.24);
+            background:
+                linear-gradient(180deg, rgba(80,32,8,.55), rgba(0,0,0,.82)),
+                rgba(10,10,10,.86);
+        }
+
+        .shell > .card:nth-child(2){
+            background:
+                radial-gradient(circle at 50% 0%, rgba(255,138,28,.08), transparent 34%),
+                rgba(4,4,4,.62);
+        }
+
+        .cardHead{
+            padding:18px 22px 15px;
+            border-bottom:1px solid rgba(255,138,28,.26);
+            background:
+                linear-gradient(180deg, rgba(255,138,28,.14), rgba(70,28,8,.28));
+        }
+
+        .cardBody{ padding:18px 22px 22px; }
+
+        .shell > .card:nth-child(2) .cardBody{
+            padding:16px 22px 22px;
+        }
+
+        h1{
+            margin:0;
+            font-size:23px;
+            letter-spacing:.2px;
+        }
+
+        .sub{
+            color:var(--muted);
+            line-height:1.45;
+            margin:8px 0 0;
+            font-size:14px;
+        }
+
+        .mono{ font-family:var(--mono); }
+
+        .topLine{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+        }
+
+        .badges{
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+            margin-top:14px;
+        }
+
+        .pill{
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            border:1px solid var(--line);
+            border-radius:999px;
+            padding:7px 10px;
+            color:var(--muted);
+            font-size:12px;
+            max-width:100%;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+
+        .pill.good{
+            color:var(--good);
+            border-color:rgba(87,214,141,.38);
+            background:rgba(87,214,141,.08);
+        }
+
+        .pill.edit{
+            color:var(--accent);
+            border-color:rgba(255,138,28,.45);
+            background:rgba(255,138,28,.10);
+        }
+
+        .pill.readonly{
+            color:var(--muted);
+            background:rgba(255,255,255,.045);
+        }
+
+        .qrBox{
+            background:#fff;
+            border-radius:18px;
+            padding:12px;
+            margin:16px 0 14px;
+            min-height:190px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+        }
+
+        .qrBox img{
+            max-width:100%;
+            width:230px;
+            height:auto;
+            display:block;
+        }
+
+        .status{
+            margin-top:14px;
+            padding:12px 14px;
+            border-radius:16px;
+            border:1px solid var(--line);
+            color:var(--muted);
+            background:rgba(255,255,255,.04);
+            line-height:1.35;
+            font-size:13px;
+        }
+
+        .status.good{ color:var(--good); border-color:rgba(87,214,141,.35); }
+        .status.bad{ color:var(--bad); border-color:rgba(255,92,92,.35); }
+
+        .btn{
+            appearance:none;
+            border:1px solid rgba(255,138,28,.55);
+            background:rgba(255,138,28,.15);
+            color:var(--fg);
+            border-radius:14px;
+            padding:10px 13px;
+            font-weight:800;
+            cursor:pointer;
+            min-height:40px;
+        }
+
+        .btn:hover{
+            border-color:rgba(255,138,28,.80);
+            background:rgba(255,138,28,.22);
+        }
+
+        .btn.secondary{
+            border-color:var(--line);
+            background:rgba(255,255,255,.05);
+            color:var(--muted);
+        }
+
+        .btn.secondary:hover{
+            color:var(--fg);
+            border-color:rgba(255,255,255,.24);
+            background:rgba(255,255,255,.075);
+        }
+
+        .btn:disabled{
+            opacity:.45;
+            cursor:not-allowed;
+        }
+
+        .row{
+            display:flex;
+            gap:10px;
+            flex-wrap:wrap;
+            align-items:center;
+        }
+
+        .toolbar{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            flex-wrap:wrap;
+            padding:12px 14px;
+            border-bottom:1px solid rgba(255,138,28,.28);
+            border-radius:0;
+            background:
+                linear-gradient(180deg, rgba(88,34,8,.58), rgba(34,18,10,.44));
+            margin:-16px -22px 14px;
+        }
+
+        .toolbarGroup{
+            display:flex;
+            align-items:center;
+            gap:10px;
+            flex-wrap:wrap;
+        }
+
+        .input{
+            width:210px;
+            max-width:100%;
+            border:1px solid var(--line);
+            background:rgba(0,0,0,.22);
+            color:var(--fg);
+            border-radius:14px;
+            padding:10px 12px;
+            min-height:40px;
+            outline:none;
+        }
+
+        .input:focus{
+            border-color:rgba(255,138,28,.55);
+            box-shadow:0 0 0 3px rgba(255,138,28,.10);
+        }
+
+        .breadcrumbs{
+            display:flex;
+            align-items:center;
+            flex-wrap:wrap;
+            gap:7px;
+            min-height:34px;
+            padding:0 2px 12px;
+            border:0;
+            border-bottom:1px solid rgba(255,138,28,.18);
+            border-radius:0;
+            background:transparent;
+            margin-bottom:14px;
+            color:var(--accent);
+            font-size:13px;
+        }
+
+        .crumb{
+            border:0;
+            background:transparent;
+            color:var(--fg);
+            cursor:pointer;
+            font-weight:800;
+            padding:4px 6px;
+            border-radius:8px;
+        }
+
+        .crumb:hover{
+            background:rgba(255,138,28,.12);
+            color:var(--accent);
+        }
+
+        .crumbSep{ color:rgba(255,255,255,.28); }
+
+        .uploadBox{
+            margin:0 0 14px;
+            padding:14px;
+            border:1px dashed rgba(255,138,28,.45);
+            border-radius:18px;
+            background:rgba(255,138,28,.07);
+        }
+
+        .uploadBox strong{
+            display:block;
+            margin-bottom:8px;
+        }
+
+        .uploadBox input[type="file"]{
+            width:100%;
+            color:var(--muted);
+            margin:4px 0 12px;
+        }
+
+        .small{
+            color:var(--muted);
+            font-size:12px;
+            line-height:1.35;
+        }
+
+        .files{
+            display:grid;
+            grid-template-columns:repeat(auto-fill, minmax(132px, 156px));
+            gap:14px;
+            align-items:start;
+        }
+
+        .fileRow{
+            position:relative;
+            display:flex;
+            flex-direction:column;
+            align-items:center;
+            justify-content:flex-start;
+            gap:8px;
+            padding:14px 12px 12px;
+            border:1px solid rgba(255,138,28,.24);
+            border-radius:16px;
+            background:
+                linear-gradient(180deg, rgba(255,138,28,.055), rgba(255,255,255,.025));
+            min-height:128px;
+            overflow:hidden;
+        }
+
+        .fileMain{
+            min-width:0;
+            width:100%;
+            display:flex;
+            flex-direction:column;
+            align-items:center;
+            gap:8px;
+        }
+
+        .fileIcon{
+            width:46px;
+            height:46px;
+            border-radius:14px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            background:rgba(255,138,28,.07);
+            border:1px solid rgba(255,138,28,.22);
+            flex:0 0 auto;
+            font-size:25px;
+        }
+
+        .fileText{
+            min-width:0;
+            width:100%;
+            text-align:center;
+        }
+
+        .fileName{
+            min-width:0;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+            font-weight:900;
+            color:var(--accent);
+            font-size:13px;
+        }
+
+        .fileMeta{
+            color:rgba(255,138,28,.72);
+            font-size:11px;
+            margin-top:4px;
+            white-space:normal;
+            line-height:1.25;
+        }
+
+        .fileRow.clickable{
+            cursor:pointer;
+        }
+
+        .fileRow.clickable:hover{
+            border-color:rgba(255,138,28,.72);
+            background:rgba(255,138,28,.10);
+            transform:translateY(-1px);
+        }
+
+        .downloadLink{
+            color:var(--accent);
+            text-decoration:none;
+            font-weight:900;
+            font-size:11px;
+            border:1px solid rgba(255,138,28,.45);
+            border-radius:999px;
+            padding:5px 8px;
+            white-space:nowrap;
+            margin-top:auto;
+        }
+
+        .downloadLink:hover{
+            background:rgba(255,138,28,.12);
+        }
+
+        .empty{
+            border:1px dashed var(--line);
+            border-radius:18px;
+            background:rgba(255,255,255,.035);
+            padding:24px;
+            text-align:center;
+            color:var(--muted);
+        }
+
+        .hint{
+            color:var(--muted);
+            font-size:13px;
+            line-height:1.4;
+        }
+
+        .shell.signedIn{
+            grid-template-columns: minmax(0,1fr);
+        }
+
+        .shell.signedIn > .card:first-child{
+            display:none;
+        }
+
+        .shell.signedIn > .card:nth-child(2){
+            min-height:100vh;
+        }
+
+        #fileSurface{
+            min-height:100vh;
+        }
+
+        #fileSurface .cardBody{
+            min-height:calc(100vh - 92px);
+        }
+
+        .shell.signedIn .cardHead{
+            border-radius:0;
+        }
+
+        .contextMenu{
+            position:fixed;
+            z-index:5000;
+            min-width:230px;
+            padding:10px;
+            border:1px solid rgba(255,138,28,.38);
+            border-radius:16px;
+            background:
+                linear-gradient(180deg, rgba(55,24,10,.97), rgba(25,12,7,.97));
+            box-shadow:0 22px 70px rgba(0,0,0,.62);
+            color:var(--accent);
+            user-select:none;
+        }
+
+        .contextMenu button{
+            width:100%;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:18px;
+            border:0;
+            background:transparent;
+            color:var(--accent);
+            border-radius:10px;
+            padding:10px 10px;
+            font:inherit;
+            font-weight:900;
+            text-align:left;
+            cursor:pointer;
+        }
+
+        .contextMenu button:hover{
+            background:rgba(255,138,28,.12);
+        }
+
+        .contextMenu button:disabled{
+            opacity:.42;
+            cursor:not-allowed;
+        }
+
+        .contextMenu button:disabled:hover{
+            background:transparent;
+        }
+
+        .contextSep{
+            height:1px;
+            background:rgba(255,138,28,.18);
+            margin:8px 2px;
+        }
+
+        .contextHint{
+            color:rgba(255,255,255,.45);
+            font-size:12px;
+            font-weight:800;
+        }
+
+        /* External workspace: force File Manager win_classic-like surface. */
+        html[data-theme="win_classic"] body{
+            background:linear-gradient(180deg,#eeeeee,#cfcfcf) !important;
+            color:#050505;
+        }
+
+        html[data-theme="win_classic"] .shell{
+            background:#d6d6d6;
+        }
+
+        html[data-theme="win_classic"] .card,
+        html[data-theme="win_classic"] .shell > .card:first-child,
+        html[data-theme="win_classic"] .shell > .card:nth-child(2){
+            background:linear-gradient(180deg,#eeeeee,#d7d7d7) !important;
+            color:#050505;
+            border-color:rgba(0,0,0,.28) !important;
+            box-shadow:none !important;
+            backdrop-filter:none !important;
+        }
+
+        html[data-theme="win_classic"] .cardHead,
+        html[data-theme="win_classic"] .toolbar{
+            background:linear-gradient(180deg,#d8d8d8,#bfbfbf) !important;
+            border-color:rgba(0,0,0,.30) !important;
+            color:#050505;
+        }
+
+        html[data-theme="win_classic"] h1,
+        html[data-theme="win_classic"] .fileName{
+            color:#050505 !important;
+        }
+
+        html[data-theme="win_classic"] .sub,
+        html[data-theme="win_classic"] .fileMeta,
+        html[data-theme="win_classic"] .hint,
+        html[data-theme="win_classic"] .breadcrumbs{
+            color:#4d5662 !important;
+        }
+
+        html[data-theme="win_classic"] .btn,
+        html[data-theme="win_classic"] .downloadLink,
+        html[data-theme="win_classic"] .pathBtn,
+        html[data-theme="win_classic"] .input{
+            color:#050505 !important;
+            background:linear-gradient(180deg,#f8f8f8,#d9d9d9) !important;
+            border:1px solid rgba(0,0,0,.38) !important;
+            border-radius:10px !important;
+            box-shadow:none !important;
+        }
+
+        html[data-theme="win_classic"] .btn:hover,
+        html[data-theme="win_classic"] .downloadLink:hover,
+        html[data-theme="win_classic"] .pathBtn:hover{
+            background:linear-gradient(180deg,#ffffff,#e6e6e6) !important;
+        }
+
+        html[data-theme="win_classic"] .btn:active,
+        html[data-theme="win_classic"] .pathBtn:active{
+            transform:translateY(1px);
+        }
+
+        html[data-theme="win_classic"] .rolePill,
+        html[data-theme="win_classic"] .accessPill,
+        html[data-theme="win_classic"] .pill,
+        html[data-theme="win_classic"] .status{
+            color:#050505 !important;
+            background:#e9edf2 !important;
+            border-color:rgba(0,0,0,.25) !important;
+        }
+
+        html[data-theme="win_classic"] .uploadBox{
+            background:#eeeeee !important;
+            border:1px dashed rgba(0,0,0,.35) !important;
+            color:#050505;
+        }
+
+        html[data-theme="win_classic"] .files{
+            padding:12px 4px 28px;
+        }
+
+        html[data-theme="win_classic"] .fileRow{
+            background:#b8b8b8 !important;
+            border:1px solid rgba(0,0,0,.22) !important;
+            border-radius:14px !important;
+            color:#050505;
+        }
+
+        html[data-theme="win_classic"] .fileRow:hover{
+            background:#c8c8c8 !important;
+            border-color:rgba(0,0,0,.55) !important;
+        }
+
+        html[data-theme="win_classic"] .fileIcon{
+            background:transparent !important;
+            border:0 !important;
+            font-size:31px;
+        }
+
+        html[data-theme="win_classic"] .contextMenu{
+            color:#050505 !important;
+            background:linear-gradient(180deg,#f3f3f3,#dedede) !important;
+            border:2px solid rgba(0,0,0,.55) !important;
+            border-radius:2px !important;
+            box-shadow:5px 5px 0 rgba(0,0,0,.22) !important;
+        }
+
+        html[data-theme="win_classic"] .contextMenu button{
+            color:#050505 !important;
+            border-radius:2px !important;
+        }
+
+        html[data-theme="win_classic"] .contextMenu button:hover{
+            background:#c9d8f0 !important;
+        }
+
+        html[data-theme="win_classic"] .contextSep{
+            background:rgba(0,0,0,.22) !important;
+        }
+
+        .extPickerOverlay{
+            position:fixed;
+            inset:0;
+            z-index:7000;
+            display:none;
+            align-items:flex-start;
+            justify-content:center;
+            padding-top:22px;
+            background:rgba(0,0,0,.45);
+        }
+
+        .extPickerOverlay.show{
+            display:flex;
+        }
+
+        html[data-theme="win_classic"] .extPickerOverlay{
+            background:rgba(255,255,255,.38);
+        }
+
+        .extPickerCard{
+            width:min(720px, calc(100vw - 44px));
+            max-height:calc(100vh - 44px);
+            display:flex;
+            flex-direction:column;
+            background:rgba(18,18,18,.98);
+            border:1px solid rgba(255,255,255,.16);
+            border-radius:18px;
+            box-shadow:0 28px 110px rgba(0,0,0,.52);
+            overflow:hidden;
+        }
+
+        html[data-theme="win_classic"] .extPickerCard{
+            background:rgb(245,245,245);
+            color:#050505;
+            border:2px solid rgba(0,0,0,.55);
+            border-radius:2px;
+            box-shadow:6px 6px 0 rgba(0,0,0,.22);
+        }
+
+        .extPickerHead{
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:14px;
+            padding:16px 18px 10px;
+            border-bottom:1px solid rgba(255,255,255,.12);
+        }
+
+        html[data-theme="win_classic"] .extPickerHead{
+            background:rgba(0,0,0,.055);
+            border-bottom:1px solid rgba(0,0,0,.18);
+        }
+
+        .extPickerKicker{
+            font-size:12px;
+            font-weight:900;
+            letter-spacing:.08em;
+            text-transform:uppercase;
+            color:var(--accent);
+        }
+
+        html[data-theme="win_classic"] .extPickerKicker{
+            color:#0b4ea2;
+        }
+
+        .extPickerTitle{
+            margin-top:3px;
+            font-size:24px;
+            font-weight:950;
+            line-height:1.05;
+        }
+
+        .extPickerSub{
+            margin-top:6px;
+            font-size:14px;
+            color:var(--muted);
+        }
+
+        html[data-theme="win_classic"] .extPickerSub{
+            color:#4d5662;
+        }
+
+        .extPickerClose{
+            border:1px solid rgba(255,255,255,.18);
+            border-radius:12px;
+            padding:8px 12px;
+            background:rgba(255,255,255,.05);
+            color:inherit;
+            font-weight:900;
+            cursor:pointer;
+        }
+
+        html[data-theme="win_classic"] .extPickerClose{
+            border-radius:2px;
+            background:linear-gradient(180deg,#fff,#ddd);
+            border-color:rgba(0,0,0,.35);
+        }
+
+        .extPickerSource{
+            margin:12px 18px 10px;
+            padding:10px 12px;
+            border:1px solid rgba(255,255,255,.14);
+            border-radius:12px;
+            background:rgba(255,255,255,.04);
+            font-weight:900;
+            color:var(--fg);
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+
+        html[data-theme="win_classic"] .extPickerSource{
+            background:#e9edf2;
+            border-color:rgba(0,0,0,.22);
+            color:#162033;
+            border-radius:10px;
+        }
+
+        .extPickerCrumbs{
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+            padding:0 18px 10px;
+        }
+
+        .extPickerCrumb{
+            border:1px solid rgba(255,255,255,.16);
+            border-radius:999px;
+            padding:7px 11px;
+            background:rgba(255,255,255,.04);
+            color:inherit;
+            cursor:pointer;
+            font-weight:850;
+        }
+
+        html[data-theme="win_classic"] .extPickerCrumb{
+            border-radius:14px;
+            background:#fff;
+            border-color:rgba(0,0,0,.18);
+        }
+
+        .extPickerList{
+            margin:0 18px 8px;
+            border:1px solid rgba(255,255,255,.14);
+            border-radius:14px;
+            background:rgba(255,255,255,.035);
+            overflow:auto;
+            min-height:190px;
+            max-height:min(430px, calc(100vh - 300px));
+            padding:6px;
+        }
+
+        html[data-theme="win_classic"] .extPickerList{
+            background:#e9edf2;
+            border-color:rgba(0,0,0,.22);
+            border-radius:12px;
+        }
+
+        .extPickerDirRow{
+            width:100%;
+            border:1px solid rgba(255,255,255,.10);
+            border-radius:10px;
+            background:rgba(255,255,255,.04);
+            color:inherit;
+            padding:10px 12px;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            margin:6px 0;
+            cursor:pointer;
+            text-align:left;
+            font:inherit;
+        }
+
+        .extPickerDirRow:hover{
+            border-color:rgba(255,138,28,.42);
+            background:rgba(255,138,28,.08);
+        }
+
+        html[data-theme="win_classic"] .extPickerDirRow{
+            background:#fff;
+            border-color:rgba(0,0,0,.20);
+            border-radius:7px;
+        }
+
+        html[data-theme="win_classic"] .extPickerDirRow:hover{
+            background:#dce9ff;
+            border-color:rgba(11,78,162,.45);
+        }
+
+        .extPickerDirName{
+            font-weight:950;
+            min-width:0;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+
+        .extPickerDirMeta{
+            opacity:.65;
+            font-size:12px;
+            flex:0 0 auto;
+        }
+
+        .extPickerDest{
+            padding:0 18px 10px;
+            font-weight:900;
+            color:var(--muted);
+            font-size:13px;
+        }
+
+        html[data-theme="win_classic"] .extPickerDest{
+            color:#4d5662;
+        }
+
+        .extPickerStatus{
+            padding:0 18px 10px;
+            min-height:18px;
+            font-size:13px;
+            color:var(--muted);
+        }
+
+        html[data-theme="win_classic"] .extPickerStatus{
+            color:#4d5662;
+        }
+
+        .extPickerActions{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            padding:13px 18px 16px;
+            border-top:1px solid rgba(255,255,255,.12);
+            background:rgba(255,255,255,.035);
+        }
+
+        html[data-theme="win_classic"] .extPickerActions{
+            background:rgba(0,0,0,.055);
+            border-top:1px solid rgba(0,0,0,.18);
+        }
+
+        .extPickerActionGroup{
+            display:flex;
+            gap:10px;
+            align-items:center;
+        }
+
+        /* File Manager-style properties modal for external workspace. */
+        .propsModal{
+            position:fixed;
+            inset:0;
+            z-index:6900;
+            display:none;
+            align-items:center;
+            justify-content:center;
+            padding:18px;
+            background:rgba(0,0,0,.45);
+        }
+
+        .propsModal.show{
+            display:flex;
+        }
+
+        html[data-theme="win_classic"] .propsModal{
+            background:rgba(255,255,255,.38);
+        }
+
+        .propsCard{
+            width:min(720px, calc(100vw - 24px));
+            max-height:min(82vh, 900px);
+            display:flex;
+            flex-direction:column;
+            overflow:hidden;
+            border:1px solid rgba(255,255,255,.16);
+            border-radius:18px;
+            background:linear-gradient(180deg, rgba(32,32,32,.98), rgba(18,18,18,.98));
+            box-shadow:0 28px 110px rgba(0,0,0,.52);
+            color:var(--fg);
+        }
+
+        html[data-theme="win_classic"] .propsCard{
+            background:rgb(245,245,245);
+            color:#050505;
+            border:2px solid rgba(0,0,0,.55);
+            border-radius:2px;
+            box-shadow:6px 6px 0 rgba(0,0,0,.22);
+        }
+
+        .propsHead{
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:12px;
+            padding:12px 14px;
+            border-bottom:1px solid rgba(255,255,255,.14);
+            background:rgba(0,0,0,.18);
+            flex:0 0 auto;
+        }
+
+        html[data-theme="win_classic"] .propsHead{
+            background:rgba(0,0,0,.055);
+            border-bottom:1px solid rgba(0,0,0,.18);
+        }
+
+        .propsTitle{
+            font-weight:950;
+            letter-spacing:.2px;
+            font-size:16px;
+        }
+
+        .propsPath{
+            margin-top:2px;
+            font-size:12px;
+            color:var(--muted);
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            max-width:58ch;
+        }
+
+        html[data-theme="win_classic"] .propsPath{
+            color:#4d5662;
+        }
+
+        .propsBody{
+            padding:14px;
+            display:grid;
+            grid-template-columns:160px 1fr;
+            gap:10px 14px;
+            flex:1 1 auto;
+            min-height:0;
+            overflow:auto;
+            overscroll-behavior:contain;
+            font-size:13px;
+            line-height:1.35;
+        }
+
+        .propsBody .k{
+            color:rgba(var(--fg-rgb,255,255,255),.70);
+            font-weight:850;
+            font-size:12px;
+        }
+
+        html[data-theme="win_classic"] .propsBody .k{
+            color:#4d5662;
+        }
+
+        .propsBody .v{
+            color:rgba(var(--fg-rgb,255,255,255),.95);
+            overflow-wrap:anywhere;
+        }
+
+        html[data-theme="win_classic"] .propsBody .v{
+            color:#050505;
+        }
+
+        .propsBody .mono{
+            font-size:12px;
+        }
+
+        .propsBody pre.pre{
+            font-size:11px;
+            line-height:1.3;
+            margin:10px 0 0;
+            white-space:pre-wrap;
+            word-break:break-word;
+            max-height:240px;
+            overflow:auto;
+            padding:10px;
+            border:1px solid rgba(255,255,255,.14);
+            border-radius:10px;
+            background:rgba(0,0,0,.24);
+        }
+
+        html[data-theme="win_classic"] .propsBody pre.pre{
+            border-color:rgba(0,0,0,.22);
+            background:#e9edf2;
+            border-radius:2px;
+        }
+
+        .propsValueRow{
+            display:flex;
+            align-items:center;
+            gap:8px;
+            flex-wrap:wrap;
+        }
+
+        .propsMiniBtn{
+            border:1px solid rgba(255,255,255,.18);
+            border-radius:10px;
+            padding:6px 9px;
+            background:rgba(255,255,255,.05);
+            color:inherit;
+            font-weight:850;
+            cursor:pointer;
+        }
+
+        html[data-theme="win_classic"] .propsMiniBtn{
+            border-radius:2px;
+            background:linear-gradient(180deg,#fff,#ddd);
+            border-color:rgba(0,0,0,.35);
+        }
+
+        @media (max-width:520px){
+            .propsBody{ grid-template-columns:1fr; }
+        }
+
+        /* Detached floating folder picker, like File Manager. */
+        .extPickerOverlay{
+            background:transparent !important;
+            pointer-events:none;
+            align-items:initial !important;
+            justify-content:initial !important;
+            padding-top:0 !important;
+        }
+
+        .extPickerOverlay.show{
+            display:block !important;
+        }
+
+        .extPickerCard{
+            position:fixed;
+            left:50%;
+            top:22px;
+            transform:translateX(-50%);
+            pointer-events:auto;
+        }
+
+        .extPickerHead{
+            cursor:grab;
+            user-select:none;
+            touch-action:none;
+        }
+
+        .extPickerCard.dragging .extPickerHead{
+            cursor:grabbing;
+        }
+
+        .extPickerHead button,
+        .extPickerActions button,
+        .extPickerList button,
+        .extPickerCrumbs button{
+            cursor:pointer;
+        }
+
+        .fileRow.selected{
+            border-color:rgba(255,138,28,.82);
+            background:
+                linear-gradient(90deg, rgba(255,138,28,.22), rgba(255,138,28,.08)),
+                rgba(255,255,255,.05);
+            box-shadow:0 0 0 1px rgba(255,138,28,.35) inset;
+        }
+
+        html[data-theme="win_classic"] .fileRow.selected{
+            border-color:rgba(11,78,162,.75) !important;
+            background:#cfe3ff !important;
+            box-shadow:inset 0 0 0 1px rgba(11,78,162,.35) !important;
+        }
+
+        .fileRow.keyboardFocus{
+            outline:2px solid rgba(255,138,28,.72);
+            outline-offset:2px;
+        }
+
+        html[data-theme="win_classic"] .fileRow.keyboardFocus{
+            outline-color:rgba(11,78,162,.85);
+        }
+
+        .selectionBox{
+            position:fixed;
+            z-index:9000;
+            pointer-events:none;
+            border:1px solid rgba(255,138,28,.88);
+            background:rgba(255,138,28,.14);
+            border-radius:4px;
+            box-shadow:0 0 0 1px rgba(0,0,0,.20);
+        }
+
+        html[data-theme="win_classic"] .selectionBox{
+            border-color:rgba(11,78,162,.85);
+            background:rgba(11,78,162,.16);
+            border-radius:0;
+            box-shadow:none;
+        }
+
+
+        /* The real focus target is #files. Do not show a giant browser focus box. */
+        #files:focus,
+        #files:focus-visible,
+        .files:focus,
+        .files:focus-visible{
+            outline:none !important;
+            box-shadow:none !important;
+        }
+
+        .hidden{ display:none !important; }
+
+        @media (max-width:900px){
+            .shell{ grid-template-columns:1fr; }
+            .shell > .card:first-child{ border-right:0; border-bottom:1px solid rgba(255,138,28,.24); }
+            .files{ grid-template-columns:repeat(auto-fill, minmax(128px, 1fr)); }
+        }
+
+        @media (max-width:560px){
+            .toolbar{ align-items:stretch; }
+            .toolbarGroup{ width:100%; }
+            .input{ width:100%; }
+            .btn{ width:100%; }
+            .downloadLink{ width:max-content; }
+        }
+    
+        /* External workspace marquee selection: viewport-wide, File Manager style */
+        .selectionBox{
+            position:fixed !important;
+            z-index:99999 !important;
+            pointer-events:none !important;
+            box-sizing:border-box !important;
+            border:1px solid rgba(0,96,192,.90) !important;
+            background:rgba(0,96,192,.12) !important;
+            box-shadow:none !important;
+        }
+
+        html[data-theme="cpunk_orange"] .selectionBox{
+            border-color:rgba(255,138,28,.95) !important;
+            background:rgba(255,138,28,.12) !important;
+        }
+
+        html[data-theme="win_classic"] .selectionBox{
+            border:1px dotted #005bbb !important;
+            background:rgba(0,91,187,.10) !important;
+            box-shadow:none !important;
+        }
+
+    
+        /* Marquee selection should look like a Windows selection box, not an orange/red app border. */
+        .marqueeBox,
+        .selectionBox,
+        .selectionRect,
+        #marqueeBox,
+        #selectionBox,
+        #selectionRect{
+            border:1px solid rgba(11,78,162,.72) !important;
+            background:rgba(11,78,162,.14) !important;
+            box-shadow:none !important;
+            outline:none !important;
+            pointer-events:none !important;
+        }
+
+        html[data-theme="win_classic"] .marqueeBox,
+        html[data-theme="win_classic"] .selectionBox,
+        html[data-theme="win_classic"] .selectionRect,
+        html[data-theme="win_classic"] #marqueeBox,
+        html[data-theme="win_classic"] #selectionBox,
+        html[data-theme="win_classic"] #selectionRect{
+            border:1px solid rgba(11,78,162,.78) !important;
+            background:rgba(11,78,162,.16) !important;
+            box-shadow:none !important;
+            outline:none !important;
+        }
+
+        /* The full-screen selectable surface can be focusable for keyboard navigation,
+           but it must not draw a giant browser focus rectangle. */
+        .filesStage:focus,
+        .filesSurface:focus,
+        .fileSurface:focus,
+        .filesGrid:focus,
+        .fileGrid:focus,
+        #filesStage:focus,
+        #filesSurface:focus,
+        #fileSurface:focus,
+        #filesGrid:focus,
+        #fileGrid:focus{
+            outline:none !important;
+        }
+
+
+/* File Manager-style text/code preview modal for external workspace. */
+.textPreviewModal{
+    position:fixed;
+    inset:0;
+    z-index:6950;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(0,0,0,.45);
+}
+
+.textPreviewModal.show{
+    display:flex;
+}
+
+html[data-theme="win_classic"] .textPreviewModal{
+    background:rgba(255,255,255,.38);
+}
+
+.textPreviewCard{
+    width:min(1120px, calc(100vw - 24px));
+    height:min(82vh, 900px);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    border:1px solid rgba(255,255,255,.16);
+    border-radius:18px;
+    background:linear-gradient(180deg, rgba(32,32,32,.98), rgba(18,18,18,.98));
+    box-shadow:0 28px 110px rgba(0,0,0,.52);
+    color:var(--fg);
+}
+
+html[data-theme="win_classic"] .textPreviewCard{
+    background:rgb(245,245,245);
+    color:#050505;
+    border:2px solid rgba(0,0,0,.55);
+    border-radius:2px;
+    box-shadow:6px 6px 0 rgba(0,0,0,.22);
+}
+
+.textPreviewHead{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:12px;
+    padding:12px 14px;
+    border-bottom:1px solid rgba(255,255,255,.14);
+    background:rgba(0,0,0,.18);
+    flex:0 0 auto;
+}
+
+html[data-theme="win_classic"] .textPreviewHead{
+    background:rgba(0,0,0,.055);
+    border-bottom:1px solid rgba(0,0,0,.18);
+}
+
+.textPreviewTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+    font-size:16px;
+}
+
+.textPreviewPath{
+    margin-top:2px;
+    font-size:12px;
+    color:var(--muted);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    max-width:78ch;
+}
+
+html[data-theme="win_classic"] .textPreviewPath{
+    color:#4d5662;
+}
+
+.textPreviewMeta{
+    flex:0 0 auto;
+    padding:9px 14px;
+    border-bottom:1px solid rgba(255,255,255,.10);
+    color:var(--muted);
+    font-size:12px;
+    line-height:1.35;
+}
+
+html[data-theme="win_classic"] .textPreviewMeta{
+    color:#4d5662;
+    border-bottom-color:rgba(0,0,0,.14);
+    background:#e9edf2;
+}
+
+.textPreviewBody{
+    flex:1 1 auto;
+    min-height:0;
+    margin:0;
+    padding:14px;
+    overflow:auto;
+    white-space:pre;
+    tab-size:4;
+    font-size:12px;
+    line-height:1.45;
+    color:rgba(var(--fg-rgb,255,255,255),.96);
+    background:rgba(0,0,0,.24);
+}
+
+html[data-theme="win_classic"] .textPreviewBody{
+    color:#050505;
+    background:#ffffff;
+}
+
+
+/* External workspace text editor modal. */
+.textEditModal{
+    position:fixed;
+    inset:0;
+    z-index:7100;
+    display:none;
+    align-items:flex-start;
+    justify-content:center;
+    padding:22px;
+    background:rgba(0,0,0,.45);
+}
+
+.textEditModal.show{
+    display:flex;
+}
+
+html[data-theme="win_classic"] .textEditModal{
+    background:rgba(255,255,255,.38);
+}
+
+.textEditCard{
+    width:min(1100px, calc(100vw - 34px));
+    max-height:calc(100vh - 44px);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    border:1px solid rgba(255,255,255,.16);
+    border-radius:18px;
+    background:linear-gradient(180deg, rgba(32,32,32,.98), rgba(18,18,18,.98));
+    box-shadow:0 28px 110px rgba(0,0,0,.52);
+    color:var(--fg);
+}
+
+html[data-theme="win_classic"] .textEditCard{
+    background:rgb(245,245,245);
+    color:#050505;
+    border:2px solid rgba(0,0,0,.55);
+    border-radius:2px;
+    box-shadow:6px 6px 0 rgba(0,0,0,.22);
+}
+
+.textEditHead{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:12px;
+    padding:12px 14px;
+    border-bottom:1px solid rgba(255,255,255,.14);
+    background:rgba(0,0,0,.18);
+    flex:0 0 auto;
+    cursor:grab;
+    user-select:none;
+    touch-action:none;
+}
+
+.textEditCard.dragging .textEditHead{
+    cursor:grabbing;
+}
+
+html[data-theme="win_classic"] .textEditHead,
+html[data-theme="win_classic"] .textEditFoot{
+    background:rgba(0,0,0,.055);
+    border-color:rgba(0,0,0,.18);
+}
+
+.textEditTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+    font-size:16px;
+}
+
+.textEditPath{
+    margin-top:2px;
+    font-size:12px;
+    color:var(--muted);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    max-width:76ch;
+}
+
+html[data-theme="win_classic"] .textEditPath,
+html[data-theme="win_classic"] .textEditInfo,
+html[data-theme="win_classic"] .textEditStatus,
+html[data-theme="win_classic"] .textEditFindStatus{
+    color:#4d5662;
+}
+
+.textEditInfoWrap{
+    padding:12px 16px 0;
+    flex:0 0 auto;
+}
+
+.textEditInfo{
+    color:var(--muted);
+    font-size:12px;
+}
+
+.textEditStatus{
+    margin-top:6px;
+    min-height:18px;
+    font-size:12px;
+    line-height:1.35;
+    color:var(--muted);
+}
+
+.textEditBody{
+    padding:12px 16px;
+    flex:1 1 auto;
+    min-height:0;
+    display:flex;
+}
+
+.textEditArea{
+    width:100%;
+    min-height:420px;
+    resize:none;
+    border:1px solid rgba(255,255,255,.14);
+    border-radius:12px;
+    padding:12px;
+    background:rgba(0,0,0,.22);
+    color:var(--fg);
+    outline:none;
+    white-space:pre;
+    overflow:auto;
+    tab-size:4;
+    line-height:1.42;
+    font-size:13px;
+}
+
+html[data-theme="win_classic"] .textEditArea{
+    background:#fff;
+    color:#050505;
+    border:1px solid rgba(0,0,0,.35);
+    border-radius:2px;
+}
+
+.textEditArea:read-only{
+    opacity:.82;
+}
+
+.textEditFoot{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:12px 14px;
+    border-top:1px solid rgba(255,255,255,.14);
+    background:rgba(0,0,0,.14);
+    flex:0 0 auto;
+    flex-wrap:wrap;
+}
+
+.textEditSpacer{
+    flex:1 1 auto;
+}
+
+.textEditFindBar{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    flex-wrap:wrap;
+}
+
+.textEditFindBar.hidden{
+    display:none !important;
+}
+
+.textEditFindInput{
+    width:220px;
+    max-width:calc(100vw - 80px);
+    border:1px solid rgba(255,255,255,.16);
+    background:rgba(0,0,0,.22);
+    color:inherit;
+    border-radius:10px;
+    padding:9px 10px;
+    outline:none;
+}
+
+html[data-theme="win_classic"] .textEditFindInput{
+    background:#fff;
+    color:#050505;
+    border-color:rgba(0,0,0,.35);
+    border-radius:2px;
+}
+
+.textEditFindStatus{
+    min-width:70px;
+    color:var(--muted);
+    font-size:12px;
+}
+
+@media (max-width:720px){
+    .textEditModal{ padding:10px; }
+    .textEditCard{ width:calc(100vw - 20px); max-height:calc(100vh - 20px); }
+    .textEditArea{ min-height:320px; }
+    .textEditFindInput{ width:100%; }
+}
