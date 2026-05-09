@@ -1067,6 +1067,56 @@
             cursor:pointer;
         }
 
+        .fileRow.selected{
+            border-color:rgba(255,138,28,.82);
+            background:
+                linear-gradient(90deg, rgba(255,138,28,.22), rgba(255,138,28,.08)),
+                rgba(255,255,255,.05);
+            box-shadow:0 0 0 1px rgba(255,138,28,.35) inset;
+        }
+
+        html[data-theme="win_classic"] .fileRow.selected{
+            border-color:rgba(11,78,162,.75) !important;
+            background:#cfe3ff !important;
+            box-shadow:inset 0 0 0 1px rgba(11,78,162,.35) !important;
+        }
+
+        .fileRow.keyboardFocus{
+            outline:2px solid rgba(255,138,28,.72);
+            outline-offset:2px;
+        }
+
+        html[data-theme="win_classic"] .fileRow.keyboardFocus{
+            outline-color:rgba(11,78,162,.85);
+        }
+
+        .selectionBox{
+            position:fixed;
+            z-index:9000;
+            pointer-events:none;
+            border:1px solid rgba(255,138,28,.88);
+            background:rgba(255,138,28,.14);
+            border-radius:4px;
+            box-shadow:0 0 0 1px rgba(0,0,0,.20);
+        }
+
+        html[data-theme="win_classic"] .selectionBox{
+            border-color:rgba(11,78,162,.85);
+            background:rgba(11,78,162,.16);
+            border-radius:0;
+            box-shadow:none;
+        }
+
+
+        /* The real focus target is #files. Do not show a giant browser focus box. */
+        #files:focus,
+        #files:focus-visible,
+        .files:focus,
+        .files:focus-visible{
+            outline:none !important;
+            box-shadow:none !important;
+        }
+
         .hidden{ display:none !important; }
 
         @media (max-width:900px){
@@ -1082,7 +1132,72 @@
             .btn{ width:100%; }
             .downloadLink{ width:max-content; }
         }
-    </style>
+    
+        /* External workspace marquee selection: viewport-wide, File Manager style */
+        .selectionBox{
+            position:fixed !important;
+            z-index:99999 !important;
+            pointer-events:none !important;
+            box-sizing:border-box !important;
+            border:1px solid rgba(0,96,192,.90) !important;
+            background:rgba(0,96,192,.12) !important;
+            box-shadow:none !important;
+        }
+
+        html[data-theme="cpunk_orange"] .selectionBox{
+            border-color:rgba(255,138,28,.95) !important;
+            background:rgba(255,138,28,.12) !important;
+        }
+
+        html[data-theme="win_classic"] .selectionBox{
+            border:1px dotted #005bbb !important;
+            background:rgba(0,91,187,.10) !important;
+            box-shadow:none !important;
+        }
+
+    
+        /* Marquee selection should look like a Windows selection box, not an orange/red app border. */
+        .marqueeBox,
+        .selectionBox,
+        .selectionRect,
+        #marqueeBox,
+        #selectionBox,
+        #selectionRect{
+            border:1px solid rgba(11,78,162,.72) !important;
+            background:rgba(11,78,162,.14) !important;
+            box-shadow:none !important;
+            outline:none !important;
+            pointer-events:none !important;
+        }
+
+        html[data-theme="win_classic"] .marqueeBox,
+        html[data-theme="win_classic"] .selectionBox,
+        html[data-theme="win_classic"] .selectionRect,
+        html[data-theme="win_classic"] #marqueeBox,
+        html[data-theme="win_classic"] #selectionBox,
+        html[data-theme="win_classic"] #selectionRect{
+            border:1px solid rgba(11,78,162,.78) !important;
+            background:rgba(11,78,162,.16) !important;
+            box-shadow:none !important;
+            outline:none !important;
+        }
+
+        /* The full-screen selectable surface can be focusable for keyboard navigation,
+           but it must not draw a giant browser focus rectangle. */
+        .filesStage:focus,
+        .filesSurface:focus,
+        .fileSurface:focus,
+        .filesGrid:focus,
+        .fileGrid:focus,
+        #filesStage:focus,
+        #filesSurface:focus,
+        #fileSurface:focus,
+        #filesGrid:focus,
+        #fileGrid:focus{
+            outline:none !important;
+        }
+
+</style>
 </head>
 <body>
 <div class="shell" id="shell">
@@ -1218,9 +1333,20 @@
     <button type="button" data-action="copy">Copy to...</button>
     <button type="button" data-action="move">Move...</button>
     <button type="button" data-action="rename">Rename...</button>
-    <button type="button" data-action="trash-item">Move to trash... <span class="contextHint">soon</span></button>
+    <button type="button" data-action="trash-item">Move to trash...</button>
     <div class="contextSep"></div>
     <button type="button" data-action="properties">Properties...</button>
+</div>
+
+<div class="contextMenu hidden" id="selectionContextMenu" role="menu">
+    <button type="button" data-action="multi-open">Open selected <span class="contextHint">single only</span></button>
+    <button type="button" data-action="multi-download">Download selection <span class="contextHint">zip soon</span></button>
+    <div class="contextSep"></div>
+    <button type="button" data-action="multi-copy">Copy selected... <span class="contextHint">soon</span></button>
+    <button type="button" data-action="multi-move">Move selected... <span class="contextHint">soon</span></button>
+    <button type="button" data-action="multi-trash">Move selected to trash...</button>
+    <div class="contextSep"></div>
+    <button type="button" data-action="multi-clear">Clear selection</button>
 </div>
 
 <script>
@@ -1254,6 +1380,7 @@
     const btnNewFolder = document.getElementById("btnNewFolder");
     const emptyContextMenu = document.getElementById("emptyContextMenu");
     const itemContextMenu = document.getElementById("itemContextMenu");
+    const selectionContextMenu = document.getElementById("selectionContextMenu");
     const propsModal = document.getElementById("propsModal");
     const propsTitle = document.getElementById("propsTitle");
     const propsPath = document.getElementById("propsPath");
@@ -1373,6 +1500,13 @@
         return `/api/v4/workspaces/files/get?${qs.toString()}`;
     }
 
+    function deleteUrl(relPath) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", normalizeRelPath(relPath));
+        return `/api/v4/workspaces/files/delete?${qs.toString()}`;
+    }
+
     function syncUploadPanel() {
         if (uploadBox) uploadBox.classList.toggle("hidden", !canEdit || !uploadOpen);
         if (btnToggleUpload) btnToggleUpload.textContent = uploadOpen ? "Hide upload" : "Upload";
@@ -1408,7 +1542,21 @@
     function hideContextMenus() {
         if (emptyContextMenu) emptyContextMenu.classList.add("hidden");
         if (itemContextMenu) itemContextMenu.classList.add("hidden");
+        if (selectionContextMenu) selectionContextMenu.classList.add("hidden");
         contextItem = null;
+    }
+
+
+    function resetMarqueeVisual() {
+        const boxes = document.querySelectorAll(".marqueeBox, .selectionBox, .selectionRect, #marqueeBox, #selectionBox, #selectionRect");
+        boxes.forEach((box) => {
+            box.classList.add("hidden");
+            box.style.display = "none";
+            box.style.left = "0px";
+            box.style.top = "0px";
+            box.style.width = "0px";
+            box.style.height = "0px";
+        });
     }
 
     function placeContextMenu(menu, x, y) {
@@ -1903,6 +2051,7 @@
     }
 
     async function loadFiles(pathOverride) {
+        resetMarqueeVisual();
         if (!workspaceId) return;
 
         if (typeof pathOverride === "string") {
@@ -2235,6 +2384,42 @@
         return destFolder ? `${destFolder}/${name}` : name;
     }
 
+    async function trashItem(item) {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        if (!item || !item.rel) {
+            setStatus("No item selected.", "bad");
+            return;
+        }
+
+        const kind = item.isDir ? "folder" : "file";
+        const label = item.rel || item.name || "selected item";
+        const ok = confirm(
+            `Move ${kind} to trash?\n\n/${label}\n\n` +
+            `The owner can restore it from Trash until retention expires.`
+        );
+
+        if (!ok) {
+            setStatus("Move to trash cancelled.");
+            return;
+        }
+
+        setStatus(`Moving ${item.name || label} to trash…`);
+
+        await apiJson(deleteUrl(item.rel), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: ""
+        });
+
+        setStatus(`Moved ${item.name || label} to trash.`, "good");
+        hideContextMenus();
+        await loadFiles(currentPath);
+    }
+
     async function copyItem(item) {
         if (!canEdit) {
             setStatus("This workspace session is view-only.", "bad");
@@ -2399,6 +2584,617 @@
         await loadFiles(currentPath);
     }
 
+    // ---- Selection model -----------------------------------------------------
+    const selectedKeys = new Set();
+    let selectionAnchorKey = "";
+    let keyboardFocusKey = "";
+    let selectionScopePath = "";
+    let marqueeState = null;
+
+    if (filesEl) {
+        filesEl.tabIndex = 0;
+        filesEl.setAttribute("role", "listbox");
+        filesEl.setAttribute("aria-multiselectable", "true");
+    }
+
+    function selectableRows() {
+        if (!filesEl) return [];
+        return Array.from(filesEl.querySelectorAll(".fileRow"))
+            .filter((row) => row && (row.dataset.file || row.dataset.dir) && row.dataset.name);
+    }
+
+    function isSelectionTypingTarget(el) {
+        if (!el) return false;
+        const tag = String(el.tagName || "").toLowerCase();
+        return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
+    }
+
+    function isInteractiveSelectionTarget(el) {
+        if (!el || !el.closest) return false;
+        return !!el.closest(
+            "button,a,input,label,select,textarea," +
+            ".fileRow,.contextMenu,.extPickerOverlay,.modal,.qrBox,.uploadBox"
+        );
+    }
+
+    function rowKey(row) {
+        if (!row) return "";
+        if (row.dataset.dir) return "dir:" + normalizeRelPath(row.dataset.dir);
+        if (row.dataset.file) return "file:" + normalizeRelPath(row.dataset.file);
+        return "";
+    }
+
+    function rowByKey(key) {
+        return selectableRows().find((row) => rowKey(row) === key) || null;
+    }
+
+    function itemFromKey(key) {
+        const row = rowByKey(key);
+        return row ? itemFromRow(row) : null;
+    }
+
+    function selectedItems() {
+        const rows = selectableRows();
+        const out = [];
+        for (const row of rows) {
+            const key = rowKey(row);
+            if (!selectedKeys.has(key)) continue;
+            const item = itemFromRow(row);
+            if (item && item.rel) out.push(item);
+        }
+        return out;
+    }
+
+    function setKeyboardFocus(key) {
+        keyboardFocusKey = key || "";
+        for (const row of selectableRows()) {
+            row.classList.toggle("keyboardFocus", rowKey(row) === keyboardFocusKey);
+        }
+    }
+
+    function clearSelection() {
+        selectedKeys.clear();
+        selectionAnchorKey = "";
+        keyboardFocusKey = "";
+        syncSelectionUi();
+    }
+
+    function syncSelectionUi() {
+        if (selectionScopePath !== currentPath) {
+            selectedKeys.clear();
+            selectionAnchorKey = "";
+            keyboardFocusKey = "";
+            selectionScopePath = currentPath;
+        }
+
+        const visible = new Set();
+        for (const row of selectableRows()) visible.add(rowKey(row));
+
+        for (const key of Array.from(selectedKeys)) {
+            if (!visible.has(key)) selectedKeys.delete(key);
+        }
+
+        if (keyboardFocusKey && !visible.has(keyboardFocusKey)) keyboardFocusKey = "";
+        if (selectionAnchorKey && !visible.has(selectionAnchorKey)) selectionAnchorKey = "";
+
+        for (const row of selectableRows()) {
+            const key = rowKey(row);
+            const on = selectedKeys.has(key);
+            row.classList.toggle("selected", on);
+            row.classList.toggle("keyboardFocus", key === keyboardFocusKey);
+            row.setAttribute("aria-selected", on ? "true" : "false");
+        }
+
+        if (selectedKeys.size > 0) {
+            setStatus(`${selectedKeys.size} item${selectedKeys.size === 1 ? "" : "s"} selected.`);
+        }
+    }
+
+    function selectOnlyKey(key) {
+        if (!key) return;
+        selectionScopePath = currentPath;
+        selectedKeys.clear();
+        selectedKeys.add(key);
+        selectionAnchorKey = key;
+        setKeyboardFocus(key);
+        syncSelectionUi();
+    }
+
+    function toggleKey(key) {
+        if (!key) return;
+        selectionScopePath = currentPath;
+        if (selectedKeys.has(key)) selectedKeys.delete(key);
+        else selectedKeys.add(key);
+        selectionAnchorKey = key;
+        setKeyboardFocus(key);
+        syncSelectionUi();
+    }
+
+    function selectRangeToKey(key, additive) {
+        const rows = selectableRows();
+        const keys = rows.map(rowKey).filter(Boolean);
+        if (!key || !keys.includes(key)) return;
+
+        const anchor = selectionAnchorKey && keys.includes(selectionAnchorKey)
+            ? selectionAnchorKey
+            : key;
+
+        const a = keys.indexOf(anchor);
+        const b = keys.indexOf(key);
+        const lo = Math.min(a, b);
+        const hi = Math.max(a, b);
+
+        if (!additive) selectedKeys.clear();
+        for (let i = lo; i <= hi; i++) selectedKeys.add(keys[i]);
+
+        setKeyboardFocus(key);
+        syncSelectionUi();
+    }
+
+    function openItem(item) {
+        if (!item) return;
+        if (item.isDir) {
+            clearSelection();
+            loadFiles(item.rel).catch((e) => setStatus(`Open folder failed: ${e.message || e}`, "bad"));
+            return;
+        }
+        location.href = downloadUrl(item.rel);
+    }
+
+    function openSelectedPrimary() {
+        const items = selectedItems();
+        if (items.length !== 1) {
+            setStatus(items.length ? "Use the context menu for multiple selected items." : "No item selected.");
+            return;
+        }
+        openItem(items[0]);
+    }
+
+    function handleSelectionKeyboard(ev) {
+        if (!signedIn) return false;
+        if (isSelectionTypingTarget(ev.target)) return false;
+
+        const rows = selectableRows();
+        if (!rows.length) return false;
+
+        const keys = rows.map(rowKey).filter(Boolean);
+        let idx = keyboardFocusKey ? keys.indexOf(keyboardFocusKey) : -1;
+        if (idx < 0 && selectedKeys.size) idx = keys.indexOf(Array.from(selectedKeys).at(-1));
+        if (idx < 0) idx = 0;
+
+        let next = idx;
+        const pageStep = Math.max(1, Math.min(12, Math.floor(rows.length / 3)));
+
+        if (ev.key === "ArrowDown" || ev.key === "ArrowRight") {
+            next = Math.min(keys.length - 1, idx + 1);
+        } else if (ev.key === "ArrowUp" || ev.key === "ArrowLeft") {
+            next = Math.max(0, idx - 1);
+        } else if (ev.key === "PageDown") {
+            next = Math.min(keys.length - 1, idx + pageStep);
+        } else if (ev.key === "PageUp") {
+            next = Math.max(0, idx - pageStep);
+        } else if (ev.key === "Home") {
+            next = 0;
+        } else if (ev.key === "End") {
+            next = keys.length - 1;
+        } else if (ev.key === "Enter") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            openSelectedPrimary();
+            return true;
+        } else if (ev.key === "Escape") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            clearSelection();
+            hideContextMenus();
+            setStatus("Selection cleared.");
+            return true;
+        } else {
+            return false;
+        }
+
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        const nextKey = keys[next];
+        if (ev.shiftKey) selectRangeToKey(nextKey, false);
+        else selectOnlyKey(nextKey);
+
+        const row = rowByKey(nextKey);
+        if (row) row.scrollIntoView({ block: "nearest" });
+        return true;
+    }
+
+    async function trashSelectedItems() {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        const items = selectedItems();
+        if (!items.length) {
+            setStatus("No items selected.", "bad");
+            return;
+        }
+
+        const ok = confirm(
+            `Move ${items.length} selected item${items.length === 1 ? "" : "s"} to trash?\n\n` +
+            `The owner can restore them from Trash until retention expires.`
+        );
+        if (!ok) {
+            setStatus("Move to trash cancelled.");
+            return;
+        }
+
+        let done = 0;
+        let failed = 0;
+        const errors = [];
+
+        for (const item of items) {
+            try {
+                await apiJson(deleteUrl(item.rel), {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: ""
+                });
+                done++;
+            } catch (e) {
+                failed++;
+                errors.push(`${item.rel}: ${e.message || e}`);
+            }
+            setStatus(`Moving to trash ${done + failed}/${items.length}…`);
+        }
+
+        clearSelection();
+        hideContextMenus();
+        await loadFiles(currentPath);
+
+        if (failed) {
+            setStatus(`Moved ${done}, failed ${failed}. ${errors.slice(0, 2).join(" | ")}`, "bad");
+        } else {
+            setStatus(`Moved ${done} item${done === 1 ? "" : "s"} to trash.`, "good");
+        }
+    }
+
+    function showSelectionContextMenu(x, y) {
+        if (!selectionContextMenu) return;
+
+        const count = selectedKeys.size;
+        const openBtn = selectionContextMenu.querySelector('[data-action="multi-open"]');
+        const editorOnly = selectionContextMenu.querySelectorAll('[data-action="multi-copy"], [data-action="multi-move"], [data-action="multi-trash"]');
+
+        if (openBtn) openBtn.disabled = count !== 1;
+        editorOnly.forEach((btn) => { btn.disabled = !canEdit; });
+
+        placeContextMenu(selectionContextMenu, x, y);
+    }
+
+    filesEl.addEventListener("click", (ev) => {
+        const row = ev.target.closest(".fileRow");
+        if (!row || !filesEl.contains(row)) return;
+        if (ev.target.closest("a,button,input,label,select,textarea")) return;
+
+        const key = rowKey(row);
+        if (!key) return;
+
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+
+        if (ev.shiftKey) {
+            selectRangeToKey(key, ev.ctrlKey || ev.metaKey);
+        } else if (ev.ctrlKey || ev.metaKey) {
+            toggleKey(key);
+        } else {
+            selectOnlyKey(key);
+        }
+
+        filesEl.focus({ preventScroll: true });
+    }, true);
+
+    filesEl.addEventListener("dblclick", (ev) => {
+        const row = ev.target.closest(".fileRow");
+        if (!row || !filesEl.contains(row)) return;
+        if (ev.target.closest("a,button,input,label,select,textarea")) return;
+
+        const item = itemFromRow(row);
+        if (!item) return;
+
+        ev.preventDefault();
+        ev.stopImmediatePropagation();
+
+        openItem(item);
+    }, true);
+
+    filesEl.addEventListener("keydown", (ev) => {
+        handleSelectionKeyboard(ev);
+    });
+
+    filesEl.addEventListener("contextmenu", (ev) => {
+        const row = ev.target.closest(".fileRow");
+
+        if (row && filesEl.contains(row)) {
+            const key = rowKey(row);
+            if (!key) return;
+
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+
+            if (!selectedKeys.has(key)) {
+                selectOnlyKey(key);
+            } else {
+                setKeyboardFocus(key);
+                syncSelectionUi();
+            }
+
+            if (selectedKeys.size > 1) {
+                showSelectionContextMenu(ev.clientX, ev.clientY);
+                return;
+            }
+
+            contextItem = itemFromRow(row);
+            if (!contextItem) return;
+
+            const openBtn = itemContextMenu.querySelector('[data-action="open"]');
+            const downloadBtn = itemContextMenu.querySelector('[data-action="download"]');
+            const previewBtn = itemContextMenu.querySelector('[data-action="preview"]');
+            const editorOnly = itemContextMenu.querySelectorAll('[data-action="copy"], [data-action="move"], [data-action="rename"], [data-action="trash-item"]');
+
+            if (contextItem.isDir) {
+                if (openBtn) openBtn.textContent = "Open folder";
+                if (downloadBtn) downloadBtn.innerHTML = 'Download folder <span class="contextHint">zip soon</span>';
+                if (previewBtn) previewBtn.disabled = true;
+            } else {
+                if (openBtn) openBtn.textContent = "Open original";
+                if (downloadBtn) downloadBtn.textContent = "Download";
+                if (previewBtn) previewBtn.disabled = false;
+            }
+
+            editorOnly.forEach((btn) => { btn.disabled = !canEdit; });
+            placeContextMenu(itemContextMenu, ev.clientX, ev.clientY);
+            return;
+        }
+
+        // Let the existing empty-area context menu handler run.
+    }, true);
+
+    // Marquee selection is handled by the viewport-wide pointerdown handler below.
+    // Keep only one marquee implementation so focus/selection state cannot fight itself.
+
+
+    function handleSelectionKeyboardViewportFix(ev) {
+        if (!signedIn) return false;
+        const target = ev.target;
+        if (target) {
+            const tag = String(target.tagName || "").toLowerCase();
+            if (tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable) {
+                return false;
+            }
+        }
+
+        const rows = selectableRows();
+        if (!rows.length) return false;
+
+        const visualRows = rows.slice().sort((a, b) => {
+            const ra = a.getBoundingClientRect();
+            const rb = b.getBoundingClientRect();
+            const dy = ra.top - rb.top;
+            if (Math.abs(dy) > 8) return dy;
+            return ra.left - rb.left;
+        });
+
+        const keys = visualRows.map(rowKey).filter(Boolean);
+        if (!keys.length) return false;
+
+        let idx = keyboardFocusKey ? keys.indexOf(keyboardFocusKey) : -1;
+        if (idx < 0 && selectedKeys.size) idx = keys.indexOf(Array.from(selectedKeys).at(-1));
+        if (idx < 0) idx = 0;
+
+        const firstTop = visualRows[0].getBoundingClientRect().top;
+        let cols = 0;
+        for (const row of visualRows) {
+            const r = row.getBoundingClientRect();
+            if (Math.abs(r.top - firstTop) <= 12) cols++;
+        }
+        cols = Math.max(1, cols || 1);
+
+        let next = idx;
+        if (ev.key === "ArrowRight") {
+            next = Math.min(keys.length - 1, idx + 1);
+        } else if (ev.key === "ArrowLeft") {
+            next = Math.max(0, idx - 1);
+        } else if (ev.key === "ArrowDown") {
+            next = Math.min(keys.length - 1, idx + cols);
+        } else if (ev.key === "ArrowUp") {
+            next = Math.max(0, idx - cols);
+        } else if (ev.key === "PageDown") {
+            next = Math.min(keys.length - 1, idx + cols * 3);
+        } else if (ev.key === "PageUp") {
+            next = Math.max(0, idx - cols * 3);
+        } else if (ev.key === "Home") {
+            next = 0;
+        } else if (ev.key === "End") {
+            next = keys.length - 1;
+        } else if (ev.key === "Enter") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            openSelectedPrimary();
+            return true;
+        } else if (ev.key === "Escape") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            clearSelection();
+            hideContextMenus();
+            setStatus("Selection cleared.");
+            return true;
+        } else {
+            return false;
+        }
+
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        const nextKey = keys[next];
+        if (ev.shiftKey) selectRangeToKey(nextKey, false);
+        else selectOnlyKey(nextKey);
+
+        const row = rowByKey(nextKey);
+        if (row) row.scrollIntoView({ block: "nearest", inline: "nearest" });
+        return true;
+    }
+
+    window.addEventListener("keydown", (ev) => {
+        handleSelectionKeyboardViewportFix(ev);
+    }, true);
+
+
+
+    function isViewportMarqueeBlockedTarget(el) {
+        if (!el) return false;
+
+        const tag = String(el.tagName || "").toLowerCase();
+        if (tag === "button" || tag === "a" || tag === "input" || tag === "label" ||
+            tag === "select" || tag === "textarea" || el.isContentEditable) {
+            return true;
+        }
+
+        if (!el.closest) return false;
+
+        return !!el.closest(
+            ".fileRow,.contextMenu,.extPickerOverlay,.extPickerCard,.modal," +
+            ".qrBox,.uploadBox,.toolbarGroup,.toolbar,.pathBar,.crumbs," +
+            ".accessPanel,.rolePill,.accessPill"
+        );
+    }
+
+    window.addEventListener("pointerdown", (ev) => {
+        if (!signedIn) return;
+        if (ev.button !== 0) return;
+        if (isViewportMarqueeBlockedTarget(ev.target)) return;
+
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        hideContextMenus();
+        if (filesEl) filesEl.focus({ preventScroll: true });
+
+        const box = document.createElement("div");
+        box.className = "selectionBox";
+        document.body.appendChild(box);
+
+        marqueeState = {
+            startX: ev.clientX,
+            startY: ev.clientY,
+            lastX: ev.clientX,
+            lastY: ev.clientY,
+            box,
+            additive: ev.ctrlKey || ev.metaKey,
+            base: new Set(selectedKeys)
+        };
+
+        let moved = false;
+
+        const updateBox = () => {
+            if (!marqueeState) return;
+
+            const x1 = Math.min(marqueeState.startX, marqueeState.lastX);
+            const y1 = Math.min(marqueeState.startY, marqueeState.lastY);
+            const x2 = Math.max(marqueeState.startX, marqueeState.lastX);
+            const y2 = Math.max(marqueeState.startY, marqueeState.lastY);
+
+            if (Math.abs(x2 - x1) > 4 || Math.abs(y2 - y1) > 4) moved = true;
+
+            box.style.left = `${x1}px`;
+            box.style.top = `${y1}px`;
+            box.style.width = `${Math.max(1, x2 - x1)}px`;
+            box.style.height = `${Math.max(1, y2 - y1)}px`;
+
+            const selRect = { left:x1, top:y1, right:x2, bottom:y2 };
+
+            selectedKeys.clear();
+            if (marqueeState.additive) {
+                for (const k of marqueeState.base) selectedKeys.add(k);
+            }
+
+            for (const row of selectableRows()) {
+                const r = row.getBoundingClientRect();
+                const hit = !(
+                    r.right < selRect.left ||
+                    r.left > selRect.right ||
+                    r.bottom < selRect.top ||
+                    r.top > selRect.bottom
+                );
+
+                if (!hit) continue;
+
+                const key = rowKey(row);
+                if (!key) continue;
+
+                selectedKeys.add(key);
+                selectionAnchorKey = key;
+                keyboardFocusKey = key;
+            }
+
+            syncSelectionUi();
+        };
+
+        const onMove = (moveEv) => {
+            if (!marqueeState) return;
+            marqueeState.lastX = moveEv.clientX;
+            marqueeState.lastY = moveEv.clientY;
+            updateBox();
+        };
+
+        const onUp = () => {
+            if (marqueeState && marqueeState.box) marqueeState.box.remove();
+
+            if (!moved && !(ev.ctrlKey || ev.metaKey)) {
+                clearSelection();
+            }
+
+            marqueeState = null;
+            window.removeEventListener("pointermove", onMove, true);
+            window.removeEventListener("pointerup", onUp, true);
+            syncSelectionUi();
+        };
+
+        window.addEventListener("pointermove", onMove, true);
+        window.addEventListener("pointerup", onUp, true);
+
+        updateBox();
+    }, true);
+
+
+    const selectionObserver = new MutationObserver(() => syncSelectionUi());
+    selectionObserver.observe(filesEl, { childList: true, subtree: false });
+
+    selectionContextMenu?.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("button[data-action]");
+        if (!btn || btn.disabled) return;
+
+        const action = btn.dataset.action || "";
+        hideContextMenus();
+
+        if (action === "multi-clear") {
+            clearSelection();
+            setStatus("Selection cleared.");
+            return;
+        }
+
+        if (action === "multi-open") {
+            openSelectedPrimary();
+            return;
+        }
+
+        if (action === "multi-trash") {
+            trashSelectedItems().catch((e) => setStatus(`Move to trash failed: ${e.message || e}`, "bad"));
+            return;
+        }
+
+        if (action === "multi-download") return showPlaceholder("Download selection");
+        if (action === "multi-copy") return showPlaceholder("Copy selected");
+        if (action === "multi-move") return showPlaceholder("Move selected");
+    });
+
     filesEl.addEventListener("click", (ev) => {
         if (ev.target.closest("a")) return;
 
@@ -2535,7 +3331,10 @@
             renameItem(item).catch((e) => setStatus(`Rename failed: ${e.message || e}`, "bad"));
             return;
         }
-        if (action === "trash-item") return showPlaceholder("Move to trash");
+        if (action === "trash-item") {
+            trashItem(item).catch((e) => setStatus(`Move to trash failed: ${e.message || e}`, "bad"));
+            return;
+        }
     });
 
     document.addEventListener("click", (ev) => {
