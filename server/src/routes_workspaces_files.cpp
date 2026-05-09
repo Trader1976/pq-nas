@@ -9986,11 +9986,7 @@ srv.Post("/api/v4/files/copy_scope",
 srv.Post("/api/v4/workspaces/files/copy",
          [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp, actor_role;
-    if (!deps.require_user_auth_users_actor ||
-        !deps.require_user_auth_users_actor(
-            req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
-        return;
-    }
+    bool actor_is_external = false;
 
     if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
     (void)actor_role;
@@ -10069,6 +10065,12 @@ srv.Post("/api/v4/workspaces/files/copy",
         return;
     }
 
+    if (!require_workspace_file_actor_for_workspace_local(
+            deps, req, res, workspace_id,
+            &actor_fp, &actor_role, &actor_is_external)) {
+        return;
+    }
+
     std::string from_rel, to_rel;
     if (req.has_param("from")) from_rel = req.get_param_value("from");
     if (req.has_param("to"))   to_rel   = req.get_param_value("to");
@@ -10113,6 +10115,16 @@ srv.Post("/api/v4/workspaces/files/copy",
             {"ok", false},
             {"error", "forbidden"},
             {"message", "workspace access denied"}
+        }.dump());
+        return;
+    }
+
+    if (actor_is_external && mopt->member_kind != "external") {
+        audit_fail(workspace_id, "external_member_kind_mismatch", 403, "", from_rel, to_rel);
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace external access denied"}
         }.dump());
         return;
     }
