@@ -19901,6 +19901,139 @@ c.audit_emit = [&](const std::string& event,
 
 
 
+
+c.external_invite_accept_by_st_hash =
+    [&](const std::string& st_hash_b64,
+        const std::string& fingerprint_hex,
+        VerifyLoginCommonContext::ExternalInviteAcceptResult& out,
+        std::string& err) -> bool {
+        out = VerifyLoginCommonContext::ExternalInviteAcceptResult{};
+        err.clear();
+
+        if (st_hash_b64.empty() || fingerprint_hex.empty()) {
+            return false;
+        }
+
+        if (!workspace_external_invites.load(workspace_external_invites_path)) {
+            err = "failed to load external invites";
+            return false;
+        }
+
+        const auto inv_opt = workspace_external_invites.get_by_st_hash_b64(st_hash_b64);
+        if (!inv_opt.has_value()) {
+            return false; // normal login/auth flow, not an external invite
+        }
+
+        pqnas::WorkspaceExternalInviteRec inv = *inv_opt;
+
+        out.invite_id = inv.invite_id;
+        out.workspace_id = inv.workspace_id;
+        out.role = inv.role;
+        out.fingerprint_hex = fingerprint_hex;
+
+        const long now = now_epoch_sec();
+
+        if (inv.status != "pending") {
+            out.accepted = false;
+            out.message = "invite is not pending";
+            err = out.message;
+            return true; // handled as external invite, but refused
+        }
+
+        if (inv.expires_at_epoch > 0 && now > inv.expires_at_epoch) {
+            workspace_external_invites.mark_expired_pending(now);
+            (void)workspace_external_invites.save(workspace_external_invites_path);
+
+            out.accepted = false;
+            out.message = "invite expired";
+            err = out.message;
+            return true;
+        }
+
+        if (!workspaces.load(workspaces_path)) {
+            out.accepted = false;
+            out.message = "failed to load workspaces";
+            err = out.message;
+            return true;
+        }
+
+        auto wopt = workspaces.get(inv.workspace_id);
+        if (!wopt.has_value() || wopt->status != "enabled") {
+            out.accepted = false;
+            out.message = "workspace not found";
+            err = out.message;
+            return true;
+        }
+
+        const auto existing_member = workspaces.get_member(inv.workspace_id, fingerprint_hex);
+        if (existing_member.has_value() &&
+            existing_member->status == "enabled" &&
+            existing_member->member_kind != "external") {
+            out.accepted = false;
+            out.message = "fingerprint is already a normal workspace member";
+            err = out.message;
+            return true;
+        }
+
+        const std::string now_iso = pqnas::now_iso_utc();
+
+        pqnas::WorkspaceMemberRec member;
+        member.fingerprint = fingerprint_hex;
+        member.role = inv.role;
+        member.status = "enabled";
+        member.member_kind = "external";
+        member.display_name = "External member";
+        member.added_at = inv.created_at.empty() ? now_iso : inv.created_at;
+        member.added_by = inv.created_by;
+        member.responded_at = now_iso;
+        member.responded_by = fingerprint_hex;
+
+        if (!workspaces.add_or_update_member(inv.workspace_id, member)) {
+            out.accepted = false;
+            out.message = "failed to add external member";
+            err = out.message;
+            return true;
+        }
+
+        if (!workspaces.save(workspaces_path)) {
+            out.accepted = false;
+            out.message = "failed to save workspace member";
+            err = out.message;
+            return true;
+        }
+
+        if (!workspace_external_invites.mark_accepted(inv.invite_id, fingerprint_hex, now_iso)) {
+            out.accepted = false;
+            out.message = "failed to mark invite accepted";
+            err = out.message;
+            return true;
+        }
+
+        if (!workspace_external_invites.save(workspace_external_invites_path)) {
+            out.accepted = false;
+            out.message = "failed to save external invite";
+            err = out.message;
+            return true;
+        }
+
+        pqnas::AuditEvent ev;
+        ev.event = "workspace.external_invite_accepted";
+        ev.outcome = "ok";
+        ev.f = {
+            {"invite_id", inv.invite_id},
+            {"workspace_id", inv.workspace_id},
+            {"role", inv.role},
+            {"fingerprint", fingerprint_hex},
+            {"created_by", inv.created_by}
+        };
+        audit_append(ev);
+
+        out.accepted = true;
+        out.message = "accepted";
+        return true;
+    };
+
+
 srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& res) {
     if (c.audit_emit) c.audit_emit("route.hit", "ok", [&](std::map<std::string,std::string>& f){
         f["path"] = "/api/v5/verify";

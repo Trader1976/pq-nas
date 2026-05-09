@@ -30,6 +30,27 @@ struct VerifyLoginCommonContext {
     const std::string* allowlist_path = nullptr;
     const std::string* users_path = nullptr;
 
+    // external workspace invite hook
+    //
+    // If a verified v5 st_hash belongs to a pending workspace external invite,
+    // this hook accepts the invite and prevents normal user-login policy from
+    // auto-creating a disabled user.
+    struct ExternalInviteAcceptResult {
+        bool accepted = false;
+        std::string invite_id;
+        std::string workspace_id;
+        std::string role;
+        std::string fingerprint_hex;
+        std::string message;
+    };
+
+    // Return true when st_hash matched an external invite and was handled.
+    // Return false when st_hash is not an external invite.
+    std::function<bool(const std::string& st_hash_b64,
+                       const std::string& fingerprint_hex,
+                       ExternalInviteAcceptResult& out,
+                       std::string& err)> external_invite_accept_by_st_hash;
+
     // approvals/pending maps
     //
     // KEYING:

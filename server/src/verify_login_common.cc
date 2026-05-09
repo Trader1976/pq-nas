@@ -189,6 +189,50 @@ void handle_verify_login_common(const httplib::Request& req,
             return fail(400, "verify failed");
         }
 
+        // ---- external workspace invite mode ----
+        //
+        // External members are DNA Connect identities, not full DNA-Nexus users.
+        // If this verified auth request belongs to a workspace external invite,
+        // accept it before normal user policy. This prevents the normal
+        // "unknown fingerprint -> create disabled user" path from firing.
+        if (ctx.external_invite_accept_by_st_hash) {
+            VerifyLoginCommonContext::ExternalInviteAcceptResult ext;
+            std::string ext_err;
+
+            if (ctx.external_invite_accept_by_st_hash(approval_key, computed_fp, ext, ext_err)) {
+                if (ext.accepted) {
+                    audit_info("v5.workspace_external_invite_accepted", "ok",
+                               ext.invite_id, ext.workspace_id);
+
+                    reply_json(res, 200, json{
+                        {"ok", true},
+                        {"v", 5},
+                        {"kind", "workspace_external_invite"},
+                        {"state", "accepted"},
+                        {"invite_id", ext.invite_id},
+                        {"workspace_id", ext.workspace_id},
+                        {"workspace_role", ext.role},
+                        {"fingerprint", computed_fp}
+                    }.dump());
+                    return;
+                }
+
+                audit_info("v5.workspace_external_invite_refused", "fail",
+                           ext.invite_id, ext_err.empty() ? ext.message : ext_err);
+
+                reply_json(res, 409, json{
+                    {"ok", false},
+                    {"v", 5},
+                    {"kind", "workspace_external_invite"},
+                    {"error", "external_invite_not_accepted"},
+                    {"message", ext_err.empty() ? ext.message : ext_err},
+                    {"invite_id", ext.invite_id},
+                    {"workspace_id", ext.workspace_id}
+                }.dump());
+                return;
+            }
+        }
+
         // Bootstrap: first verified fingerprint becomes admin if fresh install
         {
             static std::mutex bootstrap_mu;
