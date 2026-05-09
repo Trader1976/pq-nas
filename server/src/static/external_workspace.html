@@ -609,7 +609,7 @@
     <button type="button" data-action="share">Create share link... <span class="contextHint">soon</span></button>
     <div class="contextSep"></div>
     <button type="button" data-action="copy">Copy to... <span class="contextHint">soon</span></button>
-    <button type="button" data-action="move">Move... <span class="contextHint">soon</span></button>
+    <button type="button" data-action="move">Move...</button>
     <button type="button" data-action="rename">Rename...</button>
     <button type="button" data-action="trash-item">Move to trash... <span class="contextHint">soon</span></button>
     <div class="contextSep"></div>
@@ -1067,6 +1067,68 @@
         return i < 0 ? v : v.slice(i + 1);
     }
 
+    function validateSimpleRelPathInput(pathText) {
+        const v = normalizeRelPath(pathText);
+        if (!v) return { ok:false, message:"Path cannot be empty." };
+        if (v.includes("\\")) return { ok:false, message:"Use forward slashes, not backslashes." };
+
+        const parts = v.split("/").filter(Boolean);
+        for (const part of parts) {
+            if (part === "." || part === "..") {
+                return { ok:false, message:"Path cannot contain . or .. segments." };
+            }
+        }
+
+        return { ok:true, path:v };
+    }
+
+    async function moveItem(item) {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        if (!item || !item.rel) {
+            setStatus("No item selected.", "bad");
+            return;
+        }
+
+        const oldPath = normalizeRelPath(item.rel);
+        const oldName = basenameFromPath(oldPath);
+
+        const nextPath = prompt(
+            "Move item to path\n\nInclude the filename/folder name at the end.",
+            oldPath
+        );
+        if (nextPath == null) return;
+
+        const check = validateSimpleRelPathInput(nextPath);
+        if (!check.ok) {
+            setStatus(check.message, "bad");
+            return;
+        }
+
+        const targetPath = check.path;
+        if (targetPath === oldPath) {
+            setStatus("Path did not change.");
+            return;
+        }
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("from", oldPath);
+        qs.set("to", targetPath);
+
+        setStatus(`Moving ${oldName}…`);
+
+        await apiJson(`/api/v4/workspaces/files/move?${qs.toString()}`, {
+            method: "POST"
+        });
+
+        setStatus(`Moved ${oldName}.`, "good");
+        await loadFiles(currentPath);
+    }
+
     async function renameItem(item) {
         if (!canEdit) {
             setStatus("This workspace session is view-only.", "bad");
@@ -1276,7 +1338,10 @@
         if (action === "versions") return showPlaceholder("Versions");
         if (action === "share") return showPlaceholder("Create share link");
         if (action === "copy") return showPlaceholder("Copy");
-        if (action === "move") return showPlaceholder("Move");
+        if (action === "move") {
+            moveItem(item).catch((e) => setStatus(`Move failed: ${e.message || e}`, "bad"));
+            return;
+        }
         if (action === "rename") {
             renameItem(item).catch((e) => setStatus(`Rename failed: ${e.message || e}`, "bad"));
             return;
