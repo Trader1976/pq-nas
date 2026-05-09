@@ -162,7 +162,7 @@
 <div class="shell">
     <section class="card">
         <h1>External workspace access</h1>
-        <p class="sub">
+        <p class="sub" id="accessSub">
             Scan the QR code with DNA Connect to prove your identity and open this workspace.
         </p>
 
@@ -173,7 +173,7 @@
         </div>
 
         <div class="row">
-            <button class="btn" id="btnNewQr" type="button">New QR</button>
+            <button class="btn" id="btnNewQr" type="button">New sign-in QR</button>
             <button class="btn secondary" id="btnRefreshFiles" type="button">Refresh files</button>
         </div>
 
@@ -195,6 +195,7 @@
     const workspaceId = String(params.get("workspace_id") || "").trim();
 
     const workspacePill = document.getElementById("workspacePill");
+    const accessSub = document.getElementById("accessSub");
     const qrBox = document.getElementById("qrBox");
     const statusEl = document.getElementById("status");
     const filesEl = document.getElementById("files");
@@ -259,8 +260,9 @@
 
         clearInterval(pollTimer);
         currentSessionId = "";
-        filesEl.innerHTML = "";
-        fileSub.textContent = "After login, files you can access will appear here.";
+        if (accessSub) {
+            accessSub.textContent = "Scan the QR code with DNA Connect to prove your identity and open this workspace.";
+        }
         setStatus("Creating a fresh QR login session…");
 
         const j = await apiJson("/api/v4/workspaces/external-sessions/start", {
@@ -319,6 +321,7 @@
             body: JSON.stringify({ session_id: currentSessionId })
         });
 
+        showSignedInState();
         setStatus("Workspace session ready.", "good");
     }
 
@@ -358,9 +361,24 @@
 
     workspacePill.textContent = `workspace_id: ${workspaceId || "missing"}`;
 
+    function showSignedInState() {
+        if (accessSub) {
+            accessSub.textContent = "You are signed in with DNA Connect. Use a new QR only when this session expires or you want to sign in again.";
+        }
+        qrBox.innerHTML = `
+            <div class="hint" style="text-align:center; color:#444;">
+                Workspace session is active.<br>
+                Use “New sign-in QR” only when you want to sign in again.
+            </div>
+        `;
+    }
+
     // Try existing external cookie first. If it fails, show QR.
     loadFiles()
-        .then(() => setStatus("Existing workspace session is active.", "good"))
+        .then(() => {
+            showSignedInState();
+            setStatus("Existing workspace session is active.", "good");
+        })
         .catch(() => startSession().catch((e) => setStatus(`Failed to start QR session: ${e.message || e}`, "bad")));
 })();
 </script>
