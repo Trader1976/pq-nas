@@ -906,6 +906,7 @@ std::uint64_t dir_size_bytes_best_effort_local(const std::filesystem::path& root
     return total;
 }
 
+
 std::optional<WorkspaceMemberRec> enabled_member_for_actor(const WorkspaceRec& w,
                                                            const std::string& actor_fp) {
     const std::string fp = trim_copy_safe(actor_fp);
@@ -918,6 +919,144 @@ std::optional<WorkspaceMemberRec> enabled_member_for_actor(const WorkspaceRec& w
     }
 
     return std::nullopt;
+}
+
+std::string cookie_value_local(const httplib::Request& req, const std::string& name) {
+    const std::string header = ws_header_value(req, "Cookie");
+    if (header.empty() || name.empty()) return "";
+
+    std::size_t pos = 0;
+    while (pos < header.size()) {
+        std::size_t semi = header.find(';', pos);
+        std::string part = header.substr(pos, semi == std::string::npos ? std::string::npos : semi - pos);
+        part = trim_copy_safe(part);
+
+        const std::string prefix = name + "=";
+        if (part.rfind(prefix, 0) == 0) {
+            return part.substr(prefix.size());
+        }
+
+        if (semi == std::string::npos) break;
+        pos = semi + 1;
+    }
+
+    return "";
+}
+
+bool parse_workspace_external_claim_local(const std::string& claim,
+                                          std::string* out_workspace_id,
+                                          std::string* out_fp,
+                                          std::string* out_role) {
+    if (out_workspace_id) out_workspace_id->clear();
+    if (out_fp) out_fp->clear();
+    if (out_role) out_role->clear();
+
+    std::vector<std::string> parts;
+    std::size_t pos = 0;
+    while (true) {
+        std::size_t pipe = claim.find('|', pos);
+        parts.push_back(claim.substr(pos, pipe == std::string::npos ? std::string::npos : pipe - pos));
+        if (pipe == std::string::npos) break;
+        pos = pipe + 1;
+    }
+
+    if (parts.size() != 4) return false;
+    if (parts[0] != "external") return false;
+
+    const std::string workspace_id = trim_copy_safe(parts[1]);
+    const std::string fp = trim_copy_safe(parts[2]);
+    const std::string role = normalize_workspace_role_copy(parts[3]);
+
+    if (!is_valid_workspace_id(workspace_id)) return false;
+    if (fp.empty()) return false;
+
+    if (out_workspace_id) *out_workspace_id = workspace_id;
+    if (out_fp) *out_fp = fp;
+    if (out_role) *out_role = role;
+    return true;
+}
+
+bool try_workspace_external_cookie_actor_local(const WorkspaceFileRouteDeps& deps,
+                                               const httplib::Request& req,
+                                               const std::string& requested_workspace_id,
+                                               std::string* out_actor_fp,
+                                               std::string* out_actor_role) {
+    if (out_actor_fp) out_actor_fp->clear();
+    if (out_actor_role) out_actor_role->clear();
+
+    if (!deps.cookie_key || !deps.session_cookie_verify || !deps.b64_std_decode) {
+        return false;
+    }
+
+    const std::string cookie_val = cookie_value_local(req, "pqnas_workspace_session");
+    if (cookie_val.empty()) return false;
+
+    std::string claim_b64;
+    long exp = 0;
+    if (!deps.session_cookie_verify(deps.cookie_key, cookie_val, claim_b64, exp)) {
+        return false;
+    }
+
+    const long now = deps.now_epoch_sec ? static_cast<long>(deps.now_epoch_sec()) : 0L;
+    if (exp > 0 && now > exp) {
+        return false;
+    }
+
+    std::string claim;
+    if (!deps.b64_std_decode(claim_b64, claim)) {
+        return false;
+    }
+
+    std::string workspace_id;
+    std::string fp;
+    std::string role;
+    if (!parse_workspace_external_claim_local(claim, &workspace_id, &fp, &role)) {
+        return false;
+    }
+
+    if (workspace_id != requested_workspace_id) {
+        return false;
+    }
+
+    if (out_actor_fp) *out_actor_fp = fp;
+    if (out_actor_role) *out_actor_role = role;
+    return true;
+}
+
+bool require_workspace_file_actor_for_workspace_local(const WorkspaceFileRouteDeps& deps,
+                                                      const httplib::Request& req,
+                                                      httplib::Response& res,
+                                                      const std::string& workspace_id,
+                                                      std::string* out_actor_fp,
+                                                      std::string* out_actor_role,
+                                                      bool* out_is_external) {
+    if (out_actor_fp) out_actor_fp->clear();
+    if (out_actor_role) out_actor_role->clear();
+    if (out_is_external) *out_is_external = false;
+
+    if (try_workspace_external_cookie_actor_local(
+            deps, req, workspace_id, out_actor_fp, out_actor_role)) {
+        if (out_is_external) *out_is_external = true;
+        return true;
+    }
+
+    if (!deps.require_user_auth_users_actor) {
+        if (deps.reply_json) {
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "workspace auth not configured"}
+            }.dump());
+        } else {
+            res.status = 500;
+            res.set_header("Content-Type", "application/json");
+            res.body = R"({"ok":false,"error":"server_error","message":"workspace auth not configured"})";
+        }
+        return false;
+    }
+
+    return deps.require_user_auth_users_actor(
+        req, res, deps.cookie_key, deps.users, out_actor_fp, out_actor_role);
 }
     std::size_t count_enabled_owners_local(const WorkspaceRec& w) {
     std::size_t n = 0;
@@ -3196,11 +3335,7 @@ srv.Get("/api/v4/workspaces/members",
     srv.Get("/api/v4/workspaces/files/list",
             [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp, actor_role;
-        if (!deps.require_user_auth_users_actor ||
-            !deps.require_user_auth_users_actor(
-                req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
-            return;
-        }
+        bool actor_is_external = false;
 
         (void)actor_role;
         res.set_header("Cache-Control", "no-store");
@@ -3260,6 +3395,12 @@ srv.Get("/api/v4/workspaces/members",
             return;
         }
 
+        if (!require_workspace_file_actor_for_workspace_local(
+                deps, req, res, workspace_id,
+                &actor_fp, &actor_role, &actor_is_external)) {
+            return;
+        }
+
         auto wopt = deps.workspaces->get(workspace_id);
         if (!wopt.has_value()) {
             audit_fail("workspace_not_found", 404, workspace_id);
@@ -3290,6 +3431,16 @@ srv.Get("/api/v4/workspaces/members",
                 {"ok", false},
                 {"error", "forbidden"},
                 {"message", "workspace access denied"}
+            }.dump());
+            return;
+        }
+
+        if (actor_is_external && mopt->member_kind != "external") {
+            audit_fail("external_member_kind_mismatch", 403, workspace_id);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace external access denied"}
             }.dump());
             return;
         }
@@ -3453,11 +3604,7 @@ srv.Get("/api/v4/workspaces/members",
     // GET/POST /api/v4/workspaces/files/stat?workspace_id=...&path=rel/path or "." ...
     auto workspace_files_stat_handler = [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp, actor_role;
-        if (!deps.require_user_auth_users_actor ||
-            !deps.require_user_auth_users_actor(
-                req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
-            return;
-        }
+        bool actor_is_external = false;
 
         (void)actor_role;
         res.set_header("Cache-Control", "no-store");
@@ -3526,6 +3673,12 @@ srv.Get("/api/v4/workspaces/members",
             return;
         }
 
+        if (!require_workspace_file_actor_for_workspace_local(
+                deps, req, res, workspace_id,
+                &actor_fp, &actor_role, &actor_is_external)) {
+            return;
+        }
+
         auto wopt = deps.workspaces->get(workspace_id);
         if (!wopt.has_value()) {
             audit_fail(workspace_id, "workspace_not_found", 404);
@@ -3556,6 +3709,16 @@ srv.Get("/api/v4/workspaces/members",
                 {"ok", false},
                 {"error", "forbidden"},
                 {"message", "workspace access denied"}
+            }.dump());
+            return;
+        }
+
+        if (actor_is_external && mopt->member_kind != "external") {
+            audit_fail(workspace_id, "external_member_kind_mismatch", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace external access denied"}
             }.dump());
             return;
         }
@@ -4116,11 +4279,7 @@ srv.Get("/api/v4/workspaces/members",
     srv.Get("/api/v4/workspaces/files/read_text",
             [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp, actor_role;
-        if (!deps.require_user_auth_users_actor ||
-            !deps.require_user_auth_users_actor(
-                req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
-            return;
-        }
+        bool actor_is_external = false;
 
         (void)actor_role;
         res.set_header("Cache-Control", "no-store");
@@ -4189,6 +4348,12 @@ srv.Get("/api/v4/workspaces/members",
             return;
         }
 
+        if (!require_workspace_file_actor_for_workspace_local(
+                deps, req, res, workspace_id,
+                &actor_fp, &actor_role, &actor_is_external)) {
+            return;
+        }
+
         auto wopt = deps.workspaces->get(workspace_id);
         if (!wopt.has_value()) {
             audit_fail(workspace_id, "workspace_not_found", 404);
@@ -4219,6 +4384,16 @@ srv.Get("/api/v4/workspaces/members",
                 {"ok", false},
                 {"error", "forbidden"},
                 {"message", "workspace access denied"}
+            }.dump());
+            return;
+        }
+
+        if (actor_is_external && mopt->member_kind != "external") {
+            audit_fail(workspace_id, "external_member_kind_mismatch", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace external access denied"}
             }.dump());
             return;
         }
@@ -6855,11 +7030,7 @@ srv.Post("/api/v4/workspaces/files/write_text",
     srv.Get("/api/v4/workspaces/files/get",
             [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp, actor_role;
-        if (!deps.require_user_auth_users_actor ||
-            !deps.require_user_auth_users_actor(
-                req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
-            return;
-        }
+        bool actor_is_external = false;
 
         (void)actor_role;
         res.set_header("Cache-Control", "no-store");
@@ -6923,6 +7094,12 @@ srv.Post("/api/v4/workspaces/files/write_text",
             return;
         }
 
+        if (!require_workspace_file_actor_for_workspace_local(
+                deps, req, res, workspace_id,
+                &actor_fp, &actor_role, &actor_is_external)) {
+            return;
+        }
+
         auto wopt = deps.workspaces->get(workspace_id);
         if (!wopt.has_value()) {
             audit_fail(workspace_id, "workspace_not_found", 404);
@@ -6953,6 +7130,16 @@ srv.Post("/api/v4/workspaces/files/write_text",
                 {"ok", false},
                 {"error", "forbidden"},
                 {"message", "workspace access denied"}
+            }.dump());
+            return;
+        }
+
+        if (actor_is_external && mopt->member_kind != "external") {
+            audit_fail(workspace_id, "external_member_kind_mismatch", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace external access denied"}
             }.dump());
             return;
         }

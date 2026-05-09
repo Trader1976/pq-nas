@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <functional>
 #include <map>
 #include <string>
@@ -43,6 +44,14 @@ namespace pqnas {
         const std::string* origin = nullptr;
 
         const unsigned char* cookie_key = nullptr;
+
+        std::function<bool(const unsigned char* cookie_key,
+                           const std::string& cookie_value,
+                           std::string& out_fingerprint_b64,
+                           long& out_exp)> session_cookie_verify;
+
+        std::function<bool(const std::string& b64,
+                           std::string& out_bytes)> b64_std_decode;
 
         std::uint64_t transport_max_upload_bytes = 0;
         std::uint64_t payload_max_upload_bytes = 0;

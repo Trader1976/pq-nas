@@ -21033,6 +21033,18 @@ INSERT INTO admin_stats_buckets (
     ws_file_deps.users_path = users_path;
     ws_file_deps.workspaces_path = workspaces_path;
     ws_file_deps.cookie_key = COOKIE_KEY;
+    ws_file_deps.session_cookie_verify =
+        [&](const unsigned char* cookie_key,
+            const std::string& cookie_value,
+            std::string& out_fingerprint_b64,
+            long& out_exp) -> bool {
+            return session_cookie_verify(cookie_key, cookie_value, out_fingerprint_b64, out_exp);
+        };
+    ws_file_deps.b64_std_decode =
+        [&](const std::string& b64,
+            std::string& out_bytes) -> bool {
+            return b64std_decode_to_bytes(b64, out_bytes);
+        };
     ws_file_deps.origin = &ORIGIN;
     ws_file_deps.transport_max_upload_bytes =
         (g_transport_max_upload_bytes ? g_transport_max_upload_bytes : k_payload_max_upload_bytes);
