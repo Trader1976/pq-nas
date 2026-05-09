@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>External Workspace Access - DNA-Nexus</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <script src="/static/theme.js"></script>
+    <style>
+        :root{
+            --bg:#070707;
+            --card:rgba(18,18,18,.86);
+            --fg:#f4f4f4;
+            --muted:#a8a8a8;
+            --line:rgba(255,255,255,.14);
+            --accent:#ff8a1c;
+            --bad:#ff5c5c;
+            --good:#57d68d;
+            --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;
+            --sans:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+        }
+        body{
+            margin:0;
+            min-height:100vh;
+            background:
+                radial-gradient(circle at 20% 10%, rgba(255,138,28,.20), transparent 34%),
+                radial-gradient(circle at 80% 90%, rgba(120,120,120,.18), transparent 34%),
+                var(--bg);
+            color:var(--fg);
+            font-family:var(--sans);
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            padding:24px;
+            box-sizing:border-box;
+        }
+        .shell{
+            width:min(980px,100%);
+            display:grid;
+            grid-template-columns: minmax(280px, 390px) 1fr;
+            gap:18px;
+        }
+        .card{
+            background:var(--card);
+            border:1px solid var(--line);
+            border-radius:22px;
+            box-shadow:0 22px 80px rgba(0,0,0,.42);
+            padding:22px;
+            backdrop-filter: blur(10px);
+        }
+        h1{
+            margin:0 0 8px;
+            font-size:24px;
+            letter-spacing:.2px;
+        }
+        .sub{
+            color:var(--muted);
+            line-height:1.45;
+            margin:0 0 16px;
+        }
+        .mono{ font-family:var(--mono); }
+        .pill{
+            display:inline-flex;
+            align-items:center;
+            gap:8px;
+            border:1px solid var(--line);
+            border-radius:999px;
+            padding:7px 10px;
+            color:var(--muted);
+            font-size:13px;
+            max-width:100%;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+        .qrBox{
+            background:#fff;
+            border-radius:18px;
+            padding:12px;
+            margin:18px 0 12px;
+            min-height:220px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+        }
+        .qrBox img{
+            max-width:100%;
+            width:280px;
+            height:auto;
+            display:block;
+        }
+        .status{
+            margin-top:14px;
+            padding:12px 14px;
+            border-radius:14px;
+            border:1px solid var(--line);
+            color:var(--muted);
+            background:rgba(255,255,255,.04);
+            line-height:1.35;
+        }
+        .status.good{ color:var(--good); border-color:rgba(87,214,141,.35); }
+        .status.bad{ color:var(--bad); border-color:rgba(255,92,92,.35); }
+        .btn{
+            appearance:none;
+            border:1px solid rgba(255,138,28,.55);
+            background:rgba(255,138,28,.15);
+            color:var(--fg);
+            border-radius:14px;
+            padding:10px 13px;
+            font-weight:800;
+            cursor:pointer;
+        }
+        .btn.secondary{
+            border-color:var(--line);
+            background:rgba(255,255,255,.05);
+            color:var(--muted);
+        }
+        .row{
+            display:flex;
+            gap:10px;
+            flex-wrap:wrap;
+            align-items:center;
+        }
+        .files{
+            margin-top:14px;
+            display:flex;
+            flex-direction:column;
+            gap:8px;
+        }
+        .fileRow{
+            display:grid;
+            grid-template-columns: 1fr auto;
+            gap:10px;
+            align-items:center;
+            padding:11px 12px;
+            border:1px solid var(--line);
+            border-radius:14px;
+            background:rgba(255,255,255,.04);
+        }
+        .fileName{
+            min-width:0;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+        .fileMeta{
+            color:var(--muted);
+            font-size:12px;
+            white-space:nowrap;
+        }
+        .hint{
+            color:var(--muted);
+            font-size:13px;
+            line-height:1.4;
+        }
+        .hidden{ display:none !important; }
+        @media (max-width:760px){
+            .shell{ grid-template-columns:1fr; }
+        }
+    </style>
+</head>
+<body>
+<div class="shell">
+    <section class="card">
+        <h1>External workspace access</h1>
+        <p class="sub">
+            Scan the QR code with DNA Connect to prove your identity and open this workspace.
+        </p>
+
+        <div class="pill mono" id="workspacePill">workspace_id: —</div>
+
+        <div class="qrBox" id="qrBox">
+            <div class="hint">Preparing QR…</div>
+        </div>
+
+        <div class="row">
+            <button class="btn" id="btnNewQr" type="button">New QR</button>
+            <button class="btn secondary" id="btnRefreshFiles" type="button">Refresh files</button>
+        </div>
+
+        <div class="status" id="status">Loading…</div>
+    </section>
+
+    <section class="card">
+        <h1>Workspace files</h1>
+        <p class="sub" id="fileSub">After login, files you can access will appear here.</p>
+        <div class="files" id="files"></div>
+    </section>
+</div>
+
+<script>
+(() => {
+    "use strict";
+
+    const params = new URLSearchParams(location.search);
+    const workspaceId = String(params.get("workspace_id") || "").trim();
+
+    const workspacePill = document.getElementById("workspacePill");
+    const qrBox = document.getElementById("qrBox");
+    const statusEl = document.getElementById("status");
+    const filesEl = document.getElementById("files");
+    const fileSub = document.getElementById("fileSub");
+    const btnNewQr = document.getElementById("btnNewQr");
+    const btnRefreshFiles = document.getElementById("btnRefreshFiles");
+
+    let currentSessionId = "";
+    let pollTimer = null;
+
+    function setStatus(text, kind) {
+        statusEl.textContent = text || "";
+        statusEl.classList.toggle("good", kind === "good");
+        statusEl.classList.toggle("bad", kind === "bad");
+    }
+
+    function escapeHtml(s) {
+        return String(s == null ? "" : s)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll("\"", "&quot;")
+            .replaceAll("'", "&#39;");
+    }
+
+    function fmtSize(n) {
+        const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+        let v = Number(n || 0);
+        let i = 0;
+        while (v >= 1024 && i < units.length - 1) {
+            v /= 1024;
+            i++;
+        }
+        return i === 0 ? `${v | 0} ${units[i]}` : `${v.toFixed(1)} ${units[i]}`;
+    }
+
+    async function apiJson(path, opts = {}) {
+        const r = await fetch(path, {
+            credentials: "include",
+            cache: "no-store",
+            ...opts,
+            headers: {
+                "Accept": "application/json",
+                ...(opts.headers || {})
+            }
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            const msg = j && (j.message || j.error) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`;
+            throw new Error(msg);
+        }
+        return j;
+    }
+
+    async function startSession() {
+        if (!workspaceId) {
+            setStatus("Missing workspace_id in URL.", "bad");
+            qrBox.innerHTML = `<div class="hint">Missing workspace_id.</div>`;
+            return;
+        }
+
+        clearInterval(pollTimer);
+        currentSessionId = "";
+        filesEl.innerHTML = "";
+        fileSub.textContent = "After login, files you can access will appear here.";
+        setStatus("Creating a fresh QR login session…");
+
+        const j = await apiJson("/api/v4/workspaces/external-sessions/start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ workspace_id: workspaceId })
+        });
+
+        currentSessionId = String(j.session && j.session.session_id || "");
+        const qrPath = String(j.qr_svg || "");
+
+        if (!currentSessionId || !qrPath) {
+            throw new Error("Server did not return session QR.");
+        }
+
+        qrBox.innerHTML = `<img alt="DNA Connect QR" src="${escapeHtml(qrPath)}">`;
+        setStatus("Scan the QR with DNA Connect. Waiting for approval…");
+
+        pollTimer = setInterval(() => pollStatus().catch((e) => {
+            setStatus(`Status check failed: ${e.message || e}`, "bad");
+        }), 1800);
+    }
+
+    async function pollStatus() {
+        if (!currentSessionId) return;
+
+        const j = await apiJson(`/api/v4/workspaces/external-sessions/status?session_id=${encodeURIComponent(currentSessionId)}`);
+        const s = j.session || {};
+        const state = String(s.status || "");
+
+        if (state === "approved") {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            setStatus("QR approved. Opening workspace…", "good");
+            await consumeSession();
+            await loadFiles();
+            return;
+        }
+
+        if (state === "denied" || state === "expired") {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            setStatus(`Login ${state}: ${s.reason || "try a new QR"}`, "bad");
+            return;
+        }
+
+        setStatus("Waiting for DNA Connect scan…");
+    }
+
+    async function consumeSession() {
+        if (!currentSessionId) throw new Error("missing session id");
+
+        await apiJson("/api/v4/workspaces/external-sessions/consume", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session_id: currentSessionId })
+        });
+
+        setStatus("Workspace session ready.", "good");
+    }
+
+    async function loadFiles() {
+        if (!workspaceId) return;
+
+        const j = await apiJson(`/api/v4/workspaces/files/list?workspace_id=${encodeURIComponent(workspaceId)}`);
+        const items = Array.isArray(j.items) ? j.items : [];
+
+        fileSub.textContent = `${items.length} item(s) in workspace root.`;
+
+        if (!items.length) {
+            filesEl.innerHTML = `<div class="hint">This workspace is empty.</div>`;
+            return;
+        }
+
+        filesEl.innerHTML = items.map((it) => {
+            const name = it.name || it.path || "item";
+            const type = it.type || (it.is_dir ? "dir" : "file");
+            const size = type === "dir" ? "folder" : fmtSize(it.size || it.bytes || 0);
+            return `
+                <div class="fileRow">
+                    <div class="fileName">${escapeHtml(name)}</div>
+                    <div class="fileMeta">${escapeHtml(size)}</div>
+                </div>
+            `;
+        }).join("");
+    }
+
+    btnNewQr.addEventListener("click", () => {
+        startSession().catch((e) => setStatus(`Failed to start QR session: ${e.message || e}`, "bad"));
+    });
+
+    btnRefreshFiles.addEventListener("click", () => {
+        loadFiles().catch((e) => setStatus(`File refresh failed: ${e.message || e}`, "bad"));
+    });
+
+    workspacePill.textContent = `workspace_id: ${workspaceId || "missing"}`;
+
+    // Try existing external cookie first. If it fails, show QR.
+    loadFiles()
+        .then(() => setStatus("Existing workspace session is active.", "good"))
+        .catch(() => startSession().catch((e) => setStatus(`Failed to start QR session: ${e.message || e}`, "bad")));
+})();
+</script>
+</body>
+</html>
