@@ -102,6 +102,7 @@
     const EXT_VIEW_PREF_KEY = "pqnas_external_workspace_view_v1";
     const EXT_DIRS_FIRST_PREF_KEY = "pqnas_external_workspace_dirs_first_v1";
     const EXT_SORT_PREF_KEY = "pqnas_external_workspace_sort_v1";
+    const CHUNKED_UPLOAD_THRESHOLD_BYTES = 64 * 1024 * 1024;
 
     let externalViewMode = (() => {
         try { return localStorage.getItem(EXT_VIEW_PREF_KEY) === "list" ? "list" : "grid"; }
@@ -406,6 +407,177 @@
             : `HTTP ${xhr ? xhr.status : 0}`;
     }
 
+
+    async function postUploadJson(url, body) {
+        const r = await fetch(url, {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            body: JSON.stringify(body || {})
+        });
+
+        const text = await r.text().catch(() => "");
+        let j = null;
+        try { j = text ? JSON.parse(text) : null; } catch (_) {}
+
+        if (!r.ok || !j || j.ok !== true) {
+            throw new Error(
+                j && (j.message || j.error)
+                    ? `${j.error || ""} ${j.message || ""}`.trim()
+                    : (text ? text.replace(/\s+/g, " ").slice(0, 220) : `HTTP ${r.status}`)
+            );
+        }
+
+        return j;
+    }
+
+    function xhrPutBlob(url, blob, onProgress) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            uploadCurrentXhr = xhr;
+
+            const clearActive = () => {
+                if (uploadCurrentXhr === xhr) uploadCurrentXhr = null;
+            };
+
+            xhr.open("PUT", url, true);
+            xhr.withCredentials = true;
+            xhr.timeout = 60 * 60 * 1000;
+            xhr.setRequestHeader("Accept", "application/json");
+            xhr.setRequestHeader("Content-Type", "application/octet-stream");
+
+            xhr.upload.onprogress = (e) => {
+                if (!onProgress) return;
+                if (e.lengthComputable) onProgress(e.loaded, e.total);
+                else onProgress(e.loaded, blob.size || 0);
+            };
+
+            xhr.onload = () => {
+                clearActive();
+                const j = parseUploadJsonText(xhr.responseText);
+                if (xhr.status >= 200 && xhr.status < 300 && j && j.ok) {
+                    resolve(j);
+                    return;
+                }
+                reject(new Error(uploadErrorMessageFromXhr(xhr)));
+            };
+
+            xhr.onerror = () => {
+                clearActive();
+                reject(new Error("upload chunk failed: network error"));
+            };
+
+            xhr.ontimeout = () => {
+                clearActive();
+                reject(new Error("upload chunk failed: timeout"));
+            };
+
+            xhr.onabort = () => {
+                clearActive();
+                reject(Object.assign(new Error(uploadCancelRequested ? "upload cancelled" : "upload chunk aborted"), {
+                    kind: uploadCancelRequested ? "cancelled" : "network"
+                }));
+            };
+
+            xhr.send(blob);
+        });
+    }
+
+    async function cancelWorkspaceChunkedUploadBestEffort(uploadId) {
+        if (!uploadId) return;
+
+        try {
+            await postUploadJson("/api/v4/workspaces/uploads/cancel", {
+                workspace_id: workspaceId,
+                upload_id: uploadId
+            });
+        } catch (_) {}
+    }
+
+    async function uploadFileToWorkspaceChunked(relPath, file, onProgress) {
+        const size = Number(file && file.size != null ? file.size : 0);
+        let uploadId = "";
+        let uploadedCommitted = 0;
+
+        try {
+            const start = await postUploadJson("/api/v4/workspaces/uploads/start", {
+                workspace_id: workspaceId,
+                path: relPath,
+                size_bytes: size,
+                overwrite: false
+            });
+
+            uploadId = String(start.upload_id || "");
+            const chunkSize = Math.max(1, Number(start.chunk_size || CHUNKED_UPLOAD_THRESHOLD_BYTES));
+            const chunksTotal = Math.max(0, Number(start.chunks_total || Math.ceil(size / chunkSize)));
+
+            if (!uploadId || chunksTotal < 1) {
+                throw new Error("invalid chunked upload session");
+            }
+
+            for (let index = 0; index < chunksTotal; index++) {
+                if (uploadCancelRequested) {
+                    throw Object.assign(new Error("upload cancelled"), { kind: "cancelled" });
+                }
+
+                const begin = index * chunkSize;
+                const end = Math.min(size, begin + chunkSize);
+                const blob = file.slice(begin, end);
+
+                const url =
+                    `/api/v4/workspaces/uploads/chunk?workspace_id=${encodeURIComponent(workspaceId)}` +
+                    `&upload_id=${encodeURIComponent(uploadId)}` +
+                    `&index=${encodeURIComponent(String(index))}`;
+
+                await xhrPutBlob(url, blob, (loaded) => {
+                    const totalLoaded = uploadedCommitted + Math.max(0, Number(loaded || 0));
+                    if (onProgress) onProgress(totalLoaded, size, {
+                        chunkIndex: index,
+                        chunksTotal,
+                        chunkLoaded: loaded,
+                        chunkSize: blob.size
+                    });
+                });
+
+                uploadedCommitted += blob.size;
+                if (onProgress) onProgress(uploadedCommitted, size, {
+                    chunkIndex: index,
+                    chunksTotal,
+                    chunkLoaded: blob.size,
+                    chunkSize: blob.size
+                });
+            }
+
+            if (uploadCancelRequested) {
+                throw Object.assign(new Error("upload cancelled"), { kind: "cancelled" });
+            }
+
+            const finish = await postUploadJson("/api/v4/workspaces/uploads/finish", {
+                workspace_id: workspaceId,
+                upload_id: uploadId
+            });
+
+            uploadId = "";
+            return finish;
+        } catch (e) {
+            if (uploadId) await cancelWorkspaceChunkedUploadBestEffort(uploadId);
+            throw e;
+        }
+    }
+
+    async function uploadFileSmartToWorkspace(relPath, file, onProgress) {
+        const size = Number(file && file.size != null ? file.size : 0);
+        if (size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
+            return await uploadFileToWorkspaceChunked(relPath, file, onProgress);
+        }
+        return await uploadFileToWorkspacePut(relPath, file, onProgress);
+    }
+
+
     function uploadFileToWorkspacePut(relPath, file, onProgress) {
         return new Promise((resolve, reject) => {
             const qs = new URLSearchParams();
@@ -498,7 +670,7 @@
             });
 
             try {
-                await uploadFileToWorkspacePut(target, item.file, (loaded, total) => {
+                await uploadFileSmartToWorkspace(target, item.file, (loaded, total, ctx) => {
                     lastLoaded = Math.max(0, Number(loaded || 0));
                     const pct = ((committedBytes + lastLoaded) / totalBytes) * 100;
                     setUploadModalProgress({
@@ -795,8 +967,8 @@
     }
 
     function syncUploadPanel() {
-        if (uploadBox) uploadBox.classList.toggle("hidden", !canEdit || !uploadOpen);
-        if (btnToggleUpload) btnToggleUpload.textContent = uploadOpen ? "Hide upload" : "Upload";
+        if (uploadBox) uploadBox.classList.add("hidden");
+        if (btnToggleUpload) btnToggleUpload.textContent = "Upload";
     }
 
     function applyAccessInfo(j) {
@@ -1885,42 +2057,21 @@
     }
 
     async function uploadSelectedFile() {
-        if (!canEdit) {
-            setStatus("This workspace session is view-only.", "bad");
-            return;
+        const selected = Array.from((uploadFile && uploadFile.files) || []);
+        const relFiles = selected.map((file) => ({
+            rel: file.webkitRelativePath || file.name,
+            file
+        }));
+
+        try {
+            uploadOpen = false;
+            /* direct upload: old inline panel update not needed */
+            await uploadRelFiles(relFiles);
+        } finally {
+            if (uploadFile) uploadFile.value = "";
+            uploadOpen = false;
+            /* direct upload: old inline panel update not needed */
         }
-
-        const f = uploadFile && uploadFile.files && uploadFile.files[0];
-        if (!f) {
-            setStatus("Choose a file first.", "bad");
-            return;
-        }
-
-        const targetPath = childPath(currentPath, f.name);
-        const qs = new URLSearchParams();
-        qs.set("workspace_id", workspaceId);
-        qs.set("path", targetPath);
-        qs.set("overwrite", "1");
-
-        setStatus(`Uploading ${f.name}…`);
-
-        const r = await fetch(`/api/v4/workspaces/files/put?${qs.toString()}`, {
-            method: "PUT",
-            credentials: "include",
-            cache: "no-store",
-            headers: { "Accept": "application/json" },
-            body: f
-        });
-
-        const j = await r.json().catch(() => null);
-        if (!r.ok || !j || !j.ok) {
-            const msg = j && (j.message || j.error) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`;
-            throw new Error(msg);
-        }
-
-        if (uploadFile) uploadFile.value = "";
-        setStatus(`Uploaded ${f.name}.`, "good");
-        await loadFiles(currentPath);
     }
 
     function basenameFromPath(rel) {
@@ -3091,7 +3242,7 @@
             if (!canEdit) return setStatus("This workspace session is view-only.", "bad");
             uploadOpen = true;
             syncUploadPanel();
-            uploadFile && uploadFile.click();
+            launchExternalUploadPicker(false);
             return;
         }
 
@@ -3107,9 +3258,9 @@
         }
 
         if (action === "upload-folder") {
-            uploadOpen = true;
-            updateAccessUi();
-            uploadFolderFile && uploadFolderFile.click();
+            uploadOpen = false;
+            /* direct upload: old inline panel update not needed */
+            launchExternalUploadPicker(true);
             return;
         }
         if (action === "zip-folder") return showPlaceholder("Download current folder as zip");
@@ -3438,10 +3589,79 @@
         })
         .catch(() => startSession().catch((e) => setStatus(`Failed to start QR session: ${e.message || e}`, "bad")));
 
+    uploadFile?.addEventListener("change", () => {
+        uploadSelectedFile().catch((e) => setStatus(`Upload failed: ${e.message || e}`, "bad"));
+    });
+
     uploadFolderFile?.addEventListener("change", () => {
         uploadSelectedFolderFiles().catch((e) => setStatus(`Upload failed: ${e.message || e}`, "bad"));
     });
 
     wireExternalDragDropUpload();
+
+    function updateAccessUi() {
+        uploadOpen = false;
+        if (uploadBox) uploadBox.classList.add("hidden");
+        if (btnToggleUpload) btnToggleUpload.textContent = "Upload";
+    }
+
+    function launchExternalUploadPicker(folderMode) {
+        if (!canEdit) {
+            setStatus("Upload requires editor access.", "bad");
+            return;
+        }
+
+        uploadOpen = false;
+        updateAccessUi();
+
+        const picker = document.createElement("input");
+        picker.type = "file";
+        picker.multiple = true;
+
+        if (folderMode) {
+            picker.setAttribute("webkitdirectory", "");
+            picker.setAttribute("directory", "");
+        }
+
+        picker.style.position = "fixed";
+        picker.style.left = "-10000px";
+        picker.style.top = "-10000px";
+        picker.style.width = "1px";
+        picker.style.height = "1px";
+        picker.style.opacity = "0";
+        picker.style.pointerEvents = "none";
+
+        picker.addEventListener("change", async () => {
+            const selected = Array.from(picker.files || []);
+            const relFiles = selected.map((file) => ({
+                rel: file.webkitRelativePath || file.name,
+                file
+            }));
+
+            try {
+                await uploadRelFiles(relFiles);
+            } finally {
+                try { picker.remove(); } catch (_) {}
+            }
+        }, { once: true });
+
+        document.body.appendChild(picker);
+        picker.click();
+    }
+
+    function wireDirectUploadPicker() {
+        if (!btnToggleUpload || btnToggleUpload.__externalDirectUploadWired) return;
+
+        btnToggleUpload.__externalDirectUploadWired = true;
+        btnToggleUpload.textContent = "Upload";
+
+        btnToggleUpload.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+            launchExternalUploadPicker(false);
+        }, true);
+    }
+
+    wireDirectUploadPicker();
 
 })();

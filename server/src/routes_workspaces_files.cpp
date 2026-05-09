@@ -10,6 +10,7 @@
 #include <random>
 #include <system_error>
 #include <array>
+#include <algorithm>
 #include <openssl/evp.h>
 #include <vector>
 #include <csignal>
@@ -6200,6 +6201,1269 @@ srv.Post("/api/v4/workspaces/files/write_text",
             {"path", rel_norm}
         }.dump());
     });
+
+    // Workspace chunked upload API.
+    //
+    // Purpose:
+    // - Let both internal workspace users and external workspace members upload
+    //   large files through small per-request chunks.
+    // - Keep each request below common reverse-proxy / Cloudflare body limits.
+    // - Finish assembles the chunks server-side into the normal workspace file tree.
+    //
+    // These routes intentionally do NOT reuse /api/v4/uploads/* because that API
+    // is My Files/user-storage only and is keyed by fp_hex/user_dir.
+    static constexpr std::uint64_t k_ws_chunked_upload_chunk_bytes =
+        64ull * 1024ull * 1024ull; // 64 MiB
+    static constexpr std::uint64_t k_ws_chunked_upload_max_total_bytes =
+        64ull * 1024ull * 1024ull * 1024ull; // 64 GiB safety cap
+
+    auto ws_upload_root = []() -> std::filesystem::path {
+        return std::filesystem::path(pqnas::data_root_dir()).parent_path() /
+               "workspace_upload_sessions";
+    };
+
+    auto ws_upload_safe_part = [](const std::string& s) -> std::string {
+        std::string out;
+        out.reserve(s.size());
+        for (unsigned char ch : s) {
+            if (std::isalnum(ch) || ch == '_' || ch == '-') out.push_back(static_cast<char>(ch));
+            else out.push_back('_');
+        }
+        if (out.empty()) out = "unknown";
+        return out;
+    };
+
+    auto ws_upload_session_dir = [ws_upload_root, ws_upload_safe_part](const std::string& workspace_id,
+                                     const std::string& upload_id) -> std::filesystem::path {
+        return ws_upload_root() / ws_upload_safe_part(workspace_id) / upload_id;
+    };
+
+    auto ws_upload_id_ok = [](const std::string& s) -> bool {
+        if (s.size() < 12 || s.size() > 96) return false;
+        for (unsigned char ch : s) {
+            if (!(std::isalnum(ch) || ch == '_' || ch == '-')) return false;
+        }
+        return true;
+    };
+
+    auto ws_upload_chunk_name = [](std::uint64_t idx) -> std::string {
+        return "chunk-" + std::to_string(static_cast<unsigned long long>(idx)) + ".bin";
+    };
+
+    auto ws_upload_json_u64 = [](const json& j, const char* key, std::uint64_t* out) -> bool {
+        if (!out || !j.contains(key)) return false;
+        const auto& v = j[key];
+
+        if (v.is_number_unsigned()) {
+            *out = v.get<std::uint64_t>();
+            return true;
+        }
+
+        if (v.is_number_integer()) {
+            const long long n = v.get<long long>();
+            if (n < 0) return false;
+            *out = static_cast<std::uint64_t>(n);
+            return true;
+        }
+
+        return false;
+    };
+
+    auto ws_upload_header_u64 = [](const httplib::Request& req,
+                                   const char* name,
+                                   std::uint64_t* out) -> bool {
+        if (!out) return false;
+        auto it = req.headers.find(name);
+        if (it == req.headers.end()) return false;
+
+        try {
+            std::size_t idx = 0;
+            unsigned long long v = std::stoull(it->second, &idx, 10);
+            if (idx != it->second.size()) return false;
+            *out = static_cast<std::uint64_t>(v);
+            return true;
+        } catch (...) {
+            return false;
+        }
+    };
+
+    auto ws_upload_write_json_file = [](const std::filesystem::path& path,
+                                         const json& body,
+                                         std::string* err) -> bool {
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
+        if (ec) {
+            if (err) *err = "mkdir failed: " + ec.message();
+            return false;
+        }
+
+        const auto tmp = path.parent_path() /
+            (path.filename().string() + ".tmp." + random_urlsafe_token(8));
+
+        try {
+            {
+                std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+                if (!f.good()) {
+                    if (err) *err = "open tmp failed";
+                    return false;
+                }
+                f << body.dump(2);
+                f.flush();
+                if (!f.good()) {
+                    if (err) *err = "write tmp failed";
+                    return false;
+                }
+            }
+
+            std::filesystem::rename(tmp, path, ec);
+            if (ec) {
+                std::filesystem::remove(tmp, ec);
+                if (err) *err = "rename failed: " + ec.message();
+                return false;
+            }
+
+            return true;
+        } catch (const std::exception& e) {
+            std::filesystem::remove(tmp, ec);
+            if (err) *err = e.what();
+            return false;
+        }
+    };
+
+    auto ws_upload_read_json_file = [](const std::filesystem::path& path,
+                                       json* out,
+                                       std::string* err) -> bool {
+        if (out) *out = json::object();
+
+        try {
+            std::ifstream f(path, std::ios::binary);
+            if (!f.good()) {
+                if (err) *err = "open failed";
+                return false;
+            }
+
+            json j = json::parse(f, nullptr, false);
+            if (j.is_discarded() || !j.is_object()) {
+                if (err) *err = "invalid json";
+                return false;
+            }
+
+            if (out) *out = std::move(j);
+            return true;
+        } catch (const std::exception& e) {
+            if (err) *err = e.what();
+            return false;
+        }
+    };
+
+    auto ws_upload_expected_chunk_bytes = [](std::uint64_t size_bytes,
+                                             std::uint64_t chunk_size,
+                                             std::uint64_t chunks_total,
+                                             std::uint64_t idx) -> std::uint64_t {
+        if (chunk_size == 0 || chunks_total == 0 || idx >= chunks_total) return 0;
+        if (idx + 1 < chunks_total) return chunk_size;
+
+        const std::uint64_t already = chunk_size * idx;
+        if (already > size_bytes) return 0;
+        return size_bytes - already;
+    };
+
+    auto ws_upload_active_temp_bytes = [ws_upload_root, ws_upload_safe_part](const std::string& workspace_id) -> std::uint64_t {
+        std::uint64_t total = 0;
+        const std::filesystem::path root =
+            ws_upload_root() / ws_upload_safe_part(workspace_id);
+
+        std::error_code ec;
+        if (!std::filesystem::exists(root, ec)) return 0;
+
+        for (std::filesystem::recursive_directory_iterator it(
+                 root,
+                 std::filesystem::directory_options::skip_permission_denied,
+                 ec);
+             !ec && it != std::filesystem::recursive_directory_iterator();
+             it.increment(ec)) {
+            std::error_code st_ec;
+            const auto st = std::filesystem::symlink_status(it->path(), st_ec);
+            if (st_ec || !std::filesystem::is_regular_file(st)) continue;
+
+            const std::uint64_t n = pqnas::file_size_u64_safe(it->path());
+            if (std::numeric_limits<std::uint64_t>::max() - total < n) {
+                return std::numeric_limits<std::uint64_t>::max();
+            }
+            total += n;
+        }
+
+        return total;
+    };
+
+    auto ws_upload_file_time_to_epoch_sec =
+        [](const std::filesystem::file_time_type& ft) -> std::int64_t {
+            using namespace std::chrono;
+            const auto sctp = time_point_cast<system_clock::duration>(
+                ft - std::filesystem::file_time_type::clock::now() + system_clock::now()
+            );
+            return static_cast<std::int64_t>(
+                duration_cast<seconds>(sctp.time_since_epoch()).count());
+        };
+
+    auto ws_upload_prepare_target =
+        [deps, ws_upload_file_time_to_epoch_sec](const httplib::Request& req,
+            httplib::Response& res,
+            const std::string& audit_prefix,
+            const std::string& workspace_id,
+            const std::string& rel_path,
+            std::uint64_t size_bytes,
+            bool overwrite,
+            bool conflict_check,
+            std::string* out_actor_fp,
+            std::string* out_actor_role,
+            bool* out_actor_is_external,
+            WorkspaceRec* out_workspace,
+            std::filesystem::path* out_ws_root,
+            std::string* out_rel_norm,
+            std::filesystem::path* out_abs,
+            bool* out_physical_exists,
+            std::uint64_t* out_existing_size,
+            std::int64_t* out_existing_mtime) -> bool {
+        if (out_actor_fp) out_actor_fp->clear();
+        if (out_actor_role) out_actor_role->clear();
+        if (out_actor_is_external) *out_actor_is_external = false;
+        if (out_ws_root) *out_ws_root = std::filesystem::path{};
+        if (out_rel_norm) out_rel_norm->clear();
+        if (out_abs) *out_abs = std::filesystem::path{};
+        if (out_physical_exists) *out_physical_exists = false;
+        if (out_existing_size) *out_existing_size = 0;
+        if (out_existing_mtime) *out_existing_mtime = 0;
+
+        std::string actor_fp;
+        std::string actor_role;
+        bool actor_is_external = false;
+
+        auto audit_fail = [&](const std::string& reason,
+                              int http,
+                              const std::string& detail = "") {
+            if (!deps.audit_emit) return;
+            std::map<std::string, std::string> f;
+            if (!actor_fp.empty()) f["actor_fp"] = actor_fp;
+            if (!workspace_id.empty()) f["workspace_id"] = workspace_id;
+            if (!rel_path.empty()) f["path"] = rel_path;
+            f["reason"] = reason;
+            f["http"] = std::to_string(http);
+            if (!detail.empty()) f["detail"] = detail;
+            f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+
+            auto it_cf = req.headers.find("CF-Connecting-IP");
+            if (it_cf != req.headers.end()) f["cf_ip"] = it_cf->second;
+
+            auto it_xff = req.headers.find("X-Forwarded-For");
+            if (it_xff != req.headers.end()) f["xff"] = it_xff->second;
+
+            deps.audit_emit(audit_prefix + "_fail", "fail", f);
+        };
+
+        if (!deps.workspaces || !deps.users) {
+            audit_fail("route_deps_missing", 500);
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "workspace upload route deps not configured"}
+            }.dump());
+            return false;
+        }
+
+        if (!deps.workspaces->load(deps.workspaces_path)) {
+            audit_fail("workspaces_reload_failed", 500);
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "workspaces_reload_failed"},
+                {"message", "failed to reload workspaces"}
+            }.dump());
+            return false;
+        }
+
+        if (workspace_id.empty()) {
+            audit_fail("missing_workspace_id", 400);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "missing workspace_id"}
+            }.dump());
+            return false;
+        }
+
+        if (!require_workspace_file_actor_for_workspace_local(
+                deps, req, res, workspace_id,
+                &actor_fp, &actor_role, &actor_is_external)) {
+            return false;
+        }
+
+        auto wopt = deps.workspaces->get(workspace_id);
+        if (!wopt.has_value()) {
+            audit_fail("workspace_not_found", 404);
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "workspace not found"}
+            }.dump());
+            return false;
+        }
+
+        const WorkspaceRec& w = *wopt;
+
+        if (w.status != "enabled") {
+            audit_fail("workspace_disabled", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace disabled"}
+            }.dump());
+            return false;
+        }
+
+        auto mopt = enabled_member_for_actor(w, actor_fp);
+        if (!mopt.has_value()) {
+            audit_fail("workspace_access_denied", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace access denied"}
+            }.dump());
+            return false;
+        }
+
+        if (actor_is_external && mopt->member_kind != "external") {
+            audit_fail("external_member_kind_mismatch", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace external access denied"}
+            }.dump());
+            return false;
+        }
+
+        if (!(mopt->role == "owner" || mopt->role == "editor")) {
+            audit_fail("workspace_write_denied", 403, mopt->role);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace write access denied"}
+            }.dump());
+            return false;
+        }
+
+        if (w.storage_state != "allocated") {
+            audit_fail("storage_unallocated", 403);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "storage_unallocated"},
+                {"message", "Workspace storage not allocated"},
+                {"workspace_id", workspace_id},
+                {"quota_bytes", w.quota_bytes}
+            }.dump());
+            return false;
+        }
+
+        if (!w.storage_pool_id.empty()) {
+            audit_fail("pool_not_supported_yet", 400, w.storage_pool_id);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "pool_not_supported_yet"},
+                {"message", "workspace chunked upload currently supports default pool only"}
+            }.dump());
+            return false;
+        }
+
+        if (rel_path.empty()) {
+            audit_fail("missing_path", 400);
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "missing path"}
+            }.dump());
+            return false;
+        }
+
+        std::string rel_norm;
+        {
+            std::string nerr;
+            if (!pqnas::normalize_user_rel_path_strict(rel_path, &rel_norm, &nerr)) {
+                audit_fail("invalid_path", 400, nerr);
+                deps.reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "invalid path"}
+                }.dump());
+                return false;
+            }
+        }
+
+        const std::filesystem::path ws_root =
+            workspace_dir_for_default_pool_only(deps.users_path, w);
+
+        std::filesystem::path abs;
+        {
+            std::string perr;
+            if (!pqnas::resolve_user_path_strict(ws_root, rel_norm, &abs, &perr)) {
+                audit_fail("invalid_path", 400, perr);
+                deps.reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", "invalid path"}
+                }.dump());
+                return false;
+            }
+        }
+
+        {
+            std::string found_ancestor;
+            if (any_file_ancestor_exists_physical(ws_root, rel_norm, &found_ancestor)) {
+                audit_fail("ancestor_is_file", 409, found_ancestor);
+                deps.reply_json(res, 409, json{
+                    {"ok", false},
+                    {"error", "path_conflict"},
+                    {"message", "a parent path is an existing file"},
+                    {"ancestor", found_ancestor}
+                }.dump());
+                return false;
+            }
+        }
+
+        bool physical_exists = false;
+        std::uint64_t existing_size = 0;
+        std::int64_t existing_mtime = 0;
+
+        {
+            std::error_code ec;
+            auto st_existing = std::filesystem::symlink_status(abs, ec);
+
+            if (ec) {
+                if (ec == std::make_error_code(std::errc::no_such_file_or_directory)) {
+                    ec.clear();
+                    physical_exists = false;
+                } else {
+                    audit_fail("target_exists_check_failed", 500, ec.message());
+                    deps.reply_json(res, 500, json{
+                        {"ok", false},
+                        {"error", "server_error"},
+                        {"message", "target existence check failed"},
+                        {"detail", ec.message()}
+                    }.dump());
+                    return false;
+                }
+            } else {
+                physical_exists = std::filesystem::exists(st_existing);
+            }
+
+            if (physical_exists) {
+                if (std::filesystem::is_symlink(st_existing)) {
+                    audit_fail("target_is_symlink", 409, abs.string());
+                    deps.reply_json(res, 409, json{
+                        {"ok", false},
+                        {"error", "path_conflict"},
+                        {"message", "target path exists and is a symlink"},
+                        {"path", rel_norm}
+                    }.dump());
+                    return false;
+                }
+
+                if (!std::filesystem::is_regular_file(st_existing)) {
+                    audit_fail("target_not_regular_file", 409, abs.string());
+                    deps.reply_json(res, 409, json{
+                        {"ok", false},
+                        {"error", "path_conflict"},
+                        {"message", "target path exists and is not a regular file"},
+                        {"path", rel_norm}
+                    }.dump());
+                    return false;
+                }
+
+                existing_size = pqnas::file_size_u64_safe(abs);
+
+                std::error_code ec_mtime;
+                auto ft = std::filesystem::last_write_time(abs, ec_mtime);
+                if (!ec_mtime) existing_mtime = ws_upload_file_time_to_epoch_sec(ft);
+            }
+        }
+
+        if (conflict_check && !overwrite && physical_exists) {
+            json existing = json::object();
+            existing["size_bytes"] = existing_size;
+            existing["mtime_epoch"] = existing_mtime;
+            existing["physical_path"] = abs.string();
+
+            audit_fail("file_exists", 409, rel_norm);
+            deps.reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "file_exists"},
+                {"message", "file already exists"},
+                {"path", rel_norm},
+                {"existing", existing}
+            }.dump());
+            return false;
+        }
+
+        const std::uint64_t used_bytes = dir_size_bytes_best_effort_local(ws_root);
+
+        std::uint64_t would_used_bytes = used_bytes;
+        if (existing_size <= would_used_bytes) would_used_bytes -= existing_size;
+        else would_used_bytes = 0;
+
+        if (std::numeric_limits<std::uint64_t>::max() - would_used_bytes < size_bytes) {
+            would_used_bytes = std::numeric_limits<std::uint64_t>::max();
+        } else {
+            would_used_bytes += size_bytes;
+        }
+
+        if ((w.quota_bytes == 0 && size_bytes > 0) ||
+            (w.quota_bytes > 0 && would_used_bytes > w.quota_bytes)) {
+            audit_fail("quota_exceeded", 413, rel_norm);
+            deps.reply_json(res, 413, json{
+                {"ok", false},
+                {"error", "quota_exceeded"},
+                {"message", "Quota exceeded"},
+                {"workspace_id", workspace_id},
+                {"used_bytes", used_bytes},
+                {"quota_bytes", w.quota_bytes},
+                {"incoming_bytes", size_bytes},
+                {"existing_bytes", existing_size},
+                {"would_used_bytes", would_used_bytes}
+            }.dump());
+            return false;
+        }
+
+        if (out_actor_fp) *out_actor_fp = actor_fp;
+        if (out_actor_role) *out_actor_role = actor_role;
+        if (out_actor_is_external) *out_actor_is_external = actor_is_external;
+        if (out_workspace) *out_workspace = w;
+        if (out_ws_root) *out_ws_root = ws_root;
+        if (out_rel_norm) *out_rel_norm = rel_norm;
+        if (out_abs) *out_abs = abs;
+        if (out_physical_exists) *out_physical_exists = physical_exists;
+        if (out_existing_size) *out_existing_size = existing_size;
+        if (out_existing_mtime) *out_existing_mtime = existing_mtime;
+
+        return true;
+    };
+
+    srv.Post("/api/v4/workspaces/uploads/start", [=](const httplib::Request& req, httplib::Response& res) {
+        if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
+        res.set_header("Cache-Control", "no-store");
+
+        json body = json::parse(req.body, nullptr, false);
+        if (body.is_discarded() || !body.is_object()) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid json"}
+            }.dump());
+            return;
+        }
+
+        const std::string workspace_id = body.value("workspace_id", "");
+        const std::string rel_path = body.value("path", "");
+        const bool overwrite =
+            body.contains("overwrite") && body["overwrite"].is_boolean()
+                ? body["overwrite"].get<bool>()
+                : false;
+
+        std::uint64_t size_bytes = 0;
+        if (!ws_upload_json_u64(body, "size_bytes", &size_bytes)) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "missing size_bytes"}
+            }.dump());
+            return;
+        }
+
+        if (size_bytes > k_ws_chunked_upload_max_total_bytes) {
+            deps.reply_json(res, 413, json{
+                {"ok", false},
+                {"error", "upload_too_large"},
+                {"message", "workspace chunked upload exceeds maximum total size"},
+                {"max_bytes", k_ws_chunked_upload_max_total_bytes}
+            }.dump());
+            return;
+        }
+
+        std::string actor_fp;
+        std::string actor_role;
+        bool actor_is_external = false;
+        WorkspaceRec w;
+        std::filesystem::path ws_root;
+        std::string rel_norm;
+        std::filesystem::path out_abs;
+
+        if (!ws_upload_prepare_target(
+                req, res, "workspace.uploads_start",
+                workspace_id, rel_path, size_bytes, overwrite, true,
+                &actor_fp, &actor_role, &actor_is_external,
+                &w, &ws_root, &rel_norm, &out_abs,
+                nullptr, nullptr, nullptr)) {
+            return;
+        }
+
+        const std::uint64_t chunks_total =
+            size_bytes == 0
+                ? 1
+                : ((size_bytes + k_ws_chunked_upload_chunk_bytes - 1) /
+                   k_ws_chunked_upload_chunk_bytes);
+
+        const std::string upload_id = random_urlsafe_token(24);
+        const std::filesystem::path dir = ws_upload_session_dir(workspace_id, upload_id);
+
+        json meta = {
+            {"workspace_id", workspace_id},
+            {"path", rel_norm},
+            {"size_bytes", size_bytes},
+            {"chunk_size", k_ws_chunked_upload_chunk_bytes},
+            {"chunks_total", chunks_total},
+            {"overwrite", overwrite},
+            {"actor_fp", actor_fp},
+            {"actor_role", actor_role},
+            {"actor_is_external", actor_is_external},
+            {"created_epoch", deps.now_epoch_sec ? deps.now_epoch_sec() : static_cast<std::int64_t>(std::time(nullptr))}
+        };
+
+        std::string werr;
+        if (!ws_upload_write_json_file(dir / "meta.json", meta, &werr)) {
+            if (deps.audit_emit) {
+                deps.audit_emit("workspace.uploads_start_fail", "fail", {
+                    {"actor_fp", actor_fp},
+                    {"workspace_id", workspace_id},
+                    {"path", rel_norm},
+                    {"reason", "write_meta_failed"},
+                    {"detail", werr}
+                });
+            }
+
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to save upload session"},
+                {"detail", werr}
+            }.dump());
+            return;
+        }
+
+        if (deps.audit_emit) {
+            deps.audit_emit("workspace.uploads_start_ok", "ok", {
+                {"actor_fp", actor_fp},
+                {"workspace_id", workspace_id},
+                {"upload_id", upload_id},
+                {"path", rel_norm},
+                {"size_bytes", std::to_string(static_cast<unsigned long long>(size_bytes))},
+                {"chunk_size", std::to_string(static_cast<unsigned long long>(k_ws_chunked_upload_chunk_bytes))},
+                {"chunks_total", std::to_string(static_cast<unsigned long long>(chunks_total))}
+            });
+        }
+
+        deps.reply_json(res, 200, json{
+            {"ok", true},
+            {"workspace_id", workspace_id},
+            {"upload_id", upload_id},
+            {"path", rel_norm},
+            {"chunk_size", k_ws_chunked_upload_chunk_bytes},
+            {"chunks_total", chunks_total}
+        }.dump());
+    });
+
+    srv.Put("/api/v4/workspaces/uploads/chunk",
+            [=](const httplib::Request& req,
+                httplib::Response& res,
+                const httplib::ContentReader& content_reader) {
+        if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
+        res.set_header("Cache-Control", "no-store");
+
+        const std::string workspace_id =
+            req.has_param("workspace_id") ? trim_copy_safe(req.get_param_value("workspace_id")) : "";
+        const std::string upload_id =
+            req.has_param("upload_id") ? trim_copy_safe(req.get_param_value("upload_id")) : "";
+
+        if (workspace_id.empty() || !ws_upload_id_ok(upload_id)) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid workspace_id or upload_id"}
+            }.dump());
+            return;
+        }
+
+        std::uint64_t chunk_index = 0;
+        if (!req.has_param("index")) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "missing index"}
+            }.dump());
+            return;
+        }
+
+        try {
+            std::size_t idx = 0;
+            unsigned long long v = std::stoull(req.get_param_value("index"), &idx, 10);
+            if (idx != req.get_param_value("index").size()) throw std::runtime_error("bad index");
+            chunk_index = static_cast<std::uint64_t>(v);
+        } catch (...) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid index"}
+            }.dump());
+            return;
+        }
+
+        const std::filesystem::path dir = ws_upload_session_dir(workspace_id, upload_id);
+
+        json meta;
+        std::string rerr;
+        if (!ws_upload_read_json_file(dir / "meta.json", &meta, &rerr)) {
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "upload session not found"}
+            }.dump());
+            return;
+        }
+
+        if (meta.value("workspace_id", "") != workspace_id) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "upload session workspace mismatch"}
+            }.dump());
+            return;
+        }
+
+        std::uint64_t size_bytes = 0;
+        std::uint64_t chunk_size = 0;
+        std::uint64_t chunks_total = 0;
+
+        if (!ws_upload_json_u64(meta, "size_bytes", &size_bytes) ||
+            !ws_upload_json_u64(meta, "chunk_size", &chunk_size) ||
+            !ws_upload_json_u64(meta, "chunks_total", &chunks_total) ||
+            chunk_size == 0 ||
+            chunks_total == 0 ||
+            chunk_index >= chunks_total) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "bad upload session metadata"}
+            }.dump());
+            return;
+        }
+
+        const std::string rel_norm = meta.value("path", "");
+        const bool overwrite = meta.value("overwrite", false);
+
+        std::string actor_fp;
+        std::string actor_role;
+        bool actor_is_external = false;
+        WorkspaceRec w;
+        std::filesystem::path ws_root;
+
+        if (!ws_upload_prepare_target(
+                req, res, "workspace.uploads_chunk",
+                workspace_id, rel_norm, size_bytes, overwrite, false,
+                &actor_fp, &actor_role, &actor_is_external,
+                &w, &ws_root, nullptr, nullptr,
+                nullptr, nullptr, nullptr)) {
+            return;
+        }
+
+        if (actor_fp != meta.value("actor_fp", "")) {
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "upload session belongs to another actor"}
+            }.dump());
+            return;
+        }
+
+        std::uint64_t content_length = 0;
+        if (!ws_upload_header_u64(req, "Content-Length", &content_length)) {
+            deps.reply_json(res, 411, json{
+                {"ok", false},
+                {"error", "length_required"},
+                {"message", "Content-Length required"}
+            }.dump());
+            return;
+        }
+
+        const std::uint64_t expected_bytes =
+            ws_upload_expected_chunk_bytes(size_bytes, chunk_size, chunks_total, chunk_index);
+
+        if (content_length != expected_bytes || content_length > chunk_size) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "chunk size mismatch"},
+                {"content_length", content_length},
+                {"expected_bytes", expected_bytes},
+                {"chunk_size", chunk_size}
+            }.dump());
+            return;
+        }
+
+        const std::filesystem::path final_chunk =
+            dir / "chunks" / ws_upload_chunk_name(chunk_index);
+
+        std::uint64_t existing_this_chunk = pqnas::file_size_u64_safe(final_chunk);
+        std::uint64_t active_temp_bytes = ws_upload_active_temp_bytes(workspace_id);
+        if (existing_this_chunk <= active_temp_bytes) active_temp_bytes -= existing_this_chunk;
+
+        const std::uint64_t live_used = dir_size_bytes_best_effort_local(ws_root);
+        std::uint64_t temp_would = live_used;
+        if (std::numeric_limits<std::uint64_t>::max() - temp_would < active_temp_bytes) {
+            temp_would = std::numeric_limits<std::uint64_t>::max();
+        } else {
+            temp_would += active_temp_bytes;
+        }
+        if (std::numeric_limits<std::uint64_t>::max() - temp_would < content_length) {
+            temp_would = std::numeric_limits<std::uint64_t>::max();
+        } else {
+            temp_would += content_length;
+        }
+
+        if ((w.quota_bytes == 0 && content_length > 0) ||
+            (w.quota_bytes > 0 && temp_would > w.quota_bytes)) {
+            deps.reply_json(res, 413, json{
+                {"ok", false},
+                {"error", "quota_exceeded"},
+                {"message", "Upload chunk would exceed workspace quota"},
+                {"workspace_id", workspace_id},
+                {"used_bytes", live_used},
+                {"active_temp_bytes", active_temp_bytes},
+                {"incoming_chunk_bytes", content_length},
+                {"quota_bytes", w.quota_bytes},
+                {"would_used_bytes", temp_would}
+            }.dump());
+            return;
+        }
+
+        std::error_code ec;
+        std::filesystem::create_directories(final_chunk.parent_path(), ec);
+        if (ec) {
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to prepare chunk directory"},
+                {"detail", ec.message()}
+            }.dump());
+            return;
+        }
+
+        const std::filesystem::path tmp_chunk =
+            final_chunk.parent_path() /
+            (final_chunk.filename().string() + ".tmp." + random_urlsafe_token(8));
+
+        std::uint64_t bytes_written = 0;
+        bool stream_ok = true;
+        std::string stream_err;
+
+        try {
+            std::ofstream f(tmp_chunk, std::ios::binary | std::ios::trunc);
+            if (!f.good()) throw std::runtime_error("open chunk tmp failed");
+
+            content_reader([&](const char* data, size_t len) {
+                if (!stream_ok) return false;
+                if (len == 0) return true;
+
+                const std::uint64_t n = static_cast<std::uint64_t>(len);
+                const std::uint64_t next = bytes_written + n;
+
+                if (next < bytes_written || next > expected_bytes) {
+                    stream_ok = false;
+                    stream_err = "chunk_length_exceeded";
+                    return false;
+                }
+
+                f.write(data, static_cast<std::streamsize>(len));
+                if (!f.good()) {
+                    stream_ok = false;
+                    stream_err = "write_chunk_failed";
+                    return false;
+                }
+
+                bytes_written = next;
+                return true;
+            });
+
+            f.flush();
+            if (!f.good()) throw std::runtime_error("flush chunk tmp failed");
+            f.close();
+
+            if (!stream_ok || bytes_written != expected_bytes) {
+                std::filesystem::remove(tmp_chunk, ec);
+                deps.reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_request"},
+                    {"message", stream_ok ? "chunk length mismatch" : stream_err},
+                    {"expected_bytes", expected_bytes},
+                    {"bytes_written", bytes_written}
+                }.dump());
+                return;
+            }
+
+            std::filesystem::rename(tmp_chunk, final_chunk, ec);
+            if (ec) throw std::runtime_error("rename chunk failed: " + ec.message());
+
+        } catch (const std::exception& e) {
+            std::filesystem::remove(tmp_chunk, ec);
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to write upload chunk"},
+                {"detail", e.what()}
+            }.dump());
+            return;
+        }
+
+        if (deps.audit_emit) {
+            deps.audit_emit("workspace.uploads_chunk_ok", "ok", {
+                {"actor_fp", actor_fp},
+                {"workspace_id", workspace_id},
+                {"upload_id", upload_id},
+                {"index", std::to_string(static_cast<unsigned long long>(chunk_index))}
+            });
+        }
+
+        deps.reply_json(res, 200, json{
+            {"ok", true},
+            {"workspace_id", workspace_id},
+            {"upload_id", upload_id},
+            {"index", chunk_index}
+        }.dump());
+    });
+
+    srv.Post("/api/v4/workspaces/uploads/cancel", [=](const httplib::Request& req, httplib::Response& res) {
+        if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
+        res.set_header("Cache-Control", "no-store");
+
+        json body = json::parse(req.body, nullptr, false);
+        if (body.is_discarded() || !body.is_object()) body = json::object();
+
+        const std::string workspace_id = body.value("workspace_id", "");
+        const std::string upload_id = body.value("upload_id", "");
+
+        if (workspace_id.empty() || !ws_upload_id_ok(upload_id)) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid workspace_id or upload_id"}
+            }.dump());
+            return;
+        }
+
+        const std::filesystem::path dir = ws_upload_session_dir(workspace_id, upload_id);
+
+        json meta;
+        std::string rerr;
+        if (!ws_upload_read_json_file(dir / "meta.json", &meta, &rerr)) {
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "upload session not found"}
+            }.dump());
+            return;
+        }
+
+        const std::string rel_norm = meta.value("path", "");
+        std::uint64_t size_bytes = 0;
+        (void)ws_upload_json_u64(meta, "size_bytes", &size_bytes);
+        const bool overwrite = meta.value("overwrite", false);
+
+        std::string actor_fp;
+        if (!ws_upload_prepare_target(
+                req, res, "workspace.uploads_cancel",
+                workspace_id, rel_norm, size_bytes, overwrite, false,
+                &actor_fp, nullptr, nullptr,
+                nullptr, nullptr, nullptr, nullptr,
+                nullptr, nullptr, nullptr)) {
+            return;
+        }
+
+        if (actor_fp != meta.value("actor_fp", "")) {
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "upload session belongs to another actor"}
+            }.dump());
+            return;
+        }
+
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+        if (ec) {
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to cancel upload"},
+                {"detail", ec.message()}
+            }.dump());
+            return;
+        }
+
+        if (deps.audit_emit) {
+            deps.audit_emit("workspace.uploads_cancel_ok", "ok", {
+                {"actor_fp", actor_fp},
+                {"workspace_id", workspace_id},
+                {"upload_id", upload_id}
+            });
+        }
+
+        deps.reply_json(res, 200, json{
+            {"ok", true},
+            {"workspace_id", workspace_id},
+            {"upload_id", upload_id}
+        }.dump());
+    });
+
+    srv.Post("/api/v4/workspaces/uploads/finish", [=](const httplib::Request& req, httplib::Response& res) {
+        if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
+        res.set_header("Cache-Control", "no-store");
+
+        json body = json::parse(req.body, nullptr, false);
+        if (body.is_discarded() || !body.is_object()) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid json"}
+            }.dump());
+            return;
+        }
+
+        const std::string workspace_id = body.value("workspace_id", "");
+        const std::string upload_id = body.value("upload_id", "");
+
+        if (workspace_id.empty() || !ws_upload_id_ok(upload_id)) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid workspace_id or upload_id"}
+            }.dump());
+            return;
+        }
+
+        const std::filesystem::path dir = ws_upload_session_dir(workspace_id, upload_id);
+
+        json meta;
+        std::string rerr;
+        if (!ws_upload_read_json_file(dir / "meta.json", &meta, &rerr)) {
+            deps.reply_json(res, 404, json{
+                {"ok", false},
+                {"error", "not_found"},
+                {"message", "upload session not found"}
+            }.dump());
+            return;
+        }
+
+        if (meta.value("workspace_id", "") != workspace_id) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "upload session workspace mismatch"}
+            }.dump());
+            return;
+        }
+
+        std::uint64_t size_bytes = 0;
+        std::uint64_t chunk_size = 0;
+        std::uint64_t chunks_total = 0;
+
+        if (!ws_upload_json_u64(meta, "size_bytes", &size_bytes) ||
+            !ws_upload_json_u64(meta, "chunk_size", &chunk_size) ||
+            !ws_upload_json_u64(meta, "chunks_total", &chunks_total) ||
+            chunk_size == 0 ||
+            chunks_total == 0) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "bad upload session metadata"}
+            }.dump());
+            return;
+        }
+
+        const std::string rel_norm = meta.value("path", "");
+        const bool overwrite = meta.value("overwrite", false);
+
+        std::string actor_fp;
+        WorkspaceRec w;
+        std::filesystem::path ws_root;
+        std::filesystem::path out_abs;
+        bool physical_exists = false;
+
+        if (!ws_upload_prepare_target(
+                req, res, "workspace.uploads_finish",
+                workspace_id, rel_norm, size_bytes, overwrite, true,
+                &actor_fp, nullptr, nullptr,
+                &w, &ws_root, nullptr, &out_abs,
+                &physical_exists, nullptr, nullptr)) {
+            return;
+        }
+
+        if (actor_fp != meta.value("actor_fp", "")) {
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "upload session belongs to another actor"}
+            }.dump());
+            return;
+        }
+
+        for (std::uint64_t i = 0; i < chunks_total; ++i) {
+            const auto chunk_path = dir / "chunks" / ws_upload_chunk_name(i);
+            const std::uint64_t expected =
+                ws_upload_expected_chunk_bytes(size_bytes, chunk_size, chunks_total, i);
+
+            std::error_code ec;
+            auto st = std::filesystem::symlink_status(chunk_path, ec);
+            if (ec || !std::filesystem::is_regular_file(st)) {
+                deps.reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "missing_chunk"},
+                    {"message", "upload chunk missing"},
+                    {"index", i}
+                }.dump());
+                return;
+            }
+
+            const std::uint64_t actual = pqnas::file_size_u64_safe(chunk_path);
+            if (actual != expected) {
+                deps.reply_json(res, 400, json{
+                    {"ok", false},
+                    {"error", "bad_chunk"},
+                    {"message", "upload chunk has wrong size"},
+                    {"index", i},
+                    {"expected_bytes", expected},
+                    {"actual_bytes", actual}
+                }.dump());
+                return;
+            }
+        }
+
+        std::error_code ec;
+        std::filesystem::create_directories(out_abs.parent_path(), ec);
+        if (ec) {
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to create directories"},
+                {"detail", ec.message()}
+            }.dump());
+            return;
+        }
+
+        const std::filesystem::path tmp =
+            out_abs.parent_path() /
+            (out_abs.filename().string() + ".chunked." + random_urlsafe_token(8) + ".tmp");
+
+        std::uint64_t assembled_bytes = 0;
+
+        try {
+            {
+                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+                if (!out.good()) throw std::runtime_error("open output tmp failed");
+
+                std::array<char, 1024 * 1024> buf{};
+
+                for (std::uint64_t i = 0; i < chunks_total; ++i) {
+                    const auto chunk_path = dir / "chunks" / ws_upload_chunk_name(i);
+                    std::ifstream in(chunk_path, std::ios::binary);
+                    if (!in.good()) {
+                        throw std::runtime_error("open chunk failed index=" +
+                                                 std::to_string(static_cast<unsigned long long>(i)));
+                    }
+
+                    while (in.good()) {
+                        in.read(buf.data(), static_cast<std::streamsize>(buf.size()));
+                        std::streamsize n = in.gcount();
+                        if (n > 0) {
+                            out.write(buf.data(), n);
+                            if (!out.good()) throw std::runtime_error("write output tmp failed");
+                            assembled_bytes += static_cast<std::uint64_t>(n);
+                        }
+                    }
+
+                    if (!in.eof()) {
+                        throw std::runtime_error("read chunk failed index=" +
+                                                 std::to_string(static_cast<unsigned long long>(i)));
+                    }
+                }
+
+                out.flush();
+                if (!out.good()) throw std::runtime_error("flush output tmp failed");
+            }
+
+            if (assembled_bytes != size_bytes) {
+                throw std::runtime_error("assembled size mismatch");
+            }
+
+            if (!deps.file_versions) {
+                throw std::runtime_error("file versions service missing");
+            }
+
+            if (overwrite && physical_exists) {
+                pqnas::PreserveLiveFileVersionParams vp;
+                vp.scope_type = "workspace";
+                vp.scope_id = workspace_id;
+                vp.scope_root = ws_root;
+                vp.logical_rel_path = rel_norm;
+                vp.live_abs_path = out_abs;
+                vp.event_kind = "overwrite_preserve";
+                vp.actor_fp = actor_fp;
+                vp.users = deps.users;
+
+                pqnas::FileVersionRec vrec;
+                std::string verr;
+                if (!deps.file_versions->preserve_live_file_version(vp, &vrec, &verr)) {
+                    throw std::runtime_error("failed to preserve previous version: " + verr);
+                }
+            }
+
+            std::filesystem::rename(tmp, out_abs, ec);
+            if (ec) {
+                throw std::runtime_error("rename failed: " + ec.message());
+            }
+
+            std::filesystem::remove_all(dir, ec);
+
+            if (deps.audit_emit) {
+                deps.audit_emit("workspace.uploads_finish_ok", "ok", {
+                    {"actor_fp", actor_fp},
+                    {"workspace_id", workspace_id},
+                    {"upload_id", upload_id},
+                    {"path", rel_norm},
+                    {"bytes", std::to_string(static_cast<unsigned long long>(assembled_bytes))},
+                    {"chunks_total", std::to_string(static_cast<unsigned long long>(chunks_total))}
+                });
+            }
+
+            deps.reply_json(res, 200, json{
+                {"ok", true},
+                {"workspace_id", workspace_id},
+                {"upload_id", upload_id},
+                {"path", rel_norm},
+                {"bytes", assembled_bytes},
+                {"overwrite", overwrite},
+                {"chunked", true}
+            }.dump());
+            return;
+
+        } catch (const std::exception& e) {
+            std::error_code rm_ec;
+            std::filesystem::remove(tmp, rm_ec);
+
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "chunked upload finish failed"},
+                {"detail", e.what()}
+            }.dump());
+            return;
+        }
+    });
+
         // PUT /api/v4/workspaces/files/put?workspace_id=...&path=relative/path.bin[&overwrite=1]
     // Body: raw bytes streamed to temp file, then renamed atomically
     srv.Put("/api/v4/workspaces/files/put",

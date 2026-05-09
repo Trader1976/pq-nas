@@ -2449,33 +2449,37 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return false;
   }
 
+  function currentWorkspaceIdForUpload() {
+    try {
+      const fm = window.PQNAS_FILEMGR || null;
+
+      if (fm && fm.scope && fm.scope.workspaceId) {
+        return String(fm.scope.workspaceId || "");
+      }
+
+      if (fm && typeof fm.getWorkspaceId === "function") {
+        const v = String(fm.getWorkspaceId() || "");
+        if (v) return v;
+      }
+    } catch (_) {}
+
+    try {
+      const snap = typeof currentScopeSnapshot === "function" ? currentScopeSnapshot() : null;
+      const v = snap && (snap.workspace_id || snap.workspaceId);
+      if (v) return String(v || "");
+    } catch (_) {}
+
+    return "";
+  }
+
   function shouldUseChunkedUpload(file, opts = {}) {
     const size = Number(file && file.size != null ? file.size : 0);
-
-    // My Files only for now. Workspace chunking comes next.
-    const inWorkspace =
-        window.PQNAS_FILEMGR &&
-        typeof window.PQNAS_FILEMGR.isWorkspaceScope === "function" &&
-        window.PQNAS_FILEMGR.isWorkspaceScope();
-
-    return size > CHUNKED_UPLOAD_THRESHOLD_BYTES && !inWorkspace;
+    return size > CHUNKED_UPLOAD_THRESHOLD_BYTES;
   }
 
   function assertWorkspaceLargeUploadSupported(file) {
-    const size = Number(file && file.size != null ? file.size : 0);
-
-    if (!isWorkspaceUploadScope()) return;
-    if (size <= CHUNKED_UPLOAD_THRESHOLD_BYTES) return;
-
-    const err = new Error(
-      `Workspace quota/upload limit exceeded. This large file is ${fmtSize(size)}. ` +
-      `Workspace uploads are not chunked yet, so large files cannot be uploaded to workspaces until workspace chunked upload is added.`
-    );
-
-    err.kind = "workspace_large_upload_not_chunked_yet";
-    err.source = "client";
-    err.error = "workspace_upload_limit";
-    throw err;
+    // Workspace chunked upload is now supported through /api/v4/workspaces/uploads/*.
+    return;
   }
 
   async function postUploadJson(url, body) {
@@ -2581,15 +2585,25 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     });
   }
 
-  async function cancelChunkedUploadBestEffort(uploadId) {
+  async function cancelChunkedUploadBestEffort(uploadId, workspaceId = "") {
     if (!uploadId) return;
+
+    const inWorkspace = !!workspaceId;
+    const url = inWorkspace
+        ? "/api/v4/workspaces/uploads/cancel"
+        : "/api/v4/uploads/cancel";
+
+    const body = inWorkspace
+        ? { workspace_id: workspaceId, upload_id: uploadId }
+        : { upload_id: uploadId };
+
     try {
-      await fetch("/api/v4/uploads/cancel", {
+      await fetch(url, {
         method: "POST",
         credentials: "include",
         cache: "no-store",
         headers: { "Content-Type": "application/json", "Accept": "application/json" },
-        body: JSON.stringify({ upload_id: uploadId })
+        body: JSON.stringify(body)
       });
     } catch (_) {}
   }
@@ -2598,15 +2612,36 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const full = curPath ? `${curPath}/${relPath}` : relPath;
     const size = Number(file && file.size != null ? file.size : 0);
 
+    const workspaceScope = isWorkspaceUploadScope();
+    const workspaceId = workspaceScope ? currentWorkspaceIdForUpload() : "";
+    if (workspaceScope && !workspaceId) {
+      throw Object.assign(new Error("missing workspace_id for workspace chunked upload"), {
+        kind: "workspace_upload_missing_id",
+        source: "client"
+      });
+    }
+
+    const inWorkspace = !!workspaceId;
+
     let uploadId = "";
     let uploadedCommitted = 0;
 
     try {
-      const start = await postUploadJson("/api/v4/uploads/start", {
-        path: full,
-        size_bytes: size,
-        overwrite: !!(opts && opts.overwrite)
-      });
+      const start = await postUploadJson(
+          inWorkspace ? "/api/v4/workspaces/uploads/start" : "/api/v4/uploads/start",
+          inWorkspace
+              ? {
+                  workspace_id: workspaceId,
+                  path: full,
+                  size_bytes: size,
+                  overwrite: !!(opts && opts.overwrite)
+                }
+              : {
+                  path: full,
+                  size_bytes: size,
+                  overwrite: !!(opts && opts.overwrite)
+                }
+      );
 
       uploadId = String(start.upload_id || "");
       const chunkSize = Math.max(1, Number(start.chunk_size || CHUNKED_UPLOAD_THRESHOLD_BYTES));
@@ -2629,8 +2664,9 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         const end = Math.min(size, begin + chunkSize);
         const blob = file.slice(begin, end);
 
-        const url =
-            `/api/v4/uploads/chunk?upload_id=${encodeURIComponent(uploadId)}&index=${encodeURIComponent(String(index))}`;
+        const url = inWorkspace
+            ? `/api/v4/workspaces/uploads/chunk?workspace_id=${encodeURIComponent(workspaceId)}&upload_id=${encodeURIComponent(uploadId)}&index=${encodeURIComponent(String(index))}`
+            : `/api/v4/uploads/chunk?upload_id=${encodeURIComponent(uploadId)}&index=${encodeURIComponent(String(index))}`;
 
         await xhrPutBlob(url, blob, (loaded) => {
           const totalLoaded = uploadedCommitted + Math.max(0, Number(loaded || 0));
@@ -2655,14 +2691,17 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         throw Object.assign(new Error("upload cancelled"), { kind: "cancelled", source: "client" });
       }
 
-      const finish = await postUploadJson("/api/v4/uploads/finish", {
-        upload_id: uploadId
-      });
+      const finish = await postUploadJson(
+          inWorkspace ? "/api/v4/workspaces/uploads/finish" : "/api/v4/uploads/finish",
+          inWorkspace
+              ? { workspace_id: workspaceId, upload_id: uploadId }
+              : { upload_id: uploadId }
+      );
 
       uploadId = "";
       return finish;
     } catch (e) {
-      if (uploadId) await cancelChunkedUploadBestEffort(uploadId);
+      if (uploadId) await cancelChunkedUploadBestEffort(uploadId, workspaceId);
       throw e;
     }
   }

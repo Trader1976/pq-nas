@@ -1896,3 +1896,10 @@ html[data-theme="win_classic"] .dropOverlay .dropOverlayCard{
         radial-gradient(circle at 20% 0%, rgba(255,138,28,.18), transparent 44%),
         rgba(246,246,246,.98);
 }
+
+
+/* Direct upload mode: External Workspace now opens the file picker immediately,
+   so the old inline upload panel is no longer used. */
+.uploadBox{
+    display:none !important;
+}
