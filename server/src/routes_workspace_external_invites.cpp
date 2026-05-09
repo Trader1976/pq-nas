@@ -347,19 +347,11 @@ void register_workspace_external_invite_routes(
 
     // GET /api/v4/workspaces/external-invites/qr.svg?invite_id=wsi_xxx
     //
-    // Returns QR SVG containing dna://auth, not dna://pair.
+    // Public-by-invite-id: this QR link is intentionally sendable to outsiders.
+    // The invite_id is the bearer secret; acceptance still requires DNA Connect auth.
     srv.Get("/api/v4/workspaces/external-invites/qr.svg",
             [&](const httplib::Request& req, httplib::Response& res) {
-        std::string actor_fp;
-        std::string actor_role;
-
-        if (!deps.require_user_auth_users_actor ||
-            !deps.require_user_auth_users_actor(
-                req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
-            return;
-        }
-
-        if (!deps.reply_json || !deps.workspaces || !deps.external_invites ||
+        if (!deps.reply_json || !deps.external_invites ||
             !deps.origin || !deps.app || !deps.url_encode || !deps.qr_svg_from_text) {
             deps.reply_json(res, 500, json{
                 {"ok", false},
@@ -379,7 +371,6 @@ void register_workspace_external_invite_routes(
             return;
         }
 
-        if (!reload_workspaces_or_500(deps, res)) return;
         if (!reload_invites_or_500(deps, res)) return;
 
         const long now = deps.now_epoch_sec ? static_cast<long>(deps.now_epoch_sec()) : 0L;
@@ -391,16 +382,6 @@ void register_workspace_external_invite_routes(
                 {"ok", false},
                 {"error", "invite_not_found"},
                 {"message", "invite not found"}
-            }.dump());
-            return;
-        }
-
-        auto wopt = deps.workspaces->get(inv->workspace_id);
-        if (!wopt.has_value() || !actor_is_enabled_workspace_owner(*wopt, actor_fp)) {
-            deps.reply_json(res, 403, json{
-                {"ok", false},
-                {"error", "forbidden"},
-                {"message", "workspace owner required"}
             }.dump());
             return;
         }
