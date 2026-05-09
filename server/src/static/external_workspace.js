@@ -17,6 +17,7 @@
     const breadcrumbsEl = document.getElementById("breadcrumbs");
     const uploadBox = document.getElementById("uploadBox");
     const uploadFile = document.getElementById("uploadFile");
+    const uploadFolderFile = document.getElementById("uploadFolderFile");
     const editorTools = document.getElementById("editorTools");
     const newFolderName = document.getElementById("newFolderName");
     const btnUpload = document.getElementById("btnUpload");
@@ -87,6 +88,9 @@
     let currentRole = "";
     let signedIn = false;
     let uploadOpen = false;
+    let uploadCancelRequested = false;
+    let uploadCurrentXhr = null;
+    let uploadDragDepth = 0;
     let contextItem = null;
     let pickerResolve = null;
     let pickerPath = "";
@@ -250,6 +254,509 @@
         }
         return j;
     }
+
+
+    // ---- External Workspace upload progress / drag-drop helpers -------------
+
+    function safeUploadRelativePath(rel) {
+        const parts = String(rel || "")
+            .replaceAll("\\", "/")
+            .split("/")
+            .map((p) => p.trim())
+            .filter((p) => p && p !== "." && p !== "..");
+        return parts.join("/");
+    }
+
+    function uploadTargetPath(rel) {
+        const clean = safeUploadRelativePath(rel);
+        return normalizeRelPath(currentPath ? `${currentPath}/${clean}` : clean);
+    }
+
+    function ensureDropOverlay() {
+        let overlay = document.getElementById("dropOverlay");
+        if (overlay) return overlay;
+
+        overlay = document.createElement("div");
+        overlay.id = "dropOverlay";
+        overlay.className = "dropOverlay";
+        overlay.setAttribute("aria-hidden", "true");
+        overlay.innerHTML = `
+            <div class="dropOverlayCard">
+                <div class="big">Drop files or folders to upload</div>
+                <div class="small">Uploads will land in the current workspace folder.</div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        return overlay;
+    }
+
+    function showDropOverlay(show) {
+        const overlay = ensureDropOverlay();
+        overlay.classList.toggle("show", !!show);
+        overlay.setAttribute("aria-hidden", show ? "false" : "true");
+    }
+
+    function ensureUploadProgressModal() {
+        let backdrop = document.getElementById("fmUploadProgressBackdrop");
+        if (backdrop) return backdrop;
+
+        backdrop = document.createElement("div");
+        backdrop.id = "fmUploadProgressBackdrop";
+        backdrop.className = "fmUploadProgressBackdrop";
+        backdrop.hidden = true;
+        backdrop.innerHTML = `
+            <div class="fmUploadProgressCard" role="dialog" aria-modal="true" aria-labelledby="fmUploadProgressTitle">
+                <div class="fmUploadProgressHead">
+                    <div>
+                        <div class="fmUploadProgressKicker">DNA-Nexus upload</div>
+                        <div id="fmUploadProgressTitle" class="fmUploadProgressTitle">Uploading files</div>
+                        <p id="fmUploadProgressSub">Preparing upload…</p>
+                    </div>
+                    <button id="fmUploadProgressCancelTop" class="fmUploadProgressX" type="button" title="Cancel upload">×</button>
+                </div>
+                <div class="fmUploadProgressBody">
+                    <div id="fmUploadProgressFile" class="fmUploadProgressFile">Preparing upload…</div>
+                    <div class="fmUploadProgressLine">
+                        <div id="fmUploadProgressText">Starting…</div>
+                        <div id="fmUploadProgressPct" class="fmUploadProgressPct">0%</div>
+                    </div>
+                    <div class="fmUploadProgressBar">
+                        <div id="fmUploadProgressFill" class="fmUploadProgressFill"></div>
+                    </div>
+                    <div id="fmUploadProgressMeta" class="fmUploadProgressMeta"></div>
+                </div>
+                <div class="fmUploadProgressActions">
+                    <button id="fmUploadProgressCloseBtn" class="fmUploadProgressBtn secondary" type="button" hidden>Close</button>
+                    <button id="fmUploadProgressCancel" class="fmUploadProgressBtn secondary" type="button">Cancel upload</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(backdrop);
+
+        backdrop.querySelector("#fmUploadProgressCancel")?.addEventListener("click", requestUploadCancel);
+        backdrop.querySelector("#fmUploadProgressCancelTop")?.addEventListener("click", requestUploadCancel);
+        backdrop.querySelector("#fmUploadProgressCloseBtn")?.addEventListener("click", () => {
+            backdrop.hidden = true;
+        });
+
+        return backdrop;
+    }
+
+    function setUploadModalProgress({ title, sub, file, text, pct, meta, done }) {
+        const backdrop = ensureUploadProgressModal();
+        const titleEl = backdrop.querySelector("#fmUploadProgressTitle");
+        const subEl = backdrop.querySelector("#fmUploadProgressSub");
+        const fileEl = backdrop.querySelector("#fmUploadProgressFile");
+        const textEl = backdrop.querySelector("#fmUploadProgressText");
+        const pctEl = backdrop.querySelector("#fmUploadProgressPct");
+        const fillEl = backdrop.querySelector("#fmUploadProgressFill");
+        const metaEl = backdrop.querySelector("#fmUploadProgressMeta");
+        const closeBtn = backdrop.querySelector("#fmUploadProgressCloseBtn");
+        const cancelBtn = backdrop.querySelector("#fmUploadProgressCancel");
+        const cancelTop = backdrop.querySelector("#fmUploadProgressCancelTop");
+
+        const safePct = Math.max(0, Math.min(100, Number(pct || 0)));
+
+        if (titleEl && title != null) titleEl.textContent = String(title);
+        if (subEl && sub != null) subEl.textContent = String(sub);
+        if (fileEl && file != null) fileEl.textContent = String(file);
+        if (textEl && text != null) textEl.textContent = String(text);
+        if (pctEl) pctEl.textContent = `${Math.round(safePct)}%`;
+        if (fillEl) fillEl.style.width = `${safePct.toFixed(1)}%`;
+        if (metaEl && meta != null) metaEl.textContent = String(meta);
+
+        if (closeBtn) closeBtn.hidden = !done;
+        if (cancelBtn) cancelBtn.hidden = !!done;
+        if (cancelTop) cancelTop.hidden = !!done;
+
+        backdrop.hidden = false;
+    }
+
+    function requestUploadCancel() {
+        uploadCancelRequested = true;
+        setStatus("Cancelling upload…", "bad");
+
+        try {
+            if (uploadCurrentXhr) uploadCurrentXhr.abort();
+        } catch (_) {}
+
+        setUploadModalProgress({
+            title: "Cancelling upload",
+            sub: "Stopping the current transfer…",
+            text: "Cancelling…",
+            meta: "Already uploaded files remain stored.",
+            pct: 100,
+            done: false
+        });
+    }
+
+    function parseUploadJsonText(text) {
+        try {
+            return text ? JSON.parse(text) : {};
+        } catch (_) {
+            return {};
+        }
+    }
+
+    function uploadErrorMessageFromXhr(xhr) {
+        const j = parseUploadJsonText(xhr && xhr.responseText);
+        return (j && (j.message || j.error))
+            ? `${j.error || ""} ${j.message || ""}`.trim()
+            : `HTTP ${xhr ? xhr.status : 0}`;
+    }
+
+    function uploadFileToWorkspacePut(relPath, file, onProgress) {
+        return new Promise((resolve, reject) => {
+            const qs = new URLSearchParams();
+            qs.set("workspace_id", workspaceId);
+            qs.set("path", relPath);
+
+            const xhr = new XMLHttpRequest();
+            uploadCurrentXhr = xhr;
+
+            xhr.open("PUT", `/api/v4/workspaces/files/put?${qs.toString()}`, true);
+            xhr.withCredentials = true;
+            xhr.timeout = 0;
+            xhr.setRequestHeader("Accept", "application/json");
+            xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+
+            xhr.upload.onprogress = (e) => {
+                if (!e.lengthComputable) return;
+                onProgress(Math.max(0, Number(e.loaded || 0)), Math.max(1, Number(e.total || file.size || 1)));
+            };
+
+            xhr.onload = () => {
+                uploadCurrentXhr = null;
+                const j = parseUploadJsonText(xhr.responseText);
+                if (xhr.status >= 200 && xhr.status < 300 && (!j || j.ok !== false)) {
+                    resolve(j || {});
+                    return;
+                }
+                reject(new Error(uploadErrorMessageFromXhr(xhr)));
+            };
+
+            xhr.onerror = () => {
+                uploadCurrentXhr = null;
+                reject(new Error("upload failed: network error"));
+            };
+
+            xhr.onabort = () => {
+                uploadCurrentXhr = null;
+                reject(Object.assign(new Error(uploadCancelRequested ? "upload cancelled" : "upload aborted"), {
+                    kind: uploadCancelRequested ? "cancelled" : "network"
+                }));
+            };
+
+            xhr.send(file);
+        });
+    }
+
+    async function uploadRelFiles(relFiles) {
+        if (!canEdit) {
+            setStatus("Upload requires editor access.", "bad");
+            return;
+        }
+
+        const files = (relFiles || [])
+            .filter((x) => x && x.file)
+            .map((x) => ({
+                rel: safeUploadRelativePath(x.rel || x.file.webkitRelativePath || x.file.name),
+                file: x.file
+            }))
+            .filter((x) => x.rel && x.file);
+
+        if (!files.length) {
+            setStatus("No files selected for upload.", "bad");
+            return;
+        }
+
+        uploadCancelRequested = false;
+
+        const totalBytes = files.reduce((sum, x) => sum + Math.max(0, Number(x.file.size || 0)), 0) || 1;
+        let committedBytes = 0;
+        let completed = 0;
+
+        setStatus(`Uploading ${files.length} file(s)…`, "good");
+
+        for (let i = 0; i < files.length; i++) {
+            if (uploadCancelRequested) break;
+
+            const item = files[i];
+            const target = uploadTargetPath(item.rel);
+            const displayName = item.rel || item.file.name;
+            let lastLoaded = 0;
+
+            setUploadModalProgress({
+                title: "Uploading files",
+                sub: `${i + 1} / ${files.length}`,
+                file: displayName,
+                text: `Uploading ${fmtSize(item.file.size || 0)}…`,
+                pct: (committedBytes / totalBytes) * 100,
+                meta: `Destination: /${target}`,
+                done: false
+            });
+
+            try {
+                await uploadFileToWorkspacePut(target, item.file, (loaded, total) => {
+                    lastLoaded = Math.max(0, Number(loaded || 0));
+                    const pct = ((committedBytes + lastLoaded) / totalBytes) * 100;
+                    setUploadModalProgress({
+                        title: "Uploading files",
+                        sub: `${i + 1} / ${files.length}`,
+                        file: displayName,
+                        text: `${fmtSize(loaded)} / ${fmtSize(total)}`,
+                        pct,
+                        meta: `Destination: /${target}`,
+                        done: false
+                    });
+                });
+
+                committedBytes += Math.max(Number(item.file.size || 0), lastLoaded);
+                completed++;
+
+                setUploadModalProgress({
+                    title: "Uploading files",
+                    sub: `${completed} / ${files.length} uploaded`,
+                    file: displayName,
+                    text: "Uploaded",
+                    pct: (committedBytes / totalBytes) * 100,
+                    meta: `Stored at /${target}`,
+                    done: false
+                });
+            } catch (e) {
+                const msg = e && e.message ? e.message : String(e || "upload failed");
+                const cancelled = e && e.kind === "cancelled";
+
+                setUploadModalProgress({
+                    title: cancelled ? "Upload cancelled" : "Upload failed",
+                    sub: cancelled ? `${completed} file(s) uploaded before cancel.` : `${completed} file(s) uploaded before failure.`,
+                    file: displayName,
+                    text: cancelled ? "Cancelled" : "Failed",
+                    pct: cancelled ? 100 : (committedBytes / totalBytes) * 100,
+                    meta: msg,
+                    done: true
+                });
+
+                setStatus(cancelled ? "Upload cancelled." : `Upload failed: ${msg}`, "bad");
+
+                try { await loadFiles(currentPath); } catch (_) {}
+                uploadCancelRequested = false;
+                uploadCurrentXhr = null;
+                return;
+            }
+        }
+
+        uploadCancelRequested = false;
+        uploadCurrentXhr = null;
+
+        setUploadModalProgress({
+            title: "Upload complete",
+            sub: `${completed} file(s) uploaded.`,
+            file: "Finished",
+            text: "Uploaded",
+            pct: 100,
+            meta: "Workspace file list refreshed.",
+            done: true
+        });
+
+        setStatus(`Uploaded ${completed} file(s).`, "good");
+        await loadFiles(currentPath);
+    }
+
+    async function uploadSelectedFolderFiles() {
+        const selected = Array.from((uploadFolderFile && uploadFolderFile.files) || []);
+        const relFiles = selected.map((file) => ({
+            rel: file.webkitRelativePath || file.name,
+            file
+        }));
+
+        try {
+            await uploadRelFiles(relFiles);
+        } finally {
+            if (uploadFolderFile) uploadFolderFile.value = "";
+        }
+    }
+
+    function fileFromEntry(entry) {
+        return new Promise((resolve, reject) => {
+            entry.file(resolve, reject);
+        });
+    }
+
+    function readDirectoryEntries(reader) {
+        return new Promise((resolve) => {
+            const out = [];
+
+            function readBatch() {
+                reader.readEntries((batch) => {
+                    if (!batch || !batch.length) {
+                        resolve(out);
+                        return;
+                    }
+                    out.push(...batch);
+                    readBatch();
+                }, () => resolve(out));
+            }
+
+            readBatch();
+        });
+    }
+
+    async function walkDroppedEntry(entry, prefix, out) {
+        if (!entry) return;
+
+        if (entry.isFile) {
+            const file = await fileFromEntry(entry);
+            out.push({
+                rel: safeUploadRelativePath(prefix + file.name),
+                file
+            });
+            return;
+        }
+
+        if (entry.isDirectory) {
+            const reader = entry.createReader();
+            const children = await readDirectoryEntries(reader);
+            const nextPrefix = prefix + entry.name + "/";
+            for (const child of children) {
+                await walkDroppedEntry(child, nextPrefix, out);
+            }
+        }
+    }
+
+    async function droppedFilesFromDataTransfer(dataTransfer) {
+        const out = [];
+        const items = Array.from((dataTransfer && dataTransfer.items) || []);
+        const entries = items
+            .map((item) => item && typeof item.webkitGetAsEntry === "function" ? item.webkitGetAsEntry() : null)
+            .filter(Boolean);
+
+        if (entries.length) {
+            for (const entry of entries) {
+                await walkDroppedEntry(entry, "", out);
+            }
+            return out;
+        }
+
+        const files = Array.from((dataTransfer && dataTransfer.files) || []);
+        for (const file of files) {
+            out.push({
+                rel: file.webkitRelativePath || file.name,
+                file
+            });
+        }
+        return out;
+    }
+
+    function wireExternalDragDropUpload() {
+        if (window.__externalWorkspaceUploadDndWired) return;
+        window.__externalWorkspaceUploadDndWired = true;
+
+        const hasFiles = (ev) => {
+            const dt = ev && ev.dataTransfer;
+            if (!dt) return false;
+
+            try {
+                const types = Array.from(dt.types || []);
+                if (types.includes("Files")) return true;
+            } catch (_) {}
+
+            try {
+                return Array.from(dt.items || []).some((it) => it && it.kind === "file");
+            } catch (_) {}
+
+            return false;
+        };
+
+        const shouldAcceptDrop = (ev) => {
+            if (!hasFiles(ev)) return false;
+            if (!signedIn || !canEdit) return false;
+            return true;
+        };
+
+        const stopBrowserFileDrop = (ev) => {
+            if (!hasFiles(ev)) return;
+            ev.preventDefault();
+            ev.stopPropagation();
+        };
+
+        window.addEventListener("dragenter", (ev) => {
+            if (!hasFiles(ev)) return;
+            stopBrowserFileDrop(ev);
+
+            if (!signedIn || !canEdit) {
+                if (ev.dataTransfer) ev.dataTransfer.dropEffect = "none";
+                setStatus("Upload requires editor access.", "bad");
+                return;
+            }
+
+            uploadDragDepth++;
+            showDropOverlay(true);
+            if (ev.dataTransfer) ev.dataTransfer.dropEffect = "copy";
+        }, true);
+
+        window.addEventListener("dragover", (ev) => {
+            if (!hasFiles(ev)) return;
+            stopBrowserFileDrop(ev);
+
+            if (!signedIn || !canEdit) {
+                if (ev.dataTransfer) ev.dataTransfer.dropEffect = "none";
+                return;
+            }
+
+            showDropOverlay(true);
+            if (ev.dataTransfer) ev.dataTransfer.dropEffect = "copy";
+        }, true);
+
+        window.addEventListener("dragleave", (ev) => {
+            if (!hasFiles(ev)) return;
+
+            uploadDragDepth = Math.max(0, uploadDragDepth - 1);
+
+            // When leaving the browser window, clientX/Y usually hit 0 or viewport edge.
+            const leavingWindow =
+                ev.clientX <= 0 ||
+                ev.clientY <= 0 ||
+                ev.clientX >= window.innerWidth ||
+                ev.clientY >= window.innerHeight;
+
+            if (uploadDragDepth === 0 || leavingWindow) {
+                uploadDragDepth = 0;
+                showDropOverlay(false);
+            }
+        }, true);
+
+        window.addEventListener("drop", async (ev) => {
+            if (!hasFiles(ev)) return;
+            stopBrowserFileDrop(ev);
+
+            uploadDragDepth = 0;
+            showDropOverlay(false);
+
+            if (!signedIn || !canEdit) {
+                setStatus("Upload requires editor access.", "bad");
+                return;
+            }
+
+            try {
+                setStatus("Reading dropped files…", "good");
+
+                const relFiles = await droppedFilesFromDataTransfer(ev.dataTransfer);
+
+                if (!relFiles.length) {
+                    setStatus("Drag & drop did not provide files. Use Upload instead.", "bad");
+                    return;
+                }
+
+                setStatus(`Preparing ${relFiles.length} dropped file(s)…`, "good");
+                await uploadRelFiles(relFiles);
+            } catch (err) {
+                setStatus(`Drop upload failed: ${err && err.message ? err.message : err}`, "bad");
+            }
+        }, true);
+    }
+
 
     function normalizeRelPath(p) {
         let v = String(p || "").trim();
@@ -2599,7 +3106,12 @@
             return;
         }
 
-        if (action === "upload-folder") return showPlaceholder("Upload folder");
+        if (action === "upload-folder") {
+            uploadOpen = true;
+            updateAccessUi();
+            uploadFolderFile && uploadFolderFile.click();
+            return;
+        }
         if (action === "zip-folder") return showPlaceholder("Download current folder as zip");
         if (action === "trash") return showPlaceholder("Trash");
     });
@@ -2925,4 +3437,11 @@
             setStatus("Existing workspace session is active.", "good");
         })
         .catch(() => startSession().catch((e) => setStatus(`Failed to start QR session: ${e.message || e}`, "bad")));
+
+    uploadFolderFile?.addEventListener("change", () => {
+        uploadSelectedFolderFiles().catch((e) => setStatus(`Upload failed: ${e.message || e}`, "bad"));
+    });
+
+    wireExternalDragDropUpload();
+
 })();

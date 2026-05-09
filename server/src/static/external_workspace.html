@@ -77,13 +77,14 @@
             <div class="breadcrumbs" id="breadcrumbs"></div>
 
             <div class="uploadBox hidden" id="uploadBox">
-                <strong>Upload file</strong>
-                <input type="file" id="uploadFile">
+                <strong>Upload files</strong>
+                <input type="file" id="uploadFile" multiple>
+                <input type="file" id="uploadFolderFile" multiple webkitdirectory directory hidden>
                 <div class="row">
                     <button class="btn" id="btnUpload" type="button">Upload to current folder</button>
                 </div>
                 <div class="small">
-                    Upload and folder creation require editor access. View-only members can browse and download.
+                    Select files or drag & drop files/folders into the file area. Upload and folder creation require editor access.
                 </div>
             </div>
 
@@ -189,7 +190,7 @@
 
 <div class="contextMenu hidden" id="emptyContextMenu" role="menu">
     <button type="button" data-action="upload">Upload files...</button>
-    <button type="button" data-action="upload-folder">Upload folder... <span class="contextHint">soon</span></button>
+    <button type="button" data-action="upload-folder">Upload folder...</button>
     <div class="contextSep"></div>
     <button type="button" data-action="zip-folder">Download current folder (zip) <span class="contextHint">soon</span></button>
     <button type="button" data-action="new-folder">New folder...</button>

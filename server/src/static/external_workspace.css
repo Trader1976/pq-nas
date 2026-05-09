@@ -1665,3 +1665,234 @@ html[data-theme="win_classic"] .toolbarSelect{
     border:1px solid rgba(0,0,0,.38) !important;
     border-radius:10px !important;
 }
+
+
+/* External workspace drag/drop + File Manager-style upload progress modal. */
+.dropOverlay{
+    position:fixed;
+    inset:0;
+    z-index:8500;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:24px;
+    pointer-events:none;
+    background:rgba(0,0,0,.38);
+    backdrop-filter:blur(6px);
+}
+
+.dropOverlay.show{
+    display:flex;
+}
+
+.dropOverlay .dropOverlayCard{
+    width:min(560px, calc(100vw - 32px));
+    border:1px solid rgba(255,138,28,.45);
+    border-radius:24px;
+    padding:28px;
+    text-align:center;
+    background:
+        radial-gradient(circle at 20% 0%, rgba(255,138,28,.22), transparent 44%),
+        rgba(15,15,15,.94);
+    box-shadow:0 24px 70px rgba(0,0,0,.55);
+}
+
+.dropOverlay .big{
+    font-size:24px;
+    font-weight:900;
+    color:var(--fg);
+    margin-bottom:8px;
+}
+
+.dropOverlay .small{
+    color:var(--muted);
+    font-size:14px;
+}
+
+.fmUploadProgressBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:9000;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:22px;
+    background:rgba(0,0,0,.56);
+    backdrop-filter:blur(8px);
+}
+
+.fmUploadProgressBackdrop[hidden]{
+    display:none !important;
+}
+
+.fmUploadProgressCard{
+    width:min(620px, calc(100vw - 28px));
+    border:1px solid rgba(255,138,28,.38);
+    border-radius:24px;
+    background:
+        radial-gradient(circle at 15% 0%, rgba(255,138,28,.18), transparent 42%),
+        rgba(14,14,14,.96);
+    color:var(--fg);
+    box-shadow:0 24px 80px rgba(0,0,0,.58);
+    overflow:hidden;
+}
+
+.fmUploadProgressHead{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:14px;
+    padding:18px 20px 14px;
+    border-bottom:1px solid rgba(255,255,255,.12);
+}
+
+.fmUploadProgressKicker{
+    color:var(--accent);
+    font-size:12px;
+    font-weight:900;
+    letter-spacing:.16em;
+    text-transform:uppercase;
+}
+
+.fmUploadProgressTitle{
+    margin-top:4px;
+    font-size:21px;
+    font-weight:900;
+}
+
+.fmUploadProgressHead p{
+    margin:6px 0 0;
+    color:var(--muted);
+    font-size:13px;
+    line-height:1.35;
+}
+
+.fmUploadProgressX{
+    border:1px solid rgba(255,255,255,.18);
+    background:rgba(255,255,255,.06);
+    color:var(--muted);
+    border-radius:14px;
+    min-width:40px;
+    height:40px;
+    font-weight:900;
+    cursor:pointer;
+}
+
+.fmUploadProgressX:hover{
+    color:var(--fg);
+    background:rgba(255,255,255,.10);
+}
+
+.fmUploadProgressBody{
+    padding:18px 20px 20px;
+}
+
+.fmUploadProgressFile{
+    font-weight:850;
+    margin-bottom:10px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+
+.fmUploadProgressLine{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:14px;
+    margin-bottom:10px;
+    color:var(--muted);
+    font-size:13px;
+}
+
+.fmUploadProgressPct{
+    font-family:var(--mono);
+    color:var(--fg);
+    font-weight:900;
+}
+
+.fmUploadProgressBar{
+    height:12px;
+    border-radius:999px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(0,0,0,.30);
+    overflow:hidden;
+}
+
+.fmUploadProgressFill{
+    width:0%;
+    height:100%;
+    border-radius:999px;
+    background:linear-gradient(90deg, rgba(255,138,28,.75), rgba(255,188,91,.95));
+    transition:width .12s ease;
+}
+
+.fmUploadProgressMeta{
+    min-height:20px;
+    margin-top:10px;
+    color:var(--muted);
+    font-size:12px;
+    line-height:1.35;
+}
+
+.fmUploadProgressActions{
+    display:flex;
+    align-items:center;
+    justify-content:flex-end;
+    gap:10px;
+    padding:14px 20px 18px;
+    border-top:1px solid rgba(255,255,255,.10);
+}
+
+.fmUploadProgressBtn{
+    appearance:none;
+    border:1px solid rgba(255,138,28,.55);
+    background:rgba(255,138,28,.16);
+    color:var(--fg);
+    border-radius:14px;
+    min-height:40px;
+    padding:9px 13px;
+    font-weight:900;
+    cursor:pointer;
+}
+
+.fmUploadProgressBtn.secondary{
+    border-color:rgba(255,255,255,.18);
+    background:rgba(255,255,255,.06);
+    color:var(--muted);
+}
+
+.fmUploadProgressBtn:hover{
+    border-color:rgba(255,138,28,.82);
+    background:rgba(255,138,28,.23);
+}
+
+.fmUploadProgressBtn.secondary:hover{
+    color:var(--fg);
+    border-color:rgba(255,255,255,.28);
+    background:rgba(255,255,255,.10);
+}
+
+.fmUploadProgressBtn[hidden]{
+    display:none !important;
+}
+
+html[data-theme="bright"] .fmUploadProgressBackdrop,
+html[data-theme="win_classic"] .fmUploadProgressBackdrop{
+    background:rgba(255,255,255,.42);
+}
+
+html[data-theme="bright"] .fmUploadProgressCard,
+html[data-theme="win_classic"] .fmUploadProgressCard{
+    background:
+        radial-gradient(circle at 15% 0%, rgba(255,138,28,.15), transparent 42%),
+        rgba(246,246,246,.98);
+    color:#111;
+}
+
+html[data-theme="bright"] .dropOverlay .dropOverlayCard,
+html[data-theme="win_classic"] .dropOverlay .dropOverlayCard{
+    background:
+        radial-gradient(circle at 20% 0%, rgba(255,138,28,.18), transparent 44%),
+        rgba(246,246,246,.98);
+}
