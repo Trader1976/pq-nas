@@ -4,7 +4,9 @@
     <meta charset="utf-8">
     <title>External Workspace - DNA-Nexus</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
+    <link rel="stylesheet" href="/static/theme.css">
     <script src="/static/theme.js"></script>
+    <script>document.documentElement.setAttribute("data-theme", "win_classic");</script>
     <style>
         :root{
             --bg:#070707;
@@ -500,6 +502,411 @@
             font-weight:800;
         }
 
+        /* External workspace: force File Manager win_classic-like surface. */
+        html[data-theme="win_classic"] body{
+            background:linear-gradient(180deg,#eeeeee,#cfcfcf) !important;
+            color:#050505;
+        }
+
+        html[data-theme="win_classic"] .shell{
+            background:#d6d6d6;
+        }
+
+        html[data-theme="win_classic"] .card,
+        html[data-theme="win_classic"] .shell > .card:first-child,
+        html[data-theme="win_classic"] .shell > .card:nth-child(2){
+            background:linear-gradient(180deg,#eeeeee,#d7d7d7) !important;
+            color:#050505;
+            border-color:rgba(0,0,0,.28) !important;
+            box-shadow:none !important;
+            backdrop-filter:none !important;
+        }
+
+        html[data-theme="win_classic"] .cardHead,
+        html[data-theme="win_classic"] .toolbar{
+            background:linear-gradient(180deg,#d8d8d8,#bfbfbf) !important;
+            border-color:rgba(0,0,0,.30) !important;
+            color:#050505;
+        }
+
+        html[data-theme="win_classic"] h1,
+        html[data-theme="win_classic"] .fileName{
+            color:#050505 !important;
+        }
+
+        html[data-theme="win_classic"] .sub,
+        html[data-theme="win_classic"] .fileMeta,
+        html[data-theme="win_classic"] .hint,
+        html[data-theme="win_classic"] .breadcrumbs{
+            color:#4d5662 !important;
+        }
+
+        html[data-theme="win_classic"] .btn,
+        html[data-theme="win_classic"] .downloadLink,
+        html[data-theme="win_classic"] .pathBtn,
+        html[data-theme="win_classic"] .input{
+            color:#050505 !important;
+            background:linear-gradient(180deg,#f8f8f8,#d9d9d9) !important;
+            border:1px solid rgba(0,0,0,.38) !important;
+            border-radius:10px !important;
+            box-shadow:none !important;
+        }
+
+        html[data-theme="win_classic"] .btn:hover,
+        html[data-theme="win_classic"] .downloadLink:hover,
+        html[data-theme="win_classic"] .pathBtn:hover{
+            background:linear-gradient(180deg,#ffffff,#e6e6e6) !important;
+        }
+
+        html[data-theme="win_classic"] .btn:active,
+        html[data-theme="win_classic"] .pathBtn:active{
+            transform:translateY(1px);
+        }
+
+        html[data-theme="win_classic"] .rolePill,
+        html[data-theme="win_classic"] .accessPill,
+        html[data-theme="win_classic"] .pill,
+        html[data-theme="win_classic"] .status{
+            color:#050505 !important;
+            background:#e9edf2 !important;
+            border-color:rgba(0,0,0,.25) !important;
+        }
+
+        html[data-theme="win_classic"] .uploadBox{
+            background:#eeeeee !important;
+            border:1px dashed rgba(0,0,0,.35) !important;
+            color:#050505;
+        }
+
+        html[data-theme="win_classic"] .files{
+            padding:12px 4px 28px;
+        }
+
+        html[data-theme="win_classic"] .fileRow{
+            background:#b8b8b8 !important;
+            border:1px solid rgba(0,0,0,.22) !important;
+            border-radius:14px !important;
+            color:#050505;
+        }
+
+        html[data-theme="win_classic"] .fileRow:hover{
+            background:#c8c8c8 !important;
+            border-color:rgba(0,0,0,.55) !important;
+        }
+
+        html[data-theme="win_classic"] .fileIcon{
+            background:transparent !important;
+            border:0 !important;
+            font-size:31px;
+        }
+
+        html[data-theme="win_classic"] .contextMenu{
+            color:#050505 !important;
+            background:linear-gradient(180deg,#f3f3f3,#dedede) !important;
+            border:2px solid rgba(0,0,0,.55) !important;
+            border-radius:2px !important;
+            box-shadow:5px 5px 0 rgba(0,0,0,.22) !important;
+        }
+
+        html[data-theme="win_classic"] .contextMenu button{
+            color:#050505 !important;
+            border-radius:2px !important;
+        }
+
+        html[data-theme="win_classic"] .contextMenu button:hover{
+            background:#c9d8f0 !important;
+        }
+
+        html[data-theme="win_classic"] .contextSep{
+            background:rgba(0,0,0,.22) !important;
+        }
+
+        .extPickerOverlay{
+            position:fixed;
+            inset:0;
+            z-index:7000;
+            display:none;
+            align-items:flex-start;
+            justify-content:center;
+            padding-top:22px;
+            background:rgba(0,0,0,.45);
+        }
+
+        .extPickerOverlay.show{
+            display:flex;
+        }
+
+        html[data-theme="win_classic"] .extPickerOverlay{
+            background:rgba(255,255,255,.38);
+        }
+
+        .extPickerCard{
+            width:min(720px, calc(100vw - 44px));
+            max-height:calc(100vh - 44px);
+            display:flex;
+            flex-direction:column;
+            background:rgba(18,18,18,.98);
+            border:1px solid rgba(255,255,255,.16);
+            border-radius:18px;
+            box-shadow:0 28px 110px rgba(0,0,0,.52);
+            overflow:hidden;
+        }
+
+        html[data-theme="win_classic"] .extPickerCard{
+            background:rgb(245,245,245);
+            color:#050505;
+            border:2px solid rgba(0,0,0,.55);
+            border-radius:2px;
+            box-shadow:6px 6px 0 rgba(0,0,0,.22);
+        }
+
+        .extPickerHead{
+            display:flex;
+            justify-content:space-between;
+            align-items:flex-start;
+            gap:14px;
+            padding:16px 18px 10px;
+            border-bottom:1px solid rgba(255,255,255,.12);
+        }
+
+        html[data-theme="win_classic"] .extPickerHead{
+            background:rgba(0,0,0,.055);
+            border-bottom:1px solid rgba(0,0,0,.18);
+        }
+
+        .extPickerKicker{
+            font-size:12px;
+            font-weight:900;
+            letter-spacing:.08em;
+            text-transform:uppercase;
+            color:var(--accent);
+        }
+
+        html[data-theme="win_classic"] .extPickerKicker{
+            color:#0b4ea2;
+        }
+
+        .extPickerTitle{
+            margin-top:3px;
+            font-size:24px;
+            font-weight:950;
+            line-height:1.05;
+        }
+
+        .extPickerSub{
+            margin-top:6px;
+            font-size:14px;
+            color:var(--muted);
+        }
+
+        html[data-theme="win_classic"] .extPickerSub{
+            color:#4d5662;
+        }
+
+        .extPickerClose{
+            border:1px solid rgba(255,255,255,.18);
+            border-radius:12px;
+            padding:8px 12px;
+            background:rgba(255,255,255,.05);
+            color:inherit;
+            font-weight:900;
+            cursor:pointer;
+        }
+
+        html[data-theme="win_classic"] .extPickerClose{
+            border-radius:2px;
+            background:linear-gradient(180deg,#fff,#ddd);
+            border-color:rgba(0,0,0,.35);
+        }
+
+        .extPickerSource{
+            margin:12px 18px 10px;
+            padding:10px 12px;
+            border:1px solid rgba(255,255,255,.14);
+            border-radius:12px;
+            background:rgba(255,255,255,.04);
+            font-weight:900;
+            color:var(--fg);
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+
+        html[data-theme="win_classic"] .extPickerSource{
+            background:#e9edf2;
+            border-color:rgba(0,0,0,.22);
+            color:#162033;
+            border-radius:10px;
+        }
+
+        .extPickerCrumbs{
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+            padding:0 18px 10px;
+        }
+
+        .extPickerCrumb{
+            border:1px solid rgba(255,255,255,.16);
+            border-radius:999px;
+            padding:7px 11px;
+            background:rgba(255,255,255,.04);
+            color:inherit;
+            cursor:pointer;
+            font-weight:850;
+        }
+
+        html[data-theme="win_classic"] .extPickerCrumb{
+            border-radius:14px;
+            background:#fff;
+            border-color:rgba(0,0,0,.18);
+        }
+
+        .extPickerList{
+            margin:0 18px 8px;
+            border:1px solid rgba(255,255,255,.14);
+            border-radius:14px;
+            background:rgba(255,255,255,.035);
+            overflow:auto;
+            min-height:190px;
+            max-height:min(430px, calc(100vh - 300px));
+            padding:6px;
+        }
+
+        html[data-theme="win_classic"] .extPickerList{
+            background:#e9edf2;
+            border-color:rgba(0,0,0,.22);
+            border-radius:12px;
+        }
+
+        .extPickerDirRow{
+            width:100%;
+            border:1px solid rgba(255,255,255,.10);
+            border-radius:10px;
+            background:rgba(255,255,255,.04);
+            color:inherit;
+            padding:10px 12px;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            margin:6px 0;
+            cursor:pointer;
+            text-align:left;
+            font:inherit;
+        }
+
+        .extPickerDirRow:hover{
+            border-color:rgba(255,138,28,.42);
+            background:rgba(255,138,28,.08);
+        }
+
+        html[data-theme="win_classic"] .extPickerDirRow{
+            background:#fff;
+            border-color:rgba(0,0,0,.20);
+            border-radius:7px;
+        }
+
+        html[data-theme="win_classic"] .extPickerDirRow:hover{
+            background:#dce9ff;
+            border-color:rgba(11,78,162,.45);
+        }
+
+        .extPickerDirName{
+            font-weight:950;
+            min-width:0;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+
+        .extPickerDirMeta{
+            opacity:.65;
+            font-size:12px;
+            flex:0 0 auto;
+        }
+
+        .extPickerDest{
+            padding:0 18px 10px;
+            font-weight:900;
+            color:var(--muted);
+            font-size:13px;
+        }
+
+        html[data-theme="win_classic"] .extPickerDest{
+            color:#4d5662;
+        }
+
+        .extPickerStatus{
+            padding:0 18px 10px;
+            min-height:18px;
+            font-size:13px;
+            color:var(--muted);
+        }
+
+        html[data-theme="win_classic"] .extPickerStatus{
+            color:#4d5662;
+        }
+
+        .extPickerActions{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            padding:13px 18px 16px;
+            border-top:1px solid rgba(255,255,255,.12);
+            background:rgba(255,255,255,.035);
+        }
+
+        html[data-theme="win_classic"] .extPickerActions{
+            background:rgba(0,0,0,.055);
+            border-top:1px solid rgba(0,0,0,.18);
+        }
+
+        .extPickerActionGroup{
+            display:flex;
+            gap:10px;
+            align-items:center;
+        }
+
+        /* Detached floating folder picker, like File Manager. */
+        .extPickerOverlay{
+            background:transparent !important;
+            pointer-events:none;
+            align-items:initial !important;
+            justify-content:initial !important;
+            padding-top:0 !important;
+        }
+
+        .extPickerOverlay.show{
+            display:block !important;
+        }
+
+        .extPickerCard{
+            position:fixed;
+            left:50%;
+            top:22px;
+            transform:translateX(-50%);
+            pointer-events:auto;
+        }
+
+        .extPickerHead{
+            cursor:grab;
+            user-select:none;
+            touch-action:none;
+        }
+
+        .extPickerCard.dragging .extPickerHead{
+            cursor:grabbing;
+        }
+
+        .extPickerHead button,
+        .extPickerActions button,
+        .extPickerList button,
+        .extPickerCrumbs button{
+            cursor:pointer;
+        }
+
         .hidden{ display:none !important; }
 
         @media (max-width:900px){
@@ -590,6 +997,33 @@
     </section>
 </div>
 
+<div class="extPickerOverlay" id="extPickerOverlay" aria-hidden="true">
+    <div class="extPickerCard" role="dialog" aria-modal="true" aria-labelledby="extPickerTitle">
+        <div class="extPickerHead">
+            <div>
+                <div class="extPickerKicker">DNA-Nexus folder picker</div>
+                <div class="extPickerTitle" id="extPickerTitle">Move</div>
+                <div class="extPickerSub" id="extPickerSub">Select destination folder</div>
+            </div>
+            <button class="extPickerClose" id="extPickerClose" type="button">Close</button>
+        </div>
+
+        <div class="extPickerSource" id="extPickerSource">Move: /</div>
+        <div class="extPickerCrumbs" id="extPickerCrumbs"></div>
+        <div class="extPickerList" id="extPickerList"></div>
+        <div class="extPickerDest" id="extPickerDest">Destination: Workspace /</div>
+        <div class="extPickerStatus" id="extPickerStatus"></div>
+
+        <div class="extPickerActions">
+            <button class="btn secondary" id="extPickerNewFolder" type="button">New folder here...</button>
+            <div class="extPickerActionGroup">
+                <button class="btn secondary" id="extPickerCancel" type="button">Cancel</button>
+                <button class="btn" id="extPickerChoose" type="button">Move here</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="contextMenu hidden" id="emptyContextMenu" role="menu">
     <button type="button" data-action="upload">Upload files...</button>
     <button type="button" data-action="upload-folder">Upload folder... <span class="contextHint">soon</span></button>
@@ -647,6 +1081,20 @@
     const btnNewFolder = document.getElementById("btnNewFolder");
     const emptyContextMenu = document.getElementById("emptyContextMenu");
     const itemContextMenu = document.getElementById("itemContextMenu");
+    const extPickerOverlay = document.getElementById("extPickerOverlay");
+    const extPickerCard = extPickerOverlay ? extPickerOverlay.querySelector(".extPickerCard") : null;
+    const extPickerHead = extPickerOverlay ? extPickerOverlay.querySelector(".extPickerHead") : null;
+    const extPickerTitle = document.getElementById("extPickerTitle");
+    const extPickerSub = document.getElementById("extPickerSub");
+    const extPickerSource = document.getElementById("extPickerSource");
+    const extPickerCrumbs = document.getElementById("extPickerCrumbs");
+    const extPickerList = document.getElementById("extPickerList");
+    const extPickerDest = document.getElementById("extPickerDest");
+    const extPickerStatus = document.getElementById("extPickerStatus");
+    const extPickerClose = document.getElementById("extPickerClose");
+    const extPickerCancel = document.getElementById("extPickerCancel");
+    const extPickerChoose = document.getElementById("extPickerChoose");
+    const extPickerNewFolder = document.getElementById("extPickerNewFolder");
 
     let currentSessionId = "";
     let pollTimer = null;
@@ -656,6 +1104,11 @@
     let signedIn = false;
     let uploadOpen = false;
     let contextItem = null;
+    let pickerResolve = null;
+    let pickerPath = "";
+    let pickerMode = "move";
+    let pickerItem = null;
+    let pickerDrag = null;
 
     function setStatus(text, kind) {
         statusEl.textContent = text || "";
@@ -1082,6 +1535,200 @@
         return { ok:true, path:v };
     }
 
+    function resetFolderPickerPosition() {
+        if (!extPickerCard) return;
+        extPickerCard.style.left = "50%";
+        extPickerCard.style.top = "22px";
+        extPickerCard.style.transform = "translateX(-50%)";
+    }
+
+    function clampPickerPosition(left, top) {
+        if (!extPickerCard) return { left, top };
+
+        const rect = extPickerCard.getBoundingClientRect();
+        const pad = 6;
+
+        const maxLeft = Math.max(pad, window.innerWidth - rect.width - pad);
+        const maxTop = Math.max(pad, window.innerHeight - rect.height - pad);
+
+        return {
+            left: Math.min(Math.max(pad, left), maxLeft),
+            top: Math.min(Math.max(pad, top), maxTop)
+        };
+    }
+
+    function beginFolderPickerDrag(ev) {
+        if (!extPickerCard || !extPickerHead) return;
+        if (ev.button !== 0) return;
+        if (ev.target.closest("button, input, textarea, select, a")) return;
+
+        const rect = extPickerCard.getBoundingClientRect();
+        pickerDrag = {
+            pointerId: ev.pointerId,
+            dx: ev.clientX - rect.left,
+            dy: ev.clientY - rect.top
+        };
+
+        extPickerCard.classList.add("dragging");
+        extPickerCard.style.left = `${rect.left}px`;
+        extPickerCard.style.top = `${rect.top}px`;
+        extPickerCard.style.transform = "none";
+
+        try { extPickerHead.setPointerCapture(ev.pointerId); } catch (_) {}
+        ev.preventDefault();
+    }
+
+    function moveFolderPickerDrag(ev) {
+        if (!pickerDrag || !extPickerCard) return;
+        if (ev.pointerId !== pickerDrag.pointerId) return;
+
+        const pos = clampPickerPosition(
+            ev.clientX - pickerDrag.dx,
+            ev.clientY - pickerDrag.dy
+        );
+
+        extPickerCard.style.left = `${pos.left}px`;
+        extPickerCard.style.top = `${pos.top}px`;
+        extPickerCard.style.transform = "none";
+    }
+
+    function endFolderPickerDrag(ev) {
+        if (!pickerDrag) return;
+        if (ev.pointerId !== pickerDrag.pointerId) return;
+
+        if (extPickerCard) extPickerCard.classList.remove("dragging");
+        try { extPickerHead && extPickerHead.releasePointerCapture(ev.pointerId); } catch (_) {}
+        pickerDrag = null;
+    }
+
+    function pickerDestLabel() {
+        return `Destination: Workspace ${pickerPath ? "/" + pickerPath : "/"}`;
+    }
+
+    function renderPickerCrumbs() {
+        if (!extPickerCrumbs) return;
+        const parts = normalizeRelPath(pickerPath).split("/").filter(Boolean);
+        const rows = [];
+        rows.push(`<button class="extPickerCrumb" type="button" data-path="">/</button>`);
+        let acc = "";
+        for (const part of parts) {
+            acc = acc ? `${acc}/${part}` : part;
+            rows.push(`<button class="extPickerCrumb" type="button" data-path="${escapeHtml(acc)}">${escapeHtml(part)}</button>`);
+        }
+        extPickerCrumbs.innerHTML = rows.join("");
+    }
+
+    async function loadPickerFolder(path) {
+        pickerPath = normalizeRelPath(path);
+        if (extPickerStatus) extPickerStatus.textContent = "Loading folders...";
+        renderPickerCrumbs();
+        if (extPickerDest) extPickerDest.textContent = pickerDestLabel();
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        if (pickerPath) qs.set("path", pickerPath);
+
+        const j = await apiJson(`/api/v4/workspaces/files/list?${qs.toString()}`);
+        const items = Array.isArray(j.items) ? j.items : [];
+        const dirs = items
+            .filter((it) => {
+                const type = String(it.type || (it.is_dir ? "dir" : "file")).toLowerCase();
+                return type === "dir" || type === "folder" || it.is_dir === true;
+            })
+            .map((it) => String(it.name || it.path || ""))
+            .filter(Boolean)
+            .sort((a, b) => a.localeCompare(b));
+
+        const rows = [];
+
+        if (pickerPath) {
+            rows.push(`
+                <button class="extPickerDirRow" type="button" data-path="${escapeHtml(parentPath(pickerPath))}">
+                    <span class="extPickerDirName">..</span>
+                    <span class="extPickerDirMeta">Parent</span>
+                </button>
+            `);
+        }
+
+        for (const name of dirs) {
+            const rel = childPath(pickerPath, name);
+
+            // Prevent picking inside selected folder when moving a folder.
+            let disabled = false;
+            if (pickerMode === "move" && pickerItem && pickerItem.isDir) {
+                const src = normalizeRelPath(pickerItem.rel);
+                disabled = rel === src || rel.startsWith(src + "/");
+            }
+
+            rows.push(`
+                <button class="extPickerDirRow" type="button" data-path="${escapeHtml(rel)}" ${disabled ? "disabled" : ""}>
+                    <span class="extPickerDirName">${escapeHtml(name)}</span>
+                    <span class="extPickerDirMeta">Folder</span>
+                </button>
+            `);
+        }
+
+        if (!rows.length) {
+            rows.push(`<div class="hint" style="padding:12px;">No folders here.</div>`);
+        }
+
+        extPickerList.innerHTML = rows.join("");
+        if (extPickerStatus) extPickerStatus.textContent = "";
+    }
+
+    function openFolderPicker(opts) {
+        return new Promise((resolve) => {
+            pickerResolve = resolve;
+            pickerMode = opts.mode || "move";
+            pickerItem = opts.item || null;
+            pickerPath = normalizeRelPath(opts.initialPath || currentPath || "");
+
+            if (extPickerTitle) extPickerTitle.textContent = pickerMode === "copy" ? "Copy" : "Move";
+            if (extPickerSub) extPickerSub.textContent = "Select destination folder";
+            if (extPickerSource) {
+                const rel = pickerItem && pickerItem.rel ? pickerItem.rel : "";
+                extPickerSource.textContent = `${pickerMode === "copy" ? "Copy" : "Move"}: /${rel}`;
+            }
+            if (extPickerChoose) extPickerChoose.textContent = pickerMode === "copy" ? "Copy here" : "Move here";
+            if (extPickerStatus) extPickerStatus.textContent = "";
+
+            extPickerOverlay.classList.add("show");
+            extPickerOverlay.setAttribute("aria-hidden", "false");
+            resetFolderPickerPosition();
+
+            loadPickerFolder(pickerPath).catch((e) => {
+                if (extPickerStatus) extPickerStatus.textContent = `Folder list failed: ${e.message || e}`;
+            });
+        });
+    }
+
+    function closeFolderPicker(value) {
+        if (extPickerOverlay) {
+            extPickerOverlay.classList.remove("show");
+            extPickerOverlay.setAttribute("aria-hidden", "true");
+        }
+
+        const resolve = pickerResolve;
+        pickerResolve = null;
+        if (resolve) resolve(value);
+    }
+
+    async function chooseFolderForItem(item, mode) {
+        if (!item || !item.rel) return null;
+
+        const picked = await openFolderPicker({
+            mode,
+            item,
+            initialPath: parentPath(item.rel)
+        });
+
+        if (picked === null) return null;
+
+        const name = basenameFromPath(item.rel);
+        const destFolder = normalizeRelPath(picked || "");
+        return destFolder ? `${destFolder}/${name}` : name;
+    }
+
     async function copyItem(item) {
         if (!canEdit) {
             setStatus("This workspace session is view-only.", "bad");
@@ -1096,21 +1743,14 @@
         const oldPath = normalizeRelPath(item.rel);
         const oldName = basenameFromPath(oldPath);
 
-        const nextPath = prompt(
-            "Copy item to path\n\nInclude the filename/folder name at the end.",
-            oldPath
-        );
-        if (nextPath == null) return;
-
-        const check = validateSimpleRelPathInput(nextPath);
-        if (!check.ok) {
-            setStatus(check.message, "bad");
+        const targetPath = await chooseFolderForItem(item, "copy");
+        if (targetPath === null) {
+            setStatus("Copy cancelled.");
             return;
         }
 
-        const targetPath = check.path;
         if (targetPath === oldPath) {
-            setStatus("Choose a different destination path.", "bad");
+            setStatus("Choose a different destination folder.", "bad");
             return;
         }
 
@@ -1143,21 +1783,14 @@
         const oldPath = normalizeRelPath(item.rel);
         const oldName = basenameFromPath(oldPath);
 
-        const nextPath = prompt(
-            "Move item to path\n\nInclude the filename/folder name at the end.",
-            oldPath
-        );
-        if (nextPath == null) return;
-
-        const check = validateSimpleRelPathInput(nextPath);
-        if (!check.ok) {
-            setStatus(check.message, "bad");
+        const targetPath = await chooseFolderForItem(item, "move");
+        if (targetPath === null) {
+            setStatus("Move cancelled.");
             return;
         }
 
-        const targetPath = check.path;
         if (targetPath === oldPath) {
-            setStatus("Path did not change.");
+            setStatus("Choose a different destination folder.", "bad");
             return;
         }
 
@@ -1405,11 +2038,82 @@
     });
 
     document.addEventListener("keydown", (ev) => {
-        if (ev.key === "Escape") hideContextMenus();
+        if (ev.key !== "Escape") return;
+        if (extPickerOverlay && extPickerOverlay.classList.contains("show")) {
+            closeFolderPicker(null);
+            return;
+        }
+        hideContextMenus();
     });
 
     window.addEventListener("resize", hideContextMenus);
     window.addEventListener("scroll", hideContextMenus, true);
+
+    extPickerHead.addEventListener("pointerdown", beginFolderPickerDrag);
+    extPickerHead.addEventListener("pointermove", moveFolderPickerDrag);
+    extPickerHead.addEventListener("pointerup", endFolderPickerDrag);
+    extPickerHead.addEventListener("pointercancel", endFolderPickerDrag);
+
+    window.addEventListener("resize", () => {
+        if (!extPickerOverlay || !extPickerOverlay.classList.contains("show") || !extPickerCard) return;
+        const rect = extPickerCard.getBoundingClientRect();
+        const pos = clampPickerPosition(rect.left, rect.top);
+        extPickerCard.style.left = `${pos.left}px`;
+        extPickerCard.style.top = `${pos.top}px`;
+        extPickerCard.style.transform = "none";
+    });
+
+    extPickerList.addEventListener("click", (ev) => {
+        const row = ev.target.closest("[data-path]");
+        if (!row || row.disabled) return;
+        loadPickerFolder(row.dataset.path || "").catch((e) => {
+            if (extPickerStatus) extPickerStatus.textContent = `Open folder failed: ${e.message || e}`;
+        });
+    });
+
+    extPickerCrumbs.addEventListener("click", (ev) => {
+        const crumb = ev.target.closest("[data-path]");
+        if (!crumb) return;
+        loadPickerFolder(crumb.dataset.path || "").catch((e) => {
+            if (extPickerStatus) extPickerStatus.textContent = `Open folder failed: ${e.message || e}`;
+        });
+    });
+
+    extPickerChoose.addEventListener("click", () => {
+        closeFolderPicker(pickerPath);
+    });
+
+    extPickerCancel.addEventListener("click", () => closeFolderPicker(null));
+    extPickerClose.addEventListener("click", () => closeFolderPicker(null));
+
+    extPickerNewFolder.addEventListener("click", async () => {
+        if (!canEdit) {
+            if (extPickerStatus) extPickerStatus.textContent = "This workspace session is view-only.";
+            return;
+        }
+
+        const name = prompt("New folder name");
+        if (name == null) return;
+
+        const clean = String(name || "").trim();
+        if (!clean || clean === "." || clean === ".." || clean.includes("/") || clean.includes("\\")) {
+            if (extPickerStatus) extPickerStatus.textContent = "Use a simple folder name without slashes.";
+            return;
+        }
+
+        const target = childPath(pickerPath, clean);
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", target);
+
+        try {
+            if (extPickerStatus) extPickerStatus.textContent = "Creating folder...";
+            await apiJson(`/api/v4/workspaces/files/mkdir?${qs.toString()}`, { method:"POST" });
+            await loadPickerFolder(target);
+        } catch (e) {
+            if (extPickerStatus) extPickerStatus.textContent = `Create folder failed: ${e.message || e}`;
+        }
+    });
 
     btnUp.addEventListener("click", () => {
         loadFiles(parentPath(currentPath)).catch((e) => setStatus(`Open parent failed: ${e.message || e}`, "bad"));
