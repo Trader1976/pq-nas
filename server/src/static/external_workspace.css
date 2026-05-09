@@ -2032,3 +2032,26 @@ html[data-theme="dark"] .externalUploadConflictActions{
     height: 30px;
 }
 
+/* External workspace: keep file cards clean.
+   Download remains available from the right-click/context menu. */
+.downloadLink{
+    display:none !important;
+}
+
+/* External workspace: top bar simplified.
+   Upload/new-folder still exist through context menu flows. */
+#btnToggleUpload,
+#newFolderName,
+#btnNewFolder{
+    display:none !important;
+}\n\n/* External workspace clean toolbar/cards.
+   Download remains available from the right-click item menu. */
+.downloadLink{
+    display:none !important;
+}
+
+#btnToggleUpload,
+#newFolderName,
+#btnNewFolder{
+    display:none !important;
+}\n

@@ -2332,7 +2332,6 @@
                                 <div class="fileMeta">${escapeHtml(meta)}</div>
                             </div>
                         </div>
-                        <a class="downloadLink" href="${escapeHtml(downloadUrl(rel))}" download>Download</a>
                     </div>
                 `);
             }
@@ -3534,7 +3533,15 @@
 
         if (action === "new-folder") {
             if (!canEdit) return setStatus("This workspace session is view-only.", "bad");
-            newFolderName && newFolderName.focus();
+
+            const raw = prompt("New folder name");
+            if (raw == null) {
+                setStatus("New folder cancelled.");
+                return;
+            }
+
+            if (newFolderName) newFolderName.value = raw;
+            createFolder().catch((e) => setStatus(`Create folder failed: ${e.message || e}`, "bad"));
             return;
         }
 
