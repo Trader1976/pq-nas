@@ -51,6 +51,22 @@ struct VerifyLoginCommonContext {
                        ExternalInviteAcceptResult& out,
                        std::string& err)> external_invite_accept_by_st_hash;
 
+    struct ExternalSessionAcceptResult {
+        bool accepted = false;
+        std::string session_id;
+        std::string workspace_id;
+        std::string role;
+        std::string fingerprint_hex;
+        std::string message;
+    };
+
+    // Return true when st_hash matched an external workspace login session.
+    // Return false when st_hash is not an external workspace session.
+    std::function<bool(const std::string& st_hash_b64,
+                       const std::string& fingerprint_hex,
+                       ExternalSessionAcceptResult& out,
+                       std::string& err)> external_session_accept_by_st_hash;
+
     // approvals/pending maps
     //
     // KEYING:

@@ -233,6 +233,50 @@ void handle_verify_login_common(const httplib::Request& req,
             }
         }
 
+        // ---- reusable external workspace login mode ----
+        //
+        // This is for already-accepted external members returning later through
+        // the reusable workspace access page. It approves the short-lived QR
+        // session, but does not create a normal DNA-Nexus user and does not mint
+        // a normal login cookie.
+        if (ctx.external_session_accept_by_st_hash) {
+            VerifyLoginCommonContext::ExternalSessionAcceptResult ext_sess;
+            std::string ext_sess_err;
+
+            if (ctx.external_session_accept_by_st_hash(approval_key, computed_fp, ext_sess, ext_sess_err)) {
+                if (ext_sess.accepted) {
+                    audit_info("v5.workspace_external_session_approved", "ok",
+                               ext_sess.session_id, ext_sess.workspace_id);
+
+                    reply_json(res, 200, json{
+                        {"ok", true},
+                        {"v", 5},
+                        {"kind", "workspace_external_session"},
+                        {"state", "approved"},
+                        {"session_id", ext_sess.session_id},
+                        {"workspace_id", ext_sess.workspace_id},
+                        {"workspace_role", ext_sess.role},
+                        {"fingerprint", computed_fp}
+                    }.dump());
+                    return;
+                }
+
+                audit_info("v5.workspace_external_session_refused", "fail",
+                           ext_sess.session_id, ext_sess_err.empty() ? ext_sess.message : ext_sess_err);
+
+                reply_json(res, 403, json{
+                    {"ok", false},
+                    {"v", 5},
+                    {"kind", "workspace_external_session"},
+                    {"error", "external_session_not_approved"},
+                    {"message", ext_sess_err.empty() ? ext_sess.message : ext_sess_err},
+                    {"session_id", ext_sess.session_id},
+                    {"workspace_id", ext_sess.workspace_id}
+                }.dump());
+                return;
+            }
+        }
+
         // Bootstrap: first verified fingerprint becomes admin if fresh install
         {
             static std::mutex bootstrap_mu;

@@ -106,6 +106,8 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include "file_location_index.h"
 #include "workspaces.h"
 #include "workspace_external_invites.h"
+#include "workspace_external_sessions.h"
+#include "routes_workspace_external_sessions.h"
 #include "routes_workspace_external_invites.h"
 #include "routes_admin_workspaces.h"
 #include "routes_workspaces_files.h"
@@ -9964,6 +9966,7 @@ auto maybe_auto_rotate_before_append = [&]() {
 
 
 
+pqnas::WorkspaceExternalSessionsStore workspace_external_sessions;
 pqnas::WorkspaceExternalInvitesRegistry workspace_external_invites;
 const std::string workspace_external_invites_path =
     (std::filesystem::path(users_path).parent_path() / "workspace_external_invites.json").string();
@@ -20034,6 +20037,102 @@ c.external_invite_accept_by_st_hash =
     };
 
 
+
+c.external_session_accept_by_st_hash =
+    [&](const std::string& st_hash_b64,
+        const std::string& fingerprint_hex,
+        VerifyLoginCommonContext::ExternalSessionAcceptResult& out,
+        std::string& err) -> bool {
+        out = VerifyLoginCommonContext::ExternalSessionAcceptResult{};
+        err.clear();
+
+        if (st_hash_b64.empty() || fingerprint_hex.empty()) {
+            return false;
+        }
+
+        const auto sess_opt = workspace_external_sessions.get_by_st_hash_b64(st_hash_b64);
+        if (!sess_opt.has_value()) {
+            return false; // normal login/auth flow, not an external workspace session
+        }
+
+        pqnas::WorkspaceExternalSessionRec sess = *sess_opt;
+
+        out.session_id = sess.session_id;
+        out.workspace_id = sess.workspace_id;
+        out.fingerprint_hex = fingerprint_hex;
+
+        const long now = now_epoch_sec();
+
+        if (sess.status != "pending") {
+            out.accepted = false;
+            out.message = "session is not pending";
+            err = out.message;
+            return true;
+        }
+
+        if (sess.expires_at_epoch > 0 && now > sess.expires_at_epoch) {
+            workspace_external_sessions.mark_expired_pending(now);
+
+            out.accepted = false;
+            out.message = "session expired";
+            err = out.message;
+            return true;
+        }
+
+        if (!workspaces.load(workspaces_path)) {
+            out.accepted = false;
+            out.message = "failed to load workspaces";
+            err = out.message;
+            return true;
+        }
+
+        auto member_opt = workspaces.get_member(sess.workspace_id, fingerprint_hex);
+        if (!member_opt.has_value() || member_opt->status != "enabled") {
+            workspace_external_sessions.mark_denied(sess.session_id, "not a workspace member");
+
+            out.accepted = false;
+            out.message = "not a workspace member";
+            err = out.message;
+            return true;
+        }
+
+        if (member_opt->member_kind != "external") {
+            workspace_external_sessions.mark_denied(sess.session_id, "not an external member");
+
+            out.accepted = false;
+            out.message = "not an external member";
+            err = out.message;
+            return true;
+        }
+
+        const std::string role = member_opt->role;
+        const std::string now_iso = pqnas::now_iso_utc();
+
+        if (!workspace_external_sessions.mark_approved(sess.session_id, fingerprint_hex, role, now_iso)) {
+            out.accepted = false;
+            out.message = "failed to approve external session";
+            err = out.message;
+            return true;
+        }
+
+        pqnas::AuditEvent ev;
+        ev.event = "workspace.external_session_approved";
+        ev.outcome = "ok";
+        ev.f = {
+            {"session_id", sess.session_id},
+            {"workspace_id", sess.workspace_id},
+            {"role", role},
+            {"fingerprint", fingerprint_hex}
+        };
+        audit_append(ev);
+
+        out.accepted = true;
+        out.role = role;
+        out.message = "approved";
+        return true;
+    };
+
+
 srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& res) {
     if (c.audit_emit) c.audit_emit("route.hit", "ok", [&](std::map<std::string,std::string>& f){
         f["path"] = "/api/v5/verify";
@@ -21032,6 +21131,56 @@ ws_external_invite_deps.qr_svg_from_text =
     };
 
 pqnas::register_workspace_external_invite_routes(srv, ws_external_invite_deps);
+
+pqnas::WorkspaceExternalSessionRouteDeps ws_external_session_deps;
+ws_external_session_deps.workspaces = &workspaces;
+ws_external_session_deps.external_sessions = &workspace_external_sessions;
+ws_external_session_deps.workspaces_path = workspaces_path;
+ws_external_session_deps.origin = &ORIGIN;
+ws_external_session_deps.app = &APP_NAME;
+ws_external_session_deps.reply_json = [](httplib::Response& res, int status, const std::string& body) {
+    reply_json(res, status, body);
+};
+ws_external_session_deps.audit_emit =
+    [&](const std::string& event,
+        const std::string& outcome,
+        const std::map<std::string, std::string>& fields) {
+        pqnas::AuditEvent ev;
+        ev.event = event;
+        ev.outcome = outcome;
+        ev.f = fields;
+        audit_append(ev);
+    };
+ws_external_session_deps.now_epoch_sec = []() { return now_epoch_sec(); };
+ws_external_session_deps.now_iso_utc = []() { return pqnas::now_iso_utc(); };
+ws_external_session_deps.random_b64url = [&](int n) { return random_b64url(n); };
+ws_external_session_deps.url_encode = [&](const std::string& v) { return url_encode(v); };
+ws_external_session_deps.build_req_payload_canonical =
+    [&](const std::string& sid,
+        const std::string& chal,
+        const std::string& nonce,
+        long iat,
+        long exp) {
+        return build_req_payload_canonical(sid, chal, nonce, iat, exp);
+    };
+ws_external_session_deps.sign_req_token =
+    [&](const std::string& payload) {
+        return sign_req_token(payload);
+    };
+ws_external_session_deps.st_hash_b64_from_st =
+    [&](const std::string& st) {
+        if (v5.st_hash_b64_from_st) {
+            return v5.st_hash_b64_from_st(st);
+        }
+        return std::string{};
+    };
+ws_external_session_deps.qr_svg_from_text =
+    [&](const std::string& text, int scale, int border) {
+        return qr_svg_from_text(text, scale, border);
+    };
+
+pqnas::register_workspace_external_session_routes(srv, ws_external_session_deps);
+
 
 	srv.Get("/api/v4/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
     	std::string actor_fp;

@@ -1,0 +1,56 @@
+#pragma once
+
+#include <cstdint>
+#include <functional>
+#include <map>
+#include <string>
+
+#include <httplib.h>
+
+#include "workspaces.h"
+#include "workspace_external_sessions.h"
+
+namespace pqnas {
+
+using WorkspaceExternalSessionReplyJsonFn =
+    std::function<void(httplib::Response&, int, const std::string&)>;
+
+using WorkspaceExternalSessionAuditEmitFn =
+    std::function<void(const std::string& event,
+                       const std::string& outcome,
+                       const std::map<std::string, std::string>& fields)>;
+
+struct WorkspaceExternalSessionRouteDeps {
+    pqnas::WorkspacesRegistry* workspaces = nullptr;
+    pqnas::WorkspaceExternalSessionsStore* external_sessions = nullptr;
+
+    std::string workspaces_path;
+
+    const std::string* origin = nullptr;
+    const std::string* app = nullptr;
+
+    WorkspaceExternalSessionReplyJsonFn reply_json;
+    WorkspaceExternalSessionAuditEmitFn audit_emit;
+
+    std::function<std::int64_t()> now_epoch_sec;
+    std::function<std::string()> now_iso_utc;
+
+    std::function<std::string(int)> random_b64url;
+    std::function<std::string(const std::string&)> url_encode;
+
+    std::function<std::string(const std::string& sid,
+                              const std::string& chal,
+                              const std::string& nonce,
+                              long issued_at,
+                              long expires_at)> build_req_payload_canonical;
+
+    std::function<std::string(const std::string& payload)> sign_req_token;
+    std::function<std::string(const std::string& st_token)> st_hash_b64_from_st;
+    std::function<std::string(const std::string& text, int scale, int border)> qr_svg_from_text;
+};
+
+void register_workspace_external_session_routes(
+    httplib::Server& srv,
+    const WorkspaceExternalSessionRouteDeps& deps);
+
+} // namespace pqnas
