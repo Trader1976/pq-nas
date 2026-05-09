@@ -1497,3 +1497,171 @@ html[data-theme="win_classic"] .textEditFindInput{
     .textEditArea{ min-height:320px; }
     .textEditFindInput{ width:100%; }
 }
+
+/* Detached floating text editor, matched to the detached folder picker. */
+.textEditModal{
+    background:transparent !important;
+    pointer-events:none !important;
+    align-items:initial !important;
+    justify-content:initial !important;
+    padding:0 !important;
+}
+
+.textEditModal.show{
+    display:block !important;
+}
+
+.textEditCard{
+    position:fixed !important;
+    left:50%;
+    top:28px;
+    transform:translateX(-50%);
+    pointer-events:auto !important;
+}
+
+.textEditHead{
+    cursor:grab !important;
+    user-select:none;
+    touch-action:none;
+}
+
+.textEditCard.dragging .textEditHead{
+    cursor:grabbing !important;
+}
+
+.textEditHead button,
+.textEditFoot button,
+.textEditFindBar button,
+.textEditFindBar input,
+.textEditBody textarea{
+    pointer-events:auto;
+}
+
+
+
+
+/* External workspace topbar + list/grid view controls */
+.toolbarBadge{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-height:38px;
+    padding:0 14px;
+    border:1px solid rgba(255,138,28,.42);
+    border-radius:999px;
+    background:rgba(255,138,28,.10);
+    color:var(--fg);
+    font-weight:950;
+    font-size:13px;
+    white-space:nowrap;
+}
+
+.toolbarBadge.loading{
+    color:var(--accent);
+}
+
+.toolbarBadge.bad{
+    color:var(--bad);
+    border-color:rgba(255,92,92,.38);
+    background:rgba(255,92,92,.08);
+}
+
+.toolbarBadge.good{
+    color:var(--good);
+    border-color:rgba(87,214,141,.38);
+    background:rgba(87,214,141,.08);
+}
+
+.toolbarSelect{
+    width:auto;
+    min-width:136px;
+    max-width:180px;
+    padding:8px 10px;
+}
+
+.btn.active{
+    border-color:rgba(255,138,28,.82);
+    background:rgba(255,138,28,.20);
+    color:var(--fg);
+}
+
+.files.listView{
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    align-items:stretch;
+}
+
+.files.listView .fileRow{
+    min-height:56px;
+    width:100%;
+    flex-direction:row;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:9px 12px;
+    border-radius:10px;
+}
+
+.files.listView .fileMain{
+    flex:1 1 auto;
+    min-width:0;
+    width:auto;
+    flex-direction:row;
+    align-items:center;
+    justify-content:flex-start;
+    gap:12px;
+}
+
+.files.listView .fileIcon{
+    width:34px;
+    height:34px;
+    min-width:34px;
+    font-size:22px;
+}
+
+.files.listView .fileText{
+    text-align:left;
+    min-width:0;
+}
+
+.files.listView .fileName{
+    max-width:none;
+}
+
+.files.listView .fileMeta{
+    margin-top:2px;
+}
+
+.files.listView .downloadLink{
+    margin-top:0;
+    flex:0 0 auto;
+}
+
+html[data-theme="win_classic"] .toolbarBadge{
+    color:#050505 !important;
+    background:linear-gradient(180deg,#f8f8f8,#d9d9d9) !important;
+    border:1px solid rgba(0,0,0,.38) !important;
+    border-radius:999px !important;
+}
+
+html[data-theme="win_classic"] .toolbarBadge.good,
+html[data-theme="win_classic"] .toolbarBadge.loading{
+    color:#050505 !important;
+}
+
+html[data-theme="win_classic"] .toolbarBadge.bad{
+    color:#7b1111 !important;
+}
+
+html[data-theme="win_classic"] .btn.active{
+    background:#cfe3ff !important;
+    border-color:rgba(11,78,162,.65) !important;
+}
+
+html[data-theme="win_classic"] .toolbarSelect{
+    color:#050505 !important;
+    background:linear-gradient(180deg,#f8f8f8,#d9d9d9) !important;
+    border:1px solid rgba(0,0,0,.38) !important;
+    border-radius:10px !important;
+}

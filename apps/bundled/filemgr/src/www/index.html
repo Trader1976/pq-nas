@@ -1458,7 +1458,136 @@
       border-color:rgba(180,94,0,.38) !important;
     }
 
-  </style>
+  
+    /* Win classic: professional text editor surface, matched to external workspace editor. */
+    html[data-theme="win_classic"] #textEditModal{
+      background: rgba(255,255,255,0.38) !important;
+      backdrop-filter: none !important;
+      align-items: flex-start !important;
+      justify-content: center !important;
+      padding-top: 28px !important;
+    }
+
+    html[data-theme="win_classic"] #textEditCard{
+      width: min(1180px, calc(100vw - 80px)) !important;
+      max-height: min(86vh, 900px) !important;
+      /* top is controlled by the inline modal position + drag JS; do not lock it with !important. */
+      border-radius: 2px !important;
+      background: rgb(245,245,245) !important;
+      color: #050505 !important;
+      border: 2px solid rgba(0,0,0,0.55) !important;
+      box-shadow: 6px 6px 0 rgba(0,0,0,0.22) !important;
+      overflow: hidden !important;
+    }
+
+    html[data-theme="win_classic"] #textEditModal .modalHead{
+      background: rgba(0,0,0,0.055) !important;
+      border-bottom: 1px solid rgba(0,0,0,0.18) !important;
+      padding: 12px 14px !important;
+      color: #050505 !important;
+    }
+
+    html[data-theme="win_classic"] #textEditTitle{
+      font-size: 16px !important;
+      font-weight: 950 !important;
+      letter-spacing: 0.1px !important;
+      color: #050505 !important;
+    }
+
+    html[data-theme="win_classic"] #textEditPath{
+      color: #4d5662 !important;
+      font-size: 12px !important;
+      opacity: 1 !important;
+    }
+
+    html[data-theme="win_classic"] #textEditInfo,
+    html[data-theme="win_classic"] #textEditStatus{
+      color: #4d5662 !important;
+      opacity: 1 !important;
+      font-size: 12px !important;
+    }
+
+    html[data-theme="win_classic"] #textEditStatus{
+      color: #0a7a35 !important;
+    }
+
+    html[data-theme="win_classic"] #textEditArea,
+    html[data-theme="win_classic"] #textEditArea:read-only{
+      background: #ffffff !important;
+      color: #050505 !important;
+      border: 1px solid rgba(0,0,0,0.28) !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      outline: none !important;
+      font-size: 13px !important;
+      line-height: 1.45 !important;
+      padding: 14px !important;
+      resize: none !important;
+    }
+
+    html[data-theme="win_classic"] #textEditArea:focus{
+      border-color: rgba(11,78,162,0.55) !important;
+      box-shadow: inset 0 0 0 1px rgba(11,78,162,0.18) !important;
+    }
+
+    html[data-theme="win_classic"] #textEditModal .modalFoot{
+      background: rgba(0,0,0,0.055) !important;
+      border-top: 1px solid rgba(0,0,0,0.18) !important;
+      padding: 13px 14px !important;
+      gap: 10px !important;
+    }
+
+    html[data-theme="win_classic"] #textEditModal .btn,
+    html[data-theme="win_classic"] #textEditModal .iconBtn{
+      color: #050505 !important;
+      background: linear-gradient(180deg,#ffffff,#dddddd) !important;
+      border: 1px solid rgba(0,0,0,0.38) !important;
+      border-radius: 8px !important;
+      box-shadow: none !important;
+      min-height: 36px !important;
+      font-weight: 850 !important;
+    }
+
+    html[data-theme="win_classic"] #textEditModal .btn:hover,
+    html[data-theme="win_classic"] #textEditModal .iconBtn:hover{
+      background: linear-gradient(180deg,#ffffff,#e9e9e9) !important;
+    }
+
+    html[data-theme="win_classic"] #textEditModal .btn:disabled{
+      opacity: .45 !important;
+      cursor: not-allowed !important;
+    }
+
+    html[data-theme="win_classic"] #textEditFindBar{
+      background: transparent !important;
+      border: 0 !important;
+      padding: 0 !important;
+      gap: 8px !important;
+    }
+
+    html[data-theme="win_classic"] #textEditFindInput{
+      color: #050505 !important;
+      background: #ffffff !important;
+      border: 1px solid rgba(0,0,0,0.30) !important;
+      border-radius: 6px !important;
+      min-height: 34px !important;
+      padding: 7px 9px !important;
+      box-shadow: none !important;
+    }
+
+    html[data-theme="win_classic"] #textEditFindInput:focus{
+      border-color: rgba(11,78,162,0.55) !important;
+      outline: none !important;
+      box-shadow: inset 0 0 0 1px rgba(11,78,162,0.18) !important;
+    }
+
+    html[data-theme="win_classic"] #textEditFindStatus{
+      color: #4d5662 !important;
+      opacity: 1 !important;
+      font-size: 12px !important;
+    }
+
+</style>
   <link rel="stylesheet" href="./file_versions_ui.css">
   <link rel="stylesheet" href="./filemgr_storage_insights.css">
   <link rel="stylesheet" href="./video_preview.css">
@@ -1592,7 +1721,7 @@
   </div>
 </div>
 <div id="textEditModal" class="modal" aria-hidden="true">
-  <div id="textEditCard" class="modalCard" style="width:min(1100px,96vw); max-height:90vh; display:flex; flex-direction:column; position:absolute; left:50%; top:80px; transform:translateX(-50%);">
+  <div id="textEditCard" class="modalCard" style="width:min(1100px,96vw); max-height:90vh; display:flex; flex-direction:column; position:absolute; left:50%; top:28px; transform:translateX(-50%);">
     <div id="textEditHead" class="modalHead" style="cursor:move; user-select:none;">
       <div>
         <div id="textEditTitle" class="modalTitle">Edit text file</div>

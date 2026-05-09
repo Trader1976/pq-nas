@@ -51,9 +51,20 @@
 
         <div class="cardBody">
             <div class="toolbar">
-                <div class="toolbarGroup">
-                    <button class="btn secondary" id="btnUp" type="button">Up</button>
-                    <button class="btn secondary" id="btnReload" type="button">Refresh files</button>
+                <div class="toolbarGroup fileToolbarMain">
+                    <span class="toolbarBadge" id="topReadyBadge">ready</span>
+                    <button class="btn secondary" id="btnUp" type="button">⬆ Up</button>
+                    <button class="btn secondary" id="btnViewMode" type="button" title="Toggle grid/list view">List</button>
+                    <button class="btn secondary" id="btnDirsFirst" type="button" title="Keep folders first">☷ Dirs</button>
+                    <select class="input toolbarSelect" id="sortMode" title="Sort files">
+                        <option value="name-asc">Name ↑</option>
+                        <option value="name-desc">Name ↓</option>
+                        <option value="mtime-desc">Modified ↓</option>
+                        <option value="mtime-asc">Modified ↑</option>
+                        <option value="size-desc">Size ↓</option>
+                        <option value="size-asc">Size ↑</option>
+                    </select>
+                    <button class="btn secondary" id="btnReload" type="button">Refresh</button>
                 </div>
 
                 <div class="toolbarGroup hidden" id="editorTools">
@@ -188,8 +199,7 @@
 </div>
 
 <div class="contextMenu hidden" id="itemContextMenu" role="menu">
-    <button type="button" data-action="preview">Open preview <span class="contextHint">soon</span></button>
-    <button type="button" data-action="edit-text">Edit text file</button>
+    <button type="button" data-action="preview">Open / edit text?</button>
     <button type="button" data-action="open">Open original</button>
     <button type="button" data-action="download">Download</button>
     <button type="button" data-action="versions">Versions... <span class="contextHint">soon</span></button>

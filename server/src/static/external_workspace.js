@@ -26,6 +26,10 @@
     const btnReload = document.getElementById("btnReload");
     const btnUp = document.getElementById("btnUp");
     const btnNewFolder = document.getElementById("btnNewFolder");
+    const topReadyBadge = document.getElementById("topReadyBadge");
+    const btnViewMode = document.getElementById("btnViewMode");
+    const btnDirsFirst = document.getElementById("btnDirsFirst");
+    const sortModeSelect = document.getElementById("sortMode");
     const emptyContextMenu = document.getElementById("emptyContextMenu");
     const itemContextMenu = document.getElementById("itemContextMenu");
     const selectionContextMenu = document.getElementById("selectionContextMenu");
@@ -41,8 +45,10 @@
     const textPreviewBody = document.getElementById("textPreviewBody");
     const textPreviewClose = document.getElementById("textPreviewClose");
     const textEditModal = document.getElementById("textEditModal");
-    const textEditCard = document.getElementById("textEditCard");
-    const textEditHead = document.getElementById("textEditHead");
+    const textEditCard = document.getElementById("textEditCard") ||
+        (textEditModal ? textEditModal.querySelector(".textEditCard, [role='dialog']") : null);
+    const textEditHead = document.getElementById("textEditHead") ||
+        (textEditModal ? textEditModal.querySelector(".textEditHead, .textPreviewHead, .modalHead") : null);
     const textEditTitle = document.getElementById("textEditTitle");
     const textEditPath = document.getElementById("textEditPath");
     const textEditInfo = document.getElementById("textEditInfo");
@@ -88,6 +94,25 @@
     let pickerItem = null;
     let pickerDrag = null;
     const hashCache = new Map();
+
+    const EXT_VIEW_PREF_KEY = "pqnas_external_workspace_view_v1";
+    const EXT_DIRS_FIRST_PREF_KEY = "pqnas_external_workspace_dirs_first_v1";
+    const EXT_SORT_PREF_KEY = "pqnas_external_workspace_sort_v1";
+
+    let externalViewMode = (() => {
+        try { return localStorage.getItem(EXT_VIEW_PREF_KEY) === "list" ? "list" : "grid"; }
+        catch (_) { return "grid"; }
+    })();
+
+    let externalDirsFirst = (() => {
+        try { return localStorage.getItem(EXT_DIRS_FIRST_PREF_KEY) !== "0"; }
+        catch (_) { return true; }
+    })();
+
+    let externalSortMode = (() => {
+        try { return localStorage.getItem(EXT_SORT_PREF_KEY) || "name-asc"; }
+        catch (_) { return "name-asc"; }
+    })();
     let textEditState = null;
     let textEditDrag = null;
     let textEditFindMatchCase = false;
@@ -98,6 +123,83 @@
         statusEl.textContent = text || "";
         statusEl.classList.toggle("good", kind === "good");
         statusEl.classList.toggle("bad", kind === "bad");
+
+        if (topReadyBadge) {
+            topReadyBadge.classList.toggle("good", kind === "good");
+            topReadyBadge.classList.toggle("bad", kind === "bad");
+            topReadyBadge.classList.toggle("loading", /loading|uploading|moving|copying|saving|creating|checking|scan/i.test(String(text || "")));
+        }
+    }
+
+    function setTopReadyBadge(text, kind) {
+        if (!topReadyBadge) return;
+        topReadyBadge.textContent = text || "ready";
+        topReadyBadge.classList.toggle("good", kind === "good");
+        topReadyBadge.classList.toggle("bad", kind === "bad");
+        topReadyBadge.classList.toggle("loading", kind === "loading");
+    }
+
+    function applyExternalViewPrefs() {
+        if (filesEl) filesEl.classList.toggle("listView", externalViewMode === "list");
+
+        if (btnViewMode) {
+            btnViewMode.textContent = externalViewMode === "list" ? "Grid" : "List";
+            btnViewMode.title = externalViewMode === "list" ? "Switch to grid view" : "Switch to list view";
+        }
+
+        if (btnDirsFirst) {
+            btnDirsFirst.classList.toggle("active", !!externalDirsFirst);
+            btnDirsFirst.title = externalDirsFirst ? "Folders first is on" : "Folders first is off";
+        }
+
+        if (sortModeSelect && sortModeSelect.value !== externalSortMode) {
+            sortModeSelect.value = externalSortMode;
+        }
+    }
+
+    function workspaceItemIsDir(it) {
+        const type = String((it && it.type) || (it && it.is_dir ? "dir" : "")).toLowerCase();
+        return type === "dir" || type === "folder" || (it && it.is_dir === true);
+    }
+
+    function workspaceItemName(it) {
+        return String((it && (it.name || it.path)) || "").toLowerCase();
+    }
+
+    function workspaceItemSize(it) {
+        if (workspaceItemIsDir(it)) return -1;
+        return Number((it && (it.size_bytes ?? it.size ?? it.bytes)) || 0);
+    }
+
+    function workspaceItemMtime(it) {
+        return Number((it && (it.mtime_unix ?? it.mtime_epoch ?? it.mtime)) || 0);
+    }
+
+    function compareWorkspaceItems(a, b) {
+        const ad = workspaceItemIsDir(a);
+        const bd = workspaceItemIsDir(b);
+
+        if (externalDirsFirst && ad !== bd) return ad ? -1 : 1;
+
+        const mode = String(externalSortMode || "name-asc");
+        let out = 0;
+
+        if (mode === "name-desc" || mode === "name-asc") {
+            out = workspaceItemName(a).localeCompare(workspaceItemName(b), undefined, { sensitivity:"base" });
+            if (mode === "name-desc") out = -out;
+        } else if (mode === "mtime-desc" || mode === "mtime-asc") {
+            out = workspaceItemMtime(a) - workspaceItemMtime(b);
+            if (mode === "mtime-desc") out = -out;
+        } else if (mode === "size-desc" || mode === "size-asc") {
+            out = workspaceItemSize(a) - workspaceItemSize(b);
+            if (mode === "size-desc") out = -out;
+        }
+
+        if (out === 0) {
+            out = workspaceItemName(a).localeCompare(workspaceItemName(b), undefined, { sensitivity:"base" });
+        }
+
+        return out;
     }
 
     function escapeHtml(s) {
@@ -329,6 +431,40 @@
         if (i < 0 || i === clean.length - 1) return false;
 
         return TEXT_PREVIEW_EXTS.has(clean.slice(i + 1));
+    }
+
+    function isTextFileItem(item) {
+        return !!item && !item.isDir && isTextPreviewableName(item.name || item.rel || "");
+    }
+
+    function configureExternalItemContextMenu(item) {
+        if (!itemContextMenu || !item) return;
+
+        const openBtn = itemContextMenu.querySelector('[data-action="open"]');
+        const previewBtn = itemContextMenu.querySelector('[data-action="preview"]');
+        const isText = isTextFileItem(item);
+
+        if (previewBtn) {
+            previewBtn.classList.remove("hidden");
+            previewBtn.style.display = "";
+            previewBtn.textContent = isText ? "Open / edit text?" : "Open preview";
+            previewBtn.disabled = item.isDir || !isText;
+        }
+
+        if (openBtn) {
+            if (isText) {
+                // For text/code files, this old row must disappear.
+                // The preview action becomes the smart File Manager-style Open / edit text? row.
+                openBtn.classList.add("hidden");
+                openBtn.style.display = "none";
+                openBtn.disabled = true;
+            } else {
+                openBtn.classList.remove("hidden");
+                openBtn.style.display = "";
+                openBtn.disabled = false;
+                openBtn.textContent = item.isDir ? "Open folder" : "Open original";
+            }
+        }
     }
 
     function textPreviewUrl(relPath) {
@@ -601,6 +737,7 @@
 
     function openTextEditorModal() {
         if (!textEditModal) return;
+        document.body.classList.add("externalTextEditorOpen");
         textEditModal.classList.add("show");
         textEditModal.setAttribute("aria-hidden", "false");
         setTimeout(() => {
@@ -618,6 +755,8 @@
             textEditModal.classList.remove("show");
             textEditModal.setAttribute("aria-hidden", "true");
         }
+
+        document.body.classList.remove("externalTextEditorOpen");
 
         textEditState = null;
         textEditFindMatches = [];
@@ -654,7 +793,14 @@
         textEditCard.style.transform = "none";
 
         try { textEditHead.setPointerCapture(ev.pointerId); } catch (_) {}
+
+        window.addEventListener("pointermove", moveTextEditorDrag, true);
+        window.addEventListener("pointerup", endTextEditorDrag, true);
+        window.addEventListener("pointercancel", endTextEditorDrag, true);
+
         ev.preventDefault();
+        if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation();
+        else ev.stopPropagation();
     }
 
     function moveTextEditorDrag(ev) {
@@ -677,6 +823,11 @@
 
         if (textEditCard) textEditCard.classList.remove("dragging");
         try { textEditHead && textEditHead.releasePointerCapture(ev.pointerId); } catch (_) {}
+
+        window.removeEventListener("pointermove", moveTextEditorDrag, true);
+        window.removeEventListener("pointerup", endTextEditorDrag, true);
+        window.removeEventListener("pointercancel", endTextEditorDrag, true);
+
         textEditDrag = null;
     }
 
@@ -1150,6 +1301,7 @@
 
     async function loadFiles(pathOverride) {
         resetMarqueeVisual();
+        setTopReadyBadge("loading…", "loading");
         if (!workspaceId) return;
 
         if (typeof pathOverride === "string") {
@@ -1163,6 +1315,7 @@
         const j = await apiJson(`/api/v4/workspaces/files/list?${qs.toString()}`);
         applyAccessInfo(j);
         renderBreadcrumbs();
+        applyExternalViewPrefs();
 
         const items = Array.isArray(j.items) ? j.items.slice() : [];
         const pathLabel = currentPath || "workspace root";
@@ -1173,17 +1326,13 @@
             fileSub.textContent = `Editor access. ${countLabel}`;
         }
 
-        items.sort((a, b) => {
-            const ad = String(a.type || "").toLowerCase() === "dir" || a.is_dir === true;
-            const bd = String(b.type || "").toLowerCase() === "dir" || b.is_dir === true;
-            if (ad !== bd) return ad ? -1 : 1;
-            return String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity:"base" });
-        });
+        items.sort(compareWorkspaceItems);
 
         const rows = [];
 
         if (!items.length) {
             filesEl.innerHTML = `<div class="empty">This folder is empty.</div>`;
+            setTopReadyBadge("ready", "good");
             return;
         }
 
@@ -1225,6 +1374,7 @@
         }
 
         filesEl.innerHTML = rows.join("");
+        setTopReadyBadge("ready", "good");
     }
 
     async function uploadSelectedFile() {
@@ -2046,12 +2196,11 @@
             const downloadBtn = itemContextMenu.querySelector('[data-action="download"]');
             const previewBtn = itemContextMenu.querySelector('[data-action="preview"]');
             const editorOnly = itemContextMenu.querySelectorAll('[data-action="copy"], [data-action="move"], [data-action="rename"], [data-action="trash-item"]');
-
             if (contextItem.isDir) {
                 if (openBtn) openBtn.textContent = "Open folder";
                 if (downloadBtn) downloadBtn.innerHTML = 'Download folder <span class="contextHint">zip soon</span>';
                 if (previewBtn) {
-                    previewBtn.innerHTML = 'Open preview <span class="contextHint">text files</span>';
+                    previewBtn.innerHTML = "Open / edit text?";
                     previewBtn.disabled = true;
                 }
             } else {
@@ -2060,13 +2209,14 @@
                 if (downloadBtn) downloadBtn.textContent = "Download";
                 if (previewBtn) {
                     previewBtn.innerHTML = canTextPreview
-                        ? "Open text preview"
-                        : 'Open preview <span class="contextHint">text files</span>';
+                        ? "Open / edit text?"
+                        : "Open / edit text?";
                     previewBtn.disabled = !canTextPreview;
                 }
             }
 
             editorOnly.forEach((btn) => { btn.disabled = !canEdit; });
+            configureExternalItemContextMenu(contextItem);
             placeContextMenu(itemContextMenu, ev.clientX, ev.clientY);
             return;
         }
@@ -2165,6 +2315,43 @@
 
 
 
+    function pointInsideElement(ev, el) {
+        if (!ev || !el || typeof el.getBoundingClientRect !== "function") return false;
+        const r = el.getBoundingClientRect();
+        return ev.clientX >= r.left &&
+            ev.clientX <= r.right &&
+            ev.clientY >= r.top &&
+            ev.clientY <= r.bottom;
+    }
+
+    function isPointerInsideOpenFloatingUi(ev) {
+        if (textEditModal &&
+            textEditModal.classList.contains("show") &&
+            pointInsideElement(ev, textEditCard)) {
+            return true;
+        }
+
+        if (textPreviewModal &&
+            textPreviewModal.classList.contains("show") &&
+            pointInsideElement(ev, textPreviewModal)) {
+            return true;
+        }
+
+        if (propsModal &&
+            propsModal.classList.contains("show") &&
+            pointInsideElement(ev, propsModal)) {
+            return true;
+        }
+
+        if (extPickerOverlay &&
+            extPickerOverlay.classList.contains("show") &&
+            pointInsideElement(ev, extPickerCard)) {
+            return true;
+        }
+
+        return false;
+    }
+
     function isViewportMarqueeBlockedTarget(el) {
         if (!el) return false;
 
@@ -2178,6 +2365,8 @@
 
         return !!el.closest(
             ".fileRow,.contextMenu,.extPickerOverlay,.extPickerCard,.modal," +
+            "#textEditModal,.textEditModal,#textEditCard,.textEditCard,#textEditHead,.textEditHead," +
+            "#textPreviewModal,.textPreviewModal,#propsModal,.propsModal,.propsCard," +
             ".qrBox,.uploadBox,.toolbarGroup,.toolbar,.pathBar,.crumbs," +
             ".accessPanel,.rolePill,.accessPill"
         );
@@ -2186,6 +2375,11 @@
     window.addEventListener("pointerdown", (ev) => {
         if (!signedIn) return;
         if (ev.button !== 0) return;
+
+        // Text editor is detached/floating. While it is open, the global
+        // marquee must not start at all, otherwise it steals the drag.
+        if (document.body.classList.contains("externalTextEditorOpen")) return;
+        if (isPointerInsideOpenFloatingUi(ev)) return;
         if (isViewportMarqueeBlockedTarget(ev.target)) return;
 
         ev.preventDefault();
@@ -2345,11 +2539,10 @@
             const downloadBtn = itemContextMenu.querySelector('[data-action="download"]');
             const previewBtn = itemContextMenu.querySelector('[data-action="preview"]');
             const editorOnly = itemContextMenu.querySelectorAll('[data-action="copy"], [data-action="move"], [data-action="rename"], [data-action="trash-item"]');
-
             if (contextItem && contextItem.isDir) {
                 openBtn.textContent = "Open folder";
                 downloadBtn.textContent = "Download folder (zip)";
-                previewBtn.innerHTML = 'Open preview <span class="contextHint">text files</span>';
+                previewBtn.innerHTML = "Open / edit text?";
                 previewBtn.disabled = true;
                 downloadBtn.disabled = true;
             } else {
@@ -2357,13 +2550,14 @@
                 openBtn.textContent = "Open original";
                 downloadBtn.textContent = "Download";
                 previewBtn.innerHTML = canTextPreview
-                    ? "Open text preview"
-                    : 'Open preview <span class="contextHint">text files</span>';
+                    ? "Open / edit text?"
+                    : "Open / edit text?";
                 previewBtn.disabled = !canTextPreview;
                 downloadBtn.disabled = false;
             }
 
             editorOnly.forEach((btn) => { btn.disabled = !canEdit; });
+            configureExternalItemContextMenu(contextItem);
             placeContextMenu(itemContextMenu, ev.clientX, ev.clientY);
             return;
         }
@@ -2439,14 +2633,18 @@
         }
 
         if (action === "preview") {
-            openTextPreview(item).catch((e) => setStatus(`Preview failed: ${e.message || e}`, "bad"));
+            if (!isTextFileItem(item)) {
+                return showPlaceholder("Preview");
+            }
+
+            if (canEdit) {
+                openTextEditor(item).catch((e) => setStatus(`Text editor failed: ${e.message || e}`, "bad"));
+            } else {
+                openTextPreview(item).catch((e) => setStatus(`Preview failed: ${e.message || e}`, "bad"));
+            }
             return;
         }
 
-        if (action === "edit-text") {
-            openTextEditor(item).catch((e) => setStatus(`Text editor failed: ${e.message || e}`, "bad"));
-            return;
-        }
         if (action === "versions") return showPlaceholder("Versions");
         if (action === "share") return showPlaceholder("Create share link");
         if (action === "copy") {
@@ -2646,10 +2844,7 @@
     }
 
     if (textEditHead) {
-        textEditHead.addEventListener("pointerdown", beginTextEditorDrag);
-        textEditHead.addEventListener("pointermove", moveTextEditorDrag);
-        textEditHead.addEventListener("pointerup", endTextEditorDrag);
-        textEditHead.addEventListener("pointercancel", endTextEditorDrag);
+        textEditHead.addEventListener("pointerdown", beginTextEditorDrag, true);
     }
 
     btnUp.addEventListener("click", () => {
@@ -2690,6 +2885,35 @@
 
     btnRefreshFiles.addEventListener("click", refreshCurrent);
     btnReload.addEventListener("click", refreshCurrent);
+
+    if (btnViewMode) {
+        btnViewMode.addEventListener("click", () => {
+            externalViewMode = externalViewMode === "list" ? "grid" : "list";
+            try { localStorage.setItem(EXT_VIEW_PREF_KEY, externalViewMode); } catch (_) {}
+            applyExternalViewPrefs();
+        });
+    }
+
+    if (btnDirsFirst) {
+        btnDirsFirst.addEventListener("click", () => {
+            externalDirsFirst = !externalDirsFirst;
+            try { localStorage.setItem(EXT_DIRS_FIRST_PREF_KEY, externalDirsFirst ? "1" : "0"); } catch (_) {}
+            applyExternalViewPrefs();
+            loadFiles(currentPath).catch((e) => setStatus(`Sort failed: ${e.message || e}`, "bad"));
+        });
+    }
+
+    if (sortModeSelect) {
+        sortModeSelect.value = externalSortMode;
+        sortModeSelect.addEventListener("change", () => {
+            externalSortMode = String(sortModeSelect.value || "name-asc");
+            try { localStorage.setItem(EXT_SORT_PREF_KEY, externalSortMode); } catch (_) {}
+            applyExternalViewPrefs();
+            loadFiles(currentPath).catch((e) => setStatus(`Sort failed: ${e.message || e}`, "bad"));
+        });
+    }
+
+    applyExternalViewPrefs();
 
     workspacePill.textContent = `workspace_id: ${workspaceId || "missing"}`;
     renderBreadcrumbs();
