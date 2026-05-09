@@ -10533,17 +10533,14 @@ srv.Post("/api/v4/workspaces/files/copy",
 srv.Post("/api/v4/workspaces/files/move",
              [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp, actor_role;
-        if (!deps.require_user_auth_users_actor ||
-            !deps.require_user_auth_users_actor(
-                req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+        bool actor_is_external = false;
+
+        if (!deps.origin || deps.origin->empty()) {
+            res.status = 500;
+            res.set_header("Content-Type", "application/json");
+            res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
             return;
         }
-                 if (!deps.origin || deps.origin->empty()) {
-              res.status = 500;
-              res.set_header("Content-Type", "application/json");
-              res.body = R"({"ok":false,"error":"server_error","message":"origin not configured"})";
-              return;
-          }
 
         if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
         (void)actor_role;
@@ -10618,6 +10615,12 @@ srv.Post("/api/v4/workspaces/files/move",
             return;
         }
 
+        if (!require_workspace_file_actor_for_workspace_local(
+                deps, req, res, workspace_id,
+                &actor_fp, &actor_role, &actor_is_external)) {
+            return;
+        }
+
         std::string from_rel, to_rel;
         if (req.has_param("from")) from_rel = req.get_param_value("from");
         if (req.has_param("to"))   to_rel   = req.get_param_value("to");
@@ -10662,6 +10665,16 @@ srv.Post("/api/v4/workspaces/files/move",
                 {"ok", false},
                 {"error", "forbidden"},
                 {"message", "workspace access denied"}
+            }.dump());
+            return;
+        }
+
+        if (actor_is_external && mopt->member_kind != "external") {
+            audit_fail(workspace_id, "external_member_kind_mismatch", 403, "", from_rel, to_rel);
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "forbidden"},
+                {"message", "workspace external access denied"}
             }.dump());
             return;
         }
@@ -10731,6 +10744,28 @@ srv.Post("/api/v4/workspaces/files/move",
                 {"message", "from and to are the same"}
             }.dump());
             return;
+        }
+
+        // External workspace sessions may use this endpoint for rename only
+        // until the external Move UI and permission model are implemented.
+        //
+        // Normal DNA-Nexus workspace users keep full move support.
+        if (actor_is_external) {
+            auto parent_rel = [](const std::string& rel) -> std::string {
+                const auto slash = rel.find_last_of('/');
+                if (slash == std::string::npos) return "";
+                return rel.substr(0, slash);
+            };
+
+            if (parent_rel(from_rel_norm) != parent_rel(to_rel_norm)) {
+                audit_fail(workspace_id, "external_move_not_enabled", 403, "", from_rel, to_rel);
+                deps.reply_json(res, 403, json{
+                    {"ok", false},
+                    {"error", "forbidden"},
+                    {"message", "external workspace move is not enabled yet"}
+                }.dump());
+                return;
+            }
         }
 
         const std::filesystem::path ws_root =

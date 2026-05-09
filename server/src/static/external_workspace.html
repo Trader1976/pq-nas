@@ -610,7 +610,7 @@
     <div class="contextSep"></div>
     <button type="button" data-action="copy">Copy to... <span class="contextHint">soon</span></button>
     <button type="button" data-action="move">Move... <span class="contextHint">soon</span></button>
-    <button type="button" data-action="rename">Rename... <span class="contextHint">soon</span></button>
+    <button type="button" data-action="rename">Rename...</button>
     <button type="button" data-action="trash-item">Move to trash... <span class="contextHint">soon</span></button>
     <div class="contextSep"></div>
     <button type="button" data-action="properties">Properties...</button>
@@ -1060,6 +1060,62 @@
         await loadFiles(currentPath);
     }
 
+    function basenameFromPath(rel) {
+        const v = normalizeRelPath(rel);
+        if (!v) return "";
+        const i = v.lastIndexOf("/");
+        return i < 0 ? v : v.slice(i + 1);
+    }
+
+    async function renameItem(item) {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        if (!item || !item.rel) {
+            setStatus("No item selected.", "bad");
+            return;
+        }
+
+        const oldName = basenameFromPath(item.rel);
+        const nextName = prompt("Rename item", oldName);
+        if (nextName == null) return;
+
+        const cleanName = String(nextName || "").trim();
+        if (!cleanName) {
+            setStatus("Name cannot be empty.", "bad");
+            return;
+        }
+
+        if (cleanName === "." || cleanName === ".." || cleanName.includes("/") || cleanName.includes("\\")) {
+            setStatus("Use a simple name without slashes.", "bad");
+            return;
+        }
+
+        if (cleanName === oldName) {
+            setStatus("Name did not change.");
+            return;
+        }
+
+        const parent = parentPath(item.rel);
+        const targetPath = childPath(parent, cleanName);
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("from", item.rel);
+        qs.set("to", targetPath);
+
+        setStatus(`Renaming ${oldName}…`);
+
+        await apiJson(`/api/v4/workspaces/files/move?${qs.toString()}`, {
+            method: "POST"
+        });
+
+        setStatus(`Renamed ${oldName} to ${cleanName}.`, "good");
+        await loadFiles(currentPath);
+    }
+
     async function createFolder() {
         if (!canEdit) {
             setStatus("This workspace session is view-only.", "bad");
@@ -1221,7 +1277,10 @@
         if (action === "share") return showPlaceholder("Create share link");
         if (action === "copy") return showPlaceholder("Copy");
         if (action === "move") return showPlaceholder("Move");
-        if (action === "rename") return showPlaceholder("Rename");
+        if (action === "rename") {
+            renameItem(item).catch((e) => setStatus(`Rename failed: ${e.message || e}`, "bad"));
+            return;
+        }
         if (action === "trash-item") return showPlaceholder("Move to trash");
     });
 
