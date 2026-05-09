@@ -2,62 +2,113 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>External Workspace Access - DNA-Nexus</title>
+    <title>External Workspace - DNA-Nexus</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <script src="/static/theme.js"></script>
     <style>
         :root{
             --bg:#070707;
-            --card:rgba(18,18,18,.86);
+            --card:rgba(18,18,18,.88);
+            --card2:rgba(255,255,255,.045);
             --fg:#f4f4f4;
             --muted:#a8a8a8;
             --line:rgba(255,255,255,.14);
+            --line2:rgba(255,138,28,.35);
             --accent:#ff8a1c;
             --bad:#ff5c5c;
             --good:#57d68d;
             --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;
             --sans:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
         }
+
+        *{ box-sizing:border-box; }
+
         body{
             margin:0;
             min-height:100vh;
             background:
-                radial-gradient(circle at 20% 10%, rgba(255,138,28,.20), transparent 34%),
-                radial-gradient(circle at 80% 90%, rgba(120,120,120,.18), transparent 34%),
+                radial-gradient(circle at 0% 0%, rgba(255,138,28,.22), transparent 30%),
+                radial-gradient(circle at 85% 90%, rgba(255,138,28,.08), transparent 34%),
+                linear-gradient(180deg, rgba(80,32,8,.46), rgba(0,0,0,.88) 170px),
                 var(--bg);
             color:var(--fg);
             font-family:var(--sans);
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            padding:24px;
-            box-sizing:border-box;
+            padding:0;
         }
+
         .shell{
-            width:min(980px,100%);
+            width:100%;
+            min-height:100vh;
             display:grid;
-            grid-template-columns: minmax(280px, 390px) 1fr;
-            gap:18px;
+            grid-template-columns: 300px minmax(0,1fr);
+            gap:0;
+            align-items:stretch;
         }
+
         .card{
-            background:var(--card);
-            border:1px solid var(--line);
-            border-radius:22px;
-            box-shadow:0 22px 80px rgba(0,0,0,.42);
-            padding:22px;
+            background:rgba(12,12,12,.72);
+            border:0;
+            border-radius:0;
+            box-shadow:none;
             backdrop-filter: blur(10px);
+            overflow:hidden;
         }
+
+        .shell > .card:first-child{
+            border-right:1px solid rgba(255,138,28,.24);
+            background:
+                linear-gradient(180deg, rgba(80,32,8,.55), rgba(0,0,0,.82)),
+                rgba(10,10,10,.86);
+        }
+
+        .shell > .card:nth-child(2){
+            background:
+                radial-gradient(circle at 50% 0%, rgba(255,138,28,.08), transparent 34%),
+                rgba(4,4,4,.62);
+        }
+
+        .cardHead{
+            padding:18px 22px 15px;
+            border-bottom:1px solid rgba(255,138,28,.26);
+            background:
+                linear-gradient(180deg, rgba(255,138,28,.14), rgba(70,28,8,.28));
+        }
+
+        .cardBody{ padding:18px 22px 22px; }
+
+        .shell > .card:nth-child(2) .cardBody{
+            padding:16px 22px 22px;
+        }
+
         h1{
-            margin:0 0 8px;
-            font-size:24px;
+            margin:0;
+            font-size:23px;
             letter-spacing:.2px;
         }
+
         .sub{
             color:var(--muted);
             line-height:1.45;
-            margin:0 0 16px;
+            margin:8px 0 0;
+            font-size:14px;
         }
+
         .mono{ font-family:var(--mono); }
+
+        .topLine{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+        }
+
+        .badges{
+            display:flex;
+            flex-wrap:wrap;
+            gap:8px;
+            margin-top:14px;
+        }
+
         .pill{
             display:inline-flex;
             align-items:center;
@@ -66,39 +117,62 @@
             border-radius:999px;
             padding:7px 10px;
             color:var(--muted);
-            font-size:13px;
+            font-size:12px;
             max-width:100%;
             overflow:hidden;
             text-overflow:ellipsis;
             white-space:nowrap;
         }
+
+        .pill.good{
+            color:var(--good);
+            border-color:rgba(87,214,141,.38);
+            background:rgba(87,214,141,.08);
+        }
+
+        .pill.edit{
+            color:var(--accent);
+            border-color:rgba(255,138,28,.45);
+            background:rgba(255,138,28,.10);
+        }
+
+        .pill.readonly{
+            color:var(--muted);
+            background:rgba(255,255,255,.045);
+        }
+
         .qrBox{
             background:#fff;
             border-radius:18px;
             padding:12px;
-            margin:18px 0 12px;
-            min-height:220px;
+            margin:16px 0 14px;
+            min-height:190px;
             display:flex;
             align-items:center;
             justify-content:center;
         }
+
         .qrBox img{
             max-width:100%;
-            width:280px;
+            width:230px;
             height:auto;
             display:block;
         }
+
         .status{
             margin-top:14px;
             padding:12px 14px;
-            border-radius:14px;
+            border-radius:16px;
             border:1px solid var(--line);
             color:var(--muted);
             background:rgba(255,255,255,.04);
             line-height:1.35;
+            font-size:13px;
         }
+
         .status.good{ color:var(--good); border-color:rgba(87,214,141,.35); }
         .status.bad{ color:var(--bad); border-color:rgba(255,92,92,.35); }
+
         .btn{
             appearance:none;
             border:1px solid rgba(255,138,28,.55);
@@ -108,152 +182,438 @@
             padding:10px 13px;
             font-weight:800;
             cursor:pointer;
+            min-height:40px;
         }
+
+        .btn:hover{
+            border-color:rgba(255,138,28,.80);
+            background:rgba(255,138,28,.22);
+        }
+
         .btn.secondary{
             border-color:var(--line);
             background:rgba(255,255,255,.05);
             color:var(--muted);
         }
+
+        .btn.secondary:hover{
+            color:var(--fg);
+            border-color:rgba(255,255,255,.24);
+            background:rgba(255,255,255,.075);
+        }
+
+        .btn:disabled{
+            opacity:.45;
+            cursor:not-allowed;
+        }
+
         .row{
             display:flex;
             gap:10px;
             flex-wrap:wrap;
             align-items:center;
         }
-        .uploadBox{
-            margin:14px 0 0;
-            padding:12px;
-            border:1px solid var(--line);
-            border-radius:16px;
-            background:rgba(255,255,255,.04);
+
+        .toolbar{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:12px;
+            flex-wrap:wrap;
+            padding:12px 14px;
+            border-bottom:1px solid rgba(255,138,28,.28);
+            border-radius:0;
+            background:
+                linear-gradient(180deg, rgba(88,34,8,.58), rgba(34,18,10,.44));
+            margin:-16px -22px 14px;
         }
+
+        .toolbarGroup{
+            display:flex;
+            align-items:center;
+            gap:10px;
+            flex-wrap:wrap;
+        }
+
+        .input{
+            width:210px;
+            max-width:100%;
+            border:1px solid var(--line);
+            background:rgba(0,0,0,.22);
+            color:var(--fg);
+            border-radius:14px;
+            padding:10px 12px;
+            min-height:40px;
+            outline:none;
+        }
+
+        .input:focus{
+            border-color:rgba(255,138,28,.55);
+            box-shadow:0 0 0 3px rgba(255,138,28,.10);
+        }
+
+        .breadcrumbs{
+            display:flex;
+            align-items:center;
+            flex-wrap:wrap;
+            gap:7px;
+            min-height:34px;
+            padding:0 2px 12px;
+            border:0;
+            border-bottom:1px solid rgba(255,138,28,.18);
+            border-radius:0;
+            background:transparent;
+            margin-bottom:14px;
+            color:var(--accent);
+            font-size:13px;
+        }
+
+        .crumb{
+            border:0;
+            background:transparent;
+            color:var(--fg);
+            cursor:pointer;
+            font-weight:800;
+            padding:4px 6px;
+            border-radius:8px;
+        }
+
+        .crumb:hover{
+            background:rgba(255,138,28,.12);
+            color:var(--accent);
+        }
+
+        .crumbSep{ color:rgba(255,255,255,.28); }
+
+        .uploadBox{
+            margin:0 0 14px;
+            padding:14px;
+            border:1px dashed rgba(255,138,28,.45);
+            border-radius:18px;
+            background:rgba(255,138,28,.07);
+        }
+
+        .uploadBox strong{
+            display:block;
+            margin-bottom:8px;
+        }
+
         .uploadBox input[type="file"]{
             width:100%;
             color:var(--muted);
-            margin:8px 0 10px;
+            margin:4px 0 12px;
         }
-        .uploadBox .small{
+
+        .small{
             color:var(--muted);
             font-size:12px;
             line-height:1.35;
-            margin-top:8px;
         }
+
         .files{
-            margin-top:14px;
+            display:grid;
+            grid-template-columns:repeat(auto-fill, minmax(132px, 156px));
+            gap:14px;
+            align-items:start;
+        }
+
+        .fileRow{
+            position:relative;
             display:flex;
             flex-direction:column;
+            align-items:center;
+            justify-content:flex-start;
+            gap:8px;
+            padding:14px 12px 12px;
+            border:1px solid rgba(255,138,28,.24);
+            border-radius:16px;
+            background:
+                linear-gradient(180deg, rgba(255,138,28,.055), rgba(255,255,255,.025));
+            min-height:128px;
+            overflow:hidden;
+        }
+
+        .fileMain{
+            min-width:0;
+            width:100%;
+            display:flex;
+            flex-direction:column;
+            align-items:center;
             gap:8px;
         }
-        .fileRow{
-            display:grid;
-            grid-template-columns: 1fr auto;
-            gap:10px;
-            align-items:center;
-            padding:11px 12px;
-            border:1px solid var(--line);
+
+        .fileIcon{
+            width:46px;
+            height:46px;
             border-radius:14px;
-            background:rgba(255,255,255,.04);
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            background:rgba(255,138,28,.07);
+            border:1px solid rgba(255,138,28,.22);
+            flex:0 0 auto;
+            font-size:25px;
         }
+
+        .fileText{
+            min-width:0;
+            width:100%;
+            text-align:center;
+        }
+
         .fileName{
             min-width:0;
             overflow:hidden;
             text-overflow:ellipsis;
             white-space:nowrap;
-        }
-        .fileMeta{
-            color:var(--muted);
-            font-size:12px;
-            white-space:nowrap;
-        }
-        .pathBar{
-            display:flex;
-            align-items:center;
-            justify-content:space-between;
-            gap:10px;
-            margin: 0 0 12px;
-            color:var(--muted);
+            font-weight:900;
+            color:var(--accent);
             font-size:13px;
         }
-        .pathBtn{
-            border:1px solid var(--line);
-            background:rgba(255,255,255,.05);
-            color:var(--fg);
-            border-radius:999px;
-            padding:6px 10px;
-            cursor:pointer;
-            font-weight:800;
-            font-size:12px;
+
+        .fileMeta{
+            color:rgba(255,138,28,.72);
+            font-size:11px;
+            margin-top:4px;
+            white-space:normal;
+            line-height:1.25;
         }
+
         .fileRow.clickable{
             cursor:pointer;
         }
+
         .fileRow.clickable:hover{
-            border-color:rgba(255,138,28,.55);
-            background:rgba(255,138,28,.08);
+            border-color:rgba(255,138,28,.72);
+            background:rgba(255,138,28,.10);
+            transform:translateY(-1px);
         }
+
         .downloadLink{
             color:var(--accent);
             text-decoration:none;
-            font-weight:800;
-            font-size:12px;
+            font-weight:900;
+            font-size:11px;
             border:1px solid rgba(255,138,28,.45);
             border-radius:999px;
-            padding:5px 9px;
+            padding:5px 8px;
             white-space:nowrap;
+            margin-top:auto;
         }
+
         .downloadLink:hover{
             background:rgba(255,138,28,.12);
         }
+
+        .empty{
+            border:1px dashed var(--line);
+            border-radius:18px;
+            background:rgba(255,255,255,.035);
+            padding:24px;
+            text-align:center;
+            color:var(--muted);
+        }
+
         .hint{
             color:var(--muted);
             font-size:13px;
             line-height:1.4;
         }
+
+        .shell.signedIn{
+            grid-template-columns: minmax(0,1fr);
+        }
+
+        .shell.signedIn > .card:first-child{
+            display:none;
+        }
+
+        .shell.signedIn > .card:nth-child(2){
+            min-height:100vh;
+        }
+
+        #fileSurface{
+            min-height:100vh;
+        }
+
+        #fileSurface .cardBody{
+            min-height:calc(100vh - 92px);
+        }
+
+        .shell.signedIn .cardHead{
+            border-radius:0;
+        }
+
+        .contextMenu{
+            position:fixed;
+            z-index:5000;
+            min-width:230px;
+            padding:10px;
+            border:1px solid rgba(255,138,28,.38);
+            border-radius:16px;
+            background:
+                linear-gradient(180deg, rgba(55,24,10,.97), rgba(25,12,7,.97));
+            box-shadow:0 22px 70px rgba(0,0,0,.62);
+            color:var(--accent);
+            user-select:none;
+        }
+
+        .contextMenu button{
+            width:100%;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:18px;
+            border:0;
+            background:transparent;
+            color:var(--accent);
+            border-radius:10px;
+            padding:10px 10px;
+            font:inherit;
+            font-weight:900;
+            text-align:left;
+            cursor:pointer;
+        }
+
+        .contextMenu button:hover{
+            background:rgba(255,138,28,.12);
+        }
+
+        .contextMenu button:disabled{
+            opacity:.42;
+            cursor:not-allowed;
+        }
+
+        .contextMenu button:disabled:hover{
+            background:transparent;
+        }
+
+        .contextSep{
+            height:1px;
+            background:rgba(255,138,28,.18);
+            margin:8px 2px;
+        }
+
+        .contextHint{
+            color:rgba(255,255,255,.45);
+            font-size:12px;
+            font-weight:800;
+        }
+
         .hidden{ display:none !important; }
-        @media (max-width:760px){
+
+        @media (max-width:900px){
             .shell{ grid-template-columns:1fr; }
+            .shell > .card:first-child{ border-right:0; border-bottom:1px solid rgba(255,138,28,.24); }
+            .files{ grid-template-columns:repeat(auto-fill, minmax(128px, 1fr)); }
+        }
+
+        @media (max-width:560px){
+            .toolbar{ align-items:stretch; }
+            .toolbarGroup{ width:100%; }
+            .input{ width:100%; }
+            .btn{ width:100%; }
+            .downloadLink{ width:max-content; }
         }
     </style>
 </head>
 <body>
-<div class="shell">
+<div class="shell" id="shell">
     <section class="card">
-        <h1>External workspace access</h1>
-        <p class="sub" id="accessSub">
-            Scan the QR code with DNA Connect to prove your identity and open this workspace.
-        </p>
-
-        <div class="pill mono" id="workspacePill">workspace_id: —</div>
-
-        <div class="qrBox" id="qrBox">
-            <div class="hint">Preparing QR…</div>
+        <div class="cardHead">
+            <h1>External workspace</h1>
+            <p class="sub" id="accessSub">
+                Scan the QR code with DNA Connect to prove your identity and open this workspace.
+            </p>
+            <div class="badges">
+                <div class="pill mono" id="workspacePill">workspace_id: —</div>
+                <div class="pill readonly hidden" id="rolePill">Role: —</div>
+            </div>
         </div>
 
-        <div class="row">
-            <button class="btn" id="btnNewQr" type="button">New sign-in QR</button>
-            <button class="btn secondary" id="btnRefreshFiles" type="button">Refresh files</button>
-        </div>
+        <div class="cardBody">
+            <div class="qrBox" id="qrBox">
+                <div class="hint">Preparing QR…</div>
+            </div>
 
-        <div class="status" id="status">Loading…</div>
-    </section>
-
-    <section class="card">
-        <h1>Workspace files</h1>
-        <p class="sub" id="fileSub">After login, files you can access will appear here.</p>
-
-        <div class="uploadBox hidden" id="uploadBox">
-            <strong>Upload file</strong>
-            <input type="file" id="uploadFile">
             <div class="row">
-                <button class="btn" id="btnUpload" type="button">Upload to current folder</button>
+                <button class="btn" id="btnNewQr" type="button">New sign-in QR</button>
+                <button class="btn secondary" id="btnRefreshFiles" type="button">Refresh</button>
             </div>
-            <div class="small">
-                Upload requires editor access. View-only members can browse and download, but uploads will be denied.
+
+            <div class="status" id="status">Loading…</div>
+        </div>
+    </section>
+
+    <section class="card" id="fileSurface">
+        <div class="cardHead">
+            <div class="topLine">
+                <div>
+                    <h1>Workspace files</h1>
+                    <p class="sub" id="fileSub">After login, files you can access will appear here.</p>
+                </div>
+                <div class="pill readonly" id="accessPill">Not signed in</div>
             </div>
         </div>
 
-        <div class="files" id="files"></div>
+        <div class="cardBody">
+            <div class="toolbar">
+                <div class="toolbarGroup">
+                    <button class="btn secondary" id="btnUp" type="button">Up</button>
+                    <button class="btn secondary" id="btnReload" type="button">Refresh files</button>
+                </div>
+
+                <div class="toolbarGroup hidden" id="editorTools">
+                    <button class="btn secondary" id="btnToggleUpload" type="button">Upload</button>
+                    <input class="input" id="newFolderName" placeholder="New folder name" autocomplete="off">
+                    <button class="btn" id="btnNewFolder" type="button">New folder</button>
+                </div>
+            </div>
+
+            <div class="breadcrumbs" id="breadcrumbs"></div>
+
+            <div class="uploadBox hidden" id="uploadBox">
+                <strong>Upload file</strong>
+                <input type="file" id="uploadFile">
+                <div class="row">
+                    <button class="btn" id="btnUpload" type="button">Upload to current folder</button>
+                </div>
+                <div class="small">
+                    Upload and folder creation require editor access. View-only members can browse and download.
+                </div>
+            </div>
+
+            <div class="files" id="files">
+                <div class="empty">Sign in to browse this workspace.</div>
+            </div>
+        </div>
     </section>
+</div>
+
+<div class="contextMenu hidden" id="emptyContextMenu" role="menu">
+    <button type="button" data-action="upload">Upload files...</button>
+    <button type="button" data-action="upload-folder">Upload folder... <span class="contextHint">soon</span></button>
+    <div class="contextSep"></div>
+    <button type="button" data-action="zip-folder">Download current folder (zip) <span class="contextHint">soon</span></button>
+    <button type="button" data-action="new-folder">New folder...</button>
+    <div class="contextSep"></div>
+    <button type="button" data-action="trash">Open trash <span class="contextHint">soon</span></button>
+    <button type="button" data-action="refresh">Refresh</button>
+</div>
+
+<div class="contextMenu hidden" id="itemContextMenu" role="menu">
+    <button type="button" data-action="preview">Open preview <span class="contextHint">soon</span></button>
+    <button type="button" data-action="open">Open original</button>
+    <button type="button" data-action="download">Download</button>
+    <button type="button" data-action="versions">Versions... <span class="contextHint">soon</span></button>
+    <button type="button" data-action="share">Create share link... <span class="contextHint">soon</span></button>
+    <div class="contextSep"></div>
+    <button type="button" data-action="copy">Copy to... <span class="contextHint">soon</span></button>
+    <button type="button" data-action="move">Move... <span class="contextHint">soon</span></button>
+    <button type="button" data-action="rename">Rename... <span class="contextHint">soon</span></button>
+    <button type="button" data-action="trash-item">Move to trash... <span class="contextHint">soon</span></button>
+    <div class="contextSep"></div>
+    <button type="button" data-action="properties">Properties...</button>
 </div>
 
 <script>
@@ -263,21 +623,39 @@
     const params = new URLSearchParams(location.search);
     const workspaceId = String(params.get("workspace_id") || "").trim();
 
+    const shell = document.getElementById("shell");
+    const fileSurface = document.getElementById("fileSurface");
     const workspacePill = document.getElementById("workspacePill");
+    const rolePill = document.getElementById("rolePill");
+    const accessPill = document.getElementById("accessPill");
     const accessSub = document.getElementById("accessSub");
     const qrBox = document.getElementById("qrBox");
     const statusEl = document.getElementById("status");
     const filesEl = document.getElementById("files");
     const fileSub = document.getElementById("fileSub");
+    const breadcrumbsEl = document.getElementById("breadcrumbs");
     const uploadBox = document.getElementById("uploadBox");
     const uploadFile = document.getElementById("uploadFile");
+    const editorTools = document.getElementById("editorTools");
+    const newFolderName = document.getElementById("newFolderName");
     const btnUpload = document.getElementById("btnUpload");
+    const btnToggleUpload = document.getElementById("btnToggleUpload");
     const btnNewQr = document.getElementById("btnNewQr");
     const btnRefreshFiles = document.getElementById("btnRefreshFiles");
+    const btnReload = document.getElementById("btnReload");
+    const btnUp = document.getElementById("btnUp");
+    const btnNewFolder = document.getElementById("btnNewFolder");
+    const emptyContextMenu = document.getElementById("emptyContextMenu");
+    const itemContextMenu = document.getElementById("itemContextMenu");
 
     let currentSessionId = "";
     let pollTimer = null;
     let currentPath = "";
+    let canEdit = false;
+    let currentRole = "";
+    let signedIn = false;
+    let uploadOpen = false;
+    let contextItem = null;
 
     function setStatus(text, kind) {
         statusEl.textContent = text || "";
@@ -305,6 +683,16 @@
         return i === 0 ? `${v | 0} ${units[i]}` : `${v.toFixed(1)} ${units[i]}`;
     }
 
+    function fmtTime(epoch) {
+        const n = Number(epoch || 0);
+        if (!Number.isFinite(n) || n <= 0) return "";
+        try {
+            return new Date(n * 1000).toLocaleString();
+        } catch (_) {
+            return "";
+        }
+    }
+
     async function apiJson(path, opts = {}) {
         const r = await fetch(path, {
             credentials: "include",
@@ -324,6 +712,156 @@
         return j;
     }
 
+    function normalizeRelPath(p) {
+        let v = String(p || "").trim();
+        v = v.replaceAll("\\", "/");
+        while (v.startsWith("/")) v = v.slice(1);
+        while (v.endsWith("/") && v.length > 1) v = v.slice(0, -1);
+        if (v === "." || v === "/") return "";
+        return v;
+    }
+
+    function childPath(base, name) {
+        const b = normalizeRelPath(base);
+        const n = normalizeRelPath(name);
+        return b ? `${b}/${n}` : n;
+    }
+
+    function parentPath(p) {
+        const v = normalizeRelPath(p);
+        const i = v.lastIndexOf("/");
+        if (i < 0) return "";
+        return v.slice(0, i);
+    }
+
+    function downloadUrl(relPath) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", normalizeRelPath(relPath));
+        return `/api/v4/workspaces/files/get?${qs.toString()}`;
+    }
+
+    function syncUploadPanel() {
+        if (uploadBox) uploadBox.classList.toggle("hidden", !canEdit || !uploadOpen);
+        if (btnToggleUpload) btnToggleUpload.textContent = uploadOpen ? "Hide upload" : "Upload";
+    }
+
+    function applyAccessInfo(j) {
+        signedIn = true;
+        currentRole = String(j.role || "");
+        canEdit = !!j.can_edit;
+
+        const roleLabel = currentRole ? currentRole[0].toUpperCase() + currentRole.slice(1) : "Member";
+        const accessLabel = canEdit ? "Editor access" : "View-only access";
+
+        rolePill.textContent = `Role: ${roleLabel}`;
+        rolePill.classList.remove("hidden", "edit", "readonly");
+        rolePill.classList.add(canEdit ? "edit" : "readonly");
+
+        accessPill.textContent = accessLabel;
+        accessPill.classList.remove("good", "edit", "readonly");
+        accessPill.classList.add(canEdit ? "edit" : "readonly");
+
+        if (editorTools) editorTools.classList.toggle("hidden", !canEdit);
+        if (!canEdit) uploadOpen = false;
+        syncUploadPanel();
+
+        if (fileSub) {
+            fileSub.textContent = canEdit
+                ? "You can browse, download, upload, and create folders in this workspace."
+                : "You can browse and download files in this workspace.";
+        }
+    }
+
+    function hideContextMenus() {
+        if (emptyContextMenu) emptyContextMenu.classList.add("hidden");
+        if (itemContextMenu) itemContextMenu.classList.add("hidden");
+        contextItem = null;
+    }
+
+    function placeContextMenu(menu, x, y) {
+        if (!menu) return;
+        menu.classList.remove("hidden");
+
+        const pad = 8;
+        const rect = menu.getBoundingClientRect();
+        let left = x;
+        let top = y;
+
+        if (left + rect.width + pad > window.innerWidth) {
+            left = Math.max(pad, window.innerWidth - rect.width - pad);
+        }
+        if (top + rect.height + pad > window.innerHeight) {
+            top = Math.max(pad, window.innerHeight - rect.height - pad);
+        }
+
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+    }
+
+    function showPlaceholder(label) {
+        setStatus(`${label} is not enabled for external workspace access yet.`, "bad");
+    }
+
+    function itemFromRow(row) {
+        if (!row) return null;
+        const isDir = row.hasAttribute("data-dir");
+        const rel = isDir ? (row.dataset.dir || "") : (row.dataset.file || "");
+        return {
+            isDir,
+            rel,
+            name: row.dataset.name || rel.split("/").pop() || "item",
+            type: row.dataset.type || (isDir ? "dir" : "file"),
+            size: row.dataset.size || "",
+            mtime: row.dataset.mtime || ""
+        };
+    }
+
+    function showProperties(item) {
+        if (!item) return;
+        const modified = item.mtime ? fmtTime(item.mtime) : "";
+        const size = item.isDir ? "Folder" : fmtSize(item.size || 0);
+        alert([
+            `Name: ${item.name}`,
+            `Type: ${item.isDir ? "Folder" : "File"}`,
+            `Path: ${item.rel || "."}`,
+            `Size: ${size}`,
+            modified ? `Modified: ${modified}` : ""
+        ].filter(Boolean).join("\n"));
+    }
+
+    function renderBreadcrumbs() {
+        const p = normalizeRelPath(currentPath);
+        const parts = p ? p.split("/").filter(Boolean) : [];
+
+        const html = [];
+        html.push(`<button class="crumb" type="button" data-crumb="">Workspace root</button>`);
+
+        let acc = "";
+        for (const part of parts) {
+            acc = acc ? `${acc}/${part}` : part;
+            html.push(`<span class="crumbSep">/</span>`);
+            html.push(`<button class="crumb" type="button" data-crumb="${escapeHtml(acc)}">${escapeHtml(part)}</button>`);
+        }
+
+        breadcrumbsEl.innerHTML = html.join("");
+        btnUp.disabled = !p;
+    }
+
+    function showSignedInState() {
+        if (shell) shell.classList.add("signedIn");
+
+        if (accessSub) {
+            accessSub.textContent = "You are signed in with DNA Connect. Use a new QR only when this session expires or you want to sign in again.";
+        }
+        qrBox.innerHTML = `
+            <div class="hint" style="text-align:center; color:#444;">
+                Workspace session is active.<br>
+                Use “New sign-in QR” only when you want to sign in again.
+            </div>
+        `;
+    }
+
     async function startSession() {
         if (!workspaceId) {
             setStatus("Missing workspace_id in URL.", "bad");
@@ -333,9 +871,16 @@
 
         clearInterval(pollTimer);
         currentSessionId = "";
+        signedIn = false;
+        canEdit = false;
+        uploadOpen = false;
+        syncUploadPanel();
+        if (shell) shell.classList.remove("signedIn");
+
         if (accessSub) {
             accessSub.textContent = "Scan the QR code with DNA Connect to prove your identity and open this workspace.";
         }
+
         setStatus("Creating a fresh QR login session…");
 
         const j = await apiJson("/api/v4/workspaces/external-sessions/start", {
@@ -398,35 +943,6 @@
         setStatus("Workspace session ready.", "good");
     }
 
-    function normalizeRelPath(p) {
-        let v = String(p || "").trim();
-        v = v.replaceAll("\\", "/");
-        while (v.startsWith("/")) v = v.slice(1);
-        while (v.endsWith("/") && v.length > 1) v = v.slice(0, -1);
-        if (v === "." || v === "/") return "";
-        return v;
-    }
-
-    function childPath(base, name) {
-        const b = normalizeRelPath(base);
-        const n = normalizeRelPath(name);
-        return b ? `${b}/${n}` : n;
-    }
-
-    function parentPath(p) {
-        const v = normalizeRelPath(p);
-        const i = v.lastIndexOf("/");
-        if (i < 0) return "";
-        return v.slice(0, i);
-    }
-
-    function downloadUrl(relPath) {
-        const qs = new URLSearchParams();
-        qs.set("workspace_id", workspaceId);
-        qs.set("path", normalizeRelPath(relPath));
-        return `/api/v4/workspaces/files/get?${qs.toString()}`;
-    }
-
     async function loadFiles(pathOverride) {
         if (!workspaceId) return;
 
@@ -439,30 +955,29 @@
         if (currentPath) qs.set("path", currentPath);
 
         const j = await apiJson(`/api/v4/workspaces/files/list?${qs.toString()}`);
-        const items = Array.isArray(j.items) ? j.items : [];
+        applyAccessInfo(j);
+        renderBreadcrumbs();
 
+        const items = Array.isArray(j.items) ? j.items.slice() : [];
         const pathLabel = currentPath || "workspace root";
-        fileSub.innerHTML = `
-            <div class="pathBar">
-                <span>${escapeHtml(items.length)} item(s) in ${escapeHtml(pathLabel)}.</span>
-                ${currentPath ? `<button class="pathBtn" type="button" data-up="1">Up</button>` : ""}
-            </div>
-        `;
+        const countLabel = `${items.length} item${items.length === 1 ? "" : "s"} in ${pathLabel}.`;
+        if (fileSub && !canEdit) {
+            fileSub.textContent = `View-only access. ${countLabel}`;
+        } else if (fileSub && canEdit) {
+            fileSub.textContent = `Editor access. ${countLabel}`;
+        }
+
+        items.sort((a, b) => {
+            const ad = String(a.type || "").toLowerCase() === "dir" || a.is_dir === true;
+            const bd = String(b.type || "").toLowerCase() === "dir" || b.is_dir === true;
+            if (ad !== bd) return ad ? -1 : 1;
+            return String(a.name || "").localeCompare(String(b.name || ""), undefined, { sensitivity:"base" });
+        });
 
         const rows = [];
 
-        if (currentPath) {
-            rows.push(`
-                <div class="fileRow clickable" data-dir="${escapeHtml(parentPath(currentPath))}">
-                    <div class="fileName">⬆ ..</div>
-                    <div class="fileMeta">parent</div>
-                </div>
-            `);
-        }
-
         if (!items.length) {
-            rows.push(`<div class="hint">This folder is empty.</div>`);
-            filesEl.innerHTML = rows.join("");
+            filesEl.innerHTML = `<div class="empty">This folder is empty.</div>`;
             return;
         }
 
@@ -471,19 +986,32 @@
             const type = String(it.type || (it.is_dir ? "dir" : "file")).toLowerCase();
             const isDir = type === "dir" || type === "folder" || it.is_dir === true;
             const rel = childPath(currentPath, name);
+            const mtime = fmtTime(it.mtime_unix);
+            const size = isDir ? "Folder" : fmtSize(it.size_bytes || it.size || it.bytes || 0);
+            const meta = mtime ? `${size} · ${mtime}` : size;
 
             if (isDir) {
                 rows.push(`
-                    <div class="fileRow clickable" data-dir="${escapeHtml(rel)}">
-                        <div class="fileName">📁 ${escapeHtml(name)}</div>
-                        <div class="fileMeta">folder</div>
+                    <div class="fileRow clickable" data-dir="${escapeHtml(rel)}" data-name="${escapeHtml(name)}" data-type="dir" data-size="0" data-mtime="${escapeHtml(it.mtime_unix || "")}" title="${escapeHtml(name)}">
+                        <div class="fileMain">
+                            <div class="fileIcon">📁</div>
+                            <div class="fileText">
+                                <div class="fileName">${escapeHtml(name)}</div>
+                                <div class="fileMeta">${escapeHtml(meta)}</div>
+                            </div>
+                        </div>
                     </div>
                 `);
             } else {
-                const size = fmtSize(it.size || it.bytes || 0);
                 rows.push(`
-                    <div class="fileRow">
-                        <div class="fileName">📄 ${escapeHtml(name)}</div>
+                    <div class="fileRow clickable" data-file="${escapeHtml(rel)}" data-name="${escapeHtml(name)}" data-type="file" data-size="${escapeHtml(it.size_bytes || it.size || it.bytes || 0)}" data-mtime="${escapeHtml(it.mtime_unix || "")}" title="${escapeHtml(name)}">
+                        <div class="fileMain">
+                            <div class="fileIcon">📄</div>
+                            <div class="fileText">
+                                <div class="fileName">${escapeHtml(name)}</div>
+                                <div class="fileMeta">${escapeHtml(meta)}</div>
+                            </div>
+                        </div>
                         <a class="downloadLink" href="${escapeHtml(downloadUrl(rel))}" download>Download</a>
                     </div>
                 `);
@@ -493,21 +1021,12 @@
         filesEl.innerHTML = rows.join("");
     }
 
-    filesEl.addEventListener("click", (ev) => {
-        const up = ev.target.closest("[data-up]");
-        if (up) {
-            loadFiles(parentPath(currentPath)).catch((e) => setStatus(`Open parent failed: ${e.message || e}`, "bad"));
+    async function uploadSelectedFile() {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
             return;
         }
 
-        const row = ev.target.closest(".fileRow[data-dir]");
-        if (!row) return;
-
-        const nextPath = row.dataset.dir || "";
-        loadFiles(nextPath).catch((e) => setStatus(`Open folder failed: ${e.message || e}`, "bad"));
-    });
-
-    async function uploadSelectedFile() {
         const f = uploadFile && uploadFile.files && uploadFile.files[0];
         if (!f) {
             setStatus("Choose a file first.", "bad");
@@ -526,9 +1045,7 @@
             method: "PUT",
             credentials: "include",
             cache: "no-store",
-            headers: {
-                "Accept": "application/json"
-            },
+            headers: { "Accept": "application/json" },
             body: f
         });
 
@@ -543,32 +1060,224 @@
         await loadFiles(currentPath);
     }
 
+    async function createFolder() {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        const raw = String(newFolderName.value || "").trim();
+        if (!raw) {
+            setStatus("Enter a folder name.", "bad");
+            newFolderName.focus();
+            return;
+        }
+
+        if (raw === "." || raw === ".." || raw.includes("/") || raw.includes("\\")) {
+            setStatus("Use a simple folder name without slashes.", "bad");
+            newFolderName.focus();
+            return;
+        }
+
+        const targetPath = childPath(currentPath, raw);
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", targetPath);
+
+        setStatus(`Creating folder ${raw}…`);
+
+        await apiJson(`/api/v4/workspaces/files/mkdir?${qs.toString()}`, {
+            method: "POST"
+        });
+
+        newFolderName.value = "";
+        setStatus(`Created folder ${raw}.`, "good");
+        await loadFiles(currentPath);
+    }
+
+    filesEl.addEventListener("click", (ev) => {
+        if (ev.target.closest("a")) return;
+
+        const rowDir = ev.target.closest(".fileRow[data-dir]");
+        if (rowDir) {
+            loadFiles(rowDir.dataset.dir || "").catch((e) => setStatus(`Open folder failed: ${e.message || e}`, "bad"));
+            return;
+        }
+
+        const rowFile = ev.target.closest(".fileRow[data-file]");
+        if (rowFile) {
+            location.href = downloadUrl(rowFile.dataset.file || "");
+        }
+    });
+
+    fileSurface.addEventListener("contextmenu", (ev) => {
+        if (ev.target.closest(".contextMenu")) return;
+
+        // Keep normal browser context menu for text/file inputs so paste/select still works.
+        if (ev.target.closest("input, textarea, select")) return;
+
+        ev.preventDefault();
+
+        const row = ev.target.closest(".fileRow");
+        hideContextMenus();
+
+        if (row) {
+            contextItem = itemFromRow(row);
+
+            const openBtn = itemContextMenu.querySelector('[data-action="open"]');
+            const downloadBtn = itemContextMenu.querySelector('[data-action="download"]');
+            const previewBtn = itemContextMenu.querySelector('[data-action="preview"]');
+            const editorOnly = itemContextMenu.querySelectorAll('[data-action="copy"], [data-action="move"], [data-action="rename"], [data-action="trash-item"]');
+
+            if (contextItem && contextItem.isDir) {
+                openBtn.textContent = "Open folder";
+                downloadBtn.textContent = "Download folder (zip)";
+                previewBtn.disabled = true;
+                downloadBtn.disabled = true;
+            } else {
+                openBtn.textContent = "Open original";
+                downloadBtn.textContent = "Download";
+                previewBtn.disabled = false;
+                downloadBtn.disabled = false;
+            }
+
+            editorOnly.forEach((btn) => { btn.disabled = !canEdit; });
+            placeContextMenu(itemContextMenu, ev.clientX, ev.clientY);
+            return;
+        }
+
+        const editorOnly = emptyContextMenu.querySelectorAll('[data-action="upload"], [data-action="upload-folder"], [data-action="new-folder"]');
+        editorOnly.forEach((btn) => { btn.disabled = !canEdit; });
+        placeContextMenu(emptyContextMenu, ev.clientX, ev.clientY);
+    });
+
+    breadcrumbsEl.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-crumb]");
+        if (!btn) return;
+        loadFiles(btn.dataset.crumb || "").catch((e) => setStatus(`Open path failed: ${e.message || e}`, "bad"));
+    });
+
+    emptyContextMenu.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-action]");
+        if (!btn || btn.disabled) return;
+
+        const action = btn.dataset.action;
+        hideContextMenus();
+
+        if (action === "upload") {
+            if (!canEdit) return setStatus("This workspace session is view-only.", "bad");
+            uploadOpen = true;
+            syncUploadPanel();
+            uploadFile && uploadFile.click();
+            return;
+        }
+
+        if (action === "new-folder") {
+            if (!canEdit) return setStatus("This workspace session is view-only.", "bad");
+            newFolderName && newFolderName.focus();
+            return;
+        }
+
+        if (action === "refresh") {
+            refreshCurrent();
+            return;
+        }
+
+        if (action === "upload-folder") return showPlaceholder("Upload folder");
+        if (action === "zip-folder") return showPlaceholder("Download current folder as zip");
+        if (action === "trash") return showPlaceholder("Trash");
+    });
+
+    itemContextMenu.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("[data-action]");
+        if (!btn || btn.disabled || !contextItem) return;
+
+        const action = btn.dataset.action;
+        const item = contextItem;
+        hideContextMenus();
+
+        if (action === "open") {
+            if (item.isDir) {
+                loadFiles(item.rel).catch((e) => setStatus(`Open folder failed: ${e.message || e}`, "bad"));
+            } else {
+                window.open(downloadUrl(item.rel), "_blank", "noopener");
+            }
+            return;
+        }
+
+        if (action === "download") {
+            if (item.isDir) return showPlaceholder("Download folder as zip");
+            location.href = downloadUrl(item.rel);
+            return;
+        }
+
+        if (action === "properties") {
+            showProperties(item);
+            return;
+        }
+
+        if (action === "preview") return showPlaceholder("Preview");
+        if (action === "versions") return showPlaceholder("Versions");
+        if (action === "share") return showPlaceholder("Create share link");
+        if (action === "copy") return showPlaceholder("Copy");
+        if (action === "move") return showPlaceholder("Move");
+        if (action === "rename") return showPlaceholder("Rename");
+        if (action === "trash-item") return showPlaceholder("Move to trash");
+    });
+
+    document.addEventListener("click", (ev) => {
+        if (ev.target.closest(".contextMenu")) return;
+        hideContextMenus();
+    });
+
+    document.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape") hideContextMenus();
+    });
+
+    window.addEventListener("resize", hideContextMenus);
+    window.addEventListener("scroll", hideContextMenus, true);
+
+    btnUp.addEventListener("click", () => {
+        loadFiles(parentPath(currentPath)).catch((e) => setStatus(`Open parent failed: ${e.message || e}`, "bad"));
+    });
+
+    btnToggleUpload.addEventListener("click", () => {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+        uploadOpen = !uploadOpen;
+        syncUploadPanel();
+    });
+
     btnUpload.addEventListener("click", () => {
         uploadSelectedFile().catch((e) => setStatus(`Upload failed: ${e.message || e}`, "bad"));
+    });
+
+    btnNewFolder.addEventListener("click", () => {
+        createFolder().catch((e) => setStatus(`Create folder failed: ${e.message || e}`, "bad"));
+    });
+
+    newFolderName.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+            ev.preventDefault();
+            createFolder().catch((e) => setStatus(`Create folder failed: ${e.message || e}`, "bad"));
+        }
     });
 
     btnNewQr.addEventListener("click", () => {
         startSession().catch((e) => setStatus(`Failed to start QR session: ${e.message || e}`, "bad"));
     });
 
-    btnRefreshFiles.addEventListener("click", () => {
-        loadFiles().catch((e) => setStatus(`File refresh failed: ${e.message || e}`, "bad"));
-    });
+    function refreshCurrent() {
+        loadFiles(currentPath).catch((e) => setStatus(`File refresh failed: ${e.message || e}`, "bad"));
+    }
+
+    btnRefreshFiles.addEventListener("click", refreshCurrent);
+    btnReload.addEventListener("click", refreshCurrent);
 
     workspacePill.textContent = `workspace_id: ${workspaceId || "missing"}`;
-
-    function showSignedInState() {
-        if (accessSub) {
-            accessSub.textContent = "You are signed in with DNA Connect. Use a new QR only when this session expires or you want to sign in again.";
-        }
-        if (uploadBox) uploadBox.classList.remove("hidden");
-        qrBox.innerHTML = `
-            <div class="hint" style="text-align:center; color:#444;">
-                Workspace session is active.<br>
-                Use “New sign-in QR” only when you want to sign in again.
-            </div>
-        `;
-    }
+    renderBreadcrumbs();
 
     // Try existing external cookie first. If it fails, show QR.
     loadFiles()
