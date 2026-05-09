@@ -147,6 +147,45 @@
             font-size:12px;
             white-space:nowrap;
         }
+        .pathBar{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:10px;
+            margin: 0 0 12px;
+            color:var(--muted);
+            font-size:13px;
+        }
+        .pathBtn{
+            border:1px solid var(--line);
+            background:rgba(255,255,255,.05);
+            color:var(--fg);
+            border-radius:999px;
+            padding:6px 10px;
+            cursor:pointer;
+            font-weight:800;
+            font-size:12px;
+        }
+        .fileRow.clickable{
+            cursor:pointer;
+        }
+        .fileRow.clickable:hover{
+            border-color:rgba(255,138,28,.55);
+            background:rgba(255,138,28,.08);
+        }
+        .downloadLink{
+            color:var(--accent);
+            text-decoration:none;
+            font-weight:800;
+            font-size:12px;
+            border:1px solid rgba(255,138,28,.45);
+            border-radius:999px;
+            padding:5px 9px;
+            white-space:nowrap;
+        }
+        .downloadLink:hover{
+            background:rgba(255,138,28,.12);
+        }
         .hint{
             color:var(--muted);
             font-size:13px;
@@ -205,6 +244,7 @@
 
     let currentSessionId = "";
     let pollTimer = null;
+    let currentPath = "";
 
     function setStatus(text, kind) {
         statusEl.textContent = text || "";
@@ -325,31 +365,114 @@
         setStatus("Workspace session ready.", "good");
     }
 
-    async function loadFiles() {
+    function normalizeRelPath(p) {
+        let v = String(p || "").trim();
+        v = v.replaceAll("\\", "/");
+        while (v.startsWith("/")) v = v.slice(1);
+        while (v.endsWith("/") && v.length > 1) v = v.slice(0, -1);
+        if (v === "." || v === "/") return "";
+        return v;
+    }
+
+    function childPath(base, name) {
+        const b = normalizeRelPath(base);
+        const n = normalizeRelPath(name);
+        return b ? `${b}/${n}` : n;
+    }
+
+    function parentPath(p) {
+        const v = normalizeRelPath(p);
+        const i = v.lastIndexOf("/");
+        if (i < 0) return "";
+        return v.slice(0, i);
+    }
+
+    function downloadUrl(relPath) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", normalizeRelPath(relPath));
+        return `/api/v4/workspaces/files/get?${qs.toString()}`;
+    }
+
+    async function loadFiles(pathOverride) {
         if (!workspaceId) return;
 
-        const j = await apiJson(`/api/v4/workspaces/files/list?workspace_id=${encodeURIComponent(workspaceId)}`);
+        if (typeof pathOverride === "string") {
+            currentPath = normalizeRelPath(pathOverride);
+        }
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        if (currentPath) qs.set("path", currentPath);
+
+        const j = await apiJson(`/api/v4/workspaces/files/list?${qs.toString()}`);
         const items = Array.isArray(j.items) ? j.items : [];
 
-        fileSub.textContent = `${items.length} item(s) in workspace root.`;
+        const pathLabel = currentPath || "workspace root";
+        fileSub.innerHTML = `
+            <div class="pathBar">
+                <span>${escapeHtml(items.length)} item(s) in ${escapeHtml(pathLabel)}.</span>
+                ${currentPath ? `<button class="pathBtn" type="button" data-up="1">Up</button>` : ""}
+            </div>
+        `;
+
+        const rows = [];
+
+        if (currentPath) {
+            rows.push(`
+                <div class="fileRow clickable" data-dir="${escapeHtml(parentPath(currentPath))}">
+                    <div class="fileName">⬆ ..</div>
+                    <div class="fileMeta">parent</div>
+                </div>
+            `);
+        }
 
         if (!items.length) {
-            filesEl.innerHTML = `<div class="hint">This workspace is empty.</div>`;
+            rows.push(`<div class="hint">This folder is empty.</div>`);
+            filesEl.innerHTML = rows.join("");
             return;
         }
 
-        filesEl.innerHTML = items.map((it) => {
-            const name = it.name || it.path || "item";
-            const type = it.type || (it.is_dir ? "dir" : "file");
-            const size = type === "dir" ? "folder" : fmtSize(it.size || it.bytes || 0);
-            return `
-                <div class="fileRow">
-                    <div class="fileName">${escapeHtml(name)}</div>
-                    <div class="fileMeta">${escapeHtml(size)}</div>
-                </div>
-            `;
-        }).join("");
+        for (const it of items) {
+            const name = String(it.name || it.path || "item");
+            const type = String(it.type || (it.is_dir ? "dir" : "file")).toLowerCase();
+            const isDir = type === "dir" || type === "folder" || it.is_dir === true;
+            const rel = childPath(currentPath, name);
+
+            if (isDir) {
+                rows.push(`
+                    <div class="fileRow clickable" data-dir="${escapeHtml(rel)}">
+                        <div class="fileName">📁 ${escapeHtml(name)}</div>
+                        <div class="fileMeta">folder</div>
+                    </div>
+                `);
+            } else {
+                const size = fmtSize(it.size || it.bytes || 0);
+                rows.push(`
+                    <div class="fileRow">
+                        <div class="fileName">📄 ${escapeHtml(name)}</div>
+                        <a class="downloadLink" href="${escapeHtml(downloadUrl(rel))}" download>Download</a>
+                    </div>
+                `);
+            }
+        }
+
+        filesEl.innerHTML = rows.join("");
     }
+
+    filesEl.addEventListener("click", (ev) => {
+        const up = ev.target.closest("[data-up]");
+        if (up) {
+            loadFiles(parentPath(currentPath)).catch((e) => setStatus(`Open parent failed: ${e.message || e}`, "bad"));
+            return;
+        }
+
+        const row = ev.target.closest(".fileRow[data-dir]");
+        if (!row) return;
+
+        const nextPath = row.dataset.dir || "";
+        loadFiles(nextPath).catch((e) => setStatus(`Open folder failed: ${e.message || e}`, "bad"));
+    });
 
     btnNewQr.addEventListener("click", () => {
         startSession().catch((e) => setStatus(`Failed to start QR session: ${e.message || e}`, "bad"));
