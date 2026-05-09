@@ -120,6 +120,24 @@
             flex-wrap:wrap;
             align-items:center;
         }
+        .uploadBox{
+            margin:14px 0 0;
+            padding:12px;
+            border:1px solid var(--line);
+            border-radius:16px;
+            background:rgba(255,255,255,.04);
+        }
+        .uploadBox input[type="file"]{
+            width:100%;
+            color:var(--muted);
+            margin:8px 0 10px;
+        }
+        .uploadBox .small{
+            color:var(--muted);
+            font-size:12px;
+            line-height:1.35;
+            margin-top:8px;
+        }
         .files{
             margin-top:14px;
             display:flex;
@@ -222,6 +240,18 @@
     <section class="card">
         <h1>Workspace files</h1>
         <p class="sub" id="fileSub">After login, files you can access will appear here.</p>
+
+        <div class="uploadBox hidden" id="uploadBox">
+            <strong>Upload file</strong>
+            <input type="file" id="uploadFile">
+            <div class="row">
+                <button class="btn" id="btnUpload" type="button">Upload to current folder</button>
+            </div>
+            <div class="small">
+                Upload requires editor access. View-only members can browse and download, but uploads will be denied.
+            </div>
+        </div>
+
         <div class="files" id="files"></div>
     </section>
 </div>
@@ -239,6 +269,9 @@
     const statusEl = document.getElementById("status");
     const filesEl = document.getElementById("files");
     const fileSub = document.getElementById("fileSub");
+    const uploadBox = document.getElementById("uploadBox");
+    const uploadFile = document.getElementById("uploadFile");
+    const btnUpload = document.getElementById("btnUpload");
     const btnNewQr = document.getElementById("btnNewQr");
     const btnRefreshFiles = document.getElementById("btnRefreshFiles");
 
@@ -474,6 +507,46 @@
         loadFiles(nextPath).catch((e) => setStatus(`Open folder failed: ${e.message || e}`, "bad"));
     });
 
+    async function uploadSelectedFile() {
+        const f = uploadFile && uploadFile.files && uploadFile.files[0];
+        if (!f) {
+            setStatus("Choose a file first.", "bad");
+            return;
+        }
+
+        const targetPath = childPath(currentPath, f.name);
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", targetPath);
+        qs.set("overwrite", "1");
+
+        setStatus(`Uploading ${f.name}…`);
+
+        const r = await fetch(`/api/v4/workspaces/files/put?${qs.toString()}`, {
+            method: "PUT",
+            credentials: "include",
+            cache: "no-store",
+            headers: {
+                "Accept": "application/json"
+            },
+            body: f
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            const msg = j && (j.message || j.error) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`;
+            throw new Error(msg);
+        }
+
+        if (uploadFile) uploadFile.value = "";
+        setStatus(`Uploaded ${f.name}.`, "good");
+        await loadFiles(currentPath);
+    }
+
+    btnUpload.addEventListener("click", () => {
+        uploadSelectedFile().catch((e) => setStatus(`Upload failed: ${e.message || e}`, "bad"));
+    });
+
     btnNewQr.addEventListener("click", () => {
         startSession().catch((e) => setStatus(`Failed to start QR session: ${e.message || e}`, "bad"));
     });
@@ -488,6 +561,7 @@
         if (accessSub) {
             accessSub.textContent = "You are signed in with DNA Connect. Use a new QR only when this session expires or you want to sign in again.";
         }
+        if (uploadBox) uploadBox.classList.remove("hidden");
         qrBox.innerHTML = `
             <div class="hint" style="text-align:center; color:#444;">
                 Workspace session is active.<br>
