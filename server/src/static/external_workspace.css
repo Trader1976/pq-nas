@@ -1903,3 +1903,132 @@ html[data-theme="win_classic"] .dropOverlay .dropOverlayCard{
 .uploadBox{
     display:none !important;
 }
+
+
+/* External workspace upload conflict dialog. */
+.externalUploadConflictBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:9100;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:22px;
+    background:rgba(0,0,0,.38);
+    backdrop-filter:blur(6px);
+}
+
+.externalUploadConflictCard{
+    width:min(720px, calc(100vw - 32px));
+    border:1px solid rgba(255,138,28,.38);
+    border-radius:18px;
+    background:rgba(246,246,246,.98);
+    color:#111;
+    box-shadow:0 24px 80px rgba(0,0,0,.48);
+    overflow:hidden;
+}
+
+.externalUploadConflictHead{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:14px;
+    padding:16px 18px 12px;
+    border-bottom:1px solid rgba(0,0,0,.14);
+}
+
+.externalUploadConflictTitle{
+    font-size:20px;
+    font-weight:900;
+}
+
+.externalUploadConflictPath{
+    margin-top:3px;
+    font-family:var(--mono);
+    font-size:12px;
+    opacity:.72;
+    word-break:break-all;
+}
+
+.externalUploadConflictClose{
+    border:1px solid rgba(0,0,0,.22);
+    border-radius:14px;
+    padding:8px 13px;
+    font-weight:900;
+    background:rgba(255,255,255,.55);
+    cursor:pointer;
+}
+
+.externalUploadConflictBody{
+    padding:16px 18px;
+}
+
+.externalUploadConflictGrid{
+    display:grid;
+    grid-template-columns:140px minmax(0, 1fr);
+    gap:12px 16px;
+    align-items:start;
+}
+
+.externalUploadConflictChoices{
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+}
+
+.externalUploadConflictChoices label{
+    display:flex;
+    gap:10px;
+    align-items:flex-start;
+}
+
+.externalUploadConflictChoices small{
+    opacity:.78;
+    line-height:1.35;
+}
+
+.externalUploadConflictApplyAll{
+    display:flex;
+    gap:10px;
+    align-items:center;
+}
+
+.externalUploadConflictActions{
+    display:flex;
+    justify-content:flex-start;
+    gap:10px;
+    padding:14px 18px 16px;
+    border-top:1px solid rgba(0,0,0,.12);
+}
+
+html[data-theme="dark"] .externalUploadConflictCard{
+    background:rgba(18,18,18,.98);
+    color:var(--fg);
+}
+
+html[data-theme="dark"] .externalUploadConflictHead,
+html[data-theme="dark"] .externalUploadConflictActions{
+    border-color:rgba(255,255,255,.12);
+}
+
+/* File Manager generated SVG file type icons */
+.fileIcon.svgFileIcon{
+    font-size: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.fileIcon.svgFileIcon svg{
+    width: 46px;
+    height: 46px;
+    display: block;
+}
+
+#files.listView .fileIcon.svgFileIcon svg,
+.files.listView .fileIcon.svgFileIcon svg{
+    width: 30px;
+    height: 30px;
+}
+

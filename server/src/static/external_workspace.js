@@ -216,6 +216,101 @@
             .replaceAll("'", "&#39;");
     }
 
+
+    function externalFileExtLower(name) {
+        const base = String(name || "").split("/").pop().split("?")[0].split("#")[0];
+        const i = base.lastIndexOf(".");
+        if (i < 0 || i === base.length - 1) return "";
+        return base.slice(i + 1).toLowerCase();
+    }
+
+    function externalNormalizeIconExt(ext) {
+        const e = String(ext || "").toLowerCase();
+        const aliases = {
+            jpeg: "jpg",
+            jpe: "jpg",
+            htm: "html",
+            xhtml: "html",
+            markdown: "md",
+            text: "txt",
+            yml: "yaml",
+            tgz: "gz",
+            cxx: "cpp",
+            cc: "cpp",
+            hpp: "h",
+            hxx: "h",
+            m4v: "mp4",
+            tif: "tiff"
+        };
+        return aliases[e] || e;
+    }
+
+    function externalIconMarkupFor(name, isDir) {
+        const icons = (window && window.PQNAS_FILE_ICONS) || {};
+
+        if (isDir) {
+            return icons.folder || icons.directory || icons.default || "";
+        }
+
+        const ext = externalNormalizeIconExt(externalFileExtLower(name));
+        if (ext && icons[ext]) return icons[ext];
+
+        const genericMap = {
+            zip: "generic_archive", "7z": "generic_archive", rar: "generic_archive",
+            tar: "generic_archive", gz: "generic_archive", bz2: "generic_archive",
+            xz: "generic_archive", deb: "generic_archive", rpm: "generic_archive",
+            dmg: "generic_archive", apk: "generic_archive",
+
+            mp3: "generic_audio", wav: "generic_audio", ogg: "generic_audio",
+            flac: "generic_audio", m4a: "generic_audio", aac: "generic_audio",
+
+            mp4: "generic_video", mov: "generic_video", mkv: "generic_video",
+            avi: "generic_video", webm: "generic_video",
+
+            png: "generic_image", jpg: "generic_image", gif: "generic_image",
+            bmp: "generic_image", svg: "generic_image", webp: "generic_image",
+            tiff: "generic_image", ico: "generic_image", heic: "generic_image",
+
+            xls: "generic_spreadsheet", xlsx: "generic_spreadsheet",
+            csv: "generic_spreadsheet", ods: "generic_spreadsheet",
+
+            ppt: "generic_presentation", pptx: "generic_presentation",
+            odp: "generic_presentation", key: "generic_presentation",
+
+            doc: "generic_document", docx: "generic_document", pdf: "generic_document",
+            txt: "generic_document", md: "generic_document", rtf: "generic_document",
+            odt: "generic_document", ini: "generic_document", cfg: "generic_document",
+            conf: "generic_document", log: "generic_document",
+
+            db: "generic_database", sqlite: "generic_database", sql: "generic_database",
+
+            c: "generic_code", cpp: "generic_code", h: "generic_code",
+            java: "generic_code", kt: "generic_code", ts: "generic_code",
+            tsx: "generic_code", js: "generic_code", jsx: "generic_code",
+            json: "generic_code", html: "generic_code", css: "generic_code",
+            scss: "generic_code", php: "generic_code", py: "generic_code",
+            rb: "generic_code", rs: "generic_code", go: "generic_code",
+            sh: "generic_code", bash: "generic_code", zsh: "generic_code",
+            lua: "generic_code", swift: "generic_code", xml: "generic_code",
+            yaml: "generic_code", toml: "generic_code", so: "generic_code",
+            dll: "generic_code", exe: "generic_code"
+        };
+
+        const generic = ext ? genericMap[ext] : "";
+        if (generic && icons[generic]) return icons[generic];
+
+        return icons.default || "";
+    }
+
+    function externalFileIconHtml(name, isDir) {
+        const svg = externalIconMarkupFor(name, isDir);
+        if (svg && String(svg).trim().startsWith("<svg")) {
+            return `<div class="fileIcon svgFileIcon" aria-hidden="true">${svg}</div>`;
+        }
+        return `<div class="fileIcon">${isDir ? "📁" : "📄"}</div>`;
+    }
+
+
     function fmtSize(n) {
         const units = ["B", "KiB", "MiB", "GiB", "TiB"];
         let v = Number(n || 0);
@@ -498,7 +593,7 @@
         } catch (_) {}
     }
 
-    async function uploadFileToWorkspaceChunked(relPath, file, onProgress) {
+    async function uploadFileToWorkspaceChunked(relPath, file, onProgress, opts = {}) {
         const size = Number(file && file.size != null ? file.size : 0);
         let uploadId = "";
         let uploadedCommitted = 0;
@@ -508,7 +603,7 @@
                 workspace_id: workspaceId,
                 path: relPath,
                 size_bytes: size,
-                overwrite: false
+                overwrite: !!(opts && opts.overwrite)
             });
 
             uploadId = String(start.upload_id || "");
@@ -569,20 +664,21 @@
         }
     }
 
-    async function uploadFileSmartToWorkspace(relPath, file, onProgress) {
+    async function uploadFileSmartToWorkspace(relPath, file, onProgress, opts = {}) {
         const size = Number(file && file.size != null ? file.size : 0);
         if (size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
-            return await uploadFileToWorkspaceChunked(relPath, file, onProgress);
+            return await uploadFileToWorkspaceChunked(relPath, file, onProgress, opts);
         }
-        return await uploadFileToWorkspacePut(relPath, file, onProgress);
+        return await uploadFileToWorkspacePut(relPath, file, onProgress, opts);
     }
 
 
-    function uploadFileToWorkspacePut(relPath, file, onProgress) {
+    function uploadFileToWorkspacePut(relPath, file, onProgress, opts = {}) {
         return new Promise((resolve, reject) => {
             const qs = new URLSearchParams();
             qs.set("workspace_id", workspaceId);
             qs.set("path", relPath);
+            if (opts && opts.overwrite) qs.set("overwrite", "1");
 
             const xhr = new XMLHttpRequest();
             uploadCurrentXhr = xhr;
@@ -605,7 +701,12 @@
                     resolve(j || {});
                     return;
                 }
-                reject(new Error(uploadErrorMessageFromXhr(xhr)));
+                const err = new Error(uploadErrorMessageFromXhr(xhr));
+                err.http = xhr.status || 0;
+                err.kind = j && j.error ? String(j.error) : "pqnas_error";
+                err.error = j && j.error ? String(j.error) : "";
+                err.details = j || {};
+                reject(err);
             };
 
             xhr.onerror = () => {
@@ -621,6 +722,108 @@
             };
 
             xhr.send(file);
+        });
+    }
+
+    
+    function isExternalUploadFileExistsConflict(e) {
+        const j = e && e.details ? e.details : null;
+        if (j && j.error === "file_exists") return true;
+        const hay = `${e && e.kind ? e.kind : ""} ${e && e.error ? e.error : ""} ${e && e.message ? e.message : ""}`.toLowerCase();
+        return hay.includes("file_exists") || hay.includes("file already exists");
+    }
+
+    function externalUploadExistingInfo(e) {
+        const j = e && e.details ? e.details : null;
+        return j && j.existing ? j.existing : null;
+    }
+
+    function fmtConflictDate(epoch) {
+        const n = Number(epoch || 0);
+        if (!Number.isFinite(n) || n <= 0) return "unknown";
+        try { return new Date(n * 1000).toLocaleString(); } catch (_) { return "unknown"; }
+    }
+
+    function askExternalUploadConflictDecision(rel, file, existing) {
+        return new Promise((resolve) => {
+            let backdrop = document.getElementById("externalUploadConflictBackdrop");
+            if (backdrop) backdrop.remove();
+
+            backdrop = document.createElement("div");
+            backdrop.id = "externalUploadConflictBackdrop";
+            backdrop.className = "externalUploadConflictBackdrop";
+
+            const existingSize = existing && existing.size_bytes != null ? fmtSize(existing.size_bytes) : "unknown";
+            const existingMtime = existing && existing.mtime_epoch != null ? fmtConflictDate(existing.mtime_epoch) : "unknown";
+            const newSize = file && file.size != null ? fmtSize(file.size) : "unknown";
+            const newMtime = file && file.lastModified ? new Date(file.lastModified).toLocaleString() : "unknown";
+
+            backdrop.innerHTML = `
+                <div class="externalUploadConflictCard" role="dialog" aria-modal="true">
+                    <div class="externalUploadConflictHead">
+                        <div>
+                            <div class="externalUploadConflictTitle">File already exists</div>
+                            <div class="externalUploadConflictPath">/${rel}</div>
+                        </div>
+                        <button type="button" class="externalUploadConflictClose" data-action="cancel">Close</button>
+                    </div>
+                    <div class="externalUploadConflictBody">
+                        <div class="externalUploadConflictGrid">
+                            <div><b>Existing file</b></div>
+                            <div>Size: ${existingSize} • Modified: ${existingMtime}</div>
+                            <div><b>New file</b></div>
+                            <div>Size: ${newSize} • Modified: ${newMtime}</div>
+                            <div><b>Choice</b></div>
+                            <div class="externalUploadConflictChoices">
+                                <label>
+                                    <input type="radio" name="externalUploadConflictChoice" value="keep_old" checked>
+                                    <span><b>Keep existing</b><br><small>Skip this upload and keep the file already stored in PQ-NAS.</small></span>
+                                </label>
+                                <label>
+                                    <input type="radio" name="externalUploadConflictChoice" value="replace">
+                                    <span><b>Replace with new</b><br><small>Upload this file and preserve the old one as a version.</small></span>
+                                </label>
+                            </div>
+                            <div></div>
+                            <label class="externalUploadConflictApplyAll">
+                                <input type="checkbox" id="externalUploadConflictApplyAll">
+                                Use this choice for all remaining conflicts in this upload
+                            </label>
+                        </div>
+                    </div>
+                    <div class="externalUploadConflictActions">
+                        <button type="button" class="fmUploadProgressBtn secondary" data-action="continue">Continue</button>
+                        <button type="button" class="fmUploadProgressBtn secondary" data-action="cancel">Cancel upload</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(backdrop);
+
+            const finish = (decision) => {
+                try { backdrop.remove(); } catch (_) {}
+                resolve(decision);
+            };
+
+            backdrop.addEventListener("click", (ev) => {
+                const btn = ev.target && ev.target.closest ? ev.target.closest("[data-action]") : null;
+                if (!btn) return;
+
+                const action = btn.dataset.action || "";
+                if (action === "cancel") {
+                    finish({ action: "cancel", applyAll: false });
+                    return;
+                }
+
+                if (action === "continue") {
+                    const picked = backdrop.querySelector('input[name="externalUploadConflictChoice"]:checked');
+                    const applyAll = !!backdrop.querySelector("#externalUploadConflictApplyAll")?.checked;
+                    finish({
+                        action: picked ? picked.value : "keep_old",
+                        applyAll
+                    });
+                }
+            });
         });
     }
 
@@ -648,6 +851,10 @@
         const totalBytes = files.reduce((sum, x) => sum + Math.max(0, Number(x.file.size || 0)), 0) || 1;
         let committedBytes = 0;
         let completed = 0;
+        let skipped = 0;
+
+        let conflictApplyAll = false;
+        let conflictActionAll = "";
 
         setStatus(`Uploading ${files.length} file(s)…`, "good");
 
@@ -659,30 +866,108 @@
             const displayName = item.rel || item.file.name;
             let lastLoaded = 0;
 
-            setUploadModalProgress({
-                title: "Uploading files",
-                sub: `${i + 1} / ${files.length}`,
-                file: displayName,
-                text: `Uploading ${fmtSize(item.file.size || 0)}…`,
-                pct: (committedBytes / totalBytes) * 100,
-                meta: `Destination: /${target}`,
-                done: false
-            });
+            const showFileStart = () => {
+                setUploadModalProgress({
+                    title: "Uploading files",
+                    sub: `${i + 1} / ${files.length}`,
+                    file: displayName,
+                    text: `Uploading ${fmtSize(item.file.size || 0)}…`,
+                    pct: (committedBytes / totalBytes) * 100,
+                    meta: `Destination: /${target}`,
+                    done: false
+                });
+            };
 
-            try {
+            const runUpload = async (overwrite = false) => {
+                lastLoaded = 0;
+                showFileStart();
+
                 await uploadFileSmartToWorkspace(target, item.file, (loaded, total, ctx) => {
                     lastLoaded = Math.max(0, Number(loaded || 0));
                     const pct = ((committedBytes + lastLoaded) / totalBytes) * 100;
+                    const chunkText = ctx && ctx.chunksTotal
+                        ? ` • chunk ${(Number(ctx.chunkIndex || 0) + 1)}/${ctx.chunksTotal}`
+                        : "";
+
                     setUploadModalProgress({
                         title: "Uploading files",
                         sub: `${i + 1} / ${files.length}`,
                         file: displayName,
                         text: `${fmtSize(loaded)} / ${fmtSize(total)}`,
                         pct,
-                        meta: `Destination: /${target}`,
+                        meta: `Destination: /${target}${chunkText}${overwrite ? " • replacing existing" : ""}`,
                         done: false
                     });
-                });
+                }, { overwrite });
+            };
+
+            let finishedThisFile = false;
+            let skipThisFile = false;
+
+            try {
+                while (!finishedThisFile && !skipThisFile) {
+                    try {
+                        const autoOverwrite = conflictApplyAll && conflictActionAll === "replace";
+                        await runUpload(autoOverwrite);
+                        finishedThisFile = true;
+                    } catch (e) {
+                        if (e && e.kind === "cancelled") throw e;
+
+                        if (isExternalUploadFileExistsConflict(e)) {
+                            let decision = null;
+
+                            if (conflictApplyAll && conflictActionAll) {
+                                decision = { action: conflictActionAll, applyAll: true };
+                            } else {
+                                setUploadModalProgress({
+                                    title: "Upload conflict",
+                                    sub: `${completed} file(s) uploaded, ${skipped} skipped.`,
+                                    file: displayName,
+                                    text: "File already exists",
+                                    pct: (committedBytes / totalBytes) * 100,
+                                    meta: `Already exists: /${target}`,
+                                    done: false
+                                });
+
+                                decision = await askExternalUploadConflictDecision(
+                                    target,
+                                    item.file,
+                                    externalUploadExistingInfo(e)
+                                );
+                            }
+
+                            if (!decision || decision.action === "cancel") {
+                                uploadCancelRequested = true;
+                                throw Object.assign(new Error("upload cancelled"), {
+                                    kind: "cancelled",
+                                    source: "client"
+                                });
+                            }
+
+                            if (decision.applyAll) {
+                                conflictApplyAll = true;
+                                conflictActionAll = decision.action;
+                            }
+
+                            if (decision.action === "keep_old") {
+                                skipped++;
+                                skipThisFile = true;
+                                setStatus(`Skipped existing file: ${displayName}`, "good");
+                                break;
+                            }
+
+                            if (decision.action === "replace") {
+                                await runUpload(true);
+                                finishedThisFile = true;
+                                break;
+                            }
+                        }
+
+                        throw e;
+                    }
+                }
+
+                if (skipThisFile) continue;
 
                 committedBytes += Math.max(Number(item.file.size || 0), lastLoaded);
                 completed++;
@@ -724,7 +1009,7 @@
 
         setUploadModalProgress({
             title: "Upload complete",
-            sub: `${completed} file(s) uploaded.`,
+            sub: `${completed} file(s) uploaded${skipped ? `, ${skipped} skipped` : ""}.`,
             file: "Finished",
             text: "Uploaded",
             pct: 100,
@@ -732,9 +1017,10 @@
             done: true
         });
 
-        setStatus(`Uploaded ${completed} file(s).`, "good");
+        setStatus(`Uploaded ${completed} file(s)${skipped ? `, skipped ${skipped}` : ""}.`, "good");
         await loadFiles(currentPath);
     }
+
 
     async function uploadSelectedFolderFiles() {
         const selected = Array.from((uploadFolderFile && uploadFolderFile.files) || []);
@@ -2028,7 +2314,7 @@
                 rows.push(`
                     <div class="fileRow clickable" data-dir="${escapeHtml(rel)}" data-name="${escapeHtml(name)}" data-type="dir" data-size="0" data-mtime="${escapeHtml(it.mtime_unix || "")}" title="${escapeHtml(name)}">
                         <div class="fileMain">
-                            <div class="fileIcon">📁</div>
+                            ${externalFileIconHtml(name, true)}
                             <div class="fileText">
                                 <div class="fileName">${escapeHtml(name)}</div>
                                 <div class="fileMeta">${escapeHtml(meta)}</div>
@@ -2040,7 +2326,7 @@
                 rows.push(`
                     <div class="fileRow clickable" data-file="${escapeHtml(rel)}" data-name="${escapeHtml(name)}" data-type="file" data-size="${escapeHtml(it.size_bytes || it.size || it.bytes || 0)}" data-mtime="${escapeHtml(it.mtime_unix || "")}" title="${escapeHtml(name)}">
                         <div class="fileMain">
-                            <div class="fileIcon">📄</div>
+                            ${externalFileIconHtml(name, false)}
                             <div class="fileText">
                                 <div class="fileName">${escapeHtml(name)}</div>
                                 <div class="fileMeta">${escapeHtml(meta)}</div>
