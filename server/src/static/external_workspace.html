@@ -869,6 +869,166 @@
             align-items:center;
         }
 
+        /* File Manager-style properties modal for external workspace. */
+        .propsModal{
+            position:fixed;
+            inset:0;
+            z-index:6900;
+            display:none;
+            align-items:center;
+            justify-content:center;
+            padding:18px;
+            background:rgba(0,0,0,.45);
+        }
+
+        .propsModal.show{
+            display:flex;
+        }
+
+        html[data-theme="win_classic"] .propsModal{
+            background:rgba(255,255,255,.38);
+        }
+
+        .propsCard{
+            width:min(720px, calc(100vw - 24px));
+            max-height:min(82vh, 900px);
+            display:flex;
+            flex-direction:column;
+            overflow:hidden;
+            border:1px solid rgba(255,255,255,.16);
+            border-radius:18px;
+            background:linear-gradient(180deg, rgba(32,32,32,.98), rgba(18,18,18,.98));
+            box-shadow:0 28px 110px rgba(0,0,0,.52);
+            color:var(--fg);
+        }
+
+        html[data-theme="win_classic"] .propsCard{
+            background:rgb(245,245,245);
+            color:#050505;
+            border:2px solid rgba(0,0,0,.55);
+            border-radius:2px;
+            box-shadow:6px 6px 0 rgba(0,0,0,.22);
+        }
+
+        .propsHead{
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:12px;
+            padding:12px 14px;
+            border-bottom:1px solid rgba(255,255,255,.14);
+            background:rgba(0,0,0,.18);
+            flex:0 0 auto;
+        }
+
+        html[data-theme="win_classic"] .propsHead{
+            background:rgba(0,0,0,.055);
+            border-bottom:1px solid rgba(0,0,0,.18);
+        }
+
+        .propsTitle{
+            font-weight:950;
+            letter-spacing:.2px;
+            font-size:16px;
+        }
+
+        .propsPath{
+            margin-top:2px;
+            font-size:12px;
+            color:var(--muted);
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            max-width:58ch;
+        }
+
+        html[data-theme="win_classic"] .propsPath{
+            color:#4d5662;
+        }
+
+        .propsBody{
+            padding:14px;
+            display:grid;
+            grid-template-columns:160px 1fr;
+            gap:10px 14px;
+            flex:1 1 auto;
+            min-height:0;
+            overflow:auto;
+            overscroll-behavior:contain;
+            font-size:13px;
+            line-height:1.35;
+        }
+
+        .propsBody .k{
+            color:rgba(var(--fg-rgb,255,255,255),.70);
+            font-weight:850;
+            font-size:12px;
+        }
+
+        html[data-theme="win_classic"] .propsBody .k{
+            color:#4d5662;
+        }
+
+        .propsBody .v{
+            color:rgba(var(--fg-rgb,255,255,255),.95);
+            overflow-wrap:anywhere;
+        }
+
+        html[data-theme="win_classic"] .propsBody .v{
+            color:#050505;
+        }
+
+        .propsBody .mono{
+            font-size:12px;
+        }
+
+        .propsBody pre.pre{
+            font-size:11px;
+            line-height:1.3;
+            margin:10px 0 0;
+            white-space:pre-wrap;
+            word-break:break-word;
+            max-height:240px;
+            overflow:auto;
+            padding:10px;
+            border:1px solid rgba(255,255,255,.14);
+            border-radius:10px;
+            background:rgba(0,0,0,.24);
+        }
+
+        html[data-theme="win_classic"] .propsBody pre.pre{
+            border-color:rgba(0,0,0,.22);
+            background:#e9edf2;
+            border-radius:2px;
+        }
+
+        .propsValueRow{
+            display:flex;
+            align-items:center;
+            gap:8px;
+            flex-wrap:wrap;
+        }
+
+        .propsMiniBtn{
+            border:1px solid rgba(255,255,255,.18);
+            border-radius:10px;
+            padding:6px 9px;
+            background:rgba(255,255,255,.05);
+            color:inherit;
+            font-weight:850;
+            cursor:pointer;
+        }
+
+        html[data-theme="win_classic"] .propsMiniBtn{
+            border-radius:2px;
+            background:linear-gradient(180deg,#fff,#ddd);
+            border-color:rgba(0,0,0,.35);
+        }
+
+        @media (max-width:520px){
+            .propsBody{ grid-template-columns:1fr; }
+        }
+
         /* Detached floating folder picker, like File Manager. */
         .extPickerOverlay{
             background:transparent !important;
@@ -997,6 +1157,19 @@
     </section>
 </div>
 
+<div id="propsModal" class="propsModal" aria-hidden="true">
+    <div class="propsCard" role="dialog" aria-modal="true" aria-labelledby="propsTitle">
+        <div class="propsHead">
+            <div>
+                <div id="propsTitle" class="propsTitle">Properties</div>
+                <div id="propsPath" class="propsPath mono">/</div>
+            </div>
+            <button id="propsClose" class="btn secondary" type="button">Close</button>
+        </div>
+        <div id="propsBody" class="propsBody"></div>
+    </div>
+</div>
+
 <div class="extPickerOverlay" id="extPickerOverlay" aria-hidden="true">
     <div class="extPickerCard" role="dialog" aria-modal="true" aria-labelledby="extPickerTitle">
         <div class="extPickerHead">
@@ -1081,6 +1254,11 @@
     const btnNewFolder = document.getElementById("btnNewFolder");
     const emptyContextMenu = document.getElementById("emptyContextMenu");
     const itemContextMenu = document.getElementById("itemContextMenu");
+    const propsModal = document.getElementById("propsModal");
+    const propsTitle = document.getElementById("propsTitle");
+    const propsPath = document.getElementById("propsPath");
+    const propsBody = document.getElementById("propsBody");
+    const propsClose = document.getElementById("propsClose");
     const extPickerOverlay = document.getElementById("extPickerOverlay");
     const extPickerCard = extPickerOverlay ? extPickerOverlay.querySelector(".extPickerCard") : null;
     const extPickerHead = extPickerOverlay ? extPickerOverlay.querySelector(".extPickerHead") : null;
@@ -1270,17 +1448,240 @@
         };
     }
 
-    function showProperties(item) {
+    function kvRow(k, v) {
+        const kEl = document.createElement("div");
+        kEl.className = "k";
+        kEl.textContent = k;
+
+        const vEl = document.createElement("div");
+        vEl.className = "v mono";
+        vEl.textContent = v == null ? "" : String(v);
+
+        return [kEl, vEl];
+    }
+
+    function openPropsModal() {
+        if (!propsModal) return;
+        propsModal.classList.add("show");
+        propsModal.setAttribute("aria-hidden", "false");
+    }
+
+    function closePropsModal() {
+        if (!propsModal) return;
+        propsModal.classList.remove("show");
+        propsModal.setAttribute("aria-hidden", "true");
+    }
+
+    async function copyText(text) {
+        const value = String(text || "");
+        if (!value) return false;
+
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(value);
+                return true;
+            }
+        } catch (_) {}
+
+        try {
+            const ta = document.createElement("textarea");
+            ta.value = value;
+            ta.setAttribute("readonly", "readonly");
+            ta.style.position = "fixed";
+            ta.style.left = "-9999px";
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand("copy");
+            ta.remove();
+            return !!ok;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function miniCopyButton(getTextFn) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "propsMiniBtn";
+        b.textContent = "Copy";
+        b.onclick = async () => {
+            const text = getTextFn ? String(getTextFn() || "") : "";
+            const ok = text ? await copyText(text) : false;
+            b.textContent = ok ? "Copied" : "Copy failed";
+            setTimeout(() => { b.textContent = "Copy"; }, 1100);
+        };
+        return b;
+    }
+
+    function addPropsRow(k, v, opts = {}) {
+        if (!propsBody) return;
+        if (v === undefined || v === null || v === "") return;
+
+        const [kEl, vEl] = kvRow(k, v);
+
+        if (opts.copy) {
+            vEl.textContent = "";
+            vEl.classList.remove("mono");
+            const wrap = document.createElement("div");
+            wrap.className = "propsValueRow";
+
+            const line = document.createElement("span");
+            line.className = "mono";
+            line.textContent = String(v);
+
+            wrap.appendChild(line);
+            wrap.appendChild(miniCopyButton(() => line.textContent));
+            vEl.appendChild(wrap);
+        }
+
+        propsBody.appendChild(kEl);
+        propsBody.appendChild(vEl);
+    }
+
+    function fmtUnixLocal(sec) {
+        if (!sec) return "";
+        const d = new Date(Number(sec) * 1000);
+        if (isNaN(d.getTime())) return String(sec);
+
+        const pad2 = (n) => String(n).padStart(2, "0");
+        return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+    }
+
+    function permsFromOctal(modeStr) {
+        if (!modeStr || typeof modeStr !== "string") return "";
+        const s = modeStr.trim();
+        if (!/^[0-7]{3,4}$/.test(s)) return "";
+        const oct = s.length === 4 ? s.slice(1) : s;
+        const bits = oct.split("").map((c) => parseInt(c, 8));
+        if (bits.length !== 3 || bits.some((x) => Number.isNaN(x))) return "";
+
+        const rwx = (b) => {
+            const r = (b & 4) ? "r" : "-";
+            const w = (b & 2) ? "w" : "-";
+            const x = (b & 1) ? "x" : "-";
+            return r + w + x;
+        };
+
+        return rwx(bits[0]) + rwx(bits[1]) + rwx(bits[2]);
+    }
+
+    function statUrl(relPath) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", normalizeRelPath(relPath) || ".");
+        return `/api/v4/workspaces/files/stat?${qs.toString()}`;
+    }
+
+    async function showProperties(item) {
         if (!item) return;
-        const modified = item.mtime ? fmtTime(item.mtime) : "";
-        const size = item.isDir ? "Folder" : fmtSize(item.size || 0);
-        alert([
-            `Name: ${item.name}`,
-            `Type: ${item.isDir ? "Folder" : "File"}`,
-            `Path: ${item.rel || "."}`,
-            `Size: ${size}`,
-            modified ? `Modified: ${modified}` : ""
-        ].filter(Boolean).join("\n"));
+
+        const rel = normalizeRelPath(item.rel || "");
+        const name = item.name || basenameFromPath(rel);
+        const isDirHint = !!item.isDir;
+
+        if (propsTitle) propsTitle.textContent = isDirHint ? "Folder properties" : "File properties";
+        if (propsPath) propsPath.textContent = "/" + rel;
+        if (propsBody) propsBody.innerHTML = "";
+
+        addPropsRow("Name", name);
+        addPropsRow("Type", isDirHint ? "Folder" : "File");
+        addPropsRow("Path", "/" + rel, { copy:true });
+        if (!isDirHint) addPropsRow("Size", fmtSize(item.size || 0));
+        if (item.mtime) addPropsRow("Modified", fmtUnixLocal(item.mtime));
+        addPropsRow("Details", "Loading…");
+
+        openPropsModal();
+
+        let st = null;
+        try {
+            st = await apiJson(statUrl(rel));
+        } catch (e) {
+            st = {
+                ok:false,
+                error:"client_error",
+                message:String(e && e.message ? e.message : e)
+            };
+        }
+
+        if (!propsBody) return;
+        propsBody.innerHTML = "";
+
+        if (!st || !st.ok) {
+            addPropsRow("Name", name);
+            addPropsRow("Type", isDirHint ? "Folder" : "File");
+            addPropsRow("Path", "/" + rel, { copy:true });
+            addPropsRow("Error", st && (st.message || st.error) ? `${st.error || "error"}: ${st.message || ""}`.trim() : "Failed to load properties");
+            return;
+        }
+
+        const isDir = st.type === "dir";
+        const isFile = st.type === "file";
+
+        if (propsTitle) {
+            propsTitle.textContent = isDir ? "Folder properties" : (isFile ? "File properties" : "Item properties");
+        }
+        if (propsPath) propsPath.textContent = st.path_norm || ("/" + rel);
+
+        addPropsRow("Name", st.name || name);
+        addPropsRow("Type", isDir ? "Folder" : (isFile ? "File" : "Other"));
+        addPropsRow("Path", st.path_norm || ("/" + rel), { copy:true });
+        addPropsRow("Workspace ID", st.workspace_id || workspaceId, { copy:true });
+
+        if (st.mode_octal) {
+            const rwx = permsFromOctal(st.mode_octal);
+            addPropsRow("Permissions", rwx ? `${st.mode_octal} (${rwx})` : st.mode_octal);
+        }
+
+        if (st.mtime_epoch) addPropsRow("Modified", fmtUnixLocal(st.mtime_epoch));
+
+        if (isFile) {
+            if (st.bytes != null) addPropsRow("Size", fmtSize(st.bytes));
+            if (st.mime) addPropsRow("MIME", st.mime);
+            if (typeof st.is_text === "boolean") addPropsRow("Looks like text", st.is_text ? "Yes" : "No");
+        }
+
+        if (isDir) {
+            if (st.children) {
+                const parts = [];
+                if (st.children.files != null) parts.push(`${st.children.files} files`);
+                if (st.children.dirs != null) parts.push(`${st.children.dirs} folders`);
+                if (st.children.other != null && st.children.other !== 0) parts.push(`${st.children.other} other`);
+                addPropsRow("Children", parts.join(", "));
+            }
+
+            if (st.bytes_recursive != null) addPropsRow("Size (recursive)", fmtSize(st.bytes_recursive));
+            if (st.recursive_scanned_entries != null) addPropsRow("Scanned entries", String(st.recursive_scanned_entries));
+            if (typeof st.recursive_complete === "boolean") addPropsRow("Scan complete", st.recursive_complete ? "Yes" : "No");
+            if (st.scan_cap != null) addPropsRow("Scan cap", String(st.scan_cap));
+            if (st.time_cap_ms != null) addPropsRow("Time cap", `${st.time_cap_ms} ms`);
+        }
+
+        {
+            const kEl = document.createElement("div");
+            kEl.className = "k";
+            kEl.textContent = "Details";
+
+            const vEl = document.createElement("div");
+            vEl.className = "v";
+            const details = document.createElement("details");
+            details.style.width = "100%";
+
+            const summary = document.createElement("summary");
+            summary.textContent = "Raw JSON";
+            summary.style.cursor = "pointer";
+            summary.style.userSelect = "none";
+
+            const pre = document.createElement("pre");
+            pre.className = "mono pre";
+            pre.textContent = JSON.stringify(st, null, 2);
+
+            details.appendChild(summary);
+            details.appendChild(pre);
+            vEl.appendChild(details);
+
+            propsBody.appendChild(kEl);
+            propsBody.appendChild(vEl);
+        }
     }
 
     function renderBreadcrumbs() {
@@ -2010,7 +2411,7 @@
         }
 
         if (action === "properties") {
-            showProperties(item);
+            showProperties(item).catch((e) => setStatus(`Properties failed: ${e.message || e}`, "bad"));
             return;
         }
 
@@ -2039,6 +2440,10 @@
 
     document.addEventListener("keydown", (ev) => {
         if (ev.key !== "Escape") return;
+        if (propsModal && propsModal.classList.contains("show")) {
+            closePropsModal();
+            return;
+        }
         if (extPickerOverlay && extPickerOverlay.classList.contains("show")) {
             closeFolderPicker(null);
             return;
@@ -2048,6 +2453,11 @@
 
     window.addEventListener("resize", hideContextMenus);
     window.addEventListener("scroll", hideContextMenus, true);
+
+    propsClose.addEventListener("click", closePropsModal);
+    propsModal.addEventListener("click", (ev) => {
+        if (ev.target === propsModal) closePropsModal();
+    });
 
     extPickerHead.addEventListener("pointerdown", beginFolderPickerDrag);
     extPickerHead.addEventListener("pointermove", moveFolderPickerDrag);
