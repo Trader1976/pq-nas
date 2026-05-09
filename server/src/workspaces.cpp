@@ -133,6 +133,13 @@ std::string normalize_workspace_storage_state_copy(const std::string& s) {
     m->fingerprint = trim_copy_safe(m->fingerprint);
     m->role = normalize_workspace_role_copy(m->role);
     m->status = normalize_workspace_member_status_copy(m->status);
+
+    m->member_kind = lower_ascii_copy(trim_copy_safe(m->member_kind));
+    if (m->member_kind != "external") {
+        m->member_kind = "user";
+    }
+    m->display_name = trim_copy_safe(m->display_name);
+
     m->added_at = trim_copy_safe(m->added_at);
     m->added_by = trim_copy_safe(m->added_by);
     m->responded_at = trim_copy_safe(m->responded_at);
@@ -206,6 +213,8 @@ WorkspaceMemberRec workspace_member_from_json_v1(const json& j) {
     m.fingerprint = j.value("fingerprint", "");
     m.role = j.value("role", "viewer");
     m.status = j.value("status", "enabled");
+    m.member_kind = j.value("member_kind", "user");
+    m.display_name = j.value("display_name", "");
     m.added_at = j.value("added_at", "");
     m.added_by = j.value("added_by", "");
     m.responded_at = j.value("responded_at", "");
@@ -223,6 +232,8 @@ json workspace_member_to_json_v1(const WorkspaceMemberRec& in_m) {
         {"fingerprint", m.fingerprint},
         {"role", m.role},
         {"status", m.status},
+        {"member_kind", m.member_kind.empty() ? "user" : m.member_kind},
+        {"display_name", m.display_name},
         {"added_at", m.added_at},
         {"added_by", m.added_by},
         {"responded_at", m.responded_at},

@@ -105,6 +105,8 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include "storage_resolver.h"
 #include "file_location_index.h"
 #include "workspaces.h"
+#include "workspace_external_invites.h"
+#include "routes_workspace_external_invites.h"
 #include "routes_admin_workspaces.h"
 #include "routes_workspaces_files.h"
 //storage health
@@ -9960,6 +9962,13 @@ auto maybe_auto_rotate_before_append = [&]() {
         (std::filesystem::path(users_path).parent_path() / "workspaces.json").string();
     (void)workspaces.load(workspaces_path);
 
+
+
+pqnas::WorkspaceExternalInvitesRegistry workspace_external_invites;
+const std::string workspace_external_invites_path =
+    (std::filesystem::path(users_path).parent_path() / "workspace_external_invites.json").string();
+(void)workspace_external_invites.load(workspace_external_invites_path);
+std::cerr << "[cfg] workspace_external_invites_path=" << workspace_external_invites_path << std::endl;
 
     std::cerr << "[cfg] users_path=" << users_path << std::endl;
 
@@ -20827,6 +20836,70 @@ INSERT INTO admin_stats_buckets (
     };
 
     pqnas::register_workspace_file_routes(srv, ws_file_deps);
+
+pqnas::WorkspaceExternalInviteRouteDeps ws_external_invite_deps;
+ws_external_invite_deps.users = &users;
+ws_external_invite_deps.workspaces = &workspaces;
+ws_external_invite_deps.external_invites = &workspace_external_invites;
+ws_external_invite_deps.users_path = users_path;
+ws_external_invite_deps.workspaces_path = workspaces_path;
+ws_external_invite_deps.external_invites_path = workspace_external_invites_path;
+ws_external_invite_deps.cookie_key = COOKIE_KEY;
+ws_external_invite_deps.origin = &ORIGIN;
+ws_external_invite_deps.app = &APP_NAME;
+ws_external_invite_deps.reply_json = [](httplib::Response& res, int status, const std::string& body) {
+    reply_json(res, status, body);
+};
+ws_external_invite_deps.require_user_auth_users_actor =
+    [&](const httplib::Request& req,
+        httplib::Response& res,
+        const unsigned char* cookie_key,
+        pqnas::UsersRegistry* users_arg,
+        std::string* out_fp_hex,
+        std::string* out_role) -> bool {
+        return require_user_auth_users_actor(
+            req, res, cookie_key, users_arg, out_fp_hex, out_role);
+    };
+ws_external_invite_deps.audit_emit =
+    [&](const std::string& event,
+        const std::string& outcome,
+        const std::map<std::string, std::string>& fields) {
+        pqnas::AuditEvent ev;
+        ev.event = event;
+        ev.outcome = outcome;
+        ev.f = fields;
+        audit_append(ev);
+    };
+ws_external_invite_deps.now_epoch_sec = []() { return now_epoch_sec(); };
+ws_external_invite_deps.now_iso_utc = []() { return pqnas::now_iso_utc(); };
+ws_external_invite_deps.random_b64url = [&](int n) { return random_b64url(n); };
+ws_external_invite_deps.url_encode = [&](const std::string& v) { return url_encode(v); };
+ws_external_invite_deps.build_req_payload_canonical =
+    [&](const std::string& sid,
+        const std::string& chal,
+        const std::string& nonce,
+        long iat,
+        long exp) {
+        return build_req_payload_canonical(sid, chal, nonce, iat, exp);
+    };
+ws_external_invite_deps.sign_req_token =
+    [&](const std::string& payload) {
+        return sign_req_token(payload);
+    };
+ws_external_invite_deps.st_hash_b64_from_st =
+    [&](const std::string& st) {
+        if (v5.st_hash_b64_from_st) {
+            return v5.st_hash_b64_from_st(st);
+        }
+        return std::string{};
+    };
+ws_external_invite_deps.qr_svg_from_text =
+    [&](const std::string& text, int scale, int border) {
+        return qr_svg_from_text(text, scale, border);
+    };
+
+pqnas::register_workspace_external_invite_routes(srv, ws_external_invite_deps);
+
 	srv.Get("/api/v4/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
     	std::string actor_fp;
     	if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;

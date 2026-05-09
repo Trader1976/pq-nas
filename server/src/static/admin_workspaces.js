@@ -225,6 +225,9 @@
     function memberRowHtml(ws, m) {
         const fp = escapeHtml(m.fingerprint || "");
         const role = escapeHtml(m.role || "viewer");
+        const memberKindRaw = String(m.member_kind || "user").toLowerCase();
+        const memberKind = escapeHtml(memberKindRaw === "external" ? "external" : "user");
+        const displayName = escapeHtml(m.display_name || "");
 
         const displayStatusRaw = displayMemberStatus(m);
         const status = escapeHtml(displayStatusRaw || m.status || "");
@@ -243,6 +246,9 @@
             <div class="memberRow">
                 <div class="memberFp">
                     <div class="mono">${fp}</div>
+                    <div class="hint" style="margin-top:4px;">
+                        ${displayName ? `${displayName} • ` : ""}${memberKind} member
+                    </div>
                     <div class="hint" style="margin-top:4px;">
                         added ${escapeHtml(m.added_at || "—")}
                         ${m.added_by ? ` by ${escapeHtml(m.added_by)}` : ""}

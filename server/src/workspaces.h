@@ -20,6 +20,12 @@ using json = nlohmann::json;
         std::string fingerprint;
         std::string role;      // owner | editor | viewer
         std::string status;    // invited | enabled | disabled
+
+        // user     = normal DNA-Nexus server user
+        // external = DNA Connect identity invited only into this workspace
+        std::string member_kind;   // user | external
+        std::string display_name;  // optional friendly label for external members
+
         std::string added_at;
         std::string added_by;
         std::string responded_at;
