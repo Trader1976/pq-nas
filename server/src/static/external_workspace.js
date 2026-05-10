@@ -217,100 +217,6 @@
     }
 
 
-    function externalFileExtLower(name) {
-        const base = String(name || "").split("/").pop().split("?")[0].split("#")[0];
-        const i = base.lastIndexOf(".");
-        if (i < 0 || i === base.length - 1) return "";
-        return base.slice(i + 1).toLowerCase();
-    }
-
-    function externalNormalizeIconExt(ext) {
-        const e = String(ext || "").toLowerCase();
-        const aliases = {
-            jpeg: "jpg",
-            jpe: "jpg",
-            htm: "html",
-            xhtml: "html",
-            markdown: "md",
-            text: "txt",
-            yml: "yaml",
-            tgz: "gz",
-            cxx: "cpp",
-            cc: "cpp",
-            hpp: "h",
-            hxx: "h",
-            m4v: "mp4",
-            tif: "tiff"
-        };
-        return aliases[e] || e;
-    }
-
-    function externalIconMarkupFor(name, isDir) {
-        const icons = (window && window.PQNAS_FILE_ICONS) || {};
-
-        if (isDir) {
-            return icons.folder || icons.directory || icons.default || "";
-        }
-
-        const ext = externalNormalizeIconExt(externalFileExtLower(name));
-        if (ext && icons[ext]) return icons[ext];
-
-        const genericMap = {
-            zip: "generic_archive", "7z": "generic_archive", rar: "generic_archive",
-            tar: "generic_archive", gz: "generic_archive", bz2: "generic_archive",
-            xz: "generic_archive", deb: "generic_archive", rpm: "generic_archive",
-            dmg: "generic_archive", apk: "generic_archive",
-
-            mp3: "generic_audio", wav: "generic_audio", ogg: "generic_audio",
-            flac: "generic_audio", m4a: "generic_audio", aac: "generic_audio",
-
-            mp4: "generic_video", mov: "generic_video", mkv: "generic_video",
-            avi: "generic_video", webm: "generic_video",
-
-            png: "generic_image", jpg: "generic_image", gif: "generic_image",
-            bmp: "generic_image", svg: "generic_image", webp: "generic_image",
-            tiff: "generic_image", ico: "generic_image", heic: "generic_image",
-
-            xls: "generic_spreadsheet", xlsx: "generic_spreadsheet",
-            csv: "generic_spreadsheet", ods: "generic_spreadsheet",
-
-            ppt: "generic_presentation", pptx: "generic_presentation",
-            odp: "generic_presentation", key: "generic_presentation",
-
-            doc: "generic_document", docx: "generic_document", pdf: "generic_document",
-            txt: "generic_document", md: "generic_document", rtf: "generic_document",
-            odt: "generic_document", ini: "generic_document", cfg: "generic_document",
-            conf: "generic_document", log: "generic_document",
-
-            db: "generic_database", sqlite: "generic_database", sql: "generic_database",
-
-            c: "generic_code", cpp: "generic_code", h: "generic_code",
-            java: "generic_code", kt: "generic_code", ts: "generic_code",
-            tsx: "generic_code", js: "generic_code", jsx: "generic_code",
-            json: "generic_code", html: "generic_code", css: "generic_code",
-            scss: "generic_code", php: "generic_code", py: "generic_code",
-            rb: "generic_code", rs: "generic_code", go: "generic_code",
-            sh: "generic_code", bash: "generic_code", zsh: "generic_code",
-            lua: "generic_code", swift: "generic_code", xml: "generic_code",
-            yaml: "generic_code", toml: "generic_code", so: "generic_code",
-            dll: "generic_code", exe: "generic_code"
-        };
-
-        const generic = ext ? genericMap[ext] : "";
-        if (generic && icons[generic]) return icons[generic];
-
-        return icons.default || "";
-    }
-
-    function externalFileIconHtml(name, isDir) {
-        const svg = externalIconMarkupFor(name, isDir);
-        if (svg && String(svg).trim().startsWith("<svg")) {
-            return `<div class="fileIcon svgFileIcon" aria-hidden="true">${svg}</div>`;
-        }
-        return `<div class="fileIcon">${isDir ? "📁" : "📄"}</div>`;
-    }
-
-
     function fmtSize(n) {
         const units = ["B", "KiB", "MiB", "GiB", "TiB"];
         let v = Number(n || 0);
@@ -321,6 +227,7 @@
         }
         return i === 0 ? `${v | 0} ${units[i]}` : `${v.toFixed(1)} ${units[i]}`;
     }
+
 
     function fmtTime(epoch) {
         const n = Number(epoch || 0);
@@ -2278,6 +2185,7 @@
         if (currentPath) qs.set("path", currentPath);
 
         const j = await apiJson(`/api/v4/workspaces/files/list?${qs.toString()}`);
+        window.PQNAS_EXTERNAL_WORKSPACE_FOOTER?.update(j, filesEl);
         applyAccessInfo(j);
         renderBreadcrumbs();
         applyExternalViewPrefs();
@@ -2314,7 +2222,7 @@
                 rows.push(`
                     <div class="fileRow clickable" data-dir="${escapeHtml(rel)}" data-name="${escapeHtml(name)}" data-type="dir" data-size="0" data-mtime="${escapeHtml(it.mtime_unix || "")}" title="${escapeHtml(name)}">
                         <div class="fileMain">
-                            ${externalFileIconHtml(name, true)}
+                            ${window.PQNAS_EXTERNAL_WORKSPACE_ICONS?.iconHtml(name, true) || '<div class="fileIcon">📁</div>'}
                             <div class="fileText">
                                 <div class="fileName">${escapeHtml(name)}</div>
                                 <div class="fileMeta">${escapeHtml(meta)}</div>
@@ -2326,7 +2234,7 @@
                 rows.push(`
                     <div class="fileRow clickable" data-file="${escapeHtml(rel)}" data-name="${escapeHtml(name)}" data-type="file" data-size="${escapeHtml(it.size_bytes || it.size || it.bytes || 0)}" data-mtime="${escapeHtml(it.mtime_unix || "")}" title="${escapeHtml(name)}">
                         <div class="fileMain">
-                            ${externalFileIconHtml(name, false)}
+                            ${window.PQNAS_EXTERNAL_WORKSPACE_ICONS?.iconHtml(name, false) || '<div class="fileIcon">📄</div>'}
                             <div class="fileText">
                                 <div class="fileName">${escapeHtml(name)}</div>
                                 <div class="fileMeta">${escapeHtml(meta)}</div>
@@ -2475,6 +2383,7 @@
         if (pickerPath) qs.set("path", pickerPath);
 
         const j = await apiJson(`/api/v4/workspaces/files/list?${qs.toString()}`);
+        window.PQNAS_EXTERNAL_WORKSPACE_FOOTER?.update(j, filesEl);
         const items = Array.isArray(j.items) ? j.items : [];
         const dirs = items
             .filter((it) => {
@@ -2740,22 +2649,22 @@
         await loadFiles(currentPath);
     }
 
-    async function createFolder() {
+    async function createFolder(nameOverride = null) {
         if (!canEdit) {
             setStatus("This workspace session is view-only.", "bad");
             return;
         }
 
-        const raw = String(newFolderName.value || "").trim();
+        const raw = String(nameOverride != null ? nameOverride : (newFolderName ? newFolderName.value : "")).trim();
         if (!raw) {
             setStatus("Enter a folder name.", "bad");
-            newFolderName.focus();
+            if (newFolderName) newFolderName.focus();
             return;
         }
 
         if (raw === "." || raw === ".." || raw.includes("/") || raw.includes("\\")) {
             setStatus("Use a simple folder name without slashes.", "bad");
-            newFolderName.focus();
+            if (newFolderName) newFolderName.focus();
             return;
         }
 
@@ -2770,7 +2679,7 @@
             method: "POST"
         });
 
-        newFolderName.value = "";
+        if (newFolderName) newFolderName.value = "";
         setStatus(`Created folder ${raw}.`, "good");
         await loadFiles(currentPath);
     }
@@ -3540,8 +3449,7 @@
                 return;
             }
 
-            if (newFolderName) newFolderName.value = raw;
-            createFolder().catch((e) => setStatus(`Create folder failed: ${e.message || e}`, "bad"));
+            createFolder(raw).catch((e) => setStatus(`Create folder failed: ${e.message || e}`, "bad"));
             return;
         }
 
@@ -3803,11 +3711,11 @@
         textEditHead.addEventListener("pointerdown", beginTextEditorDrag, true);
     }
 
-    btnUp.addEventListener("click", () => {
+    btnUp?.addEventListener("click", () => {
         loadFiles(parentPath(currentPath)).catch((e) => setStatus(`Open parent failed: ${e.message || e}`, "bad"));
     });
 
-    btnToggleUpload.addEventListener("click", () => {
+    btnToggleUpload?.addEventListener("click", () => {
         if (!canEdit) {
             setStatus("This workspace session is view-only.", "bad");
             return;
@@ -3816,22 +3724,22 @@
         syncUploadPanel();
     });
 
-    btnUpload.addEventListener("click", () => {
+    btnUpload?.addEventListener("click", () => {
         uploadSelectedFile().catch((e) => setStatus(`Upload failed: ${e.message || e}`, "bad"));
     });
 
-    btnNewFolder.addEventListener("click", () => {
+    btnNewFolder?.addEventListener("click", () => {
         createFolder().catch((e) => setStatus(`Create folder failed: ${e.message || e}`, "bad"));
     });
 
-    newFolderName.addEventListener("keydown", (ev) => {
+    newFolderName?.addEventListener("keydown", (ev) => {
         if (ev.key === "Enter") {
             ev.preventDefault();
             createFolder().catch((e) => setStatus(`Create folder failed: ${e.message || e}`, "bad"));
         }
     });
 
-    btnNewQr.addEventListener("click", () => {
+    btnNewQr?.addEventListener("click", () => {
         startSession().catch((e) => setStatus(`Failed to start QR session: ${e.message || e}`, "bad"));
     });
 
@@ -3839,8 +3747,8 @@
         loadFiles(currentPath).catch((e) => setStatus(`File refresh failed: ${e.message || e}`, "bad"));
     }
 
-    btnRefreshFiles.addEventListener("click", refreshCurrent);
-    btnReload.addEventListener("click", refreshCurrent);
+    btnRefreshFiles?.addEventListener("click", refreshCurrent);
+    btnReload?.addEventListener("click", refreshCurrent);
 
     if (btnViewMode) {
         btnViewMode.addEventListener("click", () => {
@@ -3948,7 +3856,7 @@
         btnToggleUpload.__externalDirectUploadWired = true;
         btnToggleUpload.textContent = "Upload";
 
-        btnToggleUpload.addEventListener("click", (ev) => {
+        btnToggleUpload?.addEventListener("click", (ev) => {
             ev.preventDefault();
             ev.stopImmediatePropagation();
             launchExternalUploadPicker(false);

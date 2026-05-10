@@ -2055,3 +2055,131 @@ html[data-theme="dark"] .externalUploadConflictActions{
 #btnNewFolder{
     display:none !important;
 }\n
+
+.externalWorkspaceFooter{
+    margin-top: 18px;
+    border-top: 1px solid rgba(var(--fg-rgb),0.14);
+    background: rgba(var(--fg-rgb),0.045);
+    color: rgba(var(--fg-rgb),0.72);
+    min-height: 54px;
+    padding: 10px 14px 8px;
+    display: grid;
+    grid-template-columns: minmax(0,1fr) auto;
+    grid-template-rows: auto auto;
+    align-items: center;
+    column-gap: 22px;
+    row-gap: 4px;
+    font-size: 12px;
+}
+
+.externalWorkspaceFooterStorage{
+    grid-column: 1;
+    grid-row: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.externalWorkspaceFooterApp{
+    grid-column: 2;
+    grid-row: 1;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.externalWorkspaceFooterCopyright{
+    grid-column: 1 / -1;
+    grid-row: 2;
+    text-align: right;
+    opacity: 0.78;
+}
+
+html[data-theme="win_classic"] .externalWorkspaceFooter{
+    background: #d6d6d6;
+    border-top-color: rgba(0,0,0,0.18);
+    color: #5d6570;
+}
+
+/* Keep the external workspace footer near the bottom when the folder has few files. */
+#fileSurface .cardBody{
+    min-height: calc(100vh - 178px);
+    display: flex;
+    flex-direction: column;
+}
+
+#fileSurface #files{
+    flex: 1 1 auto;
+    align-content: flex-start;
+}
+
+.externalWorkspaceFooter{
+    margin-top: auto;
+}
+
+
+/* external-footer-bottom-v2 */
+html,
+body{
+    min-height:100%;
+}
+
+body{
+    min-height:100vh;
+}
+
+.shell.signedIn{
+    min-height:100vh;
+}
+
+.shell.signedIn #fileSurface{
+    min-height:100vh !important;
+    display:flex !important;
+    flex-direction:column !important;
+    box-sizing:border-box;
+}
+
+.shell.signedIn #fileSurface > .cardBody{
+    flex:1 1 auto !important;
+    min-height:0 !important;
+    display:flex !important;
+    flex-direction:column !important;
+}
+
+.shell.signedIn #fileSurface #files{
+    flex:1 1 auto !important;
+    align-content:flex-start;
+}
+
+.externalWorkspaceFooter{
+    flex:0 0 auto;
+    margin-top:auto !important;
+    min-height:56px;
+    box-sizing:border-box;
+    display:flex;
+    align-items:flex-end;
+    justify-content:space-between;
+    gap:18px;
+    padding:10px 12px;
+    background:rgba(0,0,0,0.045);
+    color:rgba(var(--fg-rgb),0.68);
+    font-family:var(--mono, monospace);
+    font-size:13px;
+    line-height:1.35;
+    overflow:hidden;
+}
+
+.externalWorkspaceStorage{
+    min-width:0;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+
+.externalWorkspaceBrand{
+    flex:0 1 auto;
+    min-width:220px;
+    text-align:right;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:clip;
+}

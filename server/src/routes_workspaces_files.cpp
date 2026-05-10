@@ -3587,6 +3587,20 @@ srv.Get("/api/v4/workspaces/members",
         out["role"] = mopt->role;
         out["member_kind"] = mopt->member_kind.empty() ? "user" : mopt->member_kind;
         out["external"] = actor_is_external;
+        const std::filesystem::path workspace_storage_for_footer_root =
+            workspace_dir_for_default_pool_only(deps.users_path, w);
+        const std::uint64_t workspace_storage_for_footer_used_bytes =
+            dir_size_bytes_best_effort_local(workspace_storage_for_footer_root);
+        out["quota_bytes"] = w.quota_bytes;
+        out["used_bytes"] = workspace_storage_for_footer_used_bytes;
+        out["storage"] = {
+            {"quota_bytes", w.quota_bytes},
+            {"used_bytes", workspace_storage_for_footer_used_bytes}
+        };
+        out["workspace_storage"] = {
+            {"quota_bytes", w.quota_bytes},
+            {"used_bytes", workspace_storage_for_footer_used_bytes}
+        };
         out["can_edit"] = (mopt->role == "owner" || mopt->role == "editor");
         out["read_only"] = !(mopt->role == "owner" || mopt->role == "editor");
         out["items"] = json::array();
