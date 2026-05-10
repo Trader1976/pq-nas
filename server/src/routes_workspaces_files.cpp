@@ -9966,6 +9966,384 @@ srv.Get("/api/v4/workspaces/files/trash/list",
 });
 
 
+
+// POST /api/v4/workspaces/files/trash/restore
+// Body JSON: { "workspace_id":"ws_xxx", "trash_id":"trash_xxx", "rename_if_conflict":true }
+auto parse_workspace_trash_mutation_body_local =
+        [&](const httplib::Request& req,
+            httplib::Response& res,
+            json* out_body,
+            std::string* out_workspace_id,
+            std::string* out_trash_id) -> bool {
+    json body = json::object();
+
+    if (!req.body.empty()) {
+        body = json::parse(req.body, nullptr, false);
+        if (body.is_discarded() || !body.is_object()) {
+            deps.reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid json"}
+            }.dump());
+            return false;
+        }
+    }
+
+    const std::string workspace_id =
+        req.has_param("workspace_id")
+            ? trim_copy_safe(req.get_param_value("workspace_id"))
+            : trim_copy_safe(body.value("workspace_id", ""));
+
+    const std::string trash_id =
+        req.has_param("trash_id")
+            ? trim_copy_safe(req.get_param_value("trash_id"))
+            : trim_copy_safe(body.value("trash_id", ""));
+
+    if (workspace_id.empty() || trash_id.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing workspace_id or trash_id"}
+        }.dump());
+        return false;
+    }
+
+    if (out_body) *out_body = std::move(body);
+    if (out_workspace_id) *out_workspace_id = workspace_id;
+    if (out_trash_id) *out_trash_id = trash_id;
+    return true;
+};
+
+auto workspace_trash_authorize_mutation_local =
+        [&](const httplib::Request& req,
+            httplib::Response& res,
+            const std::string& workspace_id,
+            const std::string& trash_id,
+            std::string* out_actor_fp,
+            WorkspaceRec* out_w,
+            pqnas::TrashItemRec* out_rec) -> bool {
+    if (!deps.trash_index || !deps.trash_service) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "trash service missing"}
+        }.dump());
+        return false;
+    }
+
+    if (!deps.workspaces || !deps.workspaces->load(deps.workspaces_path)) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "workspaces_reload_failed"},
+            {"message", "failed to reload workspaces"}
+        }.dump());
+        return false;
+    }
+
+    std::string actor_fp, actor_role;
+    bool actor_is_external = false;
+    if (!require_workspace_file_actor_for_workspace_local(
+            deps, req, res, workspace_id,
+            &actor_fp, &actor_role, &actor_is_external)) {
+        return false;
+    }
+
+    auto wopt = deps.workspaces->get(workspace_id);
+    if (!wopt.has_value()) {
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "workspace not found"}
+        }.dump());
+        return false;
+    }
+
+    const WorkspaceRec& w = *wopt;
+
+    if (w.status != "enabled") {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace disabled"}
+        }.dump());
+        return false;
+    }
+
+    auto mopt = enabled_member_for_actor(w, actor_fp);
+    if (!mopt.has_value()) {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace access denied"}
+        }.dump());
+        return false;
+    }
+
+    if (actor_is_external && mopt->member_kind != "external") {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace external access denied"}
+        }.dump());
+        return false;
+    }
+
+    if (!(mopt->role == "owner" || mopt->role == "editor")) {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace write access denied"}
+        }.dump());
+        return false;
+    }
+
+    if (w.storage_state != "allocated") {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Workspace storage not allocated"},
+            {"workspace_id", workspace_id},
+            {"quota_bytes", w.quota_bytes}
+        }.dump());
+        return false;
+    }
+
+    if (!w.storage_pool_id.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "pool_not_supported_yet"},
+            {"message", "workspace trash currently supports default pool only"}
+        }.dump());
+        return false;
+    }
+
+    std::string gerr;
+    auto rec_opt = deps.trash_index->get(trash_id, &gerr);
+    if (!rec_opt.has_value()) {
+        if (!gerr.empty()) {
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to read trash item"},
+                {"detail", pqnas::shorten(gerr, 180)}
+            }.dump());
+            return false;
+        }
+
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "trash item not found"}
+        }.dump());
+        return false;
+    }
+
+    const pqnas::TrashItemRec& rec = *rec_opt;
+    if (rec.scope_type != "workspace" || rec.scope_id != workspace_id) {
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "trash item not found for this workspace"}
+        }.dump());
+        return false;
+    }
+
+    if (rec.restore_status != "trashed") {
+        deps.reply_json(res, 409, json{
+            {"ok", false},
+            {"error", "trash_inactive"},
+            {"message", "trash item is not active"},
+            {"restore_status", rec.restore_status}
+        }.dump());
+        return false;
+    }
+
+    if (out_actor_fp) *out_actor_fp = actor_fp;
+    if (out_w) *out_w = w;
+    if (out_rec) *out_rec = rec;
+    return true;
+};
+
+srv.Post("/api/v4/workspaces/files/trash/restore",
+         [&, parse_workspace_trash_mutation_body_local, workspace_trash_authorize_mutation_local](const httplib::Request& req, httplib::Response& res) {
+    if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
+    res.set_header("Cache-Control", "no-store");
+
+    json body = json::object();
+    std::string workspace_id, trash_id;
+    if (!parse_workspace_trash_mutation_body_local(req, res, &body, &workspace_id, &trash_id)) {
+        return;
+    }
+
+    std::string actor_fp;
+    WorkspaceRec w;
+    pqnas::TrashItemRec rec;
+    if (!workspace_trash_authorize_mutation_local(
+            req, res, workspace_id, trash_id, &actor_fp, &w, &rec)) {
+        return;
+    }
+
+    std::string rel_norm;
+    {
+        std::string nerr;
+        if (!pqnas::normalize_user_rel_path_strict(rec.original_rel_path, &rel_norm, &nerr)) {
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "trash item has invalid original path"},
+                {"detail", pqnas::shorten(nerr, 180)}
+            }.dump());
+            return;
+        }
+    }
+
+    const std::filesystem::path ws_root =
+        workspace_dir_for_default_pool_only(deps.users_path, w);
+
+    std::filesystem::path restore_abs;
+    {
+        std::string perr;
+        if (!pqnas::resolve_user_path_strict(ws_root, rel_norm, &restore_abs, &perr)) {
+            deps.reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to resolve restore path"},
+                {"detail", pqnas::shorten(perr, 180)}
+            }.dump());
+            return;
+        }
+    }
+
+    pqnas::TrashService::RestoreParams rp;
+    rp.trash_id = trash_id;
+    rp.restore_abs_path = restore_abs;
+    rp.restore_root_abs = ws_root;
+    rp.rename_if_conflict = body.value("rename_if_conflict", true);
+
+    std::cerr << "[workspace-trash-restore] before restore"
+              << " workspace_id=" << workspace_id
+              << " trash_id=" << trash_id
+              << " rel=" << rel_norm
+              << " ws_root=" << ws_root.string()
+              << " restore_abs=" << restore_abs.string()
+              << std::endl;
+
+    pqnas::TrashService::RestoreResult rr;
+    std::string rerr;
+    if (!deps.trash_service->restore_from_trash(rp, &rr, &rerr)) {
+        const bool conflict =
+            rerr.find("exist") != std::string::npos ||
+            rerr.find("conflict") != std::string::npos ||
+            rerr.find("active") != std::string::npos;
+
+        deps.reply_json(res, conflict ? 409 : 500, json{
+            {"ok", false},
+            {"error", conflict ? "restore_conflict" : "server_error"},
+            {"message", "failed to restore trash item"},
+            {"detail", pqnas::shorten(rerr, 180)}
+        }.dump());
+        return;
+    }
+
+    std::cerr << "[workspace-trash-restore] after restore"
+              << " trash_id=" << trash_id
+              << " restored_abs=" << rr.restored_abs_path.string()
+              << " renamed=" << (rr.renamed ? "1" : "0")
+              << std::endl;
+
+    std::string restored_rel = rel_norm;
+    {
+        std::error_code ec;
+        auto rp_rel = std::filesystem::relative(rr.restored_abs_path, ws_root, ec);
+        if (!ec) restored_rel = rp_rel.generic_string();
+    }
+
+    if (deps.audit_emit) {
+        std::map<std::string, std::string> f;
+        f["actor_fp"] = actor_fp;
+        f["workspace_id"] = workspace_id;
+        f["trash_id"] = trash_id;
+        f["path"] = pqnas::shorten(restored_rel, 200);
+        f["renamed"] = rr.renamed ? "1" : "0";
+        f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        deps.audit_emit("workspace.trash_restore_ok", "ok", f);
+    }
+
+    deps.reply_json(res, 200, json{
+        {"ok", true},
+        {"workspace_id", workspace_id},
+        {"trash_id", trash_id},
+        {"restored_path", restored_rel},
+        {"item_type", rr.item_type},
+        {"size_bytes", rr.size_bytes},
+        {"file_count", rr.file_count},
+        {"renamed", rr.renamed}
+    }.dump());
+});
+
+// POST /api/v4/workspaces/files/trash/purge
+// Body JSON: { "workspace_id":"ws_xxx", "trash_id":"trash_xxx" }
+srv.Post("/api/v4/workspaces/files/trash/purge",
+         [&, parse_workspace_trash_mutation_body_local, workspace_trash_authorize_mutation_local](const httplib::Request& req, httplib::Response& res) {
+    if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
+    res.set_header("Cache-Control", "no-store");
+
+    json body = json::object();
+    std::string workspace_id, trash_id;
+    if (!parse_workspace_trash_mutation_body_local(req, res, &body, &workspace_id, &trash_id)) {
+        return;
+    }
+
+    std::string actor_fp;
+    WorkspaceRec w;
+    pqnas::TrashItemRec rec;
+    if (!workspace_trash_authorize_mutation_local(
+            req, res, workspace_id, trash_id, &actor_fp, &w, &rec)) {
+        return;
+    }
+
+    pqnas::TrashService::PurgeParams pp;
+    pp.trash_id = trash_id;
+
+    pqnas::TrashService::PurgeResult pr;
+    std::string perr;
+    if (!deps.trash_service->purge_from_trash(pp, &pr, &perr)) {
+        const bool inactive = perr.find("active") != std::string::npos;
+        deps.reply_json(res, inactive ? 409 : 500, json{
+            {"ok", false},
+            {"error", inactive ? "trash_inactive" : "server_error"},
+            {"message", "failed to permanently delete trash item"},
+            {"detail", pqnas::shorten(perr, 180)}
+        }.dump());
+        return;
+    }
+
+    if (deps.audit_emit) {
+        std::map<std::string, std::string> f;
+        f["actor_fp"] = actor_fp;
+        f["workspace_id"] = workspace_id;
+        f["trash_id"] = trash_id;
+        f["path"] = pqnas::shorten(rec.original_rel_path, 200);
+        f["size_bytes"] = std::to_string((unsigned long long)pr.size_bytes);
+        f["file_count"] = std::to_string((unsigned long long)pr.file_count);
+        f["ip"] = req.remote_addr.empty() ? "?" : req.remote_addr;
+        deps.audit_emit("workspace.trash_purge_ok", "ok", f);
+    }
+
+    deps.reply_json(res, 200, json{
+        {"ok", true},
+        {"workspace_id", workspace_id},
+        {"trash_id", trash_id},
+        {"size_bytes", pr.size_bytes},
+        {"file_count", pr.file_count},
+        {"versions_deleted", pr.versions_deleted},
+        {"version_bytes_deleted", pr.version_bytes_deleted},
+        {"version_blobs_missing", pr.version_blobs_missing},
+        {"version_cleanup_error", pr.version_cleanup_error}
+    }.dump());
+});
+
+
 // POST /api/v4/workspaces/files/delete?workspace_id=...&path=relative/path
 // Moves a workspace file or directory to trash.
 srv.Post("/api/v4/workspaces/files/delete",
