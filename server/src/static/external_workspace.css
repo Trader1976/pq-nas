@@ -2251,3 +2251,472 @@ body{
     }
 }
 
+
+
+/* External Workspace detached trash window. */
+.externalTrashOverlay{
+    position:fixed;
+    inset:0;
+    z-index:7600;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:24px;
+    background:rgba(0,0,0,.38);
+}
+
+.externalTrashOverlay.show{
+    display:flex;
+}
+
+.externalTrashWindow{
+    width:min(980px, calc(100vw - 48px));
+    max-height:min(82vh, 900px);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    border:1px solid rgba(255,255,255,.16);
+    border-radius:18px;
+    background:linear-gradient(180deg, rgba(32,32,32,.98), rgba(18,18,18,.98));
+    box-shadow:0 28px 110px rgba(0,0,0,.52);
+    color:var(--fg);
+}
+
+.externalTrashHead{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:14px;
+    padding:16px 18px 12px;
+    border-bottom:1px solid rgba(255,255,255,.12);
+}
+
+.externalTrashTitle{
+    font-size:22px;
+    font-weight:950;
+    line-height:1.1;
+}
+
+.externalTrashSub{
+    margin-top:4px;
+    font-size:12px;
+    color:var(--muted);
+    word-break:break-all;
+}
+
+.externalTrashStatus{
+    padding:12px 18px;
+    border-bottom:1px solid rgba(255,255,255,.08);
+    color:var(--muted);
+    font-size:13px;
+}
+
+.externalTrashStatus.good{
+    color:var(--good);
+}
+
+.externalTrashStatus.bad{
+    color:var(--bad);
+}
+
+.externalTrashStatus.loading{
+    color:var(--accent);
+}
+
+.externalTrashInfo{
+    margin:12px 18px 0;
+    padding:11px 12px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    flex-wrap:wrap;
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:14px;
+    background:rgba(255,255,255,.045);
+}
+
+.externalTrashChip{
+    display:inline-flex;
+    align-items:center;
+    border-radius:999px;
+    padding:7px 10px;
+    border:1px solid rgba(255,255,255,.14);
+    background:rgba(255,255,255,.06);
+    font-size:12px;
+    font-weight:900;
+}
+
+.externalTrashNote{
+    font-size:12px;
+    color:var(--muted);
+}
+
+.externalTrashList{
+    flex:1 1 auto;
+    min-height:0;
+    overflow:auto;
+    padding:12px 18px;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+}
+
+.externalTrashEmpty{
+    padding:18px;
+    border:1px dashed rgba(255,255,255,.16);
+    border-radius:14px;
+    color:var(--muted);
+    background:rgba(255,255,255,.035);
+}
+
+.externalTrashRow{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:14px;
+    padding:13px 14px;
+    border:1px solid rgba(255,255,255,.12);
+    border-radius:14px;
+    background:rgba(255,255,255,.045);
+}
+
+.externalTrashRowMain{
+    min-width:0;
+    flex:1 1 auto;
+}
+
+.externalTrashRowTitle{
+    font-size:16px;
+    font-weight:950;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+
+.externalTrashRowMeta{
+    margin-top:5px;
+    color:var(--muted);
+    font-size:12px;
+}
+
+.externalTrashRowPath{
+    margin-top:5px;
+    color:var(--muted);
+    font-size:12px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+
+.externalTrashRowActions{
+    flex:0 0 auto;
+    display:flex;
+    align-items:center;
+    gap:8px;
+    flex-wrap:wrap;
+    justify-content:flex-end;
+}
+
+.externalTrashFoot{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:12px 18px;
+    border-top:1px solid rgba(255,255,255,.12);
+    background:rgba(255,255,255,.035);
+}
+
+.externalTrashFootCount{
+    color:var(--muted);
+    font-size:13px;
+}
+
+html[data-theme="win_classic"] .externalTrashOverlay{
+    background:rgba(255,255,255,.38);
+}
+
+html[data-theme="win_classic"] .externalTrashWindow{
+    background:rgb(245,245,245);
+    color:#050505;
+    border:2px solid rgba(0,0,0,.55);
+    border-radius:2px;
+    box-shadow:6px 6px 0 rgba(0,0,0,.22);
+}
+
+html[data-theme="win_classic"] .externalTrashHead,
+html[data-theme="win_classic"] .externalTrashFoot{
+    background:rgba(0,0,0,.055);
+    border-color:rgba(0,0,0,.18);
+}
+
+html[data-theme="win_classic"] .externalTrashStatus{
+    border-color:rgba(0,0,0,.12);
+    color:#4d5662;
+}
+
+html[data-theme="win_classic"] .externalTrashInfo,
+html[data-theme="win_classic"] .externalTrashRow,
+html[data-theme="win_classic"] .externalTrashEmpty,
+html[data-theme="win_classic"] .externalTrashChip{
+    background:#d0d0d0;
+    border-color:rgba(0,0,0,.20);
+    color:#050505;
+}
+
+html[data-theme="win_classic"] .externalTrashSub,
+html[data-theme="win_classic"] .externalTrashNote,
+html[data-theme="win_classic"] .externalTrashRowMeta,
+html[data-theme="win_classic"] .externalTrashRowPath,
+html[data-theme="win_classic"] .externalTrashFootCount{
+    color:#4d5662;
+}
+
+@media (max-width:720px){
+    .externalTrashOverlay{
+        padding:10px;
+    }
+
+    .externalTrashWindow{
+        width:calc(100vw - 20px);
+        max-height:calc(100vh - 20px);
+    }
+
+    .externalTrashRow{
+        flex-direction:column;
+    }
+
+    .externalTrashRowActions{
+        justify-content:flex-start;
+    }
+}
+
+
+/* external-trash-detached-modal-v2 */
+.externalTrashDetachedOverlay{
+    position:fixed;
+    inset:0;
+    z-index:7600;
+    display:none;
+    align-items:flex-start;
+    justify-content:center;
+    padding:28px;
+    background:rgba(0,0,0,.42);
+}
+
+.externalTrashDetachedOverlay.show{
+    display:flex;
+}
+
+.externalTrashDetachedCard{
+    width:min(980px, calc(100vw - 44px));
+    max-height:calc(100vh - 56px);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    border:1px solid rgba(255,255,255,.16);
+    border-radius:18px;
+    background:linear-gradient(180deg, rgba(32,32,32,.98), rgba(18,18,18,.98));
+    box-shadow:0 28px 110px rgba(0,0,0,.52);
+    color:var(--fg);
+}
+
+.externalTrashDetachedHead{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:12px;
+    padding:14px 16px 12px;
+    border-bottom:1px solid rgba(255,255,255,.14);
+    background:rgba(0,0,0,.18);
+    cursor:grab;
+    user-select:none;
+    touch-action:none;
+}
+
+.externalTrashDetachedCard.dragging .externalTrashDetachedHead{
+    cursor:grabbing;
+}
+
+.externalTrashDetachedTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+    font-size:18px;
+}
+
+.externalTrashDetachedSub{
+    margin-top:3px;
+    font-size:12px;
+    color:var(--muted);
+    word-break:break-all;
+}
+
+.externalTrashDetachedStatus{
+    padding:10px 16px;
+    border-bottom:1px solid rgba(255,255,255,.08);
+    color:var(--muted);
+    font-size:13px;
+}
+
+.externalTrashDetachedStatus.good{
+    color:var(--good);
+}
+
+.externalTrashDetachedStatus.bad{
+    color:var(--bad);
+}
+
+.externalTrashDetachedBody{
+    padding:14px 16px;
+    overflow:auto;
+    min-height:0;
+    flex:1 1 auto;
+}
+
+.externalTrashDetachedEmpty{
+    padding:18px;
+    border-radius:14px;
+    background:rgba(255,255,255,.04);
+    color:var(--muted);
+}
+
+.externalTrashDetachedEmpty.bad{
+    color:var(--bad);
+}
+
+.externalTrashDetachedSummary{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    flex-wrap:wrap;
+    padding:10px;
+    margin-bottom:12px;
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:14px;
+    background:rgba(255,255,255,.04);
+}
+
+.externalTrashDetachedNote{
+    color:var(--muted);
+    font-size:12px;
+}
+
+.externalTrashDetachedList{
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+}
+
+.externalTrashDetachedRow{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:16px;
+    padding:13px 14px;
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:14px;
+    background:rgba(255,255,255,.035);
+}
+
+.externalTrashDetachedRowMain{
+    min-width:0;
+    flex:1 1 auto;
+}
+
+.externalTrashDetachedRowTitle{
+    font-weight:950;
+    font-size:15px;
+}
+
+.externalTrashDetachedRowMeta{
+    margin-top:6px;
+    color:var(--muted);
+    font-size:12px;
+    line-height:1.35;
+}
+
+.externalTrashDetachedRowPath{
+    margin-top:5px;
+    color:var(--muted);
+    font-size:12px;
+    word-break:break-all;
+}
+
+.externalTrashDetachedRowActions{
+    display:flex;
+    align-items:center;
+    justify-content:flex-end;
+    gap:8px;
+    flex-wrap:wrap;
+    flex:0 0 auto;
+}
+
+.externalTrashDetachedFoot{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:12px 16px;
+    border-top:1px solid rgba(255,255,255,.12);
+    background:rgba(255,255,255,.035);
+}
+
+.externalTrashDetachedCount{
+    color:var(--muted);
+    font-size:13px;
+}
+
+html[data-theme="win_classic"] .externalTrashDetachedOverlay{
+    background:rgba(255,255,255,.38);
+}
+
+html[data-theme="win_classic"] .externalTrashDetachedCard{
+    background:rgb(245,245,245);
+    color:#050505;
+    border:2px solid rgba(0,0,0,.55);
+    border-radius:2px;
+    box-shadow:6px 6px 0 rgba(0,0,0,.22);
+}
+
+html[data-theme="win_classic"] .externalTrashDetachedHead,
+html[data-theme="win_classic"] .externalTrashDetachedFoot{
+    background:rgba(0,0,0,.055);
+    border-color:rgba(0,0,0,.18);
+}
+
+html[data-theme="win_classic"] .externalTrashDetachedStatus,
+html[data-theme="win_classic"] .externalTrashDetachedSub,
+html[data-theme="win_classic"] .externalTrashDetachedRowMeta,
+html[data-theme="win_classic"] .externalTrashDetachedRowPath,
+html[data-theme="win_classic"] .externalTrashDetachedCount,
+html[data-theme="win_classic"] .externalTrashDetachedNote{
+    color:#4d5662;
+}
+
+html[data-theme="win_classic"] .externalTrashDetachedSummary,
+html[data-theme="win_classic"] .externalTrashDetachedRow,
+html[data-theme="win_classic"] .externalTrashDetachedEmpty{
+    background:#c8c8c8;
+    border-color:rgba(0,0,0,.18);
+}
+
+@media (max-width:760px){
+    .externalTrashDetachedOverlay{
+        padding:10px;
+    }
+
+    .externalTrashDetachedCard{
+        width:calc(100vw - 20px);
+        max-height:calc(100vh - 20px);
+    }
+
+    .externalTrashDetachedRow{
+        flex-direction:column;
+    }
+
+    .externalTrashDetachedRowActions{
+        justify-content:flex-start;
+    }
+}
+/* /external-trash-detached-modal-v2 */
+

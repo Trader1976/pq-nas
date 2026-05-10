@@ -15,6 +15,7 @@
 namespace pqnas {
 
     class TrashService;
+    class TrashIndex;
 
     using ReplyJsonFn =
         std::function<void(httplib::Response&, int, const std::string&)>;
@@ -58,6 +59,7 @@ namespace pqnas {
 
         pqnas::FileVersionsIndex* file_versions = nullptr;
         pqnas::TrashService* trash_service = nullptr;
+        pqnas::TrashIndex* trash_index = nullptr;
 
         ReplyJsonFn reply_json;
         RequireUserAuthUsersActorFn require_user_auth_users_actor;

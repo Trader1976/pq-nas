@@ -28,6 +28,7 @@
 #include "file_versions_present.h"
 #include "file_versions_restore.h"
 #include "trash_service.h"
+#include "trash_index.h"
 #include "runtime_paths.h"
 #include "gallery_meta.h"
 
@@ -9797,6 +9798,173 @@ srv.Post("/api/v4/workspaces/files/write_text",
             res.set_header("Content-Disposition", build_content_disposition("attachment", fname));
             res.body = std::move(zip_data);
     });
+
+
+// GET /api/v4/workspaces/files/trash/list?workspace_id=...&limit=500
+// Lists active workspace trash entries. Readable by any enabled workspace member,
+// including external workspace members authenticated through pqnas_workspace_session.
+srv.Get("/api/v4/workspaces/files/trash/list",
+        [&](const httplib::Request& req, httplib::Response& res) {
+    res.set_header("Cache-Control", "no-store");
+
+    const std::string workspace_id =
+        req.has_param("workspace_id") ? trim_copy_safe(req.get_param_value("workspace_id")) : "";
+
+    if (workspace_id.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing workspace_id"}
+        }.dump());
+        return;
+    }
+
+    std::string actor_fp, actor_role;
+    bool actor_is_external = false;
+    if (!require_workspace_file_actor_for_workspace_local(
+            deps, req, res, workspace_id,
+            &actor_fp, &actor_role, &actor_is_external)) {
+        return;
+    }
+    (void)actor_role;
+
+    if (!deps.trash_index) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "trash index missing"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->load(deps.workspaces_path)) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "workspaces_reload_failed"},
+            {"message", "failed to reload workspaces"}
+        }.dump());
+        return;
+    }
+
+    auto wopt = deps.workspaces->get(workspace_id);
+    if (!wopt.has_value()) {
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "workspace not found"}
+        }.dump());
+        return;
+    }
+
+    const WorkspaceRec& w = *wopt;
+    if (w.status != "enabled") {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace disabled"}
+        }.dump());
+        return;
+    }
+
+    auto mopt = enabled_member_for_actor(w, actor_fp);
+    if (!mopt.has_value()) {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace access denied"}
+        }.dump());
+        return;
+    }
+
+    if (actor_is_external && mopt->member_kind != "external") {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace external access denied"}
+        }.dump());
+        return;
+    }
+
+    std::size_t limit = 500;
+    if (req.has_param("limit")) {
+        try {
+            long long v = std::stoll(req.get_param_value("limit"));
+            if (v > 0) limit = static_cast<std::size_t>(std::min<long long>(v, 500));
+        } catch (...) {}
+    }
+
+    const bool include_inactive =
+        req.has_param("include_inactive") &&
+        (req.get_param_value("include_inactive") == "1" ||
+         req.get_param_value("include_inactive") == "true" ||
+         req.get_param_value("include_inactive") == "yes");
+
+    std::string terr;
+    auto rows = deps.trash_index->list_scope(
+        "workspace",
+        workspace_id,
+        include_inactive,
+        limit,
+        &terr
+    );
+
+    if (!terr.empty()) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to list workspace trash"},
+            {"detail", pqnas::shorten(terr, 180)}
+        }.dump());
+        return;
+    }
+
+    auto basename_for_trash = [](const std::string& rel) -> std::string {
+        try {
+            std::string name = std::filesystem::path(rel).filename().string();
+            if (!name.empty()) return name;
+        } catch (...) {
+        }
+        return rel.empty() ? "item" : rel;
+    };
+
+    json items = json::array();
+    for (const auto& rec : rows) {
+        json item = json::object();
+        item["trash_id"] = rec.trash_id;
+        item["scope_type"] = rec.scope_type;
+        item["scope_id"] = rec.scope_id;
+        item["workspace_id"] = workspace_id;
+        item["origin_app"] = rec.origin_app;
+        item["item_type"] = rec.item_type;
+        item["type"] = rec.item_type;
+        item["original_rel_path"] = rec.original_rel_path;
+        item["path"] = rec.original_rel_path;
+        item["name"] = basename_for_trash(rec.original_rel_path);
+        item["source_pool"] = rec.source_pool;
+        item["source_tier_state"] = rec.source_tier_state;
+        item["size_bytes"] = rec.size_bytes;
+        item["bytes"] = rec.size_bytes;
+        item["file_count"] = rec.file_count;
+        item["deleted_epoch"] = rec.deleted_epoch;
+        item["purge_after_epoch"] = rec.purge_after_epoch;
+        item["restore_status"] = rec.restore_status;
+        item["status_updated_epoch"] = rec.status_updated_epoch;
+        items.push_back(std::move(item));
+    }
+
+    deps.reply_json(res, 200, json{
+        {"ok", true},
+        {"scope_type", "workspace"},
+        {"scope_id", workspace_id},
+        {"workspace_id", workspace_id},
+        {"limit", limit},
+        {"include_inactive", include_inactive},
+        {"items", items},
+        {"entries", items},
+        {"trash", items}
+    }.dump());
+});
+
 
 // POST /api/v4/workspaces/files/delete?workspace_id=...&path=relative/path
 // Moves a workspace file or directory to trash.

@@ -87,7 +87,9 @@
     let currentPath = "";
     let canEdit = false;
     let currentRole = "";
-    let signedIn = false;
+    
+    let trashMode = false;
+let signedIn = false;
     let uploadOpen = false;
     let uploadCancelRequested = false;
     let uploadCurrentXhr = null;
@@ -1289,6 +1291,235 @@
         return `/api/v4/workspaces/files/delete?${qs.toString()}`;
     }
 
+    function trashListUrl() {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("limit", "500");
+        return `/api/v4/workspaces/files/trash/list?${qs.toString()}`;
+    }
+
+
+    let externalTrashOverlay = null;
+    let externalTrashStatus = null;
+    let externalTrashList = null;
+    let externalTrashCount = null;
+
+    function ensureExternalTrashDetachedDom() {
+        if (externalTrashOverlay) return;
+
+        externalTrashOverlay = document.createElement("div");
+        externalTrashOverlay.className = "externalTrashOverlay";
+        externalTrashOverlay.setAttribute("aria-hidden", "true");
+
+        externalTrashOverlay.innerHTML = `
+            <div class="externalTrashWindow" role="dialog" aria-modal="true" aria-label="Workspace trash">
+                <div class="externalTrashHead">
+                    <div>
+                        <div class="externalTrashTitle">Trash</div>
+                        <div class="externalTrashSub mono">Workspace trash · ${escapeHtml(workspaceId)}</div>
+                    </div>
+                    <button class="btn secondary externalTrashClose" type="button">Close</button>
+                </div>
+
+                <div class="externalTrashStatus" id="externalTrashStatus">Loading…</div>
+
+                <div class="externalTrashInfo">
+                    <span class="externalTrashChip" id="externalTrashCount">Trash: —</span>
+                    <span class="externalTrashNote">Items in trash are listed separately from live workspace files.</span>
+                </div>
+
+                <div class="externalTrashList" id="externalTrashList"></div>
+
+                <div class="externalTrashFoot">
+                    <div class="row">
+                        <button class="btn secondary externalTrashRefresh" type="button">Refresh</button>
+                    </div>
+                    <div class="mono externalTrashFootCount">—</div>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(externalTrashOverlay);
+
+        externalTrashStatus = externalTrashOverlay.querySelector("#externalTrashStatus");
+        externalTrashList = externalTrashOverlay.querySelector("#externalTrashList");
+        externalTrashCount = externalTrashOverlay.querySelector("#externalTrashCount");
+
+        externalTrashOverlay.querySelector(".externalTrashClose")?.addEventListener("click", closeExternalTrashDetached);
+        externalTrashOverlay.querySelector(".externalTrashRefresh")?.addEventListener("click", () => {
+            loadExternalTrashDetached().catch((e) => {
+                setExternalTrashStatus(`Trash refresh failed: ${e.message || e}`, "bad");
+            });
+        });
+
+        externalTrashOverlay.addEventListener("click", (ev) => {
+            if (ev.target === externalTrashOverlay) closeExternalTrashDetached();
+        });
+
+        document.addEventListener("keydown", (ev) => {
+            if (!externalTrashOverlay || !externalTrashOverlay.classList.contains("show")) return;
+            if (ev.key === "Escape") {
+                ev.preventDefault();
+                closeExternalTrashDetached();
+            }
+        });
+    }
+
+    function setExternalTrashStatus(text, kind = "") {
+        if (!externalTrashStatus) return;
+        externalTrashStatus.className = `externalTrashStatus${kind ? " " + kind : ""}`;
+        externalTrashStatus.textContent = text || "";
+    }
+
+    function externalTrashListUrl() {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("limit", "500");
+        return `/api/v4/workspaces/files/trash/list?${qs.toString()}`;
+    }
+
+    function trashItemName(item) {
+        return String(
+            item.name ||
+            basenameFromPath(item.original_rel_path || item.path || "") ||
+            item.trash_id ||
+            "item"
+        );
+    }
+
+    function trashItemPath(item) {
+        return normalizeRelPath(item.original_rel_path || item.path || "");
+    }
+
+    function renderExternalTrashDetached(items) {
+        if (!externalTrashList) return;
+
+        const rows = Array.isArray(items) ? items : [];
+        externalTrashList.innerHTML = "";
+
+        if (externalTrashCount) {
+            externalTrashCount.textContent = `Trash: ${rows.length} item${rows.length === 1 ? "" : "s"}`;
+        }
+
+        const footCount = externalTrashOverlay?.querySelector(".externalTrashFootCount");
+        if (footCount) footCount.textContent = `${rows.length} item${rows.length === 1 ? "" : "s"}`;
+
+        if (!rows.length) {
+            const empty = document.createElement("div");
+            empty.className = "externalTrashEmpty";
+            empty.textContent = "Trash is empty.";
+            externalTrashList.appendChild(empty);
+            return;
+        }
+
+        for (const item of rows) {
+            const name = trashItemName(item);
+            const rel = trashItemPath(item);
+            const type = String(item.item_type || item.type || "item");
+            const bytes = Number(item.size_bytes ?? item.bytes ?? 0);
+            const deleted = Number(item.deleted_epoch || 0);
+            const purge = Number(item.purge_after_epoch || 0);
+
+            const row = document.createElement("div");
+            row.className = "externalTrashRow";
+            row.dataset.trashId = String(item.trash_id || "");
+
+            const main = document.createElement("div");
+            main.className = "externalTrashRowMain";
+
+            const title = document.createElement("div");
+            title.className = "externalTrashRowTitle";
+            title.textContent = name;
+
+            const meta = document.createElement("div");
+            meta.className = "externalTrashRowMeta";
+            const bits = [];
+            bits.push(type === "dir" ? "Folder" : "File");
+            if (bytes) bits.push(fmtSize(bytes));
+            if (deleted) bits.push(`Deleted: ${fmtUnixLocal(deleted)}`);
+            if (purge) bits.push(`Purge after: ${fmtUnixLocal(purge)}`);
+            meta.textContent = bits.join("  ");
+
+            const path = document.createElement("div");
+            path.className = "externalTrashRowPath mono";
+            path.textContent = rel || name;
+
+            main.appendChild(title);
+            main.appendChild(meta);
+            main.appendChild(path);
+
+            const actions = document.createElement("div");
+            actions.className = "externalTrashRowActions";
+
+            const restoreBtn = document.createElement("button");
+            restoreBtn.type = "button";
+            restoreBtn.className = "btn secondary";
+            restoreBtn.textContent = "Restore";
+            restoreBtn.disabled = true;
+            restoreBtn.title = "Restore from external workspace trash is not wired yet.";
+
+            const purgeBtn = document.createElement("button");
+            purgeBtn.type = "button";
+            purgeBtn.className = "btn secondary";
+            purgeBtn.textContent = "Delete permanently";
+            purgeBtn.disabled = true;
+            purgeBtn.title = "Permanent delete from external workspace trash is not wired yet.";
+
+            actions.appendChild(restoreBtn);
+            actions.appendChild(purgeBtn);
+
+            row.appendChild(main);
+            row.appendChild(actions);
+            externalTrashList.appendChild(row);
+        }
+    }
+
+    async function loadExternalTrashDetached() {
+        ensureExternalTrashDetachedDom();
+        setExternalTrashStatus("Loading trash…", "loading");
+        if (externalTrashList) {
+            externalTrashList.innerHTML = `<div class="externalTrashEmpty">Loading trash…</div>`;
+        }
+
+        const r = await fetch(externalTrashListUrl(), {
+            method: "GET",
+            credentials: "include",
+            cache: "no-store",
+            headers: { "Accept": "application/json" },
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            const msg = j && (j.message || j.error)
+                ? `${j.error || ""} ${j.message || ""}`.trim()
+                : `HTTP ${r.status}`;
+            throw new Error(msg || "failed to load trash");
+        }
+
+        const items = Array.isArray(j.items)
+            ? j.items
+            : (Array.isArray(j.entries) ? j.entries : (Array.isArray(j.trash) ? j.trash : []));
+
+        renderExternalTrashDetached(items);
+        setExternalTrashStatus(`Loaded ${items.length} item${items.length === 1 ? "" : "s"}.`, "good");
+    }
+
+    function openExternalTrashDetached() {
+        ensureExternalTrashDetachedDom();
+        externalTrashOverlay.classList.add("show");
+        externalTrashOverlay.setAttribute("aria-hidden", "false");
+        loadExternalTrashDetached().catch((e) => {
+            setExternalTrashStatus(`Trash failed: ${e.message || e}`, "bad");
+        });
+    }
+
+    function closeExternalTrashDetached() {
+        if (!externalTrashOverlay) return;
+        externalTrashOverlay.classList.remove("show");
+        externalTrashOverlay.setAttribute("aria-hidden", "true");
+    }
+
+
     function syncUploadPanel() {
         if (uploadBox) uploadBox.classList.add("hidden");
         if (btnToggleUpload) btnToggleUpload.textContent = "Upload";
@@ -2326,8 +2557,135 @@
     }
 
 
+
+    function trashItemName(row) {
+        return String(
+            row.name ||
+            row.original_name ||
+            basenameFromPath(row.original_rel_path || row.path || row.rel_path || row.path_norm || "") ||
+            row.trash_id ||
+            "Trashed item"
+        );
+    }
+
+    function trashItemPath(row) {
+        return normalizeRelPath(
+            row.original_rel_path ||
+            row.path ||
+            row.rel_path ||
+            row.path_norm ||
+            row.logical_rel_path ||
+            ""
+        );
+    }
+
+    function trashItemType(row) {
+        const t = String(row.item_type || row.type || row.kind || "").toLowerCase();
+        if (t === "dir" || t === "folder" || t === "directory") return "Folder";
+        if (t === "file") return "File";
+        return t ? t[0].toUpperCase() + t.slice(1) : "Item";
+    }
+
+    function trashItemMeta(row) {
+        const parts = [];
+        const type = trashItemType(row);
+        if (type) parts.push(type);
+
+        const bytes = row.size_bytes ?? row.bytes ?? row.file_size ?? null;
+        if (bytes != null && type !== "Folder") parts.push(fmtSize(bytes));
+
+        const when = row.deleted_at || row.trashed_at || row.created_at || "";
+        if (when) parts.push(String(when));
+
+        const p = trashItemPath(row);
+        if (p) parts.push("/" + p);
+
+        return parts.join(" · ");
+    }
+
+    function renderTrashBreadcrumbs() {
+        if (!breadcrumbs) return;
+        breadcrumbs.innerHTML = `
+            <button class="crumb" type="button" id="trashBackToWorkspace">Workspace root</button>
+            <span class="crumbSep">/</span>
+            <span class="crumb" style="cursor:default;">Trash</span>
+        `;
+
+        const back = document.getElementById("trashBackToWorkspace");
+        if (back) {
+            back.addEventListener("click", () => {
+                trashMode = false;
+                loadFiles(currentPath).catch((e) => setStatus(`Open workspace failed: ${e.message || e}`, "bad"));
+            });
+        }
+    }
+
+    function renderTrashRows(rows) {
+        if (!filesEl) return;
+
+        filesEl.classList.remove("listView");
+        filesEl.innerHTML = "";
+
+        if (!rows.length) {
+            filesEl.innerHTML = `<div class="empty">Trash is empty.</div>`;
+            return;
+        }
+
+        filesEl.innerHTML = rows.map((row) => {
+            const name = trashItemName(row);
+            const path = trashItemPath(row);
+            const type = trashItemType(row);
+            const meta = trashItemMeta(row);
+            const icon = type === "Folder" ? "🗂️" : "🗑️";
+
+            return `
+                <div class="fileRow" data-trash-id="${escapeHtml(row.trash_id || row.id || "")}" title="${escapeHtml(path || name)}">
+                    <div class="fileMain">
+                        <div class="fileIcon">${icon}</div>
+                        <div class="fileText">
+                            <div class="fileName">${escapeHtml(name)}</div>
+                            <div class="fileMeta">${escapeHtml(meta)}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join("");
+    }
+
+    async function openTrash() {
+        if (!signedIn) {
+            setStatus("Sign in before opening trash.", "bad");
+            return;
+        }
+
+        trashMode = true;
+        clearSelection();
+        hideContextMenus();
+        renderTrashBreadcrumbs();
+
+        if (fileSub) fileSub.textContent = "Trash. Deleted workspace items are shown here.";
+        if (filesEl) filesEl.innerHTML = `<div class="empty">Loading trash…</div>`;
+
+        setStatus("Loading trash…", "good");
+
+        const j = await apiJson(trashListUrl());
+
+        const rows =
+            Array.isArray(j.items) ? j.items :
+            Array.isArray(j.trash) ? j.trash :
+            Array.isArray(j.entries) ? j.entries :
+            Array.isArray(j.trash_items) ? j.trash_items :
+            [];
+
+        renderTrashRows(rows);
+        setStatus(`Trash loaded. ${rows.length} item${rows.length === 1 ? "" : "s"}.`, "good");
+    }
+
+
     async function loadFiles(pathOverride) {
-        resetMarqueeVisual();
+        
+        trashMode = false;
+resetMarqueeVisual();
         setTopReadyBadge("loading…", "loading");
         if (!workspaceId) return;
 
@@ -3355,6 +3713,14 @@
             return true;
         }
 
+        const trashCard =
+            document.querySelector(".externalTrashDetachedOverlay.show .externalTrashDetachedCard") ||
+            document.querySelector(".externalTrashOverlay.show .externalTrashWindow");
+
+        if (trashCard && pointInsideElement(ev, trashCard)) {
+            return true;
+        }
+
         return false;
     }
 
@@ -3374,7 +3740,9 @@
             "#textEditModal,.textEditModal,#textEditCard,.textEditCard,#textEditHead,.textEditHead," +
             "#textPreviewModal,.textPreviewModal,#propsModal,.propsModal,.propsCard," +
             ".qrBox,.uploadBox,.toolbarGroup,.toolbar,.pathBar,.crumbs," +
-            ".accessPanel,.rolePill,.accessPill"
+            ".accessPanel,.rolePill,.accessPill," +
+            ".externalTrashDetachedOverlay,.externalTrashDetachedCard,.externalTrashDetachedHead," +
+            ".externalTrashOverlay,.externalTrashWindow,.externalTrashHead"
         );
     }
 
@@ -3625,7 +3993,11 @@
             downloadCurrentFolderZip();
             return;
         }
-        if (action === "trash") return showPlaceholder("Trash");
+        if (action === "trash") {
+            openExternalTrashDetached();
+            return;
+        }
+
     });
 
     itemContextMenu.addEventListener("click", (ev) => {
@@ -3729,6 +4101,319 @@
         }
         hideContextMenus();
     });
+
+
+
+    /* external-trash-detached-modal-v2 */
+    const externalTrashDetachedState = {
+        root: null,
+        card: null,
+        sub: null,
+        status: null,
+        body: null,
+        count: null
+    };
+
+    function externalTrashMakeEl(tag, cls, text) {
+        const el = document.createElement(tag);
+        if (cls) el.className = cls;
+        if (text != null) el.textContent = String(text);
+        return el;
+    }
+
+    function externalTrashListUrl() {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("limit", "500");
+        return "/api/v4/workspaces/files/trash/list?" + qs.toString();
+    }
+
+    function externalTrashTime(sec) {
+        const n = Number(sec || 0);
+        if (!n) return "—";
+        if (typeof fmtUnixLocal === "function") return fmtUnixLocal(n);
+        return new Date(n * 1000).toLocaleString();
+    }
+
+    function externalTrashName(item) {
+        const rel = String((item && item.original_rel_path) || "");
+        if (!rel) return "Deleted item";
+        const parts = rel.split("/").filter(Boolean);
+        return parts.length ? parts[parts.length - 1] : rel;
+    }
+
+    function closeExternalTrashDetached() {
+        const root = externalTrashDetachedState.root;
+        if (!root) return;
+        root.classList.remove("show");
+        root.setAttribute("aria-hidden", "true");
+    }
+
+    function ensureExternalTrashDetachedDom() {
+        if (externalTrashDetachedState.root) return;
+
+        const root = externalTrashMakeEl("div", "externalTrashDetachedOverlay");
+        root.id = "externalTrashDetachedOverlay";
+        root.setAttribute("aria-hidden", "true");
+
+        const card = externalTrashMakeEl("div", "externalTrashDetachedCard");
+        card.id = "externalTrashDetachedCard";
+        card.setAttribute("role", "dialog");
+        card.setAttribute("aria-modal", "true");
+
+        const head = externalTrashMakeEl("div", "externalTrashDetachedHead");
+        const headLeft = externalTrashMakeEl("div", "");
+        const title = externalTrashMakeEl("div", "externalTrashDetachedTitle", "Trash");
+        const sub = externalTrashMakeEl("div", "externalTrashDetachedSub mono", "Workspace trash");
+        const closeBtn = externalTrashMakeEl("button", "btn secondary", "Close");
+        closeBtn.type = "button";
+
+        headLeft.appendChild(title);
+        headLeft.appendChild(sub);
+        head.appendChild(headLeft);
+        head.appendChild(closeBtn);
+
+        const status = externalTrashMakeEl("div", "externalTrashDetachedStatus", "Loading…");
+        const body = externalTrashMakeEl("div", "externalTrashDetachedBody");
+
+        const foot = externalTrashMakeEl("div", "externalTrashDetachedFoot");
+        const refreshBtn = externalTrashMakeEl("button", "btn secondary", "Refresh");
+        refreshBtn.type = "button";
+        const count = externalTrashMakeEl("div", "externalTrashDetachedCount mono", "—");
+        foot.appendChild(refreshBtn);
+        foot.appendChild(count);
+
+        card.appendChild(head);
+        card.appendChild(status);
+        card.appendChild(body);
+        card.appendChild(foot);
+        root.appendChild(card);
+        document.body.appendChild(root);
+
+        externalTrashDetachedState.root = root;
+        externalTrashDetachedState.card = card;
+        externalTrashDetachedState.sub = sub;
+        externalTrashDetachedState.status = status;
+        externalTrashDetachedState.body = body;
+        externalTrashDetachedState.count = count;
+
+        closeBtn.addEventListener("click", closeExternalTrashDetached);
+        refreshBtn.addEventListener("click", function () {
+            loadExternalTrashDetached().catch(function (e) {
+                status.textContent = "Trash load failed: " + (e && e.message ? e.message : e);
+                status.className = "externalTrashDetachedStatus bad";
+            });
+        });
+
+        root.addEventListener("click", function (ev) {
+            if (ev.target === root) closeExternalTrashDetached();
+        });
+
+        document.addEventListener("keydown", function (ev) {
+            if (!root.classList.contains("show")) return;
+            if (ev.key === "Escape") {
+                ev.preventDefault();
+                closeExternalTrashDetached();
+            }
+        });
+
+        let drag = null;
+
+        function clampExternalTrashDetachedPosition(left, top) {
+            const rect = card.getBoundingClientRect();
+            const pad = 8;
+
+            return {
+                left: Math.min(
+                    Math.max(pad, left),
+                    Math.max(pad, window.innerWidth - rect.width - pad)
+                ),
+                top: Math.min(
+                    Math.max(pad, top),
+                    Math.max(pad, window.innerHeight - rect.height - pad)
+                )
+            };
+        }
+
+        function moveExternalTrashDetachedDrag(ev) {
+            if (!drag || ev.pointerId !== drag.pointerId) return;
+
+            const pos = clampExternalTrashDetachedPosition(
+                drag.left + ev.clientX - drag.startX,
+                drag.top + ev.clientY - drag.startY
+            );
+
+            card.style.left = pos.left + "px";
+            card.style.top = pos.top + "px";
+            card.style.transform = "none";
+
+            ev.preventDefault();
+            if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation();
+            else ev.stopPropagation();
+        }
+
+        function endExternalTrashDetachedDrag(ev) {
+            if (!drag || ev.pointerId !== drag.pointerId) return;
+
+            card.classList.remove("dragging");
+            try { head.releasePointerCapture(ev.pointerId); } catch (_) {}
+
+            window.removeEventListener("pointermove", moveExternalTrashDetachedDrag, true);
+            window.removeEventListener("pointerup", endExternalTrashDetachedDrag, true);
+            window.removeEventListener("pointercancel", endExternalTrashDetachedDrag, true);
+
+            drag = null;
+
+            ev.preventDefault();
+            if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation();
+            else ev.stopPropagation();
+        }
+
+        head.addEventListener("pointerdown", function (ev) {
+            if (ev.button !== 0) return;
+            if (ev.target.closest("button, input, textarea, select, a")) return;
+
+            const rect = card.getBoundingClientRect();
+            drag = {
+                pointerId: ev.pointerId,
+                startX: ev.clientX,
+                startY: ev.clientY,
+                left: rect.left,
+                top: rect.top
+            };
+
+            card.classList.add("dragging");
+            card.style.position = "fixed";
+            card.style.left = rect.left + "px";
+            card.style.top = rect.top + "px";
+            card.style.transform = "none";
+
+            try { head.setPointerCapture(ev.pointerId); } catch (_) {}
+
+            window.addEventListener("pointermove", moveExternalTrashDetachedDrag, true);
+            window.addEventListener("pointerup", endExternalTrashDetachedDrag, true);
+            window.addEventListener("pointercancel", endExternalTrashDetachedDrag, true);
+
+            ev.preventDefault();
+            if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation();
+            else ev.stopPropagation();
+        }, true);
+    }
+
+    function renderExternalTrashDetached(items, meta) {
+        const body = externalTrashDetachedState.body;
+        const status = externalTrashDetachedState.status;
+        const count = externalTrashDetachedState.count;
+
+        body.textContent = "";
+
+        if (!items.length) {
+            body.appendChild(externalTrashMakeEl("div", "externalTrashDetachedEmpty", "Trash is empty."));
+            status.textContent = "Trash is empty.";
+            status.className = "externalTrashDetachedStatus";
+            count.textContent = "0 item(s)";
+            return;
+        }
+
+        const totalBytes = Number((meta && (meta.trash_bytes || meta.total_bytes)) || 0);
+
+        status.textContent = "Loaded " + items.length + " item" + (items.length === 1 ? "" : "s") + ".";
+        status.className = "externalTrashDetachedStatus good";
+        count.textContent = items.length + " item" + (items.length === 1 ? "" : "s") +
+            (totalBytes ? " • " + fmtSize(totalBytes) : "");
+
+        const summary = externalTrashMakeEl("div", "externalTrashDetachedSummary");
+        summary.appendChild(externalTrashMakeEl("span", "pill readonly", "Trash: " + items.length + " item" + (items.length === 1 ? "" : "s")));
+        if (totalBytes) summary.appendChild(externalTrashMakeEl("span", "pill readonly", "Uses: " + fmtSize(totalBytes)));
+        summary.appendChild(externalTrashMakeEl("span", "externalTrashDetachedNote", "Items in trash are stored separately from file versions."));
+        body.appendChild(summary);
+
+        const list = externalTrashMakeEl("div", "externalTrashDetachedList");
+
+        items.forEach(function (item) {
+            const name = externalTrashName(item);
+            const rel = String((item && item.original_rel_path) || "");
+            const kind = String((item && item.item_type) || "item");
+            const size = fmtSize(Number((item && item.size_bytes) || 0));
+            const deleted = externalTrashTime(item && item.deleted_epoch);
+            const purgeAfter = externalTrashTime(item && item.purge_after_epoch);
+
+            const row = externalTrashMakeEl("div", "externalTrashDetachedRow");
+            const main = externalTrashMakeEl("div", "externalTrashDetachedRowMain");
+
+            main.appendChild(externalTrashMakeEl("div", "externalTrashDetachedRowTitle", name));
+            main.appendChild(externalTrashMakeEl(
+                "div",
+                "externalTrashDetachedRowMeta",
+                kind + " · " + size + " · Deleted: " + deleted + " · Purge after: " + purgeAfter
+            ));
+            main.appendChild(externalTrashMakeEl("div", "externalTrashDetachedRowPath mono", rel));
+
+            const actions = externalTrashMakeEl("div", "externalTrashDetachedRowActions");
+            const restoreBtn = externalTrashMakeEl("button", "btn secondary", "Restore");
+            restoreBtn.type = "button";
+            restoreBtn.disabled = true;
+            const purgeBtn = externalTrashMakeEl("button", "btn secondary", "Delete permanently");
+            purgeBtn.type = "button";
+            purgeBtn.disabled = true;
+
+            actions.appendChild(restoreBtn);
+            actions.appendChild(purgeBtn);
+
+            row.appendChild(main);
+            row.appendChild(actions);
+            list.appendChild(row);
+        });
+
+        body.appendChild(list);
+    }
+
+    async function loadExternalTrashDetached() {
+        ensureExternalTrashDetachedDom();
+
+        externalTrashDetachedState.status.textContent = "Loading trash…";
+        externalTrashDetachedState.status.className = "externalTrashDetachedStatus";
+        externalTrashDetachedState.count.textContent = "Loading…";
+        externalTrashDetachedState.body.textContent = "";
+        externalTrashDetachedState.body.appendChild(externalTrashMakeEl("div", "externalTrashDetachedEmpty", "Loading trash…"));
+
+        const j = await apiJson(externalTrashListUrl(), { method: "GET" });
+        const items = Array.isArray(j.items) ? j.items : [];
+        renderExternalTrashDetached(items, j);
+    }
+
+    function openExternalTrashDetached() {
+        ensureExternalTrashDetachedDom();
+
+        externalTrashDetachedState.sub.textContent = "Workspace trash · " + (workspaceId || "missing workspace");
+        externalTrashDetachedState.root.classList.add("show");
+        externalTrashDetachedState.root.setAttribute("aria-hidden", "false");
+
+        loadExternalTrashDetached().catch(function (e) {
+            const msg = String(e && e.message ? e.message : e);
+            externalTrashDetachedState.status.textContent = "Trash load failed: " + msg;
+            externalTrashDetachedState.status.className = "externalTrashDetachedStatus bad";
+            externalTrashDetachedState.body.textContent = "";
+            externalTrashDetachedState.body.appendChild(externalTrashMakeEl("div", "externalTrashDetachedEmpty bad", msg));
+            externalTrashDetachedState.count.textContent = "Failed";
+        });
+    }
+
+    document.addEventListener("click", function (ev) {
+        const btn = ev.target && ev.target.closest
+            ? ev.target.closest("#emptyContextMenu [data-action='trash']")
+            : null;
+        if (!btn) return;
+
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation();
+
+        hideContextMenus();
+        openExternalTrashDetached();
+    }, true);
+    /* /external-trash-detached-modal-v2 */
+
 
     window.addEventListener("resize", hideContextMenus);
     window.addEventListener("scroll", hideContextMenus, true);

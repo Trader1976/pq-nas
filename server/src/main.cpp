@@ -21051,6 +21051,7 @@ INSERT INTO admin_stats_buckets (
     ws_file_deps.payload_max_upload_bytes = k_payload_max_upload_bytes;
     ws_file_deps.file_versions = &file_versions_index;
     ws_file_deps.trash_service = &trash_service;
+    ws_file_deps.trash_index = &trash_index;
     ws_file_deps.reply_json =
         [](httplib::Response& res, int status, const std::string& body) {
             reply_json(res, status, body);
