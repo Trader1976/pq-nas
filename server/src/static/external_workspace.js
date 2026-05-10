@@ -3746,6 +3746,8 @@ resetMarqueeVisual();
         // Text editor is detached/floating. While it is open, the global
         // marquee must not start at all, otherwise it steals the drag.
         if (document.body.classList.contains("externalTextEditorOpen")) return;
+        if (document.body.classList.contains("externalImagePreviewOpen") ||
+            document.querySelector(".externalImagePreviewOverlay.show")) return;
         if (isPointerInsideOpenFloatingUi(ev)) return;
         if (isViewportMarqueeBlockedTarget(ev.target)) return;
 
