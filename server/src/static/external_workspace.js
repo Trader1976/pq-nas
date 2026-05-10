@@ -9,6 +9,7 @@
     const workspacePill = document.getElementById("workspacePill");
     const rolePill = document.getElementById("rolePill");
     const accessPill = document.getElementById("accessPill");
+    const externalRolePill = document.getElementById("externalRolePill");
     const accessSub = document.getElementById("accessSub");
     const qrBox = document.getElementById("qrBox");
     const statusEl = document.getElementById("status");
@@ -1191,6 +1192,96 @@
         location.href = zipUrl(rel);
     }
 
+    function filenameFromContentDisposition(headerValue, fallback) {
+        const h = String(headerValue || "");
+        const star = /filename\*=UTF-8''([^;]+)/i.exec(h);
+        if (star && star[1]) {
+            try { return decodeURIComponent(star[1].replace(/^"|"$/g, "")); } catch (_) {}
+        }
+
+        const plain = /filename="?([^";]+)"?/i.exec(h);
+        if (plain && plain[1]) return plain[1];
+
+        return fallback || "selection.zip";
+    }
+
+    function triggerBlobDownload(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename || "selection.zip";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+    }
+
+    async function downloadSelectionZip() {
+        const items = selectedItems();
+        if (!items.length) {
+            setStatus("No items selected.", "bad");
+            return;
+        }
+
+        const paths = items
+            .map((item) => normalizeRelPath(item.rel || ""))
+            .filter(Boolean);
+
+        if (!paths.length) {
+            setStatus("No downloadable selection.", "bad");
+            return;
+        }
+
+        const base = normalizeRelPath(currentPath);
+        setStatus(`Preparing zip for ${paths.length} selected item${paths.length === 1 ? "" : "s"}…`, "good");
+
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+
+        const r = await fetch(`/api/v4/workspaces/files/zip_sel?${qs.toString()}`, {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/zip, application/json"
+            },
+            body: JSON.stringify({
+                workspace_id: workspaceId,
+                paths,
+                base,
+                max_bytes: 250 * 1024 * 1024
+            })
+        });
+
+        if (!r.ok) {
+            let msg = `HTTP ${r.status}`;
+            const ct = String(r.headers.get("Content-Type") || "");
+            if (ct.includes("application/json")) {
+                const j = await r.json().catch(() => null);
+                if (j && (j.message || j.error)) {
+                    msg = `${j.error || ""} ${j.message || ""}`.trim();
+                }
+            } else {
+                const text = await r.text().catch(() => "");
+                if (text) msg = text.slice(0, 220);
+            }
+            throw new Error(msg || "zip download failed");
+        }
+
+        const blob = await r.blob();
+        const fallbackName = paths.length === 1
+            ? `${paths[0].split("/").pop() || "selection"}.zip`
+            : "selection.zip";
+        const filename = filenameFromContentDisposition(
+            r.headers.get("Content-Disposition"),
+            fallbackName
+        );
+
+        triggerBlobDownload(blob, filename);
+        setStatus(`Downloaded zip for ${paths.length} selected item${paths.length === 1 ? "" : "s"}.`, "good");
+    }
+
     function deleteUrl(relPath) {
         const qs = new URLSearchParams();
         qs.set("workspace_id", workspaceId);
@@ -1209,15 +1300,25 @@
         canEdit = !!j.can_edit;
 
         const roleLabel = currentRole ? currentRole[0].toUpperCase() + currentRole.slice(1) : "Member";
-        const accessLabel = canEdit ? "Editor access" : "View-only access";
+        const roleText = currentRole || "—";
 
-        rolePill.textContent = `Role: ${roleLabel}`;
-        rolePill.classList.remove("hidden", "edit", "readonly");
-        rolePill.classList.add(canEdit ? "edit" : "readonly");
+        if (rolePill) {
+            rolePill.textContent = `Role: ${roleLabel}`;
+            rolePill.classList.remove("hidden", "edit", "readonly");
+            rolePill.classList.add(canEdit ? "edit" : "readonly");
+        }
 
-        accessPill.textContent = accessLabel;
-        accessPill.classList.remove("good", "edit", "readonly");
-        accessPill.classList.add(canEdit ? "edit" : "readonly");
+        if (accessPill) {
+            accessPill.textContent = `Role: ${roleText}`;
+            accessPill.classList.remove("good", "edit", "readonly");
+            accessPill.classList.add(canEdit ? "edit" : "readonly");
+        }
+
+        if (externalRolePill) {
+            externalRolePill.textContent = `Role: ${roleText}`;
+            externalRolePill.classList.remove("good", "edit", "readonly");
+            externalRolePill.classList.add(canEdit ? "edit" : "readonly");
+        }
 
         if (editorTools) editorTools.classList.toggle("hidden", !canEdit);
         if (!canEdit) uploadOpen = false;
@@ -3406,7 +3507,10 @@
             return;
         }
 
-        if (action === "multi-download") return showPlaceholder("Download selection");
+        if (action === "multi-download") {
+            downloadSelectionZip().catch((e) => setStatus(`Download selection failed: ${e.message || e}`, "bad"));
+            return;
+        }
         if (action === "multi-copy") return showPlaceholder("Copy selected");
         if (action === "multi-move") return showPlaceholder("Move selected");
     });

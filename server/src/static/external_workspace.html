@@ -6,14 +6,14 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <link rel="stylesheet" href="/static/theme.css">
 <script>document.documentElement.setAttribute("data-theme", "win_classic");</script>
-    <link rel="stylesheet" href="/static/external_workspace.css?v=external-workspace-20260510">
+    <link rel="stylesheet" href="/static/external_workspace.css?v=external-workspace-20260510-header-actions1">
     <script src="/static/filetype_icons.js?v=filetypes-20260510"></script>
     <script defer src="/static/external_workspace_icons.js?v=external-icons-20260510"></script>
     <script defer src="/static/external_workspace_footer.js?v=external-footer-20260510"></script>
     <script defer src="/static/external_workspace_breadcrumbs.js?v=external-breadcrumbs-20260510"></script>
-    <script defer src="/static/external_workspace_topbar.js?v=external-topbar-20260510"></script>
+    <script defer src="/static/external_workspace_topbar.js?v=external-topbar-20260510-header-actions1"></script>
     <script defer src="/static/external_workspace_versions.js?v=external-versions-20260510"></script>
-    <script defer src="/static/external_workspace.js?v=external-main-20260510"></script>
+    <script defer src="/static/external_workspace.js?v=external-main-20260510-clean-rolepill1"></script>
 </head>
 <body>
 <div class="shell" id="shell">
@@ -45,12 +45,15 @@
 
     <section class="card" id="fileSurface">
         <div class="cardHead">
-            <div class="topLine">
-                <div>
-                    <h1>Workspace files</h1>
+            <div class="topLine externalWorkspaceTopLine">
+                <div class="externalWorkspaceFilesTitleBlock">
+                    <h1 class="externalWorkspaceFilesTitle">
+                        <span>Workspace files</span>
+                        <span class="pill readonly externalRolePill" id="externalRolePill">Role: —</span>
+                    </h1>
                     <p class="sub" id="fileSub">After login, files you can access will appear here.</p>
                 </div>
-                <div class="pill readonly" id="accessPill">Not signed in</div>
+                <div class="externalWorkspaceHeaderActions" id="externalWorkspaceHeaderActions"></div>
             </div>
         </div>
 
@@ -228,7 +231,7 @@
 
 <div class="contextMenu hidden" id="selectionContextMenu" role="menu">
     <button type="button" data-action="multi-open">Open selected <span class="contextHint">single only</span></button>
-    <button type="button" data-action="multi-download">Download selection <span class="contextHint">zip soon</span></button>
+    <button type="button" data-action="multi-download">Download selection (zip)</button>
     <div class="contextSep"></div>
     <button type="button" data-action="multi-copy">Copy selected... <span class="contextHint">soon</span></button>
     <button type="button" data-action="multi-move">Move selected... <span class="contextHint">soon</span></button>

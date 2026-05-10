@@ -138,3 +138,33 @@
         installTopbar();
     }
 })();
+
+
+(function(){
+    "use strict";
+
+    function dockExternalWorkspaceToolbar(){
+        const host = document.getElementById("externalWorkspaceHeaderActions");
+        const toolbarMain = document.querySelector(".fileToolbarMain");
+        const toolbar = toolbarMain ? toolbarMain.closest(".toolbar") : null;
+
+        if (!host || !toolbarMain) return;
+
+        if (toolbarMain.parentElement !== host) {
+            host.appendChild(toolbarMain);
+        }
+
+        if (toolbar) {
+            toolbar.classList.add("externalWorkspaceToolbarDocked");
+        }
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", dockExternalWorkspaceToolbar);
+    } else {
+        dockExternalWorkspaceToolbar();
+    }
+
+    window.addEventListener("resize", dockExternalWorkspaceToolbar);
+})();
+
