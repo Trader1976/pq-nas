@@ -1167,6 +1167,30 @@
         return `/api/v4/workspaces/files/get?${qs.toString()}`;
     }
 
+    function zipUrl(relPath) {
+        const qs = new URLSearchParams();
+        qs.set("workspace_id", workspaceId);
+        qs.set("path", normalizeRelPath(relPath) || ".");
+        qs.set("max_bytes", String(250 * 1024 * 1024));
+        return `/api/v4/workspaces/files/zip?${qs.toString()}`;
+    }
+
+    function downloadCurrentFolderZip() {
+        const rel = normalizeRelPath(currentPath) || ".";
+        setStatus(`Preparing zip for ${rel === "." ? "workspace root" : "/" + rel}…`, "good");
+        location.href = zipUrl(rel);
+    }
+
+    function downloadFolderZip(item) {
+        if (!item || !item.rel) {
+            setStatus("No folder selected.", "bad");
+            return;
+        }
+        const rel = normalizeRelPath(item.rel) || ".";
+        setStatus(`Preparing zip for /${rel}…`, "good");
+        location.href = zipUrl(rel);
+    }
+
     function deleteUrl(relPath) {
         const qs = new URLSearchParams();
         qs.set("workspace_id", workspaceId);
@@ -3079,7 +3103,7 @@
             const editorOnly = itemContextMenu.querySelectorAll('[data-action="copy"], [data-action="move"], [data-action="rename"], [data-action="trash-item"]');
             if (contextItem.isDir) {
                 if (openBtn) openBtn.textContent = "Open folder";
-                if (downloadBtn) downloadBtn.innerHTML = 'Download folder <span class="contextHint">zip soon</span>';
+                if (downloadBtn) downloadBtn.textContent = "Download folder (zip)";
                 if (previewBtn) {
                     previewBtn.innerHTML = "Open / edit text?";
                     previewBtn.disabled = true;
@@ -3425,7 +3449,7 @@
                 downloadBtn.textContent = "Download folder (zip)";
                 previewBtn.innerHTML = "Open / edit text?";
                 previewBtn.disabled = true;
-                downloadBtn.disabled = true;
+                downloadBtn.disabled = false;
             } else {
                 const canTextPreview = isTextPreviewableName(contextItem && (contextItem.name || contextItem.rel) || "");
                 openBtn.textContent = "Open original";
@@ -3493,7 +3517,10 @@
             launchExternalUploadPicker(true);
             return;
         }
-        if (action === "zip-folder") return showPlaceholder("Download current folder as zip");
+        if (action === "zip-folder") {
+            downloadCurrentFolderZip();
+            return;
+        }
         if (action === "trash") return showPlaceholder("Trash");
     });
 
@@ -3515,7 +3542,10 @@
         }
 
         if (action === "download") {
-            if (item.isDir) return showPlaceholder("Download folder as zip");
+            if (item.isDir) {
+                downloadFolderZip(item);
+                return;
+            }
             location.href = downloadUrl(item.rel);
             return;
         }
