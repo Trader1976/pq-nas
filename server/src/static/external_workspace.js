@@ -3130,6 +3130,14 @@ resetMarqueeVisual();
             loadFiles(item.rel).catch((e) => setStatus(`Open folder failed: ${e.message || e}`, "bad"));
             return;
         }
+        const pdfPreview = window.PQNAS_EXTERNAL_PDF_PREVIEW;
+        if (pdfPreview && typeof pdfPreview.isPdfName === "function" &&
+            typeof pdfPreview.open === "function" &&
+            pdfPreview.isPdfName(item.name || item.rel || "")) {
+            pdfPreview.open(item);
+            return;
+        }
+
         // Open text files in editor/preview instead of immediate download.
         if (isTextPreviewableName(item.name || item.rel || "")) {
             if (canEdit) {
@@ -3746,8 +3754,11 @@ resetMarqueeVisual();
         // Text editor is detached/floating. While it is open, the global
         // marquee must not start at all, otherwise it steals the drag.
         if (document.body.classList.contains("externalTextEditorOpen")) return;
+        if (document.body.classList.contains("externalPdfPreviewOpen")) return;
         if (document.body.classList.contains("externalImagePreviewOpen") ||
-            document.querySelector(".externalImagePreviewOverlay.show")) return;
+            document.body.classList.contains("externalPdfPreviewOpen") ||
+            document.querySelector(".externalImagePreviewOverlay.show") ||
+            document.querySelector(".externalPdfPreviewOverlay.show")) return;
         if (isPointerInsideOpenFloatingUi(ev)) return;
         if (isViewportMarqueeBlockedTarget(ev.target)) return;
 
