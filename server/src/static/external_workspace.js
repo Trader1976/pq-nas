@@ -3538,7 +3538,20 @@
             return;
         }
 
-        if (action === "versions") return showPlaceholder("Versions");
+        if (action === "versions") {
+            const versions = window.ExternalWorkspaceVersions;
+            if (!versions || typeof versions.open !== "function") {
+                return showPlaceholder("Versions");
+            }
+            versions.open(item, {
+                workspaceId,
+                currentPath,
+                canWrite: !!canEdit,
+                reload: () => loadFiles(currentPath),
+                setStatus
+            });
+            return;
+        }
         if (action === "share") return showPlaceholder("Create share link");
         if (action === "copy") {
             copyItem(item).catch((e) => setStatus(`Copy failed: ${e.message || e}`, "bad"));
