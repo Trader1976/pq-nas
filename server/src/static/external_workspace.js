@@ -217,6 +217,21 @@
     }
 
 
+    function externalFileIconHtml(name, isDir) {
+        const mod = window.PQNAS_EXTERNAL_ICONS || window.PQNAS_EXTERNAL_WORKSPACE_ICONS;
+
+        if (mod && typeof mod.fileIconHtml === "function") {
+            return mod.fileIconHtml(name, isDir);
+        }
+
+        if (mod && typeof mod.iconHtml === "function") {
+            return mod.iconHtml(name, isDir);
+        }
+
+        return `<div class="fileIcon">${isDir ? "📁" : "📄"}</div>`;
+    }
+
+
     function fmtSize(n) {
         const units = ["B", "KiB", "MiB", "GiB", "TiB"];
         let v = Number(n || 0);
@@ -2171,6 +2186,21 @@
         setStatus("Workspace session ready.", "good");
     }
 
+    function updateExternalWorkspaceFooter(j) {
+        const mod = window.PQNAS_EXTERNAL_WORKSPACE_FOOTER || window.PQNAS_EXTERNAL_FOOTER;
+        if (!mod || typeof mod.update !== "function") return;
+
+        try {
+            mod.update(j, filesEl, { fmtSize });
+            return;
+        } catch (_) {}
+
+        try {
+            mod.update(j, { fmtSize, filesEl, anchor: filesEl });
+        } catch (_) {}
+    }
+
+
     async function loadFiles(pathOverride) {
         resetMarqueeVisual();
         setTopReadyBadge("loading…", "loading");
@@ -2185,7 +2215,7 @@
         if (currentPath) qs.set("path", currentPath);
 
         const j = await apiJson(`/api/v4/workspaces/files/list?${qs.toString()}`);
-        window.PQNAS_EXTERNAL_WORKSPACE_FOOTER?.update(j, filesEl);
+        updateExternalWorkspaceFooter(j);
         applyAccessInfo(j);
         renderBreadcrumbs();
         applyExternalViewPrefs();
@@ -2222,7 +2252,7 @@
                 rows.push(`
                     <div class="fileRow clickable" data-dir="${escapeHtml(rel)}" data-name="${escapeHtml(name)}" data-type="dir" data-size="0" data-mtime="${escapeHtml(it.mtime_unix || "")}" title="${escapeHtml(name)}">
                         <div class="fileMain">
-                            ${window.PQNAS_EXTERNAL_WORKSPACE_ICONS?.iconHtml(name, true) || '<div class="fileIcon">📁</div>'}
+                            ${externalFileIconHtml(name, true)}
                             <div class="fileText">
                                 <div class="fileName">${escapeHtml(name)}</div>
                                 <div class="fileMeta">${escapeHtml(meta)}</div>
@@ -2234,7 +2264,7 @@
                 rows.push(`
                     <div class="fileRow clickable" data-file="${escapeHtml(rel)}" data-name="${escapeHtml(name)}" data-type="file" data-size="${escapeHtml(it.size_bytes || it.size || it.bytes || 0)}" data-mtime="${escapeHtml(it.mtime_unix || "")}" title="${escapeHtml(name)}">
                         <div class="fileMain">
-                            ${window.PQNAS_EXTERNAL_WORKSPACE_ICONS?.iconHtml(name, false) || '<div class="fileIcon">📄</div>'}
+                            ${externalFileIconHtml(name, false)}
                             <div class="fileText">
                                 <div class="fileName">${escapeHtml(name)}</div>
                                 <div class="fileMeta">${escapeHtml(meta)}</div>
@@ -2383,7 +2413,6 @@
         if (pickerPath) qs.set("path", pickerPath);
 
         const j = await apiJson(`/api/v4/workspaces/files/list?${qs.toString()}`);
-        window.PQNAS_EXTERNAL_WORKSPACE_FOOTER?.update(j, filesEl);
         const items = Array.isArray(j.items) ? j.items : [];
         const dirs = items
             .filter((it) => {

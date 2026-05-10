@@ -1,5 +1,14 @@
-(() => {
+(function () {
     "use strict";
+
+    function escapeHtml(s) {
+        return String(s == null ? "" : s)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+    }
 
     function fileExtLower(name) {
         const base = String(name || "").split("/").pop().split("?")[0].split("#")[0];
@@ -86,15 +95,19 @@
         return icons.default || "";
     }
 
-    function iconHtml(name, isDir) {
-        const svg = iconMarkupFor(name, isDir);
+    function fileIconHtml(name, isDir) {
+        const svg = iconMarkupFor(name, !!isDir);
         if (svg && String(svg).trim().startsWith("<svg")) {
             return `<div class="fileIcon svgFileIcon" aria-hidden="true">${svg}</div>`;
         }
+
         return `<div class="fileIcon">${isDir ? "📁" : "📄"}</div>`;
     }
 
-    window.PQNAS_EXTERNAL_WORKSPACE_ICONS = {
-        iconHtml
+    window.PQNAS_EXTERNAL_ICONS = {
+        fileIconHtml,
+        iconMarkupFor,
+        normalizeIconExt,
+        fileExtLower
     };
 })();
