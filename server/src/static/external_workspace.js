@@ -3207,6 +3207,219 @@ resetMarqueeVisual();
         return true;
     }
 
+
+    async function chooseFolderForSelection(items, mode) {
+        const count = Array.isArray(items) ? items.length : 0;
+        if (!count) return null;
+
+        const picked = await openFolderPicker({
+            mode,
+            item: {
+                rel: `${count} selected item${count === 1 ? "" : "s"}`,
+                isDir: false
+            },
+            initialPath: currentPath
+        });
+
+        if (picked === null) return null;
+        return normalizeRelPath(picked || "");
+    }
+
+    function selectedItemDestinationPath(destFolder, item) {
+        const oldPath = normalizeRelPath(item && item.rel || "");
+        const name = basenameFromPath(oldPath);
+        const dest = normalizeRelPath(destFolder || "");
+        return dest ? `${dest}/${name}` : name;
+    }
+
+    function selectedFolderDestinationConflict(items, destFolder) {
+        const dest = normalizeRelPath(destFolder || "");
+
+        for (const item of items || []) {
+            if (!item || !item.isDir) continue;
+
+            const src = normalizeRelPath(item.rel || "");
+            if (!src) continue;
+
+            if (dest === src || dest.startsWith(src + "/")) {
+                return item;
+            }
+        }
+
+        return null;
+    }
+
+    async function copySelectedItems() {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        const items = selectedItems();
+        if (!items.length) {
+            setStatus("No items selected.", "bad");
+            return;
+        }
+
+        const destFolder = await chooseFolderForSelection(items, "copy");
+        if (destFolder === null) {
+            setStatus("Copy cancelled.");
+            return;
+        }
+
+        const blocker = selectedFolderDestinationConflict(items, destFolder);
+        if (blocker) {
+            setStatus(`Cannot copy folder into itself or one of its children: /${blocker.rel}`, "bad");
+            return;
+        }
+
+        const allSame = items.every((item) =>
+            selectedItemDestinationPath(destFolder, item) === normalizeRelPath(item.rel || "")
+        );
+
+        if (allSame) {
+            setStatus("Choose a different destination folder.", "bad");
+            return;
+        }
+
+        const destLabel = destFolder ? `/${destFolder}` : "workspace root";
+        const ok = confirm(
+            `Copy ${items.length} selected item${items.length === 1 ? "" : "s"} to ${destLabel}?`
+        );
+
+        if (!ok) {
+            setStatus("Copy selected cancelled.");
+            return;
+        }
+
+        let done = 0;
+        let failed = 0;
+        const errors = [];
+
+        for (const item of items) {
+            const oldPath = normalizeRelPath(item.rel || "");
+            const targetPath = selectedItemDestinationPath(destFolder, item);
+
+            if (!oldPath || !targetPath || targetPath === oldPath) {
+                failed++;
+                errors.push(`${oldPath || "item"}: destination is the same path`);
+                continue;
+            }
+
+            const qs = new URLSearchParams();
+            qs.set("workspace_id", workspaceId);
+            qs.set("from", oldPath);
+            qs.set("to", targetPath);
+
+            try {
+                setStatus(`Copying ${done + failed + 1}/${items.length}…`);
+                await apiJson(`/api/v4/workspaces/files/copy?${qs.toString()}`, {
+                    method: "POST"
+                });
+                done++;
+            } catch (e) {
+                failed++;
+                errors.push(`${oldPath}: ${e && e.message ? e.message : e}`);
+            }
+        }
+
+        clearSelection();
+        hideContextMenus();
+        await loadFiles(currentPath);
+
+        if (failed) {
+            setStatus(`Copied ${done}, failed ${failed}. ${errors.slice(0, 2).join(" | ")}`, "bad");
+        } else {
+            setStatus(`Copied ${done} selected item${done === 1 ? "" : "s"}.`, "good");
+        }
+    }
+
+    async function moveSelectedItems() {
+        if (!canEdit) {
+            setStatus("This workspace session is view-only.", "bad");
+            return;
+        }
+
+        const items = selectedItems();
+        if (!items.length) {
+            setStatus("No items selected.", "bad");
+            return;
+        }
+
+        const destFolder = await chooseFolderForSelection(items, "move");
+        if (destFolder === null) {
+            setStatus("Move selected cancelled.");
+            return;
+        }
+
+        const blocker = selectedFolderDestinationConflict(items, destFolder);
+        if (blocker) {
+            setStatus(`Cannot move folder into itself or one of its children: /${blocker.rel}`, "bad");
+            return;
+        }
+
+        const allSame = items.every((item) =>
+            selectedItemDestinationPath(destFolder, item) === normalizeRelPath(item.rel || "")
+        );
+
+        if (allSame) {
+            setStatus("Choose a different destination folder.", "bad");
+            return;
+        }
+
+        const destLabel = destFolder ? `/${destFolder}` : "workspace root";
+        const ok = confirm(
+            `Move ${items.length} selected item${items.length === 1 ? "" : "s"} to ${destLabel}?`
+        );
+
+        if (!ok) {
+            setStatus("Move selected cancelled.");
+            return;
+        }
+
+        let done = 0;
+        let failed = 0;
+        const errors = [];
+
+        for (const item of items) {
+            const oldPath = normalizeRelPath(item.rel || "");
+            const targetPath = selectedItemDestinationPath(destFolder, item);
+
+            if (!oldPath || !targetPath || targetPath === oldPath) {
+                failed++;
+                errors.push(`${oldPath || "item"}: destination is the same path`);
+                continue;
+            }
+
+            const qs = new URLSearchParams();
+            qs.set("workspace_id", workspaceId);
+            qs.set("from", oldPath);
+            qs.set("to", targetPath);
+
+            try {
+                setStatus(`Moving ${done + failed + 1}/${items.length}…`);
+                await apiJson(`/api/v4/workspaces/files/move?${qs.toString()}`, {
+                    method: "POST"
+                });
+                done++;
+            } catch (e) {
+                failed++;
+                errors.push(`${oldPath}: ${e && e.message ? e.message : e}`);
+            }
+        }
+
+        clearSelection();
+        hideContextMenus();
+        await loadFiles(currentPath);
+
+        if (failed) {
+            setStatus(`Moved ${done}, failed ${failed}. ${errors.slice(0, 2).join(" | ")}`, "bad");
+        } else {
+            setStatus(`Moved ${done} selected item${done === 1 ? "" : "s"}.`, "good");
+        }
+    }
+
+
     async function trashSelectedItems() {
         if (!canEdit) {
             setStatus("This workspace session is view-only.", "bad");
@@ -3659,8 +3872,15 @@ resetMarqueeVisual();
             downloadSelectionZip().catch((e) => setStatus(`Download selection failed: ${e.message || e}`, "bad"));
             return;
         }
-        if (action === "multi-copy") return showPlaceholder("Copy selected");
-        if (action === "multi-move") return showPlaceholder("Move selected");
+        if (action === "multi-copy") {
+            copySelectedItems().catch((e) => setStatus(`Copy selected failed: ${e.message || e}`, "bad"));
+            return;
+        }
+
+        if (action === "multi-move") {
+            moveSelectedItems().catch((e) => setStatus(`Move selected failed: ${e.message || e}`, "bad"));
+            return;
+        }
     });
 
     filesEl.addEventListener("click", (ev) => {
