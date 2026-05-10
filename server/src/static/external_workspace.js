@@ -3552,7 +3552,6 @@
             });
             return;
         }
-        if (action === "share") return showPlaceholder("Create share link");
         if (action === "copy") {
             copyItem(item).catch((e) => setStatus(`Copy failed: ${e.message || e}`, "bad"));
             return;
