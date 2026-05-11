@@ -219,11 +219,10 @@ nlohmann::json workspace_external_invite_to_json_v1(const WorkspaceExternalInvit
     WorkspaceExternalInviteRec r = in_r;
     normalize_workspace_external_invite_rec_v1(&r);
 
-    return nlohmann::json{
+    nlohmann::json out = {
         {"invite_id", r.invite_id},
         {"workspace_id", r.workspace_id},
         {"st_hash_b64", r.st_hash_b64},
-        {"st_token", r.st_token},
         {"role", r.role},
         {"status", r.status},
         {"created_by", r.created_by},
@@ -232,6 +231,10 @@ nlohmann::json workspace_external_invite_to_json_v1(const WorkspaceExternalInvit
         {"accepted_fingerprint", r.accepted_fingerprint},
         {"accepted_at", r.accepted_at}
     };
+
+    out["st_token"] = (r.status == "pending") ? r.st_token : "";
+
+    return out;
 }
 
 bool is_valid_workspace_external_invite_id(const std::string& invite_id) {
