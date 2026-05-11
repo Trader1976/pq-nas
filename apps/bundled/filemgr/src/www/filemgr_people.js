@@ -90,23 +90,8 @@
                 : displayName;
         }
 
-        let line = row.querySelector(".fmPeopleLabelLine");
-        if (!line) {
-            line = document.createElement("div");
-            line.className = "fmPeopleLabelLine mono";
-            line.style.opacity = ".78";
-            line.style.fontSize = "12px";
-            line.style.marginTop = "6px";
-
-            const fpLine = row.querySelector(".mono");
-            if (fpLine && fpLine.parentElement) {
-                fpLine.parentElement.insertBefore(line, fpLine);
-            } else {
-                row.appendChild(line);
-            }
-        }
-
-        line.textContent = `People label: ${displayName}`;
+        const duplicateLine = row.querySelector(".fmPeopleLabelLine");
+        if (duplicateLine) duplicateLine.remove();
     }
 
 
@@ -171,7 +156,7 @@
             btn.disabled = false;
             btn.textContent = resolved ? "Edit People" : "Add to People";
             hint.textContent = resolved
-                ? `Saved as ${currentName}`
+                ? "Saved in People"
                 : "Not saved in People";
 
             btn.addEventListener("click", async () => {
@@ -216,12 +201,12 @@
                     applyResolvedPeopleLabel(row, savedPerson);
 
                     btn.textContent = "Edit People";
-                    hint.textContent = `Saved as ${savedName}`;
+                    hint.textContent = "Saved in People";
                     setStatus(statusEl, `Saved ${savedName} in People.`);
                 } catch (e) {
                     btn.textContent = old;
                     hint.textContent = resolved
-                        ? `Saved as ${currentName}`
+                        ? "Saved in People"
                         : "Not saved in People";
                     setStatus(statusEl, `People save failed: ${String(e && e.message ? e.message : e)}`);
                 } finally {
