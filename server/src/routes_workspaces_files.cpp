@@ -1474,6 +1474,7 @@ static bool require_workspace_no_live_lock_for_write_local(
     const std::string& actor_fp,
     const std::string& action_label,
     bool allow_lock_owner = true) {
+    (void)actor_fp;
     if (deps.locks_db_path.empty()) return true;
 
     const std::int64_t now =

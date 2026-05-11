@@ -22967,6 +22967,11 @@ srv.Post("/api/v4/uploads/start", [&](const httplib::Request& req, httplib::Resp
     }
 
 
+    if (!require_user_no_live_lock_for_write_local(
+            users, users_path, res, fp_hex, rel_norm, "write", false)) {
+        return;
+    }
+
     auto* plm = pqnas::get_path_lock_manager();
     auto write_guard = plm->lock_paths(fp_hex, {rel_norm});
 
@@ -23473,6 +23478,11 @@ srv.Post("/api/v4/uploads/finish", [&](const httplib::Request& req, httplib::Res
             }.dump());
             return;
         }
+    }
+
+    if (!require_user_no_live_lock_for_write_local(
+            users, users_path, res, fp_hex, rel_norm, "write", false)) {
+        return;
     }
 
     auto* plm = pqnas::get_path_lock_manager();
@@ -25053,6 +25063,11 @@ srv.Post("/api/v4/files/rmdir", [&](const httplib::Request& req, httplib::Respon
     }
 
     // Serialize writes on overlapping logical paths for this user.
+    if (!require_user_no_live_lock_for_write_local(
+            users, users_path, res, fp_hex, rel_norm, "write", false)) {
+        return;
+    }
+
     auto* plm = pqnas::get_path_lock_manager();
     auto write_guard = plm->lock_paths(fp_hex, {rel_norm});
 
@@ -30180,6 +30195,11 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
     if (!require_user_no_live_lock_for_write_local(
             users, users_path, res, fp_hex, rel_norm, "delete", false)) {
         audit_fail("locked_delete_blocked", 409, rel_norm);
+        return;
+    }
+
+    if (!require_user_no_live_lock_for_write_local(
+            users, users_path, res, fp_hex, rel_norm, "write", false)) {
         return;
     }
 
@@ -38487,6 +38507,11 @@ srv.Put("/api/v4/files/put",
 
     // Serialize writes on overlapping logical paths for this user.
     // This prevents PUT/MOVE/DELETE races on the same file/subtree.
+    if (!require_user_no_live_lock_for_write_local(
+            users, users_path, res, fp_hex, rel_norm, "write", false)) {
+        return;
+    }
+
     auto* plm = pqnas::get_path_lock_manager();
     auto write_guard = plm->lock_paths(fp_hex, {rel_norm});
 

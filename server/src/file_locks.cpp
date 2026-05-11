@@ -65,6 +65,9 @@ bool open_db(const std::filesystem::path& db_path, sqlite3** out, std::string* e
     return true;
 }
 
+
+
+
 } // namespace
 
 bool file_lock_is_live(const FileLockRec& rec, std::int64_t now_epoch) {
