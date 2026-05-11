@@ -1,7 +1,10 @@
 #include "routes_workspace_external_sessions.h"
 #include "workspace_access_shared.h"
 #include <cctype>
+#include <deque>
 #include <limits>
+#include <map>
+#include <mutex>
 
 #include <nlohmann/json.hpp>
 
@@ -63,6 +66,63 @@ bool require_same_origin_for_cookie_mutation_local(
     res.body = R"({"ok":false,"error":"forbidden","message":"origin required"})";
     return false;
 }
+
+std::string external_session_rate_ip_local(const httplib::Request& req) {
+    return req.remote_addr.empty() ? std::string("unknown") : req.remote_addr;
+}
+
+bool external_session_start_rate_limit_allow_local(
+    const httplib::Request& req,
+    const std::string& workspace_id,
+    long now_epoch,
+    unsigned limit,
+    long window_seconds,
+    long* out_retry_after) {
+
+    if (out_retry_after) *out_retry_after = 0;
+    if (limit == 0) return false;
+    if (window_seconds <= 0) window_seconds = 60;
+
+    static std::mutex mu;
+    static std::map<std::string, std::deque<long>> hits_by_key;
+
+    const std::string key =
+        external_session_rate_ip_local(req) + "|" + workspace_id;
+
+    std::lock_guard<std::mutex> lk(mu);
+
+    auto& hits = hits_by_key[key];
+
+    while (!hits.empty() && hits.front() <= now_epoch - window_seconds) {
+        hits.pop_front();
+    }
+
+    if (hits.size() >= limit) {
+        if (out_retry_after) {
+            const long oldest = hits.empty() ? now_epoch : hits.front();
+            const long retry = (oldest + window_seconds) - now_epoch;
+            *out_retry_after = retry > 0 ? retry : 1;
+        }
+        return false;
+    }
+
+    hits.push_back(now_epoch);
+
+    // Opportunistic cleanup so the map cannot grow forever.
+    if (hits_by_key.size() > 4096) {
+        for (auto it = hits_by_key.begin(); it != hits_by_key.end(); ) {
+            auto& q = it->second;
+            while (!q.empty() && q.front() <= now_epoch - window_seconds) {
+                q.pop_front();
+            }
+            if (q.empty()) it = hits_by_key.erase(it);
+            else ++it;
+        }
+    }
+
+    return true;
+}
+
 
 long json_long_default(const json& j, const char* key, long defv) {
     auto it = j.find(key);
@@ -182,6 +242,19 @@ void register_workspace_external_session_routes(
 
         const long now = deps.now_epoch_sec ? static_cast<long>(deps.now_epoch_sec()) : 0L;
         deps.external_sessions->mark_expired_pending(now);
+        deps.external_sessions->evict_terminal_older_than(now, 3600);
+
+        long retry_after = 0;
+        if (!external_session_start_rate_limit_allow_local(
+                req, workspace_id, now, 10u, 60L, &retry_after)) {
+            deps.reply_json(res, 429, json{
+                {"ok", false},
+                {"error", "rate_limited"},
+                {"message", "too many external session starts"},
+                {"retry_after_seconds", retry_after}
+            }.dump());
+            return;
+        }
 
         const std::string sid = deps.random_b64url(18);
         const std::string chal = deps.random_b64url(32);
@@ -281,6 +354,7 @@ void register_workspace_external_session_routes(
 
         const long now = deps.now_epoch_sec ? static_cast<long>(deps.now_epoch_sec()) : 0L;
         deps.external_sessions->mark_expired_pending(now);
+        deps.external_sessions->evict_terminal_older_than(now, 3600);
 
         auto sess = deps.external_sessions->get(session_id);
         if (!sess.has_value()) {
@@ -364,6 +438,7 @@ void register_workspace_external_session_routes(
 
         const long now = deps.now_epoch_sec ? static_cast<long>(deps.now_epoch_sec()) : 0L;
         deps.external_sessions->mark_expired_pending(now);
+        deps.external_sessions->evict_terminal_older_than(now, 3600);
 
         auto sess = deps.external_sessions->get(session_id);
         if (!sess.has_value()) {
@@ -510,6 +585,7 @@ void register_workspace_external_session_routes(
 
         const long now = deps.now_epoch_sec ? static_cast<long>(deps.now_epoch_sec()) : 0L;
         deps.external_sessions->mark_expired_pending(now);
+        deps.external_sessions->evict_terminal_older_than(now, 3600);
 
         auto sess = deps.external_sessions->get(session_id);
         if (!sess.has_value()) {

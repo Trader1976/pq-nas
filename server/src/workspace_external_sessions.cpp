@@ -247,4 +247,40 @@ std::size_t WorkspaceExternalSessionsStore::mark_expired_pending(long now_epoch)
     return changed;
 }
 
+std::size_t WorkspaceExternalSessionsStore::evict_terminal_older_than(
+    long now_epoch,
+    long max_age_seconds) {
+
+    if (now_epoch <= 0) return 0;
+    if (max_age_seconds < 60) max_age_seconds = 60;
+
+    std::lock_guard<std::mutex> lk(mu_);
+
+    std::size_t removed = 0;
+
+    for (auto it = by_id_.begin(); it != by_id_.end(); ) {
+        const WorkspaceExternalSessionRec& r = it->second;
+
+        const bool terminal =
+            r.status == "consumed" ||
+            r.status == "denied" ||
+            r.status == "expired";
+
+        if (!terminal || r.expires_at_epoch <= 0) {
+            ++it;
+            continue;
+        }
+
+        if (now_epoch > r.expires_at_epoch + max_age_seconds) {
+            it = by_id_.erase(it);
+            ++removed;
+            continue;
+        }
+
+        ++it;
+    }
+
+    return removed;
+}
+
 } // namespace pqnas

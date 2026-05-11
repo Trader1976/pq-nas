@@ -50,6 +50,7 @@ public:
                      const std::string& reason);
 
     std::size_t mark_expired_pending(long now_epoch);
+    std::size_t evict_terminal_older_than(long now_epoch, long max_age_seconds);
 
 private:
     mutable std::mutex mu_;
