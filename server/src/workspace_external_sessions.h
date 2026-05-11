@@ -13,7 +13,7 @@ struct WorkspaceExternalSessionRec {
     std::string st_hash_b64;           // v5 auth correlation key
     std::string st_token;              // QR token
 
-    std::string status;                // pending | approved | denied | expired
+    std::string status;                // pending | approved | consumed | denied | expired
     std::string reason;
 
     std::string approved_fingerprint;
@@ -36,6 +36,10 @@ public:
 
     std::optional<WorkspaceExternalSessionRec> get(const std::string& session_id) const;
     std::optional<WorkspaceExternalSessionRec> get_by_st_hash_b64(const std::string& st_hash_b64) const;
+
+    std::optional<WorkspaceExternalSessionRec> consume_approved(
+        const std::string& session_id,
+        long now_epoch);
 
     bool mark_approved(const std::string& session_id,
                        const std::string& fingerprint,

@@ -688,7 +688,7 @@ let signedIn = false;
                     <div class="externalUploadConflictHead">
                         <div>
                             <div class="externalUploadConflictTitle">File already exists</div>
-                            <div class="externalUploadConflictPath">/${rel}</div>
+                            <div class="externalUploadConflictPath">/${escapeHtml(rel)}</div>
                         </div>
                         <button type="button" class="externalUploadConflictClose" data-action="cancel">Close</button>
                     </div>

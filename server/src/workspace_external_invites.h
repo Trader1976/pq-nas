@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -57,9 +58,10 @@ public:
     // Marks expired pending invites as expired. Returns number changed.
     std::size_t mark_expired_pending(long now_epoch);
 
-    const std::map<std::string, WorkspaceExternalInviteRec>& snapshot() const;
+    std::map<std::string, WorkspaceExternalInviteRec> snapshot() const;
 
 private:
+    mutable std::mutex mu_;
     std::map<std::string, WorkspaceExternalInviteRec> by_id_;
 };
 

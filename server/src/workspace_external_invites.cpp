@@ -258,7 +258,7 @@ std::string new_workspace_external_invite_id() {
 }
 
 bool WorkspaceExternalInvitesRegistry::load(const std::string& path) {
-    by_id_.clear();
+    std::map<std::string, WorkspaceExternalInviteRec> loaded;
 
     std::string txt;
     nlohmann::json cfg = nlohmann::json::object();
@@ -281,19 +281,30 @@ bool WorkspaceExternalInvitesRegistry::load(const std::string& path) {
             if (!is_valid_workspace_external_invite_id(r.invite_id)) continue;
             if (!is_valid_workspace_id(r.workspace_id)) continue;
 
-            by_id_[r.invite_id] = std::move(r);
+            loaded[r.invite_id] = std::move(r);
         }
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        by_id_ = std::move(loaded);
     }
 
     return true;
 }
 
 bool WorkspaceExternalInvitesRegistry::save(const std::string& path) const {
+    std::map<std::string, WorkspaceExternalInviteRec> snapshot_copy;
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        snapshot_copy = by_id_;
+    }
+
     nlohmann::json cfg = nlohmann::json::object();
     cfg["version"] = 1;
     cfg["external_invites"] = nlohmann::json::array();
 
-    for (const auto& kv : by_id_) {
+    for (const auto& kv : snapshot_copy) {
         cfg["external_invites"].push_back(workspace_external_invite_to_json_v1(kv.second));
     }
 
@@ -302,11 +313,14 @@ bool WorkspaceExternalInvitesRegistry::save(const std::string& path) const {
 }
 
 bool WorkspaceExternalInvitesRegistry::exists(const std::string& invite_id) const {
+    std::lock_guard<std::mutex> lk(mu_);
     return by_id_.find(trim_copy_safe(invite_id)) != by_id_.end();
 }
 
 std::optional<WorkspaceExternalInviteRec> WorkspaceExternalInvitesRegistry::get(
     const std::string& invite_id) const {
+
+    std::lock_guard<std::mutex> lk(mu_);
 
     auto it = by_id_.find(trim_copy_safe(invite_id));
     if (it == by_id_.end()) return std::nullopt;
@@ -319,6 +333,8 @@ std::optional<WorkspaceExternalInviteRec> WorkspaceExternalInvitesRegistry::get_
 
     const std::string want = trim_copy_safe(st_hash_b64);
     if (want.empty()) return std::nullopt;
+
+    std::lock_guard<std::mutex> lk(mu_);
 
     for (const auto& kv : by_id_) {
         if (kv.second.st_hash_b64 == want) return kv.second;
@@ -335,45 +351,58 @@ bool WorkspaceExternalInvitesRegistry::upsert(const WorkspaceExternalInviteRec& 
     if (!is_valid_workspace_id(r.workspace_id)) return false;
     if (r.st_hash_b64.empty()) return false;
 
+    std::lock_guard<std::mutex> lk(mu_);
     by_id_[r.invite_id] = std::move(r);
     return true;
 }
 
 bool WorkspaceExternalInvitesRegistry::erase(const std::string& invite_id) {
+    std::lock_guard<std::mutex> lk(mu_);
     return by_id_.erase(trim_copy_safe(invite_id)) > 0;
 }
 
 bool WorkspaceExternalInvitesRegistry::mark_accepted(const std::string& invite_id,
                                                      const std::string& fingerprint,
                                                      const std::string& accepted_at) {
-    auto it = by_id_.find(trim_copy_safe(invite_id));
+    const std::string id = trim_copy_safe(invite_id);
+    const std::string fp = trim_copy_safe(fingerprint);
+
+    if (id.empty() || fp.empty()) return false;
+
+    std::lock_guard<std::mutex> lk(mu_);
+
+    auto it = by_id_.find(id);
     if (it == by_id_.end()) return false;
 
     WorkspaceExternalInviteRec& r = it->second;
 
     if (r.status != "pending") return false;
 
-    const std::string fp = trim_copy_safe(fingerprint);
-    if (fp.empty()) return false;
-
     r.status = "accepted";
     r.accepted_fingerprint = fp;
     r.accepted_at = trim_copy_safe(accepted_at);
+    r.st_token.clear();
 
     return true;
 }
 
 bool WorkspaceExternalInvitesRegistry::mark_revoked(const std::string& invite_id) {
+    std::lock_guard<std::mutex> lk(mu_);
+
     auto it = by_id_.find(trim_copy_safe(invite_id));
     if (it == by_id_.end()) return false;
 
     if (it->second.status == "accepted") return false;
 
     it->second.status = "revoked";
+    it->second.st_token.clear();
+
     return true;
 }
 
 std::size_t WorkspaceExternalInvitesRegistry::mark_expired_pending(long now_epoch) {
+    std::lock_guard<std::mutex> lk(mu_);
+
     std::size_t changed = 0;
 
     for (auto& kv : by_id_) {
@@ -384,14 +413,16 @@ std::size_t WorkspaceExternalInvitesRegistry::mark_expired_pending(long now_epoc
         if (now_epoch <= r.expires_at_epoch) continue;
 
         r.status = "expired";
+        r.st_token.clear();
         ++changed;
     }
 
     return changed;
 }
 
-const std::map<std::string, WorkspaceExternalInviteRec>&
+std::map<std::string, WorkspaceExternalInviteRec>
 WorkspaceExternalInvitesRegistry::snapshot() const {
+    std::lock_guard<std::mutex> lk(mu_);
     return by_id_;
 }
 

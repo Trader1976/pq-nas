@@ -93,7 +93,9 @@
         const head = fileSurface.querySelector(":scope > .cardHead");
         const toolbar = fileSurface.querySelector(".toolbar");
         const mainTools = fileSurface.querySelector(".fileToolbarMain");
-        const accessPill = document.getElementById("accessPill");
+        const accessPill =
+            document.getElementById("accessPill") ||
+            document.getElementById("externalRolePill");
         const h1 = head ? head.querySelector("h1") : null;
         const fileSub = document.getElementById("fileSub");
 

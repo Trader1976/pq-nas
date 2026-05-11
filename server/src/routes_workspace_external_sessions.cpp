@@ -1,5 +1,5 @@
 #include "routes_workspace_external_sessions.h"
-
+#include "workspace_access_shared.h"
 #include <cctype>
 #include <limits>
 
@@ -375,15 +375,19 @@ void register_workspace_external_session_routes(
             return;
         }
 
-        if (sess->status != "approved") {
-            deps.reply_json(res, 409, json{
-                {"ok", false},
-                {"error", "session_not_approved"},
-                {"message", "session is not approved"},
-                {"status", sess->status}
-            }.dump());
-            return;
-        }
+         if (sess->status != "approved") {
+             const bool already_consumed = (sess->status == "consumed");
+
+             deps.reply_json(res, 409, json{
+                 {"ok", false},
+                 {"error", already_consumed ? "session_already_consumed" : "session_not_approved"},
+                 {"message", already_consumed
+                     ? "session was already consumed"
+                     : "session is not approved"},
+                 {"status", sess->status}
+             }.dump());
+             return;
+         }
 
         if (sess->approved_fingerprint.empty() || sess->workspace_role.empty()) {
             deps.reply_json(res, 409, json{
@@ -394,13 +398,57 @@ void register_workspace_external_session_routes(
             return;
         }
 
+        if (!reload_workspaces_or_500(deps, res)) return;
+
+        auto wopt = deps.workspaces->get(sess->workspace_id);
+        if (!wopt.has_value() || wopt->status != "enabled") {
+            deps.reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "workspace_not_enabled"},
+                {"message", "workspace is not enabled"}
+            }.dump());
+            return;
+        }
+
+        auto mopt = workspace_enabled_member_for_actor(*wopt, sess->approved_fingerprint);
+        if (!mopt.has_value() || mopt->member_kind != "external" || mopt->status != "enabled") {
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "external_member_not_enabled"},
+                {"message", "external member is no longer enabled"}
+            }.dump());
+            return;
+        }
+
+        const std::string live_role = normalize_workspace_role_copy(mopt->role);
+        if (live_role != "viewer" && live_role != "editor") {
+            deps.reply_json(res, 403, json{
+                {"ok", false},
+                {"error", "external_member_role_invalid"},
+                {"message", "external member role is invalid"}
+            }.dump());
+            return;
+        }
+
+        auto consumed = deps.external_sessions->consume_approved(session_id, now);
+        if (!consumed.has_value()) {
+            deps.reply_json(res, 409, json{
+                {"ok", false},
+                {"error", "session_already_consumed"},
+                {"message", "session was already consumed or expired"}
+            }.dump());
+            return;
+        }
+
+        sess = consumed;
+
         const long cookie_ttl = 8 * 3600;
         const long exp = now + cookie_ttl;
 
         const std::string workspace_claim =
             "external|" + sess->workspace_id + "|" +
             sess->approved_fingerprint + "|" +
-            sess->workspace_role;
+            live_role;
 
         const std::string claim_b64 = deps.b64_std(
             reinterpret_cast<const unsigned char*>(workspace_claim.data()),
@@ -426,14 +474,14 @@ void register_workspace_external_session_routes(
         audit_session_event(deps, "workspace.external_session_consumed", "ok", {
             {"session_id", sess->session_id},
             {"workspace_id", sess->workspace_id},
-            {"role", sess->workspace_role},
+            {"role", live_role},
             {"fingerprint", sess->approved_fingerprint}
         });
 
         deps.reply_json(res, 200, json{
             {"ok", true},
             {"workspace_id", sess->workspace_id},
-            {"workspace_role", sess->workspace_role},
+            {"workspace_role", live_role},
             {"expires_at_epoch", exp}
         }.dump());
     });

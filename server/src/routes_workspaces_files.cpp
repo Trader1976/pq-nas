@@ -6704,7 +6704,6 @@ srv.Post("/api/v4/workspaces/files/write_text",
             json existing = json::object();
             existing["size_bytes"] = existing_size;
             existing["mtime_epoch"] = existing_mtime;
-            existing["physical_path"] = abs.string();
 
             audit_fail("file_exists", 409, rel_norm);
             deps.reply_json(res, 409, json{
@@ -7895,7 +7894,6 @@ srv.Post("/api/v4/workspaces/files/write_text",
             json existing = json::object();
             existing["size_bytes"] = physical_existing_size;
             existing["mtime_epoch"] = physical_existing_mtime;
-            existing["physical_path"] = out_abs.string();
 
             audit_fail(workspace_id, "file_exists", 409, rel_norm);
             deps.reply_json(res, 409, json{
@@ -7909,48 +7907,10 @@ srv.Post("/api/v4/workspaces/files/write_text",
         }
 
         {
-            std::cerr
-            << "[ws.put.debug] workspace_id=" << workspace_id
-            << " w.root_rel=" << w.root_rel
-            << " ws_root=" << ws_root.string()
-            << " rel_norm=" << rel_norm
-            << " out_abs=" << out_abs.string()
-            << " parent=" << out_abs.parent_path().string()
-            << std::endl;
-
             std::error_code ec;
-
-            {
-                std::error_code ec_ws;
-                auto ws_st = std::filesystem::symlink_status(ws_root, ec_ws);
-                std::cerr
-                    << "[ws.put.debug] ws_root_exists=" << (!ec_ws && std::filesystem::exists(ws_st))
-                    << " ws_root_is_dir=" << (!ec_ws && std::filesystem::is_directory(ws_st))
-                    << " ws_root_is_symlink=" << (!ec_ws && std::filesystem::is_symlink(ws_st))
-                    << " ws_root_ec=" << (ec_ws ? ec_ws.message() : "")
-                    << std::endl;
-            }
-
-            {
-                std::error_code ec_parent;
-                auto parent_st = std::filesystem::symlink_status(out_abs.parent_path(), ec_parent);
-                std::cerr
-                    << "[ws.put.debug] parent_exists=" << (!ec_parent && std::filesystem::exists(parent_st))
-                    << " parent_is_dir=" << (!ec_parent && std::filesystem::is_directory(parent_st))
-                    << " parent_is_file=" << (!ec_parent && std::filesystem::is_regular_file(parent_st))
-                    << " parent_is_symlink=" << (!ec_parent && std::filesystem::is_symlink(parent_st))
-                    << " parent_ec=" << (ec_parent ? ec_parent.message() : "")
-                    << std::endl;
-            }
 
             std::filesystem::create_directories(out_abs.parent_path(), ec);
             if (ec) {
-                std::cerr
-                    << "[ws.put.debug] create_directories failed"
-                    << " parent=" << out_abs.parent_path().string()
-                    << " ec=" << ec.message()
-                    << std::endl;
-
                 audit_fail(workspace_id, "mkdir_failed", 500, ec.message());
                 deps.reply_json(res, 500, json{
                     {"ok", false},

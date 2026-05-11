@@ -76,6 +76,7 @@ std::string normalize_workspace_external_session_status_copy(const std::string& 
     if (v == "approved") return "approved";
     if (v == "denied") return "denied";
     if (v == "expired") return "expired";
+    if (v == "consumed") return "consumed";
 
     return "pending";
 }
@@ -149,6 +150,36 @@ std::optional<WorkspaceExternalSessionRec> WorkspaceExternalSessionsStore::get_b
     }
 
     return std::nullopt;
+}
+
+std::optional<WorkspaceExternalSessionRec> WorkspaceExternalSessionsStore::consume_approved(
+    const std::string& session_id,
+    long now_epoch) {
+
+    const std::string id = trim_copy_safe(session_id);
+    if (id.empty()) return std::nullopt;
+
+    std::lock_guard<std::mutex> lk(mu_);
+
+    auto it = by_id_.find(id);
+    if (it == by_id_.end()) return std::nullopt;
+
+    WorkspaceExternalSessionRec& r = it->second;
+
+    if (r.status != "approved") return std::nullopt;
+
+    if (r.expires_at_epoch > 0 && now_epoch > r.expires_at_epoch) {
+        r.status = "expired";
+        r.reason = "expired";
+        return std::nullopt;
+    }
+
+    if (r.approved_fingerprint.empty() || r.workspace_role.empty()) {
+        return std::nullopt;
+    }
+
+    r.status = "consumed";
+    return r;
 }
 
 bool WorkspaceExternalSessionsStore::mark_approved(const std::string& session_id,
