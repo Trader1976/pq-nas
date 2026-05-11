@@ -8727,34 +8727,67 @@ srv.Post("/api/v4/workspaces/files/write_text",
             return;
         }
 
-        std::ifstream f(abs_path, std::ios::binary);
-        if (!f.good()) {
-            audit_fail(workspace_id, "open_failed", 500, abs_path.string());
+        const std::uint64_t file_size =
+            static_cast<std::uint64_t>(std::filesystem::file_size(abs_path, ec));
+        if (ec) {
+            audit_fail(workspace_id, "stat_failed", 500, ec.message());
             deps.reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "server_error"},
-                {"message", "failed to open file"}
+                {"message", "target stat failed"}
             }.dump());
             return;
         }
 
-        std::string body((std::istreambuf_iterator<char>(f)),
-                         std::istreambuf_iterator<char>());
-        if (!f.good() && !f.eof()) {
-            audit_fail(workspace_id, "read_failed", 500, abs_path.string());
-            deps.reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "server_error"},
-                {"message", "failed to read file"}
-            }.dump());
-            return;
+        {
+            std::ifstream test(abs_path, std::ios::binary);
+            if (!test.good()) {
+                audit_fail(workspace_id, "open_failed", 500, abs_path.string());
+                deps.reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "failed to open file"}
+                }.dump());
+                return;
+            }
         }
 
         const auto filename = abs_path.filename().string();
         res.set_header("Content-Disposition", build_content_disposition("inline", filename));
-        res.set_content(body, "application/octet-stream");
 
-        audit_ok(workspace_id, rel_norm, static_cast<std::uint64_t>(body.size()));
+        const std::string stream_path = abs_path.string();
+
+        res.set_content_provider(
+            static_cast<size_t>(file_size),
+            "application/octet-stream",
+            [stream_path](size_t offset, size_t length, httplib::DataSink& sink) {
+                std::ifstream in(stream_path, std::ios::binary);
+                if (!in.good()) return false;
+
+                in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+                if (!in.good()) return false;
+
+                std::array<char, 64 * 1024> buf{};
+                size_t remaining = length;
+
+                while (remaining > 0) {
+                    const size_t want = std::min(buf.size(), remaining);
+                    in.read(buf.data(), static_cast<std::streamsize>(want));
+
+                    const std::streamsize got = in.gcount();
+                    if (got <= 0) {
+                        return false;
+                    }
+
+                    sink.write(buf.data(), static_cast<size_t>(got));
+                    remaining -= static_cast<size_t>(got);
+                }
+
+                return true;
+            }
+        );
+
+        audit_ok(workspace_id, rel_norm, file_size);
     });
 
         // GET/POST /api/v4/workspaces/files/zip?workspace_id=...&path=relative/path&max_bytes=52428800
