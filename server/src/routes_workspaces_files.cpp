@@ -8961,6 +8961,7 @@ srv.Post("/api/v4/workspaces/files/write_text",
 
             const char* argv[] = {
                 "zip",
+                "-y",
                 "-r",
                 "-q",
                 "-",
@@ -9620,6 +9621,7 @@ srv.Post("/api/v4/workspaces/files/write_text",
 
             const char* argv[] = {
                 "zip",
+                "-y",
                 "-r",
                 "-q",
                 "-",
