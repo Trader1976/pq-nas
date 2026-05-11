@@ -73,6 +73,43 @@
         if (statusEl) statusEl.textContent = text;
     }
 
+    function applyResolvedPeopleLabel(row, person) {
+        if (!row || !person) return;
+
+        const displayName = String(person.display_name || "").trim();
+        if (!displayName) return;
+
+        const title = row.querySelector(".workspaceMemberTitle");
+        if (title) {
+            if (!title.dataset.originalTitle) {
+                title.dataset.originalTitle = String(title.textContent || "");
+            }
+            title.textContent = displayName;
+            title.title = title.dataset.originalTitle && title.dataset.originalTitle !== displayName
+                ? `Workspace label: ${title.dataset.originalTitle}`
+                : displayName;
+        }
+
+        let line = row.querySelector(".fmPeopleLabelLine");
+        if (!line) {
+            line = document.createElement("div");
+            line.className = "fmPeopleLabelLine mono";
+            line.style.opacity = ".78";
+            line.style.fontSize = "12px";
+            line.style.marginTop = "6px";
+
+            const fpLine = row.querySelector(".mono");
+            if (fpLine && fpLine.parentElement) {
+                fpLine.parentElement.insertBefore(line, fpLine);
+            } else {
+                row.appendChild(line);
+            }
+        }
+
+        line.textContent = `People label: ${displayName}`;
+    }
+
+
     async function resolvePerson(fp) {
         const q = encodeURIComponent(fp);
         return await apiJson(`/api/v4/people/resolve?fingerprint=${q}`);
@@ -127,6 +164,10 @@
             const fallbackName = memberDefaultName(member, fp);
             const currentName = existingName || fallbackName;
 
+            if (resolved) {
+                applyResolvedPeopleLabel(row, person);
+            }
+
             btn.disabled = false;
             btn.textContent = resolved ? "Edit People" : "Add to People";
             hint.textContent = resolved
@@ -169,9 +210,10 @@
                         notes: String(notesPrompt || "").trim()
                     });
 
-                    const savedName = String(
-                        saved && saved.contact && saved.contact.display_name || displayName
-                    );
+                    const savedPerson = saved && saved.contact ? saved.contact : { display_name: displayName };
+                    const savedName = String(savedPerson.display_name || displayName);
+
+                    applyResolvedPeopleLabel(row, savedPerson);
 
                     btn.textContent = "Edit People";
                     hint.textContent = `Saved as ${savedName}`;

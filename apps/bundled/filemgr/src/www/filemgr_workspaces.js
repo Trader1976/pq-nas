@@ -846,6 +846,7 @@
             head.style.flexWrap = "wrap";
 
             const title = document.createElement("div");
+            title.className = "workspaceMemberTitle";
             title.style.fontWeight = "900";
             title.textContent = label;
             head.appendChild(title);
