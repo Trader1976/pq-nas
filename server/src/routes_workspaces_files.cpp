@@ -9305,49 +9305,20 @@ srv.Post("/api/v4/workspaces/files/write_text",
         const std::filesystem::path ws_root =
             workspace_dir_for_default_pool_only(deps.users_path, w);
 
-        std::string base_rel;
-        if (body.contains("base") && body["base"].is_string()) {
-            base_rel = body["base"].get<std::string>();
-            if (base_rel == "." || base_rel == "./" || base_rel == "/") base_rel.clear();
+        std::string base_rel = trim_copy_safe(body.value("base_path", ""));
+        if (base_rel == "." || base_rel == "./" || base_rel == "/") {
+            base_rel.clear();
+        }
 
-            for (char& c : base_rel) if (c == '\\') c = '/';
-            while (!base_rel.empty() && base_rel[0] == '/') base_rel.erase(base_rel.begin());
-
-            {
-                std::string tmp;
-                tmp.reserve(base_rel.size());
-                bool prev_slash = false;
-                for (char c : base_rel) {
-                    if (c == '/') {
-                        if (prev_slash) continue;
-                        prev_slash = true;
-                        tmp.push_back(c);
-                    } else {
-                        prev_slash = false;
-                        tmp.push_back(c);
-                    }
-                }
-                base_rel.swap(tmp);
+        if (!base_rel.empty()) {
+            std::string base_norm;
+            std::string nerr;
+            if (!pqnas::normalize_user_rel_path_strict(base_rel, &base_norm, &nerr) ||
+                (!base_norm.empty() && base_norm[0] == '-')) {
+                base_rel.clear();
+            } else {
+                base_rel = std::move(base_norm);
             }
-
-            while (!base_rel.empty() && base_rel.back() == '/') base_rel.pop_back();
-
-            bool bad = false;
-            if (!base_rel.empty() && base_rel[0] == '-') bad = true;
-            if (base_rel.find('\n') != std::string::npos || base_rel.find('\r') != std::string::npos) bad = true;
-
-            if (!bad && !base_rel.empty()) {
-                size_t start = 0;
-                while (start < base_rel.size()) {
-                    size_t end = base_rel.find('/', start);
-                    if (end == std::string::npos) end = base_rel.size();
-                    std::string seg = base_rel.substr(start, end - start);
-                    if (seg == "." || seg == ".." || seg.empty()) { bad = true; break; }
-                    start = end + 1;
-                }
-            }
-
-            if (bad) base_rel.clear();
         }
 
         std::uint64_t max_bytes = 50ull * 1024 * 1024;
@@ -9371,48 +9342,20 @@ srv.Post("/api/v4/workspaces/files/write_text",
         for (const auto& it : body["paths"]) {
             if (!it.is_string()) continue;
 
-            std::string p = it.get<std::string>();
-            if (p == "." || p == "./" || p == "/") p.clear();
-
-            for (char& c : p) if (c == '\\') c = '/';
-            while (!p.empty() && p[0] == '/') p.erase(p.begin());
-
-            {
-                std::string tmp;
-                tmp.reserve(p.size());
-                bool prev_slash = false;
-                for (char c : p) {
-                    if (c == '/') {
-                        if (prev_slash) continue;
-                        prev_slash = true;
-                        tmp.push_back(c);
-                    } else {
-                        prev_slash = false;
-                        tmp.push_back(c);
-                    }
-                }
-                p.swap(tmp);
+            std::string raw = it.get<std::string>();
+            if (raw == "." || raw == "./" || raw == "/") {
+                raw.clear();
             }
 
-            while (p.size() > 1 && p.back() == '/') p.pop_back();
-
-            if (!p.empty() && p[0] == '-') continue;
-
-            bool bad = false;
-            if (p.find('\n') != std::string::npos || p.find('\r') != std::string::npos) bad = true;
-
-            if (!bad && !p.empty()) {
-                size_t start = 0;
-                while (start < p.size()) {
-                    size_t end = p.find('/', start);
-                    if (end == std::string::npos) end = p.size();
-                    std::string seg = p.substr(start, end - start);
-                    if (seg == "." || seg == ".." || seg.empty()) { bad = true; break; }
-                    start = end + 1;
-                }
+            std::string p;
+            std::string nerr;
+            if (!pqnas::normalize_user_rel_path_strict(raw, &p, &nerr)) {
+                continue;
             }
 
-            if (bad) continue;
+            if (!p.empty() && p[0] == '-') {
+                continue;
+            }
 
             paths_in.push_back(std::move(p));
         }
