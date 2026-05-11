@@ -240,6 +240,18 @@ std::string build_default_message(const ActivityEvent& ev) {
         return actor + " moved " + target + " to Trash";
     }
 
+    if (ev.event_type == "file.locked") {
+        return actor + " locked " + target;
+    }
+
+    if (ev.event_type == "file.unlocked") {
+        return actor + " unlocked " + target;
+    }
+
+    if (ev.event_type == "file.lock_force_released") {
+        return actor + " force-unlocked " + target;
+    }
+
     if (ev.event_type == "file.restored") {
         return actor + " restored " + target;
     }

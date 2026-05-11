@@ -12,6 +12,7 @@
     const navTrustedDevices = document.getElementById("nav_trusted_devices");
     const navWorkspaceInvites = document.getElementById("nav_workspace_invites");
     const navWorkspaceInvitesCount = document.getElementById("nav_workspace_invites_count");
+    const navPeople = document.getElementById("nav_people");
     const navUserSettings = document.getElementById("nav_user_settings");
 
     const navAdmin = document.getElementById("nav_admin");
@@ -303,6 +304,7 @@
             "nav_home",
             "nav_trusted_devices",
             "nav_workspace_invites",
+            "nav_people",
             "nav_user_settings"
         ];
         for (const id of ids) {
@@ -2031,6 +2033,41 @@
         }
     }
 
+    function renderPeople(messageText = "", messageKind = "") {
+        stopPairPolling();
+
+        currentView = "people";
+        currentApp = null;
+
+        setActiveNav("nav_people");
+        setActiveApp("");
+
+        if (wsTitle) wsTitle.textContent = "People";
+        if (wsSubtitle) wsSubtitle.textContent = "Friendly names for DNA fingerprints and workspace collaborators";
+        if (mainPaneTitle) mainPaneTitle.textContent = "People";
+
+        if (!homeBlurb) return;
+
+        setMainHostMode("home");
+        homeBlurb.classList.remove("appHostBlurb");
+
+        if (window.PQPeople && typeof window.PQPeople.render === "function") {
+            window.PQPeople.render({
+                homeBlurb,
+                messageText,
+                messageKind
+            });
+            return;
+        }
+
+        homeBlurb.innerHTML = `
+            <div class="card" style="padding:16px; margin-top:12px;">
+                <h3 style="margin:0 0 8px 0;">People unavailable</h3>
+                <div class="mini">The People UI module did not load. Hard-refresh the browser and try again.</div>
+            </div>
+        `;
+    }
+
     function renderWorkspaceInvites(messageText = "", messageKind = "", inviteNotice = null) {
         stopPairPolling();
 
@@ -2384,6 +2421,9 @@
                     // signed-in vs not-signed-in nav
                     show(navLogin, !ok);
 
+                    // People is user-owned contact data and is available to any signed-in user.
+                    show(navPeople, ok);
+
                     // Normal user settings are only for non-admin users.
                     // Admins use /admin/settings instead.
                     show(navUserSettings, ok && !isAdmin);
@@ -2405,6 +2445,7 @@
 
                         updateWorkspaceInvitesNav();
                         updateHomeInvitesHint();
+                        show(navPeople, false);
                         show(navUserSettings, false);
                         const err = String(j.error || "").toLowerCase();
                         const msg = String(j.message || "");
@@ -2418,7 +2459,8 @@
                             setBadge("warn", "not signed in");
                             show(stateUnauth, true);
                             show(navLogin, true);
-                            show(navUserSettings, false);
+                            show(navPeople, false);
+                        show(navUserSettings, false);
                         } else {
                             setWsSubtitleSafe(`Error (${r.status || "?"})`);
                             setBadge("err", "error");
@@ -2665,6 +2707,9 @@
     });
     if (navWorkspaceInvites) navWorkspaceInvites.addEventListener("click", () => {
         renderWorkspaceInvites();
+    });
+    if (navPeople) navPeople.addEventListener("click", () => {
+        renderPeople();
     });
     if (navUserSettings) navUserSettings.addEventListener("click", () => {
         renderUserSettings();

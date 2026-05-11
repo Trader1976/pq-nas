@@ -495,6 +495,10 @@ static bool reelstack_meta_remove_under_prefix_path_local(const std::string& sco
 
 // activity
 #include "routes_activity.h"
+#include "routes_people.h"
+#include "routes_file_annotations.h"
+#include "routes_file_locks.h"
+#include "file_locks.h"
 #include "activity_log.h"
 
 using json = nlohmann::json;
@@ -1535,6 +1539,78 @@ static void record_user_file_activity_best_effort_local(pqnas::UsersRegistry& us
     std::string activity_err;
     (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
 }
+
+
+
+static std::string user_file_lock_fp_short_local(const std::string& fp) {
+    if (fp.size() <= 18) return fp;
+    return fp.substr(0, 8) + "…" + fp.substr(fp.size() - 8);
+}
+
+static bool require_user_no_live_lock_for_write_local(pqnas::UsersRegistry& users,
+                                                      const std::string& users_path,
+                                                      httplib::Response& res,
+                                                      const std::string& fp_hex,
+                                                      const std::string& rel_norm,
+                                                      const std::string& action_label,
+                                                      bool allow_lock_owner = true) {
+    if (fp_hex.empty()) return true;
+
+    const std::filesystem::path locks_db_path =
+        std::filesystem::path(users_path).parent_path() / "file_locks.sqlite3";
+
+    pqnas::FileLocksStore store(locks_db_path);
+    const std::int64_t now = static_cast<std::int64_t>(std::time(nullptr));
+
+    (void)store.delete_expired(now, nullptr);
+
+    std::string lerr;
+    auto conflict = store.find_live_conflict("user", fp_hex, rel_norm, now, &lerr);
+
+    if (!lerr.empty()) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to check file lock"},
+            {"detail", pqnas::shorten(lerr, 180)}
+        }.dump());
+        return false;
+    }
+
+    if (!conflict.has_value()) return true;
+
+    if (allow_lock_owner &&
+        !conflict->locked_by_fp.empty() &&
+        conflict->locked_by_fp == fp_hex) {
+        return true;
+    }
+
+    std::string label = activity_user_display_name_local(users, conflict->locked_by_fp);
+    if (label.empty()) label = user_file_lock_fp_short_local(conflict->locked_by_fp);
+
+    reply_json(res, 409, json{
+        {"ok", false},
+        {"error", "locked"},
+        {"message", action_label.empty()
+            ? "item is locked"
+            : action_label + " blocked because this item is locked"},
+        {"lock", json{
+            {"scope_type", conflict->scope_type},
+            {"scope_id", conflict->scope_id},
+            {"logical_rel_path", conflict->logical_rel_path},
+            {"item_kind", conflict->item_kind},
+            {"locked_by_fp_short", user_file_lock_fp_short_local(conflict->locked_by_fp)},
+            {"locked_by_label", label},
+            {"note", conflict->note},
+            {"created_at_epoch", conflict->created_at_epoch},
+            {"updated_at_epoch", conflict->updated_at_epoch},
+            {"expires_at_epoch", conflict->expires_at_epoch}
+        }}
+    }.dump());
+
+    return false;
+}
+
 
 
 
@@ -10588,6 +10664,55 @@ register_routes_v5(srv, v5);
     };
 
     pqnas::register_activity_routes(srv, activity_deps);
+
+    pqnas::PeopleRoutesDeps people_deps;
+    people_deps.users = activity_deps.users;
+    people_deps.cookie_key = activity_deps.cookie_key;
+    people_deps.people_db_path = std::filesystem::path(users_path).parent_path() / "people_contacts.sqlite3";
+    people_deps.require_user_auth_users_actor = activity_deps.require_user_auth_users_actor;
+    people_deps.reply_json = activity_deps.reply_json;
+    pqnas::register_people_routes(srv, people_deps);
+
+    pqnas::FileAnnotationRoutesDeps file_annotation_deps;
+    file_annotation_deps.users = &users;
+    file_annotation_deps.workspaces = &workspaces;
+    file_annotation_deps.users_path = users_path;
+    file_annotation_deps.workspaces_path = workspaces_path;
+    file_annotation_deps.annotations_db_path =
+        std::filesystem::path(users_path).parent_path() / "file_annotations.sqlite3";
+    file_annotation_deps.cookie_key = COOKIE_KEY;
+    file_annotation_deps.require_user_auth_users_actor = activity_deps.require_user_auth_users_actor;
+    file_annotation_deps.reply_json = activity_deps.reply_json;
+    file_annotation_deps.now_epoch_sec = []() {
+        return now_epoch_sec();
+    };
+    file_annotation_deps.user_dir_for_fp =
+        [&](pqnas::UsersRegistry& users_ref, const std::string& fp_hex) -> std::filesystem::path {
+            return user_dir_for_fp(users_ref, fp_hex);
+        };
+    pqnas::register_file_annotation_routes(srv, file_annotation_deps);
+
+    pqnas::FileLockRoutesDeps file_lock_deps;
+    file_lock_deps.users = &users;
+    file_lock_deps.workspaces = &workspaces;
+    file_lock_deps.users_path = users_path;
+    file_lock_deps.workspaces_path = workspaces_path;
+    file_lock_deps.locks_db_path =
+        std::filesystem::path(users_path).parent_path() / "file_locks.sqlite3";
+    file_lock_deps.cookie_key = COOKIE_KEY;
+    file_lock_deps.require_user_auth_users_actor = activity_deps.require_user_auth_users_actor;
+    file_lock_deps.reply_json = activity_deps.reply_json;
+    file_lock_deps.now_epoch_sec = []() {
+        return now_epoch_sec();
+    };
+    file_lock_deps.user_dir_for_fp = [&](const std::string& fp_hex) -> std::filesystem::path {
+        return user_dir_for_fp(users, fp_hex);
+    };
+    file_lock_deps.display_name_for_fp = [&](const std::string& fp_hex) -> std::string {
+        return activity_user_display_name_local(users, fp_hex);
+    };
+    pqnas::register_file_lock_routes(srv, file_lock_deps);
+
 
 trash_service.set_restore_reindexer(
     [&](const pqnas::TrashItemRec& rec,
@@ -21052,6 +21177,7 @@ INSERT INTO admin_stats_buckets (
     ws_file_deps.file_versions = &file_versions_index;
     ws_file_deps.trash_service = &trash_service;
     ws_file_deps.trash_index = &trash_index;
+    ws_file_deps.locks_db_path = file_lock_deps.locks_db_path;
     ws_file_deps.reply_json =
         [](httplib::Response& res, int status, const std::string& body) {
             reply_json(res, status, body);
@@ -22840,6 +22966,12 @@ srv.Post("/api/v4/uploads/start", [&](const httplib::Request& req, httplib::Resp
         }
     }
 
+
+    if (!require_user_no_live_lock_for_write_local(
+            users, users_path, res, fp_hex, rel_norm, "write", false)) {
+        return;
+    }
+
     auto* plm = pqnas::get_path_lock_manager();
     auto write_guard = plm->lock_paths(fp_hex, {rel_norm});
 
@@ -23346,6 +23478,11 @@ srv.Post("/api/v4/uploads/finish", [&](const httplib::Request& req, httplib::Res
             }.dump());
             return;
         }
+    }
+
+    if (!require_user_no_live_lock_for_write_local(
+            users, users_path, res, fp_hex, rel_norm, "write", false)) {
+        return;
     }
 
     auto* plm = pqnas::get_path_lock_manager();
@@ -24926,6 +25063,11 @@ srv.Post("/api/v4/files/rmdir", [&](const httplib::Request& req, httplib::Respon
     }
 
     // Serialize writes on overlapping logical paths for this user.
+    if (!require_user_no_live_lock_for_write_local(
+            users, users_path, res, fp_hex, rel_norm, "write", false)) {
+        return;
+    }
+
     auto* plm = pqnas::get_path_lock_manager();
     auto write_guard = plm->lock_paths(fp_hex, {rel_norm});
 
@@ -30047,6 +30189,17 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             {"error", "bad_request"},
             {"message", "invalid path"}
         }.dump());
+        return;
+    }
+
+    if (!require_user_no_live_lock_for_write_local(
+            users, users_path, res, fp_hex, rel_norm, "delete", false)) {
+        audit_fail("locked_delete_blocked", 409, rel_norm);
+        return;
+    }
+
+    if (!require_user_no_live_lock_for_write_local(
+            users, users_path, res, fp_hex, rel_norm, "write", false)) {
         return;
     }
 
@@ -38354,6 +38507,11 @@ srv.Put("/api/v4/files/put",
 
     // Serialize writes on overlapping logical paths for this user.
     // This prevents PUT/MOVE/DELETE races on the same file/subtree.
+    if (!require_user_no_live_lock_for_write_local(
+            users, users_path, res, fp_hex, rel_norm, "write", false)) {
+        return;
+    }
+
     auto* plm = pqnas::get_path_lock_manager();
     auto write_guard = plm->lock_paths(fp_hex, {rel_norm});
 

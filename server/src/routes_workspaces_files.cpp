@@ -27,6 +27,7 @@
 #include "file_versions.h"
 #include "file_versions_present.h"
 #include "file_versions_restore.h"
+#include "file_locks.h"
 #include "trash_service.h"
 #include "trash_index.h"
 #include "runtime_paths.h"
@@ -1327,6 +1328,7 @@ bool resolve_workspace_edit_target_local(const WorkspaceFileRouteDeps& deps,
         return false;
     }
 
+
     const std::filesystem::path ws_root =
         workspace_dir_for_default_pool_only(deps.users_path, w);
 
@@ -1458,6 +1460,98 @@ static void record_workspace_file_activity_best_effort_local(const WorkspaceFile
     (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
 }
 
+
+static std::string workspace_file_lock_fp_short_local(const std::string& fp) {
+    if (fp.size() <= 18) return fp;
+    return fp.substr(0, 8) + "…" + fp.substr(fp.size() - 8);
+}
+
+static bool require_workspace_no_live_lock_for_write_local(
+    const WorkspaceFileRouteDeps& deps,
+    httplib::Response& res,
+    const std::string& workspace_id,
+    const std::string& rel_norm,
+    const std::string& actor_fp,
+    const std::string& action_label,
+    bool allow_lock_owner = true) {
+    (void)actor_fp;
+    if (deps.locks_db_path.empty()) return true;
+
+    const std::int64_t now =
+        deps.now_epoch_sec ? deps.now_epoch_sec() : static_cast<std::int64_t>(0);
+
+    pqnas::FileLocksStore store(deps.locks_db_path);
+    (void)store.delete_expired(now, nullptr);
+
+    std::string lerr;
+    auto conflict = store.find_live_conflict(
+        "workspace",
+        workspace_id,
+        rel_norm,
+        now,
+        &lerr);
+
+    if (!lerr.empty()) {
+        json body = {
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to check file lock"},
+            {"detail", pqnas::shorten(lerr, 180)}
+        };
+
+        if (deps.reply_json) {
+            deps.reply_json(res, 500, body.dump());
+        } else {
+            res.status = 500;
+            res.set_content(body.dump(), "application/json; charset=utf-8");
+        }
+        return false;
+    }
+
+    if (!conflict.has_value()) return true;
+
+    // The lock owner may continue working. Other editors must wait or ask an
+    // owner to force-unlock through the lock UI.
+    if (allow_lock_owner &&
+        !conflict->locked_by_fp.empty() &&
+        conflict->locked_by_fp == actor_fp) {
+        return true;
+    }
+
+    std::string label = workspace_activity_display_name_local(deps, conflict->locked_by_fp);
+    if (label.empty()) label = workspace_file_lock_fp_short_local(conflict->locked_by_fp);
+
+    json lock_j = {
+        {"scope_type", conflict->scope_type},
+        {"scope_id", conflict->scope_id},
+        {"logical_rel_path", conflict->logical_rel_path},
+        {"item_kind", conflict->item_kind},
+        {"locked_by_fp_short", workspace_file_lock_fp_short_local(conflict->locked_by_fp)},
+        {"locked_by_label", label},
+        {"note", conflict->note},
+        {"created_at_epoch", conflict->created_at_epoch},
+        {"updated_at_epoch", conflict->updated_at_epoch},
+        {"expires_at_epoch", conflict->expires_at_epoch}
+    };
+
+    json body = {
+        {"ok", false},
+        {"error", "locked"},
+        {"message", action_label.empty()
+            ? "item is locked"
+            : action_label + " blocked because this item is locked"},
+        {"lock", lock_j}
+    };
+
+    if (deps.reply_json) {
+        deps.reply_json(res, 409, body.dump());
+    } else {
+        res.status = 409;
+        res.set_content(body.dump(), "application/json; charset=utf-8");
+    }
+
+    return false;
+}
 
 static void record_workspace_folder_created_activity_best_effort_local(const WorkspaceFileRouteDeps& deps,
                                                                        const std::string& actor_fp,
@@ -5224,6 +5318,11 @@ srv.Post("/api/v4/workspaces/files/write_text",
             }.dump());
             return;
         }
+        if (!require_workspace_no_live_lock_for_write_local(
+                deps, res, workspace_id, rel_norm, actor_fp, "write")) {
+            return;
+        }
+
          if (!deps.file_versions) {
              audit_fail(workspace_id, "file_versions_missing", 500, "", rel_norm);
              deps.reply_json(res, 500, json{
@@ -7513,6 +7612,11 @@ srv.Post("/api/v4/workspaces/files/write_text",
 
         std::uint64_t assembled_bytes = 0;
 
+        if (!require_workspace_no_live_lock_for_write_local(
+                deps, res, workspace_id, rel_norm, actor_fp, "upload")) {
+            return;
+        }
+
         try {
             {
                 std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
@@ -8151,6 +8255,11 @@ srv.Post("/api/v4/workspaces/files/write_text",
                 }.dump());
                 return;
             }
+            if (!require_workspace_no_live_lock_for_write_local(
+                    deps, res, workspace_id, rel_norm, actor_fp, "upload")) {
+                return;
+            }
+
             if (!deps.file_versions) {
                 std::error_code rm_ec;
                 std::filesystem::remove(tmp, rm_ec);
@@ -10769,6 +10878,11 @@ srv.Post("/api/v4/workspaces/files/delete",
         tp.size_bytes = static_cast<std::uint64_t>(sz);
     }
 
+    if (!require_workspace_no_live_lock_for_write_local(
+            deps, res, workspace_id, rel_norm, actor_fp, "delete", false)) {
+        return;
+    }
+
     pqnas::TrashService::MoveToTrashResult tr;
     std::string terr;
     if (!deps.trash_service->move_to_trash(tp, &tr, &terr)) {
@@ -11221,6 +11335,11 @@ srv.Post("/api/v4/workspaces/files/restore_version",
             }.dump());
             return;
         }
+    }
+
+    if (!require_workspace_no_live_lock_for_write_local(
+            deps, res, workspace_id, rel_norm, actor_fp, "restore")) {
+        return;
     }
 
     auto* vix = deps.file_versions;

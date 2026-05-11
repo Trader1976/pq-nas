@@ -4444,6 +4444,18 @@ function describeMoveItems(items) {
     }
   }
 
+
+  function fmLooksLikeLockedFailure(j, httpStatus) {
+    const hay = [
+      httpStatus === 409 ? "409" : "",
+      j && j.error,
+      j && j.message,
+      j && j.detail
+    ].filter(Boolean).join(" ").toLowerCase();
+
+    return hay.includes("locked") || hay.includes("lock");
+  }
+
   async function doDelete(item) {
     if (!requireWritableScopeOrExplain("Delete")) return;
     const rel = currentRelPathFor(item);
@@ -4469,9 +4481,14 @@ function describeMoveItems(items) {
     const j = await r.json().catch(() => null);
 
     if (!r.ok || !j || !j.ok) {
-      setBadge("err", "error");
-      const msg = j && (j.message || j.error) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`;
-      status.textContent = `Move to trash failed: ${msg}`;
+      const locked = fmLooksLikeLockedFailure(j, r.status);
+      setBadge(locked ? "locked" : "err", locked ? "locked" : "error");
+      const msg = j && (j.message || j.error || j.detail)
+          ? [j.error, j.message, j.detail].filter(Boolean).join(" ")
+          : `HTTP ${r.status}`;
+      status.textContent = locked
+          ? msg
+          : `Move to trash failed: ${msg}`;
       return;
     }
 
@@ -5489,6 +5506,9 @@ function describeMoveItems(items) {
     const t = document.createElement("div");
     t.className = "tile";
     t.dataset.key = key;
+    t.dataset.relPath = currentRelPathFor(item);
+    t.dataset.itemType = item.type === "dir" ? "dir" : "file";
+    t.dataset.name = item.name || "";
     t.style.position = "relative";
 
     const icoWrap = document.createElement("div");
