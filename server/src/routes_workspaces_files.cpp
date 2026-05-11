@@ -1036,8 +1036,76 @@ bool require_workspace_file_actor_for_workspace_local(const WorkspaceFileRouteDe
     if (out_actor_role) out_actor_role->clear();
     if (out_is_external) *out_is_external = false;
 
+    std::string external_fp;
+    std::string external_cookie_role;
     if (try_workspace_external_cookie_actor_local(
-            deps, req, workspace_id, out_actor_fp, out_actor_role)) {
+            deps, req, workspace_id, &external_fp, &external_cookie_role)) {
+        (void)external_cookie_role;
+
+        if (!deps.workspaces) {
+            if (deps.reply_json) {
+                deps.reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "workspace registry not configured"}
+                }.dump());
+            } else {
+                res.status = 500;
+                res.set_header("Content-Type", "application/json");
+                res.body = R"({"ok":false,"error":"server_error","message":"workspace registry not configured"})";
+            }
+            return false;
+        }
+
+        if (!deps.workspaces->load(deps.workspaces_path)) {
+            if (deps.reply_json) {
+                deps.reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "workspaces_reload_failed"},
+                    {"message", "failed to reload workspaces"}
+                }.dump());
+            } else {
+                res.status = 500;
+                res.set_header("Content-Type", "application/json");
+                res.body = R"({"ok":false,"error":"workspaces_reload_failed","message":"failed to reload workspaces"})";
+            }
+            return false;
+        }
+
+        auto wopt = deps.workspaces->get(workspace_id);
+        if (!wopt.has_value() || wopt->status != "enabled") {
+            if (deps.reply_json) {
+                deps.reply_json(res, 404, json{
+                    {"ok", false},
+                    {"error", "workspace_not_found"},
+                    {"message", "workspace not found"}
+                }.dump());
+            } else {
+                res.status = 404;
+                res.set_header("Content-Type", "application/json");
+                res.body = R"({"ok":false,"error":"workspace_not_found","message":"workspace not found"})";
+            }
+            return false;
+        }
+
+        auto mopt = enabled_member_for_actor(*wopt, external_fp);
+        if (!mopt.has_value() || mopt->member_kind != "external") {
+            if (deps.reply_json) {
+                deps.reply_json(res, 403, json{
+                    {"ok", false},
+                    {"error", "external_member_not_enabled"},
+                    {"message", "external member is no longer enabled"}
+                }.dump());
+            } else {
+                res.status = 403;
+                res.set_header("Content-Type", "application/json");
+                res.body = R"({"ok":false,"error":"external_member_not_enabled","message":"external member is no longer enabled"})";
+            }
+            return false;
+        }
+
+        if (out_actor_fp) *out_actor_fp = external_fp;
+        if (out_actor_role) *out_actor_role = normalize_workspace_role_copy(mopt->role);
         if (out_is_external) *out_is_external = true;
         return true;
     }
