@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #include <sqlite3.h>
 
@@ -31,6 +32,19 @@ bool bind_text(sqlite3_stmt* st, int idx, const std::string& v) {
 std::string col_text(sqlite3_stmt* st, int idx) {
     const unsigned char* p = sqlite3_column_text(st, idx);
     return p ? reinterpret_cast<const char*>(p) : std::string{};
+}
+
+FileNoteRec row_to_note(sqlite3_stmt* st) {
+    FileNoteRec r;
+    r.scope_type = col_text(st, 0);
+    r.scope_id = col_text(st, 1);
+    r.logical_rel_path = col_text(st, 2);
+    r.item_kind = col_text(st, 3);
+    r.description = col_text(st, 4);
+    r.updated_by_fp = col_text(st, 5);
+    r.created_at_epoch = static_cast<std::int64_t>(sqlite3_column_int64(st, 6));
+    r.updated_at_epoch = static_cast<std::int64_t>(sqlite3_column_int64(st, 7));
+    return r;
 }
 
 bool open_db(const std::filesystem::path& db_path, sqlite3** out, std::string* err) {
@@ -123,18 +137,60 @@ std::optional<FileNoteRec> FileAnnotationsStore::get_note(const std::string& sco
     std::optional<FileNoteRec> out;
     const int rc = sqlite3_step(st);
     if (rc == SQLITE_ROW) {
-        FileNoteRec r;
-        r.scope_type = col_text(st, 0);
-        r.scope_id = col_text(st, 1);
-        r.logical_rel_path = col_text(st, 2);
-        r.item_kind = col_text(st, 3);
-        r.description = col_text(st, 4);
-        r.updated_by_fp = col_text(st, 5);
-        r.created_at_epoch = static_cast<std::int64_t>(sqlite3_column_int64(st, 6));
-        r.updated_at_epoch = static_cast<std::int64_t>(sqlite3_column_int64(st, 7));
-        out = std::move(r);
+        out = row_to_note(st);
     } else if (rc != SQLITE_DONE) {
         set_err(err, sqlite3_errmsg(db));
+    }
+
+    sqlite3_finalize(st);
+    sqlite3_close(db);
+    return out;
+}
+
+std::vector<FileNoteRec> FileAnnotationsStore::list_notes_for_paths(
+    const std::string& scope_type,
+    const std::string& scope_id,
+    const std::vector<std::string>& logical_rel_paths,
+    std::string* err) const {
+    std::vector<FileNoteRec> out;
+    if (logical_rel_paths.empty()) return out;
+    if (!init(err)) return out;
+
+    sqlite3* db = nullptr;
+    if (!open_db(db_path_, &db, err)) return out;
+
+    const char* sql =
+        "SELECT scope_type, scope_id, logical_rel_path, item_kind, description, "
+        "       updated_by_fp, created_at_epoch, updated_at_epoch "
+        "FROM file_notes "
+        "WHERE scope_type = ?1 AND scope_id = ?2 AND logical_rel_path = ?3 "
+        "LIMIT 1;";
+
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db, sql, -1, &st, nullptr) != SQLITE_OK) {
+        set_err(err, sqlite3_errmsg(db));
+        sqlite3_close(db);
+        return out;
+    }
+
+    for (const auto& rel : logical_rel_paths) {
+        sqlite3_reset(st);
+        sqlite3_clear_bindings(st);
+
+        if (!bind_text(st, 1, scope_type) ||
+            !bind_text(st, 2, scope_id) ||
+            !bind_text(st, 3, rel)) {
+            set_err(err, sqlite3_errmsg(db));
+            break;
+        }
+
+        const int rc = sqlite3_step(st);
+        if (rc == SQLITE_ROW) {
+            out.push_back(row_to_note(st));
+        } else if (rc != SQLITE_DONE) {
+            set_err(err, sqlite3_errmsg(db));
+            break;
+        }
     }
 
     sqlite3_finalize(st);

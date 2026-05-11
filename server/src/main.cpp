@@ -10612,6 +10612,10 @@ register_routes_v5(srv, v5);
     file_annotation_deps.now_epoch_sec = []() {
         return now_epoch_sec();
     };
+    file_annotation_deps.user_dir_for_fp =
+        [&](pqnas::UsersRegistry& users_ref, const std::string& fp_hex) -> std::filesystem::path {
+            return user_dir_for_fp(users_ref, fp_hex);
+        };
     pqnas::register_file_annotation_routes(srv, file_annotation_deps);
 
 

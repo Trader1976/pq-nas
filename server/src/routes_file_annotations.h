@@ -30,6 +30,8 @@ struct FileAnnotationRoutesDeps {
 
     std::function<void(httplib::Response&, int, const std::string&)> reply_json;
     std::function<std::int64_t()> now_epoch_sec;
+
+    std::function<std::filesystem::path(UsersRegistry&, const std::string&)> user_dir_for_fp;
 };
 
 void register_file_annotation_routes(httplib::Server& srv,

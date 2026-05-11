@@ -5489,6 +5489,9 @@ function describeMoveItems(items) {
     const t = document.createElement("div");
     t.className = "tile";
     t.dataset.key = key;
+    t.dataset.relPath = currentRelPathFor(item);
+    t.dataset.itemType = item.type === "dir" ? "dir" : "file";
+    t.dataset.name = item.name || "";
     t.style.position = "relative";
 
     const icoWrap = document.createElement("div");

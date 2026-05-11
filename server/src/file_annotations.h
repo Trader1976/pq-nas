@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace pqnas {
 
@@ -28,6 +29,11 @@ public:
                                         const std::string& scope_id,
                                         const std::string& logical_rel_path,
                                         std::string* err = nullptr) const;
+
+    std::vector<FileNoteRec> list_notes_for_paths(const std::string& scope_type,
+                                                  const std::string& scope_id,
+                                                  const std::vector<std::string>& logical_rel_paths,
+                                                  std::string* err = nullptr) const;
 
     bool upsert_note(const FileNoteRec& rec, std::string* err = nullptr) const;
 

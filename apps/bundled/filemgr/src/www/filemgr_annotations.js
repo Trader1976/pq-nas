@@ -74,6 +74,25 @@
         gap:8px;
         flex-wrap:wrap;
       }
+      .fmAnnoTileBadge{
+        position:absolute;
+        left:7px;
+        top:36px;
+        z-index:8;
+        width:22px;
+        height:22px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        border-radius:999px;
+        font-size:12px;
+        line-height:1;
+        background:rgba(20,20,20,0.78);
+        color:#fff;
+        border:1px solid rgba(255,255,255,0.42);
+        box-shadow:0 6px 14px rgba(0,0,0,0.22);
+        pointer-events:none;
+      }
       html[data-theme="win_classic"] #${PANEL_ID}{
         background:#fff;
         border-color:#b8b8b8;
@@ -81,6 +100,12 @@
       html[data-theme="win_classic"] #${PANEL_ID} textarea{
         background:#fff;
         border-color:#9a9a9a;
+      }
+      html[data-theme="win_classic"] .fmAnnoTileBadge{
+        background:#ffffcc;
+        color:#000;
+        border-color:#808080;
+        box-shadow:none;
       }
     `;
     document.head.appendChild(style);
@@ -147,6 +172,29 @@
     return j;
   }
 
+  async function apiResolveNotes(scope, paths) {
+    const r = await fetch("/api/v4/file-annotations/notes/resolve", {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify({
+        scope_type: scope.scope_type,
+        scope_id: scope.scope_id,
+        paths
+      })
+    });
+
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j || !j.ok) {
+      throw new Error((j && (j.message || j.error)) || `HTTP ${r.status}`);
+    }
+    return j.notes || {};
+  }
+
   async function apiSaveNote(scope, path, itemKind, description) {
     const r = await fetch("/api/v4/file-annotations/note", {
       method: "POST",
@@ -172,10 +220,80 @@
     return j;
   }
 
+  function noteStatusText(note, emptyText) {
+    if (!note || !note.updated_at_epoch) return emptyText;
+
+    const when = new Date(Number(note.updated_at_epoch) * 1000).toLocaleString();
+    const by = String(note.updated_by_label || note.updated_by_fp_short || "").trim();
+
+    return by ? `Saved by ${by} · ${when}` : `Saved · ${when}`;
+  }
+
   let activeSignature = "";
+  let badgeTimer = null;
+  let lastBadgeSignature = "";
 
   function attachPanelSoon() {
     window.setTimeout(attachPanel, 0);
+  }
+
+  function setTileBadge(tile, enabled) {
+    if (!tile) return;
+
+    let badge = tile.querySelector(":scope > .fmAnnoTileBadge");
+    if (enabled) {
+      if (!badge) {
+        badge = document.createElement("div");
+        badge.className = "fmAnnoTileBadge";
+        badge.title = "Has description";
+        badge.textContent = "💬";
+        tile.appendChild(badge);
+      }
+    } else if (badge) {
+      badge.remove();
+    }
+  }
+
+  function scheduleBadgeRefresh(force = false) {
+    if (force) lastBadgeSignature = "";
+    if (badgeTimer) clearTimeout(badgeTimer);
+    badgeTimer = window.setTimeout(() => refreshVisibleBadges().catch(() => {}), 160);
+  }
+
+  async function refreshVisibleBadges() {
+    installStyle();
+
+    const tiles = Array.from(document.querySelectorAll(".tile[data-rel-path]"));
+    if (!tiles.length) return;
+
+    const scope = currentScope();
+    const paths = Array.from(new Set(
+      tiles
+        .map((t) => String(t.dataset.relPath || "").replace(/^\/+/, ""))
+        .filter((p) => p && p !== ".")
+    ));
+
+    if (!paths.length) {
+      for (const tile of tiles) setTileBadge(tile, false);
+      return;
+    }
+
+    const sig = `${scope.scope_type}:${scope.scope_id}:${paths.join("\n")}`;
+    if (sig === lastBadgeSignature) return;
+    lastBadgeSignature = sig;
+
+    let notes = {};
+    try {
+      notes = await apiResolveNotes(scope, paths);
+    } catch (_) {
+      return;
+    }
+
+    for (const tile of tiles) {
+      const rel = String(tile.dataset.relPath || "").replace(/^\/+/, "");
+      const note = notes[rel];
+      setTileBadge(tile, !!(note && note.has_description));
+    }
   }
 
   function attachPanel() {
@@ -229,7 +347,7 @@
         textarea.value = String(note.description || "");
 
         if (j.resolved && note.updated_at_epoch) {
-          status.textContent = `Saved · ${new Date(Number(note.updated_at_epoch) * 1000).toLocaleString()}`;
+          status.textContent = noteStatusText(note, "Saved");
         } else {
           status.textContent = scope.can_write ? "No description yet" : "No description";
         }
@@ -247,9 +365,8 @@
       try {
         const j = await apiSaveNote(scope, path, itemKind, textarea.value);
         const note = j.note || {};
-        status.textContent = note.updated_at_epoch
-          ? `Saved · ${new Date(Number(note.updated_at_epoch) * 1000).toLocaleString()}`
-          : "Saved";
+        status.textContent = noteStatusText(note, "Saved");
+        scheduleBadgeRefresh(true);
       } catch (e) {
         status.textContent = `Save failed: ${String(e && e.message ? e.message : e)}`;
       } finally {
@@ -262,19 +379,30 @@
     load();
   }
 
-  const mo = new MutationObserver(attachPanelSoon);
+  const propsObserver = new MutationObserver(attachPanelSoon);
+  const badgeObserver = new MutationObserver(() => scheduleBadgeRefresh(false));
 
   window.addEventListener("DOMContentLoaded", () => {
+    installStyle();
+
     const modal = $("propsModal");
     const body = $("propsBody");
     const title = $("propsTitle");
     const path = $("propsPath");
 
-    if (modal) mo.observe(modal, { attributes: true, attributeFilter: ["class", "aria-hidden"] });
-    if (body) mo.observe(body, { childList: true });
-    if (title) mo.observe(title, { childList: true, characterData: true, subtree: true });
-    if (path) mo.observe(path, { childList: true, characterData: true, subtree: true });
+    if (modal) propsObserver.observe(modal, { attributes: true, attributeFilter: ["class", "aria-hidden"] });
+    if (body) propsObserver.observe(body, { childList: true });
+    if (title) propsObserver.observe(title, { childList: true, characterData: true, subtree: true });
+    if (path) propsObserver.observe(path, { childList: true, characterData: true, subtree: true });
+
+    const grid = document.querySelector("#grid, #filesGrid, .grid") || document.body;
+    badgeObserver.observe(grid, { childList: true, subtree: true });
 
     attachPanelSoon();
+    scheduleBadgeRefresh(true);
   });
+
+  window.PQNAS_FILEMGR_ANNOTATIONS = {
+    refreshBadges: () => scheduleBadgeRefresh(true)
+  };
 })();
