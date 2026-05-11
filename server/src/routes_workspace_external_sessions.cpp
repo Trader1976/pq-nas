@@ -468,7 +468,7 @@ void register_workspace_external_session_routes(
         res.set_header(
             "Set-Cookie",
             "pqnas_workspace_session=" + cookie_val +
-            "; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=" + std::to_string(cookie_ttl)
+            "; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=" + std::to_string(cookie_ttl)
         );
 
         audit_session_event(deps, "workspace.external_session_consumed", "ok", {
