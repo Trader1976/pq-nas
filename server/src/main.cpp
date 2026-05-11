@@ -496,6 +496,7 @@ static bool reelstack_meta_remove_under_prefix_path_local(const std::string& sco
 // activity
 #include "routes_activity.h"
 #include "routes_people.h"
+#include "routes_file_annotations.h"
 #include "activity_log.h"
 
 using json = nlohmann::json;
@@ -10597,6 +10598,22 @@ register_routes_v5(srv, v5);
     people_deps.require_user_auth_users_actor = activity_deps.require_user_auth_users_actor;
     people_deps.reply_json = activity_deps.reply_json;
     pqnas::register_people_routes(srv, people_deps);
+
+    pqnas::FileAnnotationRoutesDeps file_annotation_deps;
+    file_annotation_deps.users = &users;
+    file_annotation_deps.workspaces = &workspaces;
+    file_annotation_deps.users_path = users_path;
+    file_annotation_deps.workspaces_path = workspaces_path;
+    file_annotation_deps.annotations_db_path =
+        std::filesystem::path(users_path).parent_path() / "file_annotations.sqlite3";
+    file_annotation_deps.cookie_key = COOKIE_KEY;
+    file_annotation_deps.require_user_auth_users_actor = activity_deps.require_user_auth_users_actor;
+    file_annotation_deps.reply_json = activity_deps.reply_json;
+    file_annotation_deps.now_epoch_sec = []() {
+        return now_epoch_sec();
+    };
+    pqnas::register_file_annotation_routes(srv, file_annotation_deps);
+
 
 trash_service.set_restore_reindexer(
     [&](const pqnas::TrashItemRec& rec,
