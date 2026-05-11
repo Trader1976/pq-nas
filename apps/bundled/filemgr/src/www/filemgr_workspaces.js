@@ -978,6 +978,17 @@
 
             workspaceMembersList.appendChild(row);
         }
+
+        if (window.FMPeople && typeof window.FMPeople.enhanceWorkspaceMembers === "function") {
+            window.FMPeople.enhanceWorkspaceMembers({
+                members,
+                listEl: workspaceMembersList,
+                statusEl: workspaceMembersStatus,
+                workspaceId,
+                workspaceName: FM.scope.workspaceName || FM.scope.workspaceId || "",
+                workspaceRole: FM.scope.workspaceRole || ""
+            });
+        }
     }
 
 
