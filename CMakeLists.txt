@@ -219,7 +219,6 @@ add_executable(pqnas_server
         server/src/share_pq_crypto_v1.cpp
         server/src/share_pq_mlkem_v1.cpp
         server/src/share_pq_mlkem_v1.h
-        server/src/routes_admin_workspaces.cpp
         server/src/routes_workspaces_files.cpp
         server/src/workspaces.cpp
         server/src/workspace_external_invites.cpp

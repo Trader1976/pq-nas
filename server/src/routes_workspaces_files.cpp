@@ -2374,8 +2374,8 @@ srv.Get("/api/v4/workspaces/members",
     // - only kind="personal"
     // - actor must be an enabled owner
     // - target must be an existing enabled user
-    // - target starts as status="invited"
-    // - existing disabled/invited member can be re-invited/updated
+    // - target is added immediately as status="enabled"
+    // - existing disabled/invited member can be re-added/updated
     srv.Post("/api/v4/workspaces/members/invite",
         [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp, actor_role;
@@ -2574,11 +2574,11 @@ srv.Get("/api/v4/workspaces/members",
     WorkspaceMemberRec member;
     member.fingerprint = target_fp;
     member.role = role;
-    member.status = "invited";
+    member.status = "enabled";
     member.added_at = now_iso;
     member.added_by = actor_fp;
-    member.responded_at.clear();
-    member.responded_by.clear();
+    member.responded_at = now_iso;
+    member.responded_by = actor_fp;
 
     if (existing.has_value() && !existing->added_at.empty()) {
         member.added_at = existing->added_at;

@@ -109,7 +109,6 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include "workspace_external_sessions.h"
 #include "routes_workspace_external_sessions.h"
 #include "routes_workspace_external_invites.h"
-#include "routes_admin_workspaces.h"
 #include "routes_workspaces_files.h"
 //storage health
 #include "drive_health.h"
@@ -594,8 +593,6 @@ const std::string STATIC_ADMIN_APPS_JS       = static_path("admin_apps.js");
 const std::string STATIC_APP_HTML            = static_path("app.html");
 const std::string STATIC_APP_JS              = static_path("app.js");
 const std::string STATIC_USERS_HTML          = static_path("admin_users.html");
-const std::string STATIC_ADMIN_WORKSPACES_HTML = static_path("admin_workspaces.html");
-const std::string STATIC_ADMIN_WORKSPACES_JS   = static_path("admin_workspaces.js");
 const std::string STATIC_ADMIN_STATS_HTML      = static_path("admin_stats.html");
 const std::string STATIC_ADMIN_STATS_JS        = static_path("admin_stats.js");
 const std::string STATIC_USERS_JS            = static_path("admin_users.js");
@@ -20290,16 +20287,6 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
         res.set_content(body, "text/html; charset=utf-8");
     });
 
-    srv.Get("/admin/workspaces", [&](const httplib::Request& req, httplib::Response& res) {
-        std::string actor_fp;
-        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
-
-        const std::string body = slurp_file(STATIC_ADMIN_WORKSPACES_HTML);
-        if (body.empty()) { res.status = 404; res.set_content("missing admin_workspaces.html","text/plain"); return; }
-        res.set_header("Cache-Control", "no-store");
-        res.set_content(body, "text/html; charset=utf-8");
-    });
-
     // GET /static/wait_approval.js
     srv.Get("/static/wait_approval.js", [&](const httplib::Request&, httplib::Response& res) {
         const std::string body = slurp_file(STATIC_WAIT_APPROVAL_JS);
@@ -21114,43 +21101,6 @@ INSERT INTO admin_stats_buckets (
 
         reply_json(res, 200, out.dump());
     });
-
-    pqnas::AdminWorkspaceRouteDeps admin_ws_deps;
-    admin_ws_deps.users = &users;
-    admin_ws_deps.workspaces = &workspaces;
-    admin_ws_deps.users_path = users_path;
-    admin_ws_deps.workspaces_path = workspaces_path;
-    admin_ws_deps.cookie_key = COOKIE_KEY;
-    admin_ws_deps.origin = &ORIGIN;
-    admin_ws_deps.reply_json =
-        [](httplib::Response& res, int status, const std::string& body) {
-            reply_json(res, status, body);
-        };
-    admin_ws_deps.require_admin_cookie_users_actor =
-        [&](const httplib::Request& req,
-            httplib::Response& res,
-            const unsigned char* cookie_key,
-            const std::string& users_path_arg,
-            pqnas::UsersRegistry* users_arg,
-            std::string* out_actor_fp) -> bool {
-            return require_admin_cookie_users_actor(
-                req, res, cookie_key, users_path_arg, users_arg, out_actor_fp);
-        };
-    admin_ws_deps.audit_emit =
-        [&](const std::string& event,
-            const std::string& outcome,
-            const std::map<std::string, std::string>& fields) {
-            pqnas::AuditEvent ev;
-            ev.event = event;
-            ev.outcome = outcome;
-            ev.f = fields;
-            audit_append(ev);
-        };
-    admin_ws_deps.now_iso_utc = []() {
-        return pqnas::now_iso_utc();
-    };
-
-    pqnas::register_admin_workspace_routes(srv, admin_ws_deps);
 
     pqnas::WorkspaceFileRouteDeps ws_file_deps;
     ws_file_deps.users = &users;
