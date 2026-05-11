@@ -4741,6 +4741,8 @@ srv.Post("/api/v4/workspaces/files/write_text",
             return;
         }
 
+        if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
+
         if (!require_workspace_file_actor_for_workspace_local(
                 deps, req, res, auth_workspace_id,
                 &actor_fp, &actor_role, &actor_is_external)) {
@@ -5667,6 +5669,8 @@ srv.Post("/api/v4/workspaces/files/write_text",
             }.dump());
             return;
         }
+
+        if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
 
         if (!require_workspace_file_actor_for_workspace_local(
                 deps, req, res, auth_workspace_id,
