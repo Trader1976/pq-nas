@@ -838,6 +838,19 @@
         }
     }
     async function loadWorkspaceInvites() {
+        // Retired: File Manager Shared Space invites now direct-add enabled members.
+        workspaceInvites = [];
+        workspaceInvitesError = "";
+        updateWorkspaceInvitesNav();
+        return;
+        // Legacy shell-level workspace invites are disabled.
+        // File Manager Shared Space invites now manage members directly.
+        workspaceInvites = [];
+        workspaceInvitesError = "";
+        updateWorkspaceInvitesNav();
+        updateHomeInvitesHint();
+        return;
+
         if (!authed) {
             workspaceInvites = [];
             workspaceInvitesError = "";
@@ -1594,6 +1607,8 @@
     }
 
     function updateHomeInvitesHint() {
+        // Legacy shell-level workspace invite hint disabled.
+        return;
         const desktopHint = document.getElementById("desktopHint");
         if (!desktopHint) return;
 
