@@ -1656,6 +1656,71 @@ static void record_copy_scope_activity_best_effort_local(const WorkspaceFileRout
     std::string activity_err;
     (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
 
+
+}
+
+static void record_workspace_member_role_changed_activity_best_effort_local(
+    const WorkspaceFileRouteDeps& deps,
+    const std::string& actor_fp,
+    const WorkspaceRec& workspace,
+    const WorkspaceMemberRec& target_member,
+    const std::string& old_role,
+    const std::string& new_role) {
+
+    if (!deps.users || actor_fp.empty()) return;
+
+    std::filesystem::path user_root;
+    try {
+        user_root = ::pqnas_user_dir_for_fp(*deps.users, actor_fp);
+    } catch (...) {
+        return;
+    }
+
+    if (user_root.empty()) return;
+
+    const std::string target_fp = target_member.fingerprint;
+    const std::string target_kind =
+        target_member.member_kind.empty() ? "user" : target_member.member_kind;
+
+    std::string target_name = target_member.display_name;
+
+    if (target_name.empty() && deps.users && !target_fp.empty()) {
+        auto target_user = deps.users->get(target_fp);
+        if (target_user.has_value()) {
+            target_name = target_user->name;
+        }
+    }
+
+    if (target_name.empty()) {
+        target_name = target_fp.empty() ? std::string("member") : target_fp;
+    }
+
+    pqnas::activity::ActivityEvent ev;
+    ev.owner_user_id = actor_fp;
+
+    ev.actor.user_id = actor_fp;
+    ev.actor.display_name = workspace_activity_display_name_local(deps, actor_fp);
+    ev.actor.kind = "user";
+
+    ev.event_type = "workspace.member_role_changed";
+    ev.scope_type = "workspace";
+    ev.scope_id = workspace.workspace_id;
+
+    ev.target_kind = "member";
+    ev.target_name = target_name;
+
+    ev.details = nlohmann::json{
+        {"workspace_id", workspace.workspace_id},
+        {"workspace_name", workspace.name},
+        {"target_fingerprint", target_fp},
+        {"target_display_name", target_name},
+        {"target_member_kind", target_kind},
+        {"old_role", old_role},
+        {"new_role", new_role}
+    };
+
+    std::string activity_err;
+    (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
 }
 
 void register_workspace_file_routes(httplib::Server& srv,
@@ -2366,17 +2431,6 @@ srv.Get("/api/v4/workspaces/members",
         return;
     }
 
-    const std::string kind = w.kind.empty() ? "admin" : w.kind;
-    if (kind != "personal") {
-        audit_fail(workspace_id, "not_personal_workspace", 403);
-        deps.reply_json(res, 403, json{
-            {"ok", false},
-            {"error", "forbidden"},
-            {"message", "only personal Shared Spaces can be managed here"}
-        }.dump());
-        return;
-    }
-
     auto actor_member = enabled_member_for_actor(w, actor_fp);
     if (!actor_member.has_value() || actor_member->role != "owner") {
         audit_fail(workspace_id, "owner_required", 403);
@@ -2638,7 +2692,6 @@ srv.Get("/api/v4/workspaces/members",
         }.dump());
         return;
     }
-
     if (target_member->status == "enabled" &&
         target_member->role == "owner" &&
         count_enabled_owners_local(w) <= 1) {
@@ -2811,18 +2864,6 @@ srv.Get("/api/v4/workspaces/members",
         }.dump());
         return;
     }
-
-    const std::string kind = w.kind.empty() ? "admin" : w.kind;
-    if (kind != "personal") {
-        audit_fail(workspace_id, "not_personal_workspace", 403);
-        deps.reply_json(res, 403, json{
-            {"ok", false},
-            {"error", "forbidden"},
-            {"message", "only personal Shared Spaces can be managed here"}
-        }.dump());
-        return;
-    }
-
     auto actor_member = enabled_member_for_actor(w, actor_fp);
     if (!actor_member.has_value() || actor_member->role != "owner") {
         audit_fail(workspace_id, "owner_required", 403);
@@ -2844,6 +2885,21 @@ srv.Get("/api/v4/workspaces/members",
         }.dump());
         return;
     }
+
+    const std::string target_kind =
+        target_member->member_kind.empty() ? "user" : target_member->member_kind;
+
+    if (target_kind == "external" && new_role == "owner") {
+        audit_fail(workspace_id, "external_owner_forbidden", 400, target_fp);
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "external members can only be viewer or editor"}
+        }.dump());
+        return;
+    }
+
+    const std::string old_role = normalize_workspace_role_copy(target_member->role);
 
     if (target_member->status == "enabled" &&
         target_member->role == "owner" &&
@@ -2889,6 +2945,17 @@ srv.Get("/api/v4/workspaces/members",
             {"message", "failed to reload workspace after role change"}
         }.dump());
         return;
+    }
+
+    if (old_role != member2->role) {
+        record_workspace_member_role_changed_activity_best_effort_local(
+            deps,
+            actor_fp,
+            *w2,
+            *member2,
+            old_role,
+            member2->role
+        );
     }
 
     audit_ok(workspace_id, target_fp, member2->role);

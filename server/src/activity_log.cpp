@@ -277,6 +277,26 @@ std::string build_default_message(const ActivityEvent& ev) {
         return actor + " uploaded " + target + " through Drop Zone";
     }
 
+    if (ev.event_type == "workspace.member_role_changed") {
+        std::string old_role;
+        std::string new_role;
+
+        if (ev.details.is_object()) {
+            if (ev.details.contains("old_role") && ev.details["old_role"].is_string()) {
+                old_role = ev.details["old_role"].get<std::string>();
+            }
+            if (ev.details.contains("new_role") && ev.details["new_role"].is_string()) {
+                new_role = ev.details["new_role"].get<std::string>();
+            }
+        }
+
+        if (!old_role.empty() && !new_role.empty()) {
+            return actor + " changed " + target + "'s role from " + old_role + " to " + new_role;
+        }
+
+        return actor + " changed " + target + "'s role";
+    }
+
     if (ev.event_type == "security.login_success") {
         return actor + " signed in";
     }

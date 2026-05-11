@@ -95,7 +95,7 @@
     }
 
     function canCurrentScopeManageMembers() {
-        return isCurrentScopePersonalSharedSpace() && FM.scope.workspaceRole === "owner";
+        return isWorkspaceScope() && FM.scope.workspaceRole === "owner";
     }
 
 
