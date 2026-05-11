@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -63,7 +64,7 @@ public:
     bool upsert(const WorkspaceRec& rec);
     bool erase(const std::string& workspace_id);
 
-    const std::map<std::string, WorkspaceRec>& snapshot() const;
+    std::map<std::string, WorkspaceRec> snapshot() const;
 
     std::vector<WorkspaceRec> list_for_member(const std::string& fingerprint) const;
     std::optional<WorkspaceMemberRec> get_member(const std::string& workspace_id,
@@ -89,6 +90,7 @@ public:
     std::size_t enabled_member_count(const std::string& workspace_id) const;
 
 private:
+    mutable std::mutex mu_;
     std::map<std::string, WorkspaceRec> by_id_;
 };
 

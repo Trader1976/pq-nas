@@ -365,6 +365,7 @@ std::uint64_t sum_allocated_workspace_quota_on_pool(const WorkspacesRegistry& wo
 }
 
 bool WorkspacesRegistry::load(const std::string& path) {
+    std::lock_guard<std::mutex> lock(mu_);
     by_id_.clear();
 
     std::string txt;
@@ -393,6 +394,7 @@ bool WorkspacesRegistry::load(const std::string& path) {
 }
 
 bool WorkspacesRegistry::save(const std::string& path) const {
+    std::lock_guard<std::mutex> lock(mu_);
     json cfg = json::object();
     cfg["version"] = 1;
     cfg["workspaces"] = json::array();
@@ -412,16 +414,19 @@ bool WorkspacesRegistry::save(const std::string& path) const {
 }
 
 bool WorkspacesRegistry::exists(const std::string& workspace_id) const {
+    std::lock_guard<std::mutex> lock(mu_);
     return by_id_.find(workspace_id) != by_id_.end();
 }
 
 std::optional<WorkspaceRec> WorkspacesRegistry::get(const std::string& workspace_id) const {
+    std::lock_guard<std::mutex> lock(mu_);
     auto it = by_id_.find(workspace_id);
     if (it == by_id_.end()) return std::nullopt;
     return it->second;
 }
 
 bool WorkspacesRegistry::upsert(const WorkspaceRec& rec) {
+    std::lock_guard<std::mutex> lock(mu_);
     WorkspaceRec w = rec;
     normalize_workspace_rec_v1(&w);
 
@@ -432,14 +437,17 @@ bool WorkspacesRegistry::upsert(const WorkspaceRec& rec) {
 }
 
 bool WorkspacesRegistry::erase(const std::string& workspace_id) {
+    std::lock_guard<std::mutex> lock(mu_);
     return by_id_.erase(workspace_id) > 0;
 }
 
-const std::map<std::string, WorkspaceRec>& WorkspacesRegistry::snapshot() const {
+std::map<std::string, WorkspaceRec> WorkspacesRegistry::snapshot() const {
+    std::lock_guard<std::mutex> lock(mu_);
     return by_id_;
 }
 
 std::vector<WorkspaceRec> WorkspacesRegistry::list_for_member(const std::string& fingerprint) const {
+    std::lock_guard<std::mutex> lock(mu_);
     std::vector<WorkspaceRec> out;
     const std::string fp = trim_copy_safe(fingerprint);
     if (fp.empty()) return out;
@@ -459,6 +467,7 @@ std::vector<WorkspaceRec> WorkspacesRegistry::list_for_member(const std::string&
 
 std::optional<WorkspaceMemberRec> WorkspacesRegistry::get_member(const std::string& workspace_id,
                                                                  const std::string& fingerprint) const {
+    std::lock_guard<std::mutex> lock(mu_);
     auto wopt = get(workspace_id);
     if (!wopt.has_value()) return std::nullopt;
 
@@ -472,6 +481,7 @@ std::optional<WorkspaceMemberRec> WorkspacesRegistry::get_member(const std::stri
 
 bool WorkspacesRegistry::add_or_update_member(const std::string& workspace_id,
                                               const WorkspaceMemberRec& in_member) {
+    std::lock_guard<std::mutex> lock(mu_);
     auto it = by_id_.find(workspace_id);
     if (it == by_id_.end()) return false;
 
@@ -499,6 +509,7 @@ bool WorkspacesRegistry::add_or_update_member(const std::string& workspace_id,
 
 bool WorkspacesRegistry::remove_member(const std::string& workspace_id,
                                        const std::string& fingerprint) {
+    std::lock_guard<std::mutex> lock(mu_);
     auto it = by_id_.find(workspace_id);
     if (it == by_id_.end()) return false;
 
@@ -517,6 +528,7 @@ bool WorkspacesRegistry::remove_member(const std::string& workspace_id,
 bool WorkspacesRegistry::set_member_role(const std::string& workspace_id,
                                          const std::string& fingerprint,
                                          const std::string& role) {
+    std::lock_guard<std::mutex> lock(mu_);
     auto it = by_id_.find(workspace_id);
     if (it == by_id_.end()) return false;
 
@@ -536,6 +548,7 @@ bool WorkspacesRegistry::set_member_role(const std::string& workspace_id,
                                                const std::string& status,
                                                const std::string& responded_at,
                                                const std::string& responded_by) {
+    std::lock_guard<std::mutex> lock(mu_);
     auto it = by_id_.find(workspace_id);
     if (it == by_id_.end()) return false;
 
@@ -553,6 +566,7 @@ bool WorkspacesRegistry::set_member_role(const std::string& workspace_id,
 }
 
 bool WorkspacesRegistry::has_enabled_owner(const std::string& workspace_id) const {
+    std::lock_guard<std::mutex> lock(mu_);
     auto wopt = get(workspace_id);
     if (!wopt.has_value()) return false;
 
@@ -564,6 +578,7 @@ bool WorkspacesRegistry::has_enabled_owner(const std::string& workspace_id) cons
 }
 
 std::size_t WorkspacesRegistry::enabled_member_count(const std::string& workspace_id) const {
+    std::lock_guard<std::mutex> lock(mu_);
     auto wopt = get(workspace_id);
     if (!wopt.has_value()) return 0;
 
