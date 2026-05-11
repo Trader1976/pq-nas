@@ -41,9 +41,6 @@ bool require_same_origin_for_cookie_mutation_local(
         return false;
     }
 
-    const std::string authz = header_value_local(req, "Authorization");
-    if (authz.rfind("Bearer ", 0) == 0) return true;
-
     const std::string origin = header_value_local(req, "Origin");
     if (!origin.empty()) {
         if (origin == *deps.origin) return true;
