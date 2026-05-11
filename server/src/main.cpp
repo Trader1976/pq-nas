@@ -495,6 +495,7 @@ static bool reelstack_meta_remove_under_prefix_path_local(const std::string& sco
 
 // activity
 #include "routes_activity.h"
+#include "routes_people.h"
 #include "activity_log.h"
 
 using json = nlohmann::json;
@@ -10588,6 +10589,14 @@ register_routes_v5(srv, v5);
     };
 
     pqnas::register_activity_routes(srv, activity_deps);
+
+    pqnas::PeopleRoutesDeps people_deps;
+    people_deps.users = activity_deps.users;
+    people_deps.cookie_key = activity_deps.cookie_key;
+    people_deps.people_db_path = std::filesystem::path(users_path).parent_path() / "people_contacts.sqlite3";
+    people_deps.require_user_auth_users_actor = activity_deps.require_user_auth_users_actor;
+    people_deps.reply_json = activity_deps.reply_json;
+    pqnas::register_people_routes(srv, people_deps);
 
 trash_service.set_restore_reindexer(
     [&](const pqnas::TrashItemRec& rec,
