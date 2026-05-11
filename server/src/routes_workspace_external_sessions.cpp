@@ -387,11 +387,11 @@ void register_workspace_external_session_routes(
             res.set_header("Content-Type", "image/svg+xml; charset=utf-8");
             res.set_header("Cache-Control", "no-store");
             res.body = svg;
-        } catch (const std::exception& e) {
+        } catch (const std::exception&) {
             deps.reply_json(res, 500, json{
                 {"ok", false},
                 {"error", "server_error"},
-                {"message", e.what()}
+                {"message", "failed to generate QR code"}
             }.dump());
         }
     });
