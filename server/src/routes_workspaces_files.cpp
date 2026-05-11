@@ -10546,7 +10546,7 @@ srv.Post("/api/v4/workspaces/files/delete",
     }
 
     std::error_code ec;
-    const bool exists = std::filesystem::exists(abs_path, ec);
+    auto target_st = std::filesystem::symlink_status(abs_path, ec);
     if (ec) {
         audit_fail(workspace_id, "stat_failed", 500, ec.message());
         deps.reply_json(res, 500, json{
@@ -10558,7 +10558,7 @@ srv.Post("/api/v4/workspaces/files/delete",
         return;
     }
 
-    if (!exists) {
+    if (!std::filesystem::exists(target_st)) {
         audit_fail(workspace_id, "not_found", 404, rel_norm);
         deps.reply_json(res, 404, json{
             {"ok", false},
@@ -10568,17 +10568,17 @@ srv.Post("/api/v4/workspaces/files/delete",
         return;
     }
 
-    const bool is_dir = std::filesystem::is_directory(abs_path, ec);
-    if (ec) {
-        audit_fail(workspace_id, "stat_failed", 500, ec.message());
-        deps.reply_json(res, 500, json{
+    if (std::filesystem::is_symlink(target_st)) {
+        audit_fail(workspace_id, "symlink_not_supported", 400, rel_norm);
+        deps.reply_json(res, 400, json{
             {"ok", false},
-            {"error", "server_error"},
-            {"message", "target stat failed"},
-            {"detail", ec.message()}
+            {"error", "symlink_not_supported"},
+            {"message", "symlinks are not supported"}
         }.dump());
         return;
     }
+
+    const bool is_dir = std::filesystem::is_directory(target_st);
 
     const std::filesystem::path storage_root = std::filesystem::path(pqnas::data_root_dir());
 
