@@ -170,24 +170,43 @@
         }
     }
 
+    function openPeopleEditor(contact) {
+        const c = contact || {};
+        const editor = window.PQPeopleEditor;
+
+        if (!editor || typeof editor.open !== "function") {
+            state.editing = { ...c };
+            state.notice = "";
+            draw();
+            return;
+        }
+
+        state.editing = null;
+        state.notice = "";
+
+        editor.open(c, {
+            onSaved: async () => {
+                state.notice = "Person saved.";
+                state.noticeKind = "ok";
+                await loadContacts();
+            }
+        });
+    }
+
     function beginAdd() {
-        state.editing = {
+        openPeopleEditor({
             subject_fingerprint: "",
             subject_kind: "fingerprint",
             display_name: "",
             nickname: "",
             notes: ""
-        };
-        state.notice = "";
-        draw();
+        });
     }
 
     function beginEdit(fp) {
         const c = state.contacts.find((x) => x.subject_fingerprint === fp);
         if (!c) return;
-        state.editing = { ...c };
-        state.notice = "";
-        draw();
+        openPeopleEditor({ ...c });
     }
 
     function renderEditor() {
@@ -325,7 +344,7 @@
         }
 
         return `
-            <div style="display:grid; gap:10px; margin-top:12px;">
+            <div class="peopleContactsList" style="display:grid; gap:10px; margin-top:12px;">
                 ${contacts.map(renderContactCard).join("")}
             </div>
         `;
@@ -342,7 +361,8 @@
         ` : "";
 
         homeBlurb.innerHTML = `
-            <div class="card" style="padding:18px; margin-top:12px;">
+            <div class="peopleView">
+            <div class="card peopleHeroCard" style="padding:18px; margin-top:12px;">
                 <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; flex-wrap:wrap;">
                     <div>
                         <h3 style="margin:0 0 8px 0; font-size:20px;">People</h3>
@@ -366,15 +386,16 @@
             </div>
 
             ${notice}
-            ${renderEditor()}
+            ${window.PQPeopleEditor ? "" : renderEditor()}
             ${renderContactsList()}
 
-            <div class="card" style="padding:16px; margin-top:12px;">
+            <div class="card peopleFutureCard" style="padding:16px; margin-top:12px;">
                 <h3 style="margin:0 0 8px 0; font-size:17px;">Future use</h3>
                 <div class="mini" style="line-height:1.6;">
                     These labels will later appear in @mentions, file locks, comments, activity timelines,
                     “what changed?” digests, and access maps.
                 </div>
+            </div>
             </div>
         `;
 

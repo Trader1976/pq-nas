@@ -1,0 +1,124 @@
+/* DNA-Nexus People page visual polish */
+
+.peopleView{
+    display:grid;
+    gap:18px;
+    padding-bottom:32px;
+}
+
+.peopleView .peopleHeroCard,
+.peopleView .peopleFutureCard,
+.peopleView .peopleContactCard{
+    box-sizing:border-box;
+    width:100%;
+}
+
+.peopleView .peopleHeroCard{
+    margin-top:12px !important;
+    border:1px solid rgba(var(--fg-rgb),0.14) !important;
+    border-radius:18px !important;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.075), rgba(255,255,255,0.035)) !important;
+    box-shadow:0 12px 34px rgba(0,0,0,0.10) !important;
+}
+
+.peopleContactsList{
+    display:grid !important;
+    gap:14px !important;
+    margin-top:0 !important;
+}
+
+.peopleView .peopleContactCard{
+    position:relative;
+    overflow:hidden;
+    padding:18px 18px 18px 22px !important;
+    border:1px solid rgba(var(--fg-rgb),0.16) !important;
+    border-radius:18px !important;
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.025)) !important;
+    box-shadow:0 10px 26px rgba(0,0,0,0.09) !important;
+}
+
+.peopleView .peopleContactCard::before{
+    content:"";
+    position:absolute;
+    left:0;
+    top:0;
+    bottom:0;
+    width:5px;
+    background:rgba(var(--accent-rgb),0.72);
+}
+
+.peopleView .peopleContactCard h3{
+    font-size:18px !important;
+    letter-spacing:.01em;
+}
+
+.peopleView .peopleContactCard .mini{
+    line-height:1.5;
+}
+
+.peopleView .peopleContactCard .mono{
+    display:inline-block;
+    padding:2px 6px;
+    border-radius:999px;
+    background:rgba(var(--fg-rgb),0.06);
+    border:1px solid rgba(var(--fg-rgb),0.09);
+}
+
+.peopleView .peopleFutureCard{
+    margin-top:0 !important;
+    padding:16px !important;
+    border:1px dashed rgba(var(--fg-rgb),0.18) !important;
+    border-radius:16px !important;
+    background:rgba(255,255,255,0.025) !important;
+}
+
+/* Bright/light needs more visible separation than dark themes. */
+html[data-theme="bright"] .peopleView .peopleHeroCard,
+html[data-theme="light"] .peopleView .peopleHeroCard,
+html[data-theme="bright"] .peopleView .peopleContactCard,
+html[data-theme="light"] .peopleView .peopleContactCard{
+    background:#ffffff !important;
+    border-color:rgba(15,23,42,0.18) !important;
+    box-shadow:0 12px 32px rgba(15,23,42,0.11) !important;
+}
+
+html[data-theme="bright"] .peopleView .peopleContactCard .mono,
+html[data-theme="light"] .peopleView .peopleContactCard .mono{
+    background:#f3f4f6;
+    border-color:#e5e7eb;
+}
+
+/* CPUNK/orange: keep the cards distinct without washing out the black/orange mood. */
+html[data-theme="cpunk_orange"] .peopleView .peopleHeroCard,
+html[data-theme="orange"] .peopleView .peopleHeroCard,
+html[data-theme="cpunk_orange"] .peopleView .peopleContactCard,
+html[data-theme="orange"] .peopleView .peopleContactCard{
+    background:linear-gradient(180deg, rgba(255,122,0,0.055), rgba(0,0,0,0.18)) !important;
+    border-color:rgba(255,122,0,0.28) !important;
+    box-shadow:0 12px 34px rgba(255,122,0,0.08) !important;
+}
+
+html[data-theme="cpunk_orange"] .peopleView .peopleContactCard::before,
+html[data-theme="orange"] .peopleView .peopleContactCard::before{
+    background:rgba(255,122,0,0.82);
+}
+
+/* Win classic: stronger old-school panel separation. */
+html[data-theme="win_classic"] .peopleView{
+    gap:10px;
+}
+
+html[data-theme="win_classic"] .peopleView .peopleHeroCard,
+html[data-theme="win_classic"] .peopleView .peopleContactCard,
+html[data-theme="win_classic"] .peopleView .peopleFutureCard{
+    border-radius:0 !important;
+    border:1px solid #9a9a9a !important;
+    box-shadow:none !important;
+    background:#f2f2f2 !important;
+}
+
+html[data-theme="win_classic"] .peopleView .peopleContactCard::before{
+    width:0;
+}
