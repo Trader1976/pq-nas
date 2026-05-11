@@ -465,19 +465,21 @@ std::vector<WorkspaceRec> WorkspacesRegistry::list_for_member(const std::string&
     return out;
 }
 
+
 std::optional<WorkspaceMemberRec> WorkspacesRegistry::get_member(const std::string& workspace_id,
                                                                  const std::string& fingerprint) const {
     std::lock_guard<std::mutex> lock(mu_);
-    auto wopt = get(workspace_id);
-    if (!wopt.has_value()) return std::nullopt;
 
-    const std::string fp = trim_copy_safe(fingerprint);
-    for (const auto& m : wopt->members) {
-        if (m.fingerprint == fp) return m;
+    const auto it = by_id_.find(workspace_id);
+    if (it == by_id_.end()) return std::nullopt;
+
+    for (const auto& m : it->second.members) {
+        if (m.fingerprint == fingerprint) return m;
     }
 
     return std::nullopt;
 }
+
 
 bool WorkspacesRegistry::add_or_update_member(const std::string& workspace_id,
                                               const WorkspaceMemberRec& in_member) {
@@ -565,28 +567,35 @@ bool WorkspacesRegistry::set_member_role(const std::string& workspace_id,
     return false;
 }
 
+
 bool WorkspacesRegistry::has_enabled_owner(const std::string& workspace_id) const {
     std::lock_guard<std::mutex> lock(mu_);
-    auto wopt = get(workspace_id);
-    if (!wopt.has_value()) return false;
 
-    for (const auto& m : wopt->members) {
+    const auto it = by_id_.find(workspace_id);
+    if (it == by_id_.end()) return false;
+
+    for (const auto& m : it->second.members) {
         if (m.status == "enabled" && m.role == "owner") return true;
     }
 
     return false;
 }
 
+
+
 std::size_t WorkspacesRegistry::enabled_member_count(const std::string& workspace_id) const {
     std::lock_guard<std::mutex> lock(mu_);
-    auto wopt = get(workspace_id);
-    if (!wopt.has_value()) return 0;
+
+    const auto it = by_id_.find(workspace_id);
+    if (it == by_id_.end()) return 0;
 
     std::size_t n = 0;
-    for (const auto& m : wopt->members) {
+    for (const auto& m : it->second.members) {
         if (m.status == "enabled") ++n;
     }
+
     return n;
 }
+
 
 } // namespace pqnas

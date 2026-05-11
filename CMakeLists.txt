@@ -204,6 +204,8 @@ add_executable(pqnas_server
         server/src/routes_people.cpp
         server/src/file_annotations.cpp
         server/src/routes_file_annotations.cpp
+        server/src/file_locks.cpp
+        server/src/routes_file_locks.cpp
         server/src/static_serve.cc
         server/src/verify_login_common.cc
         server/src/storage_resolver.cpp

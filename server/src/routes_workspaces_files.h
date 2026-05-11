@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <string>
@@ -60,6 +61,7 @@ namespace pqnas {
         pqnas::FileVersionsIndex* file_versions = nullptr;
         pqnas::TrashService* trash_service = nullptr;
         pqnas::TrashIndex* trash_index = nullptr;
+        std::filesystem::path locks_db_path;
 
         ReplyJsonFn reply_json;
         RequireUserAuthUsersActorFn require_user_auth_users_actor;

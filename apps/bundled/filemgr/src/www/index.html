@@ -1587,6 +1587,37 @@
       font-size: 12px !important;
     }
 
+
+    .badge.locked{
+      color:#3b2500;
+      background:linear-gradient(180deg,#ffe28a,#ffb33d);
+      border-color:#8a5a00;
+      box-shadow:0 1px 0 rgba(255,255,255,0.45) inset;
+      font-weight:900;
+    }
+
+    html[data-theme="dark"] .badge.locked,
+    html[data-theme="cpunk_orange"] .badge.locked,
+    html[data-theme="cpunk"] .badge.locked{
+      color:#ffd36a;
+      background:rgba(255,160,24,0.18);
+      border-color:rgba(255,160,24,0.65);
+      box-shadow:0 0 12px rgba(255,160,24,0.18);
+    }
+
+    html[data-theme="bright"] .badge.locked{
+      color:#3b2500;
+      background:linear-gradient(180deg,#ffe99f,#ffbd45);
+      border-color:#7a4f00;
+    }
+
+    html[data-theme="win_classic"] .badge.locked{
+      color:#000;
+      background:#ffd966;
+      border-color:#806000;
+      box-shadow:none;
+    }
+
 </style>
   <link rel="stylesheet" href="./file_versions_ui.css">
   <link rel="stylesheet" href="./filemgr_storage_insights.css">
@@ -1946,10 +1977,11 @@
 <script src="./audio_preview.js"></script>
 <script src="./office_preview.js"></script>
 <script src="/static/pqnas_folder_picker.js?v=3"></script>
-<script src="./app.js"></script>
+<script src="./app.js?v=lock-pill-color-1778487093"></script>
 <script src="./filemgr_people.js?v=people-member-link-1"></script>
 <script src="./filemgr_workspaces.js?v=shared-spaces-ui-1"></script>
 <script src="./filemgr_annotations.js?v=file-annotations-4"></script>
+<script src="./filemgr_locks.js?v=file-locks-badges-1"></script>
 <script src="./file_versions_ui.js"></script>
 <script src="./filemgr_storage_insights.js"></script>
 <script src="./textedit.js"></script>
