@@ -238,6 +238,9 @@ add_executable(pqnas_server
         server/src/dropzone_index.cpp
         server/src/echo_stack_routes.cpp
         server/src/echo_stack_index.cpp
+        server/src/echo_stack_text_extract.cpp
+        server/src/echo_stack_content_index.cpp
+        server/src/echo_stack_search_routes.cpp
         server/src/gallery_albums.cpp
         server/src/gallery_albums_routes.cpp
 

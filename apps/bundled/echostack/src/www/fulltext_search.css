@@ -1,0 +1,113 @@
+.deepSearch {
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,.055);
+  backdrop-filter: blur(14px);
+  border-radius: 22px;
+  box-shadow: 0 18px 52px rgba(0,0,0,.22);
+  padding: 14px;
+  margin-bottom: 14px;
+}
+
+.deepSearchTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.deepSearchTitleBlock h2 {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+
+.deepSearchTitleBlock p {
+  margin: 0;
+  color: var(--dim);
+}
+
+.deepSearchRow {
+  display: flex;
+  gap: 10px;
+}
+
+.deepSearchStatus {
+  margin-top: 10px;
+  color: var(--dim);
+}
+
+.deepSearchStatus.good {
+  color: var(--good);
+}
+
+.deepSearchStatus.bad {
+  color: #ffb3b3;
+}
+
+.deepSearchResults {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.deepSearchResult,
+.deepSearchEmpty {
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.20);
+  border-radius: 18px;
+  padding: 13px;
+}
+
+.deepSearchTitle {
+  display: inline-block;
+  color: var(--fg);
+  font-size: 17px;
+  font-weight: 850;
+  text-decoration: none;
+}
+
+.deepSearchTitle:hover {
+  color: #ffd7a0;
+  text-decoration: underline;
+}
+
+.deepSearchUrl {
+  margin-top: 3px;
+  color: #9be7ff;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.deepSearchSnippet {
+  margin-top: 10px;
+  color: rgba(244,247,251,.86);
+  line-height: 1.55;
+  border-left: 3px solid rgba(255,159,28,.55);
+  padding-left: 10px;
+}
+
+.deepSearchMeta {
+  margin-top: 9px;
+  color: var(--dim);
+  font-size: 13px;
+}
+
+.deepSearchActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+@media (max-width: 760px) {
+  .deepSearchTop,
+  .deepSearchRow {
+    display: block;
+  }
+
+  .deepSearchTop button,
+  .deepSearchRow button {
+    margin-top: 10px;
+    width: 100%;
+  }
+}

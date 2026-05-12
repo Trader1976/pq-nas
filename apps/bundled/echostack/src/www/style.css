@@ -370,3 +370,139 @@ button:disabled {
     margin-top: 10px;
   }
 }
+
+/* Compact grid view */
+.items.gridMode {
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  align-items: stretch;
+}
+
+.items.gridMode .item {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  min-height: 0;
+}
+
+.items.gridMode .itemMain {
+  min-width: 0;
+}
+
+.items.gridMode .itemHead {
+  gap: 9px;
+  margin-bottom: 4px;
+}
+
+.items.gridMode .favicon {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+}
+
+.items.gridMode .itemTitle {
+  font-size: 16px;
+  line-height: 1.2;
+  margin-bottom: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.items.gridMode .readBadge {
+  min-height: 20px;
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
+.items.gridMode .itemUrl {
+  font-size: 12px;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.items.gridMode .itemDescription {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.items.gridMode .itemPreview {
+  width: 100%;
+  margin-top: 8px;
+  border-radius: 13px;
+}
+
+.items.gridMode .itemPreview img {
+  max-height: 115px;
+}
+
+.items.gridMode .itemMeta {
+  margin-top: 7px;
+  font-size: 12px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.items.gridMode .itemNotes {
+  display: none;
+}
+
+.items.gridMode .itemActions {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.items.gridMode .itemActions button {
+  flex: 1 1 auto;
+  min-width: 96px;
+  padding: 8px 9px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.items.gridMode .itemActions .saveItemBtn {
+  display: none;
+}
+
+/* Compact save-link composer */
+.composer.collapsed {
+  padding-bottom: 12px;
+}
+
+.composer.collapsed .grid2,
+.composer.collapsed .grid1,
+.composer.collapsed textarea {
+  display: none;
+}
+
+.composer.expanded .grid2,
+.composer.expanded .grid1 {
+  animation: echoComposerReveal .14s ease-out;
+}
+
+.composer.expanded textarea {
+  animation: echoComposerReveal .14s ease-out;
+}
+
+@keyframes echoComposerReveal {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

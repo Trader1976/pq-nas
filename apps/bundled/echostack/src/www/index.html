@@ -5,7 +5,8 @@
   <title>DNA-Nexus • Echo Stack</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <link rel="stylesheet" href="./style.css">
-    <link rel="stylesheet" href="./background.css">
+  <link rel="stylesheet" href="./fulltext_search.css">
+  <link rel="stylesheet" href="./background.css">
 </head>
 <body>
   <div class="shell">
@@ -39,7 +40,24 @@
 
     <section class="toolbar">
       <input id="searchInput" type="search" placeholder="Search links, notes, tags, collections">
+      <button id="viewModeBtn" type="button">Grid view</button>
       <button id="refreshBtn" type="button">Refresh</button>
+    </section>
+
+    <section class="deepSearch" id="deepSearchPanel">
+      <div class="deepSearchTop">
+        <div class="deepSearchTitleBlock">
+          <h2>Deep Search</h2>
+          <p>Search inside archived page snapshots, not just link titles and tags.</p>
+        </div>
+        <button id="deepReindexAllBtn" type="button" title="Build or refresh the Deep Search index for pages that have already been archived. Saved links that are not archived yet will be skipped." aria-label="Index archived pages for Deep Search">Re-index archives</button>
+      </div>
+      <div class="deepSearchRow">
+        <input id="deepSearchInput" type="search" placeholder="Example: muscle gain in 50s">
+        <button id="deepSearchBtn" type="button" title="Search inside the saved text of archived pages. This finds words from page content, not only titles, tags, or notes." aria-label="Search inside archived page text">Deep Search</button>
+      </div>
+      <div id="deepSearchStatus" class="deepSearchStatus">Type a phrase to search inside archived page text.</div>
+      <div id="deepSearchResults" class="deepSearchResults"></div>
     </section>
 
     <main id="items" class="items"></main>
@@ -62,6 +80,7 @@
     </article>
   </template>
 
+  <script src="./fulltext_search.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

@@ -2,12 +2,29 @@
   "use strict";
 
   const API = "/api/v4/echostack";
+  const VIEW_MODE_KEY = "echostack_view_mode_v1";
 
   const el = (id) => document.getElementById(id);
 
+  function loadViewMode() {
+    try {
+      const v = localStorage.getItem(VIEW_MODE_KEY);
+      return v === "grid" ? "grid" : "list";
+    } catch (_) {
+      return "list";
+    }
+  }
+
+  function saveViewMode(mode) {
+    try {
+      localStorage.setItem(VIEW_MODE_KEY, mode);
+    } catch (_) {}
+  }
+
   const state = {
     items: [],
-    q: ""
+    q: "",
+    viewMode: loadViewMode()
   };
 
   let statusDotsTimer = null;
@@ -167,6 +184,9 @@
     const root = el("items");
     const tpl = el("itemTemplate");
     if (!root || !tpl) return;
+
+    root.className = `items ${state.viewMode === "grid" ? "gridMode" : "listMode"}`;
+    updateViewModeButton();
 
     root.innerHTML = "";
 
@@ -366,6 +386,7 @@
     el("titleInput").value = "";
     el("notesInput").value = "";
 
+    updateComposerExpanded();
     setStatus("Saved.", "good");
     await loadItems();
   }
@@ -405,10 +426,26 @@
         body: JSON.stringify({ id })
       });
 
+      let deepIndexed = false;
+      try {
+        if (window.EchoStackFullText &&
+            typeof window.EchoStackFullText.reindexItem === "function") {
+          deepIndexed = await window.EchoStackFullText.reindexItem(id);
+        }
+      } catch (idxErr) {
+        console.warn("Echo Stack Deep Search indexing failed:", idxErr);
+      }
+
       if (j.already_archived) {
-        setStatus("Already archived.", "good");
+        setStatus(
+          deepIndexed ? "Already archived. Deep Search index refreshed." : "Already archived.",
+          "good"
+        );
       } else {
-        setStatus("Archived.", "good");
+        setStatus(
+          deepIndexed ? "Archived and indexed for Deep Search." : "Archived.",
+          "good"
+        );
       }
     } catch (e) {
       setStatus(`Archive failed: ${e.message || String(e)}`, "bad");
@@ -421,11 +458,56 @@
     }
   }
 
+  function updateViewModeButton() {
+    const btn = el("viewModeBtn");
+    if (!btn) return;
+
+    if (state.viewMode === "grid") {
+      btn.textContent = "List view";
+      btn.title = "Switch to full list view";
+    } else {
+      btn.textContent = "Grid view";
+      btn.title = "Switch to compact grid view";
+    }
+  }
+
+  function setViewMode(mode) {
+    state.viewMode = mode === "grid" ? "grid" : "list";
+    saveViewMode(state.viewMode);
+    render();
+  }
+
+  function composerHasDetails() {
+    return Boolean(
+      (el("urlInput")?.value || "").trim() ||
+      (el("titleInput")?.value || "").trim() ||
+      (el("collectionInput")?.value || "").trim() ||
+      (el("tagsInput")?.value || "").trim() ||
+      (el("notesInput")?.value || "").trim()
+    );
+  }
+
+  function setComposerExpanded(expanded) {
+    const composer = document.querySelector(".composer");
+    if (!composer) return;
+
+    composer.classList.toggle("expanded", Boolean(expanded));
+    composer.classList.toggle("collapsed", !expanded);
+  }
+
+  function updateComposerExpanded() {
+    setComposerExpanded(composerHasDetails());
+  }
+
   function bind() {
     el("saveBtn")?.addEventListener("click", () => {
       saveNewItem().catch((e) => setStatus(e.message || String(e), "bad"));
     });
     
+
+    el("viewModeBtn")?.addEventListener("click", () => {
+      setViewMode(state.viewMode === "grid" ? "list" : "grid");
+    });
 
     el("refreshBtn")?.addEventListener("click", () => {
       loadItems().catch((e) => setStatus(e.message || String(e), "bad"));
@@ -439,6 +521,19 @@
       }, 220);
     });
 
+    el("urlInput")?.addEventListener("focus", () => {
+      setComposerExpanded(true);
+    });
+
+    el("urlInput")?.addEventListener("input", () => {
+      setComposerExpanded(true);
+    });
+
+    for (const id of ["titleInput", "collectionInput", "tagsInput", "notesInput"]) {
+      el(id)?.addEventListener("input", updateComposerExpanded);
+      el(id)?.addEventListener("focus", () => setComposerExpanded(true));
+    }
+
     el("urlInput")?.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
@@ -448,5 +543,6 @@
   }
 
   bind();
+  updateComposerExpanded();
   loadItems().catch((e) => setStatus(e.message || String(e), "bad"));
 })();

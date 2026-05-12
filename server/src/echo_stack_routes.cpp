@@ -1,4 +1,5 @@
 #include "echo_stack_routes.h"
+#include "echo_stack_search_routes.h"
 #include "user_quota.h"
 
 #include <nlohmann/json.hpp>
@@ -3111,6 +3112,8 @@ static EchoStackItemRec mutable_from_json_local(const json& j,
 } // namespace
 
 void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps& deps) {
+    register_echo_stack_search_routes(srv, deps);
+
     srv.Get("/api/v4/echostack/items", [deps](const httplib::Request& req, httplib::Response& res) {
         std::string fp, role;
         if (!require_actor_local(deps, req, res, &fp, &role)) return;
@@ -3916,7 +3919,26 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
         }
 
         if (rec.archive_status == "archived" && !rec.archive_rel_dir.empty()) {
-            deps.reply_json(res, 200, json{
+                    std::string deep_index_source;
+        std::string deep_index_err;
+        if (echo_stack_index_archived_item_for_search(
+                deps,
+                rec.owner_fp,
+                rec.id,
+                &deep_index_source,
+                &deep_index_err)) {
+            audit_local(deps, "echostack.deep_index", "ok", {
+                {"item_id", rec.id},
+                {"source_file", deep_index_source}
+            });
+        } else {
+            audit_local(deps, "echostack.deep_index", "fail", {
+                {"item_id", rec.id},
+                {"error", deep_index_err}
+            });
+        }
+
+deps.reply_json(res, 200, json{
                 {"ok", true},
                 {"already_archived", true},
                 {"archive_view_url", archive_view_url_local(rec.id)},
@@ -4204,7 +4226,26 @@ void register_echo_stack_routes(httplib::Server& srv, const EchoStackRoutesDeps&
             {"bytes", std::to_string(static_cast<unsigned long long>(staged_bytes))}
         });
 
-        deps.reply_json(res, 200, json{
+                std::string deep_index_source;
+        std::string deep_index_err;
+        if (echo_stack_index_archived_item_for_search(
+                deps,
+                rec.owner_fp,
+                rec.id,
+                &deep_index_source,
+                &deep_index_err)) {
+            audit_local(deps, "echostack.deep_index", "ok", {
+                {"item_id", rec.id},
+                {"source_file", deep_index_source}
+            });
+        } else {
+            audit_local(deps, "echostack.deep_index", "fail", {
+                {"item_id", rec.id},
+                {"error", deep_index_err}
+            });
+        }
+
+deps.reply_json(res, 200, json{
             {"ok", true},
             {"archive_view_url", archive_view_url_local(rec.id)},
             {"item", item_json_local(rec)}

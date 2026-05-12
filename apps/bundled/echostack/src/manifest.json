@@ -1,7 +1,7 @@
 {
   "id": "echostack",
   "name": "Echo Stack",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "entry": "www/index.html",
   "api_base": "/api/v4/echostack",
   "permissions": [],
