@@ -13060,7 +13060,97 @@ srv.Post("/api/v4/workspaces/files/move",
                 return;
             }
         }
+        // File locks are path-based, so move/rename must be blocked before the
+        // payload changes path. Otherwise a locked item can be renamed and the lock
+        // becomes detached from the real file.
+        {
+            pqnas::FileLocksStore lock_store(deps.locks_db_path);
+            std::string lock_err;
 
+            const auto now = static_cast<std::int64_t>(
+                std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::system_clock::now().time_since_epoch()
+                ).count()
+            );
+
+            (void)lock_store.delete_expired(now, nullptr);
+
+            auto src_lock = lock_store.find_live_conflict(
+                "workspace",
+                workspace_id,
+                from_rel_norm,
+                now,
+                &lock_err
+            );
+
+            if (!lock_err.empty()) {
+                audit_fail(workspace_id, "source_lock_check_failed", 500, lock_err, from_rel_norm, to_rel_norm);
+                deps.reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "failed to check file lock"}
+                }.dump());
+                return;
+            }
+
+            if (src_lock.has_value()) {
+                audit_fail(workspace_id, "source_locked", 409, "", from_rel_norm, to_rel_norm);
+                deps.reply_json(res, 409, json{
+                    {"ok", false},
+                    {"error", "locked"},
+                    {"message", "move source blocked because this item is locked"},
+                    {"lock", json{
+                        {"scope_type", src_lock->scope_type},
+                        {"scope_id", src_lock->scope_id},
+                        {"logical_rel_path", src_lock->logical_rel_path},
+                        {"item_kind", src_lock->item_kind},
+                        {"locked_by_fp_short", workspace_file_lock_fp_short_local(src_lock->locked_by_fp)},
+                        {"note", src_lock->note},
+                        {"expires_at_epoch", src_lock->expires_at_epoch}
+                    }}
+                }.dump());
+                return;
+            }
+
+            lock_err.clear();
+
+            auto dst_lock = lock_store.find_live_conflict(
+                "workspace",
+                workspace_id,
+                to_rel_norm,
+                now,
+                &lock_err
+            );
+
+            if (!lock_err.empty()) {
+                audit_fail(workspace_id, "destination_lock_check_failed", 500, lock_err, from_rel_norm, to_rel_norm);
+                deps.reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "server_error"},
+                    {"message", "failed to check destination file lock"}
+                }.dump());
+                return;
+            }
+
+            if (dst_lock.has_value()) {
+                audit_fail(workspace_id, "destination_locked", 409, "", from_rel_norm, to_rel_norm);
+                deps.reply_json(res, 409, json{
+                    {"ok", false},
+                    {"error", "locked"},
+                    {"message", "move destination blocked because this item is locked"},
+                    {"lock", json{
+                        {"scope_type", dst_lock->scope_type},
+                        {"scope_id", dst_lock->scope_id},
+                        {"logical_rel_path", dst_lock->logical_rel_path},
+                        {"item_kind", dst_lock->item_kind},
+                        {"locked_by_fp_short", workspace_file_lock_fp_short_local(dst_lock->locked_by_fp)},
+                        {"note", dst_lock->note},
+                        {"expires_at_epoch", dst_lock->expires_at_epoch}
+                    }}
+                }.dump());
+                return;
+            }
+        }
         auto move_one_path = [&](const std::filesystem::path& src_path,
                                  const std::filesystem::path& dst_path,
                                  bool is_dir,
