@@ -611,7 +611,7 @@
         return "";
     }
 
-    async function apiInviteWorkspaceMember(workspaceId, fingerprint, role) {
+    async function apiAddWorkspaceMember(workspaceId, fingerprint, role) {
         const r = await fetch("/api/v4/workspaces/members/invite", {
             method: "POST",
             headers: {
@@ -675,7 +675,25 @@
         }
         return j;
     }
+    async function apiDeleteWorkspace(workspaceId) {
+        const r = await fetch("/api/v4/workspaces/delete", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            },
+            credentials: "include",
+            body: JSON.stringify({
+                workspace_id: workspaceId
+            })
+        });
 
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j || !j.ok) {
+            throw new Error(j.message || j.error || ("HTTP " + r.status));
+        }
+        return j;
+    }
     function statusClass(status) {
         const s = String(status || "").toLowerCase();
         if (s === "enabled") return "ok";
@@ -756,7 +774,68 @@
 
         return j;
     }
+    function appendWorkspaceDangerZone(workspace) {
+        if (!workspaceMembersList) return;
+        if (!canCurrentScopeManageMembers()) return;
 
+        const workspaceId = String((workspace && workspace.workspace_id) || FM.scope.workspaceId || "");
+        const workspaceName = String((workspace && workspace.name) || FM.scope.workspaceName || workspaceId || "this Shared Space");
+        const workspaceKind = String((workspace && workspace.kind) || FM.scope.workspaceKind || "");
+
+        if (workspaceKind && workspaceKind !== "personal") return;
+
+        const box = document.createElement("div");
+        box.className = "memberRow";
+        box.style.display = "grid";
+        box.style.gap = "10px";
+        box.style.padding = "12px";
+        box.style.border = "1px solid rgba(160,20,20,0.45)";
+        box.style.borderRadius = "14px";
+        box.style.background = "rgba(120,20,20,0.08)";
+        box.style.marginTop = "10px";
+
+        const title = document.createElement("div");
+        title.style.fontWeight = "900";
+        title.textContent = "Danger Zone";
+        box.appendChild(title);
+
+        const text = document.createElement("div");
+        text.style.fontSize = "13px";
+        text.style.opacity = ".86";
+        text.textContent = "Delete this Shared Space. Files are preserved on disk, but the Shared Space is disabled and removed from member lists.";
+        box.appendChild(text);
+
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "danger";
+        btn.textContent = "Delete Shared Space";
+
+        btn.addEventListener("click", async () => {
+            const expected = workspaceName;
+            const typed = window.prompt(`Type "${expected}" to delete this Shared Space.`);
+            if (typed !== expected) return;
+
+            try {
+                workspaceMembersStatus.textContent = "Deleting Shared Space…";
+                await apiDeleteWorkspace(workspaceId);
+
+                resetToUserScope();
+                closeWorkspaceMembersModal();
+                await refreshWorkspaceChoices();
+
+                if (FM.refresh) {
+                    await FM.refresh();
+                }
+
+                workspaceMembersStatus.textContent = "";
+            } catch (e) {
+                workspaceMembersStatus.textContent = "Delete failed: " + (e.message || e);
+            }
+        });
+
+        box.appendChild(btn);
+        workspaceMembersList.appendChild(box);
+    }
     function renderWorkspaceMembers(members) {
         if (!workspaceMembersList) return;
 
@@ -942,7 +1021,7 @@
                         reinvite.disabled = true;
                         reinvite.textContent = "Re-inviting…";
                         try {
-                            await apiInviteWorkspaceMember(workspaceId, fp, String(sel.value || "viewer"));
+                            await apiAddWorkspaceMember(workspaceId, fp, String(sel.value || "viewer"));
                             await reloadMembers();
                         } catch (e) {
                             if (workspaceMembersStatus) workspaceMembersStatus.textContent = "Re-invite failed: " + String(e && e.message ? e.message : e);
@@ -1005,20 +1084,20 @@
         panel.style.cssText = "margin-bottom:12px; padding:10px; border:1px solid rgba(255,128,0,.28); border-radius:14px; background:rgba(255,128,0,0.045);";
 
         panel.innerHTML = `
-            <div style="font-weight:900; margin-bottom:8px;">External access</div>
+            <div style="font-weight:900; margin-bottom:8px;">External member access</div>
             <div class="hint" style="margin-bottom:10px;">
-                Share a stable access page with accepted external members, or create a one-time QR invite for a new external DNA Connect identity.
+                Create a one-time invite for a new external DNA Connect identity. After they accept, give them the member access link for future visits.
             </div>
 
             <div class="row" style="margin-bottom:12px;">
                 <button id="sharedSpaceCopyExternalAccessBtn" class="btn secondary" type="button">
-                    Copy external access link
+                    Copy member access link
                 </button>
             </div>
 
             <div id="sharedSpaceExternalInviteControls">
                 <div class="hint" style="margin-bottom:8px;">
-                    Owner only: create an external invite QR. The outsider scans this once with DNA Connect to become an external workspace member.
+                    Owner only: create a one-time invite. Send it to the outsider so they can open it and scan the QR with DNA Connect.
                 </div>
 
                 <div class="row">
@@ -1034,7 +1113,7 @@
                     </select>
 
                     <button id="sharedSpaceExternalInviteBtn" class="btn" type="button">
-                        Create external invite QR
+                        Create one-time invite
                     </button>
                 </div>
 
@@ -1102,7 +1181,7 @@
                 if (result) {
                     result.innerHTML = `
                         <div class="hint" style="margin-bottom:8px;">
-                            Invite created: <span class="mono">${escapeHtml(inviteId)}</span>
+                            One-time invite: <span class="mono">${escapeHtml(inviteId)}</span>
                         </div>
 
                         <div class="row" style="margin-bottom:10px;">
@@ -1110,7 +1189,7 @@
                                     class="btn secondary"
                                     type="button"
                                     data-url="${escapeHtml(qrUrl)}">
-                                Copy invite QR link
+                                Copy one-time invite link
                             </button>
 
                             <a class="btn secondary"
@@ -1118,7 +1197,7 @@
                                target="_blank"
                                rel="noopener noreferrer"
                                style="text-decoration:none;">
-                                Open QR
+                                
                             </a>
                         </div>
 
@@ -1129,8 +1208,8 @@
                         </div>
 
                         <div class="hint" style="margin-top:8px;">
-                            Send the invite QR link to the outsider. They open it and scan the QR with DNA Connect.
-                            After acceptance, send them the external access link for future visits.
+                            Send the one-time invite link to the outsider. They open it and scan the QR with DNA Connect.
+                            After they accept, send them the member access link for future visits.
                         </div>
                     `;
 
@@ -1153,7 +1232,7 @@
                             }, 1200);
                         } catch (e) {
                             if (workspaceMembersStatus) {
-                                workspaceMembersStatus.textContent = `Copy invite QR link failed: ${String(e && e.message ? e.message : e)}`;
+                                workspaceMembersStatus.textContent = `Copy one-time invite link failed: ${String(e && e.message ? e.message : e)}`;
                             }
                             copyQrLinkBtn.textContent = oldText;
                             copyQrLinkBtn.disabled = false;
@@ -1161,7 +1240,7 @@
                     });
                 }
 
-                if (workspaceMembersStatus) workspaceMembersStatus.textContent = `External invite QR created for ${role}.`;
+                if (workspaceMembersStatus) workspaceMembersStatus.textContent = `One-time invite created for ${role}.`;
             } catch (e) {
                 if (workspaceMembersStatus) workspaceMembersStatus.textContent = `External invite failed: ${String(e && e.message ? e.message : e)}`;
             } finally {
@@ -1181,7 +1260,7 @@
         panel.id = "sharedSpaceInvitePanel";
         panel.style.cssText = "display:none; margin-bottom:12px; padding:10px; border:1px solid rgba(var(--fg-rgb),0.16); border-radius:14px; background:rgba(255,255,255,0.035);";
         panel.innerHTML = `
-            <div style="font-weight:900; margin-bottom:8px;">Invite member</div>
+            <div style="font-weight:900; margin-bottom:8px;">Add member</div>
             <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
                 <input id="sharedSpaceInviteFp" class="mono" placeholder="Fingerprint" style="flex:1; min-width:260px;" />
                 <select id="sharedSpaceInviteRole" style="min-width:120px;">
@@ -1189,7 +1268,7 @@
                     <option value="editor" selected>editor</option>
                     <option value="owner">owner</option>
                 </select>
-                <button id="sharedSpaceInviteBtn" class="btn" type="button">Invite</button>
+                <button id="sharedSpaceInviteBtn" class="btn" type="button">Add member</button>
             </div>
             <div class="mono" style="opacity:.7; font-size:12px; margin-top:8px;">
                 The invited user will see this under Shared Space invites.
@@ -1207,21 +1286,21 @@
             const workspaceId = FM.scope.workspaceId || "";
 
             if (!workspaceId || !fp) {
-                if (workspaceMembersStatus) workspaceMembersStatus.textContent = "Invite failed: missing fingerprint.";
+                if (workspaceMembersStatus) workspaceMembersStatus.textContent = "Add member failed: missing fingerprint.";
                 return;
             }
 
             const old = inviteBtn.textContent;
             inviteBtn.disabled = true;
-            inviteBtn.textContent = "Inviting…";
+            inviteBtn.textContent = "Adding member…";
 
             try {
-                await apiInviteWorkspaceMember(workspaceId, fp, role);
+                await apiAddWorkspaceMember(workspaceId, fp, role);
                 if (fpEl) fpEl.value = "";
                 await openWorkspaceMembersModal();
             } catch (e) {
                 if (workspaceMembersStatus) {
-                    workspaceMembersStatus.textContent = `Invite failed: ${String(e && e.message ? e.message : e)}`;
+                    workspaceMembersStatus.textContent = `Add member failed: ${String(e && e.message ? e.message : e)}`;
                 }
             } finally {
                 inviteBtn.disabled = false;
@@ -1244,6 +1323,86 @@
         }
     }
 
+
+
+
+
+    function ensureExternalInviteOwnerCss() {
+        if (document.getElementById("pqnasExternalInviteOwnerCss")) return;
+
+        const style = document.createElement("style");
+        style.id = "pqnasExternalInviteOwnerCss";
+        style.textContent = `
+            #sharedSpaceExternalAccessPanel img[src*="external-invites/qr.svg"],
+            #sharedSpaceExternalAccessPanel img[src*="/api/v4/workspaces/external-invites/qr.svg"] {
+                display: none !important;
+            }
+
+            #sharedSpaceExternalAccessPanel div:has(> img[src*="external-invites/qr.svg"]),
+            #sharedSpaceExternalAccessPanel div:has(> img[src*="/api/v4/workspaces/external-invites/qr.svg"]) {
+                display: none !important;
+            }
+
+            #sharedSpaceExternalAccessPanel button:empty,
+            #sharedSpaceExternalAccessPanel a:empty {
+                display: none !important;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+
+    function removeExternalInviteBallButton() {
+        const panel = document.getElementById("sharedSpaceExternalAccessPanel");
+        if (!panel) return;
+
+        const controls = Array.from(panel.querySelectorAll("button, a"));
+        for (const el of controls) {
+            const text = String(el.textContent || "").trim().toLowerCase();
+            const href = String(el.getAttribute("href") || "");
+            const prevText = el.previousElementSibling
+                ? String(el.previousElementSibling.textContent || "").trim().toLowerCase()
+                : "";
+            const nextText = el.nextElementSibling
+                ? String(el.nextElementSibling.textContent || "").trim().toLowerCase()
+                : "";
+
+            const isQrButton =
+                text === "open qr" ||
+                href.includes("external-invites/qr.svg");
+
+            const isBlankBallAfterCopyInvite =
+                text === "" &&
+                el.tagName.toLowerCase() === "button" &&
+                (
+                    prevText.includes("copy one-time invite link") ||
+                    nextText.includes("copy one-time invite link")
+                );
+
+            if (isQrButton || isBlankBallAfterCopyInvite) {
+                el.remove();
+            }
+        }
+    }
+
+    function scheduleExternalInviteBallButtonRemoval() {
+        removeExternalInviteBallButton();
+        setTimeout(removeExternalInviteBallButton, 50);
+        setTimeout(removeExternalInviteBallButton, 200);
+        setTimeout(removeExternalInviteBallButton, 800);
+    }
+
+
+    document.addEventListener("click", (ev) => {
+        const panel = document.getElementById("sharedSpaceExternalAccessPanel");
+        if (!panel) return;
+
+        const target = ev.target && ev.target.closest ? ev.target.closest("button, a") : null;
+        if (!target || !panel.contains(target)) return;
+
+        scheduleExternalInviteBallButtonRemoval();
+    }, true);
+
     async function openWorkspaceMembersModal() {
         if (!isWorkspaceScope()) return;
         if (!workspaceMembersModal) return;
@@ -1262,6 +1421,8 @@
         }
         ensureSharedSpaceInvitePanel();
         ensureExternalWorkspaceAccessPanel();
+        scheduleExternalInviteBallButtonRemoval();
+        ensureExternalInviteOwnerCss();
 
         const invitePanel = document.getElementById("sharedSpaceInvitePanel");
         if (invitePanel) {
@@ -1286,7 +1447,15 @@
 
         try {
             const j = await fetchWorkspaceMembers(FM.scope.workspaceId);
+
             renderWorkspaceMembers(j.members || []);
+
+            appendWorkspaceDangerZone(j.workspace || {
+                workspace_id: FM.scope.workspaceId,
+                name: FM.scope.workspaceName,
+                kind: FM.scope.workspaceKind
+            });
+
             if (workspaceMembersStatus) {
                 workspaceMembersStatus.textContent = `${Array.isArray(j.members) ? j.members.length : 0} member(s)`;
             }

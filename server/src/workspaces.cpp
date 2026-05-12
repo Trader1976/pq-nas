@@ -509,8 +509,8 @@ bool WorkspacesRegistry::add_or_update_member(const std::string& workspace_id,
     return true;
 }
 
-bool WorkspacesRegistry::remove_member(const std::string& workspace_id,
-                                       const std::string& fingerprint) {
+    bool WorkspacesRegistry::remove_member(const std::string& workspace_id,
+                                           const std::string& fingerprint) {
     std::lock_guard<std::mutex> lock(mu_);
     auto it = by_id_.find(workspace_id);
     if (it == by_id_.end()) return false;
@@ -521,7 +521,9 @@ bool WorkspacesRegistry::remove_member(const std::string& workspace_id,
     const auto old_size = members.size();
     members.erase(
         std::remove_if(members.begin(), members.end(),
-                       [&](const WorkspaceMemberRec& m) { return m.fingerprint == fp; }),
+                       [&](const WorkspaceMemberRec& m) {
+                           return m.fingerprint == fp && m.role != "owner";
+                       }),
         members.end());
 
     return members.size() != old_size;
