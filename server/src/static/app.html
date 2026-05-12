@@ -371,13 +371,56 @@
             border:1px solid rgba(var(--fg-rgb),0.14);
             background:rgba(0,0,0,0.05);
             border-radius:14px;
-            padding:10px 11px;
+            padding:10px 11px 10px 14px;
+            position:relative;
+            overflow:hidden;
+            flex:0 0 auto;
+            min-height:52px;
+            box-sizing:border-box;
+        }
+
+        .activityItem::before{
+            content:"";
+            position:absolute;
+            left:0;
+            top:0;
+            bottom:0;
+            width:3px;
+            background:rgba(var(--fg-rgb),0.22);
+        }
+
+        .activityItem.activityKindDevice{
+            border-color:rgba(168,85,247,0.48);
+            background:rgba(168,85,247,0.08);
+        }
+
+        .activityItem.activityKindDevice::before{
+            background:rgba(168,85,247,0.95);
+        }
+
+        .activityItem.activityKindGuest{
+            border-color:rgba(96,165,250,0.48);
+            background:rgba(96,165,250,0.08);
+        }
+
+        .activityItem.activityKindGuest::before{
+            background:rgba(96,165,250,0.95);
+        }
+
+        .activityItem.activityKindSystem{
+            border-color:rgba(245,158,11,0.42);
+            background:rgba(245,158,11,0.07);
+        }
+
+        .activityItem.activityKindSystem::before{
+            background:rgba(245,158,11,0.85);
         }
 
         .activityMsg{
             font-size:13px;
             line-height:1.35;
             font-weight:650;
+            overflow-wrap:anywhere;
         }
 
         .activityMeta{
@@ -386,6 +429,7 @@
             color:rgba(var(--fg-rgb),0.58);
             line-height:1.35;
             word-break:break-word;
+            overflow-wrap:anywhere;
         }
 
         .activityEmpty{

@@ -2615,8 +2615,19 @@
         }
 
         for (const ev of events) {
+            const actorKind = String(ev.actor_kind || "user").toLowerCase();
+            const actorDeviceName = String(ev.actor_device_name || "").trim();
+            const actorLabel = String(ev.actor_label || "").trim();
+
             const card = document.createElement("div");
             card.className = "activityItem";
+            if (actorKind === "device") {
+                card.classList.add("activityKindDevice");
+            } else if (actorKind === "guest") {
+                card.classList.add("activityKindGuest");
+            } else if (actorKind === "system") {
+                card.classList.add("activityKindSystem");
+            }
 
             const msg = document.createElement("div");
             msg.className = "activityMsg";
@@ -2626,6 +2637,14 @@
             const metaBits = [];
             const when = activityFmtTime(ev.created_at_epoch);
             if (when) metaBits.push(when);
+
+            if (actorKind === "device") {
+                metaBits.push(actorDeviceName ? `Mobile · ${actorDeviceName}` : "Mobile app");
+            } else if (actorKind === "guest") {
+                metaBits.push(actorLabel && actorLabel !== "Someone" ? `Guest · ${actorLabel}` : "Guest / Drop Zone");
+            } else if (actorKind === "system") {
+                metaBits.push("System");
+            }
 
             const targetPath = String(ev.target_path || "");
             if (targetPath) metaBits.push(targetPath);

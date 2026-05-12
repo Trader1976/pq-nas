@@ -3721,7 +3721,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return false;
   }
 
-  function moveDestinationProblem(destPath, items) {
+  function moveDestinationProblem(destPath, items, modeOpts = {}) {
     const dest = normalizeRelPath(destPath);
     const list = Array.isArray(items) ? items : [];
 

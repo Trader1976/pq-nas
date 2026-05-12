@@ -1474,6 +1474,83 @@ static std::string activity_user_display_name_local(pqnas::UsersRegistry& users,
     return rec->name;
 }
 
+static pqnas::activity::ActivityActor activity_actor_for_request_local(
+    const httplib::Request* req,
+    pqnas::UsersRegistry& users,
+    const std::string& actor_fp
+) {
+    pqnas::activity::ActivityActor actor;
+    actor.user_id = actor_fp;
+    actor.display_name = activity_user_display_name_local(users, actor_fp);
+    actor.kind = "user";
+
+    if (!req) {
+        return actor;
+    }
+
+    auto it = req->headers.find("Authorization");
+    if (it == req->headers.end()) {
+        return actor;
+    }
+
+    const std::string& hdr = it->second;
+    const std::string prefix = "Bearer ";
+    if (hdr.size() <= prefix.size() || hdr.compare(0, prefix.size(), prefix) != 0) {
+        return actor;
+    }
+
+    const std::string raw_token = hdr.substr(prefix.size());
+    if (raw_token.empty()) {
+        return actor;
+    }
+
+    std::string token_fp;
+    std::string token_role;
+    std::string device_id;
+    std::string terr;
+
+    if (!g_app_tokens.verify_access_token(
+            raw_token,
+            &token_fp,
+            &token_role,
+            &device_id,
+            &terr)) {
+        return actor;
+    }
+
+    if (token_fp != actor_fp || device_id.empty()) {
+        return actor;
+    }
+
+    actor.kind = "device";
+
+    pqnas::TrustedAppDevice d;
+    if (g_app_tokens.get_device(device_id, &d)) {
+        actor.device_name = d.device_name;
+
+        if (actor.device_name.empty()) {
+            std::string model = d.device_model;
+            std::string manufacturer = d.device_manufacturer;
+
+            if (!manufacturer.empty() && !model.empty()) {
+                actor.device_name = manufacturer + " " + model;
+            } else if (!model.empty()) {
+                actor.device_name = model;
+            } else if (!manufacturer.empty()) {
+                actor.device_name = manufacturer;
+            } else if (!d.platform.empty()) {
+                actor.device_name = d.platform + " device";
+            }
+        }
+    }
+
+    if (actor.device_name.empty()) {
+        actor.device_name = "Mobile app";
+    }
+
+    return actor;
+}
+
 static std::string activity_basename_local(const std::string& rel_path,
                                            const std::string& fallback) {
     try {
@@ -1494,7 +1571,8 @@ static void record_user_file_activity_best_effort_local(pqnas::UsersRegistry& us
                                                         const std::string& item_type,
                                                         const std::string& trash_id,
                                                         std::uint64_t size_bytes,
-                                                        std::uint64_t file_count) {
+                                                        std::uint64_t file_count,
+                                                        const httplib::Request* req = nullptr) {
     if (actor_fp.empty() || event_type.empty()) return;
 
     std::filesystem::path user_root;
@@ -1509,9 +1587,7 @@ static void record_user_file_activity_best_effort_local(pqnas::UsersRegistry& us
     pqnas::activity::ActivityEvent ev;
     ev.owner_user_id = actor_fp;
 
-    ev.actor.user_id = actor_fp;
-    ev.actor.display_name = activity_user_display_name_local(users, actor_fp);
-    ev.actor.kind = "user";
+    ev.actor = activity_actor_for_request_local(req, users, actor_fp);
 
     ev.event_type = event_type;
     ev.scope_type = "user";
@@ -1706,7 +1782,8 @@ static void record_user_file_moved_activity_best_effort_local(pqnas::UsersRegist
                                                               const std::string& from_rel_path,
                                                               const std::string& to_rel_path,
                                                               const std::string& item_type,
-                                                              std::uint64_t size_bytes) {
+                                                              std::uint64_t size_bytes,
+                                                              const httplib::Request* req = nullptr) {
     if (actor_fp.empty() || from_rel_path.empty() || to_rel_path.empty()) return;
 
     std::filesystem::path user_root;
@@ -1723,11 +1800,54 @@ static void record_user_file_moved_activity_best_effort_local(pqnas::UsersRegist
     pqnas::activity::ActivityEvent ev;
     ev.owner_user_id = actor_fp;
 
-    ev.actor.user_id = actor_fp;
-    ev.actor.display_name = activity_user_display_name_local(users, actor_fp);
-    ev.actor.kind = "user";
+    ev.actor = activity_actor_for_request_local(req, users, actor_fp);
 
     ev.event_type = "file.moved";
+    ev.scope_type = "user";
+    ev.scope_id = actor_fp;
+
+    ev.target_kind = kind;
+    ev.target_path = to_rel_path;
+    ev.target_name = activity_basename_local(to_rel_path, kind);
+
+    ev.details = json{
+        {"scope_type", "user"},
+        {"from_path", from_rel_path},
+        {"to_path", to_rel_path},
+        {"item_type", kind},
+        {"size_bytes", size_bytes}
+    };
+
+    std::string activity_err;
+    (void)pqnas::activity::record_user_activity(user_root, ev, &activity_err);
+}
+
+static void record_user_file_copied_activity_best_effort_local(pqnas::UsersRegistry& users,
+                                                               const std::string& actor_fp,
+                                                               const std::string& from_rel_path,
+                                                               const std::string& to_rel_path,
+                                                               const std::string& item_type,
+                                                               std::uint64_t size_bytes,
+                                                               const httplib::Request* req = nullptr) {
+    if (actor_fp.empty() || from_rel_path.empty() || to_rel_path.empty()) return;
+
+    std::filesystem::path user_root;
+    try {
+        user_root = user_dir_for_fp(users, actor_fp);
+    } catch (...) {
+        return;
+    }
+
+    if (user_root.empty()) return;
+
+    const std::string kind = activity_move_item_kind_local(item_type);
+
+    pqnas::activity::ActivityEvent ev;
+    ev.owner_user_id = actor_fp;
+
+    ev.actor = activity_actor_for_request_local(req, users, actor_fp);
+
+    ev.event_type = "file.copied";
     ev.scope_type = "user";
     ev.scope_id = actor_fp;
 
@@ -23711,7 +23831,8 @@ srv.Post("/api/v4/uploads/finish", [&](const httplib::Request& req, httplib::Res
             "file",
             "",
             assembled_bytes,
-            1
+            1,
+            &req
         );
 
         reply_json(res, 200, json{
@@ -24356,7 +24477,8 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
             from_rel_norm,
             to_rel_norm,
             "file",
-            bytes
+            bytes,
+            &req
         );
         reply_json(res, 200, json{
             {"ok", true},
@@ -24591,7 +24713,8 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
             from_rel_norm,
             to_rel_norm,
             "folder",
-            0
+            0,
+            &req
         );
         reply_json(res, 200, json{
             {"ok", true},
@@ -24823,7 +24946,8 @@ srv.Post("/api/v4/files/mkdir", [&](const httplib::Request& req, httplib::Respon
             "folder",
             "",
             0,
-            1
+            1,
+            &req
         );
     }
 
@@ -30423,7 +30547,8 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             tp.item_type,
             tr.trash_id,
             tp.size_bytes,
-            tp.file_count
+            tp.file_count,
+            &req
         );
 
 
@@ -30669,7 +30794,8 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             tp.item_type,
             tr.trash_id,
             tp.size_bytes,
-            tp.file_count
+            tp.file_count,
+            &req
         );
 
 
@@ -30904,7 +31030,8 @@ srv.Post("/api/v4/files/delete", [&](const httplib::Request& req, httplib::Respo
             tp.item_type,
             tr.trash_id,
             tp.size_bytes,
-            tp.file_count
+            tp.file_count,
+            &req
         );
 
 
@@ -32226,7 +32353,17 @@ srv.Post("/api/v4/files/copy", [&](const httplib::Request& req, httplib::Respons
 
 	audit_ok(from_rel, to_rel, src_bytes, dst_old_bytes, delta_bytes, dst_exists);
 
-	reply_json(res, 200, json{
+	
+        record_user_file_copied_activity_best_effort_local(
+            users,
+            fp_hex,
+            from_rel_norm,
+            to_rel_norm,
+            "file",
+            src_bytes,
+            &req
+        );
+reply_json(res, 200, json{
     	{"ok", true},
 	    {"from", from_rel},
     	{"to", to_rel},
@@ -39216,7 +39353,8 @@ srv.Put("/api/v4/files/put",
             "file",
             "",
             bytes_written,
-            1
+            1,
+            &req
         );
 
         reply_json(res, 200, json{
