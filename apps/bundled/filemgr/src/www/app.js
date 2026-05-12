@@ -4295,6 +4295,83 @@ function describeMoveItems(items) {
     openCopyModalForItems(collectSelectedCopyItems());
   }
 
+  function friendlyMoveCopyFailureReason(raw) {
+    const s = String(raw || "").trim();
+
+    if (!s) return "unknown error";
+
+    const lower = s.toLowerCase();
+
+    if (lower.includes("dest_exists") || lower.includes("destination already exists")) {
+      return "destination already exists";
+    }
+
+    if (lower.includes("locked") || lower.includes("item is locked")) {
+      return "item is locked";
+    }
+
+    if (lower.includes("quota") || lower.includes("storage limit")) {
+      return "storage quota would be exceeded";
+    }
+
+    if (lower.includes("not_found") || lower.includes("source not found")) {
+      return "source file was not found";
+    }
+
+    if (lower.includes("forbidden") || lower.includes("permission")) {
+      return "permission denied";
+    }
+
+    if (lower.includes("source must be a file") || lower.includes("directories not supported")) {
+      return "folder copy is not supported yet";
+    }
+
+    return s
+      .replace(/\bok\b/gi, "")
+      .replace(/\bdest_exists\b/gi, "")
+      .replace(/\bbad_request\b/gi, "")
+      .replace(/\bserver_error\b/gi, "")
+      .replace(/\s+/g, " ")
+      .trim() || s;
+  }
+
+  function friendlyMoveCopyFailureLine(raw) {
+    const s = String(raw || "").trim();
+    if (!s) return "unknown item";
+
+    const parts = s.split("—");
+    const itemPart = String(parts[0] || "").trim();
+    const reasonPart = parts.slice(1).join("—").trim();
+
+    const reason = friendlyMoveCopyFailureReason(reasonPart || s);
+
+    if (itemPart) {
+      return `${itemPart} — ${reason}`;
+    }
+
+    return reason;
+  }
+
+  function friendlyMoveCopyStatus(actionPast, done, total, failed, skipped, failures) {
+    const list = Array.isArray(failures) ? failures : [];
+    const first = list.length ? friendlyMoveCopyFailureLine(list[0]) : "";
+    const skippedPart = skipped ? `, ${skipped} skipped` : "";
+
+    if (failed > 0 && done === 0) {
+      return `${actionPast} failed: ${first || `${failed} item(s) failed`}`;
+    }
+
+    if (failed > 0) {
+      return `${actionPast} partially completed: ${done}/${total} succeeded, ${failed} failed${skippedPart}. ${first ? "First problem: " + first : ""}`.trim();
+    }
+
+    if (skipped) {
+      return `${actionPast} ${done} item(s). Skipped: ${skipped}.`;
+    }
+
+    return `${actionPast} ${done} item(s).`;
+  }
+
   async function copyItemsToDestination(items, destPath) {
     const list = Array.isArray(items) ? items.slice() : [];
     const dest = normalizeRelPath(destPath);
@@ -4356,8 +4433,8 @@ function describeMoveItems(items) {
     await load(true);
 
     if (failed > 0) {
-      setBadge("err", "partial");
-      status.textContent = `Copied ${done}/${list.length} item(s). Failed: ${failed}. Skipped: ${skipped}. See console.`;
+      setBadge("err", done > 0 ? "partial" : "error");
+      status.textContent = friendlyMoveCopyStatus("Copy", done, list.length, failed, skipped, failures);
       console.warn("Copy failures:", failures);
     } else {
       setBadge("ok", "ready");
@@ -4433,8 +4510,8 @@ function describeMoveItems(items) {
     await load(true);
 
     if (failed > 0) {
-      setBadge("err", "partial");
-      status.textContent = `Moved ${done}/${list.length} item(s). Failed: ${failed}. Skipped: ${skipped}. See console.`;
+      setBadge("err", done > 0 ? "partial" : "error");
+      status.textContent = friendlyMoveCopyStatus("Move", done, list.length, failed, skipped, failures);
       console.warn("Move failures:", failures);
     } else {
       setBadge("ok", "ready");
