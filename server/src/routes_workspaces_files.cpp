@@ -6466,7 +6466,7 @@ srv.Post("/api/v4/workspaces/files/write_text",
     // These routes intentionally do NOT reuse /api/v4/uploads/* because that API
     // is My Files/user-storage only and is keyed by fp_hex/user_dir.
     static constexpr std::uint64_t k_ws_chunked_upload_chunk_bytes =
-        64ull * 1024ull * 1024ull; // 64 MiB
+        16ull * 1024ull * 1024ull; // 16 MiB, safer for Firefox/Cloudflare/proxy upload paths
     static constexpr std::uint64_t k_ws_chunked_upload_max_total_bytes =
         64ull * 1024ull * 1024ull * 1024ull; // 64 GiB safety cap
 

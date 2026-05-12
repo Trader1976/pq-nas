@@ -22506,10 +22506,10 @@ srv.Post("/api/v4/system/drives/selftest/start", [&](const httplib::Request& req
 // Phase 1:
 // - New-file uploads only (overwrite=false).
 // - Designed to bypass proxy single-request body limits such as Cloudflare's ~100 MB cap.
-// - Each chunk is <= 64 MiB, then finish assembles into the same storage/tiering metadata model.
+// - Each chunk is <= 16 MiB, then finish assembles into the same storage/tiering metadata model.
 // - Workspaces + Photo Gallery integration come later.
 static constexpr std::uint64_t k_chunked_upload_chunk_bytes =
-    64ull * 1024ull * 1024ull; // 64 MiB, safely below Cloudflare 100 MB body limit
+    16ull * 1024ull * 1024ull; // 16 MiB, safer for Firefox/Cloudflare/proxy upload paths
 
 static constexpr std::uint64_t k_chunked_upload_max_total_bytes =
     64ull * 1024ull * 1024ull * 1024ull; // 64 GiB safety cap for one upload session

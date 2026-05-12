@@ -2426,7 +2426,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
   }
 
-  const CHUNKED_UPLOAD_THRESHOLD_BYTES = 64 * 1024 * 1024;
+  const CHUNKED_UPLOAD_THRESHOLD_BYTES = 16 * 1024 * 1024;
 
   function isWorkspaceUploadScope() {
     try {
@@ -2644,6 +2644,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       );
 
       uploadId = String(start.upload_id || "");
+
       const chunkSize = Math.max(1, Number(start.chunk_size || CHUNKED_UPLOAD_THRESHOLD_BYTES));
       const chunksTotal = Math.max(0, Number(start.chunks_total || Math.ceil(size / chunkSize)));
 
