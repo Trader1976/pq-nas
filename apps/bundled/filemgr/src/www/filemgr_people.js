@@ -73,6 +73,43 @@
         if (statusEl) statusEl.textContent = text;
     }
 
+    const PEOPLE_RECENT_KEY = "pqnas_people_recently_added_v1";
+    const PEOPLE_RECENT_TTL_MS = 24 * 60 * 60 * 1000;
+
+    function readRecentlyAddedPeople() {
+        try {
+            const raw = localStorage.getItem(PEOPLE_RECENT_KEY);
+            const obj = raw ? JSON.parse(raw) : {};
+            return obj && typeof obj === "object" ? obj : {};
+        } catch (_) {
+            return {};
+        }
+    }
+
+    function writeRecentlyAddedPeople(obj) {
+        try {
+            localStorage.setItem(PEOPLE_RECENT_KEY, JSON.stringify(obj || {}));
+        } catch (_) {
+        }
+    }
+
+    function markRecentlyAddedPerson(fp) {
+        const clean = normalizeFingerprint(fp);
+        if (!clean) return;
+
+        const now = Date.now();
+        const obj = readRecentlyAddedPeople();
+
+        for (const [k, v] of Object.entries(obj)) {
+            if (!Number.isFinite(Number(v)) || now - Number(v) > PEOPLE_RECENT_TTL_MS) {
+                delete obj[k];
+            }
+        }
+
+        obj[clean] = now;
+        writeRecentlyAddedPeople(obj);
+    }
+
     function applyResolvedPeopleLabel(row, person) {
         if (!row || !person) return;
 
@@ -197,6 +234,8 @@
 
                     const savedPerson = saved && saved.contact ? saved.contact : { display_name: displayName };
                     const savedName = String(savedPerson.display_name || displayName);
+
+                    markRecentlyAddedPerson(savedPerson.subject_fingerprint || fp);
 
                     applyResolvedPeopleLabel(row, savedPerson);
 

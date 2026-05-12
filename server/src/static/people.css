@@ -122,3 +122,29 @@ html[data-theme="win_classic"] .peopleView .peopleFutureCard{
 html[data-theme="win_classic"] .peopleView .peopleContactCard::before{
     width:0;
 }
+
+.peopleNewPill{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    margin-left:8px;
+    padding:2px 8px;
+    border-radius:999px;
+    border:1px solid rgba(34,197,94,0.55);
+    background:rgba(34,197,94,0.16);
+    color:rgb(22,101,52);
+    font-size:11px;
+    font-weight:800;
+    line-height:1.2;
+    text-transform:uppercase;
+    letter-spacing:.03em;
+    vertical-align:middle;
+}
+
+html[data-theme="dark"] .peopleNewPill,
+html[data-theme="cpunk_orange"] .peopleNewPill,
+html[data-theme="orange"] .peopleNewPill{
+    color:rgb(187,247,208);
+    background:rgba(34,197,94,0.18);
+    border-color:rgba(74,222,128,0.55);
+}\n

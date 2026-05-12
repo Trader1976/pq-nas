@@ -296,6 +296,59 @@
       background: rgba(var(--fav-rgb),0.14) !important;
       box-shadow: 0 0 12px rgba(var(--fav-rgb),0.18);
     }
+
+    /* File tile mini badge stack: favorite + description/comment.
+       Favorite button has inline JS styles, so these use !important to keep
+       star/comment badges aligned and same size across themes. */
+    .tile > .favBtn,
+    .tile > .fmAnnoTileBadge{
+      position:absolute !important;
+      left:8px !important;
+      width:28px !important;
+      height:28px !important;
+      min-width:28px !important;
+      min-height:28px !important;
+      max-width:28px !important;
+      max-height:28px !important;
+      border-radius:999px !important;
+      box-sizing:border-box !important;
+      display:flex !important;
+      align-items:center !important;
+      justify-content:center !important;
+      padding:0 !important;
+      margin:0 !important;
+      line-height:1 !important;
+      font-size:15px !important;
+      z-index:4 !important;
+      border:1px solid rgba(255,255,255,0.14) !important;
+      background:rgba(0,0,0,0.45) !important;
+      backdrop-filter:blur(2px);
+      -webkit-backdrop-filter:blur(2px);
+    }
+
+    .tile > .favBtn{
+      top:8px !important;
+    }
+
+    .tile > .fmAnnoTileBadge{
+      top:40px !important;
+      cursor:default;
+      color:rgba(var(--fg-rgb),0.92);
+    }
+
+    .grid.list .tile > .favBtn,
+    .grid.list .tile > .fmAnnoTileBadge{
+      position:relative !important;
+      left:auto !important;
+      top:auto !important;
+      width:22px !important;
+      height:22px !important;
+      min-width:22px !important;
+      min-height:22px !important;
+      max-width:22px !important;
+      max-height:22px !important;
+      font-size:12px !important;
+    }
     /* smaller icon in list */
 
     .grid.list .tile .ico,
@@ -1978,7 +2031,7 @@
 <script src="./office_preview.js"></script>
 <script src="/static/pqnas_folder_picker.js?v=3"></script>
 <script src="./app.js?v=lock-pill-color-1778487093"></script>
-<script src="./filemgr_people.js?v=people-member-link-1"></script>
+<script src="./filemgr_people.js?v=people-member-link-new-pill-1"></script>
 <script src="./filemgr_workspaces.js?v=shared-spaces-ui-1"></script>
 <script src="./filemgr_annotations.js?v=file-annotations-4"></script>
 <script src="./filemgr_locks.js?v=file-locks-badges-1"></script>

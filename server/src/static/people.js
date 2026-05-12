@@ -46,11 +46,73 @@
         return "Fingerprint";
     }
 
+    const PEOPLE_RECENT_KEY = "pqnas_people_recently_added_v1";
+    const PEOPLE_RECENT_TTL_MS = 24 * 60 * 60 * 1000;
+
+    function readRecentlyAddedPeople() {
+        try {
+            const raw = localStorage.getItem(PEOPLE_RECENT_KEY);
+            const obj = raw ? JSON.parse(raw) : {};
+            return obj && typeof obj === "object" ? obj : {};
+        } catch (_) {
+            return {};
+        }
+    }
+
+    function writeRecentlyAddedPeople(obj) {
+        try {
+            localStorage.setItem(PEOPLE_RECENT_KEY, JSON.stringify(obj || {}));
+        } catch (_) {
+        }
+    }
+
+    function recentlyAddedAt(fp) {
+        const clean = normalizeFingerprint(fp);
+        if (!clean) return 0;
+
+        const now = Date.now();
+        const obj = readRecentlyAddedPeople();
+        let changed = false;
+
+        for (const [k, v] of Object.entries(obj)) {
+            const ts = Number(v);
+            if (!Number.isFinite(ts) || now - ts > PEOPLE_RECENT_TTL_MS) {
+                delete obj[k];
+                changed = true;
+            }
+        }
+
+        if (changed) writeRecentlyAddedPeople(obj);
+
+        const ts = Number(obj[clean] || 0);
+        if (!Number.isFinite(ts) || ts <= 0) return 0;
+        if (now - ts > PEOPLE_RECENT_TTL_MS) return 0;
+        return ts;
+    }
+
+    function isRecentlyAddedPerson(fp) {
+        return recentlyAddedAt(fp) > 0;
+    }
+
+    function sortNewFirst(list) {
+        return [...(Array.isArray(list) ? list : [])].sort((a, b) => {
+            const an = recentlyAddedAt(a && a.subject_fingerprint);
+            const bn = recentlyAddedAt(b && b.subject_fingerprint);
+            if (an !== bn) return bn - an;
+
+            const al = String(a && (a.display_name || a.subject_fingerprint) || "");
+            const bl = String(b && (b.display_name || b.subject_fingerprint) || "");
+            return al.localeCompare(bl);
+        });
+    }
+
     function filterContacts() {
         const q = String(state.search || "").trim().toLowerCase();
-        if (!q) return state.contacts;
+        const source = Array.isArray(state.contacts) ? state.contacts : [];
 
-        return state.contacts.filter((c) => {
+        if (!q) return sortNewFirst(source);
+
+        return sortNewFirst(source.filter((c) => {
             const hay = [
                 c.display_name,
                 c.nickname,
@@ -61,7 +123,7 @@
             ].join(" ").toLowerCase();
 
             return hay.includes(q);
-        });
+        }));
     }
 
     async function apiJson(path, opts = {}) {
@@ -272,6 +334,7 @@
 
     function renderContactCard(c) {
         const fp = c.subject_fingerprint || "";
+        const isNew = isRecentlyAddedPerson(fp);
         const label = c.display_name || shortFp(fp);
         const note = c.notes ? `
             <div class="mini" style="line-height:1.45; margin-top:8px;">${esc(c.notes)}</div>
@@ -285,7 +348,10 @@
             <div class="card peopleContactCard" style="padding:14px;">
                 <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
                     <div style="min-width:0;">
-                        <h3 style="margin:0; font-size:17px;">${esc(label)}</h3>
+                        <h3 style="margin:0; font-size:17px;">
+                            ${esc(label)}
+                            ${isNew ? '<span class="peopleNewPill">new</span>' : ''}
+                        </h3>
                         <div class="mini" style="margin-top:5px;">
                             ${esc(kindLabel(c.subject_kind))}
                             <span class="mono" title="${esc(fp)}" style="margin-left:8px;">${esc(c.subject_fingerprint_short || shortFp(fp))}</span>
