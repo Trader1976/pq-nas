@@ -417,8 +417,23 @@
 
             renderTrends(j);
         } catch (e) {
+            latestTrendPayload = { points: [] };
+
+            ["trendStorageValue", "trendFilesValue", "trendUsersValue", "trendWorkspacesValue"].forEach(id => {
+                setText(id, "—");
+            });
+
+            setInsight("insightStorageChange", "—", "Trend request failed");
+            setInsight("insightFilesChange", "—", "Trend request failed");
+            setInsight("insightGrowthPerDay", "—", "Trend request failed");
+            setInsight("insightQuotaHorizon", "—", "Trend request failed");
+
+            drawLineChart($("trendStorageCanvas"), [], p => p.files_total_bytes, fmtShortBytes);
+            drawLineChart($("trendFilesCanvas"), [], p => p.files_total_count, fmtNum);
+            drawLineChart($("trendUsersCanvas"), [], p => p.users_total, fmtNum);
+            drawLineChart($("trendWorkspacesCanvas"), [], p => p.workspaces_total, fmtNum);
+
             setTrendStatus(`Failed: ${e.message || e}`);
-            renderTrends({ points: [] });
         }
     }
 
