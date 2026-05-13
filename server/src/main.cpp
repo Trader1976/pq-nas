@@ -20496,6 +20496,8 @@ srv.Post("/api/v5/verify", [&](const httplib::Request& req, httplib::Response& r
     const std::filesystem::path admin_stats_db_path =
         std::filesystem::path(users_path).parent_path() / "admin_stats.sqlite3";
 
+    std::mutex admin_stats_sampler_mutex;
+
     auto admin_stats_sql_exec_local =
         [](sqlite3* db, const char* sql, std::string* err) -> bool {
             char* msg = nullptr;
@@ -21036,25 +21038,10 @@ LIMIT 2000;
     });
 
 
-    srv.Get("/api/v4/admin/stats/summary", [&](const httplib::Request& req, httplib::Response& res) {
-        std::string actor_fp;
-        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
-
-        const bool force_refresh =
-            req.has_param("refresh") &&
-            (req.get_param_value("refresh") == "1" ||
-             req.get_param_value("refresh") == "true" ||
-             req.get_param_value("refresh") == "now");
-
-        if (!force_refresh) {
-            json cached;
-            std::string cache_err;
-            if (admin_stats_load_latest_snapshot_local(&cached, &cache_err)) {
-                reply_json(res, 200, cached.dump());
-                return;
-            }
-            // No snapshot yet: fall through and build the first one.
-        }
+    auto admin_stats_build_live_snapshot_local =
+        [&](const std::string& snapshot_source, json* out_json, std::string* err) -> bool {
+            if (out_json) *out_json = json::object();
+            if (err) err->clear();
 
         auto now_epoch_local = []() -> std::int64_t {
             return static_cast<std::int64_t>(std::time(nullptr));
@@ -21270,12 +21257,8 @@ LIMIT 2000;
         };
 
         if (!users.load(users_path)) {
-            reply_json(res, 500, json{
-                {"ok", false},
-                {"error", "users_reload_failed"},
-                {"message", "failed to reload users"}
-            }.dump());
-            return;
+            if (err) *err = "failed to reload users";
+            return false;
         }
 
         // Best-effort reload; keep serving stats even if workspace metadata reload fails.
@@ -21424,9 +21407,51 @@ LIMIT 2000;
             {"warnings", fs.warnings}
         };
 
-        out["snapshot_source"] = force_refresh ? "live_refresh" : "live_initial";
+
+        out["snapshot_source"] = snapshot_source;
+
+        if (out_json) *out_json = std::move(out);
+        return true;
+    };
+
+    srv.Get("/api/v4/admin/stats/summary", [&](const httplib::Request& req, httplib::Response& res) {
+        std::string actor_fp;
+        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+
+        const bool force_refresh =
+            req.has_param("refresh") &&
+            (req.get_param_value("refresh") == "1" ||
+             req.get_param_value("refresh") == "true" ||
+             req.get_param_value("refresh") == "now");
+
+        if (!force_refresh) {
+            json cached;
+            std::string cache_err;
+            if (admin_stats_load_latest_snapshot_local(&cached, &cache_err)) {
+                reply_json(res, 200, cached.dump());
+                return;
+            }
+            // No snapshot yet: fall through and build the first one.
+        }
+
+        json out;
+        std::string build_err;
 
         {
+            std::lock_guard<std::mutex> lock(admin_stats_sampler_mutex);
+
+            if (!admin_stats_build_live_snapshot_local(
+                    force_refresh ? std::string("live_refresh") : std::string("live_initial"),
+                    &out,
+                    &build_err)) {
+                reply_json(res, 500, json{
+                    {"ok", false},
+                    {"error", "admin_stats_build_failed"},
+                    {"message", build_err.empty() ? "failed to build admin statistics snapshot" : build_err}
+                }.dump());
+                return;
+            }
+
             std::string save_err;
             if (!admin_stats_save_snapshot_local(out, &save_err)) {
                 if (!out.contains("warnings") || !out["warnings"].is_array()) {
@@ -21442,6 +21467,52 @@ LIMIT 2000;
         }
 
         reply_json(res, 200, out.dump());
+    });
+
+
+    std::atomic<bool> admin_stats_sampler_stop{false};
+    std::thread admin_stats_sampler_thread([&]() {
+        constexpr int kAdminStatsSamplerIntervalSeconds = 60 * 60;
+
+        while (!admin_stats_sampler_stop.load()) {
+            for (int i = 0;
+                 i < kAdminStatsSamplerIntervalSeconds && !admin_stats_sampler_stop.load();
+                 ++i) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+
+            if (admin_stats_sampler_stop.load()) break;
+
+            try {
+                json snap;
+                std::string build_err;
+
+                std::lock_guard<std::mutex> lock(admin_stats_sampler_mutex);
+
+                if (!admin_stats_build_live_snapshot_local("scheduled_hourly", &snap, &build_err)) {
+                    std::cerr << "[admin_stats] scheduled sample failed: "
+                              << (build_err.empty() ? "build failed" : build_err)
+                              << "\n";
+                    continue;
+                }
+
+                std::string save_err;
+                if (!admin_stats_save_snapshot_local(snap, &save_err)) {
+                    std::cerr << "[admin_stats] scheduled sample save failed: "
+                              << save_err << "\n";
+                    continue;
+                }
+
+                std::cerr << "[admin_stats] scheduled sample saved at "
+                          << snap.value("generated_at_iso", std::string("?"))
+                          << "\n";
+            } catch (const std::exception& e) {
+                std::cerr << "[admin_stats] scheduled sample exception: "
+                          << e.what() << "\n";
+            } catch (...) {
+                std::cerr << "[admin_stats] scheduled sample unknown exception\n";
+            }
+        }
     });
 
     pqnas::WorkspaceFileRouteDeps ws_file_deps;
@@ -47728,6 +47799,9 @@ srv.Get(R"(/pq/invite/([A-Za-z0-9_-]+))", [&](const httplib::Request& req, httpl
 
     tiering_worker_stop.store(true);
     if (tiering_worker.joinable()) tiering_worker.join();
+
+    admin_stats_sampler_stop.store(true);
+    if (admin_stats_sampler_thread.joinable()) admin_stats_sampler_thread.join();
 
     snapshots_stop.store(true);
     if (snapshots_thread.joinable()) snapshots_thread.join();
