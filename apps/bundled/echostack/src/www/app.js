@@ -94,6 +94,112 @@
     s.textContent = base;
   }
 
+
+  function showEchoConfirm(options = {}) {
+    const title = String(options.title || "Are you sure?");
+    const message = String(options.message || "");
+    const confirmText = String(options.confirmText || "OK");
+    const cancelText = String(options.cancelText || "Cancel");
+    const danger = Boolean(options.danger);
+
+    return new Promise((resolve) => {
+      const old = document.getElementById("echoConfirmBackdrop");
+      if (old) old.remove();
+
+      const backdrop = document.createElement("div");
+      backdrop.id = "echoConfirmBackdrop";
+      backdrop.className = "echoConfirmBackdrop";
+      backdrop.setAttribute("role", "presentation");
+
+      const dialog = document.createElement("div");
+      dialog.className = "echoConfirmDialog";
+      dialog.setAttribute("role", "dialog");
+      dialog.setAttribute("aria-modal", "true");
+      dialog.setAttribute("aria-labelledby", "echoConfirmTitle");
+
+      const head = document.createElement("div");
+      head.className = "echoConfirmHead";
+
+      const icon = document.createElement("div");
+      icon.className = danger ? "echoConfirmIcon danger" : "echoConfirmIcon";
+      icon.textContent = danger ? "!" : "?";
+
+      const titleEl = document.createElement("div");
+      titleEl.id = "echoConfirmTitle";
+      titleEl.className = "echoConfirmTitle";
+      titleEl.textContent = title;
+
+      head.appendChild(icon);
+      head.appendChild(titleEl);
+
+      const body = document.createElement("div");
+      body.className = "echoConfirmBody";
+      body.textContent = message;
+
+      const actions = document.createElement("div");
+      actions.className = "echoConfirmActions";
+
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "echoConfirmCancel";
+      cancel.textContent = cancelText;
+
+      const ok = document.createElement("button");
+      ok.type = "button";
+      ok.className = danger ? "echoConfirmOk danger" : "echoConfirmOk";
+      ok.textContent = confirmText;
+
+      actions.appendChild(cancel);
+      actions.appendChild(ok);
+
+      dialog.appendChild(head);
+      if (message) dialog.appendChild(body);
+      dialog.appendChild(actions);
+      backdrop.appendChild(dialog);
+      document.body.appendChild(backdrop);
+
+      let done = false;
+
+      const finish = (value) => {
+        if (done) return;
+        done = true;
+        document.removeEventListener("keydown", onKey, true);
+        backdrop.remove();
+        resolve(Boolean(value));
+      };
+
+      const onKey = (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          finish(false);
+          return;
+        }
+
+        if (e.key === "Enter") {
+          e.preventDefault();
+          finish(true);
+        }
+      };
+
+      cancel.addEventListener("click", () => finish(false));
+      ok.addEventListener("click", () => finish(true));
+
+      backdrop.addEventListener("mousedown", (e) => {
+        if (e.target === backdrop) finish(false);
+      });
+
+      document.addEventListener("keydown", onKey, true);
+
+      setTimeout(() => {
+        if (danger) {
+          cancel.focus();
+        } else {
+          ok.focus();
+        }
+      }, 0);
+    });
+  }
+
   async function api(path, opts = {}) {
     const r = await fetch(API + path, {
       credentials: "include",
@@ -286,6 +392,209 @@
     return bookmarks;
   }
 
+
+  function bookmarkHtmlEscape(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function bookmarkExportUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+
+    try {
+      const u = new URL(raw);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+      return u.toString();
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function bookmarkExportTitle(item) {
+    return cleanBookmarkText(item.title || item.url || "Untitled") || "Untitled";
+  }
+
+  function bookmarkExportFolderPath(item) {
+    const raw = cleanBookmarkText(item.collection || "");
+    if (!raw) return ["Echo Stack"];
+
+    const parts = raw
+      .split(/\s+\/\s+/)
+      .map((part) => cleanBookmarkText(part))
+      .filter(Boolean);
+
+    return parts.length ? parts : ["Echo Stack"];
+  }
+
+  function makeBookmarkTree(items) {
+    const root = {
+      folders: new Map(),
+      bookmarks: []
+    };
+
+    function folderForPath(pathParts) {
+      let cur = root;
+
+      for (const part of pathParts) {
+        if (!cur.folders.has(part)) {
+          cur.folders.set(part, {
+            folders: new Map(),
+            bookmarks: []
+          });
+        }
+
+        cur = cur.folders.get(part);
+      }
+
+      return cur;
+    }
+
+    const seen = new Set();
+
+    for (const item of items || []) {
+      const url = bookmarkExportUrl(item.url || "");
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+
+      const folder = folderForPath(bookmarkExportFolderPath(item));
+      const epoch = Number(item.created_epoch || item.updated_epoch || 0);
+
+      folder.bookmarks.push({
+        url,
+        title: bookmarkExportTitle(item),
+        addDate: Number.isFinite(epoch) && epoch > 0 ? Math.floor(epoch) : Math.floor(Date.now() / 1000)
+      });
+    }
+
+    return root;
+  }
+
+  function serializeBookmarkFolder(name, folder, depth) {
+    const pad = "    ".repeat(depth);
+    const childPad = "    ".repeat(depth + 1);
+    const now = Math.floor(Date.now() / 1000);
+    const lines = [];
+
+    if (name) {
+      lines.push(`${pad}<DT><H3 ADD_DATE="${now}" LAST_MODIFIED="${now}">${bookmarkHtmlEscape(name)}</H3>`);
+      lines.push(`${pad}<DL><p>`);
+    }
+
+    for (const bookmark of folder.bookmarks) {
+      lines.push(
+        `${childPad}<DT><A HREF="${bookmarkHtmlEscape(bookmark.url)}" ADD_DATE="${bookmark.addDate}">${bookmarkHtmlEscape(bookmark.title)}</A>`
+      );
+    }
+
+    const folderNames = Array.from(folder.folders.keys()).sort((a, b) => a.localeCompare(b));
+    for (const folderName of folderNames) {
+      lines.push(serializeBookmarkFolder(folderName, folder.folders.get(folderName), depth + 1));
+    }
+
+    if (name) {
+      lines.push(`${pad}</DL><p>`);
+    }
+
+    return lines.join("\n");
+  }
+
+  function exportBookmarksHtml(items) {
+    const tree = makeBookmarkTree(items);
+    const now = Math.floor(Date.now() / 1000);
+
+    const lines = [
+      "<!DOCTYPE NETSCAPE-Bookmark-file-1>",
+      "<!-- This is an automatically generated file.",
+      "     It can be imported into Chrome, Brave, Edge, Firefox, and other browsers.",
+      "     Exported by DNA-Nexus Echo Stack.",
+      "     DO NOT EDIT! -->",
+      '<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">',
+      "<TITLE>Echo Stack Bookmarks</TITLE>",
+      "<H1>Echo Stack Bookmarks</H1>",
+      "<DL><p>"
+    ];
+
+    for (const bookmark of tree.bookmarks) {
+      lines.push(
+        `    <DT><A HREF="${bookmarkHtmlEscape(bookmark.url)}" ADD_DATE="${bookmark.addDate}">${bookmarkHtmlEscape(bookmark.title)}</A>`
+      );
+    }
+
+    const folderNames = Array.from(tree.folders.keys()).sort((a, b) => a.localeCompare(b));
+    for (const folderName of folderNames) {
+      lines.push(serializeBookmarkFolder(folderName, tree.folders.get(folderName), 1));
+    }
+
+    lines.push("</DL><p>");
+    return lines.join("\n") + "\n";
+  }
+
+  function downloadTextFile(filename, text, mime) {
+    const blob = new Blob([text], { type: mime || "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+
+    try {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    }
+  }
+
+  function todayIsoDate() {
+    try {
+      return new Date().toISOString().slice(0, 10);
+    } catch (_) {
+      return "export";
+    }
+  }
+
+  async function exportBookmarksToHtmlFile() {
+    const btn = el("exportBookmarksBtn");
+
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add("exporting");
+      btn.textContent = "Exporting";
+    }
+
+    try {
+      setStatus("Preparing bookmark export…", "working");
+
+      const j = await api("/items?limit=500");
+      const items = Array.isArray(j.items) ? j.items : [];
+
+      if (!items.length) {
+        setStatus("No links to export.", "bad");
+        return;
+      }
+
+      const html = exportBookmarksHtml(items);
+      const count = makeBookmarkTree(items).folders.size + items.length;
+      const filename = `echo-stack-bookmarks-${todayIsoDate()}.html`;
+
+      downloadTextFile(filename, html, "text/html;charset=utf-8");
+
+      const exportedLinks = (items || []).filter((item) => bookmarkExportUrl(item.url || "")).length;
+      setStatus(`Exported ${exportedLinks} bookmarks to ${filename}.`, "good");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.classList.remove("exporting");
+        btn.textContent = "Export bookmarks";
+      }
+    }
+  }
+
   function buildImportedBookmarkPayload(bookmark) {
     return {
       url: bookmark.url,
@@ -333,13 +642,17 @@
       return;
     }
 
-    const ok = confirm(
-      `Import bookmarks from ${filename || "selected file"}?\n\n` +
-      `Found: ${parsed.length} bookmarks in ${folderCount} folder/collection groups\n` +
-      `Will import: ${toImport.length}\n` +
-      `Will skip existing: ${skippedExisting}\n\n` +
-      `Imported links will get tag "${BOOKMARK_IMPORT_TAG}".`
-    );
+    const ok = await showEchoConfirm({
+      title: "Import bookmarks?",
+      message:
+        `File: ${filename || "selected file"}\n\n` +
+        `Found: ${parsed.length} bookmarks in ${folderCount} folder/collection groups\n` +
+        `Will import: ${toImport.length}\n` +
+        `Will skip existing: ${skippedExisting}\n\n` +
+        `Imported links will get tag "${BOOKMARK_IMPORT_TAG}".`,
+      confirmText: "Import",
+      cancelText: "Cancel"
+    });
 
     if (!ok) {
       setStatus("Bookmark import cancelled.");
@@ -611,6 +924,190 @@
     });
   }
 
+
+  function ensureItemContextMenu() {
+    let menu = document.getElementById("echoItemContextMenu");
+    if (menu) return menu;
+
+    menu = document.createElement("div");
+    menu.id = "echoItemContextMenu";
+    menu.className = "itemContextMenu";
+    menu.hidden = true;
+    menu.setAttribute("role", "menu");
+    document.body.appendChild(menu);
+
+    return menu;
+  }
+
+  function closeItemContextMenu() {
+    const menu = document.getElementById("echoItemContextMenu");
+    if (!menu) return;
+
+    menu.hidden = true;
+    menu.innerHTML = "";
+    menu.classList.remove("open");
+  }
+
+  function contextMenuButton(label, action, options = {}) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = label;
+    btn.setAttribute("role", "menuitem");
+
+    if (options.danger) {
+      btn.classList.add("danger");
+    }
+
+    if (options.disabled) {
+      btn.disabled = true;
+    }
+
+    btn.addEventListener("click", async () => {
+      closeItemContextMenu();
+
+      if (options.disabled) return;
+
+      try {
+        await action();
+      } catch (err) {
+        setStatus(err.message || String(err), "bad");
+      }
+    });
+
+    return btn;
+  }
+
+  async function copyTextToClipboard(text) {
+    const value = String(text || "");
+
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+
+    const area = document.createElement("textarea");
+    area.value = value;
+    area.style.position = "fixed";
+    area.style.left = "-9999px";
+    area.style.top = "0";
+    document.body.appendChild(area);
+    area.focus();
+    area.select();
+
+    try {
+      document.execCommand("copy");
+    } finally {
+      area.remove();
+    }
+  }
+
+  function positionItemContextMenu(menu, x, y) {
+    menu.style.left = "0px";
+    menu.style.top = "0px";
+    menu.hidden = false;
+    menu.classList.add("open");
+
+    const rect = menu.getBoundingClientRect();
+    const pad = 10;
+    const left = Math.max(pad, Math.min(x, window.innerWidth - rect.width - pad));
+    const top = Math.max(pad, Math.min(y, window.innerHeight - rect.height - pad));
+
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+  }
+
+  function openItemContextMenu(x, y, item, node) {
+    const menu = ensureItemContextMenu();
+    const archiveStatus = item.archive_status || "none";
+    const hasUrl = Boolean(item.url);
+    const isArchived = archiveStatus === "archived";
+    const isArchiving = archiveStatus === "archiving";
+
+    menu.innerHTML = "";
+
+    menu.appendChild(contextMenuButton("Open link", () => {
+      if (item.url) {
+        window.open(item.url, "_blank", "noopener,noreferrer");
+      }
+    }, { disabled: !hasUrl }));
+
+    if (isArchived) {
+      menu.appendChild(contextMenuButton("Open archive", () => {
+        window.open(`${API}/archive/view?id=${encodeURIComponent(item.id)}`, "_blank", "noopener,noreferrer");
+      }));
+    }
+
+    menu.appendChild(document.createElement("hr"));
+
+    menu.appendChild(contextMenuButton("Edit", () => {
+      const notes = node.querySelector(".itemNotes");
+      openInlineEditor(item, node, notes);
+    }));
+
+    menu.appendChild(contextMenuButton(
+      item.read_state === "read" ? "Mark unread" : "Mark read",
+      () => updateItem(item.id, {
+        read_state: item.read_state === "read" ? "unread" : "read"
+      })
+    ));
+
+    menu.appendChild(contextMenuButton(
+      item.favorite ? "Remove favorite" : "Add favorite",
+      () => updateItem(item.id, { favorite: !item.favorite })
+    ));
+
+    menu.appendChild(contextMenuButton("Copy URL", async () => {
+      await copyTextToClipboard(item.url || "");
+      setStatus("URL copied.", "good");
+    }, { disabled: !hasUrl }));
+
+    menu.appendChild(document.createElement("hr"));
+
+    if (isArchiving) {
+      menu.appendChild(contextMenuButton("Archiving…", () => {}, { disabled: true }));
+    } else if (!isArchived) {
+      menu.appendChild(contextMenuButton(
+        archiveStatus === "failed" ? "Retry archive" : "Archive",
+        () => archiveItem(item.id)
+      ));
+    }
+
+    menu.appendChild(contextMenuButton("Delete", async () => {
+      const ok = await showEchoConfirm({
+        title: "Delete Echo Stack item?",
+        message: "This removes the saved link from Echo Stack. The original website is not affected.",
+        confirmText: "Delete",
+        cancelText: "Cancel",
+        danger: true
+      });
+      if (!ok) return;
+      await deleteItem(item.id);
+    }, { danger: true }));
+
+    positionItemContextMenu(menu, x, y);
+  }
+
+  function bindItemContextMenuDismiss() {
+    if (bindItemContextMenuDismiss.bound) return;
+    bindItemContextMenuDismiss.bound = true;
+
+    document.addEventListener("click", (e) => {
+      const menu = document.getElementById("echoItemContextMenu");
+      if (!menu || menu.hidden) return;
+      if (e.target && e.target.closest("#echoItemContextMenu")) return;
+      closeItemContextMenu();
+    }, true);
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        closeItemContextMenu();
+      }
+    });
+
+    window.addEventListener("resize", closeItemContextMenu);
+    window.addEventListener("scroll", closeItemContextMenu, true);
+  }
+
   function render() {
     const root = el("items");
     const tpl = el("itemTemplate");
@@ -643,6 +1140,14 @@
       node.addEventListener("click", (e) => {
         if (e.target && e.target.closest("button, input, textarea, a, select")) return;
         setSelectedIndex(itemIndex, { scroll: false });
+      });
+
+      node.addEventListener("contextmenu", (e) => {
+        if (e.target && e.target.closest("input, textarea, select")) return;
+
+        e.preventDefault();
+        setSelectedIndex(itemIndex, { scroll: false });
+        openItemContextMenu(e.clientX, e.clientY, item, node);
       });
 
       const title = node.querySelector(".itemTitle");
@@ -783,7 +1288,13 @@
       });
 
       deleteBtn.addEventListener("click", async () => {
-        const ok = confirm("Delete this Echo Stack item?");
+        const ok = await showEchoConfirm({
+          title: "Delete Echo Stack item?",
+          message: "This removes the saved link from Echo Stack. The original website is not affected.",
+          confirmText: "Delete",
+          cancelText: "Cancel",
+          danger: true
+        });
         if (!ok) return;
         await deleteItem(item.id);
       });
@@ -1100,6 +1611,36 @@
     setComposerExpanded(composerHasDetails());
   }
 
+
+  function setDeepSearchOpen(open) {
+    const panel = el("deepSearchPanel");
+    const btn = el("deepSearchToggleBtn");
+    const isOpen = Boolean(open);
+
+    if (panel) {
+      panel.hidden = !isOpen;
+      panel.classList.toggle("collapsed", !isOpen);
+      panel.classList.toggle("expanded", isOpen);
+    }
+
+    if (btn) {
+      btn.classList.toggle("active", isOpen);
+      btn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+      btn.textContent = isOpen ? "Hide Deep Search" : "Deep Search";
+    }
+
+    if (isOpen) {
+      setTimeout(() => {
+        el("deepSearchInput")?.focus();
+      }, 0);
+    }
+  }
+
+  function toggleDeepSearchPanel() {
+    const panel = el("deepSearchPanel");
+    setDeepSearchOpen(panel ? panel.hidden : true);
+  }
+
   function bind() {
     el("saveBtn")?.addEventListener("click", () => {
       saveNewItem().catch((e) => setStatus(e.message || String(e), "bad"));
@@ -1110,12 +1651,20 @@
       setViewMode(state.viewMode === "grid" ? "list" : "grid");
     });
 
+    el("deepSearchToggleBtn")?.addEventListener("click", () => {
+      toggleDeepSearchPanel();
+    });
+
     el("refreshBtn")?.addEventListener("click", () => {
       loadItems().catch((e) => setStatus(e.message || String(e), "bad"));
     });
 
     el("importBookmarksBtn")?.addEventListener("click", () => {
       el("bookmarkImportFile")?.click();
+    });
+
+    el("exportBookmarksBtn")?.addEventListener("click", () => {
+      exportBookmarksToHtmlFile().catch((e) => setStatus(e.message || String(e), "bad"));
     });
 
     el("bookmarkImportFile")?.addEventListener("change", () => {
@@ -1165,6 +1714,8 @@
 
   bind();
   bindKeyboardNavigation();
+  bindItemContextMenuDismiss();
+  setDeepSearchOpen(false);
   updateComposerExpanded();
   loadItems().catch((e) => setStatus(e.message || String(e), "bad"));
 })();

@@ -16,7 +16,14 @@
         <h1>Echo Stack <span id="appVersion" class="appVersion"></span></h1>
         <p>Save links, notes, tags, and research trails on your own NAS.</p>
       </div>
-      <div class="badge">Save the signal before it fades.</div>
+      <div class="topActions" aria-label="Echo Stack actions">
+        <div class="badge">Save the signal before it fades.</div>
+        <button id="viewModeBtn" type="button">Grid view</button>
+        <button id="deepSearchToggleBtn" type="button" aria-expanded="false" aria-controls="deepSearchPanel">Deep Search</button>
+        <button id="importBookmarksBtn" type="button">Import bookmarks</button>
+        <button id="exportBookmarksBtn" type="button">Export bookmarks</button>
+        <input id="bookmarkImportFile" type="file" accept=".html,.htm,text/html" hidden>
+      </div>
     </header>
 
     <section class="composer">
@@ -41,13 +48,10 @@
     <section class="toolbar">
       <input id="searchInput" type="search" placeholder="Search links, notes, tags, collections">
       <div id="resultCount" class="resultCount" aria-live="polite">0 links</div>
-      <button id="viewModeBtn" type="button">Grid view</button>
       <button id="refreshBtn" type="button">Refresh</button>
-      <button id="importBookmarksBtn" type="button">Import bookmarks</button>
-      <input id="bookmarkImportFile" type="file" accept=".html,.htm,text/html" hidden>
     </section>
 
-    <section class="deepSearch" id="deepSearchPanel">
+    <section class="deepSearch collapsed" id="deepSearchPanel" hidden>
       <div class="deepSearchTop">
         <div class="deepSearchTitleBlock">
           <h2>Deep Search</h2>

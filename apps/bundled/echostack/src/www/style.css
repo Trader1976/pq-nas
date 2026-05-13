@@ -80,6 +80,23 @@ p {
   white-space: nowrap;
 }
 
+.topActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  max-width: 620px;
+}
+
+.topActions button {
+  min-height: 42px;
+}
+
+.topActions .badge {
+  margin-right: 2px;
+}
+
 .composer,
 .toolbar,
 .item {
@@ -369,9 +386,16 @@ button:disabled {
   }
 
   .badge,
+  .topActions,
+  .topActions button,
   .toolbar button,
   .row button {
     margin-top: 10px;
+  }
+
+  .topActions {
+    justify-content: flex-start;
+    max-width: none;
   }
 
   .grid2 {
@@ -627,33 +651,229 @@ button:disabled {
     0 18px 52px rgba(0,0,0,.25);
 }
 
-.item.selected::before {
-  content: "Selected";
-  position: absolute;
-  top: 10px;
-  right: 12px;
-  padding: 3px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(255,159,28,.36);
-  background: rgba(255,159,28,.12);
-  color: #ffd7a0;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: .02em;
-  pointer-events: none;
-}
 
 .item {
   position: relative;
 }
 
-.items.gridMode .item.selected::before {
-  top: 8px;
-  right: 10px;
-  font-size: 10px;
-  padding: 2px 7px;
-}
 
 .item.selected .itemTitle {
   color: #ffd7a0;
+}
+
+
+#exportBookmarksBtn.exporting {
+  color: #ffd27a;
+  border-color: rgba(255,159,28,.55);
+  background: rgba(255,159,28,.12);
+  box-shadow: 0 0 0 3px rgba(255,159,28,.10);
+  cursor: wait;
+}
+
+#exportBookmarksBtn.exporting::after {
+  content: "";
+  display: inline-block;
+  width: 1.4em;
+  text-align: left;
+  animation: echoArchiveDots 1.15s steps(4, end) infinite;
+}
+
+
+.deepSearch.collapsed,
+.deepSearch[hidden] {
+  display: none !important;
+}
+
+.deepSearch.expanded {
+  animation: echoDeepSearchReveal .16s ease-out;
+}
+
+#deepSearchToggleBtn.active {
+  color: #ffd7a0;
+  border-color: rgba(255,159,28,.58);
+  background: rgba(255,159,28,.14);
+  box-shadow: 0 0 0 3px rgba(255,159,28,.10);
+}
+
+@keyframes echoDeepSearchReveal {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+
+.itemContextMenu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 190px;
+  padding: 8px;
+  border: 1px solid rgba(255,159,28,.34);
+  border-radius: 16px;
+  background: rgba(9,13,20,.96);
+  box-shadow:
+    0 18px 52px rgba(0,0,0,.46),
+    0 0 0 1px rgba(255,255,255,.06) inset;
+  backdrop-filter: blur(18px);
+}
+
+.itemContextMenu[hidden] {
+  display: none !important;
+}
+
+.itemContextMenu button {
+  display: flex;
+  width: 100%;
+  justify-content: flex-start;
+  align-items: center;
+  min-height: 34px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+}
+
+.itemContextMenu button:hover:not(:disabled) {
+  border-color: rgba(255,159,28,.34);
+  background: rgba(255,159,28,.10);
+  color: #ffd7a0;
+}
+
+.itemContextMenu button:disabled {
+  opacity: .48;
+  cursor: not-allowed;
+}
+
+.itemContextMenu button.danger {
+  color: #ffb3b3;
+}
+
+.itemContextMenu button.danger:hover:not(:disabled) {
+  border-color: rgba(255,85,85,.55);
+  background: rgba(255,85,85,.10);
+  color: #ffd0d0;
+}
+
+.itemContextMenu hr {
+  border: 0;
+  border-top: 1px solid rgba(255,255,255,.10);
+  margin: 6px 4px;
+}
+
+
+.echoConfirmBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+  background: rgba(0,0,0,.62);
+  backdrop-filter: blur(8px);
+}
+
+.echoConfirmDialog {
+  width: min(520px, 100%);
+  border: 1px solid rgba(255,159,28,.30);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at top left, rgba(255,159,28,.14), transparent 24rem),
+    rgba(9,13,20,.96);
+  box-shadow:
+    0 24px 80px rgba(0,0,0,.58),
+    0 0 0 1px rgba(255,255,255,.06) inset;
+  color: var(--fg);
+  padding: 18px;
+}
+
+.echoConfirmHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.echoConfirmIcon {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 1px solid rgba(255,159,28,.38);
+  background: rgba(255,159,28,.12);
+  color: #ffd7a0;
+  font-weight: 900;
+}
+
+.echoConfirmIcon.danger {
+  border-color: rgba(255,85,85,.44);
+  background: rgba(255,85,85,.12);
+  color: #ffb3b3;
+}
+
+.echoConfirmTitle {
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: .01em;
+}
+
+.echoConfirmBody {
+  margin-top: 14px;
+  color: rgba(244,247,251,.78);
+  line-height: 1.5;
+  white-space: pre-line;
+}
+
+.echoConfirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.echoConfirmCancel,
+.echoConfirmOk {
+  min-width: 96px;
+}
+
+.echoConfirmOk {
+  color: #111827;
+  background: #ff9f1c;
+  border-color: rgba(255,255,255,.18);
+  font-weight: 900;
+}
+
+.echoConfirmOk:hover {
+  border-color: rgba(255,255,255,.30);
+  filter: brightness(1.06);
+}
+
+.echoConfirmOk.danger {
+  color: #fff;
+  background: #d93636;
+  border-color: rgba(255,255,255,.18);
+}
+
+.echoConfirmOk.danger:hover {
+  border-color: rgba(255,255,255,.30);
+  filter: brightness(1.08);
+}
+
+@media (max-width: 560px) {
+  .echoConfirmActions {
+    flex-direction: column-reverse;
+  }
+
+  .echoConfirmCancel,
+  .echoConfirmOk {
+    width: 100%;
+  }
 }
