@@ -48,6 +48,27 @@ struct PreserveLiveFileVersionParams {
     const UsersRegistry* users = nullptr; // optional, for actor name snapshot
 };
 
+
+struct FileVersionFlagRec {
+    std::string version_id;
+    std::string scope_type;
+    std::string scope_id;
+    std::string logical_rel_path;
+
+    std::string actor_fp;
+    std::string actor_name_snapshot;
+    std::string note;
+
+    std::string created_at;
+    std::int64_t created_epoch = 0;
+};
+
+struct FileVersionFlagSummary {
+    std::uint64_t flag_count = 0;
+    bool flagged_by_me = false;
+    std::vector<FileVersionFlagRec> flags;
+};
+
 struct FileVersionsScopeStats {
     std::uint64_t versions_count = 0;
     std::uint64_t versions_bytes = 0;
@@ -83,6 +104,30 @@ public:
                                                        const std::string& logical_rel_path,
                                                        std::size_t limit,
                                                        std::string* err);
+
+
+    bool flag_version(const std::string& scope_type,
+                      const std::string& scope_id,
+                      const std::string& logical_rel_path,
+                      const std::string& version_id,
+                      const std::string& actor_fp,
+                      const UsersRegistry* users,
+                      const std::string& note,
+                      std::string* err);
+
+    bool unflag_version(const std::string& scope_type,
+                        const std::string& scope_id,
+                        const std::string& logical_rel_path,
+                        const std::string& version_id,
+                        const std::string& actor_fp,
+                        std::string* err);
+
+    FileVersionFlagSummary flags_for_version(const std::string& scope_type,
+                                             const std::string& scope_id,
+                                             const std::string& logical_rel_path,
+                                             const std::string& version_id,
+                                             const std::string& viewer_fp,
+                                             std::string* err);
 
     bool scope_stats(const std::string& scope_type,
                      const std::string& scope_id,

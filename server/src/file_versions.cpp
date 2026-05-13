@@ -293,6 +293,27 @@ ON file_versions(scope_type, scope_id, logical_rel_path, created_epoch DESC, ver
 
 CREATE INDEX IF NOT EXISTS idx_file_versions_scope_time
 ON file_versions(scope_type, scope_id, created_epoch DESC, version_id DESC);
+
+
+CREATE TABLE IF NOT EXISTS file_version_flags (
+    version_id           TEXT NOT NULL,
+    scope_type           TEXT NOT NULL,
+    scope_id             TEXT NOT NULL,
+    logical_rel_path     TEXT NOT NULL,
+
+    actor_fp             TEXT NOT NULL,
+    actor_name_snapshot  TEXT NOT NULL DEFAULT '',
+    note                 TEXT NOT NULL DEFAULT '',
+
+    created_at           TEXT NOT NULL,
+    created_epoch        INTEGER NOT NULL,
+
+    PRIMARY KEY(version_id, actor_fp)
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_version_flags_version
+ON file_version_flags(scope_type, scope_id, logical_rel_path, version_id);
+
 )SQL";
 
     return exec_sql(db_, kSchema, err);
@@ -469,6 +490,229 @@ bool FileVersionsIndex::preserve_live_file_version(const PreserveLiveFileVersion
     }
 
     return true;
+}
+
+
+
+bool FileVersionsIndex::flag_version(const std::string& scope_type,
+                                     const std::string& scope_id,
+                                     const std::string& logical_rel_path,
+                                     const std::string& version_id,
+                                     const std::string& actor_fp,
+                                     const UsersRegistry* users,
+                                     const std::string& note,
+                                     std::string* err) {
+    if (err) err->clear();
+
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
+
+    if (!is_valid_scope_type_local(scope_type)) {
+        if (err) *err = "invalid scope_type";
+        return false;
+    }
+
+    if (scope_id.empty() || logical_rel_path.empty() || version_id.empty() || actor_fp.empty()) {
+        if (err) *err = "missing required field";
+        return false;
+    }
+
+    std::string get_err;
+    auto row = get_by_version_id(version_id, &get_err);
+    if (!row.has_value()) {
+        if (err) *err = get_err.empty() ? "version not found" : get_err;
+        return false;
+    }
+
+    if (row->scope_type != scope_type ||
+        row->scope_id != scope_id ||
+        row->logical_rel_path != logical_rel_path) {
+        if (err) *err = "version not found";
+        return false;
+    }
+
+    const std::int64_t now_epoch = now_epoch_sec_local();
+    const std::string now_iso = iso_utc_from_epoch_sec_local(now_epoch);
+    const std::string actor_name_snapshot =
+        actor_name_snapshot_for_fp_local(users, actor_fp);
+
+    std::string note_norm = note;
+    if (note_norm.size() > 500) note_norm.resize(500);
+
+    static const char* kSql =
+        "INSERT INTO file_version_flags ("
+        "  version_id, scope_type, scope_id, logical_rel_path, "
+        "  actor_fp, actor_name_snapshot, note, created_at, created_epoch"
+        ") VALUES ("
+        "  ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9"
+        ") "
+        "ON CONFLICT(version_id, actor_fp) DO UPDATE SET "
+        "  actor_name_snapshot = excluded.actor_name_snapshot, "
+        "  note = excluded.note, "
+        "  created_at = excluded.created_at, "
+        "  created_epoch = excluded.created_epoch";
+
+    sqlite3_stmt* stmt = nullptr;
+    const int rc_prep = sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr);
+    if (rc_prep != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        return false;
+    }
+
+    sqlite3_bind_text(stmt, 1, version_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 5, actor_fp.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 6, actor_name_snapshot.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 7, note_norm.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 8, now_iso.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 9, static_cast<sqlite3_int64>(now_epoch));
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        if (err) *err = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        return false;
+    }
+
+    sqlite3_finalize(stmt);
+    return true;
+}
+
+bool FileVersionsIndex::unflag_version(const std::string& scope_type,
+                                       const std::string& scope_id,
+                                       const std::string& logical_rel_path,
+                                       const std::string& version_id,
+                                       const std::string& actor_fp,
+                                       std::string* err) {
+    if (err) err->clear();
+
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
+
+    if (!is_valid_scope_type_local(scope_type)) {
+        if (err) *err = "invalid scope_type";
+        return false;
+    }
+
+    if (scope_id.empty() || logical_rel_path.empty() || version_id.empty() || actor_fp.empty()) {
+        if (err) *err = "missing required field";
+        return false;
+    }
+
+    std::string get_err;
+    auto row = get_by_version_id(version_id, &get_err);
+    if (!row.has_value()) {
+        if (err) *err = get_err.empty() ? "version not found" : get_err;
+        return false;
+    }
+
+    if (row->scope_type != scope_type ||
+        row->scope_id != scope_id ||
+        row->logical_rel_path != logical_rel_path) {
+        if (err) *err = "version not found";
+        return false;
+    }
+
+    static const char* kSql =
+        "DELETE FROM file_version_flags "
+        "WHERE version_id = ?1 AND scope_type = ?2 AND scope_id = ?3 "
+        "AND logical_rel_path = ?4 AND actor_fp = ?5";
+
+    sqlite3_stmt* stmt = nullptr;
+    const int rc_prep = sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr);
+    if (rc_prep != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        return false;
+    }
+
+    sqlite3_bind_text(stmt, 1, version_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 5, actor_fp.c_str(), -1, SQLITE_TRANSIENT);
+
+    const int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_DONE) {
+        if (err) *err = sqlite3_errmsg(db_);
+        sqlite3_finalize(stmt);
+        return false;
+    }
+
+    sqlite3_finalize(stmt);
+    return true;
+}
+
+FileVersionFlagSummary FileVersionsIndex::flags_for_version(const std::string& scope_type,
+                                                            const std::string& scope_id,
+                                                            const std::string& logical_rel_path,
+                                                            const std::string& version_id,
+                                                            const std::string& viewer_fp,
+                                                            std::string* err) {
+    if (err) err->clear();
+
+    FileVersionFlagSummary out;
+
+    if (!db_) {
+        if (err) *err = "db not open";
+        return out;
+    }
+
+    static const char* kSql =
+        "SELECT version_id, scope_type, scope_id, logical_rel_path, "
+        "       actor_fp, actor_name_snapshot, note, created_at, created_epoch "
+        "FROM file_version_flags "
+        "WHERE version_id = ?1 AND scope_type = ?2 AND scope_id = ?3 AND logical_rel_path = ?4 "
+        "ORDER BY created_epoch ASC, actor_name_snapshot ASC, actor_fp ASC";
+
+    sqlite3_stmt* stmt = nullptr;
+    const int rc_prep = sqlite3_prepare_v2(db_, kSql, -1, &stmt, nullptr);
+    if (rc_prep != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        return out;
+    }
+
+    sqlite3_bind_text(stmt, 1, version_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+
+    while (true) {
+        const int rc = sqlite3_step(stmt);
+        if (rc == SQLITE_DONE) break;
+
+        if (rc != SQLITE_ROW) {
+            if (err) *err = sqlite3_errmsg(db_);
+            sqlite3_finalize(stmt);
+            return FileVersionFlagSummary{};
+        }
+
+        FileVersionFlagRec rec;
+        if (const unsigned char* t = sqlite3_column_text(stmt, 0)) rec.version_id = reinterpret_cast<const char*>(t);
+        if (const unsigned char* t = sqlite3_column_text(stmt, 1)) rec.scope_type = reinterpret_cast<const char*>(t);
+        if (const unsigned char* t = sqlite3_column_text(stmt, 2)) rec.scope_id = reinterpret_cast<const char*>(t);
+        if (const unsigned char* t = sqlite3_column_text(stmt, 3)) rec.logical_rel_path = reinterpret_cast<const char*>(t);
+        if (const unsigned char* t = sqlite3_column_text(stmt, 4)) rec.actor_fp = reinterpret_cast<const char*>(t);
+        if (const unsigned char* t = sqlite3_column_text(stmt, 5)) rec.actor_name_snapshot = reinterpret_cast<const char*>(t);
+        if (const unsigned char* t = sqlite3_column_text(stmt, 6)) rec.note = reinterpret_cast<const char*>(t);
+        if (const unsigned char* t = sqlite3_column_text(stmt, 7)) rec.created_at = reinterpret_cast<const char*>(t);
+        rec.created_epoch = static_cast<std::int64_t>(sqlite3_column_int64(stmt, 8));
+
+        if (!viewer_fp.empty() && rec.actor_fp == viewer_fp) {
+            out.flagged_by_me = true;
+        }
+
+        out.flags.push_back(std::move(rec));
+    }
+
+    sqlite3_finalize(stmt);
+    out.flag_count = static_cast<std::uint64_t>(out.flags.size());
+    return out;
 }
 
 

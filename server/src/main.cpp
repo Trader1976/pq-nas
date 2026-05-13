@@ -39451,6 +39451,22 @@ srv.Get("/api/v4/files/versions/list", [&](const httplib::Request& req, httplib:
         item["sha256_hex"] = r.sha256_hex;
         item["is_deleted_event"] = (r.is_deleted_event != 0);
 
+        std::string ferr;
+        auto fs = vix->flags_for_version("user", fp_hex, rel_norm, r.version_id, fp_hex, &ferr);
+        item["flag_count"] = fs.flag_count;
+        item["flagged_by_me"] = fs.flagged_by_me;
+        item["flags"] = json::array();
+        for (const auto& fl : fs.flags) {
+            item["flags"].push_back(json{
+                {"actor_fp", fl.actor_fp},
+                {"actor_name_snapshot", fl.actor_name_snapshot},
+                {"actor_display", pqnas::version_actor_display(fl.actor_name_snapshot, fl.actor_fp)},
+                {"created_at", fl.created_at},
+                {"created_epoch", fl.created_epoch},
+                {"note", fl.note}
+            });
+        }
+
         out["versions"].push_back(std::move(item));
     }
 
@@ -39655,6 +39671,86 @@ srv.Get("/api/v4/files/versions/download", [&](const httplib::Request& req, http
     res.set_header("X-PQNAS-Version-Id", rr.version_id);
     res.set_header("X-PQNAS-SHA256", rr.sha256_hex);
     res.body = std::move(body);
+});
+
+
+auto files_versions_flag_handler = [&](const httplib::Request& req,
+                                       httplib::Response& res,
+                                       bool want_flag) {
+    if (!require_same_origin_for_cookie_mutation(req, res)) return;
+
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    json body = json::parse(req.body, nullptr, false);
+    if (body.is_discarded() || !body.is_object()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    const std::string path_rel = body.value("path", "");
+    const std::string version_id = body.value("version_id", "");
+    const std::string note = body.value("note", "");
+
+    if (path_rel.empty() || version_id.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path or version_id"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm, nerr;
+    if (!pqnas::normalize_user_rel_path_strict(path_rel, &rel_norm, &nerr)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    std::string ferr;
+    bool ok = false;
+    if (want_flag) {
+        ok = file_versions_index.flag_version("user", fp_hex, rel_norm, version_id, fp_hex, &users, note, &ferr);
+    } else {
+        ok = file_versions_index.unflag_version("user", fp_hex, rel_norm, version_id, fp_hex, &ferr);
+    }
+
+    if (!ok) {
+        const int http = (ferr == "version not found") ? 404 : 500;
+        reply_json(res, http, json{
+            {"ok", false},
+            {"error", http == 404 ? "not_found" : "server_error"},
+            {"message", want_flag ? "failed to flag version" : "failed to unflag version"},
+            {"detail", pqnas::shorten(ferr, 180)}
+        }.dump());
+        return;
+    }
+
+    auto fs = file_versions_index.flags_for_version("user", fp_hex, rel_norm, version_id, fp_hex, &ferr);
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"flagged", want_flag},
+        {"flag_count", fs.flag_count},
+        {"flagged_by_me", fs.flagged_by_me}
+    }.dump());
+};
+
+srv.Post("/api/v4/files/versions/flag", [&](const httplib::Request& req, httplib::Response& res) {
+    files_versions_flag_handler(req, res, true);
+});
+
+srv.Post("/api/v4/files/versions/unflag", [&](const httplib::Request& req, httplib::Response& res) {
+    files_versions_flag_handler(req, res, false);
 });
 
 

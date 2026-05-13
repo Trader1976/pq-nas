@@ -79,6 +79,22 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         return `${s.slice(0, 16)}…${s.slice(-12)}`;
     }
 
+    function flagSummary(row) {
+        const flags = Array.isArray(row.flags) ? row.flags : [];
+        const count = Number(row.flag_count || flags.length || 0);
+        if (!count) return "";
+
+        const names = flags
+            .map((f) => String(f.actor_display || f.actor_name_snapshot || f.actor_fp || "").trim())
+            .filter(Boolean);
+
+        if (names.length === 1) return `⭐ ${names[0]} flagged this version`;
+        if (names.length === 2) return `⭐ ${names[0]} and ${names[1]} flagged this version`;
+        if (names.length > 2) return `⭐ ${names[0]}, ${names[1]} and ${names.length - 2} more flagged this version`;
+
+        return `⭐ Flagged by ${count} user${count === 1 ? "" : "s"}`;
+    }
+
     function setGlobalStatus(text, badgeKind) {
         if (FM && typeof FM.setBadge === "function" && badgeKind) {
             FM.setBadge(badgeKind, badgeKind === "warn" ? "working…" : badgeKind);
@@ -100,6 +116,32 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         return isWorkspaceScope()
             ? `/api/v4/workspaces/files/restore_version`
             : `/api/v4/files/restore_version`;
+    }
+
+    function buildFlagUrl(flaggedByMe) {
+        if (isWorkspaceScope()) {
+            return flaggedByMe
+                ? `/api/v4/workspaces/files/versions/unflag`
+                : `/api/v4/workspaces/files/versions/flag`;
+        }
+
+        return flaggedByMe
+            ? `/api/v4/files/versions/unflag`
+            : `/api/v4/files/versions/flag`;
+    }
+
+    function buildFlagBody(relPath, versionId) {
+        const body = {
+            path: relPath,
+            version_id: versionId,
+            note: "",
+        };
+
+        if (isWorkspaceScope()) {
+            body.workspace_id = getWorkspaceId();
+        }
+
+        return body;
     }
 
     function buildDownloadUrl(relPath, versionId) {
@@ -129,7 +171,46 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         };
     }
 
+    function injectFlagCss() {
+        if (document.getElementById("pqFileVersionFlagCss")) return;
+
+        const style = document.createElement("style");
+        style.id = "pqFileVersionFlagCss";
+        style.textContent = `
+.pqfvFlagSummary{
+    display:inline-flex;
+    align-items:center;
+    width:max-content;
+    max-width:100%;
+    margin:6px 0 4px;
+    padding:4px 9px;
+    border:1px solid rgba(180,120,0,.55);
+    border-radius:999px;
+    background:rgba(255,190,0,.20);
+    color:var(--fg,#111);
+    font-weight:850;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.25);
+}
+html[data-theme="bright"] .pqfvFlagSummary,
+html[data-theme="win_classic"] .pqfvFlagSummary{
+    background:#fff0b8;
+    border-color:#b87900;
+    color:#111;
+    box-shadow:none;
+}
+html[data-theme="dark"] .pqfvFlagSummary,
+html[data-theme="cpunk_orange"] .pqfvFlagSummary,
+html[data-theme="orange"] .pqfvFlagSummary{
+    background:rgba(255,170,0,.18);
+    border-color:rgba(255,190,0,.65);
+    color:var(--fg,#f4f4f4);
+}
+`;
+        document.head.appendChild(style);
+    }
+
     function ensureDom() {
+        injectFlagCss();
         if (rootEl) return;
 
         rootEl = document.createElement("div");
@@ -391,9 +472,23 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             a.remove();
         });
 
+        const flagBtn = document.createElement("button");
+        flagBtn.type = "button";
+        flagBtn.className = row.flagged_by_me ? "btn" : "btn secondary";
+        flagBtn.textContent = row.flagged_by_me ? "⭐ Unflag" : "☆ Flag";
+        flagBtn.title = row.flagged_by_me
+            ? "Remove your flag from this version"
+            : "Flag this version so other workspace members can see it";
+        flagBtn.addEventListener("click", () => {
+            toggleFlag(row).catch((e) => {
+                setModalStatus(String(e && e.message ? e.message : e), "err");
+            });
+        });
+
         actionsEl.appendChild(compareBtn);
         actionsEl.appendChild(restoreBtn);
         actionsEl.appendChild(downloadBtn);
+        actionsEl.appendChild(flagBtn);
         actionsEl.appendChild(copyBtn);
 
         topEl.appendChild(leftEl);
@@ -401,6 +496,14 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
         const bottomEl = document.createElement("div");
         bottomEl.className = "pqfvRowBottom";
+
+        const flagText = flagSummary(row);
+        if (flagText) {
+            const flagEl = document.createElement("div");
+            flagEl.className = "pqfvMini pqfvFlagSummary";
+            flagEl.textContent = flagText;
+            bottomEl.appendChild(flagEl);
+        }
 
         const idEl = document.createElement("div");
         idEl.className = "pqfvMini mono";
@@ -432,6 +535,35 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             state.loading = false;
         }
     }
+    async function toggleFlag(row) {
+        if (!row || !row.version_id) return;
+
+        const wasFlagged = !!row.flagged_by_me;
+        setModalStatus(wasFlagged ? "Removing flag…" : "Flagging version…", "warn");
+
+        const r = await fetch(buildFlagUrl(wasFlagged), {
+            method: "POST",
+            credentials: "include",
+            cache: "no-store",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            body: JSON.stringify(buildFlagBody(state.relPath, row.version_id)),
+        });
+
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j || !j.ok) {
+            const msg = j && (j.message || j.error)
+                ? `${j.error || ""} ${j.message || ""}`.trim()
+                : `HTTP ${r.status}`;
+            throw new Error(msg || "flag update failed");
+        }
+
+        await loadVersions();
+        setModalStatus(wasFlagged ? "Flag removed." : "Version flagged.", "ok");
+    }
+
     async function restoreVersion(row) {
         const label = kindLabel(row);
         const ok = window.confirm(
