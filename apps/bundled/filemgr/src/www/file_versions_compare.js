@@ -17,7 +17,9 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         relPath: "",
         version: null,
         syncScroll: true,
-        loading: false
+        hideUnchanged: false,
+        loading: false,
+        lastDiff: null
     };
 
     let rootEl = null;
@@ -31,6 +33,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     let leftArea = null;
     let rightArea = null;
     let syncCb = null;
+    let hideCb = null;
     let scrolling = false;
 
     const drag = {
@@ -408,6 +411,25 @@ html[data-theme="win_classic"] .pqfvcLine.ins .pqfvcMark{
     color:#107c41;
 }
 
+
+/* Collapsed unchanged sections. */
+.pqfvcLine.skip{
+    background:#07151f !important;
+    opacity:.86;
+}
+.pqfvcLine.skip .pqfvcMark{
+    color:var(--fg);
+    opacity:.7;
+}
+.pqfvcLine.skip .pqfvcLineText{
+    font-style:italic;
+    opacity:.72;
+}
+html[data-theme="bright"] .pqfvcLine.skip,
+html[data-theme="win_classic"] .pqfvcLine.skip{
+    background:#eeeeee !important;
+}
+
 `;
         document.head.appendChild(style);
     }
@@ -460,6 +482,23 @@ html[data-theme="win_classic"] .pqfvcLine.ins .pqfvcMark{
         syncLabel.appendChild(syncCb);
         syncLabel.appendChild(syncText);
 
+        const hideLabel = document.createElement("label");
+        hideLabel.className = "pqfvcSync";
+
+        hideCb = document.createElement("input");
+        hideCb.type = "checkbox";
+        hideCb.checked = !!state.hideUnchanged;
+        hideCb.addEventListener("change", () => {
+            state.hideUnchanged = !!hideCb.checked;
+            rerenderCurrentDiff();
+        });
+
+        const hideText = document.createElement("span");
+        hideText.textContent = "Hide unchanged";
+
+        hideLabel.appendChild(hideCb);
+        hideLabel.appendChild(hideText);
+
         const closeBtn = document.createElement("button");
         closeBtn.type = "button";
         closeBtn.className = "btn secondary";
@@ -467,6 +506,7 @@ html[data-theme="win_classic"] .pqfvcLine.ins .pqfvcMark{
         closeBtn.addEventListener("click", close);
 
         actions.appendChild(syncLabel);
+        actions.appendChild(hideLabel);
         actions.appendChild(closeBtn);
 
         headEl.appendChild(headLeft);
@@ -654,6 +694,7 @@ html[data-theme="win_classic"] .pqfvcLine.ins .pqfvcMark{
         if (!rootEl) return;
         rootEl.classList.remove("show");
         rootEl.setAttribute("aria-hidden", "true");
+        state.lastDiff = null;
         if (leftArea) leftArea.replaceChildren();
         if (rightArea) rightArea.replaceChildren();
     }
@@ -872,6 +913,74 @@ html[data-theme="win_classic"] .pqfvcLine.ins .pqfvcMark{
         return { rows, stats, fallback: !!fallback };
     }
 
+    function compactUnchangedRows(rows, context = 3) {
+        if (!Array.isArray(rows) || !rows.length) return [];
+
+        const changed = new Set();
+
+        for (let i = 0; i < rows.length; i++) {
+            const k = rows[i] && rows[i].kind;
+            if (k && k !== "equal" && k !== "skip") {
+                for (let j = Math.max(0, i - context); j <= Math.min(rows.length - 1, i + context); j++) {
+                    changed.add(j);
+                }
+            }
+        }
+
+        if (!changed.size) return rows;
+
+        const out = [];
+        let i = 0;
+
+        while (i < rows.length) {
+            if (changed.has(i)) {
+                out.push(rows[i]);
+                i++;
+                continue;
+            }
+
+            let j = i;
+            while (j < rows.length && !changed.has(j)) j++;
+
+            const hiddenCount = j - i;
+            if (hiddenCount > 0) {
+                out.push({
+                    kind: "skip",
+                    count: hiddenCount,
+                    leftNo: "",
+                    rightNo: "",
+                    leftText: "",
+                    rightText: ""
+                });
+            }
+
+            i = j;
+        }
+
+        return out;
+    }
+
+    function rowsForCurrentMode() {
+        if (!state.lastDiff || !Array.isArray(state.lastDiff.rows)) return [];
+        return state.hideUnchanged
+            ? compactUnchangedRows(state.lastDiff.rows, 3)
+            : state.lastDiff.rows;
+    }
+
+    function rerenderCurrentDiff() {
+        if (!state.lastDiff || !leftArea || !rightArea) return;
+
+        const leftTop = leftArea.scrollTop || 0;
+        const rightTop = rightArea.scrollTop || 0;
+
+        const rows = rowsForCurrentMode();
+        renderDiffPane(leftArea, rows, "left");
+        renderDiffPane(rightArea, rows, "right");
+
+        leftArea.scrollTop = Math.min(leftTop, Math.max(0, leftArea.scrollHeight - leftArea.clientHeight));
+        rightArea.scrollTop = Math.min(rightTop, Math.max(0, rightArea.scrollHeight - rightArea.clientHeight));
+    }
+
     function renderDiffPane(container, rows, side) {
         container.replaceChildren();
 
@@ -879,6 +988,29 @@ html[data-theme="win_classic"] .pqfvcLine.ins .pqfvcMark{
         const frag = document.createDocumentFragment();
 
         for (const r of rows) {
+            if (r && r.kind === "skip") {
+                const row = document.createElement("div");
+                row.className = "pqfvcLine skip";
+
+                const no = document.createElement("div");
+                no.className = "pqfvcLineNo";
+                no.textContent = "";
+
+                const markEl = document.createElement("div");
+                markEl.className = "pqfvcMark";
+                markEl.textContent = "⋯";
+
+                const code = document.createElement("div");
+                code.className = "pqfvcLineText";
+                code.textContent = `${Number(r.count || 0)} unchanged line(s) hidden`;
+
+                row.appendChild(no);
+                row.appendChild(markEl);
+                row.appendChild(code);
+                frag.appendChild(row);
+                continue;
+            }
+
             const hasText = isLeft
                 ? (r.leftNo !== "" && r.leftNo != null)
                 : (r.rightNo !== "" && r.rightNo != null);
@@ -965,9 +1097,11 @@ html[data-theme="win_classic"] .pqfvcLine.ins .pqfvcMark{
             const curText = String(curJ.text || "");
 
             const diff = buildAlignedDiffRows(oldText, curText);
+            state.lastDiff = diff;
 
-            renderDiffPane(leftArea, diff.rows, "left");
-            renderDiffPane(rightArea, diff.rows, "right");
+            const rows = rowsForCurrentMode();
+            renderDiffPane(leftArea, rows, "left");
+            renderDiffPane(rightArea, rows, "right");
 
             leftArea.scrollTop = 0;
             rightArea.scrollTop = 0;
