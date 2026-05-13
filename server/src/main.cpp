@@ -20551,6 +20551,42 @@ CREATE TABLE IF NOT EXISTS admin_stats_buckets (
 
 CREATE INDEX IF NOT EXISTS idx_admin_stats_buckets_snapshot_kind
 ON admin_stats_buckets(snapshot_id, bucket_kind, position);
+
+CREATE TABLE IF NOT EXISTS admin_stats_monthly_rollups (
+    month_key TEXT PRIMARY KEY,
+    period_start_epoch INTEGER NOT NULL,
+    period_end_epoch INTEGER NOT NULL,
+    sample_count INTEGER NOT NULL DEFAULT 0,
+
+    first_snapshot_epoch INTEGER NOT NULL,
+    last_snapshot_epoch INTEGER NOT NULL,
+
+    files_total_count_first INTEGER NOT NULL DEFAULT 0,
+    files_total_count_last INTEGER NOT NULL DEFAULT 0,
+    files_total_count_min INTEGER NOT NULL DEFAULT 0,
+    files_total_count_max INTEGER NOT NULL DEFAULT 0,
+
+    files_total_bytes_first INTEGER NOT NULL DEFAULT 0,
+    files_total_bytes_last INTEGER NOT NULL DEFAULT 0,
+    files_total_bytes_min INTEGER NOT NULL DEFAULT 0,
+    files_total_bytes_max INTEGER NOT NULL DEFAULT 0,
+    files_total_bytes_avg INTEGER NOT NULL DEFAULT 0,
+
+    users_total_last INTEGER NOT NULL DEFAULT 0,
+    users_enabled_last INTEGER NOT NULL DEFAULT 0,
+    users_admins_last INTEGER NOT NULL DEFAULT 0,
+
+    workspaces_total_last INTEGER NOT NULL DEFAULT 0,
+    workspaces_enabled_last INTEGER NOT NULL DEFAULT 0,
+    workspaces_user_created_last INTEGER NOT NULL DEFAULT 0,
+    workspaces_admin_created_last INTEGER NOT NULL DEFAULT 0,
+
+    last_snapshot_json TEXT NOT NULL,
+    updated_at_epoch INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_stats_monthly_rollups_period
+ON admin_stats_monthly_rollups(period_start_epoch ASC);
 )SQL";
 
             return admin_stats_sql_exec_local(db, sql, err);
@@ -20790,6 +20826,393 @@ INSERT INTO admin_stats_buckets (
             return true;
         };
 
+    auto admin_stats_rollup_and_prune_old_snapshots_local =
+        [&](std::int64_t* rolled_up_months,
+            std::int64_t* pruned_snapshots,
+            std::string* err) -> bool {
+            if (rolled_up_months) *rolled_up_months = 0;
+            if (pruned_snapshots) *pruned_snapshots = 0;
+            if (err) err->clear();
+
+            constexpr std::int64_t kRawRetentionSeconds = 180LL * 24LL * 60LL * 60LL;
+            constexpr int kKeepLatest = 2000;
+
+            const std::int64_t now_epoch = static_cast<std::int64_t>(std::time(nullptr));
+            const std::int64_t cutoff_epoch = now_epoch - kRawRetentionSeconds;
+
+            sqlite3* db = nullptr;
+            if (sqlite3_open(admin_stats_db_path.string().c_str(), &db) != SQLITE_OK) {
+                if (err) *err = db ? sqlite3_errmsg(db) : "sqlite open failed";
+                if (db) sqlite3_close(db);
+                return false;
+            }
+
+            auto close_db = [&]() {
+                if (db) {
+                    sqlite3_close(db);
+                    db = nullptr;
+                }
+            };
+
+            if (!admin_stats_init_db_local(db, err)) {
+                close_db();
+                return false;
+            }
+
+            if (!admin_stats_sql_exec_local(db, "BEGIN IMMEDIATE;", err)) {
+                close_db();
+                return false;
+            }
+
+            auto rollback = [&]() {
+                std::string ignored;
+                admin_stats_sql_exec_local(db, "ROLLBACK;", &ignored);
+            };
+
+            struct MonthlyRollupLocal {
+                bool seen = false;
+                std::string month_key;
+                std::int64_t period_start_epoch = 0;
+                std::int64_t period_end_epoch = 0;
+                std::int64_t sample_count = 0;
+                std::int64_t first_snapshot_epoch = 0;
+                std::int64_t last_snapshot_epoch = 0;
+
+                std::uint64_t files_total_count_first = 0;
+                std::uint64_t files_total_count_last = 0;
+                std::uint64_t files_total_count_min = 0;
+                std::uint64_t files_total_count_max = 0;
+
+                std::uint64_t files_total_bytes_first = 0;
+                std::uint64_t files_total_bytes_last = 0;
+                std::uint64_t files_total_bytes_min = 0;
+                std::uint64_t files_total_bytes_max = 0;
+                long double files_total_bytes_sum = 0.0L;
+
+                std::uint64_t users_total_last = 0;
+                std::uint64_t users_enabled_last = 0;
+                std::uint64_t users_admins_last = 0;
+
+                std::uint64_t workspaces_total_last = 0;
+                std::uint64_t workspaces_enabled_last = 0;
+                std::uint64_t workspaces_user_created_last = 0;
+                std::uint64_t workspaces_admin_created_last = 0;
+
+                std::string last_snapshot_json;
+            };
+
+            auto col_i64 = [](sqlite3_stmt* st, int col) -> sqlite3_int64 {
+                if (sqlite3_column_type(st, col) == SQLITE_NULL) return 0;
+                return sqlite3_column_int64(st, col);
+            };
+
+            auto col_u64 = [&](sqlite3_stmt* st, int col) -> std::uint64_t {
+                const sqlite3_int64 v = col_i64(st, col);
+                return v > 0 ? static_cast<std::uint64_t>(v) : 0;
+            };
+
+            auto col_text = [](sqlite3_stmt* st, int col) -> std::string {
+                const unsigned char* t = sqlite3_column_text(st, col);
+                return t ? reinterpret_cast<const char*>(t) : std::string();
+            };
+
+            std::map<std::string, MonthlyRollupLocal> rollups;
+
+            const char* candidate_sql = R"SQL(
+SELECT
+    strftime('%Y-%m', generated_at_epoch, 'unixepoch') AS month_key,
+    CAST(strftime('%s', strftime('%Y-%m-01 00:00:00', generated_at_epoch, 'unixepoch')) AS INTEGER) AS period_start_epoch,
+    generated_at_epoch,
+    files_total_count,
+    files_total_bytes,
+    users_total,
+    users_enabled,
+    users_admins,
+    workspaces_total,
+    workspaces_enabled,
+    workspaces_user_created,
+    workspaces_admin_created,
+    snapshot_json
+FROM admin_stats_snapshots
+WHERE CAST(strftime('%s', datetime(strftime('%Y-%m-01 00:00:00', generated_at_epoch, 'unixepoch'), '+1 month')) AS INTEGER) < ?1
+  AND id NOT IN (
+      SELECT id
+      FROM admin_stats_snapshots
+      ORDER BY generated_at_epoch DESC, id DESC
+      LIMIT ?2
+  )
+ORDER BY generated_at_epoch ASC, id ASC;
+)SQL";
+
+            sqlite3_stmt* st = nullptr;
+            if (sqlite3_prepare_v2(db, candidate_sql, -1, &st, nullptr) != SQLITE_OK) {
+                if (err) *err = sqlite3_errmsg(db);
+                rollback();
+                close_db();
+                return false;
+            }
+
+            sqlite3_bind_int64(st, 1, static_cast<sqlite3_int64>(cutoff_epoch));
+            sqlite3_bind_int(st, 2, kKeepLatest);
+
+            int rc = SQLITE_OK;
+            while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+                const std::string month_key = col_text(st, 0);
+                if (month_key.empty()) continue;
+
+                MonthlyRollupLocal& r = rollups[month_key];
+
+                const std::int64_t period_start = static_cast<std::int64_t>(col_i64(st, 1));
+                const std::int64_t snap_epoch = static_cast<std::int64_t>(col_i64(st, 2));
+                const std::uint64_t files_count = col_u64(st, 3);
+                const std::uint64_t files_bytes = col_u64(st, 4);
+
+                if (!r.seen) {
+                    r.seen = true;
+                    r.month_key = month_key;
+                    r.period_start_epoch = period_start;
+                    r.period_end_epoch = snap_epoch;
+                    r.sample_count = 0;
+                    r.first_snapshot_epoch = snap_epoch;
+                    r.last_snapshot_epoch = snap_epoch;
+
+                    r.files_total_count_first = files_count;
+                    r.files_total_count_last = files_count;
+                    r.files_total_count_min = files_count;
+                    r.files_total_count_max = files_count;
+
+                    r.files_total_bytes_first = files_bytes;
+                    r.files_total_bytes_last = files_bytes;
+                    r.files_total_bytes_min = files_bytes;
+                    r.files_total_bytes_max = files_bytes;
+                    r.files_total_bytes_sum = 0.0L;
+                }
+
+                r.sample_count += 1;
+                r.period_end_epoch = snap_epoch;
+                r.last_snapshot_epoch = snap_epoch;
+
+                r.files_total_count_last = files_count;
+                r.files_total_count_min = std::min(r.files_total_count_min, files_count);
+                r.files_total_count_max = std::max(r.files_total_count_max, files_count);
+
+                r.files_total_bytes_last = files_bytes;
+                r.files_total_bytes_min = std::min(r.files_total_bytes_min, files_bytes);
+                r.files_total_bytes_max = std::max(r.files_total_bytes_max, files_bytes);
+                r.files_total_bytes_sum += static_cast<long double>(files_bytes);
+
+                r.users_total_last = col_u64(st, 5);
+                r.users_enabled_last = col_u64(st, 6);
+                r.users_admins_last = col_u64(st, 7);
+
+                r.workspaces_total_last = col_u64(st, 8);
+                r.workspaces_enabled_last = col_u64(st, 9);
+                r.workspaces_user_created_last = col_u64(st, 10);
+                r.workspaces_admin_created_last = col_u64(st, 11);
+
+                r.last_snapshot_json = col_text(st, 12);
+            }
+
+            if (rc != SQLITE_DONE) {
+                if (err) *err = sqlite3_errmsg(db);
+                sqlite3_finalize(st);
+                rollback();
+                close_db();
+                return false;
+            }
+
+            sqlite3_finalize(st);
+
+            const char* upsert_sql = R"SQL(
+INSERT INTO admin_stats_monthly_rollups (
+    month_key,
+    period_start_epoch,
+    period_end_epoch,
+    sample_count,
+    first_snapshot_epoch,
+    last_snapshot_epoch,
+    files_total_count_first,
+    files_total_count_last,
+    files_total_count_min,
+    files_total_count_max,
+    files_total_bytes_first,
+    files_total_bytes_last,
+    files_total_bytes_min,
+    files_total_bytes_max,
+    files_total_bytes_avg,
+    users_total_last,
+    users_enabled_last,
+    users_admins_last,
+    workspaces_total_last,
+    workspaces_enabled_last,
+    workspaces_user_created_last,
+    workspaces_admin_created_last,
+    last_snapshot_json,
+    updated_at_epoch
+) VALUES (
+    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+    ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24
+)
+ON CONFLICT(month_key) DO UPDATE SET
+    period_start_epoch = excluded.period_start_epoch,
+    period_end_epoch = excluded.period_end_epoch,
+    sample_count = excluded.sample_count,
+    first_snapshot_epoch = excluded.first_snapshot_epoch,
+    last_snapshot_epoch = excluded.last_snapshot_epoch,
+    files_total_count_first = excluded.files_total_count_first,
+    files_total_count_last = excluded.files_total_count_last,
+    files_total_count_min = excluded.files_total_count_min,
+    files_total_count_max = excluded.files_total_count_max,
+    files_total_bytes_first = excluded.files_total_bytes_first,
+    files_total_bytes_last = excluded.files_total_bytes_last,
+    files_total_bytes_min = excluded.files_total_bytes_min,
+    files_total_bytes_max = excluded.files_total_bytes_max,
+    files_total_bytes_avg = excluded.files_total_bytes_avg,
+    users_total_last = excluded.users_total_last,
+    users_enabled_last = excluded.users_enabled_last,
+    users_admins_last = excluded.users_admins_last,
+    workspaces_total_last = excluded.workspaces_total_last,
+    workspaces_enabled_last = excluded.workspaces_enabled_last,
+    workspaces_user_created_last = excluded.workspaces_user_created_last,
+    workspaces_admin_created_last = excluded.workspaces_admin_created_last,
+    last_snapshot_json = excluded.last_snapshot_json,
+    updated_at_epoch = excluded.updated_at_epoch;
+)SQL";
+
+            std::int64_t months_written = 0;
+
+            for (const auto& kv : rollups) {
+                const MonthlyRollupLocal& r = kv.second;
+                if (!r.seen || r.sample_count <= 0) continue;
+
+                sqlite3_stmt* ust = nullptr;
+                if (sqlite3_prepare_v2(db, upsert_sql, -1, &ust, nullptr) != SQLITE_OK) {
+                    if (err) *err = sqlite3_errmsg(db);
+                    rollback();
+                    close_db();
+                    return false;
+                }
+
+                std::uint64_t avg_bytes = 0;
+                if (r.sample_count > 0) {
+                    const long double avg = r.files_total_bytes_sum / static_cast<long double>(r.sample_count);
+                    const long double max_u64 = static_cast<long double>(std::numeric_limits<std::uint64_t>::max());
+                    avg_bytes = avg >= max_u64 ? std::numeric_limits<std::uint64_t>::max() : static_cast<std::uint64_t>(avg);
+                }
+
+                sqlite3_bind_text(ust, 1, r.month_key.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_int64(ust, 2, static_cast<sqlite3_int64>(r.period_start_epoch));
+                sqlite3_bind_int64(ust, 3, static_cast<sqlite3_int64>(r.period_end_epoch));
+                sqlite3_bind_int64(ust, 4, static_cast<sqlite3_int64>(r.sample_count));
+                sqlite3_bind_int64(ust, 5, static_cast<sqlite3_int64>(r.first_snapshot_epoch));
+                sqlite3_bind_int64(ust, 6, static_cast<sqlite3_int64>(r.last_snapshot_epoch));
+
+                admin_stats_bind_u64_local(ust, 7, r.files_total_count_first);
+                admin_stats_bind_u64_local(ust, 8, r.files_total_count_last);
+                admin_stats_bind_u64_local(ust, 9, r.files_total_count_min);
+                admin_stats_bind_u64_local(ust, 10, r.files_total_count_max);
+
+                admin_stats_bind_u64_local(ust, 11, r.files_total_bytes_first);
+                admin_stats_bind_u64_local(ust, 12, r.files_total_bytes_last);
+                admin_stats_bind_u64_local(ust, 13, r.files_total_bytes_min);
+                admin_stats_bind_u64_local(ust, 14, r.files_total_bytes_max);
+                admin_stats_bind_u64_local(ust, 15, avg_bytes);
+
+                admin_stats_bind_u64_local(ust, 16, r.users_total_last);
+                admin_stats_bind_u64_local(ust, 17, r.users_enabled_last);
+                admin_stats_bind_u64_local(ust, 18, r.users_admins_last);
+
+                admin_stats_bind_u64_local(ust, 19, r.workspaces_total_last);
+                admin_stats_bind_u64_local(ust, 20, r.workspaces_enabled_last);
+                admin_stats_bind_u64_local(ust, 21, r.workspaces_user_created_last);
+                admin_stats_bind_u64_local(ust, 22, r.workspaces_admin_created_last);
+
+                sqlite3_bind_text(ust, 23, r.last_snapshot_json.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_int64(ust, 24, static_cast<sqlite3_int64>(now_epoch));
+
+                const bool ok = (sqlite3_step(ust) == SQLITE_DONE);
+                if (!ok && err) *err = sqlite3_errmsg(db);
+                sqlite3_finalize(ust);
+
+                if (!ok) {
+                    rollback();
+                    close_db();
+                    return false;
+                }
+
+                months_written += 1;
+            }
+
+            const char* delete_buckets_sql = R"SQL(
+DELETE FROM admin_stats_buckets
+WHERE snapshot_id IN (
+    SELECT id
+    FROM admin_stats_snapshots
+    WHERE CAST(strftime('%s', datetime(strftime('%Y-%m-01 00:00:00', generated_at_epoch, 'unixepoch'), '+1 month')) AS INTEGER) < ?1
+      AND id NOT IN (
+          SELECT id
+          FROM admin_stats_snapshots
+          ORDER BY generated_at_epoch DESC, id DESC
+          LIMIT ?2
+      )
+);
+)SQL";
+
+            const char* delete_snapshots_sql = R"SQL(
+DELETE FROM admin_stats_snapshots
+WHERE CAST(strftime('%s', datetime(strftime('%Y-%m-01 00:00:00', generated_at_epoch, 'unixepoch'), '+1 month')) AS INTEGER) < ?1
+  AND id NOT IN (
+      SELECT id
+      FROM admin_stats_snapshots
+      ORDER BY generated_at_epoch DESC, id DESC
+      LIMIT ?2
+  );
+)SQL";
+
+            auto run_delete = [&](const char* sql) -> bool {
+                sqlite3_stmt* dst = nullptr;
+                if (sqlite3_prepare_v2(db, sql, -1, &dst, nullptr) != SQLITE_OK) {
+                    if (err) *err = sqlite3_errmsg(db);
+                    return false;
+                }
+
+                sqlite3_bind_int64(dst, 1, static_cast<sqlite3_int64>(cutoff_epoch));
+                sqlite3_bind_int(dst, 2, kKeepLatest);
+
+                const bool ok = (sqlite3_step(dst) == SQLITE_DONE);
+                if (!ok && err) *err = sqlite3_errmsg(db);
+                sqlite3_finalize(dst);
+                return ok;
+            };
+
+            if (!run_delete(delete_buckets_sql)) {
+                rollback();
+                close_db();
+                return false;
+            }
+
+            if (!run_delete(delete_snapshots_sql)) {
+                rollback();
+                close_db();
+                return false;
+            }
+
+            const int deleted_snapshots = sqlite3_changes(db);
+
+            if (!admin_stats_sql_exec_local(db, "COMMIT;", err)) {
+                rollback();
+                close_db();
+                return false;
+            }
+
+            if (rolled_up_months) *rolled_up_months = months_written;
+            if (pruned_snapshots) *pruned_snapshots = static_cast<std::int64_t>(deleted_snapshots);
+
+            close_db();
+            return true;
+        };
+
+
 
     // -------------------------------------------------------------------------
     // Admin Statistics page/API
@@ -21000,7 +21423,8 @@ LIMIT 2000;
                 {"workspaces_total", static_cast<std::int64_t>(col_i64(11))},
                 {"workspaces_enabled", static_cast<std::int64_t>(col_i64(12))},
                 {"workspaces_user_created", static_cast<std::int64_t>(col_i64(13))},
-                {"workspaces_admin_created", static_cast<std::int64_t>(col_i64(14))}
+                {"workspaces_admin_created", static_cast<std::int64_t>(col_i64(14))},
+                {"point_source", static_cast<std::int64_t>(col_i64(1)) < 0 ? "monthly_rollup" : "raw_snapshot"}
             };
             points.push_back(row);
         }
@@ -21463,6 +21887,19 @@ LIMIT 2000;
                     {"enabled", true},
                     {"db", "admin_stats.sqlite3"}
                 };
+
+                std::int64_t rolled_up_months = 0;
+                std::int64_t pruned_snapshots = 0;
+                std::string prune_err;
+                if (!admin_stats_rollup_and_prune_old_snapshots_local(&rolled_up_months, &pruned_snapshots, &prune_err)) {
+                    if (!out.contains("warnings") || !out["warnings"].is_array()) {
+                        out["warnings"] = json::array();
+                    }
+                    out["warnings"].push_back("failed to roll up/prune old admin statistics snapshots: " + prune_err);
+                } else if (pruned_snapshots > 0) {
+                    out["stats_cache"]["rolled_up_months"] = rolled_up_months;
+                    out["stats_cache"]["pruned_snapshots"] = pruned_snapshots;
+                }
             }
         }
 
@@ -21501,6 +21938,17 @@ LIMIT 2000;
                     std::cerr << "[admin_stats] scheduled sample save failed: "
                               << save_err << "\n";
                     continue;
+                }
+
+                std::int64_t rolled_up_months = 0;
+                std::int64_t pruned_snapshots = 0;
+                std::string prune_err;
+                if (!admin_stats_rollup_and_prune_old_snapshots_local(&rolled_up_months, &pruned_snapshots, &prune_err)) {
+                    std::cerr << "[admin_stats] scheduled rollup/prune failed: "
+                              << prune_err << "\n";
+                } else if (pruned_snapshots > 0) {
+                    std::cerr << "[admin_stats] scheduled rollup/prune deleted "
+                              << pruned_snapshots << " old snapshot(s)\n";
                 }
 
                 std::cerr << "[admin_stats] scheduled sample saved at "
