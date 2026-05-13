@@ -20815,6 +20815,227 @@ INSERT INTO admin_stats_buckets (
         res.set_content(body, "application/javascript; charset=utf-8");
     });
 
+
+    // GET /api/v4/admin/stats/trends?period=24h|7d|30d|90d|all&bucket=raw|hour|day
+    srv.Get("/api/v4/admin/stats/trends", [&](const httplib::Request& req, httplib::Response& res) {
+        if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+
+        auto param_or = [&](const char* key, const std::string& fallback) -> std::string {
+            return req.has_param(key) ? req.get_param_value(key) : fallback;
+        };
+
+        const std::string period = param_or("period", "7d");
+        const std::string bucket = param_or("bucket", "hour");
+
+        std::int64_t period_seconds = 7LL * 24LL * 3600LL;
+        if (period == "24h") {
+            period_seconds = 24LL * 3600LL;
+        } else if (period == "7d") {
+            period_seconds = 7LL * 24LL * 3600LL;
+        } else if (period == "30d") {
+            period_seconds = 30LL * 24LL * 3600LL;
+        } else if (period == "90d") {
+            period_seconds = 90LL * 24LL * 3600LL;
+        } else if (period == "all") {
+            period_seconds = 0;
+        } else {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid period; expected 24h, 7d, 30d, 90d, or all"}
+            }.dump());
+            return;
+        }
+
+        std::int64_t bucket_seconds = 3600;
+        if (bucket == "raw") {
+            bucket_seconds = 0;
+        } else if (bucket == "hour") {
+            bucket_seconds = 3600;
+        } else if (bucket == "day") {
+            bucket_seconds = 24LL * 3600LL;
+        } else {
+            reply_json(res, 400, json{
+                {"ok", false},
+                {"error", "bad_request"},
+                {"message", "invalid bucket; expected raw, hour, or day"}
+            }.dump());
+            return;
+        }
+
+        const std::int64_t now_epoch = static_cast<std::int64_t>(std::time(nullptr));
+        const std::int64_t since_epoch = period_seconds > 0 ? (now_epoch - period_seconds) : 0;
+
+        sqlite3* db = nullptr;
+        if (sqlite3_open(admin_stats_db_path.string().c_str(), &db) != SQLITE_OK) {
+            std::string msg = db ? sqlite3_errmsg(db) : "sqlite open failed";
+            if (db) sqlite3_close(db);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to open admin statistics database"},
+                {"detail", msg}
+            }.dump());
+            return;
+        }
+
+        std::string init_err;
+        if (!admin_stats_init_db_local(db, &init_err)) {
+            sqlite3_close(db);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to initialize admin statistics database"},
+                {"detail", init_err}
+            }.dump());
+            return;
+        }
+
+        std::string sql;
+        if (bucket == "raw") {
+            sql = R"SQL(
+SELECT
+    generated_at_epoch AS bucket_epoch,
+    id,
+    generated_at_epoch,
+    generated_at_iso,
+    files_total_count,
+    files_total_bytes,
+    files_average_bytes,
+    files_largest_bytes,
+    users_total,
+    users_enabled,
+    users_admins,
+    workspaces_total,
+    workspaces_enabled,
+    workspaces_user_created,
+    workspaces_admin_created
+FROM admin_stats_snapshots
+WHERE (?1 <= 0 OR generated_at_epoch >= ?1)
+ORDER BY generated_at_epoch ASC, id ASC
+LIMIT 2000;
+)SQL";
+        } else {
+            sql = R"SQL(
+WITH latest AS (
+    SELECT
+        (generated_at_epoch / ?1) * ?1 AS bucket_epoch,
+        MAX(id) AS snapshot_id
+    FROM admin_stats_snapshots
+    WHERE (?2 <= 0 OR generated_at_epoch >= ?2)
+    GROUP BY bucket_epoch
+)
+SELECT
+    latest.bucket_epoch,
+    s.id,
+    s.generated_at_epoch,
+    s.generated_at_iso,
+    s.files_total_count,
+    s.files_total_bytes,
+    s.files_average_bytes,
+    s.files_largest_bytes,
+    s.users_total,
+    s.users_enabled,
+    s.users_admins,
+    s.workspaces_total,
+    s.workspaces_enabled,
+    s.workspaces_user_created,
+    s.workspaces_admin_created
+FROM latest
+JOIN admin_stats_snapshots s ON s.id = latest.snapshot_id
+ORDER BY latest.bucket_epoch ASC
+LIMIT 2000;
+)SQL";
+        }
+
+        sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &st, nullptr) != SQLITE_OK) {
+            const std::string msg = sqlite3_errmsg(db);
+            sqlite3_close(db);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed to prepare admin statistics trend query"},
+                {"detail", msg}
+            }.dump());
+            return;
+        }
+
+        if (bucket == "raw") {
+            sqlite3_bind_int64(st, 1, since_epoch);
+        } else {
+            sqlite3_bind_int64(st, 1, bucket_seconds);
+            sqlite3_bind_int64(st, 2, since_epoch);
+        }
+
+        json points = json::array();
+        std::int64_t first_epoch = 0;
+        std::int64_t last_epoch = 0;
+
+        auto col_i64 = [&](int col) -> sqlite3_int64 {
+            if (sqlite3_column_type(st, col) == SQLITE_NULL) return 0;
+            return sqlite3_column_int64(st, col);
+        };
+
+        int rc = SQLITE_OK;
+        while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
+            const std::int64_t point_epoch = static_cast<std::int64_t>(col_i64(2));
+            if (first_epoch == 0) first_epoch = point_epoch;
+            last_epoch = point_epoch;
+
+            json row = {
+                {"bucket_t", static_cast<std::int64_t>(col_i64(0))},
+                {"id", static_cast<std::int64_t>(col_i64(1))},
+                {"t", point_epoch},
+                {"iso", reinterpret_cast<const char*>(sqlite3_column_text(st, 3) ? sqlite3_column_text(st, 3) : reinterpret_cast<const unsigned char*>(""))},
+                {"files_total_count", static_cast<std::int64_t>(col_i64(4))},
+                {"files_total_bytes", static_cast<std::int64_t>(col_i64(5))},
+                {"files_average_bytes", static_cast<std::int64_t>(col_i64(6))},
+                {"files_largest_bytes", static_cast<std::int64_t>(col_i64(7))},
+                {"users_total", static_cast<std::int64_t>(col_i64(8))},
+                {"users_enabled", static_cast<std::int64_t>(col_i64(9))},
+                {"users_admins", static_cast<std::int64_t>(col_i64(10))},
+                {"workspaces_total", static_cast<std::int64_t>(col_i64(11))},
+                {"workspaces_enabled", static_cast<std::int64_t>(col_i64(12))},
+                {"workspaces_user_created", static_cast<std::int64_t>(col_i64(13))},
+                {"workspaces_admin_created", static_cast<std::int64_t>(col_i64(14))}
+            };
+            points.push_back(row);
+        }
+
+        if (rc != SQLITE_DONE) {
+            const std::string msg = sqlite3_errmsg(db);
+            sqlite3_finalize(st);
+            sqlite3_close(db);
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", "failed while reading admin statistics trend rows"},
+                {"detail", msg}
+            }.dump());
+            return;
+        }
+
+        sqlite3_finalize(st);
+        sqlite3_close(db);
+
+        json out = {
+            {"ok", true},
+            {"period", period},
+            {"bucket", bucket},
+            {"bucket_seconds", bucket_seconds},
+            {"since_epoch", since_epoch},
+            {"count", points.size()},
+            {"first_epoch", first_epoch},
+            {"last_epoch", last_epoch},
+            {"points", points}
+        };
+
+        res.set_header("Cache-Control", "no-store");
+        reply_json(res, 200, out.dump());
+    });
+
+
     srv.Get("/api/v4/admin/stats/summary", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
         if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;

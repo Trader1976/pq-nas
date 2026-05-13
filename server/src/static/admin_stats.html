@@ -174,6 +174,85 @@
             color:rgba(var(--warn-rgb),0.95);
         }
 
+
+        .trendToolbar{
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:10px;
+            flex-wrap:wrap;
+            margin-bottom:12px;
+        }
+
+        .trendButtons{
+            display:flex;
+            gap:8px;
+            flex-wrap:wrap;
+        }
+
+        .trendBtn{
+            padding:7px 10px;
+            border-radius:999px;
+            border:1px solid rgba(var(--fg-rgb),0.18);
+            background:rgba(0,0,0,0.18);
+            color:rgba(var(--fg-rgb),0.78);
+            cursor:pointer;
+            font-weight:900;
+            font-size:12px;
+        }
+
+        .trendBtn.active{
+            border-color:rgba(var(--info-rgb),0.55);
+            background:rgba(var(--info-rgb),0.14);
+            color:rgba(var(--fg-rgb),0.96);
+        }
+
+        .trendGrid{
+            display:grid;
+            grid-template-columns:repeat(4, minmax(210px, 1fr));
+            gap:14px;
+        }
+
+        .trendCard{
+            border:1px solid rgba(var(--fg-rgb),0.08);
+            border-radius:18px;
+            background:rgba(0,0,0,0.14);
+            padding:14px;
+            min-width:0;
+        }
+
+        .trendHead{
+            display:flex;
+            align-items:baseline;
+            justify-content:space-between;
+            gap:10px;
+            margin-bottom:10px;
+        }
+
+        .trendTitle{
+            font-size:14px;
+            font-weight:950;
+        }
+
+        .trendValue{
+            color:rgba(var(--fg-rgb),0.70);
+            font-size:12px;
+            font-variant-numeric:tabular-nums;
+            white-space:nowrap;
+        }
+
+        .trendCanvas{
+            display:block;
+            width:100%;
+            height:128px;
+            border-radius:14px;
+            background:rgba(0,0,0,0.12);
+        }
+
+        @media (max-width: 1350px){
+            .trendGrid{ grid-template-columns:repeat(2, minmax(260px, 1fr)); }
+        }
+
         @media (max-width: 1100px){
             .grid{ grid-template-columns:repeat(2, minmax(140px, 1fr)); }
             .panes{ grid-template-columns:1fr; }
@@ -255,6 +334,57 @@
             </div>
         </section>
 
+
+        <section class="pane" aria-label="Trend charts">
+            <div class="trendToolbar">
+                <h2 style="margin:0;">Trends</h2>
+                <div class="trendButtons" aria-label="Trend period">
+                    <button class="trendBtn" type="button" data-period="24h">24h</button>
+                    <button class="trendBtn active" type="button" data-period="7d">7d</button>
+                    <button class="trendBtn" type="button" data-period="30d">30d</button>
+                    <button class="trendBtn" type="button" data-period="90d">90d</button>
+                    <button class="trendBtn" type="button" data-period="all">All</button>
+                </div>
+                <span id="trendStatus" class="pill info">
+                    <span class="k">Trend:</span> <span class="v">Loading…</span>
+                </span>
+            </div>
+
+            <div class="trendGrid">
+                <div class="trendCard">
+                    <div class="trendHead">
+                        <div class="trendTitle">Storage used</div>
+                        <div id="trendStorageValue" class="trendValue">—</div>
+                    </div>
+                    <canvas id="trendStorageCanvas" class="trendCanvas"></canvas>
+                </div>
+
+                <div class="trendCard">
+                    <div class="trendHead">
+                        <div class="trendTitle">File count</div>
+                        <div id="trendFilesValue" class="trendValue">—</div>
+                    </div>
+                    <canvas id="trendFilesCanvas" class="trendCanvas"></canvas>
+                </div>
+
+                <div class="trendCard">
+                    <div class="trendHead">
+                        <div class="trendTitle">Users</div>
+                        <div id="trendUsersValue" class="trendValue">—</div>
+                    </div>
+                    <canvas id="trendUsersCanvas" class="trendCanvas"></canvas>
+                </div>
+
+                <div class="trendCard">
+                    <div class="trendHead">
+                        <div class="trendTitle">Workspaces</div>
+                        <div id="trendWorkspacesValue" class="trendValue">—</div>
+                    </div>
+                    <canvas id="trendWorkspacesCanvas" class="trendCanvas"></canvas>
+                </div>
+            </div>
+        </section>
+
         <section class="panes">
             <div class="pane">
                 <h2>Top MIME types</h2>
@@ -320,7 +450,7 @@
 </div>
 
 <script src="/static/admin_badges.js"></script>
-<script src="/static/admin_stats.js?v=20260508"></script>
+<script src="/static/admin_stats.js?v=20260513-trends-v2"></script>
 <script src="/static/shell_sidebar.js"></script>
 </body>
 </html>
