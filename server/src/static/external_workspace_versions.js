@@ -14,6 +14,7 @@ window.ExternalWorkspaceVersions = window.ExternalWorkspaceVersions || {};
         versions: [],
         loading: false,
         restoringVersionId: "",
+        deletingVersionId: "",
         closeAfterRestore: false
     };
 
@@ -444,6 +445,19 @@ window.ExternalWorkspaceVersions = window.ExternalWorkspaceVersions || {};
         return `/api/v4/workspaces/files/versions/download?${qs.toString()}`;
     }
 
+    function buildDeleteUrl() {
+        return `/api/v4/workspaces/files/versions/delete`;
+    }
+
+    function buildDeleteBody(relPath, versionId) {
+        return {
+            workspace_id: workspaceId(),
+            path: normalizeRelPath(relPath),
+            version_id: String(versionId || "")
+        };
+    }
+
+
     function buildFlagUrl(flaggedByMe) {
         return flaggedByMe
             ? `/api/v4/workspaces/files/versions/unflag`
@@ -570,6 +584,7 @@ window.ExternalWorkspaceVersions = window.ExternalWorkspaceVersions || {};
         rootEl.classList.remove("show");
         rootEl.setAttribute("aria-hidden", "true");
         state.restoringVersionId = "";
+        state.deletingVersionId = "";
     }
 
     function setModalStatus(text, kind = "") {
@@ -1438,9 +1453,33 @@ window.ExternalWorkspaceVersions = window.ExternalWorkspaceVersions || {};
             });
         });
 
+        const deleteBtn = document.createElement("button");
+
+        deleteBtn.type = "button";
+
+        deleteBtn.className = "btn secondary";
+
+        deleteBtn.textContent = state.deletingVersionId === row.version_id ? "Deleting…" : "Delete";
+
+        deleteBtn.title = "Delete this preserved version permanently";
+
+        deleteBtn.disabled = !!state.restoringVersionId || !!state.deletingVersionId;
+
+        deleteBtn.addEventListener("click", () => {
+
+            deleteVersion(row).catch((e) => {
+
+                setModalStatus(String(e && e.message ? e.message : e), "err");
+
+            });
+
+        });
+
+
         actionsEl.appendChild(compareBtn);
         actionsEl.appendChild(restoreBtn);
         actionsEl.appendChild(downloadBtn);
+        actionsEl.appendChild(deleteBtn);
         actionsEl.appendChild(flagBtn);
         actionsEl.appendChild(copyBtn);
 
@@ -1488,6 +1527,104 @@ window.ExternalWorkspaceVersions = window.ExternalWorkspaceVersions || {};
             state.loading = false;
         }
     }
+
+    async function deleteVersion(row) {
+
+        if (!row || !row.version_id) return;
+
+
+        const label = kindLabel(row);
+
+        const flagCount = Number(row.flag_count || 0);
+
+
+        const ok = window.confirm(
+
+            `Delete this preserved version permanently?\n\n` +
+
+            `Path: ${state.relPath}\n` +
+
+            `Kind: ${label}\n` +
+
+            `Created: ${row.created_at || ""}\n` +
+
+            `Size: ${fmtSize(row.bytes || 0)}\n` +
+
+            (flagCount > 0 ? `\nWarning: this version is flagged by ${flagCount} user(s).\n` : "") +
+
+            `\nThis cannot be undone.`
+
+        );
+
+        if (!ok) return;
+
+
+        state.deletingVersionId = row.version_id;
+
+        renderVersions();
+
+        setModalStatus("Deleting version…", "warn");
+
+        setGlobalStatus(`Deleting version: ${state.relPath}`, "warn");
+
+
+        try {
+
+            const r = await fetch(buildDeleteUrl(), {
+
+                method: "POST",
+
+                credentials: "include",
+
+                cache: "no-store",
+
+                headers: {
+
+                    "Content-Type": "application/json",
+
+                    "Accept": "application/json",
+
+                },
+
+                body: JSON.stringify(buildDeleteBody(state.relPath, row.version_id)),
+
+            });
+
+
+            const j = await r.json().catch(() => null);
+
+            if (!r.ok || !j || !j.ok) {
+
+                const msg = j && (j.message || j.error)
+
+                    ? `${j.error || ""} ${j.message || ""}`.trim()
+
+                    : `HTTP ${r.status}`;
+
+                throw new Error(msg || "delete failed");
+
+            }
+
+
+            state.deletingVersionId = "";
+
+            await loadVersions();
+
+
+            const freed = fmtSize(j.version_bytes_deleted || j.bytes_deleted || row.bytes || 0);
+
+            setModalStatus(`Version deleted. Freed ${freed}.`, "ok");
+
+            setGlobalStatus(`Deleted version: ${state.relPath}`, "ok");
+
+        } finally {
+
+            state.deletingVersionId = "";
+
+        }
+
+    }
+
 
     async function restoreVersion(row) {
         if (!(state.ctx && state.ctx.canWrite)) {
@@ -1540,6 +1677,7 @@ window.ExternalWorkspaceVersions = window.ExternalWorkspaceVersions || {};
             }
         } finally {
             state.restoringVersionId = "";
+            state.deletingVersionId = "";
         }
 
         await loadVersions();
@@ -1567,6 +1705,7 @@ window.ExternalWorkspaceVersions = window.ExternalWorkspaceVersions || {};
         state.relPath = normalizeRelPath(item.rel || "");
         state.versions = [];
         state.restoringVersionId = "";
+        state.deletingVersionId = "";
 
         titleEl.textContent = "File versions";
         pathEl.textContent = "/" + state.relPath;
