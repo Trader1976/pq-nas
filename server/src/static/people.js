@@ -211,8 +211,417 @@
         }
     }
 
+
+
+    function injectPeopleConfirmCss() {
+        if (document.getElementById("peopleConfirmCss")) return;
+
+        const style = document.createElement("style");
+        style.id = "peopleConfirmCss";
+        style.textContent = `
+.peopleConfirmBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:100000;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(0,0,0,0.55);
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+}
+
+.peopleConfirmCard{
+    width:min(640px, calc(100vw - 24px));
+    max-height:min(84vh, 900px);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    border:1px solid var(--border2, rgba(120,120,120,0.45));
+    border-radius:18px;
+    background:linear-gradient(180deg, var(--panel2, #f8f8f8), var(--panel, #eeeeee));
+    box-shadow:0 18px 70px rgba(0,0,0,0.42);
+    color:var(--fg, #111);
+}
+
+.peopleConfirmHead{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:14px 16px;
+    border-bottom:1px solid var(--border2, rgba(120,120,120,0.35));
+    background:rgba(0,0,0,0.08);
+}
+
+.peopleConfirmTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+    font-size:16px;
+}
+
+.peopleConfirmSub{
+    margin-top:4px;
+    font-size:12px;
+    color:var(--fg-dim, rgba(0,0,0,0.65));
+}
+
+.peopleConfirmBody{
+    padding:16px;
+    display:grid;
+    grid-template-columns:130px minmax(0, 1fr);
+    gap:10px 14px;
+    overflow:auto;
+    min-height:0;
+}
+
+.peopleConfirmKey{
+    color:var(--fg-dim, rgba(0,0,0,0.68));
+    font-weight:850;
+}
+
+.peopleConfirmValue{
+    color:var(--fg, #111);
+    overflow-wrap:anywhere;
+    white-space:pre-wrap;
+}
+
+.peopleConfirmValue.mono{
+    font-family:var(--mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+    font-size:12px;
+}
+
+.peopleConfirmNote{
+    grid-column:1 / -1;
+    padding:10px 12px;
+    border:1px solid rgba(var(--warn-rgb, 180,120,20),0.35);
+    border-radius:14px;
+    background:rgba(var(--warn-rgb, 180,120,20),0.10);
+    color:var(--fg, #111);
+    font-weight:850;
+}
+
+.peopleConfirmFoot{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    padding:12px 16px;
+    border-top:1px solid var(--border2, rgba(120,120,120,0.35));
+    background:rgba(0,0,0,0.08);
+}
+
+.peopleConfirmBtn{
+    border:1px solid var(--border2, rgba(120,120,120,0.45));
+    border-radius:14px;
+    padding:9px 14px;
+    font:inherit;
+    font-weight:850;
+    color:var(--fg, #111);
+    background:linear-gradient(180deg, rgba(255,255,255,0.20), rgba(0,0,0,0.04));
+    cursor:pointer;
+}
+
+.peopleConfirmBtn:hover{
+    filter:brightness(1.05);
+}
+
+.peopleConfirmBtn.secondary{
+    opacity:.90;
+}
+
+.peopleConfirmBtn.danger{
+    border-color:rgba(var(--fail-rgb, 180,40,40),0.48);
+    background:rgba(var(--fail-rgb, 180,40,40),0.14);
+    color:var(--fg, #111);
+}
+
+html[data-theme="dark"] .peopleConfirmBackdrop,
+html[data-theme="cpunk_orange"] .peopleConfirmBackdrop,
+html[data-theme="orange"] .peopleConfirmBackdrop{
+    background:rgba(0,0,0,0.62);
+}
+
+html[data-theme="bright"] .peopleConfirmBackdrop,
+html[data-theme="win_classic"] .peopleConfirmBackdrop{
+    background:rgba(0,0,0,0.38);
+}
+`;
+        document.head.appendChild(style);
+    }
+
+    function openPeopleConfirmModal(opts = {}) {
+        injectPeopleConfirmCss();
+
+        return new Promise((resolve) => {
+            const options = opts || {};
+
+            const modal = document.createElement("div");
+            modal.className = "peopleConfirmBackdrop";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "peopleConfirmCard";
+
+            const head = document.createElement("div");
+            head.className = "peopleConfirmHead";
+
+            const headText = document.createElement("div");
+
+            const title = document.createElement("div");
+            title.className = "peopleConfirmTitle";
+            title.textContent = options.title || "Confirm action";
+
+            const sub = document.createElement("div");
+            sub.className = "peopleConfirmSub";
+            sub.textContent = options.subtitle || "";
+
+            headText.appendChild(title);
+            if (sub.textContent) headText.appendChild(sub);
+            head.appendChild(headText);
+
+            const body = document.createElement("div");
+            body.className = "peopleConfirmBody";
+
+            const rows = Array.isArray(options.rows) ? options.rows : [];
+            for (const row of rows) {
+                const k = document.createElement("div");
+                k.className = "peopleConfirmKey";
+                k.textContent = String(row.label || "");
+
+                const v = document.createElement("div");
+                v.className = row.mono ? "peopleConfirmValue mono" : "peopleConfirmValue";
+                v.textContent = String(row.value || "");
+
+                body.appendChild(k);
+                body.appendChild(v);
+            }
+
+            if (options.note) {
+                const note = document.createElement("div");
+                note.className = "peopleConfirmNote";
+                note.textContent = String(options.note || "");
+                body.appendChild(note);
+            }
+
+            const foot = document.createElement("div");
+            foot.className = "peopleConfirmFoot";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "peopleConfirmBtn secondary";
+            cancelBtn.textContent = options.cancelText || "Cancel";
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = options.danger ? "peopleConfirmBtn danger" : "peopleConfirmBtn";
+            okBtn.textContent = options.confirmText || "OK";
+
+            foot.appendChild(spacer);
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(!!value);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(false);
+                    return;
+                }
+
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(true);
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish(false);
+            });
+
+            cancelBtn.addEventListener("click", () => finish(false));
+            okBtn.addEventListener("click", () => finish(true));
+
+            window.setTimeout(() => {
+                if (options.danger) cancelBtn.focus();
+                else okBtn.focus();
+            }, 0);
+        });
+    }
+
+
+    function injectPeopleModalForceCss() {
+        if (document.getElementById("peopleModalForceCss")) return;
+
+        const style = document.createElement("style");
+        style.id = "peopleModalForceCss";
+        style.textContent = `
+/* People page modal compatibility: supports both old .modal/.modalCard and new peopleConfirm classes. */
+.peopleConfirmBackdrop,
+.modal.show{
+    position:fixed !important;
+    inset:0 !important;
+    z-index:100000 !important;
+    display:flex !important;
+    align-items:center !important;
+    justify-content:center !important;
+    padding:18px !important;
+    background:rgba(0,0,0,0.55) !important;
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+}
+
+.peopleConfirmCard,
+.modal.show > .modalCard{
+    width:min(640px, calc(100vw - 24px)) !important;
+    max-height:min(84vh, 900px) !important;
+    display:flex !important;
+    flex-direction:column !important;
+    overflow:hidden !important;
+    border:1px solid var(--border2, rgba(120,120,120,0.45)) !important;
+    border-radius:18px !important;
+    background:linear-gradient(180deg, var(--panel2, #f8f8f8), var(--panel, #eeeeee)) !important;
+    box-shadow:0 18px 70px rgba(0,0,0,0.42) !important;
+    color:var(--fg, #111) !important;
+}
+
+.peopleConfirmHead,
+.modal.show .modalHead{
+    display:flex !important;
+    align-items:center !important;
+    justify-content:space-between !important;
+    gap:12px !important;
+    padding:14px 16px !important;
+    border-bottom:1px solid var(--border2, rgba(120,120,120,0.35)) !important;
+    background:rgba(0,0,0,0.08) !important;
+}
+
+.peopleConfirmTitle,
+.modal.show .modalTitle{
+    font-weight:950 !important;
+    letter-spacing:.2px !important;
+    font-size:16px !important;
+}
+
+.peopleConfirmSub,
+.modal.show .modalSub{
+    margin-top:4px !important;
+    font-size:12px !important;
+    color:var(--fg-dim, rgba(0,0,0,0.65)) !important;
+}
+
+.peopleConfirmBody,
+.modal.show .modalBody{
+    padding:16px !important;
+    display:grid !important;
+    grid-template-columns:130px minmax(0, 1fr) !important;
+    gap:10px 14px !important;
+    overflow:auto !important;
+    min-height:0 !important;
+}
+
+.peopleConfirmKey,
+.modal.show .k{
+    color:var(--fg-dim, rgba(0,0,0,0.68)) !important;
+    font-weight:850 !important;
+}
+
+.peopleConfirmValue,
+.modal.show .v{
+    color:var(--fg, #111) !important;
+    overflow-wrap:anywhere !important;
+    white-space:pre-wrap !important;
+}
+
+.peopleConfirmValue.mono,
+.modal.show .mono{
+    font-family:var(--mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace) !important;
+    font-size:12px !important;
+}
+
+.peopleConfirmNote{
+    grid-column:1 / -1 !important;
+    padding:10px 12px !important;
+    border:1px solid rgba(var(--warn-rgb, 180,120,20),0.35) !important;
+    border-radius:14px !important;
+    background:rgba(var(--warn-rgb, 180,120,20),0.10) !important;
+    color:var(--fg, #111) !important;
+    font-weight:850 !important;
+}
+
+.peopleConfirmFoot,
+.modal.show .modalFoot{
+    display:flex !important;
+    align-items:center !important;
+    gap:12px !important;
+    padding:12px 16px !important;
+    border-top:1px solid var(--border2, rgba(120,120,120,0.35)) !important;
+    background:rgba(0,0,0,0.08) !important;
+}
+
+.peopleConfirmBtn,
+.modal.show .btn{
+    border:1px solid var(--border2, rgba(120,120,120,0.45)) !important;
+    border-radius:14px !important;
+    padding:9px 14px !important;
+    font:inherit !important;
+    font-weight:850 !important;
+    color:var(--fg, #111) !important;
+    background:linear-gradient(180deg, rgba(255,255,255,0.20), rgba(0,0,0,0.04)) !important;
+    cursor:pointer !important;
+}
+
+.peopleConfirmBtn.danger,
+.modal.show .btn.danger{
+    border-color:rgba(var(--fail-rgb, 180,40,40),0.48) !important;
+    background:rgba(var(--fail-rgb, 180,40,40),0.14) !important;
+    color:var(--fg, #111) !important;
+}
+
+html[data-theme="bright"] .peopleConfirmBackdrop,
+html[data-theme="bright"] .modal.show,
+html[data-theme="win_classic"] .peopleConfirmBackdrop,
+html[data-theme="win_classic"] .modal.show{
+    background:rgba(0,0,0,0.38) !important;
+}
+`;
+        document.head.appendChild(style);
+    }
+
     async function deleteContact(fp, label) {
-        const ok = window.confirm(`Remove "${label || shortFp(fp)}" from your People list?`);
+        injectPeopleModalForceCss();
+        const displayLabel = label || shortFp(fp);
+        const ok = await openPeopleConfirmModal({
+            title: "Remove from People?",
+            subtitle: "This removes your private label for this person.",
+            rows: [
+                { label: "Person", value: displayLabel, mono: true },
+                { label: "Fingerprint", value: fp, mono: true },
+            ],
+            note: "This does not delete the real user, external member, or any files. It only removes the saved People label.",
+            confirmText: "Remove",
+            cancelText: "Cancel",
+            danger: true,
+        });
         if (!ok) return;
 
         try {

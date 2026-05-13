@@ -145,6 +145,199 @@
         });
     }
 
+
+    function openPeopleEditModal(opts = {}) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+
+            const modal = document.createElement("div");
+            modal.className = "modal show";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "modalCard";
+            card.style.width = "min(640px, calc(100vw - 24px))";
+
+            const head = document.createElement("div");
+            head.className = "modalHead";
+
+            const headText = document.createElement("div");
+
+            const title = document.createElement("div");
+            title.className = "modalTitle";
+            title.textContent = options.title || "Edit People";
+
+            const sub = document.createElement("div");
+            sub.className = "modalSub";
+            sub.textContent = options.subtitle || "";
+
+            headText.appendChild(title);
+            if (sub.textContent) headText.appendChild(sub);
+            head.appendChild(headText);
+
+            const body = document.createElement("div");
+            body.className = "modalBody";
+            body.style.gridTemplateColumns = "140px 1fr";
+
+            const nameLabel = document.createElement("div");
+            nameLabel.className = "k";
+            nameLabel.textContent = "Display name";
+
+            const nameWrap = document.createElement("div");
+
+            const nameInput = document.createElement("input");
+            nameInput.type = "text";
+            nameInput.value = options.displayName || "";
+            nameInput.autocomplete = "off";
+            nameInput.spellcheck = false;
+            nameInput.style.width = "100%";
+            nameInput.style.padding = "10px 12px";
+            nameInput.style.borderRadius = "12px";
+            nameInput.style.border = "1px solid var(--border2)";
+            nameInput.style.background = "rgba(0,0,0,0.22)";
+            nameInput.style.color = "var(--fg)";
+            nameInput.style.font = "inherit";
+
+            nameWrap.appendChild(nameInput);
+
+            const fpLabel = document.createElement("div");
+            fpLabel.className = "k";
+            fpLabel.textContent = "Fingerprint";
+
+            const fpValue = document.createElement("div");
+            fpValue.className = "v mono";
+            fpValue.textContent = options.fingerprint || "";
+
+            const notesLabel = document.createElement("div");
+            notesLabel.className = "k";
+            notesLabel.textContent = "Private notes";
+
+            const notesWrap = document.createElement("div");
+
+            const notesInput = document.createElement("textarea");
+            notesInput.value = options.notes || "";
+            notesInput.placeholder = "Optional notes visible only in your People list";
+            notesInput.style.width = "100%";
+            notesInput.style.minHeight = "110px";
+            notesInput.style.resize = "vertical";
+            notesInput.style.padding = "10px 12px";
+            notesInput.style.borderRadius = "12px";
+            notesInput.style.border = "1px solid var(--border2)";
+            notesInput.style.background = "rgba(0,0,0,0.22)";
+            notesInput.style.color = "var(--fg)";
+            notesInput.style.font = "inherit";
+            notesInput.style.lineHeight = "1.4";
+
+            notesWrap.appendChild(notesInput);
+
+            const err = document.createElement("div");
+            err.className = "v";
+            err.style.display = "none";
+            err.style.gridColumn = "1 / -1";
+            err.style.padding = "8px 10px";
+            err.style.border = "1px solid rgba(var(--fail-rgb),0.35)";
+            err.style.borderRadius = "12px";
+            err.style.background = "rgba(var(--fail-rgb),0.10)";
+            err.style.color = "var(--fg)";
+            err.style.fontWeight = "850";
+
+            body.appendChild(nameLabel);
+            body.appendChild(nameWrap);
+            body.appendChild(fpLabel);
+            body.appendChild(fpValue);
+            body.appendChild(notesLabel);
+            body.appendChild(notesWrap);
+            body.appendChild(err);
+
+            const foot = document.createElement("div");
+            foot.className = "modalFoot";
+
+            const hint = document.createElement("div");
+            hint.className = "v";
+            hint.style.opacity = "0.75";
+            hint.style.fontSize = "12px";
+            hint.textContent = "Saved only to your private People list.";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = "Cancel";
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = "Save People";
+
+            foot.appendChild(hint);
+            foot.appendChild(spacer);
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const showError = (text) => {
+                err.textContent = text || "";
+                err.style.display = text ? "block" : "none";
+            };
+
+            const close = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(value || null);
+            };
+
+            const submit = () => {
+                const displayName = String(nameInput.value || "").trim();
+                const notes = String(notesInput.value || "").trim();
+
+                if (!displayName) {
+                    showError("Display name is required.");
+                    nameInput.focus();
+                    return;
+                }
+
+                close({ displayName, notes });
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    close(null);
+                    return;
+                }
+
+                if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    submit();
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) close(null);
+            });
+
+            cancelBtn.addEventListener("click", () => close(null));
+            okBtn.addEventListener("click", submit);
+
+            window.setTimeout(() => {
+                nameInput.focus();
+                nameInput.select();
+            }, 0);
+        });
+    }
+
     function buildPeopleControls(row, member, opts) {
         const fp = normalizeFingerprint(row.dataset.fingerprint || "");
         if (!fp) return;
@@ -197,26 +390,20 @@
                 : "Not saved in People";
 
             btn.addEventListener("click", async () => {
-                const name = window.prompt(
-                    "Name to show in your private People list:",
-                    currentName
-                );
-                if (name === null) return;
-
-                const displayName = String(name || "").trim();
-                if (!displayName) {
-                    setStatus(statusEl, "People save failed: display name is required.");
-                    return;
-                }
-
                 const defaultNotes = String(person.notes || "").trim() ||
                     (workspaceName ? `Workspace collaborator: ${workspaceName}` : "");
 
-                const notesPrompt = window.prompt(
-                    "Private notes for this person, optional:",
-                    defaultNotes
-                );
-                if (notesPrompt === null) return;
+                const picked = await openPeopleEditModal({
+                    title: resolved ? "Edit People" : "Add to People",
+                    subtitle: "Save a private name and notes for this workspace member.",
+                    displayName: currentName,
+                    notes: defaultNotes,
+                    fingerprint: fp
+                });
+                if (!picked) return;
+
+                const displayName = picked.displayName;
+                const notesPrompt = picked.notes;
 
                 const old = btn.textContent;
                 btn.disabled = true;

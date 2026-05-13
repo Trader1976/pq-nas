@@ -526,6 +526,292 @@ function exportCsv() {
     downloadBlob(filename, "text/csv;charset=utf-8", csv);
 }
 
+
+function injectAuditConfirmCss() {
+    if (document.getElementById("auditConfirmCss")) return;
+
+    const style = document.createElement("style");
+    style.id = "auditConfirmCss";
+    style.textContent = `
+.auditConfirmBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:100000;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(0,0,0,0.55);
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+}
+
+.auditConfirmCard{
+    width:min(640px, calc(100vw - 24px));
+    max-height:min(84vh, 900px);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    border:1px solid var(--border2, rgba(120,120,120,0.45));
+    border-radius:18px;
+    background:linear-gradient(180deg, var(--panel2, #f8f8f8), var(--panel, #eeeeee));
+    box-shadow:0 18px 70px rgba(0,0,0,0.42);
+    color:var(--fg, #111);
+}
+
+.auditConfirmHead{
+    padding:14px 16px;
+    border-bottom:1px solid var(--border2, rgba(120,120,120,0.35));
+    background:rgba(0,0,0,0.08);
+}
+
+.auditConfirmTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+    font-size:16px;
+}
+
+.auditConfirmSub{
+    margin-top:4px;
+    font-size:12px;
+    color:var(--fg-dim, rgba(0,0,0,0.65));
+}
+
+.auditConfirmBody{
+    padding:16px;
+    display:grid;
+    grid-template-columns:140px minmax(0, 1fr);
+    gap:10px 14px;
+    overflow:auto;
+    min-height:0;
+}
+
+.auditConfirmKey{
+    color:var(--fg-dim, rgba(0,0,0,0.68));
+    font-weight:850;
+}
+
+.auditConfirmValue{
+    color:var(--fg, #111);
+    overflow-wrap:anywhere;
+    white-space:pre-wrap;
+}
+
+.auditConfirmValue.mono{
+    font-family:var(--mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+    font-size:12px;
+}
+
+.auditConfirmNote{
+    grid-column:1 / -1;
+    padding:10px 12px;
+    border:1px solid rgba(var(--warn-rgb, 180,120,20),0.35);
+    border-radius:14px;
+    background:rgba(var(--warn-rgb, 180,120,20),0.10);
+    color:var(--fg, #111);
+    font-weight:850;
+}
+
+.auditConfirmFoot{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    padding:12px 16px;
+    border-top:1px solid var(--border2, rgba(120,120,120,0.35));
+    background:rgba(0,0,0,0.08);
+}
+
+.auditConfirmBtn{
+    border:1px solid var(--border2, rgba(120,120,120,0.45));
+    border-radius:14px;
+    padding:9px 14px;
+    font:inherit;
+    font-weight:850;
+    color:var(--fg, #111);
+    background:linear-gradient(180deg, rgba(255,255,255,0.20), rgba(0,0,0,0.04));
+    cursor:pointer;
+}
+
+.auditConfirmBtn:hover{
+    filter:brightness(1.05);
+}
+
+.auditConfirmBtn.secondary{
+    opacity:.90;
+}
+
+.auditConfirmBtn.warn{
+    border-color:rgba(var(--warn-rgb, 180,120,20),0.48);
+    background:rgba(var(--warn-rgb, 180,120,20),0.16);
+    color:var(--fg, #111);
+}
+
+html[data-theme="bright"] .auditConfirmBackdrop{
+    background:rgba(0,0,0,0.30);
+}
+
+html[data-theme="bright"] .auditConfirmCard{
+    background:linear-gradient(180deg, #ffffff, #f2f4f7) !important;
+    border-color:rgba(70,80,95,0.32) !important;
+    color:#111827 !important;
+    box-shadow:0 22px 80px rgba(0,0,0,0.28) !important;
+}
+
+html[data-theme="bright"] .auditConfirmHead,
+html[data-theme="bright"] .auditConfirmFoot{
+    background:rgba(15,23,42,0.045) !important;
+    border-color:rgba(70,80,95,0.22) !important;
+}
+
+html[data-theme="bright"] .auditConfirmTitle,
+html[data-theme="bright"] .auditConfirmValue,
+html[data-theme="bright"] .auditConfirmBtn{
+    color:#111827 !important;
+}
+
+html[data-theme="bright"] .auditConfirmSub,
+html[data-theme="bright"] .auditConfirmKey{
+    color:rgba(17,24,39,0.68) !important;
+}
+
+html[data-theme="bright"] .auditConfirmNote{
+    background:rgba(190,125,20,0.12) !important;
+    border-color:rgba(190,125,20,0.34) !important;
+    color:#111827 !important;
+}
+
+html[data-theme="bright"] .auditConfirmBtn.secondary{
+    background:linear-gradient(180deg, #ffffff, #e8ebef) !important;
+}
+
+html[data-theme="bright"] .auditConfirmBtn.warn{
+    background:rgba(190,125,20,0.16) !important;
+    border-color:rgba(190,125,20,0.38) !important;
+    color:#111827 !important;
+}
+
+html[data-theme="win_classic"] .auditConfirmBackdrop{
+    background:rgba(0,0,0,0.38);
+}
+`;
+    document.head.appendChild(style);
+}
+
+function openAuditConfirmModal(opts = {}) {
+    injectAuditConfirmCss();
+
+    return new Promise((resolve) => {
+        const options = opts || {};
+
+        const modal = document.createElement("div");
+        modal.className = "auditConfirmBackdrop";
+        modal.setAttribute("role", "dialog");
+        modal.setAttribute("aria-modal", "true");
+
+        const card = document.createElement("div");
+        card.className = "auditConfirmCard";
+
+        const head = document.createElement("div");
+        head.className = "auditConfirmHead";
+
+        const title = document.createElement("div");
+        title.className = "auditConfirmTitle";
+        title.textContent = options.title || "Confirm action";
+
+        const sub = document.createElement("div");
+        sub.className = "auditConfirmSub";
+        sub.textContent = options.subtitle || "";
+
+        head.appendChild(title);
+        if (sub.textContent) head.appendChild(sub);
+
+        const body = document.createElement("div");
+        body.className = "auditConfirmBody";
+
+        const rows = Array.isArray(options.rows) ? options.rows : [];
+        for (const row of rows) {
+            const k = document.createElement("div");
+            k.className = "auditConfirmKey";
+            k.textContent = String(row.label || "");
+
+            const v = document.createElement("div");
+            v.className = row.mono ? "auditConfirmValue mono" : "auditConfirmValue";
+            v.textContent = String(row.value || "");
+
+            body.appendChild(k);
+            body.appendChild(v);
+        }
+
+        if (options.note) {
+            const note = document.createElement("div");
+            note.className = "auditConfirmNote";
+            note.textContent = String(options.note || "");
+            body.appendChild(note);
+        }
+
+        const foot = document.createElement("div");
+        foot.className = "auditConfirmFoot";
+
+        const spacer = document.createElement("div");
+        spacer.style.flex = "1 1 auto";
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.className = "auditConfirmBtn secondary";
+        cancelBtn.textContent = options.cancelText || "Cancel";
+
+        const okBtn = document.createElement("button");
+        okBtn.type = "button";
+        okBtn.className = options.warn ? "auditConfirmBtn warn" : "auditConfirmBtn";
+        okBtn.textContent = options.confirmText || "OK";
+
+        foot.appendChild(spacer);
+        foot.appendChild(cancelBtn);
+        foot.appendChild(okBtn);
+
+        card.appendChild(head);
+        card.appendChild(body);
+        card.appendChild(foot);
+        modal.appendChild(card);
+        document.body.appendChild(modal);
+
+        const finish = (value) => {
+            document.removeEventListener("keydown", onKey, true);
+            modal.remove();
+            resolve(!!value);
+        };
+
+        const onKey = (ev) => {
+            if (ev.key === "Escape") {
+                ev.preventDefault();
+                ev.stopPropagation();
+                finish(false);
+                return;
+            }
+
+            if (ev.key === "Enter") {
+                ev.preventDefault();
+                ev.stopPropagation();
+                finish(true);
+            }
+        };
+
+        document.addEventListener("keydown", onKey, true);
+
+        modal.addEventListener("click", (ev) => {
+            if (ev.target === modal) finish(false);
+        });
+
+        cancelBtn.addEventListener("click", () => finish(false));
+        okBtn.addEventListener("click", () => finish(true));
+
+        window.setTimeout(() => {
+            cancelBtn.focus();
+        }, 0);
+    });
+}
+
+
 // ---------- rotate ----------
 const rotateBtn = document.getElementById("btnRotateAudit");
 const rotatePill = document.getElementById("rotateAuditStatus");
@@ -533,9 +819,20 @@ const rotatePill = document.getElementById("rotateAuditStatus");
 async function doRotateAudit() {
     if (!rotateBtn) return;
 
-    if (!confirm("Rotate audit log now?\n\nThis will create a rotated file and write a rotate_header line to the new active log.")) {
-        return;
-    }
+    const ok = await openAuditConfirmModal({
+        title: "Rotate audit log now?",
+        subtitle: "This creates a rotated archive and starts a fresh active audit log.",
+        rows: [
+            { label: "Active log", value: "pqnas_audit.jsonl", mono: true },
+            { label: "Action", value: "Create rotated file and write rotate_header" },
+            { label: "Integrity", value: "Hash-chain continuity is preserved" },
+        ],
+        note: "The page refreshes the tail and verifies integrity after rotation.",
+        confirmText: "Rotate audit",
+        cancelText: "Cancel",
+        warn: true,
+    });
+    if (!ok) return;
 
     rotateBtn.disabled = true;
     if (rotatePill) {

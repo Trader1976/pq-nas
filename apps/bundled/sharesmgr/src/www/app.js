@@ -425,6 +425,235 @@
         }
         return j.recipient || null;
     }
+
+    function sharesConfirmModal(opts = {}) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+
+            const backdrop = document.createElement("div");
+            backdrop.className = "sharesConfirmBackdrop";
+            backdrop.setAttribute("role", "dialog");
+            backdrop.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "sharesConfirmCard";
+
+            const head = document.createElement("div");
+            head.className = "sharesConfirmHead";
+
+            const titleWrap = document.createElement("div");
+
+            const title = document.createElement("div");
+            title.className = "sharesConfirmTitle";
+            title.textContent = options.title || "Confirm action";
+
+            const sub = document.createElement("div");
+            sub.className = "sharesConfirmSub";
+            sub.textContent = options.subtitle || "";
+
+            titleWrap.appendChild(title);
+            if (sub.textContent) titleWrap.appendChild(sub);
+            head.appendChild(titleWrap);
+
+            const body = document.createElement("div");
+            body.className = "sharesConfirmBody";
+
+            const rows = Array.isArray(options.rows) ? options.rows : [];
+            for (const row of rows) {
+                const k = document.createElement("div");
+                k.className = "sharesConfirmKey";
+                k.textContent = String(row.label || "");
+
+                const v = document.createElement("div");
+                v.className = row.mono ? "sharesConfirmValue mono" : "sharesConfirmValue";
+                v.textContent = String(row.value || "");
+
+                body.appendChild(k);
+                body.appendChild(v);
+            }
+
+            if (options.examples) {
+                const label = document.createElement("div");
+                label.className = "sharesConfirmKey";
+                label.textContent = "Examples";
+
+                const value = document.createElement("div");
+                value.className = "sharesConfirmValue mono";
+                value.textContent = String(options.examples || "");
+
+                body.appendChild(label);
+                body.appendChild(value);
+            }
+
+            if (options.note) {
+                const note = document.createElement("div");
+                note.className = "sharesConfirmNote";
+                note.textContent = String(options.note || "");
+                body.appendChild(note);
+            }
+
+            const foot = document.createElement("div");
+            foot.className = "sharesConfirmFoot";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn btnGhost";
+            cancelBtn.textContent = options.cancelText || "Cancel";
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = options.danger ? "btn btnDanger" : "btn";
+            okBtn.textContent = options.confirmText || "OK";
+
+            foot.appendChild(spacer);
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            backdrop.appendChild(card);
+            document.body.appendChild(backdrop);
+
+            const close = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                backdrop.remove();
+                resolve(!!value);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    close(false);
+                    return;
+                }
+
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    close(true);
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+
+            backdrop.addEventListener("click", (ev) => {
+                if (ev.target === backdrop) close(false);
+            });
+
+            cancelBtn.addEventListener("click", () => close(false));
+            okBtn.addEventListener("click", () => close(true));
+
+            window.setTimeout(() => {
+                if (options.danger) cancelBtn.focus();
+                else okBtn.focus();
+            }, 0);
+        });
+    }
+
+    function injectSharesConfirmCss() {
+        if (document.getElementById("sharesConfirmCss")) return;
+
+        const style = document.createElement("style");
+        style.id = "sharesConfirmCss";
+        style.textContent = `
+.sharesConfirmBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:10000;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(0,0,0,0.55);
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+}
+
+.sharesConfirmCard{
+    width:min(620px, calc(100vw - 24px));
+    max-height:min(82vh, 900px);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    border:1px solid var(--border2);
+    border-radius:18px;
+    background:linear-gradient(180deg, var(--panel2), var(--panel));
+    box-shadow:var(--shadow);
+    color:var(--fg);
+}
+
+.sharesConfirmHead{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:14px 16px;
+    border-bottom:1px solid var(--border2);
+    background:rgba(0,0,0,0.16);
+}
+
+.sharesConfirmTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+}
+
+.sharesConfirmSub{
+    margin-top:3px;
+    font-size:12px;
+    color:var(--fg-dim);
+}
+
+.sharesConfirmBody{
+    padding:16px;
+    display:grid;
+    grid-template-columns:130px minmax(0, 1fr);
+    gap:10px 14px;
+    overflow:auto;
+    min-height:0;
+}
+
+.sharesConfirmKey{
+    color:rgba(var(--fg-rgb),0.70);
+    font-weight:850;
+}
+
+.sharesConfirmValue{
+    color:rgba(var(--fg-rgb),0.95);
+    overflow-wrap:anywhere;
+    white-space:pre-wrap;
+}
+
+.sharesConfirmNote{
+    grid-column:1 / -1;
+    padding:10px 12px;
+    border:1px solid rgba(var(--warn-rgb),0.35);
+    border-radius:14px;
+    background:rgba(var(--warn-rgb),0.10);
+    color:var(--fg);
+    font-weight:850;
+}
+
+.sharesConfirmFoot{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    padding:12px 16px;
+    border-top:1px solid var(--border2);
+    background:rgba(0,0,0,0.12);
+}
+
+html[data-theme="bright"] .sharesConfirmBackdrop{
+    background:rgba(255,255,255,0.38);
+}
+`;
+        document.head.appendChild(style);
+    }
+
     async function revokeExpired() {
         const exp = expiredShares(shares);
 
@@ -434,12 +663,22 @@
         }
 
         const sample = exp.slice(0, 5).map(s => s.path || "(no path)").join("\n");
-        const msg =
-            `Revoke ${exp.length} expired share(s)?\n\n` +
-            `Examples:\n${sample}` +
-            (exp.length > 5 ? `\n… +${exp.length - 5} more` : "");
+        injectSharesConfirmCss();
 
-        if (!confirm(msg)) return;
+        const ok = await sharesConfirmModal({
+            title: "Revoke expired shares?",
+            subtitle: "This will immediately invalidate expired share URLs.",
+            rows: [
+                { label: "Expired shares", value: String(exp.length) },
+            ],
+            examples: sample + (exp.length > 5 ? `\n… +${exp.length - 5} more` : ""),
+            note: "Revoked links cannot be used again.",
+            confirmText: `Revoke expired (${exp.length})`,
+            cancelText: "Cancel",
+            danger: true,
+        });
+
+        if (!ok) return;
 
         btnRevokeExpired.disabled = true;
         btnRefresh.disabled = true;

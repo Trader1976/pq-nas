@@ -506,6 +506,316 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         }
     }
 
+
+    function openSnapshotConfirmModal(opts = {}) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+
+            const modal = document.createElement("div");
+            modal.className = "modalOverlay snapshotConfirmOverlay";
+            modal.style.display = "flex";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "modalCard";
+            card.style.width = "min(680px, calc(100vw - 24px))";
+
+            const head = document.createElement("div");
+            head.className = "modalHead";
+
+            const headText = document.createElement("div");
+
+            const title = document.createElement("div");
+            title.className = "modalTitle";
+            title.textContent = options.title || "Confirm action";
+
+            const sub = document.createElement("div");
+            sub.className = "modalSub";
+            sub.textContent = options.subtitle || "";
+
+            headText.appendChild(title);
+            if (sub.textContent) headText.appendChild(sub);
+            head.appendChild(headText);
+
+            const body = document.createElement("div");
+            body.className = "modalBody";
+            body.style.gridTemplateColumns = "140px 1fr";
+
+            const rows = Array.isArray(options.rows) ? options.rows : [];
+            for (const row of rows) {
+                const k = document.createElement("div");
+                k.className = "k";
+                k.textContent = String(row.label || "");
+
+                const v = document.createElement("div");
+                v.className = row.mono ? "v mono" : "v";
+                v.textContent = String(row.value || "");
+
+                body.appendChild(k);
+                body.appendChild(v);
+            }
+
+            if (options.warning) {
+                const warn = document.createElement("div");
+                warn.className = "v";
+                warn.style.gridColumn = "1 / -1";
+                warn.style.padding = "10px 12px";
+                warn.style.border = "1px solid rgba(var(--fail-rgb),0.42)";
+                warn.style.borderRadius = "14px";
+                warn.style.background = "rgba(var(--fail-rgb),0.12)";
+                warn.style.fontWeight = "900";
+                warn.textContent = String(options.warning || "");
+                body.appendChild(warn);
+            }
+
+            if (options.note) {
+                const note = document.createElement("div");
+                note.className = "v";
+                note.style.gridColumn = "1 / -1";
+                note.style.opacity = "0.9";
+                note.textContent = String(options.note || "");
+                body.appendChild(note);
+            }
+
+            const foot = document.createElement("div");
+            foot.className = "modalFoot";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || "Cancel";
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = options.confirmText || "OK";
+
+            if (options.danger) {
+                okBtn.style.borderColor = "rgba(var(--fail-rgb),0.45)";
+                okBtn.style.background = "rgba(var(--fail-rgb),0.14)";
+                okBtn.style.color = "var(--fg)";
+            }
+
+            foot.appendChild(spacer);
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const close = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(!!value);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    close(false);
+                    return;
+                }
+
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    close(true);
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) close(false);
+            });
+
+            cancelBtn.addEventListener("click", () => close(false));
+            okBtn.addEventListener("click", () => close(true));
+
+            window.setTimeout(() => {
+                if (options.danger) cancelBtn.focus();
+                else okBtn.focus();
+            }, 0);
+        });
+    }
+
+    function openSnapshotTypedConfirmModal(opts = {}) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+            const expected = String(options.expected || "");
+
+            const modal = document.createElement("div");
+            modal.className = "modalOverlay snapshotConfirmOverlay";
+            modal.style.display = "flex";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "modalCard";
+            card.style.width = "min(720px, calc(100vw - 24px))";
+
+            const head = document.createElement("div");
+            head.className = "modalHead";
+
+            const headText = document.createElement("div");
+
+            const title = document.createElement("div");
+            title.className = "modalTitle";
+            title.textContent = options.title || "Confirm restore";
+
+            const sub = document.createElement("div");
+            sub.className = "modalSub";
+            sub.textContent = options.subtitle || "";
+
+            headText.appendChild(title);
+            if (sub.textContent) headText.appendChild(sub);
+            head.appendChild(headText);
+
+            const body = document.createElement("div");
+            body.className = "modalBody";
+            body.style.gridTemplateColumns = "1fr";
+
+            const warning = document.createElement("div");
+            warning.className = "v";
+            warning.style.padding = "10px 12px";
+            warning.style.border = "1px solid rgba(var(--fail-rgb),0.42)";
+            warning.style.borderRadius = "14px";
+            warning.style.background = "rgba(var(--fail-rgb),0.12)";
+            warning.style.fontWeight = "900";
+            warning.textContent = options.warning || "This action requires typed confirmation.";
+            body.appendChild(warning);
+
+            const phrase = document.createElement("div");
+            phrase.className = "v mono";
+            phrase.style.padding = "10px 12px";
+            phrase.style.border = "1px solid var(--border2)";
+            phrase.style.borderRadius = "14px";
+            phrase.style.background = "rgba(0,0,0,0.18)";
+            phrase.textContent = expected;
+            body.appendChild(phrase);
+
+            const label = document.createElement("label");
+            label.className = "k";
+            label.textContent = "Type the confirmation phrase exactly:";
+            body.appendChild(label);
+
+            const input = document.createElement("input");
+            input.type = "text";
+            input.autocomplete = "off";
+            input.spellcheck = false;
+            input.style.width = "100%";
+            input.style.padding = "10px 12px";
+            input.style.borderRadius = "12px";
+            input.style.border = "1px solid var(--border2)";
+            input.style.background = "rgba(0,0,0,0.22)";
+            input.style.color = "var(--fg)";
+            input.style.font = "inherit";
+            input.style.fontFamily = "var(--mono)";
+            body.appendChild(input);
+
+            const err = document.createElement("div");
+            err.className = "v";
+            err.style.display = "none";
+            err.style.padding = "8px 10px";
+            err.style.border = "1px solid rgba(var(--fail-rgb),0.35)";
+            err.style.borderRadius = "12px";
+            err.style.background = "rgba(var(--fail-rgb),0.10)";
+            err.style.fontWeight = "850";
+            body.appendChild(err);
+
+            const foot = document.createElement("div");
+            foot.className = "modalFoot";
+
+            const hint = document.createElement("div");
+            hint.className = "v";
+            hint.style.opacity = "0.75";
+            hint.style.fontSize = "12px";
+            hint.textContent = options.note || "";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || "Cancel";
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = options.confirmText || "Continue";
+            okBtn.style.borderColor = "rgba(var(--fail-rgb),0.45)";
+            okBtn.style.background = "rgba(var(--fail-rgb),0.14)";
+            okBtn.style.color = "var(--fg)";
+
+            foot.appendChild(hint);
+            foot.appendChild(spacer);
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const showError = (text) => {
+                err.textContent = text || "";
+                err.style.display = text ? "block" : "none";
+            };
+
+            const close = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(!!value);
+            };
+
+            const submit = () => {
+                if (String(input.value || "") !== expected) {
+                    showError("Confirmation phrase does not match.");
+                    input.focus();
+                    input.select();
+                    return;
+                }
+                close(true);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    close(false);
+                    return;
+                }
+
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    submit();
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) close(false);
+            });
+
+            cancelBtn.addEventListener("click", () => close(false));
+            okBtn.addEventListener("click", submit);
+
+            window.setTimeout(() => {
+                input.focus();
+            }, 0);
+        });
+    }
+
     // ---- Restore ----
 
     function restoreProgressModalHtml(jobId, phase, extra) {
@@ -631,18 +941,32 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
         const phrase = `RESTORE ${vol} ${id}`;
 
-        const ok1 = confirm(
-            `Restore snapshot?\n\nVolume: ${vol}\nSnapshot: ${id}\n\n` +
-            `This will REPLACE the live volume content.\nDowntime required.`
-        );
+        const ok1 = await openSnapshotConfirmModal({
+            title: "Restore snapshot?",
+            subtitle: "This will replace the live volume content.",
+            rows: [
+                { label: "Volume", value: vol, mono: true },
+                { label: "Snapshot", value: id, mono: true },
+            ],
+            warning: "This will REPLACE the live volume content. Downtime required.",
+            note: "A restore job will stop and restart PQ-NAS while the volume is swapped.",
+            confirmText: "Continue",
+            cancelText: "Cancel",
+            danger: true,
+        });
         if (!ok1) return;
 
-        const typed = prompt(
-            `Type the confirmation phrase EXACTLY to continue:\n\n${phrase}`,
-            ""
-        );
-        if (typed !== phrase) {
-            status.textContent = "Restore canceled (confirmation text did not match).";
+        const typedOk = await openSnapshotTypedConfirmModal({
+            title: "Confirm restore",
+            subtitle: "Typed confirmation is required before restore can continue.",
+            expected: phrase,
+            warning: `You are restoring snapshot ${id} into live volume ${vol}.`,
+            note: "This prevents accidental restores.",
+            confirmText: "Continue restore",
+            cancelText: "Cancel",
+        });
+        if (!typedOk) {
+            status.textContent = "Restore canceled.";
             return;
         }
 
@@ -658,7 +982,20 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
             });
 
             const planText = JSON.stringify(prep.plan || {}, null, 2);
-            const ok2 = confirm(`Restore plan:\n\n${planText}\n\nProceed now?`);
+            const ok2 = await openSnapshotConfirmModal({
+                title: "Proceed with restore plan?",
+                subtitle: "Server has prepared the restore plan.",
+                rows: [
+                    { label: "Volume", value: vol, mono: true },
+                    { label: "Snapshot", value: id, mono: true },
+                    { label: "Plan", value: planText, mono: true },
+                ],
+                warning: "Proceeding starts the restore job now.",
+                note: "PQ-NAS may be temporarily unreachable during restore.",
+                confirmText: "Start restore",
+                cancelText: "Cancel",
+                danger: true,
+            });
             if (!ok2) {
                 setBadge("ok", "ready");
                 status.textContent = "Restore canceled.";

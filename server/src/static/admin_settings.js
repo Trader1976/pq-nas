@@ -384,6 +384,291 @@
         });
     }
 
+
+    function injectAdminConfirmCss() {
+        if (document.getElementById("adminConfirmCss")) return;
+
+        const style = document.createElement("style");
+        style.id = "adminConfirmCss";
+        style.textContent = `
+.adminConfirmBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:100000;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(0,0,0,0.55);
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+}
+
+.adminConfirmCard{
+    width:min(640px, calc(100vw - 24px));
+    max-height:min(84vh, 900px);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    border:1px solid var(--border2, rgba(120,120,120,0.45));
+    border-radius:18px;
+    background:linear-gradient(180deg, var(--panel2, #f8f8f8), var(--panel, #eeeeee));
+    box-shadow:0 18px 70px rgba(0,0,0,0.42);
+    color:var(--fg, #111);
+}
+
+.adminConfirmHead{
+    padding:14px 16px;
+    border-bottom:1px solid var(--border2, rgba(120,120,120,0.35));
+    background:rgba(0,0,0,0.08);
+}
+
+.adminConfirmTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+    font-size:16px;
+}
+
+.adminConfirmSub{
+    margin-top:4px;
+    font-size:12px;
+    color:var(--fg-dim, rgba(0,0,0,0.65));
+}
+
+.adminConfirmBody{
+    padding:16px;
+    display:grid;
+    grid-template-columns:140px minmax(0, 1fr);
+    gap:10px 14px;
+    overflow:auto;
+    min-height:0;
+}
+
+.adminConfirmKey{
+    color:var(--fg-dim, rgba(0,0,0,0.68));
+    font-weight:850;
+}
+
+.adminConfirmValue{
+    color:var(--fg, #111);
+    overflow-wrap:anywhere;
+    white-space:pre-wrap;
+}
+
+.adminConfirmValue.mono{
+    font-family:var(--mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+    font-size:12px;
+}
+
+.adminConfirmNote{
+    grid-column:1 / -1;
+    padding:10px 12px;
+    border:1px solid rgba(var(--warn-rgb, 180,120,20),0.35);
+    border-radius:14px;
+    background:rgba(var(--warn-rgb, 180,120,20),0.10);
+    color:var(--fg, #111);
+    font-weight:850;
+}
+
+.adminConfirmFoot{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    padding:12px 16px;
+    border-top:1px solid var(--border2, rgba(120,120,120,0.35));
+    background:rgba(0,0,0,0.08);
+}
+
+.adminConfirmBtn{
+    border:1px solid var(--border2, rgba(120,120,120,0.45));
+    border-radius:14px;
+    padding:9px 14px;
+    font:inherit;
+    font-weight:850;
+    color:var(--fg, #111);
+    background:linear-gradient(180deg, rgba(255,255,255,0.20), rgba(0,0,0,0.04));
+    cursor:pointer;
+}
+
+.adminConfirmBtn:hover{
+    filter:brightness(1.05);
+}
+
+.adminConfirmBtn.secondary{
+    opacity:.90;
+}
+
+.adminConfirmBtn.warn{
+    border-color:rgba(var(--warn-rgb, 180,120,20),0.48);
+    background:rgba(var(--warn-rgb, 180,120,20),0.16);
+    color:var(--fg, #111);
+}
+
+html[data-theme="bright"] .adminConfirmBackdrop{
+    background:rgba(0,0,0,0.30);
+}
+
+html[data-theme="bright"] .adminConfirmCard{
+    background:linear-gradient(180deg, #ffffff, #f2f4f7) !important;
+    border-color:rgba(70,80,95,0.32) !important;
+    color:#111827 !important;
+    box-shadow:0 22px 80px rgba(0,0,0,0.28) !important;
+}
+
+html[data-theme="bright"] .adminConfirmHead,
+html[data-theme="bright"] .adminConfirmFoot{
+    background:rgba(15,23,42,0.045) !important;
+    border-color:rgba(70,80,95,0.22) !important;
+}
+
+html[data-theme="bright"] .adminConfirmTitle,
+html[data-theme="bright"] .adminConfirmValue,
+html[data-theme="bright"] .adminConfirmBtn{
+    color:#111827 !important;
+}
+
+html[data-theme="bright"] .adminConfirmSub,
+html[data-theme="bright"] .adminConfirmKey{
+    color:rgba(17,24,39,0.68) !important;
+}
+
+html[data-theme="bright"] .adminConfirmNote{
+    background:rgba(190,125,20,0.12) !important;
+    border-color:rgba(190,125,20,0.34) !important;
+    color:#111827 !important;
+}
+
+html[data-theme="bright"] .adminConfirmBtn.secondary{
+    background:linear-gradient(180deg, #ffffff, #e8ebef) !important;
+}
+
+html[data-theme="bright"] .adminConfirmBtn.warn{
+    background:rgba(190,125,20,0.16) !important;
+    border-color:rgba(190,125,20,0.38) !important;
+    color:#111827 !important;
+}
+
+html[data-theme="win_classic"] .adminConfirmBackdrop{
+    background:rgba(0,0,0,0.38);
+}
+`;
+        document.head.appendChild(style);
+    }
+
+    function openAdminConfirmModal(opts = {}) {
+        injectAdminConfirmCss();
+
+        return new Promise((resolve) => {
+            const options = opts || {};
+
+            const modal = document.createElement("div");
+            modal.className = "adminConfirmBackdrop";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "adminConfirmCard";
+
+            const head = document.createElement("div");
+            head.className = "adminConfirmHead";
+
+            const title = document.createElement("div");
+            title.className = "adminConfirmTitle";
+            title.textContent = options.title || "Confirm action";
+
+            const sub = document.createElement("div");
+            sub.className = "adminConfirmSub";
+            sub.textContent = options.subtitle || "";
+
+            head.appendChild(title);
+            if (sub.textContent) head.appendChild(sub);
+
+            const body = document.createElement("div");
+            body.className = "adminConfirmBody";
+
+            const rows = Array.isArray(options.rows) ? options.rows : [];
+            for (const row of rows) {
+                const k = document.createElement("div");
+                k.className = "adminConfirmKey";
+                k.textContent = String(row.label || "");
+
+                const v = document.createElement("div");
+                v.className = row.mono ? "adminConfirmValue mono" : "adminConfirmValue";
+                v.textContent = String(row.value || "");
+
+                body.appendChild(k);
+                body.appendChild(v);
+            }
+
+            if (options.note) {
+                const note = document.createElement("div");
+                note.className = "adminConfirmNote";
+                note.textContent = String(options.note || "");
+                body.appendChild(note);
+            }
+
+            const foot = document.createElement("div");
+            foot.className = "adminConfirmFoot";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "adminConfirmBtn secondary";
+            cancelBtn.textContent = options.cancelText || "Cancel";
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = options.warn ? "adminConfirmBtn warn" : "adminConfirmBtn";
+            okBtn.textContent = options.confirmText || "OK";
+
+            foot.appendChild(spacer);
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(!!value);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(false);
+                    return;
+                }
+
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(true);
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish(false);
+            });
+
+            cancelBtn.addEventListener("click", () => finish(false));
+            okBtn.addEventListener("click", () => finish(true));
+
+            window.setTimeout(() => {
+                cancelBtn.focus();
+            }, 0);
+        });
+    }
+
     async function apiRotateAudit() {
         return await fetchJsonOrThrow("/api/v4/admin/rotate-audit", {
             method: "POST",
@@ -1352,13 +1637,20 @@
     btnRetentionPrune?.addEventListener("click", async (ev) => {
         ev.preventDefault();
 
-        if (
-            !confirm(
-                "Run prune now?\n\nThis deletes rotated audit archives according to the saved retention policy.\nActive pqnas_audit.jsonl is never deleted."
-            )
-        ) {
-            return;
-        }
+        const ok = await openAdminConfirmModal({
+            title: "Run audit prune now?",
+            subtitle: "This deletes rotated audit archives according to the saved retention policy.",
+            rows: [
+                { label: "Target", value: "Rotated audit archives only" },
+                { label: "Active log", value: "pqnas_audit.jsonl is never deleted", mono: true },
+                { label: "Policy", value: "Uses the currently saved retention policy" },
+            ],
+            note: "This is permanent for selected rotated archive files. Preview prune first if you want to review candidates.",
+            confirmText: "Run prune now",
+            cancelText: "Cancel",
+            warn: true,
+        });
+        if (!ok) return;
 
         btnRetentionPrune.disabled = true;
         setSimplePill(retPreviewPill, "warn", "Preview", "pruning…");
@@ -1427,13 +1719,20 @@
     btnRotateNow?.addEventListener("click", async (ev) => {
         ev.preventDefault();
 
-        if (
-            !confirm(
-                "Rotate audit log now?\n\nThis renames the active pqnas_audit.jsonl into a timestamped archive and starts a fresh active log.\nHash chain continuity is preserved via the rotate header."
-            )
-        ) {
-            return;
-        }
+        const ok = await openAdminConfirmModal({
+            title: "Rotate audit log now?",
+            subtitle: "This closes the current audit log and starts a fresh active log.",
+            rows: [
+                { label: "Active log", value: "pqnas_audit.jsonl", mono: true },
+                { label: "Action", value: "Rename current log into timestamped archive" },
+                { label: "Chain", value: "Continuity preserved by rotate header" },
+            ],
+            note: "Already-written audit lines remain unchanged. New audit events will continue in the fresh log.",
+            confirmText: "Rotate now",
+            cancelText: "Cancel",
+            warn: true,
+        });
+        if (!ok) return;
 
         btnRotateNow.disabled = true;
         setStatusPill("warn", "rotating…");

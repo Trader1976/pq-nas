@@ -50,6 +50,292 @@
         return j;
     }
 
+
+    function injectAdminAppsConfirmCss() {
+        if (document.getElementById("adminAppsConfirmCss")) return;
+
+        const style = document.createElement("style");
+        style.id = "adminAppsConfirmCss";
+        style.textContent = `
+.adminAppsConfirmBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:100000;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(0,0,0,0.55);
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+}
+
+.adminAppsConfirmCard{
+    width:min(640px, calc(100vw - 24px));
+    max-height:min(84vh, 900px);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    border:1px solid var(--border2, rgba(120,120,120,0.45));
+    border-radius:18px;
+    background:linear-gradient(180deg, var(--panel2, #f8f8f8), var(--panel, #eeeeee));
+    box-shadow:0 18px 70px rgba(0,0,0,0.42);
+    color:var(--fg, #111);
+}
+
+.adminAppsConfirmHead{
+    padding:14px 16px;
+    border-bottom:1px solid var(--border2, rgba(120,120,120,0.35));
+    background:rgba(0,0,0,0.08);
+}
+
+.adminAppsConfirmTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+    font-size:16px;
+}
+
+.adminAppsConfirmSub{
+    margin-top:4px;
+    font-size:12px;
+    color:var(--fg-dim, rgba(0,0,0,0.65));
+}
+
+.adminAppsConfirmBody{
+    padding:16px;
+    display:grid;
+    grid-template-columns:130px minmax(0, 1fr);
+    gap:10px 14px;
+    overflow:auto;
+    min-height:0;
+}
+
+.adminAppsConfirmKey{
+    color:var(--fg-dim, rgba(0,0,0,0.68));
+    font-weight:850;
+}
+
+.adminAppsConfirmValue{
+    color:var(--fg, #111);
+    overflow-wrap:anywhere;
+    white-space:pre-wrap;
+}
+
+.adminAppsConfirmValue.mono{
+    font-family:var(--mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+    font-size:12px;
+}
+
+.adminAppsConfirmNote{
+    grid-column:1 / -1;
+    padding:10px 12px;
+    border:1px solid rgba(var(--fail-rgb, 180,40,40),0.35);
+    border-radius:14px;
+    background:rgba(var(--fail-rgb, 180,40,40),0.10);
+    color:var(--fg, #111);
+    font-weight:850;
+}
+
+.adminAppsConfirmFoot{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    padding:12px 16px;
+    border-top:1px solid var(--border2, rgba(120,120,120,0.35));
+    background:rgba(0,0,0,0.08);
+}
+
+.adminAppsConfirmBtn{
+    border:1px solid var(--border2, rgba(120,120,120,0.45));
+    border-radius:14px;
+    padding:9px 14px;
+    font:inherit;
+    font-weight:850;
+    color:var(--fg, #111);
+    background:linear-gradient(180deg, rgba(255,255,255,0.20), rgba(0,0,0,0.04));
+    cursor:pointer;
+}
+
+.adminAppsConfirmBtn:hover{
+    filter:brightness(1.05);
+}
+
+.adminAppsConfirmBtn.secondary{
+    opacity:.90;
+}
+
+.adminAppsConfirmBtn.danger{
+    border-color:rgba(var(--fail-rgb, 180,40,40),0.48);
+    background:rgba(var(--fail-rgb, 180,40,40),0.14);
+    color:var(--fg, #111);
+}
+
+html[data-theme="bright"] .adminAppsConfirmBackdrop{
+    background:rgba(0,0,0,0.30);
+}
+
+html[data-theme="bright"] .adminAppsConfirmCard{
+    background:linear-gradient(180deg, #ffffff, #f2f4f7) !important;
+    border-color:rgba(70,80,95,0.32) !important;
+    color:#111827 !important;
+    box-shadow:0 22px 80px rgba(0,0,0,0.28) !important;
+}
+
+html[data-theme="bright"] .adminAppsConfirmHead,
+html[data-theme="bright"] .adminAppsConfirmFoot{
+    background:rgba(15,23,42,0.045) !important;
+    border-color:rgba(70,80,95,0.22) !important;
+}
+
+html[data-theme="bright"] .adminAppsConfirmTitle,
+html[data-theme="bright"] .adminAppsConfirmValue,
+html[data-theme="bright"] .adminAppsConfirmBtn{
+    color:#111827 !important;
+}
+
+html[data-theme="bright"] .adminAppsConfirmSub,
+html[data-theme="bright"] .adminAppsConfirmKey{
+    color:rgba(17,24,39,0.68) !important;
+}
+
+html[data-theme="bright"] .adminAppsConfirmNote{
+    background:rgba(180,40,40,0.10) !important;
+    border-color:rgba(180,40,40,0.30) !important;
+    color:#111827 !important;
+}
+
+html[data-theme="bright"] .adminAppsConfirmBtn.secondary{
+    background:linear-gradient(180deg, #ffffff, #e8ebef) !important;
+}
+
+html[data-theme="bright"] .adminAppsConfirmBtn.danger{
+    background:rgba(180,40,40,0.14) !important;
+    border-color:rgba(180,40,40,0.38) !important;
+    color:#111827 !important;
+}
+
+html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
+    background:rgba(0,0,0,0.38);
+}
+`;
+        document.head.appendChild(style);
+    }
+
+    function openAdminAppsConfirmModal(opts = {}) {
+        injectAdminAppsConfirmCss();
+
+        return new Promise((resolve) => {
+            const options = opts || {};
+
+            const modal = document.createElement("div");
+            modal.className = "adminAppsConfirmBackdrop";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "adminAppsConfirmCard";
+
+            const head = document.createElement("div");
+            head.className = "adminAppsConfirmHead";
+
+            const title = document.createElement("div");
+            title.className = "adminAppsConfirmTitle";
+            title.textContent = options.title || "Confirm action";
+
+            const sub = document.createElement("div");
+            sub.className = "adminAppsConfirmSub";
+            sub.textContent = options.subtitle || "";
+
+            head.appendChild(title);
+            if (sub.textContent) head.appendChild(sub);
+
+            const body = document.createElement("div");
+            body.className = "adminAppsConfirmBody";
+
+            const rows = Array.isArray(options.rows) ? options.rows : [];
+            for (const row of rows) {
+                const k = document.createElement("div");
+                k.className = "adminAppsConfirmKey";
+                k.textContent = String(row.label || "");
+
+                const v = document.createElement("div");
+                v.className = row.mono ? "adminAppsConfirmValue mono" : "adminAppsConfirmValue";
+                v.textContent = String(row.value || "");
+
+                body.appendChild(k);
+                body.appendChild(v);
+            }
+
+            if (options.note) {
+                const note = document.createElement("div");
+                note.className = "adminAppsConfirmNote";
+                note.textContent = String(options.note || "");
+                body.appendChild(note);
+            }
+
+            const foot = document.createElement("div");
+            foot.className = "adminAppsConfirmFoot";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "adminAppsConfirmBtn secondary";
+            cancelBtn.textContent = options.cancelText || "Cancel";
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = options.danger ? "adminAppsConfirmBtn danger" : "adminAppsConfirmBtn";
+            okBtn.textContent = options.confirmText || "OK";
+
+            foot.appendChild(spacer);
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(!!value);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(false);
+                    return;
+                }
+
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(true);
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish(false);
+            });
+
+            cancelBtn.addEventListener("click", () => finish(false));
+            okBtn.addEventListener("click", () => finish(true));
+
+            window.setTimeout(() => {
+                if (options.danger) cancelBtn.focus();
+                else okBtn.focus();
+            }, 0);
+        });
+    }
+
     function renderInstalled(items){
         installedList.innerHTML = "";
         if (!items.length) {
@@ -199,10 +485,24 @@
             btn.type = "button";
             btn.textContent = "Uninstall";
             btn.addEventListener("click", async () => {
-                if (!confirm(`Uninstall ${it.id} ${it.version}?`)) return;
+                const ok = await openAdminAppsConfirmModal({
+                    title: "Uninstall app?",
+                    subtitle: "This removes the installed app package from this server.",
+                    rows: [
+                        { label: "App", value: String(it.id || ""), mono: true },
+                        { label: "Version", value: String(it.version || ""), mono: true },
+                        { label: "Path", value: String(it.root || ""), mono: true },
+                    ],
+                    note: "This removes the installed app files and registration for this version. User data stored elsewhere is not intentionally deleted.",
+                    confirmText: "Uninstall",
+                    cancelText: "Cancel",
+                    danger: true,
+                });
+                if (!ok) return;
+
                 try {
                     setBadge("warn", "working…");
-                    statusLine.textContent = "Uninstalling…";
+                    statusLine.textContent = `Uninstalling ${it.id} ${it.version}…`;
 
                     const r = await fetch("/api/v4/apps/uninstall", {
                         method: "POST",
@@ -213,16 +513,16 @@
                     const j = await r.json().catch(() => null);
                     if (!r.ok || !j || !j.ok) {
                         setBadge("err", "error");
-                        statusLine.textContent = `Uninstall failed: HTTP ${r.status}`;
-                        alert((j && (j.message || j.error)) ? `${j.error||""} ${j.message||""}`.trim() : "bad response");
+                        statusLine.textContent = (j && (j.message || j.error))
+                            ? `Uninstall failed: ${`${j.error || ""} ${j.message || ""}`.trim()}`
+                            : `Uninstall failed: HTTP ${r.status}`;
                         return;
                     }
 
                     await load();
                 } catch (e) {
                     setBadge("err", "network");
-                    statusLine.textContent = "Network error";
-                    alert(String(e && e.stack ? e.stack : e));
+                    statusLine.textContent = `Network error: ${String(e && e.message ? e.message : e)}`;
                 }
             });
 

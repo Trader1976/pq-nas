@@ -679,6 +679,440 @@ async function apiGetStoragePreview(fp, poolId) {
     const qpool = encodeURIComponent(String(poolId || "default").trim() || "default");
     return await apiGet(`/api/v4/admin/users/storage_preview?fingerprint=${qfp}&pool_id=${qpool}`);
 }
+
+function injectAdminUsersPromptCss() {
+    if (document.getElementById("adminUsersPromptCss")) return;
+
+    const style = document.createElement("style");
+    style.id = "adminUsersPromptCss";
+    style.textContent = `
+.adminUsersPromptBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:100000;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(0,0,0,0.55);
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+}
+.adminUsersPromptCard{
+    width:min(660px, calc(100vw - 24px));
+    max-height:min(84vh, 900px);
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+    border:1px solid var(--border2, rgba(120,120,120,0.45));
+    border-radius:18px;
+    background:linear-gradient(180deg, var(--panel2, #f8f8f8), var(--panel, #eeeeee));
+    box-shadow:0 18px 70px rgba(0,0,0,0.42);
+    color:var(--fg, #111);
+}
+.adminUsersPromptHead{
+    padding:14px 16px;
+    border-bottom:1px solid var(--border2, rgba(120,120,120,0.35));
+    background:rgba(0,0,0,0.08);
+}
+.adminUsersPromptTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+    font-size:16px;
+}
+.adminUsersPromptSub{
+    margin-top:4px;
+    font-size:12px;
+    color:var(--fg-dim, rgba(0,0,0,0.65));
+}
+.adminUsersPromptBody{
+    padding:16px;
+    display:grid;
+    grid-template-columns:140px minmax(0, 1fr);
+    gap:10px 14px;
+    overflow:auto;
+    min-height:0;
+}
+.adminUsersPromptKey{
+    color:var(--fg-dim, rgba(0,0,0,0.68));
+    font-weight:850;
+}
+.adminUsersPromptValue{
+    color:var(--fg, #111);
+    overflow-wrap:anywhere;
+    white-space:pre-wrap;
+}
+.adminUsersPromptValue.mono{
+    font-family:var(--mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+    font-size:12px;
+}
+.adminUsersPromptInput{
+    width:100%;
+    padding:10px 12px;
+    border-radius:12px;
+    border:1px solid var(--border2, rgba(120,120,120,0.45));
+    background:rgba(0,0,0,0.18);
+    color:var(--fg, #111);
+    font:inherit;
+    font-family:var(--mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+}
+.adminUsersPromptNote{
+    grid-column:1 / -1;
+    padding:10px 12px;
+    border:1px solid rgba(var(--warn-rgb, 180,120,20),0.35);
+    border-radius:14px;
+    background:rgba(var(--warn-rgb, 180,120,20),0.10);
+    color:var(--fg, #111);
+    font-weight:850;
+}
+.adminUsersPromptErr{
+    grid-column:1 / -1;
+    display:none;
+    padding:8px 10px;
+    border:1px solid rgba(var(--fail-rgb, 180,40,40),0.35);
+    border-radius:12px;
+    background:rgba(var(--fail-rgb, 180,40,40),0.10);
+    color:var(--fg, #111);
+    font-weight:850;
+}
+.adminUsersPromptFoot{
+    display:flex;
+    align-items:center;
+    gap:12px;
+    padding:12px 16px;
+    border-top:1px solid var(--border2, rgba(120,120,120,0.35));
+    background:rgba(0,0,0,0.08);
+}
+.adminUsersPromptBtn{
+    border:1px solid var(--border2, rgba(120,120,120,0.45));
+    border-radius:14px;
+    padding:9px 14px;
+    font:inherit;
+    font-weight:850;
+    color:var(--fg, #111);
+    background:linear-gradient(180deg, rgba(255,255,255,0.20), rgba(0,0,0,0.04));
+    cursor:pointer;
+}
+.adminUsersPromptBtn.warn{
+    border-color:rgba(var(--warn-rgb, 180,120,20),0.48);
+    background:rgba(var(--warn-rgb, 180,120,20),0.16);
+}
+html[data-theme="bright"] .adminUsersPromptBackdrop{
+    background:rgba(0,0,0,0.30);
+}
+html[data-theme="bright"] .adminUsersPromptCard{
+    background:linear-gradient(180deg, #ffffff, #f2f4f7) !important;
+    border-color:rgba(70,80,95,0.32) !important;
+    color:#111827 !important;
+    box-shadow:0 22px 80px rgba(0,0,0,0.28) !important;
+}
+html[data-theme="bright"] .adminUsersPromptHead,
+html[data-theme="bright"] .adminUsersPromptFoot{
+    background:rgba(15,23,42,0.045) !important;
+    border-color:rgba(70,80,95,0.22) !important;
+}
+html[data-theme="bright"] .adminUsersPromptTitle,
+html[data-theme="bright"] .adminUsersPromptValue,
+html[data-theme="bright"] .adminUsersPromptBtn,
+html[data-theme="bright"] .adminUsersPromptInput{
+    color:#111827 !important;
+}
+html[data-theme="bright"] .adminUsersPromptSub,
+html[data-theme="bright"] .adminUsersPromptKey{
+    color:rgba(17,24,39,0.68) !important;
+}
+html[data-theme="bright"] .adminUsersPromptInput{
+    background:#fff !important;
+}
+html[data-theme="win_classic"] .adminUsersPromptBackdrop{
+    background:rgba(0,0,0,0.38);
+}
+`;
+    document.head.appendChild(style);
+}
+
+function openAdminUsersPromptModal(opts = {}) {
+    injectAdminUsersPromptCss();
+
+    return new Promise((resolve) => {
+        const options = opts || {};
+
+        const modal = document.createElement("div");
+        modal.className = "adminUsersPromptBackdrop";
+        modal.setAttribute("role", "dialog");
+        modal.setAttribute("aria-modal", "true");
+
+        const card = document.createElement("div");
+        card.className = "adminUsersPromptCard";
+
+        const head = document.createElement("div");
+        head.className = "adminUsersPromptHead";
+
+        const title = document.createElement("div");
+        title.className = "adminUsersPromptTitle";
+        title.textContent = options.title || "Enter value";
+
+        const sub = document.createElement("div");
+        sub.className = "adminUsersPromptSub";
+        sub.textContent = options.subtitle || "";
+
+        head.appendChild(title);
+        if (sub.textContent) head.appendChild(sub);
+
+        const body = document.createElement("div");
+        body.className = "adminUsersPromptBody";
+
+        for (const row of Array.isArray(options.rows) ? options.rows : []) {
+            const k = document.createElement("div");
+            k.className = "adminUsersPromptKey";
+            k.textContent = String(row.label || "");
+
+            const v = document.createElement("div");
+            v.className = row.mono ? "adminUsersPromptValue mono" : "adminUsersPromptValue";
+            v.textContent = String(row.value || "");
+
+            body.appendChild(k);
+            body.appendChild(v);
+        }
+
+        const label = document.createElement("label");
+        label.className = "adminUsersPromptKey";
+        label.textContent = options.label || "Value";
+
+        const input = document.createElement("input");
+        input.type = "text";
+        input.className = "adminUsersPromptInput";
+        input.value = options.value || "";
+        input.placeholder = options.placeholder || "";
+        input.autocomplete = "off";
+        input.spellcheck = false;
+
+        body.appendChild(label);
+        body.appendChild(input);
+
+        if (options.note) {
+            const note = document.createElement("div");
+            note.className = "adminUsersPromptNote";
+            note.textContent = String(options.note || "");
+            body.appendChild(note);
+        }
+
+        const err = document.createElement("div");
+        err.className = "adminUsersPromptErr";
+        body.appendChild(err);
+
+        const foot = document.createElement("div");
+        foot.className = "adminUsersPromptFoot";
+
+        const spacer = document.createElement("div");
+        spacer.style.flex = "1 1 auto";
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.className = "adminUsersPromptBtn";
+        cancelBtn.textContent = options.cancelText || "Cancel";
+
+        const okBtn = document.createElement("button");
+        okBtn.type = "button";
+        okBtn.className = options.warn ? "adminUsersPromptBtn warn" : "adminUsersPromptBtn";
+        okBtn.textContent = options.confirmText || "OK";
+
+        foot.appendChild(spacer);
+        foot.appendChild(cancelBtn);
+        foot.appendChild(okBtn);
+
+        card.appendChild(head);
+        card.appendChild(body);
+        card.appendChild(foot);
+        modal.appendChild(card);
+        document.body.appendChild(modal);
+
+        const showError = (text) => {
+            err.textContent = text || "";
+            err.style.display = text ? "block" : "none";
+        };
+
+        const finish = (value) => {
+            document.removeEventListener("keydown", onKey, true);
+            modal.remove();
+            resolve(value);
+        };
+
+        const submit = () => {
+            const value = String(input.value || "").trim();
+
+            if (options.required !== false && !value) {
+                showError("Value is required.");
+                input.focus();
+                return;
+            }
+
+            if (typeof options.validate === "function") {
+                const msg = options.validate(value);
+                if (msg) {
+                    showError(msg);
+                    input.focus();
+                    input.select();
+                    return;
+                }
+            }
+
+            finish(value);
+        };
+
+        const onKey = (ev) => {
+            if (ev.key === "Escape") {
+                ev.preventDefault();
+                ev.stopPropagation();
+                finish(null);
+                return;
+            }
+
+            if (ev.key === "Enter") {
+                ev.preventDefault();
+                ev.stopPropagation();
+                submit();
+            }
+        };
+
+        document.addEventListener("keydown", onKey, true);
+
+        modal.addEventListener("click", (ev) => {
+            if (ev.target === modal) finish(null);
+        });
+
+        cancelBtn.addEventListener("click", () => finish(null));
+        okBtn.addEventListener("click", submit);
+
+        window.setTimeout(() => {
+            input.focus();
+            input.select();
+        }, 0);
+    });
+}
+
+
+
+function openAdminUsersConfirmModal(opts = {}) {
+    injectAdminUsersPromptCss();
+
+    return new Promise((resolve) => {
+        const options = opts || {};
+
+        const modal = document.createElement("div");
+        modal.className = "adminUsersPromptBackdrop";
+        modal.setAttribute("role", "dialog");
+        modal.setAttribute("aria-modal", "true");
+
+        const card = document.createElement("div");
+        card.className = "adminUsersPromptCard";
+
+        const head = document.createElement("div");
+        head.className = "adminUsersPromptHead";
+
+        const title = document.createElement("div");
+        title.className = "adminUsersPromptTitle";
+        title.textContent = options.title || "Confirm action";
+
+        const sub = document.createElement("div");
+        sub.className = "adminUsersPromptSub";
+        sub.textContent = options.subtitle || "";
+
+        head.appendChild(title);
+        if (sub.textContent) head.appendChild(sub);
+
+        const body = document.createElement("div");
+        body.className = "adminUsersPromptBody";
+
+        for (const row of Array.isArray(options.rows) ? options.rows : []) {
+            const k = document.createElement("div");
+            k.className = "adminUsersPromptKey";
+            k.textContent = String(row.label || "");
+
+            const v = document.createElement("div");
+            v.className = row.mono ? "adminUsersPromptValue mono" : "adminUsersPromptValue";
+            v.textContent = String(row.value || "");
+
+            body.appendChild(k);
+            body.appendChild(v);
+        }
+
+        if (options.note) {
+            const note = document.createElement("div");
+            note.className = "adminUsersPromptNote";
+            note.textContent = String(options.note || "");
+            body.appendChild(note);
+        }
+
+        const foot = document.createElement("div");
+        foot.className = "adminUsersPromptFoot";
+
+        const spacer = document.createElement("div");
+        spacer.style.flex = "1 1 auto";
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.className = "adminUsersPromptBtn";
+        cancelBtn.textContent = options.cancelText || "Cancel";
+
+        const okBtn = document.createElement("button");
+        okBtn.type = "button";
+        okBtn.className = options.danger ? "adminUsersPromptBtn warn" : "adminUsersPromptBtn";
+        okBtn.textContent = options.confirmText || "OK";
+
+        if (options.danger) {
+            okBtn.style.borderColor = "rgba(var(--fail-rgb, 180,40,40),0.48)";
+            okBtn.style.background = "rgba(var(--fail-rgb, 180,40,40),0.14)";
+        }
+
+        foot.appendChild(spacer);
+        foot.appendChild(cancelBtn);
+        foot.appendChild(okBtn);
+
+        card.appendChild(head);
+        card.appendChild(body);
+        card.appendChild(foot);
+        modal.appendChild(card);
+        document.body.appendChild(modal);
+
+        const finish = (value) => {
+            document.removeEventListener("keydown", onKey, true);
+            modal.remove();
+            resolve(!!value);
+        };
+
+        const onKey = (ev) => {
+            if (ev.key === "Escape") {
+                ev.preventDefault();
+                ev.stopPropagation();
+                finish(false);
+                return;
+            }
+
+            if (ev.key === "Enter") {
+                ev.preventDefault();
+                ev.stopPropagation();
+                finish(true);
+            }
+        };
+
+        document.addEventListener("keydown", onKey, true);
+
+        modal.addEventListener("click", (ev) => {
+            if (ev.target === modal) finish(false);
+        });
+
+        cancelBtn.addEventListener("click", () => finish(false));
+        okBtn.addEventListener("click", () => finish(true));
+
+        window.setTimeout(() => {
+            if (options.danger) cancelBtn.focus();
+            else okBtn.focus();
+        }, 0);
+    });
+}
+
+
 async function apiGetCleanupStatus(jobId) {
     const q = encodeURIComponent(String(jobId || "").trim());
     return await apiGet(`/api/v4/admin/users/cleanup_old_storage_status?job_id=${q}`);
@@ -899,10 +1333,37 @@ async function submitCleanupOldCopy(fp) {
 
     let oldPoolId = "";
     if (activePoolId === "default") {
-        oldPoolId = prompt(
-            "Cleanup old copy from which pool?\n\nUser is currently active on default.\nEnter old pool id to delete, for example: raidtest",
-            "raidtest"
-        ) || "";
+                const cleanupUser =
+            (typeof u !== "undefined" && u) ? u :
+            (typeof user !== "undefined" && user) ? user :
+            (typeof curUser !== "undefined" && curUser) ? curUser :
+            (typeof selectedUser !== "undefined" && selectedUser) ? selectedUser :
+            null;
+        const cleanupActivePool = cleanupUser ? storagePoolIdForUser(cleanupUser) : "default";
+        const cleanupUserLabel = cleanupUser
+            ? String(cleanupUser.name || cleanupUser.email || cleanupUser.fingerprint || "Selected user")
+            : ((typeof fp !== "undefined" && fp) ? String(fp) : "Selected user");
+
+        oldPoolId = await openAdminUsersPromptModal({
+            title: "Cleanup old storage copy?",
+            subtitle: "Choose the old pool copy to remove for this user.",
+            rows: [
+                { label: "User", value: cleanupUserLabel, mono: true },
+                { label: "Active pool", value: cleanupActivePool, mono: true },
+            ],
+            label: "Old pool id",
+            value: "raidtest",
+            placeholder: "old pool id, for example raidtest",
+            note: "Only the old inactive storage copy should be removed. The active pool is protected.",
+            confirmText: "Continue cleanup",
+            cancelText: "Cancel",
+            warn: true,
+            validate(value) {
+                if (value === cleanupActivePool) return "Old pool id cannot be the active pool.";
+                if (value.includes("/") || value.includes("\\")) return "Use a pool id, not a path.";
+                return "";
+            },
+        }) || "";
     } else {
         oldPoolId = prompt(
             `Cleanup old copy from which pool?\n\nUser is currently active on ${activePoolId}.\nEnter old pool id to delete, or use "default" if the stale copy is there.`,
@@ -1317,11 +1778,21 @@ ${detailRow}
             }
 
             if (act === "delete") {
-                const msg =
-                    "Delete this user from users.json?\n\n" +
-                    "This removes the entry entirely (cleanup). " +
-                    "If they scan again, they will re-appear as disabled.";
-                if (!confirm(msg)) return;
+                const targetUser = allUsers.find(x => String(x.fingerprint || "") === String(fp)) || {};
+                const ok = await openAdminUsersConfirmModal({
+                    title: "Delete user entry?",
+                    subtitle: "This removes the entry from users.json.",
+                    rows: [
+                        { label: "User", value: String(targetUser.name || targetUser.email || fp), mono: true },
+                        { label: "Fingerprint", value: fp, mono: true },
+                        { label: "Status", value: String(targetUser.status || "—") },
+                    ],
+                    note: "This removes the entry entirely as cleanup. If they scan again, they will re-appear as disabled.",
+                    confirmText: "Delete user",
+                    cancelText: "Cancel",
+                    danger: true,
+                });
+                if (!ok) return;
 
                 try {
                     setMsg("Deleting…");
@@ -1330,8 +1801,8 @@ ${detailRow}
                     setMsg("Delete OK");
                     showToast("User deleted");
                 } catch (e) {
-                    alert("Failed: " + e.message);
                     setMsg("Error: " + e.message);
+                    showToast("Delete failed: " + e.message, 15000);
                 }
                 return;
             }
@@ -1375,7 +1846,21 @@ ${detailRow}
             if (!status) return;
 
             if (act === "revoke") {
-                if (!confirm("Revoke this user? This hard-blocks login for that fingerprint.")) return;
+                const targetUser = allUsers.find(x => String(x.fingerprint || "") === String(fp)) || {};
+                const ok = await openAdminUsersConfirmModal({
+                    title: "Revoke user?",
+                    subtitle: "This hard-blocks login for this fingerprint.",
+                    rows: [
+                        { label: "User", value: String(targetUser.name || targetUser.email || fp), mono: true },
+                        { label: "Fingerprint", value: fp, mono: true },
+                        { label: "Current status", value: String(targetUser.status || "—") },
+                    ],
+                    note: "Use this when this identity should not be allowed to log in again.",
+                    confirmText: "Revoke user",
+                    cancelText: "Cancel",
+                    danger: true,
+                });
+                if (!ok) return;
             }
 
             try {

@@ -774,6 +774,172 @@
 
         return j;
     }
+
+    function openWorkspaceTypedConfirmModal(opts = {}) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+            const expected = String(options.expected || "");
+
+            const modal = document.createElement("div");
+            modal.className = "modal show";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "modalCard";
+            card.style.width = "min(640px, calc(100vw - 24px))";
+
+            const head = document.createElement("div");
+            head.className = "modalHead";
+
+            const headText = document.createElement("div");
+
+            const title = document.createElement("div");
+            title.className = "modalTitle";
+            title.textContent = options.title || "Confirm deletion";
+
+            const sub = document.createElement("div");
+            sub.className = "modalSub";
+            sub.textContent = options.subtitle || "";
+
+            headText.appendChild(title);
+            if (sub.textContent) headText.appendChild(sub);
+            head.appendChild(headText);
+
+            const body = document.createElement("div");
+            body.className = "modalBody";
+            body.style.gridTemplateColumns = "1fr";
+
+            const warning = document.createElement("div");
+            warning.className = "v";
+            warning.style.padding = "10px 12px";
+            warning.style.border = "1px solid rgba(var(--fail-rgb),0.38)";
+            warning.style.borderRadius = "14px";
+            warning.style.background = "rgba(var(--fail-rgb),0.10)";
+            warning.style.fontWeight = "850";
+            warning.textContent = options.warning || "This action requires confirmation.";
+
+            const label = document.createElement("label");
+            label.className = "k";
+            label.textContent = `Type “${expected}” to continue`;
+
+            const input = document.createElement("input");
+            input.type = "text";
+            input.autocomplete = "off";
+            input.spellcheck = false;
+            input.style.width = "100%";
+            input.style.padding = "10px 12px";
+            input.style.borderRadius = "12px";
+            input.style.border = "1px solid var(--border2)";
+            input.style.background = "rgba(0,0,0,0.22)";
+            input.style.color = "var(--fg)";
+            input.style.font = "inherit";
+            input.style.fontFamily = "var(--mono)";
+
+            const err = document.createElement("div");
+            err.className = "v";
+            err.style.display = "none";
+            err.style.padding = "8px 10px";
+            err.style.border = "1px solid rgba(var(--fail-rgb),0.35)";
+            err.style.borderRadius = "12px";
+            err.style.background = "rgba(var(--fail-rgb),0.10)";
+            err.style.color = "var(--fg)";
+            err.style.fontWeight = "850";
+
+            body.appendChild(warning);
+            body.appendChild(label);
+            body.appendChild(input);
+            body.appendChild(err);
+
+            const foot = document.createElement("div");
+            foot.className = "modalFoot";
+
+            const hint = document.createElement("div");
+            hint.className = "v";
+            hint.style.opacity = "0.75";
+            hint.style.fontSize = "12px";
+            hint.textContent = options.note || "";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || "Cancel";
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = options.confirmText || "Delete";
+            okBtn.style.borderColor = "rgba(var(--fail-rgb),0.45)";
+            okBtn.style.background = "rgba(var(--fail-rgb),0.14)";
+            okBtn.style.color = "var(--fg)";
+
+            foot.appendChild(hint);
+            foot.appendChild(spacer);
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const showError = (text) => {
+                err.textContent = text || "";
+                err.style.display = text ? "block" : "none";
+            };
+
+            const close = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(!!value);
+            };
+
+            const submit = () => {
+                const typed = String(input.value || "");
+                if (typed !== expected) {
+                    showError("The typed name does not match.");
+                    input.focus();
+                    input.select();
+                    return;
+                }
+
+                close(true);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    close(false);
+                    return;
+                }
+
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    submit();
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) close(false);
+            });
+
+            cancelBtn.addEventListener("click", () => close(false));
+            okBtn.addEventListener("click", submit);
+
+            window.setTimeout(() => {
+                input.focus();
+            }, 0);
+        });
+    }
+
     function appendWorkspaceDangerZone(workspace) {
         if (!workspaceMembersList) return;
         if (!canCurrentScopeManageMembers()) return;
@@ -812,8 +978,16 @@
 
         btn.addEventListener("click", async () => {
             const expected = workspaceName;
-            const typed = window.prompt(`Type "${expected}" to delete this Shared Space.`);
-            if (typed !== expected) return;
+            const ok = await openWorkspaceTypedConfirmModal({
+                title: "Delete Shared Space?",
+                subtitle: "This disables the Shared Space and removes it from member lists.",
+                expected,
+                warning: `Delete Shared Space “${workspaceName}”?`,
+                note: "Files are preserved on disk, but the Shared Space access container is removed.",
+                confirmText: "Delete Shared Space",
+                cancelText: "Cancel"
+            });
+            if (!ok) return;
 
             try {
                 workspaceMembersStatus.textContent = "Deleting Shared Space…";
@@ -836,6 +1010,133 @@
         box.appendChild(btn);
         workspaceMembersList.appendChild(box);
     }
+
+    function openWorkspaceConfirmModal(opts = {}) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+
+            const modal = document.createElement("div");
+            modal.className = "modal show";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "modalCard";
+            card.style.width = "min(620px, calc(100vw - 24px))";
+
+            const head = document.createElement("div");
+            head.className = "modalHead";
+
+            const headText = document.createElement("div");
+
+            const title = document.createElement("div");
+            title.className = "modalTitle";
+            title.textContent = options.title || "Confirm action";
+
+            const sub = document.createElement("div");
+            sub.className = "modalSub";
+            sub.textContent = options.subtitle || "";
+
+            headText.appendChild(title);
+            if (sub.textContent) headText.appendChild(sub);
+            head.appendChild(headText);
+
+            const body = document.createElement("div");
+            body.className = "modalBody";
+            body.style.gridTemplateColumns = "130px 1fr";
+
+            const rows = Array.isArray(options.rows) ? options.rows : [];
+            for (const row of rows) {
+                const k = document.createElement("div");
+                k.className = "k";
+                k.textContent = String(row.label || "");
+
+                const v = document.createElement("div");
+                v.className = row.mono ? "v mono" : "v";
+                v.textContent = String(row.value || "");
+
+                body.appendChild(k);
+                body.appendChild(v);
+            }
+
+            if (options.note) {
+                const note = document.createElement("div");
+                note.className = "v";
+                note.style.gridColumn = "1 / -1";
+                note.style.opacity = "0.9";
+                note.textContent = String(options.note || "");
+                body.appendChild(note);
+            }
+
+            const foot = document.createElement("div");
+            foot.className = "modalFoot";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || "Cancel";
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = options.confirmText || "OK";
+
+            if (options.danger) {
+                okBtn.style.borderColor = "rgba(var(--fail-rgb),0.45)";
+                okBtn.style.background = "rgba(var(--fail-rgb),0.14)";
+                okBtn.style.color = "var(--fg)";
+            }
+
+            foot.appendChild(spacer);
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(!!value);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(false);
+                    return;
+                }
+
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(true);
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish(false);
+            });
+
+            cancelBtn.addEventListener("click", () => finish(false));
+            okBtn.addEventListener("click", () => finish(true));
+
+            window.setTimeout(() => {
+                if (options.danger) cancelBtn.focus();
+                else okBtn.focus();
+            }, 0);
+        });
+    }
+
     function renderWorkspaceMembers(members) {
         if (!workspaceMembersList) return;
 
@@ -1037,7 +1338,20 @@
                 remove.type = "button";
                 remove.textContent = "Remove";
                 remove.addEventListener("click", async () => {
-                    if (!confirm("Remove member from Shared Space?\n\n" + fp)) return;
+                    const ok = await openWorkspaceConfirmModal({
+                        title: "Remove member from Shared Space?",
+                        subtitle: "This removes the member from this Shared Space.",
+                        rows: [
+                            { label: "Member", value: fp || "Selected member", mono: true },
+                            { label: "Role", value: role || "member" },
+                            { label: "Status", value: status || "—" },
+                        ],
+                        note: "This does not delete the person or their files. It only removes Shared Space access.",
+                        confirmText: "Remove member",
+                        cancelText: "Cancel",
+                        danger: true,
+                    });
+                    if (!ok) return;
 
                     const old = remove.textContent;
                     remove.disabled = true;
