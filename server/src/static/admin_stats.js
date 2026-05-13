@@ -4,6 +4,8 @@
     const $ = (id) => document.getElementById(id);
 
     let currentTrendPeriod = "7d";
+    let latestSummary = null;
+    let latestTrendPayload = null;
 
     function esc(s) {
         return String(s ?? "").replace(/[&<>"']/g, c => ({
@@ -61,6 +63,137 @@
         const el = $(id);
         if (el) el.textContent = value;
     }
+
+    function setInsight(id, value, mini, kind = "") {
+        const valueEl = $(id);
+        const miniEl = $(id + "Mini");
+
+        if (valueEl) {
+            valueEl.textContent = value;
+            valueEl.classList.remove("good", "warn", "bad");
+            if (kind) valueEl.classList.add(kind);
+        }
+
+        if (miniEl) miniEl.textContent = mini;
+    }
+
+    function signedBytes(delta) {
+        const n = Number(delta || 0);
+        const sign = n > 0 ? "+" : (n < 0 ? "−" : "");
+        return sign + fmtBytes(Math.abs(n));
+    }
+
+    function signedNum(delta) {
+        const n = Number(delta || 0);
+        const sign = n > 0 ? "+" : (n < 0 ? "−" : "");
+        return sign + fmtNum(Math.abs(n));
+    }
+
+    function daysBetween(first, last) {
+        const a = Number(first?.t || 0);
+        const b = Number(last?.t || 0);
+        if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return 0;
+        return (b - a) / 86400.0;
+    }
+
+    function fmtDays(days) {
+        if (!Number.isFinite(days) || days < 0) return "—";
+        if (days < 1) return "less than 1 day";
+        if (days < 60) return `${Math.round(days)} days`;
+        if (days < 730) return `${Math.round(days / 30.4375)} months`;
+        return `${(days / 365.25).toFixed(1)} years`;
+    }
+
+    function renderGrowthInsights() {
+        const points = latestTrendPayload && Array.isArray(latestTrendPayload.points)
+            ? latestTrendPayload.points
+            : [];
+
+        if (points.length < 2) {
+            setInsight("insightStorageChange", "—", "Need at least 2 samples");
+            setInsight("insightFilesChange", "—", "Need at least 2 samples");
+            setInsight("insightGrowthPerDay", "—", "Need at least 2 samples");
+            setInsight("insightQuotaHorizon", "—", "Need more trend data");
+            return;
+        }
+
+        const first = points[0];
+        const last = points[points.length - 1];
+        const days = daysBetween(first, last);
+
+        const firstBytes = Number(first.files_total_bytes || 0);
+        const lastBytes = Number(last.files_total_bytes || 0);
+        const deltaBytes = lastBytes - firstBytes;
+
+        const firstFiles = Number(first.files_total_count || 0);
+        const lastFiles = Number(last.files_total_count || 0);
+        const deltaFiles = lastFiles - firstFiles;
+
+        const byteKind = deltaBytes > 0 ? "warn" : (deltaBytes < 0 ? "good" : "");
+        const fileKind = deltaFiles > 0 ? "warn" : (deltaFiles < 0 ? "good" : "");
+
+        setInsight(
+            "insightStorageChange",
+            signedBytes(deltaBytes),
+            `${fmtBytes(firstBytes)} → ${fmtBytes(lastBytes)}`,
+            byteKind
+        );
+
+        setInsight(
+            "insightFilesChange",
+            signedNum(deltaFiles),
+            `${fmtNum(firstFiles)} → ${fmtNum(lastFiles)} files`,
+            fileKind
+        );
+
+        if (days > 0) {
+            const perDay = deltaBytes / days;
+            const perDayKind = perDay > 0 ? "warn" : (perDay < 0 ? "good" : "");
+            setInsight(
+                "insightGrowthPerDay",
+                signedBytes(perDay),
+                `Based on ${points.length} points / ${days.toFixed(days < 2 ? 1 : 0)} days`,
+                perDayKind
+            );
+
+            const usersQuota = Number(latestSummary?.users?.quota_bytes || 0);
+            const workspacesQuota = Number(latestSummary?.workspaces?.quota_bytes || 0);
+            const totalQuota = usersQuota + workspacesQuota;
+
+            if (totalQuota > 0 && perDay > 0) {
+                const remaining = totalQuota - lastBytes;
+                if (remaining <= 0) {
+                    setInsight(
+                        "insightQuotaHorizon",
+                        "over quota",
+                        `${fmtBytes(lastBytes)} used of ${fmtBytes(totalQuota)} allocated`,
+                        "bad"
+                    );
+                } else {
+                    const daysLeft = remaining / perDay;
+                    setInsight(
+                        "insightQuotaHorizon",
+                        fmtDays(daysLeft),
+                        `${fmtBytes(remaining)} remaining of allocated quota`,
+                        daysLeft < 30 ? "bad" : (daysLeft < 90 ? "warn" : "good")
+                    );
+                }
+            } else if (totalQuota > 0) {
+                setInsight(
+                    "insightQuotaHorizon",
+                    "stable",
+                    `${fmtBytes(lastBytes)} used of ${fmtBytes(totalQuota)} allocated`,
+                    "good"
+                );
+            } else {
+                setInsight("insightQuotaHorizon", "—", "No allocated quota total");
+            }
+        } else {
+            setInsight("insightGrowthPerDay", "—", "Samples too close together");
+            setInsight("insightQuotaHorizon", "—", "Samples too close together");
+        }
+    }
+
 
     function rowsHtml(rows, nameKey, emptyText) {
         if (!Array.isArray(rows) || rows.length === 0) {
@@ -230,6 +363,7 @@
     }
 
     function renderTrends(j) {
+        latestTrendPayload = j;
         const points = Array.isArray(j.points) ? j.points : [];
 
         if (!points.length) {
@@ -239,6 +373,7 @@
             drawLineChart($("trendFilesCanvas"), [], p => p.files_total_count, fmtNum);
             drawLineChart($("trendUsersCanvas"), [], p => p.users_total, fmtNum);
             drawLineChart($("trendWorkspacesCanvas"), [], p => p.workspaces_total, fmtNum);
+            renderGrowthInsights();
             return;
         }
 
@@ -255,6 +390,8 @@
 
         const bucket = j.bucket || "raw";
         setTrendStatus(`${fmtNum(points.length)} point${points.length === 1 ? "" : "s"} · ${bucket}`);
+
+        renderGrowthInsights();
     }
 
     async function loadTrends(period = currentTrendPeriod) {
@@ -305,6 +442,8 @@
                 throw new Error(j.message || j.error || `HTTP ${r.status}`);
             }
 
+            latestSummary = j;
+
             const users = j.users || {};
             const workspaces = j.workspaces || {};
             const files = j.files || {};
@@ -349,6 +488,8 @@
             if (status) {
                 status.textContent = `Updated ${j.generated_at_iso || "now"}`;
             }
+
+            renderGrowthInsights();
         } catch (e) {
             if (status) status.textContent = `Failed: ${e.message || e}`;
             ["mimeRows", "extRows", "scopeRows"].forEach(id => {

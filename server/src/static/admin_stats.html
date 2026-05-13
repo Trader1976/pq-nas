@@ -213,6 +213,52 @@
             gap:14px;
         }
 
+        .insightGrid{
+            display:grid;
+            grid-template-columns:repeat(4, minmax(170px, 1fr));
+            gap:10px;
+            margin-bottom:12px;
+        }
+
+        .insightCard{
+            border:1px solid rgba(var(--fg-rgb),0.08);
+            background:rgba(0,0,0,0.12);
+            border-radius:16px;
+            padding:12px;
+            min-width:0;
+        }
+
+        .insightLabel{
+            color:rgba(var(--fg-rgb),0.58);
+            font-size:10px;
+            text-transform:uppercase;
+            letter-spacing:.10em;
+            font-weight:950;
+        }
+
+        .insightValue{
+            margin-top:6px;
+            font-size:17px;
+            font-weight:950;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+
+        .insightMini{
+            margin-top:4px;
+            color:rgba(var(--fg-rgb),0.62);
+            font-size:11px;
+            overflow:hidden;
+            text-overflow:ellipsis;
+            white-space:nowrap;
+        }
+
+        .insightValue.good{ color:rgba(var(--ok-rgb),0.96); }
+        .insightValue.warn{ color:rgba(var(--warn-rgb),0.96); }
+        .insightValue.bad{ color:rgba(var(--fail-rgb),0.96); }
+
+
         .trendCard{
             border:1px solid rgba(var(--fg-rgb),0.08);
             border-radius:18px;
@@ -251,6 +297,7 @@
 
         @media (max-width: 1350px){
             .trendGrid{ grid-template-columns:repeat(2, minmax(260px, 1fr)); }
+            .insightGrid{ grid-template-columns:repeat(2, minmax(220px, 1fr)); }
         }
 
         @media (max-width: 1100px){
@@ -260,6 +307,8 @@
 
         @media (max-width: 560px){
             .grid{ grid-template-columns:1fr; }
+            .trendGrid{ grid-template-columns:1fr; }
+            .insightGrid{ grid-template-columns:1fr; }
             .actions{ flex-wrap:wrap; justify-content:flex-start; }
         }
     </style>
@@ -348,6 +397,32 @@
                 <span id="trendStatus" class="pill info">
                     <span class="k">Trend:</span> <span class="v">Loading…</span>
                 </span>
+            </div>
+
+            <div class="insightGrid" aria-label="Growth intelligence">
+                <div class="insightCard">
+                    <div class="insightLabel">Storage change</div>
+                    <div id="insightStorageChange" class="insightValue">—</div>
+                    <div id="insightStorageChangeMini" class="insightMini">—</div>
+                </div>
+
+                <div class="insightCard">
+                    <div class="insightLabel">Files change</div>
+                    <div id="insightFilesChange" class="insightValue">—</div>
+                    <div id="insightFilesChangeMini" class="insightMini">—</div>
+                </div>
+
+                <div class="insightCard">
+                    <div class="insightLabel">Average growth/day</div>
+                    <div id="insightGrowthPerDay" class="insightValue">—</div>
+                    <div id="insightGrowthPerDayMini" class="insightMini">—</div>
+                </div>
+
+                <div class="insightCard">
+                    <div class="insightLabel">Quota horizon</div>
+                    <div id="insightQuotaHorizon" class="insightValue">—</div>
+                    <div id="insightQuotaHorizonMini" class="insightMini">—</div>
+                </div>
             </div>
 
             <div class="trendGrid">
@@ -450,7 +525,7 @@
 </div>
 
 <script src="/static/admin_badges.js"></script>
-<script src="/static/admin_stats.js?v=20260513-trends-v2"></script>
+<script src="/static/admin_stats.js?v=20260513-growth-v23"></script>
 <script src="/static/shell_sidebar.js"></script>
 </body>
 </html>
