@@ -364,6 +364,50 @@ html[data-theme="win_classic"] .pqfvcLine.diff{
     border-top:1px solid var(--border2,rgba(255,255,255,.10)) !important;
 }
 
+
+/* Git-style +/- line diff rendering. */
+.pqfvcLine{
+    grid-template-columns:58px 24px minmax(0,1fr) !important;
+}
+.pqfvcMark{
+    padding:0 6px;
+    text-align:center;
+    font-weight:950;
+    user-select:none;
+    opacity:.95;
+}
+.pqfvcLine.del{
+    background:rgba(180,40,40,.24) !important;
+}
+.pqfvcLine.ins{
+    background:rgba(40,150,80,.24) !important;
+}
+.pqfvcLine.spacer{
+    opacity:.42;
+}
+.pqfvcLine.del .pqfvcMark{
+    color:#ff7070;
+}
+.pqfvcLine.ins .pqfvcMark{
+    color:#5ee27a;
+}
+html[data-theme="bright"] .pqfvcLine.del,
+html[data-theme="win_classic"] .pqfvcLine.del{
+    background:#ffe0e0 !important;
+}
+html[data-theme="bright"] .pqfvcLine.ins,
+html[data-theme="win_classic"] .pqfvcLine.ins{
+    background:#ddf7e5 !important;
+}
+html[data-theme="bright"] .pqfvcLine.del .pqfvcMark,
+html[data-theme="win_classic"] .pqfvcLine.del .pqfvcMark{
+    color:#b00020;
+}
+html[data-theme="bright"] .pqfvcLine.ins .pqfvcMark,
+html[data-theme="win_classic"] .pqfvcLine.ins .pqfvcMark{
+    color:#107c41;
+}
+
 `;
         document.head.appendChild(style);
     }
@@ -637,39 +681,254 @@ html[data-theme="win_classic"] .pqfvcLine.diff{
         return String(text || "").split("\n");
     }
 
-    function changedLineSet(a, b) {
-        const aa = splitLinesPreserveLast(a);
-        const bb = splitLinesPreserveLast(b);
-        const n = Math.max(aa.length, bb.length);
-        const changed = new Set();
+    function buildAlignedDiffRows(oldText, curText) {
+        const oldLines = splitLinesPreserveLast(oldText);
+        const curLines = splitLinesPreserveLast(curText);
 
-        for (let i = 0; i < n; i++) {
-            if ((aa[i] || "") !== (bb[i] || "")) changed.add(i);
+        const m = oldLines.length;
+        const n = curLines.length;
+        const product = m * n;
+
+        if (product > 2000000) {
+            return buildLinePositionFallback(oldLines, curLines);
         }
 
-        return changed;
+        const dp = new Array(m + 1);
+        for (let i = 0; i <= m; i++) {
+            dp[i] = new Uint32Array(n + 1);
+        }
+
+        for (let i = m - 1; i >= 0; i--) {
+            const row = dp[i];
+            const next = dp[i + 1];
+
+            for (let j = n - 1; j >= 0; j--) {
+                if (oldLines[i] === curLines[j]) {
+                    row[j] = next[j + 1] + 1;
+                } else {
+                    row[j] = Math.max(next[j], row[j + 1]);
+                }
+            }
+        }
+
+        const ops = [];
+        let i = 0;
+        let j = 0;
+
+        while (i < m && j < n) {
+            if (oldLines[i] === curLines[j]) {
+                ops.push({
+                    kind: "equal",
+                    leftNo: i + 1,
+                    rightNo: j + 1,
+                    leftText: oldLines[i],
+                    rightText: curLines[j]
+                });
+                i++;
+                j++;
+            } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+                ops.push({
+                    kind: "delete",
+                    leftNo: i + 1,
+                    rightNo: "",
+                    leftText: oldLines[i],
+                    rightText: ""
+                });
+                i++;
+            } else {
+                ops.push({
+                    kind: "insert",
+                    leftNo: "",
+                    rightNo: j + 1,
+                    leftText: "",
+                    rightText: curLines[j]
+                });
+                j++;
+            }
+        }
+
+        while (i < m) {
+            ops.push({
+                kind: "delete",
+                leftNo: i + 1,
+                rightNo: "",
+                leftText: oldLines[i],
+                rightText: ""
+            });
+            i++;
+        }
+
+        while (j < n) {
+            ops.push({
+                kind: "insert",
+                leftNo: "",
+                rightNo: j + 1,
+                leftText: "",
+                rightText: curLines[j]
+            });
+            j++;
+        }
+
+        return coalesceDiffOps(ops, false);
     }
 
-    function renderTextPane(container, text, changed) {
+    function buildLinePositionFallback(oldLines, curLines) {
+        const rows = [];
+        const stats = { inserted: 0, deleted: 0, changed: 0 };
+        const n = Math.max(oldLines.length, curLines.length);
+
+        for (let i = 0; i < n; i++) {
+            const hasLeft = i < oldLines.length;
+            const hasRight = i < curLines.length;
+            const leftText = hasLeft ? oldLines[i] : "";
+            const rightText = hasRight ? curLines[i] : "";
+
+            if (hasLeft && hasRight && leftText === rightText) {
+                rows.push({
+                    kind: "equal",
+                    leftNo: i + 1,
+                    rightNo: i + 1,
+                    leftText,
+                    rightText
+                });
+            } else if (hasLeft && hasRight) {
+                stats.changed++;
+                rows.push({
+                    kind: "replace",
+                    leftNo: i + 1,
+                    rightNo: i + 1,
+                    leftText,
+                    rightText
+                });
+            } else if (hasLeft) {
+                stats.deleted++;
+                rows.push({
+                    kind: "delete",
+                    leftNo: i + 1,
+                    rightNo: "",
+                    leftText,
+                    rightText: ""
+                });
+            } else {
+                stats.inserted++;
+                rows.push({
+                    kind: "insert",
+                    leftNo: "",
+                    rightNo: i + 1,
+                    leftText: "",
+                    rightText
+                });
+            }
+        }
+
+        return { rows, stats, fallback: true };
+    }
+
+    function coalesceDiffOps(ops, fallback) {
+        const rows = [];
+        const stats = { inserted: 0, deleted: 0, changed: 0 };
+
+        let i = 0;
+        while (i < ops.length) {
+            if (ops[i].kind === "equal") {
+                rows.push(ops[i]);
+                i++;
+                continue;
+            }
+
+            const dels = [];
+            const ins = [];
+
+            while (i < ops.length && ops[i].kind !== "equal") {
+                if (ops[i].kind === "delete") dels.push(ops[i]);
+                else if (ops[i].kind === "insert") ins.push(ops[i]);
+                i++;
+            }
+
+            const paired = Math.min(dels.length, ins.length);
+
+            for (let k = 0; k < paired; k++) {
+                stats.changed++;
+                rows.push({
+                    kind: "replace",
+                    leftNo: dels[k].leftNo,
+                    rightNo: ins[k].rightNo,
+                    leftText: dels[k].leftText,
+                    rightText: ins[k].rightText
+                });
+            }
+
+            for (let k = paired; k < dels.length; k++) {
+                stats.deleted++;
+                rows.push(dels[k]);
+            }
+
+            for (let k = paired; k < ins.length; k++) {
+                stats.inserted++;
+                rows.push(ins[k]);
+            }
+        }
+
+        return { rows, stats, fallback: !!fallback };
+    }
+
+    function renderDiffPane(container, rows, side) {
         container.replaceChildren();
 
-        const lines = splitLinesPreserveLast(text);
+        const isLeft = side === "left";
         const frag = document.createDocumentFragment();
 
-        for (let i = 0; i < lines.length; i++) {
+        for (const r of rows) {
+            const hasText = isLeft
+                ? (r.leftNo !== "" && r.leftNo != null)
+                : (r.rightNo !== "" && r.rightNo != null);
+
+            let cls = "pqfvcLine";
+            let mark = "";
+            let lineNo = "";
+            let text = "";
+
+            if (isLeft) {
+                lineNo = r.leftNo || "";
+                text = hasText ? String(r.leftText ?? "") : "";
+
+                if (r.kind === "delete" || r.kind === "replace") {
+                    cls += " del";
+                    mark = "-";
+                } else if (r.kind === "insert") {
+                    cls += " spacer";
+                }
+            } else {
+                lineNo = r.rightNo || "";
+                text = hasText ? String(r.rightText ?? "") : "";
+
+                if (r.kind === "insert" || r.kind === "replace") {
+                    cls += " ins";
+                    mark = "+";
+                } else if (r.kind === "delete") {
+                    cls += " spacer";
+                }
+            }
+
             const row = document.createElement("div");
-            row.className = "pqfvcLine" + (changed && changed.has(i) ? " diff" : "");
+            row.className = cls;
 
             const no = document.createElement("div");
             no.className = "pqfvcLineNo";
-            no.textContent = String(i + 1);
+            no.textContent = lineNo ? String(lineNo) : "";
+
+            const markEl = document.createElement("div");
+            markEl.className = "pqfvcMark";
+            markEl.textContent = mark;
 
             const code = document.createElement("div");
             code.className = "pqfvcLineText";
-            code.textContent = lines[i] || " ";
+            code.textContent = hasText ? (text || " ") : " ";
 
             row.appendChild(no);
+            row.appendChild(markEl);
             row.appendChild(code);
+
             frag.appendChild(row);
         }
 
@@ -705,10 +964,10 @@ html[data-theme="win_classic"] .pqfvcLine.diff{
             const oldText = String(oldJ.text || "");
             const curText = String(curJ.text || "");
 
-            const changed = changedLineSet(oldText, curText);
+            const diff = buildAlignedDiffRows(oldText, curText);
 
-            renderTextPane(leftArea, oldText, changed);
-            renderTextPane(rightArea, curText, changed);
+            renderDiffPane(leftArea, diff.rows, "left");
+            renderDiffPane(rightArea, diff.rows, "right");
 
             leftArea.scrollTop = 0;
             rightArea.scrollTop = 0;
@@ -719,10 +978,16 @@ html[data-theme="win_classic"] .pqfvcLine.diff{
             rightMetaEl.textContent =
                 `${fmtSize(new Blob([curText]).size)} • ${curJ.sha256 || ""}`;
 
+            const total = diff.stats.inserted + diff.stats.deleted + diff.stats.changed;
+            const parts = [];
+            if (diff.stats.inserted) parts.push(`+${diff.stats.inserted} added`);
+            if (diff.stats.deleted) parts.push(`-${diff.stats.deleted} removed`);
+            if (diff.stats.changed) parts.push(`~${diff.stats.changed} changed`);
+
             setStatus(
-                changed.size
-                    ? `Loaded. Highlighted changed line positions: ${changed.size}`
-                    : "Loaded. No line-position differences found.",
+                total
+                    ? `Loaded. ${parts.join(" • ")}${diff.fallback ? " • large-file fallback" : ""}`
+                    : "Loaded. No line differences found.",
                 "ok"
             );
         } catch (e) {
