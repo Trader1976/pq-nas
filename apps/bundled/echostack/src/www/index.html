@@ -40,8 +40,11 @@
 
     <section class="toolbar">
       <input id="searchInput" type="search" placeholder="Search links, notes, tags, collections">
+      <div id="resultCount" class="resultCount" aria-live="polite">0 links</div>
       <button id="viewModeBtn" type="button">Grid view</button>
       <button id="refreshBtn" type="button">Refresh</button>
+      <button id="importBookmarksBtn" type="button">Import bookmarks</button>
+      <input id="bookmarkImportFile" type="file" accept=".html,.htm,text/html" hidden>
     </section>
 
     <section class="deepSearch" id="deepSearchPanel">

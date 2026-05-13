@@ -3,6 +3,8 @@
 
   const API = "/api/v4/echostack";
   const VIEW_MODE_KEY = "echostack_view_mode_v1";
+  const BOOKMARK_IMPORT_TAG = "imported-bookmark";
+  const BOOKMARK_IMPORT_MAX_FILE_BYTES = 20 * 1024 * 1024;
 
   const el = (id) => document.getElementById(id);
 
@@ -24,7 +26,8 @@
   const state = {
     items: [],
     q: "",
-    viewMode: loadViewMode()
+    viewMode: loadViewMode(),
+    selectedIndex: 0
   };
 
   let statusDotsTimer = null;
@@ -138,6 +141,277 @@
     return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unit]}`;
   }
 
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function cleanBookmarkText(value) {
+    return String(value || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 240);
+  }
+
+  function normalizeImportUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+
+    try {
+      const u = new URL(raw);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+      return u.toString();
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function directChildByTag(parent, tagName) {
+    const wanted = String(tagName || "").toUpperCase();
+    for (const child of Array.from(parent?.children || [])) {
+      if (child.tagName === wanted) return child;
+    }
+    return null;
+  }
+
+  function parseBookmarkHtmlImport(htmlText) {
+    const html = String(htmlText || "");
+
+    if (!/NETSCAPE-Bookmark-file-1/i.test(html) && !/<a\s+[^>]*href\s*=/i.test(html)) {
+      throw new Error("This does not look like a browser bookmarks HTML export.");
+    }
+
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const root = doc.querySelector("dl");
+
+    if (!root) {
+      throw new Error("No bookmark list found in this file.");
+    }
+
+    const bookmarks = [];
+    const seenInFile = new Set();
+
+    function addAnchor(anchor, folders) {
+      const url = normalizeImportUrl(anchor.getAttribute("href") || "");
+      if (!url || seenInFile.has(url)) return;
+
+      seenInFile.add(url);
+
+      const title = cleanBookmarkText(anchor.textContent) || url;
+      const collection = folders.filter(Boolean).join(" / ") || "Imported bookmarks";
+      const addDateRaw = String(anchor.getAttribute("ADD_DATE") || "").trim();
+      const addedEpoch = /^\d+$/.test(addDateRaw) ? Number(addDateRaw) : 0;
+
+      bookmarks.push({
+        url,
+        title,
+        collection: collection.slice(0, 180),
+        added_epoch: Number.isFinite(addedEpoch) ? addedEpoch : 0
+      });
+    }
+
+    function walkDl(dl, folders) {
+      const children = Array.from(dl.children || []);
+
+      for (let i = 0; i < children.length; i++) {
+        const node = children[i];
+        if (!node || node.tagName === "P") continue;
+
+        if (node.tagName === "DT") {
+          const anchor = directChildByTag(node, "A");
+          const folder = directChildByTag(node, "H3");
+
+          if (anchor) {
+            addAnchor(anchor, folders);
+            continue;
+          }
+
+          if (folder) {
+            const name = cleanBookmarkText(folder.textContent);
+            let subDl = directChildByTag(node, "DL");
+
+            if (!subDl) {
+              for (let j = i + 1; j < children.length; j++) {
+                if (children[j].tagName === "DL") {
+                  subDl = children[j];
+                  i = j;
+                  break;
+                }
+                if (children[j].tagName === "DT") break;
+              }
+            }
+
+            if (subDl) {
+              walkDl(subDl, name ? folders.concat(name) : folders);
+            }
+            continue;
+          }
+
+          const nestedAnchor = node.querySelector("a[href]");
+          if (nestedAnchor) addAnchor(nestedAnchor, folders);
+          continue;
+        }
+
+        if (node.tagName === "A") {
+          addAnchor(node, folders);
+          continue;
+        }
+
+        if (node.tagName === "H3") {
+          const name = cleanBookmarkText(node.textContent);
+          let subDl = null;
+
+          for (let j = i + 1; j < children.length; j++) {
+            if (children[j].tagName === "DL") {
+              subDl = children[j];
+              i = j;
+              break;
+            }
+            if (children[j].tagName === "DT") break;
+          }
+
+          if (subDl) {
+            walkDl(subDl, name ? folders.concat(name) : folders);
+          }
+          continue;
+        }
+
+        if (node.tagName === "DL") {
+          walkDl(node, folders);
+        }
+      }
+    }
+
+    walkDl(root, []);
+    return bookmarks;
+  }
+
+  function buildImportedBookmarkPayload(bookmark) {
+    return {
+      url: bookmark.url,
+      final_url: "",
+      title: bookmark.title || bookmark.url,
+      description: "",
+      site_name: "",
+      favicon_url: faviconFromUrl(bookmark.url),
+      preview_image_url: "",
+      collection: bookmark.collection || "Imported bookmarks",
+      tags_text: BOOKMARK_IMPORT_TAG,
+      notes: "",
+      read_state: "unread"
+    };
+  }
+
+  async function importBookmarksFromText(htmlText, filename) {
+    const parsed = parseBookmarkHtmlImport(htmlText);
+
+    if (!parsed.length) {
+      throw new Error("No HTTP/HTTPS bookmarks found in this file.");
+    }
+
+    const folderCount = new Set(parsed.map((b) => b.collection || "Imported bookmarks")).size;
+
+    let existingItems = [];
+    try {
+      const j = await api("/items?limit=500");
+      existingItems = Array.isArray(j.items) ? j.items : [];
+    } catch (_) {
+      existingItems = Array.isArray(state.items) ? state.items : [];
+    }
+
+    const existingUrls = new Set(
+      existingItems
+        .map((item) => normalizeImportUrl(item.url || ""))
+        .filter(Boolean)
+    );
+
+    const toImport = parsed.filter((bookmark) => !existingUrls.has(bookmark.url));
+    const skippedExisting = parsed.length - toImport.length;
+
+    if (!toImport.length) {
+      setStatus(`Bookmark import found ${parsed.length} links, but all already exist.`, "good");
+      return;
+    }
+
+    const ok = confirm(
+      `Import bookmarks from ${filename || "selected file"}?\n\n` +
+      `Found: ${parsed.length} bookmarks in ${folderCount} folder/collection groups\n` +
+      `Will import: ${toImport.length}\n` +
+      `Will skip existing: ${skippedExisting}\n\n` +
+      `Imported links will get tag "${BOOKMARK_IMPORT_TAG}".`
+    );
+
+    if (!ok) {
+      setStatus("Bookmark import cancelled.");
+      return;
+    }
+
+    const importBtn = el("importBookmarksBtn");
+    if (importBtn) {
+      importBtn.disabled = true;
+      importBtn.classList.add("importing");
+      importBtn.textContent = "Importing";
+    }
+
+    let imported = 0;
+    let failed = 0;
+
+    try {
+      for (let i = 0; i < toImport.length; i++) {
+        const bookmark = toImport[i];
+
+        setStatus(`Importing bookmarks ${i + 1}/${toImport.length}`, "working");
+
+        try {
+          await api("/items/create", {
+            method: "POST",
+            body: JSON.stringify(buildImportedBookmarkPayload(bookmark))
+          });
+
+          imported++;
+          existingUrls.add(bookmark.url);
+        } catch (err) {
+          failed++;
+          console.warn("Echo Stack bookmark import failed:", bookmark.url, err);
+        }
+
+        if ((i + 1) % 10 === 0) {
+          await sleep(80);
+        }
+      }
+    } finally {
+      if (importBtn) {
+        importBtn.disabled = false;
+        importBtn.classList.remove("importing");
+        importBtn.textContent = "Import bookmarks";
+      }
+    }
+
+    state.q = "";
+    const search = el("searchInput");
+    if (search) search.value = "";
+
+    const failedText = failed ? `, ${failed} failed` : "";
+    setStatus(
+      `Bookmark import finished: ${imported} imported, ${skippedExisting} skipped as existing${failedText}.`,
+      failed ? "bad" : "good"
+    );
+
+    await loadItems();
+  }
+
+  async function handleBookmarkImportFile(file) {
+    if (!file) return;
+
+    if (file.size > BOOKMARK_IMPORT_MAX_FILE_BYTES) {
+      throw new Error("Bookmark file is too large for browser-side import.");
+    }
+
+    setStatus("Reading bookmark file…", "working");
+    const text = await file.text();
+    await importBookmarksFromText(text, file.name || "bookmarks.html");
+  }
+
   function faviconFromUrl(url) {
     try {
       const u = new URL(url);
@@ -145,6 +419,28 @@
     } catch {
       return "";
     }
+  }
+
+
+  function pluralLocal(count, one, many) {
+    return Number(count) === 1 ? one : many;
+  }
+
+  function updateResultCount() {
+    const out = el("resultCount");
+    if (!out) return;
+
+    const count = Array.isArray(state.items) ? state.items.length : 0;
+    const q = String(state.q || "").trim();
+
+    if (q) {
+      out.textContent = `${count} ${pluralLocal(count, "result", "results")}`;
+      out.title = `${count} ${pluralLocal(count, "result", "results")} for “${q}”`;
+      return;
+    }
+
+    out.textContent = `${count} ${pluralLocal(count, "link", "links")}`;
+    out.title = `${count} ${pluralLocal(count, "saved link", "saved links")}`;
   }
 
   function metaLine(item) {
@@ -177,7 +473,142 @@
     const q = state.q ? `?q=${encodeURIComponent(state.q)}` : "";
     const j = await api(`/items${q}`);
     state.items = Array.isArray(j.items) ? j.items : [];
+    clampSelectedIndex();
     render();
+  }
+
+
+  function clampSelectedIndex() {
+    const max = Math.max(0, state.items.length - 1);
+    if (!Number.isFinite(state.selectedIndex)) state.selectedIndex = 0;
+    if (state.selectedIndex < 0) state.selectedIndex = 0;
+    if (state.selectedIndex > max) state.selectedIndex = max;
+  }
+
+  function itemCards() {
+    return Array.from(document.querySelectorAll("#items .item"));
+  }
+
+  function selectedCard() {
+    const cards = itemCards();
+    clampSelectedIndex();
+    return cards[state.selectedIndex] || null;
+  }
+
+  function setSelectedIndex(index, options = {}) {
+    if (!state.items.length) {
+      state.selectedIndex = 0;
+      return;
+    }
+
+    const max = state.items.length - 1;
+    state.selectedIndex = Math.max(0, Math.min(max, Number(index) || 0));
+
+    const cards = itemCards();
+    cards.forEach((card, i) => {
+      const selected = i === state.selectedIndex;
+      card.classList.toggle("selected", selected);
+      card.setAttribute("aria-selected", selected ? "true" : "false");
+      card.tabIndex = selected ? 0 : -1;
+    });
+
+    const card = cards[state.selectedIndex];
+    if (card && options.scroll !== false) {
+      card.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }
+
+  function gridColumnCount() {
+    const root = el("items");
+    const cards = itemCards();
+
+    if (!root || cards.length < 2 || state.viewMode !== "grid") return 1;
+
+    const firstTop = Math.round(cards[0].getBoundingClientRect().top);
+    let cols = 0;
+
+    for (const card of cards) {
+      const top = Math.round(card.getBoundingClientRect().top);
+      if (Math.abs(top - firstTop) <= 3) cols++;
+      else break;
+    }
+
+    return Math.max(1, cols);
+  }
+
+  function moveSelectionByKey(key) {
+    if (!state.items.length) return;
+
+    const cols = gridColumnCount();
+    let next = state.selectedIndex;
+
+    if (key === "ArrowLeft") next -= 1;
+    else if (key === "ArrowRight") next += 1;
+    else if (key === "ArrowUp") next -= cols;
+    else if (key === "ArrowDown") next += cols;
+    else return;
+
+    setSelectedIndex(next);
+  }
+
+  function toggleSelectedEditPanel() {
+    const card = selectedCard();
+    if (!card) return;
+
+    const item = state.items[state.selectedIndex];
+    if (!item) return;
+
+    const notes = card.querySelector(".itemNotes");
+    openInlineEditor(item, card, notes, { focus: false });
+  }
+
+  function closeSelectedEditPanel() {
+    const card = selectedCard();
+    if (!card) return;
+
+    const panel = card.querySelector(".itemEditPanel");
+    if (panel) panel.remove();
+  }
+
+  function isTypingTarget(target) {
+    if (!target) return false;
+    const tag = String(target.tagName || "").toUpperCase();
+    return tag === "INPUT" ||
+           tag === "TEXTAREA" ||
+           tag === "SELECT" ||
+           tag === "BUTTON" ||
+           target.isContentEditable;
+  }
+
+  function bindKeyboardNavigation() {
+    if (bindKeyboardNavigation.bound) return;
+    bindKeyboardNavigation.bound = true;
+
+    document.addEventListener("keydown", (e) => {
+      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+
+      if (isTypingTarget(e.target)) return;
+
+      if (e.key === "ArrowLeft" ||
+          e.key === "ArrowRight" ||
+          e.key === "ArrowUp" ||
+          e.key === "ArrowDown") {
+        e.preventDefault();
+        moveSelectionByKey(e.key);
+        return;
+      }
+
+      if (e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        toggleSelectedEditPanel();
+        return;
+      }
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeSelectedEditPanel();
+      }
+    });
   }
 
   function render() {
@@ -187,6 +618,7 @@
 
     root.className = `items ${state.viewMode === "grid" ? "gridMode" : "listMode"}`;
     updateViewModeButton();
+    updateResultCount();
 
     root.innerHTML = "";
 
@@ -200,6 +632,18 @@
 
     for (const item of state.items) {
       const node = tpl.content.firstElementChild.cloneNode(true);
+      const itemIndex = root.children.length;
+
+      node.dataset.index = String(itemIndex);
+      node.tabIndex = itemIndex === state.selectedIndex ? 0 : -1;
+      node.setAttribute("role", "option");
+      node.setAttribute("aria-selected", itemIndex === state.selectedIndex ? "true" : "false");
+      node.classList.toggle("selected", itemIndex === state.selectedIndex);
+
+      node.addEventListener("click", (e) => {
+        if (e.target && e.target.closest("button, input, textarea, a, select")) return;
+        setSelectedIndex(itemIndex, { scroll: false });
+      });
 
       const title = node.querySelector(".itemTitle");
       const url = node.querySelector(".itemUrl");
@@ -210,6 +654,12 @@
       const saveBtn = node.querySelector(".saveItemBtn");
       const deleteBtn = node.querySelector(".deleteBtn");
       const archiveStatus = item.archive_status || "none";
+
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "editBtn";
+      editBtn.textContent = "Edit";
+      node.querySelector(".itemActions").insertBefore(editBtn, favBtn);
 
       const head = document.createElement("div");
       head.className = "itemHead";
@@ -288,6 +738,10 @@
       favBtn.textContent = item.favorite ? "★ Favorite" : "☆ Favorite";
       readBtn.textContent = item.read_state === "read" ? "Mark unread" : "Mark read";
 
+      editBtn.addEventListener("click", () => {
+        openInlineEditor(item, node, notes);
+      });
+
       favBtn.addEventListener("click", async () => {
         await updateItem(item.id, { favorite: !item.favorite });
       });
@@ -336,6 +790,153 @@
 
       root.appendChild(node);
     }
+
+    clampSelectedIndex();
+    setSelectedIndex(state.selectedIndex, { scroll: false });
+  }
+
+
+  function makeEditInput(labelText, value, options = {}) {
+    const wrap = document.createElement("label");
+    wrap.className = "editField";
+
+    const label = document.createElement("span");
+    label.textContent = labelText;
+
+    const input = options.textarea ? document.createElement("textarea") : document.createElement("input");
+    input.value = value || "";
+
+    if (!options.textarea) {
+      input.type = options.type || "text";
+    }
+
+    if (options.placeholder) {
+      input.placeholder = options.placeholder;
+    }
+
+    wrap.appendChild(label);
+    wrap.appendChild(input);
+
+    return { wrap, input };
+  }
+
+  function openInlineEditor(item, node, notesEl, options = {}) {
+    const oldPanel = node.querySelector(".itemEditPanel");
+    if (oldPanel) {
+      oldPanel.remove();
+      return;
+    }
+
+    const main = node.querySelector(".itemMain");
+    if (!main) return;
+
+    const panel = document.createElement("div");
+    panel.className = "itemEditPanel";
+
+    const urlField = makeEditInput("URL", item.url || "", {
+      type: "url",
+      placeholder: "https://example.com/article"
+    });
+    const titleField = makeEditInput("Title", item.title || "", {
+      placeholder: "Title"
+    });
+    const collectionField = makeEditInput("Collection", item.collection || "", {
+      placeholder: "Collection / Folder"
+    });
+    const tagsField = makeEditInput("Tags", item.tags_text || "", {
+      placeholder: "tag1, tag2"
+    });
+    const notesField = makeEditInput("Notes", notesEl?.value || item.notes || "", {
+      textarea: true,
+      placeholder: "Notes"
+    });
+
+    const grid = document.createElement("div");
+    grid.className = "itemEditGrid";
+    grid.appendChild(urlField.wrap);
+    grid.appendChild(titleField.wrap);
+    grid.appendChild(collectionField.wrap);
+    grid.appendChild(tagsField.wrap);
+
+    const actions = document.createElement("div");
+    actions.className = "itemEditActions";
+
+    const save = document.createElement("button");
+    save.type = "button";
+    save.textContent = "Save edit";
+
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "Cancel";
+
+    actions.appendChild(save);
+    actions.appendChild(cancel);
+
+    panel.appendChild(grid);
+    panel.appendChild(notesField.wrap);
+    panel.appendChild(actions);
+
+    main.appendChild(panel);
+
+    if (options.focus !== false) {
+      urlField.input.focus();
+    }
+
+    const submitEdit = async () => {
+      if (save.disabled) return;
+
+      const url = String(urlField.input.value || "").trim();
+      if (!url) {
+        setStatus("URL cannot be empty.", "bad");
+        urlField.input.focus();
+        return;
+      }
+
+      save.disabled = true;
+      save.textContent = "Saving…";
+
+      try {
+        await updateItem(item.id, {
+          url,
+          title: String(titleField.input.value || "").trim() || url,
+          collection: String(collectionField.input.value || "").trim(),
+          tags_text: String(tagsField.input.value || "").trim(),
+          notes: String(notesField.input.value || "").trim()
+        });
+      } catch (err) {
+        save.disabled = false;
+        save.textContent = "Save edit";
+        setStatus(err.message || String(err), "bad");
+      }
+    };
+
+    const handleEditKeydown = (e) => {
+      if (e.key !== "Enter" || e.isComposing) return;
+
+      // Notes still allows multiline text with Shift+Enter.
+      if (e.target && e.target.tagName === "TEXTAREA" && e.shiftKey) return;
+
+      e.preventDefault();
+      submitEdit();
+    };
+
+    for (const input of [
+      urlField.input,
+      titleField.input,
+      collectionField.input,
+      tagsField.input,
+      notesField.input
+    ]) {
+      input.addEventListener("keydown", handleEditKeydown);
+    }
+
+    cancel.addEventListener("click", () => {
+      panel.remove();
+    });
+
+    save.addEventListener("click", () => {
+      submitEdit();
+    });
   }
 
   async function saveNewItem() {
@@ -513,6 +1114,26 @@
       loadItems().catch((e) => setStatus(e.message || String(e), "bad"));
     });
 
+    el("importBookmarksBtn")?.addEventListener("click", () => {
+      el("bookmarkImportFile")?.click();
+    });
+
+    el("bookmarkImportFile")?.addEventListener("change", () => {
+      const input = el("bookmarkImportFile");
+      const file = input?.files && input.files[0] ? input.files[0] : null;
+      if (input) input.value = "";
+
+      handleBookmarkImportFile(file).catch((e) => {
+        setStatus(e.message || String(e), "bad");
+        const importBtn = el("importBookmarksBtn");
+        if (importBtn) {
+          importBtn.disabled = false;
+          importBtn.classList.remove("importing");
+          importBtn.textContent = "Import bookmarks";
+        }
+      });
+    });
+
     el("searchInput")?.addEventListener("input", () => {
       state.q = (el("searchInput").value || "").trim();
       clearTimeout(bind._timer);
@@ -543,6 +1164,7 @@
   }
 
   bind();
+  bindKeyboardNavigation();
   updateComposerExpanded();
   loadItems().catch((e) => setStatus(e.message || String(e), "bad"));
 })();

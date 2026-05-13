@@ -218,6 +218,20 @@ button:disabled {
   margin-bottom: 14px;
 }
 
+.resultCount {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 96px;
+  padding: 0 12px;
+  border: 1px solid rgba(255,159,28,.26);
+  border-radius: 14px;
+  background: rgba(255,159,28,.08);
+  color: #ffd7a0;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .items {
   display: grid;
   gap: 12px;
@@ -505,4 +519,141 @@ button:disabled {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+
+#importBookmarksBtn.importing {
+  color: #ffd27a;
+  border-color: rgba(255,159,28,.55);
+  background: rgba(255,159,28,.12);
+  box-shadow: 0 0 0 3px rgba(255,159,28,.10);
+  cursor: wait;
+}
+
+#importBookmarksBtn.importing::after {
+  content: "";
+  display: inline-block;
+  width: 1.4em;
+  text-align: left;
+  animation: echoArchiveDots 1.15s steps(4, end) infinite;
+}
+
+
+.itemEditPanel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(255,159,28,.24);
+  border-radius: 18px;
+  background: rgba(0,0,0,.22);
+}
+
+.itemEditGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.editField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.editField input,
+.editField textarea {
+  margin: 0;
+}
+
+.editField textarea {
+  min-height: 72px;
+}
+
+.itemEditPanel > .editField {
+  margin-top: 10px;
+}
+
+.itemEditActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.editBtn {
+  color: #ffd7a0;
+  border-color: rgba(255,159,28,.28);
+}
+
+.items.gridMode .itemEditPanel {
+  margin-top: 8px;
+}
+
+.items.gridMode .itemEditGrid {
+  grid-template-columns: 1fr;
+}
+
+.items.gridMode .itemEditActions {
+  flex-direction: column;
+}
+
+.items.gridMode .itemEditActions button {
+  width: 100%;
+}
+
+
+@media (max-width: 760px) {
+  .toolbar .resultCount {
+    margin-top: 10px;
+    min-height: 42px;
+  }
+
+  .itemEditGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .itemEditActions {
+    flex-direction: column;
+  }
+}
+
+
+.item.selected {
+  border-color: rgba(255,159,28,.72);
+  box-shadow:
+    0 0 0 2px rgba(255,159,28,.22),
+    0 18px 52px rgba(0,0,0,.25);
+}
+
+.item.selected::before {
+  content: "Selected";
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,159,28,.36);
+  background: rgba(255,159,28,.12);
+  color: #ffd7a0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .02em;
+  pointer-events: none;
+}
+
+.item {
+  position: relative;
+}
+
+.items.gridMode .item.selected::before {
+  top: 8px;
+  right: 10px;
+  font-size: 10px;
+  padding: 2px 7px;
+}
+
+.item.selected .itemTitle {
+  color: #ffd7a0;
 }
