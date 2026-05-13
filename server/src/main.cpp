@@ -131,6 +131,7 @@ All verification is fail-closed: any parse/verify/binding mismatch returns an er
 #include "file_versions.h"
 #include "file_versions_present.h"
 #include "file_versions_restore.h"
+#include "file_versions_read.h"
 
 //favorites
 #include "file_favorites.h"
@@ -39454,6 +39455,96 @@ srv.Get("/api/v4/files/versions/list", [&](const httplib::Request& req, httplib:
     }
 
     reply_json(res, 200, out.dump());
+});
+
+
+srv.Get("/api/v4/files/versions/read_text", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    res.set_header("Cache-Control", "no-store");
+
+    auto* vix = &file_versions_index;
+
+    std::string path_rel;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+
+    std::string version_id;
+    if (req.has_param("version_id")) version_id = req.get_param_value("version_id");
+
+    if (path_rel.empty() || version_id.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path or version_id"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm, nerr;
+    if (!pqnas::normalize_user_rel_path_strict(path_rel, &rel_norm, &nerr)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+
+    auto rr = pqnas::read_version_blob_as_text(
+        vix,
+        "user",
+        fp_hex,
+        rel_norm,
+        version_id,
+        user_dir,
+        2 * 1024 * 1024
+    );
+
+    if (!rr.ok) {
+        const int http =
+            (rr.error == "bad_request") ? 400 :
+            (rr.error == "not_found") ? 404 :
+            (rr.error == "too_large") ? 413 :
+            (rr.error == "unsupported") ? 415 : 500;
+
+        reply_json(res, http, json{
+            {"ok", false},
+            {"error", rr.error.empty() ? "server_error" : rr.error},
+            {"message", rr.message.empty() ? "failed to read version text" : rr.message},
+            {"detail", pqnas::shorten(rr.detail, 180)},
+            {"bytes", rr.bytes}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"scope_type", "user"},
+        {"scope_id", fp_hex},
+        {"path", rr.path},
+        {"version_id", rr.version_id},
+        {"created_at", rr.created_at},
+        {"bytes", rr.bytes},
+        {"sha256", rr.sha256_hex},
+        {"sha256_hex", rr.sha256_hex},
+        {"encoding", rr.encoding},
+        {"had_utf8_bom", rr.had_utf8_bom},
+        {"text", rr.text}
+    }.dump());
 });
 
 

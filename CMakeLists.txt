@@ -229,6 +229,7 @@ add_executable(pqnas_server
         server/src/runtime_paths.cpp
         server/src/file_versions.cpp
         server/src/file_versions_restore.cpp
+        server/src/file_versions_read.cpp
         server/src/gallery_meta.cpp
         server/src/image_embedded_meta.cpp
         server/src/trash_index.cpp

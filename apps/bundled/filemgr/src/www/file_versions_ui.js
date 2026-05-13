@@ -343,6 +343,26 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             setTimeout(() => { copyBtn.textContent = "Copy SHA"; }, 1000);
         });
 
+        const compareBtn = document.createElement("button");
+        compareBtn.type = "button";
+        compareBtn.className = "btn secondary";
+        compareBtn.textContent = "Compare";
+        compareBtn.disabled = !(
+            FM &&
+            FM.fileVersionCompare &&
+            typeof FM.fileVersionCompare.canCompare === "function" &&
+            FM.fileVersionCompare.canCompare(state.item)
+        );
+        compareBtn.title = compareBtn.disabled
+            ? "Compare is available for text-based files"
+            : "Compare this version with the current file";
+        compareBtn.addEventListener("click", () => {
+            if (!FM || !FM.fileVersionCompare || typeof FM.fileVersionCompare.open !== "function") return;
+            FM.fileVersionCompare.open(state.item, row);
+            close();
+        });
+
+        actionsEl.appendChild(compareBtn);
         actionsEl.appendChild(restoreBtn);
         actionsEl.appendChild(copyBtn);
 
