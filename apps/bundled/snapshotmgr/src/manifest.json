@@ -1,7 +1,7 @@
 {
   "id": "snapshotmgr",
   "name": "Snapshot Manager",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "entry": "www/index.html",
   "api_base": "/api/v4/snapshots",
   "permissions": [
