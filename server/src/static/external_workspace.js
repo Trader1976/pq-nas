@@ -139,6 +139,27 @@ let signedIn = false;
         }
     }
 
+
+    function isExternalDetachedUiEvent(e) {
+        const t = e && e.target;
+        if (!t || !t.closest) return false;
+
+        return !!t.closest([
+            ".externalComparePanel",
+            ".externalCompareRoot",
+            ".externalVersionsPanel",
+            ".externalVersionsRoot",
+            ".externalUploadConflictBackdrop",
+            ".fmUploadProgressBackdrop",
+            "#textEditModal",
+            "#propsModal",
+            "#extPickerOverlay",
+            "#itemContextMenu",
+            "#emptyContextMenu",
+            "#selectionContextMenu"
+        ].join(","));
+    }
+
     function setTopReadyBadge(text, kind) {
         if (!topReadyBadge) return;
         topReadyBadge.textContent = text || "ready";
@@ -3748,6 +3769,7 @@ resetMarqueeVisual();
     }
 
     window.addEventListener("pointerdown", (ev) => {
+        if (isExternalDetachedUiEvent(ev)) return;
         if (!signedIn) return;
         if (ev.button !== 0) return;
 
