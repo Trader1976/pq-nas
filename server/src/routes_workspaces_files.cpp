@@ -21,6 +21,7 @@
 #include <limits>
 #include "audit_fields.h"
 #include "storage_resolver.h"
+#include "workspace_access_shared.h"
 #include "file_location_index.h"
 #include "runtime_paths.h"
 #include "user_quota.h"
@@ -11733,6 +11734,139 @@ srv.Post("/api/v4/workspaces/files/versions/unflag",
     workspace_versions_flag_handler(req, res, false);
 });
 
+
+srv.Post("/api/v4/workspaces/files/versions/delete",
+         [deps](const httplib::Request& req, httplib::Response& res) {
+    res.set_header("Cache-Control", "no-store");
+
+    auto reply = [&](int code, const json& body) {
+        if (deps.reply_json) {
+            deps.reply_json(res, code, body.dump());
+            return;
+        }
+        res.status = code;
+        res.set_content(body.dump(), "application/json; charset=utf-8");
+    };
+
+    if (!require_same_origin_for_cookie_mutation_ws_deps(req, res, deps)) return;
+
+    if (!deps.users || !deps.workspaces || !deps.cookie_key ||
+        !deps.require_user_auth_users_actor || !deps.file_versions) {
+        reply(500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "workspace file route dependencies missing"}
+        });
+        return;
+    }
+
+    std::string actor_fp;
+    std::string actor_role;
+    if (!deps.require_user_auth_users_actor(
+            req, res, deps.cookie_key, deps.users, &actor_fp, &actor_role)) {
+        return;
+    }
+    (void)actor_role;
+
+    json body = json::parse(req.body, nullptr, false);
+    if (body.is_discarded() || !body.is_object()) {
+        reply(400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        });
+        return;
+    }
+
+    const std::string workspace_id = body.value("workspace_id", "");
+    const std::string path_rel = body.value("path", "");
+    const std::string version_id = body.value("version_id", "");
+
+    if (workspace_id.empty() || path_rel.empty() || version_id.empty()) {
+        reply(400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing workspace_id, path or version_id"}
+        });
+        return;
+    }
+
+    if (!deps.workspaces->load(deps.workspaces_path)) {
+        reply(500, json{
+            {"ok", false},
+            {"error", "workspaces_reload_failed"},
+            {"message", "failed to reload workspaces"}
+        });
+        return;
+    }
+
+    auto wopt = deps.workspaces->get(workspace_id);
+    if (!wopt.has_value() || wopt->status != "enabled") {
+        reply(404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "workspace not found"}
+        });
+        return;
+    }
+
+    pqnas::WorkspaceResolvedTarget target;
+    std::string terr;
+    if (!pqnas::resolve_workspace_member_target_default_pool_only(
+            deps.users_path,
+            *wopt,
+            actor_fp,
+            true,
+            path_rel,
+            &target,
+            &terr)) {
+        const bool forbidden =
+            terr.find("permission") != std::string::npos ||
+            terr.find("forbidden") != std::string::npos ||
+            terr.find("member") != std::string::npos ||
+            terr.find("write") != std::string::npos;
+
+        reply(forbidden ? 403 : 400, json{
+            {"ok", false},
+            {"error", forbidden ? "forbidden" : "bad_request"},
+            {"message", forbidden ? "editor access required" : "invalid workspace path"},
+            {"detail", terr}
+        });
+        return;
+    }
+
+    pqnas::FileVersionsDeleteResult dr;
+    std::string derr;
+    if (!deps.file_versions->delete_single_version(
+            "workspace",
+            workspace_id,
+            target.ws_root,
+            target.rel_norm,
+            version_id,
+            &dr,
+            &derr)) {
+        const bool not_found = derr.find("not found") != std::string::npos;
+        reply(not_found ? 404 : 500, json{
+            {"ok", false},
+            {"error", not_found ? "not_found" : "server_error"},
+            {"message", not_found ? "version not found" : "failed to delete version"},
+            {"detail", derr}
+        });
+        return;
+    }
+
+    reply(200, json{
+        {"ok", true},
+        {"scope_type", "workspace"},
+        {"scope_id", workspace_id},
+        {"workspace_id", workspace_id},
+        {"path", target.rel_norm},
+        {"version_id", version_id},
+        {"versions_deleted", dr.versions_deleted},
+        {"version_bytes_deleted", dr.bytes_deleted},
+        {"version_blobs_missing", dr.blobs_missing}
+    });
+});
 
 srv.Post("/api/v4/workspaces/files/restore_version",
          [&](const httplib::Request& req, httplib::Response& res) {

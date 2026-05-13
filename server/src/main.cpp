@@ -39781,6 +39781,82 @@ srv.Get("/api/v4/files/versions/summary", [&](const httplib::Request& req, httpl
         {"versions_bytes", stats.versions_bytes}
     }.dump());
 });
+srv.Post("/api/v4/files/versions/delete", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    json body = json::parse(req.body, nullptr, false);
+    if (body.is_discarded() || !body.is_object()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid json"}
+        }.dump());
+        return;
+    }
+
+    const std::string path_rel = body.value("path", "");
+    const std::string version_id = body.value("version_id", "");
+
+    if (path_rel.empty() || version_id.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path or version_id"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm, nerr;
+    if (!pqnas::normalize_user_rel_path_strict(path_rel, &rel_norm, &nerr)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"},
+            {"detail", pqnas::shorten(nerr, 180)}
+        }.dump());
+        return;
+    }
+
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+    auto* vix = &file_versions_index;
+
+    pqnas::FileVersionsDeleteResult dr;
+    std::string derr;
+    if (!vix->delete_single_version("user", fp_hex, user_dir, rel_norm, version_id, &dr, &derr)) {
+        const bool not_found = derr.find("not found") != std::string::npos;
+        reply_json(res, not_found ? 404 : 500, json{
+            {"ok", false},
+            {"error", not_found ? "not_found" : "server_error"},
+            {"message", not_found ? "version not found" : "failed to delete version"},
+            {"detail", pqnas::shorten(derr, 180)}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"scope_type", "user"},
+        {"scope_id", fp_hex},
+        {"path", rel_norm},
+        {"version_id", version_id},
+        {"versions_deleted", dr.versions_deleted},
+        {"version_bytes_deleted", dr.bytes_deleted},
+        {"version_blobs_missing", dr.blobs_missing}
+    }.dump());
+});
+
 
 srv.Post("/api/v4/files/restore_version", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;

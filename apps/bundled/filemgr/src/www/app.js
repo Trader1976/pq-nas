@@ -1254,9 +1254,21 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   async function purgeTrashItem(rec) {
     if (!rec || !rec.trash_id) return;
 
-    const ok = confirm(
-        `Delete permanently?\n\n${rec.original_rel_path || rec.trash_id}\n\nThis cannot be undone.`
-    );
+    const ok = await fmConfirmModal({
+      title: "Move to trash?",
+      subtitle: "The selected item will be moved to Trash.",
+      rows: [
+        {
+          label: "Item",
+          value: (typeof item !== "undefined" && item && item.name) ? item.name : "Selected item",
+          mono: true
+        },
+      ],
+      note: "You can restore it later from Trash until it is permanently deleted.",
+      confirmText: "Move to trash",
+      cancelText: "Cancel",
+      danger: true,
+    });
     if (!ok) return;
 
     trashBusy = true;
@@ -1300,9 +1312,21 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const active = trashItemsCache.filter((x) => x && x.restore_status === "trashed");
     if (!active.length) return;
 
-    const ok = confirm(
-        `Delete permanently ${active.length} item(s) from trash?\n\nThis cannot be undone.`
-    );
+    const ok = await fmConfirmModal({
+      title: "Move to trash?",
+      subtitle: "The selected item will be moved to Trash.",
+      rows: [
+        {
+          label: "Item",
+          value: (typeof item !== "undefined" && item && item.name) ? item.name : "Selected item",
+          mono: true
+        },
+      ],
+      note: "You can restore it later from Trash until it is permanently deleted.",
+      confirmText: "Move to trash",
+      cancelText: "Cancel",
+      danger: true,
+    });
     if (!ok) return;
 
     trashBusy = true;
@@ -2085,7 +2109,21 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       return;
     }
 
-    const ok = confirm(`Move ${paths.length} item(s) to trash?\n\nItems can be restored from Trash until permanently purged.`);
+    const ok = await fmConfirmModal({
+      title: "Move to trash?",
+      subtitle: "The selected item will be moved to Trash.",
+      rows: [
+        {
+          label: "Item",
+          value: (typeof item !== "undefined" && item && item.name) ? item.name : "Selected item",
+          mono: true
+        },
+      ],
+      note: "You can restore it later from Trash until it is permanently deleted.",
+      confirmText: "Move to trash",
+      cancelText: "Cancel",
+      danger: true,
+    });
     if (!ok) return;
 
     setBadge("warn", "moving to trash…");
@@ -3649,11 +3687,332 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     status.textContent = `Downloaded: ${filename}`;
   }
 
+
+
+  async function fmConfirmModal(opts) {
+    return new Promise((resolve) => {
+      const options = opts || {};
+
+      const modal = document.createElement("div");
+      modal.className = "modal show";
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+
+      const card = document.createElement("div");
+      card.className = "modalCard";
+      card.style.width = "min(560px, calc(100vw - 24px))";
+
+      const head = document.createElement("div");
+      head.className = "modalHead";
+
+      const headText = document.createElement("div");
+
+      const title = document.createElement("div");
+      title.className = "modalTitle";
+      title.textContent = options.title || "Confirm action";
+
+      const sub = document.createElement("div");
+      sub.className = "modalSub";
+      sub.textContent = options.subtitle || "";
+
+      headText.appendChild(title);
+      if (sub.textContent) headText.appendChild(sub);
+      head.appendChild(headText);
+
+      const body = document.createElement("div");
+      body.className = "modalBody";
+      body.style.gridTemplateColumns = "130px 1fr";
+
+      const rows = Array.isArray(options.rows) ? options.rows : [];
+      for (const row of rows) {
+        const k = document.createElement("div");
+        k.className = "k";
+        k.textContent = String(row.label || "");
+
+        const v = document.createElement("div");
+        v.className = row.mono ? "v mono" : "v";
+        v.textContent = String(row.value || "");
+
+        body.appendChild(k);
+        body.appendChild(v);
+      }
+
+      if (options.warning) {
+        const warn = document.createElement("div");
+        warn.className = "v";
+        warn.style.gridColumn = "1 / -1";
+        warn.style.padding = "10px 12px";
+        warn.style.border = "1px solid rgba(var(--warn-rgb),0.35)";
+        warn.style.borderRadius = "14px";
+        warn.style.background = "rgba(var(--warn-rgb),0.10)";
+        warn.style.color = "var(--fg)";
+        warn.style.fontWeight = "850";
+        warn.textContent = String(options.warning || "");
+        body.appendChild(warn);
+      }
+
+      if (options.note) {
+        const note = document.createElement("div");
+        note.className = "v";
+        note.style.gridColumn = "1 / -1";
+        note.style.opacity = "0.9";
+        note.textContent = String(options.note || "");
+        body.appendChild(note);
+      }
+
+      const foot = document.createElement("div");
+      foot.className = "modalFoot";
+
+      const spacer = document.createElement("div");
+      spacer.style.flex = "1 1 auto";
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "btn secondary";
+      cancelBtn.textContent = options.cancelText || "Cancel";
+
+      const okBtn = document.createElement("button");
+      okBtn.type = "button";
+      okBtn.className = "btn";
+      okBtn.textContent = options.confirmText || "OK";
+
+      if (options.danger) {
+        okBtn.style.borderColor = "rgba(var(--fail-rgb),0.45)";
+        okBtn.style.background = "rgba(var(--fail-rgb),0.14)";
+        okBtn.style.color = "var(--fg)";
+      }
+
+      foot.appendChild(spacer);
+      foot.appendChild(cancelBtn);
+      foot.appendChild(okBtn);
+
+      card.appendChild(head);
+      card.appendChild(body);
+      card.appendChild(foot);
+      modal.appendChild(card);
+      document.body.appendChild(modal);
+
+      const finish = (value) => {
+        document.removeEventListener("keydown", onKey, true);
+        modal.remove();
+        resolve(!!value);
+      };
+
+      const onKey = (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          finish(false);
+          return;
+        }
+
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.stopPropagation();
+          finish(true);
+        }
+      };
+
+      document.addEventListener("keydown", onKey, true);
+
+      modal.addEventListener("click", (e) => {
+        if (e.target === modal) finish(false);
+      });
+
+      cancelBtn.addEventListener("click", () => finish(false));
+      okBtn.addEventListener("click", () => finish(true));
+
+      setTimeout(() => {
+        if (options.danger) cancelBtn.focus();
+        else okBtn.focus();
+      }, 0);
+    });
+  }
+
+  async function fmPromptModal(opts) {
+    return new Promise((resolve) => {
+      const options = opts || {};
+
+      const modal = document.createElement("div");
+      modal.className = "modal show";
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+
+      const card = document.createElement("div");
+      card.className = "modalCard";
+      card.style.width = "min(560px, calc(100vw - 24px))";
+
+      const head = document.createElement("div");
+      head.className = "modalHead";
+
+      const headText = document.createElement("div");
+
+      const title = document.createElement("div");
+      title.className = "modalTitle";
+      title.textContent = options.title || "Enter value";
+
+      const sub = document.createElement("div");
+      sub.className = "modalSub";
+      sub.textContent = options.subtitle || "";
+
+      headText.appendChild(title);
+      if (sub.textContent) headText.appendChild(sub);
+      head.appendChild(headText);
+
+      const body = document.createElement("div");
+      body.className = "modalBody";
+      body.style.gridTemplateColumns = "1fr";
+
+      const label = document.createElement("label");
+      label.className = "k";
+      label.textContent = options.label || "Name";
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = options.value || "";
+      input.placeholder = options.placeholder || "";
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      input.style.width = "100%";
+      input.style.padding = "10px 12px";
+      input.style.borderRadius = "12px";
+      input.style.border = "1px solid var(--border2)";
+      input.style.background = "rgba(0,0,0,0.22)";
+      input.style.color = "var(--fg)";
+      input.style.font = "inherit";
+      input.style.fontFamily = "var(--mono)";
+
+      const help = document.createElement("div");
+      help.className = "v";
+      help.style.opacity = "0.78";
+      help.style.fontSize = "12px";
+      help.textContent = options.help || "";
+
+      const err = document.createElement("div");
+      err.className = "v";
+      err.style.display = "none";
+      err.style.padding = "8px 10px";
+      err.style.border = "1px solid rgba(var(--fail-rgb),0.35)";
+      err.style.borderRadius = "12px";
+      err.style.background = "rgba(var(--fail-rgb),0.10)";
+      err.style.color = "var(--fg)";
+      err.style.fontWeight = "850";
+
+      body.appendChild(label);
+      body.appendChild(input);
+      if (help.textContent) body.appendChild(help);
+      body.appendChild(err);
+
+      const foot = document.createElement("div");
+      foot.className = "modalFoot";
+
+      const spacer = document.createElement("div");
+      spacer.style.flex = "1 1 auto";
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "btn secondary";
+      cancelBtn.textContent = options.cancelText || "Cancel";
+
+      const okBtn = document.createElement("button");
+      okBtn.type = "button";
+      okBtn.className = "btn";
+      okBtn.textContent = options.confirmText || "OK";
+
+      foot.appendChild(spacer);
+      foot.appendChild(cancelBtn);
+      foot.appendChild(okBtn);
+
+      card.appendChild(head);
+      card.appendChild(body);
+      card.appendChild(foot);
+      modal.appendChild(card);
+      document.body.appendChild(modal);
+
+      const showError = (text) => {
+        err.textContent = text || "";
+        err.style.display = text ? "block" : "none";
+      };
+
+      const finish = (value) => {
+        document.removeEventListener("keydown", onKey, true);
+        modal.remove();
+        resolve(value);
+      };
+
+      const submit = () => {
+        const raw = input.value || "";
+        const value = raw.trim();
+
+        if (options.required !== false && !value) {
+          showError(options.requiredMessage || "Name is required.");
+          input.focus();
+          return;
+        }
+
+        if (typeof options.validate === "function") {
+          const msg = options.validate(value, raw);
+          if (msg) {
+            showError(msg);
+            input.focus();
+            return;
+          }
+        }
+
+        finish(value);
+      };
+
+      const onKey = (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          finish(null);
+          return;
+        }
+
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.stopPropagation();
+          submit();
+        }
+      };
+
+      document.addEventListener("keydown", onKey, true);
+
+      modal.addEventListener("click", (e) => {
+        if (e.target === modal) finish(null);
+      });
+
+      cancelBtn.addEventListener("click", () => finish(null));
+      okBtn.addEventListener("click", submit);
+
+      setTimeout(() => {
+        input.focus();
+        input.select();
+      }, 0);
+    });
+  }
+
   async function doRename(item) {
     if (!requireWritableScopeOrExplain("Rename")) return;
     const oldRel = currentRelPathFor(item);
     const oldName = String(item.name || "");
-    const newName = prompt("Rename to:", oldName);
+    const newName = await fmPromptModal({
+      title: "Rename item",
+      subtitle: "Choose a new name for this file or folder.",
+      label: "New name",
+      value: oldName,
+      help: "Use only the item name, not a full path.",
+      confirmText: "Rename",
+      cancelText: "Cancel",
+      validate(value) {
+        if (!value) return "Name is required.";
+        if (value === oldName) return "Name is unchanged.";
+        if (value.includes("/") || value.includes("\\")) return "Name cannot contain path separators.";
+        if (value === "." || value === "..") return "Invalid name.";
+        return "";
+      },
+    });
     if (!newName) return;
 
     if (newName.includes("/") || newName.includes("\\")) {
@@ -4539,11 +4898,21 @@ function describeMoveItems(items) {
     const rel = currentRelPathFor(item);
     const isDir = item.type === "dir";
 
-    const ok = confirm(
-        isDir
-            ? `Move folder to trash?\n\n${rel}\n\nThe folder and its contents will be moved to Trash.`
-            : `Move file to trash?\n\n${rel}`
-    );
+    const ok = await fmConfirmModal({
+      title: "Move to trash?",
+      subtitle: "The selected item will be moved to Trash.",
+      rows: [
+        {
+          label: "Item",
+          value: (typeof item !== "undefined" && item && item.name) ? item.name : "Selected item",
+          mono: true
+        },
+      ],
+      note: "You can restore it later from Trash until it is permanently deleted.",
+      confirmText: "Move to trash",
+      cancelText: "Cancel",
+      danger: true,
+    });
     if (!ok) return;
 
     setBadge("warn", "moving to trash…");
@@ -4589,7 +4958,21 @@ function describeMoveItems(items) {
   async function doMkdirAt(relDir) {
     if (!requireWritableScopeOrExplain("Create folder")) return;
     const baseShown = relDir ? `/${relDir}` : curPath ? `/${curPath}` : "/";
-    const name = prompt(`New folder name in ${baseShown}:`, "New Folder");
+    const name = await fmPromptModal({
+      title: "New folder",
+      subtitle: `Create a folder in ${baseShown}.`,
+      label: "Folder name",
+      value: "New Folder",
+      help: "Use only the folder name, not a full path.",
+      confirmText: "Create folder",
+      cancelText: "Cancel",
+      validate(value) {
+        if (!value) return "Folder name is required.";
+        if (value.includes("/") || value.includes("\\")) return "Folder name cannot contain path separators.";
+        if (value === "." || value === "..") return "Invalid folder name.";
+        return "";
+      },
+    });
     if (!name) return;
 
     if (name.includes("/") || name.includes("\\")) {

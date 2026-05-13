@@ -207,6 +207,148 @@
         }
     };
 
+
+    function injectTopModeButtonCss() {
+        if (document.getElementById("pgTopModeButtonCss")) return;
+
+        const style = document.createElement("style");
+        style.id = "pgTopModeButtonCss";
+        style.textContent = `
+.pgTopModeBtnActive{
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    border-color: rgba(75,145,190,0.88) !important;
+    background: linear-gradient(180deg, #9fd3ec 0%, #6aaed6 48%, #4b92bd 100%) !important;
+    background-image: linear-gradient(180deg, #9fd3ec 0%, #6aaed6 48%, #4b92bd 100%) !important;
+    background-color: #6aaed6 !important;
+    color: #03111b !important;
+    font-weight: 950 !important;
+    text-shadow: 0 1px 0 rgba(255,255,255,0.35) !important;
+    box-shadow:
+        inset 0 0 0 1px rgba(255,255,255,0.72),
+        0 0 0 2px rgba(45,120,170,0.24),
+        0 0 14px rgba(45,120,170,0.18) !important;
+}
+
+.pgTopModeBtnActive:hover{
+    background: linear-gradient(180deg, #b8dff0 0%, #78bade 48%, #5599c4 100%) !important;
+    background-image: linear-gradient(180deg, #b8dff0 0%, #78bade 48%, #5599c4 100%) !important;
+    background-color: #78bade !important;
+    color: #03111b !important;
+}
+
+.pgTopModeBtnActive:focus{
+    outline: 2px solid rgba(45,120,170,0.35);
+    outline-offset: 2px;
+}
+
+html[data-theme="bright"] .pgTopModeBtnActive,
+html[data-theme="win_classic"] .pgTopModeBtnActive,
+html[data-theme="dark"] .pgTopModeBtnActive,
+html[data-theme="cpunk_orange"] .pgTopModeBtnActive,
+html[data-theme="orange"] .pgTopModeBtnActive{
+    border-color: rgba(75,145,190,0.88) !important;
+    background: linear-gradient(180deg, #9fd3ec 0%, #6aaed6 48%, #4b92bd 100%) !important;
+    background-image: linear-gradient(180deg, #9fd3ec 0%, #6aaed6 48%, #4b92bd 100%) !important;
+    background-color: #6aaed6 !important;
+    color: #03111b !important;
+}
+`;
+        document.head.appendChild(style);
+    }
+
+    function setTopModeButtonActive(mode) {
+        injectTopModeButtonCss();
+
+        const activeBg = "linear-gradient(180deg, #9fd3ec 0%, #6aaed6 48%, #4b92bd 100%)";
+        const activeBorder = "rgba(75,145,190,0.88)";
+        const activeText = "#03111b";
+        const activeShadow =
+            "inset 0 0 0 1px rgba(255,255,255,0.72), " +
+            "0 0 0 2px rgba(45,120,170,0.24), " +
+            "0 0 14px rgba(45,120,170,0.18)";
+
+        const entries = [
+            ["grid", gridBtn],
+            ["map", mapBtn],
+            ["albums", albumsBtn],
+        ];
+
+        for (const [key, btn] of entries) {
+            if (!btn) continue;
+
+            const active = key === mode;
+            btn.classList.toggle("pgTopModeBtnActive", active);
+            btn.setAttribute("aria-pressed", active ? "true" : "false");
+            btn.title = active ? `${btn.textContent.trim()} view is active` : `Switch to ${btn.textContent.trim()} view`;
+
+            if (active) {
+                btn.style.setProperty("appearance", "none", "important");
+                btn.style.setProperty("-webkit-appearance", "none", "important");
+                btn.style.setProperty("background", activeBg, "important");
+                btn.style.setProperty("background-image", activeBg, "important");
+                btn.style.setProperty("background-color", "#6aaed6", "important");
+                btn.style.setProperty("border-color", activeBorder, "important");
+                btn.style.setProperty("color", activeText, "important");
+                btn.style.setProperty("box-shadow", activeShadow, "important");
+                btn.style.setProperty("font-weight", "950", "important");
+                btn.style.setProperty("text-shadow", "0 1px 0 rgba(255,255,255,0.35)", "important");
+            } else {
+                btn.style.removeProperty("appearance");
+                btn.style.removeProperty("-webkit-appearance");
+                btn.style.removeProperty("background");
+                btn.style.removeProperty("background-image");
+                btn.style.removeProperty("background-color");
+                btn.style.removeProperty("border-color");
+                btn.style.removeProperty("color");
+                btn.style.removeProperty("box-shadow");
+                btn.style.removeProperty("font-weight");
+                btn.style.removeProperty("text-shadow");
+            }
+        }
+    }
+
+    function syncTopModeButtonActive() {
+        let mode = String(state.viewMode || "grid");
+
+        if (albumsWrap && albumsWrap.style.display !== "none") {
+            mode = "albums";
+        } else if (mapWrap && mapWrap.style.display !== "none") {
+            mode = "map";
+        } else {
+            mode = "grid";
+        }
+
+        setTopModeButtonActive(mode);
+    }
+
+    function wireTopModeButtonActive() {
+        injectTopModeButtonCss();
+
+        if (gridBtn) {
+            gridBtn.addEventListener("click", () => {
+                window.setTimeout(() => setTopModeButtonActive("grid"), 0);
+            });
+        }
+
+        if (mapBtn) {
+            mapBtn.addEventListener("click", () => {
+                window.setTimeout(() => setTopModeButtonActive("map"), 0);
+            });
+        }
+
+        if (albumsBtn) {
+            albumsBtn.addEventListener("click", () => {
+                window.setTimeout(() => setTopModeButtonActive("albums"), 0);
+            });
+        }
+
+        setTopModeButtonActive(state.viewMode || "grid");
+
+        window.setTimeout(syncTopModeButtonActive, 0);
+        window.setTimeout(syncTopModeButtonActive, 250);
+    }
+
     const dragState = {
         active: false,
         startX: 0,
@@ -712,20 +854,320 @@
         return d;
     }
 
+
+    async function pgPromptModal(opts) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+
+            const modal = document.createElement("div");
+            modal.className = "modal show";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "modalCard";
+            card.style.width = "min(560px, calc(100vw - 24px))";
+
+            const head = document.createElement("div");
+            head.className = "modalHead";
+
+            const headText = document.createElement("div");
+
+            const title = document.createElement("div");
+            title.className = "modalTitle";
+            title.textContent = options.title || "Enter value";
+
+            const sub = document.createElement("div");
+            sub.className = "modalSub";
+            sub.textContent = options.subtitle || "";
+
+            headText.appendChild(title);
+            if (sub.textContent) headText.appendChild(sub);
+            head.appendChild(headText);
+
+            const body = document.createElement("div");
+            body.className = "modalBody";
+            body.style.gridTemplateColumns = "1fr";
+
+            const label = document.createElement("label");
+            label.className = "k";
+            label.textContent = options.label || "Name";
+
+            const input = document.createElement("input");
+            input.type = "text";
+            input.value = options.value || "";
+            input.placeholder = options.placeholder || "";
+            input.autocomplete = "off";
+            input.spellcheck = false;
+            input.style.width = "100%";
+            input.style.padding = "10px 12px";
+            input.style.borderRadius = "12px";
+            input.style.border = "1px solid var(--border2)";
+            input.style.background = "rgba(0,0,0,0.22)";
+            input.style.color = "var(--fg)";
+            input.style.font = "inherit";
+            input.style.fontFamily = "var(--mono)";
+
+            const help = document.createElement("div");
+            help.className = "v";
+            help.style.opacity = "0.78";
+            help.style.fontSize = "12px";
+            help.textContent = options.help || "";
+
+            const err = document.createElement("div");
+            err.className = "v";
+            err.style.display = "none";
+            err.style.padding = "8px 10px";
+            err.style.border = "1px solid rgba(var(--fail-rgb),0.35)";
+            err.style.borderRadius = "12px";
+            err.style.background = "rgba(var(--fail-rgb),0.10)";
+            err.style.color = "var(--fg)";
+            err.style.fontWeight = "850";
+
+            body.appendChild(label);
+            body.appendChild(input);
+            if (help.textContent) body.appendChild(help);
+            body.appendChild(err);
+
+            const foot = document.createElement("div");
+            foot.className = "modalFoot";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || "Cancel";
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = options.confirmText || "OK";
+
+            foot.appendChild(spacer);
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const showError = (text) => {
+                err.textContent = text || "";
+                err.style.display = text ? "block" : "none";
+            };
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(value);
+            };
+
+            const submit = () => {
+                const raw = input.value || "";
+                const value = raw.trim();
+
+                if (options.required !== false && !value) {
+                    showError(options.requiredMessage || "Name is required.");
+                    input.focus();
+                    return;
+                }
+
+                if (typeof options.validate === "function") {
+                    const msg = options.validate(value, raw);
+                    if (msg) {
+                        showError(msg);
+                        input.focus();
+                        return;
+                    }
+                }
+
+                finish(value);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(null);
+                    return;
+                }
+
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    submit();
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish(null);
+            });
+
+            cancelBtn.addEventListener("click", () => finish(null));
+            okBtn.addEventListener("click", submit);
+
+            window.setTimeout(() => {
+                input.focus();
+                input.select();
+            }, 0);
+        });
+    }
+
+    async function pgConfirmModal(opts) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+
+            const modal = document.createElement("div");
+            modal.className = "modal show";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "modalCard";
+            card.style.width = "min(560px, calc(100vw - 24px))";
+
+            const head = document.createElement("div");
+            head.className = "modalHead";
+
+            const headText = document.createElement("div");
+
+            const title = document.createElement("div");
+            title.className = "modalTitle";
+            title.textContent = options.title || "Confirm action";
+
+            const sub = document.createElement("div");
+            sub.className = "modalSub";
+            sub.textContent = options.subtitle || "";
+
+            headText.appendChild(title);
+            if (sub.textContent) headText.appendChild(sub);
+            head.appendChild(headText);
+
+            const body = document.createElement("div");
+            body.className = "modalBody";
+            body.style.gridTemplateColumns = "130px 1fr";
+
+            const rows = Array.isArray(options.rows) ? options.rows : [];
+            for (const row of rows) {
+                const k = document.createElement("div");
+                k.className = "k";
+                k.textContent = String(row.label || "");
+
+                const v = document.createElement("div");
+                v.className = row.mono ? "v mono" : "v";
+                v.textContent = String(row.value || "");
+
+                body.appendChild(k);
+                body.appendChild(v);
+            }
+
+            if (options.note) {
+                const note = document.createElement("div");
+                note.className = "v";
+                note.style.gridColumn = "1 / -1";
+                note.style.opacity = "0.9";
+                note.textContent = String(options.note || "");
+                body.appendChild(note);
+            }
+
+            const foot = document.createElement("div");
+            foot.className = "modalFoot";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || "Cancel";
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = options.confirmText || "OK";
+
+            if (options.danger) {
+                okBtn.style.borderColor = "rgba(var(--fail-rgb),0.45)";
+                okBtn.style.background = "rgba(var(--fail-rgb),0.14)";
+                okBtn.style.color = "var(--fg)";
+            }
+
+            foot.appendChild(spacer);
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(!!value);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(false);
+                    return;
+                }
+
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(true);
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish(false);
+            });
+
+            cancelBtn.addEventListener("click", () => finish(false));
+            okBtn.addEventListener("click", () => finish(true));
+
+            window.setTimeout(() => {
+                if (options.danger) cancelBtn.focus();
+                else okBtn.focus();
+            }, 0);
+        });
+    }
+
     async function renameImage(item) {
         if (!item || item.type !== "file") return;
 
         const oldRel = currentRelPathFor(item);
         const oldName = String(item.name || "");
-        const newName = prompt("Rename image to:", oldName);
+        const newName = await pgPromptModal({
+            title: "Rename image",
+            subtitle: "Choose a new name for this image.",
+            label: "New name",
+            value: oldName,
+            help: "Use only the file name, not a full path.",
+            confirmText: "Rename",
+            cancelText: "Cancel",
+            validate(value) {
+                if (!value) return "Name is required.";
+                if (value === oldName) return "Name is unchanged.";
+                if (value.includes("/") || value.includes("\\")) return "Name cannot contain path separators.";
+                if (value === "." || value === "..") return "Invalid name.";
+                return "";
+            },
+        });
 
-        if (!newName) return;
-        if (newName === oldName) return;
-
-        if (newName.includes("/") || newName.includes("\\")) {
-            alert("Name cannot contain '/' or '\\'.");
-            return;
-        }
+        if (newName === null) return;
 
         const base = parentPath(oldRel);
         const newRel = base ? `${base}/${newName}` : newName;
@@ -774,7 +1216,17 @@
         if (!item || item.type !== "file") return;
 
         const rel = currentRelPathFor(item);
-        const ok = confirm(`Move image to trash?\n\n${rel}\n\nYou can restore it later from Trash.`);
+        const ok = await pgConfirmModal({
+            title: "Move image to trash?",
+            subtitle: "The selected image will be moved to Trash.",
+            rows: [
+                { label: "Image", value: rel, mono: true },
+            ],
+            note: "You can restore it later from Trash until it is permanently deleted.",
+            confirmText: "Move to trash",
+            cancelText: "Cancel",
+            danger: true,
+        });
         if (!ok) return;
 
         setBadge("warn", "working…");
@@ -821,15 +1273,24 @@
 
         const oldRel = currentRelPathFor(item);
         const oldName = String(item.name || "");
-        const newName = prompt("Rename folder to:", oldName);
+        const newName = await pgPromptModal({
+            title: "Rename folder",
+            subtitle: "Choose a new name for this folder.",
+            label: "New name",
+            value: oldName,
+            help: "Use only the folder name, not a full path.",
+            confirmText: "Rename",
+            cancelText: "Cancel",
+            validate(value) {
+                if (!value) return "Name is required.";
+                if (value === oldName) return "Name is unchanged.";
+                if (value.includes("/") || value.includes("\\")) return "Name cannot contain path separators.";
+                if (value === "." || value === "..") return "Invalid name.";
+                return "";
+            },
+        });
 
-        if (!newName) return;
-        if (newName === oldName) return;
-
-        if (newName.includes("/") || newName.includes("\\")) {
-            alert("Name cannot contain '/' or '\\'.");
-            return;
-        }
+        if (newName === null) return;
 
         const base = parentPath(oldRel);
         const newRel = base ? `${base}/${newName}` : newName;
@@ -1237,13 +1698,23 @@
     }
     async function createFolder(basePath = state.curPath) {
         const shownBase = basePath ? `/${basePath}` : "/";
-        const name = prompt(`New folder name in ${shownBase}:`, "New Folder");
-        if (!name) return;
+        const name = await pgPromptModal({
+            title: "New folder",
+            subtitle: `Create a folder in ${shownBase}.`,
+            label: "Folder name",
+            value: "New Folder",
+            help: "Use only the folder name, not a full path.",
+            confirmText: "Create folder",
+            cancelText: "Cancel",
+            validate(value) {
+                if (!value) return "Folder name is required.";
+                if (value.includes("/") || value.includes("\\")) return "Folder name cannot contain path separators.";
+                if (value === "." || value === "..") return "Invalid folder name.";
+                return "";
+            },
+        });
 
-        if (name.includes("/") || name.includes("\\")) {
-            alert("Folder name cannot contain '/' or '\\'.");
-            return;
-        }
+        if (name === null) return;
 
         const rel = basePath ? `${basePath}/${name}` : name;
 
@@ -4632,6 +5103,7 @@
     initAppVersion();
     loadRatingFilterPref();
     loadThumbSizePref();
+    wireTopModeButtonActive();
     renderBreadcrumb();
     load();
 })();

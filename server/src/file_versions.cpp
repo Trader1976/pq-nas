@@ -1021,6 +1021,188 @@ std::vector<FileVersionRec> FileVersionsIndex::list_versions_for_path(const std:
     return out;
 }
 
+bool FileVersionsIndex::delete_single_version(const std::string& scope_type,
+                                              const std::string& scope_id,
+                                              const std::filesystem::path& scope_root,
+                                              const std::string& logical_rel_path,
+                                              const std::string& version_id,
+                                              FileVersionsDeleteResult* out,
+                                              std::string* err) {
+    if (err) err->clear();
+    if (out) *out = FileVersionsDeleteResult{};
+
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
+
+    if (!is_valid_scope_type_local(scope_type)) {
+        if (err) *err = "invalid scope_type";
+        return false;
+    }
+
+    if (scope_id.empty()) {
+        if (err) *err = "empty scope_id";
+        return false;
+    }
+
+    if (scope_root.empty()) {
+        if (err) *err = "empty scope_root";
+        return false;
+    }
+
+    if (logical_rel_path.empty()) {
+        if (err) *err = "empty logical_rel_path";
+        return false;
+    }
+
+    if (version_id.empty()) {
+        if (err) *err = "empty version_id";
+        return false;
+    }
+
+    std::string get_err;
+    auto row = get_by_version_id(version_id, &get_err);
+    if (!row.has_value()) {
+        if (err) *err = get_err.empty() ? "version not found" : get_err;
+        return false;
+    }
+
+    if (row->scope_type != scope_type ||
+        row->scope_id != scope_id ||
+        row->logical_rel_path != logical_rel_path) {
+        if (err) *err = "version not found";
+        return false;
+    }
+
+    auto path_has_prefix = [](const std::filesystem::path& root,
+                              const std::filesystem::path& child) -> bool {
+        const auto rnorm = root.lexically_normal();
+        const auto cnorm = child.lexically_normal();
+
+        auto ri = rnorm.begin();
+        auto ci = cnorm.begin();
+
+        for (; ri != rnorm.end(); ++ri, ++ci) {
+            if (ci == cnorm.end()) return false;
+            if (*ri != *ci) return false;
+        }
+
+        return true;
+    };
+
+    const auto scope_root_norm = scope_root.lexically_normal();
+    const auto blob_root = (scope_root_norm / ".pqnas" / "versions" / "blobs").lexically_normal();
+    const auto blob_abs =
+        FileVersionsIndex::version_blob_abs_path(scope_root_norm, row->blob_rel_path).lexically_normal();
+
+    if (!path_has_prefix(blob_root, blob_abs)) {
+        if (err) *err = "version blob path escapes versions root";
+        return false;
+    }
+
+    bool blob_exists = false;
+    std::error_code ec;
+    const auto st = std::filesystem::symlink_status(blob_abs, ec);
+    if (!ec && std::filesystem::exists(st)) {
+        blob_exists = true;
+
+        if (std::filesystem::is_symlink(st) || !std::filesystem::is_regular_file(st)) {
+            if (err) *err = "version blob is not a regular file";
+            return false;
+        }
+    }
+
+    if (!exec_sql(db_, "BEGIN IMMEDIATE TRANSACTION;", err)) {
+        return false;
+    }
+
+    auto rollback = [&]() {
+        std::string ignored;
+        (void)exec_sql(db_, "ROLLBACK;", &ignored);
+    };
+
+    static const char* kDeleteFlags =
+        "DELETE FROM file_version_flags "
+        "WHERE version_id = ?1 AND scope_type = ?2 AND scope_id = ?3 AND logical_rel_path = ?4";
+
+    sqlite3_stmt* flags_stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, kDeleteFlags, -1, &flags_stmt, nullptr) != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        rollback();
+        return false;
+    }
+
+    sqlite3_bind_text(flags_stmt, 1, version_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(flags_stmt, 2, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(flags_stmt, 3, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(flags_stmt, 4, logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(flags_stmt);
+    sqlite3_finalize(flags_stmt);
+
+    if (rc != SQLITE_DONE) {
+        if (err) *err = sqlite3_errmsg(db_);
+        rollback();
+        return false;
+    }
+
+    static const char* kDeleteVersion =
+        "DELETE FROM file_versions "
+        "WHERE version_id = ?1 AND scope_type = ?2 AND scope_id = ?3 AND logical_rel_path = ?4";
+
+    sqlite3_stmt* version_stmt = nullptr;
+    if (sqlite3_prepare_v2(db_, kDeleteVersion, -1, &version_stmt, nullptr) != SQLITE_OK) {
+        if (err) *err = sqlite3_errmsg(db_);
+        rollback();
+        return false;
+    }
+
+    sqlite3_bind_text(version_stmt, 1, version_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(version_stmt, 2, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(version_stmt, 3, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(version_stmt, 4, logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+
+    rc = sqlite3_step(version_stmt);
+    sqlite3_finalize(version_stmt);
+
+    if (rc != SQLITE_DONE) {
+        if (err) *err = sqlite3_errmsg(db_);
+        rollback();
+        return false;
+    }
+
+    const int changed = sqlite3_changes(db_);
+    if (changed != 1) {
+        if (err) *err = "version not found";
+        rollback();
+        return false;
+    }
+
+    if (!exec_sql(db_, "COMMIT;", err)) {
+        rollback();
+        return false;
+    }
+
+    if (blob_exists) {
+        ec.clear();
+        std::filesystem::remove(blob_abs, ec);
+        if (ec) {
+            if (err) *err = "version metadata deleted but blob removal failed: " + ec.message();
+            return false;
+        }
+    }
+
+    if (out) {
+        out->versions_deleted = 1;
+        out->bytes_deleted = row->bytes;
+        out->blobs_missing = blob_exists ? 0 : 1;
+    }
+
+    return true;
+}
+
+
 std::filesystem::path FileVersionsIndex::version_blob_abs_path(const std::filesystem::path& scope_root,
                                                                const std::string& blob_rel_path) {
     return scope_root / std::filesystem::path(blob_rel_path);

@@ -142,6 +142,15 @@ public:
                                         FileVersionsDeleteResult* out,
                                         std::string* err);
 
+    bool delete_single_version(const std::string& scope_type,
+                               const std::string& scope_id,
+                               const std::filesystem::path& scope_root,
+                               const std::string& logical_rel_path,
+                               const std::string& version_id,
+                               FileVersionsDeleteResult* out,
+                               std::string* err);
+
+
     static std::filesystem::path version_blob_abs_path(const std::filesystem::path& scope_root,
                                                        const std::string& blob_rel_path);
 

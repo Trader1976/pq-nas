@@ -208,13 +208,109 @@
         }
     }
 
+
+    function openAlbumConfirmModal(opts = {}) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+            const backdrop = document.createElement("div");
+            backdrop.className = "pgAlbumPickerBackdrop";
+
+            const dangerStyle = options.danger
+                ? ' style="border-color:rgba(var(--fail-rgb),0.45);background:rgba(var(--fail-rgb),0.14);"'
+                : "";
+
+            backdrop.innerHTML = `
+            <div class="pgAlbumPickerCard" role="dialog" aria-modal="true">
+                <div class="pgAlbumPickerHead">
+                    <div>
+                        <div class="pgAlbumPickerTitle">${escapeHtml(options.title || "Confirm action")}</div>
+                        <div class="pgAlbumPickerSub">${escapeHtml(options.subtitle || "")}</div>
+                    </div>
+                    <button class="btn secondary" type="button" data-pg-confirm-close>Close</button>
+                </div>
+
+                <div class="pgAlbumPickerBody">
+                    <div class="formGrid">
+                        ${(Array.isArray(options.rows) ? options.rows : []).map((row) => `
+                            <div class="label">${escapeHtml(row.label || "")}</div>
+                            <div class="${row.mono ? "mono" : ""}">${escapeHtml(row.value || "")}</div>
+                        `).join("")}
+                        ${options.note ? `
+                            <div class="label">Note</div>
+                            <div>${escapeHtml(options.note)}</div>
+                        ` : ""}
+                    </div>
+                </div>
+
+                <div class="pgAlbumPickerFoot">
+                    <button class="btn secondary" type="button" data-pg-confirm-cancel>${escapeHtml(options.cancelText || "Cancel")}</button>
+                    <button class="btn" type="button" data-pg-confirm-ok${dangerStyle}>${escapeHtml(options.confirmText || "OK")}</button>
+                </div>
+            </div>
+        `;
+
+            document.body.appendChild(backdrop);
+
+            function close(value) {
+                try {
+                    backdrop.remove();
+                } catch (_) {}
+                resolve(!!value);
+            }
+
+            backdrop.addEventListener("click", (ev) => {
+                const t = ev.target;
+
+                if (
+                    t === backdrop ||
+                    t.closest("[data-pg-confirm-close]") ||
+                    t.closest("[data-pg-confirm-cancel]")
+                ) {
+                    close(false);
+                    return;
+                }
+
+                if (t.closest("[data-pg-confirm-ok]")) {
+                    close(true);
+                }
+            });
+
+            backdrop.addEventListener("keydown", (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    close(false);
+                    return;
+                }
+
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    close(true);
+                }
+            });
+
+            window.setTimeout(() => {
+                const btn = backdrop.querySelector(options.danger ? "[data-pg-confirm-cancel]" : "[data-pg-confirm-ok]");
+                btn?.focus?.();
+            }, 0);
+        });
+    }
+
     async function deleteAlbumFromUi(host, album) {
         if (!album || !album.album_id) return;
 
         const name = album.name || album.album_id;
-        if (!confirm(`Delete album?\n\n${name}\n\nThis removes the album only. Photos stay in your gallery.`)) {
-            return;
-        }
+        const ok = await openAlbumConfirmModal({
+            title: "Delete album?",
+            subtitle: "This removes the album collection only.",
+            rows: [
+                { label: "Album", value: name, mono: true },
+            ],
+            note: "Photos stay in your gallery. Only the album container is deleted.",
+            confirmText: "Delete album",
+            cancelText: "Cancel",
+            danger: true,
+        });
+        if (!ok) return;
 
         try {
             setBadge("warn", "working…");
@@ -304,7 +400,7 @@
 
         const shares = window.PQNAS_PHOTOGALLERY?.shares;
         if (!shares || typeof shares.openForRelPath !== "function") {
-            alert("Share module is not loaded.");
+            setStatus("Share module is not loaded.");
             return;
         }
 
@@ -317,7 +413,18 @@
     async function removeAlbumItemFromUi(host, album, rel) {
         if (!album || !album.album_id || !rel) return;
 
-        if (!confirm(`Remove from album?\n\n${rel}`)) return;
+        const ok = await openAlbumConfirmModal({
+            title: "Remove from album?",
+            subtitle: "This removes the photo from this album only.",
+            rows: [
+                { label: "Photo", value: rel, mono: true },
+            ],
+            note: "The original photo stays in your gallery.",
+            confirmText: "Remove from album",
+            cancelText: "Cancel",
+            danger: true,
+        });
+        if (!ok) return;
 
         try {
             setBadge("warn", "working…");
@@ -881,7 +988,7 @@
     async function addSelected(paths) {
         paths = Array.isArray(paths) ? paths.filter(Boolean) : [];
         if (!paths.length) {
-            alert("Select one or more photos first.");
+            setStatus("Select one or more photos first.");
             return;
         }
 

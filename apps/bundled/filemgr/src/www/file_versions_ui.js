@@ -12,6 +12,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         versions: [],
         loading: false,
         restoringVersionId: "",
+        deletingVersionId: "",
         closeAfterRestore: false,
     };
 
@@ -117,6 +118,13 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             ? `/api/v4/workspaces/files/restore_version`
             : `/api/v4/files/restore_version`;
     }
+
+    function buildDeleteUrl() {
+        return isWorkspaceScope()
+            ? `/api/v4/workspaces/files/versions/delete`
+            : `/api/v4/files/versions/delete`;
+    }
+
 
     function buildFlagUrl(flaggedByMe) {
         if (isWorkspaceScope()) {
@@ -298,9 +306,148 @@ html[data-theme="orange"] .pqfvFlagSummary{
         document.addEventListener("keydown", (e) => {
             if (!rootEl || !rootEl.classList.contains("show")) return;
             if (e.key === "Escape") {
+                if (document.querySelector(".pqfvConfirmModal.show")) return;
                 e.preventDefault();
                 close();
             }
+        });
+    }
+
+    function confirmVersionAction(opts) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+            const modal = document.createElement("div");
+            modal.className = "modal show pqfvConfirmModal";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "modalCard";
+            card.style.width = "min(560px, calc(100vw - 24px))";
+
+            const head = document.createElement("div");
+            head.className = "modalHead";
+
+            const headText = document.createElement("div");
+
+            const title = document.createElement("div");
+            title.className = "modalTitle";
+            title.textContent = options.title || "Confirm action";
+
+            const sub = document.createElement("div");
+            sub.className = "modalSub";
+            sub.textContent = options.subtitle || "";
+
+            headText.appendChild(title);
+            if (sub.textContent) headText.appendChild(sub);
+            head.appendChild(headText);
+
+            const body = document.createElement("div");
+            body.className = "modalBody";
+            body.style.gridTemplateColumns = "130px 1fr";
+
+            const rows = Array.isArray(options.rows) ? options.rows : [];
+            for (const row of rows) {
+                const k = document.createElement("div");
+                k.className = "k";
+                k.textContent = String(row.label || "");
+
+                const v = document.createElement("div");
+                v.className = row.mono ? "v mono" : "v";
+                v.textContent = String(row.value || "");
+
+                body.appendChild(k);
+                body.appendChild(v);
+            }
+
+            if (options.warning) {
+                const warn = document.createElement("div");
+                warn.className = "v";
+                warn.style.gridColumn = "1 / -1";
+                warn.style.padding = "10px 12px";
+                warn.style.border = "1px solid rgba(var(--warn-rgb),0.35)";
+                warn.style.borderRadius = "14px";
+                warn.style.background = "rgba(var(--warn-rgb),0.10)";
+                warn.style.color = "var(--fg)";
+                warn.style.fontWeight = "850";
+                warn.textContent = String(options.warning || "");
+                body.appendChild(warn);
+            }
+
+            if (options.note) {
+                const note = document.createElement("div");
+                note.className = "v";
+                note.style.gridColumn = "1 / -1";
+                note.style.opacity = "0.9";
+                note.textContent = String(options.note || "");
+                body.appendChild(note);
+            }
+
+            const foot = document.createElement("div");
+            foot.className = "modalFoot";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || "Cancel";
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = options.confirmText || "OK";
+
+            if (options.danger) {
+                okBtn.style.borderColor = "rgba(var(--fail-rgb),0.45)";
+                okBtn.style.background = "rgba(var(--fail-rgb),0.14)";
+                okBtn.style.color = "var(--fg)";
+            }
+
+            foot.appendChild(spacer);
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(!!value);
+            };
+
+            const onKey = (e) => {
+                if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    finish(false);
+                    return;
+                }
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    finish(true);
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+
+            modal.addEventListener("click", (e) => {
+                if (e.target === modal) finish(false);
+            });
+
+            cancelBtn.addEventListener("click", () => finish(false));
+            okBtn.addEventListener("click", () => finish(true));
+
+            setTimeout(() => {
+                if (options.danger) cancelBtn.focus();
+                else okBtn.focus();
+            }, 0);
         });
     }
 
@@ -310,11 +457,35 @@ html[data-theme="orange"] .pqfvFlagSummary{
         rootEl.setAttribute("aria-hidden", "false");
     }
 
+    function buildDeleteBody(relPath, versionId) {
+
+        const body = {
+
+            path: relPath,
+
+            version_id: versionId,
+
+        };
+
+
+        if (isWorkspaceScope()) {
+
+            body.workspace_id = getWorkspaceId();
+
+        }
+
+
+        return body;
+
+    }
+
+
     function close() {
         if (!rootEl) return;
         rootEl.classList.remove("show");
         rootEl.setAttribute("aria-hidden", "true");
         state.restoringVersionId = "";
+        state.deletingVersionId = "";
     }
 
     function setModalStatus(text, kind = "") {
@@ -485,9 +656,33 @@ html[data-theme="orange"] .pqfvFlagSummary{
             });
         });
 
+        const deleteBtn = document.createElement("button");
+
+        deleteBtn.type = "button";
+
+        deleteBtn.className = "btn secondary";
+
+        deleteBtn.textContent = state.deletingVersionId === row.version_id ? "Deleting…" : "Delete";
+
+        deleteBtn.title = "Delete this preserved version permanently";
+
+        deleteBtn.disabled = !!state.restoringVersionId || !!state.deletingVersionId;
+
+        deleteBtn.addEventListener("click", () => {
+
+            deleteVersion(row).catch((e) => {
+
+                setModalStatus(String(e && e.message ? e.message : e), "err");
+
+            });
+
+        });
+
+
         actionsEl.appendChild(compareBtn);
         actionsEl.appendChild(restoreBtn);
         actionsEl.appendChild(downloadBtn);
+        actionsEl.appendChild(deleteBtn);
         actionsEl.appendChild(flagBtn);
         actionsEl.appendChild(copyBtn);
 
@@ -564,14 +759,115 @@ html[data-theme="orange"] .pqfvFlagSummary{
         setModalStatus(wasFlagged ? "Flag removed." : "Version flagged.", "ok");
     }
 
-    async function restoreVersion(row) {
+    async function deleteVersion(row) {
+
+        if (!row || !row.version_id) return;
+
+
         const label = kindLabel(row);
-        const ok = window.confirm(
-            `Restore this version?\n\n` +
-            `Path: ${state.relPath}\n` +
-            `Kind: ${label}\n` +
-            `Created: ${row.created_at || ""}`
-        );
+
+        const flagCount = Number(row.flag_count || 0);        const ok = await confirmVersionAction({
+            title: "Delete preserved version?",
+            subtitle: "This removes only this saved version from history.",
+            rows: [
+                { label: "Path", value: state.relPath, mono: true },
+                { label: "Kind", value: label },
+                { label: "Created", value: row.created_at || "" },
+                { label: "Size", value: fmtSize(row.bytes || 0) },
+            ],
+            warning: flagCount > 0
+                ? `This version is flagged by ${flagCount} user(s). Delete anyway?`
+                : "",
+            note: "This cannot be undone.",
+            confirmText: "Delete version",
+            cancelText: "Keep version",
+            danger: true,
+        });
+        if (!ok) return;
+
+
+        state.deletingVersionId = row.version_id;
+
+        renderVersions();
+
+        setModalStatus("Deleting version…", "warn");
+
+        setGlobalStatus(`Deleting version: ${state.relPath}`, "warn");
+
+
+        try {
+
+            const r = await fetch(buildDeleteUrl(), {
+
+                method: "POST",
+
+                credentials: "include",
+
+                cache: "no-store",
+
+                headers: {
+
+                    "Content-Type": "application/json",
+
+                    "Accept": "application/json",
+
+                },
+
+                body: JSON.stringify(buildDeleteBody(state.relPath, row.version_id)),
+
+            });
+
+
+            const j = await r.json().catch(() => null);
+
+            if (!r.ok || !j || !j.ok) {
+
+                const msg = j && (j.message || j.error)
+
+                    ? `${j.error || ""} ${j.message || ""}`.trim()
+
+                    : `HTTP ${r.status}`;
+
+                throw new Error(msg || "delete failed");
+
+            }
+
+
+            state.deletingVersionId = "";
+
+            await loadVersions();
+
+
+            const freed = fmtSize(j.version_bytes_deleted || j.bytes_deleted || row.bytes || 0);
+
+            setModalStatus(`Version deleted. Freed ${freed}.`, "ok");
+
+            setGlobalStatus(`Deleted version: ${state.relPath}`, "ok");
+
+        } finally {
+
+            state.deletingVersionId = "";
+
+        }
+
+    }
+
+
+    async function restoreVersion(row) {
+        const label = kindLabel(row);        const ok = await confirmVersionAction({
+            title: "Restore this version?",
+            subtitle: "The current file will be replaced by the selected version.",
+            rows: [
+                { label: "Path", value: state.relPath, mono: true },
+                { label: "Kind", value: label },
+                { label: "Created", value: row.created_at || "" },
+                { label: "Size", value: fmtSize(row.bytes || 0) },
+            ],
+            note: "A preserved copy of the current file may be created before restore, depending on server versioning rules.",
+            confirmText: "Restore version",
+            cancelText: "Cancel",
+            danger: false,
+        });
         if (!ok) return;
 
         const successMsg = "Version restored. Current file replaced successfully.";
@@ -613,6 +909,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
             }
         } finally {
             state.restoringVersionId = "";
+            state.deletingVersionId = "";
         }
 
         await loadVersions();
@@ -634,6 +931,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
             state.relPath = getCurrentRelPathFor(item);
             state.versions = [];
             state.restoringVersionId = "";
+            state.deletingVersionId = "";
 
             titleEl.textContent = "File versions";
             pathEl.textContent = "/" + state.relPath;
