@@ -24,8 +24,10 @@
   }
 
   const state = {
+    allItems: [],
     items: [],
     q: "",
+    collection: "",
     viewMode: loadViewMode(),
     selectedIndex: 0
   };
@@ -701,6 +703,7 @@
     }
 
     state.q = "";
+    state.selectedIndex = 0;
     const search = el("searchInput");
     if (search) search.value = "";
 
@@ -746,9 +749,13 @@
     const count = Array.isArray(state.items) ? state.items.length : 0;
     const q = String(state.q || "").trim();
 
-    if (q) {
+    const collection = String(state.collection || "").trim();
+
+    if (q || collection) {
       out.textContent = `${count} ${pluralLocal(count, "result", "results")}`;
-      out.title = `${count} ${pluralLocal(count, "result", "results")} for “${q}”`;
+      out.title = `${count} ${pluralLocal(count, "result", "results")}` +
+        (collection ? ` in ${collection}` : "") +
+        (q ? ` for “${q}”` : "");
       return;
     }
 
@@ -782,11 +789,107 @@
     return parts.join(" • ");
   }
 
-  async function loadItems() {
-    const q = state.q ? `?q=${encodeURIComponent(state.q)}` : "";
-    const j = await api(`/items${q}`);
-    state.items = Array.isArray(j.items) ? j.items : [];
+
+  function collectionLabel(item) {
+    const value = String(item?.collection || "").trim();
+    return value || "No collection";
+  }
+
+  function itemMatchesQuery(item, query) {
+    const q = String(query || "").trim().toLowerCase();
+    if (!q) return true;
+
+    const haystack = [
+      item.title,
+      item.url,
+      item.description,
+      item.notes,
+      item.tags_text,
+      item.collection,
+      item.site_name
+    ].map((v) => String(v || "").toLowerCase()).join(" ");
+
+    return haystack.includes(q);
+  }
+
+  function applyCollectionAndSearchFilters() {
+    const selectedCollection = String(state.collection || "").trim();
+
+    state.items = (state.allItems || []).filter((item) => {
+      if (selectedCollection && collectionLabel(item) !== selectedCollection) return false;
+      return itemMatchesQuery(item, state.q);
+    });
+
     clampSelectedIndex();
+  }
+
+  function collectionStats() {
+    const stats = new Map();
+
+    for (const item of state.allItems || []) {
+      const label = collectionLabel(item);
+      stats.set(label, (stats.get(label) || 0) + 1);
+    }
+
+    return Array.from(stats.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => {
+        if (a.name === "No collection") return 1;
+        if (b.name === "No collection") return -1;
+        return a.name.localeCompare(b.name);
+      });
+  }
+
+  function renderCollections() {
+    const root = el("collectionsList");
+    if (!root) return;
+
+    const total = (state.allItems || []).length;
+    const stats = collectionStats();
+
+    root.innerHTML = "";
+
+    const makeButton = (label, count, collectionValue) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "collectionBtn";
+      btn.classList.toggle("active", String(state.collection || "") === String(collectionValue || ""));
+      btn.title = label;
+
+      const name = document.createElement("span");
+      name.className = "collectionName";
+      name.textContent = label;
+
+      const badge = document.createElement("span");
+      badge.className = "collectionCount";
+      badge.textContent = String(count);
+
+      btn.appendChild(name);
+      btn.appendChild(badge);
+
+      btn.addEventListener("click", () => {
+        state.collection = String(collectionValue || "");
+        state.selectedIndex = 0;
+        applyCollectionAndSearchFilters();
+        renderCollections();
+        render();
+      });
+
+      root.appendChild(btn);
+    };
+
+    makeButton("All links", total, "");
+
+    for (const row of stats) {
+      makeButton(row.name, row.count, row.name);
+    }
+  }
+
+  async function loadItems() {
+    const j = await api("/items?limit=500");
+    state.allItems = Array.isArray(j.items) ? j.items : [];
+    applyCollectionAndSearchFilters();
+    renderCollections();
     render();
   }
 
@@ -1685,10 +1788,14 @@
 
     el("searchInput")?.addEventListener("input", () => {
       state.q = (el("searchInput").value || "").trim();
+      state.selectedIndex = 0;
+
       clearTimeout(bind._timer);
       bind._timer = setTimeout(() => {
-        loadItems().catch((e) => setStatus(e.message || String(e), "bad"));
-      }, 220);
+        applyCollectionAndSearchFilters();
+        renderCollections();
+        render();
+      }, 120);
     });
 
     el("urlInput")?.addEventListener("focus", () => {

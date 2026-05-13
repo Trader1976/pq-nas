@@ -877,3 +877,139 @@ button:disabled {
     width: 100%;
   }
 }
+
+
+.contentShell {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.collectionsPane {
+  position: sticky;
+  top: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  backdrop-filter: blur(14px);
+  border-radius: 22px;
+  box-shadow: 0 18px 52px rgba(0,0,0,.25);
+  padding: 14px;
+  max-height: calc(100vh - 28px);
+  overflow: hidden;
+}
+
+.collectionsHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.collectionsEyebrow {
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.collectionsHead h2 {
+  margin: 2px 0 0;
+  font-size: 18px;
+  line-height: 1.1;
+}
+
+.collectionsList {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: calc(100vh - 110px);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.collectionBtn {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 13px;
+  text-align: left;
+  white-space: normal;
+}
+
+.collectionBtn.active {
+  color: #ffd7a0;
+  border-color: rgba(255,159,28,.58);
+  background: rgba(255,159,28,.12);
+  box-shadow: 0 0 0 3px rgba(255,159,28,.08);
+}
+
+.collectionName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.collectionCount {
+  min-width: 28px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,159,28,.24);
+  background: rgba(255,159,28,.08);
+  color: #ffd7a0;
+  font-size: 12px;
+  font-weight: 900;
+  text-align: center;
+}
+
+@media (max-width: 980px) {
+  .contentShell {
+    grid-template-columns: 1fr;
+  }
+
+  .collectionsPane {
+    position: static;
+    max-height: none;
+  }
+
+  .collectionsList {
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-height: none;
+    padding-bottom: 4px;
+  }
+
+  .collectionBtn {
+    min-width: 190px;
+  }
+}
+
+/* Desktop library rail: move Collections into the outside-left margin so it
+   does not steal width from the bookmark grid. */
+@media (min-width: 981px) {
+  .contentShell {
+    --collections-width: 260px;
+    --collections-gap: 14px;
+    --collections-outset: min(
+      calc(var(--collections-width) + var(--collections-gap)),
+      max(0px, calc((100vw - 100%) / 2 - 18px))
+    );
+
+    width: calc(100% + var(--collections-outset));
+    margin-left: calc(var(--collections-outset) * -1);
+    grid-template-columns:
+      var(--collections-width)
+      minmax(0, 1fr);
+    column-gap: var(--collections-gap);
+  }
+
+  .collectionsPane {
+    width: var(--collections-width);
+  }
+}
