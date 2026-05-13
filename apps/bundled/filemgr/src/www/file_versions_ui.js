@@ -102,6 +102,19 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             : `/api/v4/files/restore_version`;
     }
 
+    function buildDownloadUrl(relPath, versionId) {
+        const qs = new URLSearchParams();
+        qs.set("path", String(relPath || ""));
+        qs.set("version_id", String(versionId || ""));
+
+        if (isWorkspaceScope()) {
+            qs.set("workspace_id", getWorkspaceId());
+            return `/api/v4/workspaces/files/versions/download?${qs.toString()}`;
+        }
+
+        return `/api/v4/files/versions/download?${qs.toString()}`;
+    }
+
     function buildRestoreBody(relPath, versionId) {
         if (isWorkspaceScope()) {
             return {
@@ -362,8 +375,25 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             close();
         });
 
+        const downloadBtn = document.createElement("button");
+        downloadBtn.type = "button";
+        downloadBtn.className = "btn secondary";
+        downloadBtn.textContent = "Download";
+        downloadBtn.title = "Download this preserved version without restoring it";
+        downloadBtn.addEventListener("click", () => {
+            const url = buildDownloadUrl(state.relPath, row.version_id);
+            const a = document.createElement("a");
+            a.href = url;
+            a.rel = "noopener";
+            a.style.display = "none";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+        });
+
         actionsEl.appendChild(compareBtn);
         actionsEl.appendChild(restoreBtn);
+        actionsEl.appendChild(downloadBtn);
         actionsEl.appendChild(copyBtn);
 
         topEl.appendChild(leftEl);

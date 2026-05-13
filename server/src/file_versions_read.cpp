@@ -125,6 +125,90 @@ static bool is_valid_utf8_local(const std::string& s) {
 
 } // namespace
 
+
+VersionBlobDownloadRef resolve_version_blob_for_download(
+    FileVersionsIndex* vix,
+    const std::string& scope_type,
+    const std::string& scope_id,
+    const std::string& logical_rel_path,
+    const std::string& version_id,
+    const std::filesystem::path& scope_root
+) {
+    VersionBlobDownloadRef rr;
+
+    if (!vix) {
+        rr.error = "server_error";
+        rr.message = "file versions index unavailable";
+        return rr;
+    }
+
+    if (version_id.empty()) {
+        rr.error = "bad_request";
+        rr.message = "missing version_id";
+        return rr;
+    }
+
+    std::string err;
+    auto row = vix->get_by_version_id(version_id, &err);
+    if (!row.has_value()) {
+        rr.error = err.empty() ? "not_found" : "server_error";
+        rr.message = err.empty() ? "version not found" : "failed to load version";
+        rr.detail = err;
+        return rr;
+    }
+
+    if (row->scope_type != scope_type ||
+        row->scope_id != scope_id ||
+        row->logical_rel_path != logical_rel_path) {
+        rr.error = "not_found";
+        rr.message = "version not found";
+        return rr;
+    }
+
+    const auto scope_root_norm = scope_root.lexically_normal();
+    const auto blob_root = (scope_root_norm / ".pqnas" / "versions" / "blobs").lexically_normal();
+    const auto blob_abs =
+        FileVersionsIndex::version_blob_abs_path(scope_root_norm, row->blob_rel_path).lexically_normal();
+
+    if (!path_has_prefix_components_local(blob_root, blob_abs)) {
+        rr.error = "server_error";
+        rr.message = "version blob path escapes versions root";
+        return rr;
+    }
+
+    std::error_code ec;
+    const auto st = std::filesystem::symlink_status(blob_abs, ec);
+    if (ec || !std::filesystem::exists(st)) {
+        rr.error = "not_found";
+        rr.message = "version blob not found";
+        rr.detail = ec ? ec.message() : "";
+        return rr;
+    }
+
+    if (std::filesystem::is_symlink(st) || !std::filesystem::is_regular_file(st)) {
+        rr.error = "unsupported";
+        rr.message = "version blob is not a regular file";
+        return rr;
+    }
+
+    const auto sz = std::filesystem::file_size(blob_abs, ec);
+    if (ec) {
+        rr.error = "server_error";
+        rr.message = "failed to stat version blob";
+        rr.detail = ec.message();
+        return rr;
+    }
+
+    rr.ok = true;
+    rr.version_id = row->version_id;
+    rr.path = row->logical_rel_path;
+    rr.created_at = row->created_at;
+    rr.bytes = static_cast<std::uint64_t>(sz);
+    rr.sha256_hex = row->sha256_hex;
+    rr.blob_abs_path = blob_abs;
+    return rr;
+}
+
 ReadVersionTextResult read_version_blob_as_text(
     FileVersionsIndex* vix,
     const std::string& scope_type,

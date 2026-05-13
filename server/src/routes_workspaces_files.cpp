@@ -11352,6 +11352,200 @@ srv.Get("/api/v4/workspaces/files/versions/read_text",
 });
 
 
+srv.Get("/api/v4/workspaces/files/versions/download",
+        [&](const httplib::Request& req, httplib::Response& res) {
+    const std::string workspace_id =
+        req.has_param("workspace_id") ? trim_copy_safe(req.get_param_value("workspace_id")) : "";
+    if (workspace_id.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing workspace_id"}
+        }.dump());
+        return;
+    }
+
+    std::string actor_fp, actor_role;
+    bool actor_is_external = false;
+    if (!require_workspace_file_actor_for_workspace_local(
+            deps, req, res, workspace_id,
+            &actor_fp, &actor_role, &actor_is_external)) {
+        return;
+    }
+
+    (void)actor_role;
+    res.set_header("Cache-Control", "no-store");
+
+    auto* vix = deps.file_versions;
+    if (!vix) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "file versions index missing"}
+        }.dump());
+        return;
+    }
+
+    if (!deps.workspaces->load(deps.workspaces_path)) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "workspaces_reload_failed"},
+            {"message", "failed to reload workspaces"}
+        }.dump());
+        return;
+    }
+
+    auto wopt = deps.workspaces->get(workspace_id);
+    if (!wopt.has_value()) {
+        deps.reply_json(res, 404, json{
+            {"ok", false},
+            {"error", "not_found"},
+            {"message", "workspace not found"}
+        }.dump());
+        return;
+    }
+
+    const WorkspaceRec& w = *wopt;
+    if (w.status != "enabled") {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace disabled"}
+        }.dump());
+        return;
+    }
+
+    auto mopt = enabled_member_for_actor(w, actor_fp);
+    if (!mopt.has_value()) {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace access denied"}
+        }.dump());
+        return;
+    }
+
+    if (actor_is_external && mopt->member_kind != "external") {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "forbidden"},
+            {"message", "workspace external access denied"}
+        }.dump());
+        return;
+    }
+
+    if (w.storage_state != "allocated") {
+        deps.reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Workspace storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    if (!w.storage_pool_id.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "pool_not_supported_yet"},
+            {"message", "workspace version download currently supports default pool only"}
+        }.dump());
+        return;
+    }
+
+    std::string path_rel;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+
+    std::string version_id;
+    if (req.has_param("version_id")) version_id = req.get_param_value("version_id");
+
+    if (path_rel.empty() || version_id.empty()) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path or version_id"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm, nerr;
+    if (!pqnas::normalize_user_rel_path_strict(path_rel, &rel_norm, &nerr)) {
+        deps.reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path ws_root =
+        workspace_dir_for_default_pool_only(deps.users_path, w);
+
+    auto rr = pqnas::resolve_version_blob_for_download(
+        vix,
+        "workspace",
+        workspace_id,
+        rel_norm,
+        version_id,
+        ws_root
+    );
+
+    if (!rr.ok) {
+        const int http =
+            (rr.error == "bad_request") ? 400 :
+            (rr.error == "not_found") ? 404 :
+            (rr.error == "unsupported") ? 415 : 500;
+
+        deps.reply_json(res, http, json{
+            {"ok", false},
+            {"error", rr.error.empty() ? "server_error" : rr.error},
+            {"message", rr.message.empty() ? "failed to download version" : rr.message},
+            {"detail", pqnas::shorten(rr.detail, 180)}
+        }.dump());
+        return;
+    }
+
+    std::ifstream f(rr.blob_abs_path, std::ios::binary);
+    if (!f.good()) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to open version blob"}
+        }.dump());
+        return;
+    }
+
+    std::string body((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if (!f.good() && !f.eof()) {
+        deps.reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to read version blob"}
+        }.dump());
+        return;
+    }
+
+    auto safe_name = [](std::string name) {
+        for (char& c : name) {
+            unsigned char uc = static_cast<unsigned char>(c);
+            if (uc < 32 || uc == 127 || c == '"' || c == '\\' || c == '/' || c == ';') c = '_';
+        }
+        if (name.empty()) name = "download";
+        return name;
+    };
+
+    std::string leaf = rel_norm;
+    const auto slash = leaf.find_last_of('/');
+    if (slash != std::string::npos) leaf = leaf.substr(slash + 1);
+    const std::string filename = safe_name(leaf + ".version-" + version_id);
+
+    res.set_header("Content-Type", "application/octet-stream");
+    res.set_header("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+    res.set_header("X-PQNAS-Version-Id", rr.version_id);
+    res.set_header("X-PQNAS-SHA256", rr.sha256_hex);
+    res.body = std::move(body);
+});
+
+
 srv.Post("/api/v4/workspaces/files/restore_version",
          [&](const httplib::Request& req, httplib::Response& res) {
     if (!deps.origin || deps.origin->empty()) {

@@ -39548,6 +39548,116 @@ srv.Get("/api/v4/files/versions/read_text", [&](const httplib::Request& req, htt
 });
 
 
+srv.Get("/api/v4/files/versions/download", [&](const httplib::Request& req, httplib::Response& res) {
+    std::string fp_hex, role;
+    if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
+    (void)role;
+
+    res.set_header("Cache-Control", "no-store");
+
+    std::string path_rel;
+    if (req.has_param("path")) path_rel = req.get_param_value("path");
+
+    std::string version_id;
+    if (req.has_param("version_id")) version_id = req.get_param_value("version_id");
+
+    if (path_rel.empty() || version_id.empty()) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "missing path or version_id"}
+        }.dump());
+        return;
+    }
+
+    std::string rel_norm, nerr;
+    if (!pqnas::normalize_user_rel_path_strict(path_rel, &rel_norm, &nerr)) {
+        reply_json(res, 400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid path"}
+        }.dump());
+        return;
+    }
+
+    auto uopt = users.get(fp_hex);
+    if (!uopt.has_value() || uopt->storage_state != "allocated") {
+        reply_json(res, 403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "Storage not allocated"}
+        }.dump());
+        return;
+    }
+
+    const std::filesystem::path user_dir = user_dir_for_fp(users, fp_hex);
+
+    auto rr = pqnas::resolve_version_blob_for_download(
+        &file_versions_index,
+        "user",
+        fp_hex,
+        rel_norm,
+        version_id,
+        user_dir
+    );
+
+    if (!rr.ok) {
+        const int http =
+            (rr.error == "bad_request") ? 400 :
+            (rr.error == "not_found") ? 404 :
+            (rr.error == "unsupported") ? 415 : 500;
+
+        reply_json(res, http, json{
+            {"ok", false},
+            {"error", rr.error.empty() ? "server_error" : rr.error},
+            {"message", rr.message.empty() ? "failed to download version" : rr.message},
+            {"detail", pqnas::shorten(rr.detail, 180)}
+        }.dump());
+        return;
+    }
+
+    std::ifstream f(rr.blob_abs_path, std::ios::binary);
+    if (!f.good()) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to open version blob"}
+        }.dump());
+        return;
+    }
+
+    std::string body((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if (!f.good() && !f.eof()) {
+        reply_json(res, 500, json{
+            {"ok", false},
+            {"error", "server_error"},
+            {"message", "failed to read version blob"}
+        }.dump());
+        return;
+    }
+
+    auto safe_name = [](std::string name) {
+        for (char& c : name) {
+            unsigned char uc = static_cast<unsigned char>(c);
+            if (uc < 32 || uc == 127 || c == '"' || c == '\\' || c == '/' || c == ';') c = '_';
+        }
+        if (name.empty()) name = "download";
+        return name;
+    };
+
+    std::string leaf = rel_norm;
+    const auto slash = leaf.find_last_of('/');
+    if (slash != std::string::npos) leaf = leaf.substr(slash + 1);
+    const std::string filename = safe_name(leaf + ".version-" + version_id);
+
+    res.set_header("Content-Type", "application/octet-stream");
+    res.set_header("Content-Disposition", "attachment; filename=\"" + filename + "\"");
+    res.set_header("X-PQNAS-Version-Id", rr.version_id);
+    res.set_header("X-PQNAS-SHA256", rr.sha256_hex);
+    res.body = std::move(body);
+});
+
+
 srv.Get("/api/v4/files/versions/summary", [&](const httplib::Request& req, httplib::Response& res) {
     std::string fp_hex, role;
     if (!require_user_auth_users_actor(req, res, COOKIE_KEY, &users, &fp_hex, &role)) return;
