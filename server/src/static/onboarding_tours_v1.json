@@ -65,6 +65,20 @@
           "body": "Workspaces let users collaborate. If someone invites you, the invite area is where you can accept or decline access."
         },
         {
+          "id": "shell-admin-panel",
+          "target": [
+            "[data-tour='nav-admin']"
+          ],
+          "placement": "right",
+          "title": "Admin Panel",
+          "body": "Admins get a different first-run path. This step only appears when the real Admin button is explicitly marked with data-tour=\"nav-admin\".",
+          "when": {
+            "any": [
+              "[data-tour='nav-admin']"
+            ]
+          }
+        },
+        {
           "id": "shell-activity",
           "target": [
             "[data-tour='activity']",
@@ -72,24 +86,83 @@
             "#activityList",
             "#activityButton",
             "#btnActivity",
-            "button[id*='activity']"
+            "button[id*='activity']",
+            "[data-tour='main-activity']",
+            "[data-tour='activity-bottom']",
+            "#nav_activity",
+            "#mainActivity",
+            "#main_activity",
+            "button[title*='Activity']",
+            "button[aria-label*='Activity']",
+            "a[title*='Activity']",
+            "a[aria-label*='Activity']",
+            "text:button:my activity",
+            "text:button:activity",
+            "text:a:my activity",
+            "text:a:activity"
           ],
           "placement": "left",
           "title": "My Activity",
-          "body": "My Activity shows recent actions such as uploads, restored files, Drop Zone uploads and other useful history."
+          "body": "My Activity is your personal timeline. It shows useful recent events such as uploads, restored files, purged files, Drop Zone uploads and other actions as DNA-Nexus grows."
+        },
+        {
+          "id": "shell-activity-bottom",
+          "target": [
+            "[data-tour='activity-bottom']",
+            "[data-tour='main-activity']",
+            "[data-tour='activity']",
+            "#nav_activity",
+            "#mainActivity",
+            "#main_activity",
+            "#activityButton",
+            "#btnActivity",
+            "button[title*='Activity']",
+            "button[aria-label*='Activity']",
+            "a[title*='Activity']",
+            "a[aria-label*='Activity']",
+            "text:button:my activity",
+            "text:button:activity",
+            "text:a:my activity",
+            "text:a:activity",
+            "#activityPane",
+            "#activityList"
+          ],
+          "placement": "top",
+          "title": "Activity lives close to your daily work",
+          "body": "This bottom activity area is meant to become a quick memory of what happened recently. When users upload, restore, purge, share or receive files, this is where DNA-Nexus can explain it in plain language."
         },
         {
           "id": "shell-settings",
           "target": [
             "[data-tour='nav-user-settings']",
+            "[data-tour='user-settings']",
             "#nav_user_settings",
             "#nav_settings",
             "a[href*='settings']",
-            "button[id*='settings']"
+            "button[id*='settings']",
+            "text:button:settings",
+            "text:a:settings",
+            "text:button:user settings",
+            "text:a:user settings"
           ],
           "placement": "right",
-          "title": "User Settings",
-          "body": "Settings let each user adjust their own browser experience, such as theme and avatar, without changing the global server style."
+          "title": "Your personal Settings",
+          "body": "Normal users use Settings to adjust their own DNA-Nexus experience, such as browser theme and avatar. These settings affect only their own account/session, not the whole server.",
+          "when": {
+            "none": [
+              "[data-tour='nav-admin']"
+            ]
+          }
+        },
+        {
+          "id": "shell-guide-button",
+          "target": [
+            ".dnx-tour-help",
+            "button.dnx-tour-help"
+          ],
+          "placement": "top",
+          "title": "You can restart the guide any time",
+          "body": "This question mark opens Nexus Guide again. Users can restart tours later, which is useful when new apps or features are added."
         }
       ]
     },
@@ -164,6 +237,101 @@
           "placement": "bottom",
           "title": "Selection tools",
           "body": "Selection tools usually appear after you pick one or more items. If nothing is selected, this guide will skip unavailable controls."
+        }
+      ]
+    },
+    {
+      "id": "settings.first_run.v1",
+      "scope": "user_settings",
+      "title": "User Settings tour",
+      "autoStart": true,
+      "steps": [
+        {
+          "id": "settings-overview",
+          "target": [
+            "[data-tour='settings-screen']",
+            "[data-view='user-settings']",
+            "[data-screen='user-settings']",
+            "#userSettings",
+            "#userSettingsView",
+            "#settingsView",
+            "#settingsPanel",
+            "#settingsContent",
+            "#settingsRoot",
+            ".settings-panel",
+            ".settings-card",
+            "text:h1:user settings",
+            "text:h2:user settings",
+            "text:h3:user settings"
+          ],
+          "placement": "bottom",
+          "title": "Your personal Settings",
+          "body": "This screen is for the current user's own DNA-Nexus experience. These choices should not unexpectedly change the global server setup for everyone else."
+        },
+        {
+          "id": "settings-theme",
+          "target": [
+            "[data-tour='settings-theme']",
+            "[data-tour='theme-picker']",
+            "#themeSelect",
+            "#themePicker",
+            "#userTheme",
+            "select[id*='theme']",
+            "button[id*='theme']",
+            "select[name*='theme']",
+            "button[name*='theme']",
+            "text:*:theme",
+            "text:*:Theme"
+          ],
+          "placement": "bottom",
+          "title": "Theme and appearance",
+          "body": "Users can change their own browser theme here. That makes DNA-Nexus feel personal without forcing the same look on every account."
+        },
+        {
+          "id": "settings-avatar",
+          "target": [
+            "[data-tour='settings-avatar']",
+            "[data-tour='avatar-upload']",
+            "#avatarUpload",
+            "#avatarInput",
+            "#userAvatar",
+            "input[type='file'][accept*='image']",
+            "button[id*='avatar']",
+            "button[class*='avatar']",
+            "text:*:avatar",
+            "text:*:Avatar",
+            "text:*:upload avatar",
+            "text:*:remove avatar"
+          ],
+          "placement": "bottom",
+          "title": "Avatar",
+          "body": "Avatar controls let users personalize their account. This is especially helpful later when workspaces, activity timelines and collaboration features show people by name."
+        },
+        {
+          "id": "settings-personal-only",
+          "target": [
+            "text:*:These settings affect your own browser",
+            "text:*:do not change the global admin theme",
+            "text:*:own browser",
+            "text:*:global admin theme",
+            "[data-tour='settings-note']",
+            ".settings-note",
+            ".hint",
+            ".muted"
+          ],
+          "placement": "top",
+          "title": "Personal, not global",
+          "body": "This note is important: normal user settings affect only that user. Server-wide settings still belong in the Admin area."
+        },
+        {
+          "id": "settings-guide-restart",
+          "target": [
+            ".dnx-tour-help",
+            "button.dnx-tour-help"
+          ],
+          "placement": "top",
+          "title": "Restart help any time",
+          "body": "The question mark opens Nexus Guide again. This gives users a safe way to rediscover features after updates or after they skip the first tour."
         }
       ]
     }

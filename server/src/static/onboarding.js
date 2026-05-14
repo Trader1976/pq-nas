@@ -1,5 +1,5 @@
 // DNA-Nexus Guided Tours v1
-// Defensive frontend-only onboarding engine.
+// Clean frontend-only onboarding engine.
 // State is browser-local for v1. Server-side per-user state can replace this later.
 
 (function () {
@@ -74,6 +74,20 @@
                     "body": "Workspaces let users collaborate. If someone invites you, the invite area is where you can accept or decline access."
                 },
                 {
+                    "id": "shell-admin-panel",
+                    "target": [
+                        "[data-tour='nav-admin']"
+                    ],
+                    "placement": "right",
+                    "title": "Admin Panel",
+                    "body": "Admins get a different first-run path. This step only appears when the real Admin button is explicitly marked with data-tour=\"nav-admin\".",
+                    "when": {
+                        "any": [
+                            "[data-tour='nav-admin']"
+                        ]
+                    }
+                },
+                {
                     "id": "shell-activity",
                     "target": [
                         "[data-tour='activity']",
@@ -81,24 +95,83 @@
                         "#activityList",
                         "#activityButton",
                         "#btnActivity",
-                        "button[id*='activity']"
+                        "button[id*='activity']",
+                        "[data-tour='main-activity']",
+                        "[data-tour='activity-bottom']",
+                        "#nav_activity",
+                        "#mainActivity",
+                        "#main_activity",
+                        "button[title*='Activity']",
+                        "button[aria-label*='Activity']",
+                        "a[title*='Activity']",
+                        "a[aria-label*='Activity']",
+                        "text:button:my activity",
+                        "text:button:activity",
+                        "text:a:my activity",
+                        "text:a:activity"
                     ],
                     "placement": "left",
                     "title": "My Activity",
-                    "body": "My Activity shows recent actions such as uploads, restored files, Drop Zone uploads and other useful history."
+                    "body": "My Activity is your personal timeline. It shows useful recent events such as uploads, restored files, purged files, Drop Zone uploads and other actions as DNA-Nexus grows."
+                },
+                {
+                    "id": "shell-activity-bottom",
+                    "target": [
+                        "[data-tour='activity-bottom']",
+                        "[data-tour='main-activity']",
+                        "[data-tour='activity']",
+                        "#nav_activity",
+                        "#mainActivity",
+                        "#main_activity",
+                        "#activityButton",
+                        "#btnActivity",
+                        "button[title*='Activity']",
+                        "button[aria-label*='Activity']",
+                        "a[title*='Activity']",
+                        "a[aria-label*='Activity']",
+                        "text:button:my activity",
+                        "text:button:activity",
+                        "text:a:my activity",
+                        "text:a:activity",
+                        "#activityPane",
+                        "#activityList"
+                    ],
+                    "placement": "top",
+                    "title": "Activity lives close to your daily work",
+                    "body": "This bottom activity area is meant to become a quick memory of what happened recently. When users upload, restore, purge, share or receive files, this is where DNA-Nexus can explain it in plain language."
                 },
                 {
                     "id": "shell-settings",
                     "target": [
                         "[data-tour='nav-user-settings']",
+                        "[data-tour='user-settings']",
                         "#nav_user_settings",
                         "#nav_settings",
                         "a[href*='settings']",
-                        "button[id*='settings']"
+                        "button[id*='settings']",
+                        "text:button:settings",
+                        "text:a:settings",
+                        "text:button:user settings",
+                        "text:a:user settings"
                     ],
                     "placement": "right",
-                    "title": "User Settings",
-                    "body": "Settings let each user adjust their own browser experience, such as theme and avatar, without changing the global server style."
+                    "title": "Your personal Settings",
+                    "body": "Normal users use Settings to adjust their own DNA-Nexus experience, such as browser theme and avatar. These settings affect only their own account/session, not the whole server.",
+                    "when": {
+                        "none": [
+                            "[data-tour='nav-admin']"
+                        ]
+                    }
+                },
+                {
+                    "id": "shell-guide-button",
+                    "target": [
+                        ".dnx-tour-help",
+                        "button.dnx-tour-help"
+                    ],
+                    "placement": "top",
+                    "title": "You can restart the guide any time",
+                    "body": "This question mark opens Nexus Guide again. Users can restart tours later, which is useful when new apps or features are added."
                 }
             ]
         },
@@ -175,21 +248,121 @@
                     "body": "Selection tools usually appear after you pick one or more items. If nothing is selected, this guide will skip unavailable controls."
                 }
             ]
+        },
+        {
+            "id": "settings.first_run.v1",
+            "scope": "user_settings",
+            "title": "User Settings tour",
+            "autoStart": true,
+            "steps": [
+                {
+                    "id": "settings-overview",
+                    "target": [
+                        "[data-tour='settings-screen']",
+                        "[data-view='user-settings']",
+                        "[data-screen='user-settings']",
+                        "#userSettings",
+                        "#userSettingsView",
+                        "#settingsView",
+                        "#settingsPanel",
+                        "#settingsContent",
+                        "#settingsRoot",
+                        ".settings-panel",
+                        ".settings-card",
+                        "text:h1:user settings",
+                        "text:h2:user settings",
+                        "text:h3:user settings"
+                    ],
+                    "placement": "bottom",
+                    "title": "Your personal Settings",
+                    "body": "This screen is for the current user's own DNA-Nexus experience. These choices should not unexpectedly change the global server setup for everyone else."
+                },
+                {
+                    "id": "settings-theme",
+                    "target": [
+                        "[data-tour='settings-theme']",
+                        "[data-tour='theme-picker']",
+                        "#themeSelect",
+                        "#themePicker",
+                        "#userTheme",
+                        "select[id*='theme']",
+                        "button[id*='theme']",
+                        "select[name*='theme']",
+                        "button[name*='theme']",
+                        "text:*:theme",
+                        "text:*:Theme"
+                    ],
+                    "placement": "bottom",
+                    "title": "Theme and appearance",
+                    "body": "Users can change their own browser theme here. That makes DNA-Nexus feel personal without forcing the same look on every account."
+                },
+                {
+                    "id": "settings-avatar",
+                    "target": [
+                        "[data-tour='settings-avatar']",
+                        "[data-tour='avatar-upload']",
+                        "#avatarUpload",
+                        "#avatarInput",
+                        "#userAvatar",
+                        "input[type='file'][accept*='image']",
+                        "button[id*='avatar']",
+                        "button[class*='avatar']",
+                        "text:*:avatar",
+                        "text:*:Avatar",
+                        "text:*:upload avatar",
+                        "text:*:remove avatar"
+                    ],
+                    "placement": "bottom",
+                    "title": "Avatar",
+                    "body": "Avatar controls let users personalize their account. This is especially helpful later when workspaces, activity timelines and collaboration features show people by name."
+                },
+                {
+                    "id": "settings-personal-only",
+                    "target": [
+                        "text:*:These settings affect your own browser",
+                        "text:*:do not change the global admin theme",
+                        "text:*:own browser",
+                        "text:*:global admin theme",
+                        "[data-tour='settings-note']",
+                        ".settings-note",
+                        ".hint",
+                        ".muted"
+                    ],
+                    "placement": "top",
+                    "title": "Personal, not global",
+                    "body": "This note is important: normal user settings affect only that user. Server-wide settings still belong in the Admin area."
+                },
+                {
+                    "id": "settings-guide-restart",
+                    "target": [
+                        ".dnx-tour-help",
+                        "button.dnx-tour-help"
+                    ],
+                    "placement": "top",
+                    "title": "Restart help any time",
+                    "body": "The question mark opens Nexus Guide again. This gives users a safe way to rediscover features after updates or after they skip the first tour."
+                }
+            ]
         }
     ]
 };
-    const AUTO_START_DELAY_MS = 700;
+    const AUTO_START_DELAY_MS = 1200;
 
     let manifest = null;
     let activeTour = null;
     let activeSteps = [];
     let activeIndex = 0;
+
     let backdrop = null;
     let spotlight = null;
     let bubble = null;
     let helpButton = null;
     let helpMenu = null;
+
     let resizeTimer = null;
+    let lastScope = null;
+    let observer = null;
+    let scopeTimer = null;
 
     function readState() {
         try {
@@ -203,14 +376,14 @@
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(state || {}));
         } catch (_) {
-            // Ignore storage failures.
+            // ignore
         }
     }
 
     function markTour(tourId, status) {
         const state = readState();
         state[tourId] = {
-            status,
+            status: status,
             updatedAt: Date.now()
         };
         writeState(state);
@@ -221,36 +394,12 @@
         return state[tourId] && state[tourId].status ? state[tourId].status : "new";
     }
 
-    function detectScope() {
-        const path = String(window.location.pathname || "").toLowerCase();
-
-        if (path.includes("/photogallery/") || path.includes("photogallery")) {
-            return "photogallery";
-        }
-
-        const shellHints = [
-            "#activityPane",
-            "#nav_user_settings",
-            "#nav_filemgr",
-            "#nav_files",
-            "[data-tour='app-launcher']",
-            "[data-tour='nav-user-settings']"
-        ];
-
-        for (const selector of shellHints) {
-            if (document.querySelector(selector)) {
-                return "shell";
-            }
-        }
-
-        // V1 fallback:
-        // onboarding.js is only included by the main shell and selected app pages.
-        // App pages with special scopes are detected above; otherwise assume shell.
-        return "shell";
-    }
-
     function isVisible(el) {
         if (!el) return false;
+
+        if (el === document.body || el === document.documentElement) {
+            return false;
+        }
 
         const rect = el.getBoundingClientRect();
         const style = window.getComputedStyle(el);
@@ -269,6 +418,125 @@
             rect.left <= (window.innerWidth || document.documentElement.clientWidth);
     }
 
+    function visibleSelector(selector) {
+        try {
+            return isVisible(document.querySelector(selector));
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function detectScope() {
+        const path = String(window.location.pathname || "").toLowerCase();
+        const hash = String(window.location.hash || "").toLowerCase();
+        const search = String(window.location.search || "").toLowerCase();
+        const bodyText = String((document.body && document.body.innerText) || "").toLowerCase();
+
+        if (path.includes("/photogallery/") || path.includes("photogallery")) {
+            return "photogallery";
+        }
+
+        const settingsSelectors = [
+            "[data-tour='settings-screen']",
+            "[data-view='user-settings']",
+            "[data-screen='user-settings']",
+            "#userSettings",
+            "#userSettingsView",
+            "#settingsView",
+            "#settingsPanel",
+            "#settingsContent",
+            "#settingsRoot",
+            ".settings-panel",
+            ".settings-card"
+        ];
+
+        for (const selector of settingsSelectors) {
+            if (visibleSelector(selector)) {
+                return "user_settings";
+            }
+        }
+
+        if (path.includes("user_settings") ||
+            path.includes("user-settings") ||
+            path.includes("/settings") ||
+            hash.includes("user_settings") ||
+            hash.includes("user-settings") ||
+            hash.includes("settings") ||
+            search.includes("user_settings") ||
+            search.includes("user-settings")) {
+            return "user_settings";
+        }
+
+        if (bodyText.includes("these settings affect your own browser") ||
+            bodyText.includes("do not change the global admin theme") ||
+            bodyText.includes("theme saved.")) {
+            return "user_settings";
+        }
+
+        return "shell";
+    }
+
+    function resolveTextTarget(selector) {
+        if (!selector || !selector.startsWith("text:")) {
+            return null;
+        }
+
+        const parts = selector.split(":");
+        if (parts.length < 3) {
+            return null;
+        }
+
+        const tag = parts[1] || "*";
+        const needle = parts.slice(2).join(":").trim().toLowerCase();
+
+        if (!needle) {
+            return null;
+        }
+
+        let nodes = [];
+        try {
+            nodes = Array.from(document.querySelectorAll(tag));
+        } catch (_) {
+            return null;
+        }
+
+        const candidates = [];
+
+        for (const node of nodes) {
+            if (node === document.body || node === document.documentElement) {
+                continue;
+            }
+
+            const text = String(node.textContent || "").trim().toLowerCase();
+            const label = String(node.getAttribute("aria-label") || "").trim().toLowerCase();
+            const title = String(node.getAttribute("title") || "").trim().toLowerCase();
+            const dataTour = String(node.getAttribute("data-tour") || "").trim().toLowerCase();
+            const dataAppId = String(node.getAttribute("data-app-id") || "").trim().toLowerCase();
+
+            if ((text && text.includes(needle)) ||
+                (label && label.includes(needle)) ||
+                (title && title.includes(needle)) ||
+                (dataTour && dataTour.includes(needle)) ||
+                (dataAppId && dataAppId.includes(needle))) {
+                if (isVisible(node)) {
+                    candidates.push(node);
+                }
+            }
+        }
+
+        if (!candidates.length) {
+            return null;
+        }
+
+        candidates.sort((a, b) => {
+            const ar = a.getBoundingClientRect();
+            const br = b.getBoundingClientRect();
+            return (ar.width * ar.height) - (br.width * br.height);
+        });
+
+        return candidates[0] || null;
+    }
+
     function resolveTarget(target) {
         const selectors = Array.isArray(target) ? target : [target];
 
@@ -276,10 +544,15 @@
             if (!selector || typeof selector !== "string") continue;
 
             let el = null;
-            try {
-                el = document.querySelector(selector);
-            } catch (_) {
-                continue;
+
+            if (selector.startsWith("text:")) {
+                el = resolveTextTarget(selector);
+            } else {
+                try {
+                    el = document.querySelector(selector);
+                } catch (_) {
+                    continue;
+                }
             }
 
             if (isVisible(el)) {
@@ -288,6 +561,47 @@
         }
 
         return null;
+    }
+
+    function selectorList(value) {
+        if (!value) return [];
+        return Array.isArray(value) ? value : [value];
+    }
+
+    function anySelectorVisible(selectors) {
+        return !!resolveTarget(selectorList(selectors));
+    }
+
+    function allSelectorsVisible(selectors) {
+        const list = selectorList(selectors);
+        if (!list.length) return true;
+
+        for (const selector of list) {
+            if (!resolveTarget(selector)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    function stepAllowed(step) {
+        const when = step && step.when;
+        if (!when) return true;
+
+        if (when.any && !anySelectorVisible(when.any)) {
+            return false;
+        }
+
+        if (when.all && !allSelectorsVisible(when.all)) {
+            return false;
+        }
+
+        if (when.none && anySelectorVisible(when.none)) {
+            return false;
+        }
+
+        return true;
     }
 
     function getToursForCurrentScope() {
@@ -302,8 +616,11 @@
 
         return tour.steps
             .map(step => {
+                if (!stepAllowed(step)) return null;
+
                 const el = resolveTarget(step.target);
                 if (!el) return null;
+
                 return Object.assign({}, step, { __targetEl: el });
             })
             .filter(Boolean);
@@ -351,7 +668,7 @@
     }
 
     function positionStep(step) {
-        if (!step || !step.__targetEl) return;
+        if (!step || !step.__targetEl || !bubble || !spotlight) return;
 
         const pad = 8;
         const rect = step.__targetEl.getBoundingClientRect();
@@ -366,6 +683,7 @@
 
         const bubbleRect = bubble.getBoundingClientRect();
         const gap = 18;
+
         let left = rect.left;
         let top = rect.bottom + gap;
 
@@ -378,9 +696,6 @@
         } else if (placement === "top") {
             left = rect.left;
             top = rect.top - bubbleRect.height - gap;
-        } else {
-            left = rect.left;
-            top = rect.bottom + gap;
         }
 
         const margin = 14;
@@ -398,6 +713,7 @@
         }
 
         if (activeIndex < 0) activeIndex = 0;
+
         if (activeIndex >= activeSteps.length) {
             markTour(activeTour.id, "completed");
             stopTour(false);
@@ -420,7 +736,7 @@
 
         bubble.innerHTML = "";
 
-        const kicker = createEl("p", "dnx-tour-kicker", activeTour.title || "DNA-Nexus Guide");
+        const kicker = createEl("p", "dnx-tour-kicker", activeTour.title || "Nexus Guide");
         const title = createEl("h3", "dnx-tour-title", step.title || "Guide");
         const body = createEl("p", "dnx-tour-body", step.body || "");
 
@@ -428,11 +744,7 @@
         const left = createEl("div", "dnx-tour-actions-left");
         const right = createEl("div", "dnx-tour-actions-right");
 
-        const progress = createEl(
-            "span",
-            "dnx-tour-progress",
-            `${activeIndex + 1} / ${activeSteps.length}`
-        );
+        const progress = createEl("span", "dnx-tour-progress", `${activeIndex + 1} / ${activeSteps.length}`);
 
         const skip = createEl("button", "dnx-tour-btn", "Skip");
         skip.type = "button";
@@ -473,29 +785,35 @@
         bubble.appendChild(body);
         bubble.appendChild(actions);
 
-        step.__targetEl.scrollIntoView({
-            behavior: "smooth",
-            block: "center",
-            inline: "center"
-        });
+        try {
+            step.__targetEl.scrollIntoView({
+                behavior: "smooth",
+                block: "center",
+                inline: "center"
+            });
+        } catch (_) {
+            // ignore
+        }
 
-        window.setTimeout(() => positionStep(step), 160);
+        window.setTimeout(() => positionStep(step), 140);
     }
 
     function startTour(tour, force) {
-        if (!tour || !tour.id) return;
+        if (!tour || !tour.id) return false;
 
         if (!force) {
             const status = getTourStatus(tour.id);
             if (status === "completed" || status === "dismissed") {
-                return;
+                return false;
             }
         }
 
         const steps = getShowableSteps(tour);
         if (!steps.length) {
-            markTour(tour.id, "completed");
-            return;
+            if (!force) {
+                markTour(tour.id, "completed");
+            }
+            return false;
         }
 
         activeTour = tour;
@@ -504,6 +822,7 @@
 
         closeHelpMenu();
         renderStep();
+        return true;
     }
 
     function stopTour() {
@@ -530,8 +849,7 @@
         if (!tours.length) return;
 
         helpMenu = createEl("div", "dnx-tour-menu");
-        const title = createEl("div", "dnx-tour-menu-title", "Nexus Guide");
-        helpMenu.appendChild(title);
+        helpMenu.appendChild(createEl("div", "dnx-tour-menu-title", "Nexus Guide"));
 
         for (const tour of tours) {
             const btn = createEl("button", "", `Restart: ${tour.title || tour.id}`);
@@ -545,8 +863,7 @@
         resetAll.addEventListener("click", () => {
             writeState({});
             closeHelpMenu();
-            const first = getToursForCurrentScope()[0];
-            if (first) startTour(first, true);
+            autoStartTours(true);
         });
         helpMenu.appendChild(resetAll);
 
@@ -554,10 +871,9 @@
     }
 
     function ensureHelpButton() {
-        if (helpButton) return;
-
-        const tours = getToursForCurrentScope();
-        if (!tours.length) return;
+        if (helpButton && document.body.contains(helpButton)) {
+            return;
+        }
 
         helpButton = createEl("button", "dnx-tour-help", "?");
         helpButton.type = "button";
@@ -567,17 +883,54 @@
         document.body.appendChild(helpButton);
     }
 
-    function autoStartTours() {
+    function autoStartTours(force) {
+        const scope = detectScope();
         const tours = getToursForCurrentScope().filter(tour => tour.autoStart);
-        if (!tours.length) return;
+
+        lastScope = scope;
+
+        if (!tours.length) return false;
 
         for (const tour of tours) {
-            const status = getTourStatus(tour.id);
-            if (status !== "completed" && status !== "dismissed") {
-                startTour(tour, false);
-                return;
+            if (force || !["completed", "dismissed"].includes(getTourStatus(tour.id))) {
+                if (startTour(tour, !!force)) {
+                    return true;
+                }
             }
         }
+
+        return false;
+    }
+
+    function maybeScopeChanged() {
+        ensureHelpButton();
+
+        if (activeTour) return;
+
+        const scope = detectScope();
+        if (scope !== lastScope) {
+            autoStartTours(false);
+        }
+    }
+
+    function watchScopeChanges() {
+        if (observer || !document.body) return;
+
+        observer = new MutationObserver(() => {
+            window.clearTimeout(scopeTimer);
+            scopeTimer = window.setTimeout(maybeScopeChanged, 300);
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["class", "style", "hidden", "aria-hidden"]
+        });
+
+        window.addEventListener("hashchange", () => window.setTimeout(maybeScopeChanged, 250));
+        window.addEventListener("popstate", () => window.setTimeout(maybeScopeChanged, 250));
+        document.addEventListener("click", () => window.setTimeout(maybeScopeChanged, 500), true);
     }
 
     async function init() {
@@ -591,7 +944,7 @@
                 manifest = await res.json();
             }
         } catch (_) {
-            // Fall back to the inline manifest below.
+            // fallback below
         }
 
         if (!manifest) {
@@ -599,17 +952,16 @@
         }
 
         ensureHelpButton();
+        watchScopeChanges();
 
-        window.setTimeout(autoStartTours, AUTO_START_DELAY_MS);
+        window.setTimeout(() => autoStartTours(false), AUTO_START_DELAY_MS);
     }
 
     window.addEventListener("resize", () => {
         if (!activeTour || !activeSteps.length) return;
 
         window.clearTimeout(resizeTimer);
-        resizeTimer = window.setTimeout(() => {
-            renderStep();
-        }, 120);
+        resizeTimer = window.setTimeout(renderStep, 120);
     });
 
     window.addEventListener("keydown", event => {
@@ -637,11 +989,18 @@
 
     window.DNANexusGuidedTours = {
         restartCurrentScope: function () {
-            const first = getToursForCurrentScope()[0];
-            if (first) startTour(first, true);
+            autoStartTours(true);
         },
         resetAll: function () {
             writeState({});
+        },
+        debug: function () {
+            return {
+                scope: detectScope(),
+                tours: getToursForCurrentScope().map(t => t.id),
+                state: readState(),
+                helpButton: !!document.querySelector(".dnx-tour-help")
+            };
         }
     };
 })();
