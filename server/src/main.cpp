@@ -2771,6 +2771,61 @@ static bool require_user_auth_users_actor(
     return require_user_cookie_users_actor(req, res, cookie_key, users, out_fp_hex, out_role);
 }
 
+// ----- Mixed admin gate: Bearer first, then browser cookie ------------------
+// Android/mobile uses Authorization: Bearer.
+// Browser admin pages use pqnas_session cookie.
+// This keeps browser behavior unchanged while allowing enabled admin app tokens.
+static bool require_admin_auth_users_actor(
+    const httplib::Request& req,
+    httplib::Response& res,
+    const unsigned char cookie_key[32],
+    const std::string& users_path,
+    pqnas::UsersRegistry* users,
+    std::string* out_fp_hex
+) {
+    if (out_fp_hex) out_fp_hex->clear();
+
+    auto it = req.headers.find("Authorization");
+    const bool has_bearer =
+        it != req.headers.end() &&
+        it->second.size() > 7 &&
+        it->second.compare(0, 7, "Bearer ") == 0;
+
+    if (has_bearer) {
+        std::string fp_hex;
+        std::string role;
+
+        if (!try_user_bearer_users_actor(req, res, users, &fp_hex, &role)) {
+            return false;
+        }
+
+        if (role != "admin") {
+            reply_json(
+                res,
+                403,
+                json({
+                    {"ok", false},
+                    {"error", "forbidden"},
+                    {"message", "admin required"}
+                }).dump()
+            );
+            return false;
+        }
+
+        if (out_fp_hex) *out_fp_hex = fp_hex;
+        return true;
+    }
+
+    return require_admin_cookie_users_actor(
+        req,
+        res,
+        cookie_key,
+        users_path,
+        users,
+        out_fp_hex
+    );
+}
+
 static std::string random_b64url(size_t nbytes) {
     std::string b(nbytes, '\0');
     randombytes_buf(b.data(), b.size());
@@ -22147,7 +22202,7 @@ pqnas::register_workspace_external_session_routes(srv, ws_external_session_deps)
 
 	srv.Get("/api/v4/admin/users", [&](const httplib::Request& req, httplib::Response& res) {
     	std::string actor_fp;
-    	if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+    	if (!require_admin_auth_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
 	    if (!users.load(users_path)) {
     	    reply_json(res, 500, json{
@@ -22302,7 +22357,7 @@ pqnas::register_workspace_external_session_routes(srv, ws_external_session_deps)
     // Body: {"fingerprint":"...","status":"enabled|disabled|revoked"}
 	srv.Post("/api/v4/admin/users/status", [&](const httplib::Request& req, httplib::Response& res) {
     	std::string actor_fp;
-	    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+	    if (!require_admin_auth_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
     	json j;
     	try { j = json::parse(req.body); }
@@ -22392,7 +22447,7 @@ pqnas::register_workspace_external_session_routes(srv, ws_external_session_deps)
 //   - storage_set_at/by set
 srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp;
-    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+    if (!require_admin_auth_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
     res.set_header("Cache-Control", "no-store");
 
@@ -41988,7 +42043,7 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
     // POST /api/v4/admin/users/enable   {"fingerprint":"...","role":"user|admin"?,"name":"..."?,"notes":"..."?}
     srv.Post("/api/v4/admin/users/enable", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
-        if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_admin_auth_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
 
         json j;
         try { j = json::parse(req.body); }
