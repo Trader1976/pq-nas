@@ -1,0 +1,171 @@
+{
+  "schema": 1,
+  "name": "DNA-Nexus Guided Tours v1",
+  "tours": [
+    {
+      "id": "shell.first_run.v1",
+      "scope": "shell",
+      "title": "Welcome to DNA-Nexus",
+      "autoStart": true,
+      "steps": [
+        {
+          "id": "shell-apps",
+          "target": [
+            "[data-tour='app-launcher']",
+            "[data-tour='nav-filemgr']",
+            "#nav_filemgr",
+            "#nav_files",
+            "#nav_apps",
+            ".sidebar",
+            "nav"
+          ],
+          "placement": "right",
+          "title": "Your DNA-Nexus apps",
+          "body": "The left side is your main launch area. Apps such as File Manager, Photo Gallery, Music, Shares and Settings appear here when available."
+        },
+        {
+          "id": "shell-filemgr",
+          "target": [
+            "[data-tour='nav-filemgr']",
+            "#nav_filemgr",
+            "#nav_files",
+            "a[href*='filemgr']",
+            "button[data-app-id='filemgr']",
+            "[data-app-id='filemgr']"
+          ],
+          "placement": "right",
+          "title": "File Manager",
+          "body": "File Manager is the central place for browsing, uploading, downloading, sharing and organizing your files."
+        },
+        {
+          "id": "shell-photogallery",
+          "target": [
+            "[data-tour='nav-photogallery']",
+            "#nav_photogallery",
+            "#nav_photo_gallery",
+            "a[href*='photogallery']",
+            "button[data-app-id='photogallery']",
+            "[data-app-id='photogallery']"
+          ],
+          "placement": "right",
+          "title": "Photo Gallery",
+          "body": "Photo Gallery gives you a visual way to browse photos, open previews, search metadata and share selected pictures."
+        },
+        {
+          "id": "shell-workspace-invites",
+          "target": [
+            "[data-tour='workspace-invites']",
+            "#nav_workspace_invites",
+            "#nav_workspaces",
+            "a[href*='workspace']",
+            "button[id*='workspace']"
+          ],
+          "placement": "right",
+          "title": "Workspaces and invites",
+          "body": "Workspaces let users collaborate. If someone invites you, the invite area is where you can accept or decline access."
+        },
+        {
+          "id": "shell-activity",
+          "target": [
+            "[data-tour='activity']",
+            "#activityPane",
+            "#activityList",
+            "#activityButton",
+            "#btnActivity",
+            "button[id*='activity']"
+          ],
+          "placement": "left",
+          "title": "My Activity",
+          "body": "My Activity shows recent actions such as uploads, restored files, Drop Zone uploads and other useful history."
+        },
+        {
+          "id": "shell-settings",
+          "target": [
+            "[data-tour='nav-user-settings']",
+            "#nav_user_settings",
+            "#nav_settings",
+            "a[href*='settings']",
+            "button[id*='settings']"
+          ],
+          "placement": "right",
+          "title": "User Settings",
+          "body": "Settings let each user adjust their own browser experience, such as theme and avatar, without changing the global server style."
+        }
+      ]
+    },
+    {
+      "id": "photogallery.first_run.v1",
+      "scope": "photogallery",
+      "title": "Photo Gallery tour",
+      "autoStart": true,
+      "steps": [
+        {
+          "id": "photo-library",
+          "target": [
+            "[data-tour='gallery-grid']",
+            "#galleryGrid",
+            "#photoGrid",
+            ".gallery-grid",
+            ".photo-grid",
+            "main"
+          ],
+          "placement": "top",
+          "title": "Your photo library",
+          "body": "This area shows your photos and albums. Missing or unavailable controls are skipped automatically by the guide."
+        },
+        {
+          "id": "photo-upload",
+          "target": [
+            "[data-tour='gallery-upload']",
+            "#uploadBtn",
+            "#btnUpload",
+            "button[id*='upload']",
+            "input[type='file']"
+          ],
+          "placement": "bottom",
+          "title": "Upload photos",
+          "body": "Use upload to add new photos to your library. DNA-Nexus can later index metadata to help with search."
+        },
+        {
+          "id": "photo-search",
+          "target": [
+            "[data-tour='gallery-search']",
+            "#searchInput",
+            "input[type='search']",
+            "input[placeholder*='Search']",
+            "input[placeholder*='search']"
+          ],
+          "placement": "bottom",
+          "title": "Search",
+          "body": "Search helps you find images by names, tags, folders or metadata when those features are available."
+        },
+        {
+          "id": "photo-share",
+          "target": [
+            "[data-tour='gallery-share']",
+            "#shareBtn",
+            "#btnShare",
+            "button[id*='share']",
+            "button[class*='share']"
+          ],
+          "placement": "bottom",
+          "title": "Share selected photos",
+          "body": "After selecting photos, you can create share links when sharing is available for your account and location."
+        },
+        {
+          "id": "photo-selection",
+          "target": [
+            "[data-tour='gallery-selection']",
+            ".selected",
+            ".selection-toolbar",
+            ".toolbar",
+            "header"
+          ],
+          "placement": "bottom",
+          "title": "Selection tools",
+          "body": "Selection tools usually appear after you pick one or more items. If nothing is selected, this guide will skip unavailable controls."
+        }
+      ]
+    }
+  ]
+}

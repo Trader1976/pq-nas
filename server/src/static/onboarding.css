@@ -1,0 +1,237 @@
+/* DNA-Nexus Guided Tours v1 */
+
+:root {
+    --dnx-tour-bg: rgba(12, 14, 20, 0.78);
+    --dnx-tour-card: rgba(20, 24, 34, 0.96);
+    --dnx-tour-fg: #f7f7fb;
+    --dnx-tour-muted: rgba(247, 247, 251, 0.72);
+    --dnx-tour-border: rgba(255, 255, 255, 0.18);
+    --dnx-tour-accent: #ff9f43;
+    --dnx-tour-shadow: 0 22px 70px rgba(0, 0, 0, 0.42);
+}
+
+.dnx-tour-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483000;
+    pointer-events: none;
+    background: transparent;
+}
+
+.dnx-tour-spotlight {
+    position: fixed;
+    z-index: 2147483001;
+    pointer-events: none;
+    border: 2px solid var(--dnx-tour-accent);
+    border-radius: 14px;
+    box-shadow:
+        0 0 0 9999px var(--dnx-tour-bg),
+        0 0 24px rgba(255, 159, 67, 0.52);
+    transition:
+        left 160ms ease,
+        top 160ms ease,
+        width 160ms ease,
+        height 160ms ease;
+}
+
+.dnx-tour-bubble {
+    position: fixed;
+    z-index: 2147483002;
+    width: min(360px, calc(100vw - 32px));
+    color: var(--dnx-tour-fg);
+    background: var(--dnx-tour-card);
+    border: 1px solid var(--dnx-tour-border);
+    border-radius: 18px;
+    box-shadow: var(--dnx-tour-shadow);
+    padding: 16px;
+    pointer-events: auto;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.dnx-tour-bubble::before {
+    content: "";
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    background: var(--dnx-tour-card);
+    border-left: 1px solid var(--dnx-tour-border);
+    border-top: 1px solid var(--dnx-tour-border);
+    transform: rotate(45deg);
+}
+
+.dnx-tour-bubble[data-placement="right"]::before {
+    left: -8px;
+    top: 28px;
+}
+
+.dnx-tour-bubble[data-placement="left"]::before {
+    right: -8px;
+    top: 28px;
+    transform: rotate(225deg);
+}
+
+.dnx-tour-bubble[data-placement="bottom"]::before {
+    top: -8px;
+    left: 28px;
+}
+
+.dnx-tour-bubble[data-placement="top"]::before {
+    bottom: -8px;
+    left: 28px;
+    transform: rotate(225deg);
+}
+
+.dnx-tour-kicker {
+    margin: 0 0 6px;
+    color: var(--dnx-tour-accent);
+    font-size: 12px;
+    font-weight: 750;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.dnx-tour-title {
+    margin: 0 0 8px;
+    font-size: 18px;
+    line-height: 1.2;
+    font-weight: 800;
+}
+
+.dnx-tour-body {
+    margin: 0;
+    color: var(--dnx-tour-muted);
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+.dnx-tour-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.dnx-tour-actions-left,
+.dnx-tour-actions-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.dnx-tour-progress {
+    color: var(--dnx-tour-muted);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.dnx-tour-btn {
+    border: 1px solid var(--dnx-tour-border);
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--dnx-tour-fg);
+    border-radius: 999px;
+    padding: 8px 12px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.dnx-tour-btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.dnx-tour-btn-primary {
+    background: var(--dnx-tour-accent);
+    color: #17130d;
+    border-color: rgba(255, 159, 67, 0.9);
+}
+
+.dnx-tour-btn-primary:hover {
+    background: #ffb15f;
+}
+
+.dnx-tour-help {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    z-index: 2147482500;
+    width: 42px;
+    height: 42px;
+    border-radius: 999px;
+    border: 1px solid var(--dnx-tour-border);
+    background: rgba(20, 24, 34, 0.88);
+    color: var(--dnx-tour-fg);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.25);
+    font-size: 19px;
+    font-weight: 900;
+    cursor: pointer;
+}
+
+.dnx-tour-help:hover {
+    background: rgba(20, 24, 34, 0.98);
+}
+
+.dnx-tour-menu {
+    position: fixed;
+    right: 18px;
+    bottom: 68px;
+    z-index: 2147482501;
+    width: min(300px, calc(100vw - 32px));
+    color: var(--dnx-tour-fg);
+    background: var(--dnx-tour-card);
+    border: 1px solid var(--dnx-tour-border);
+    border-radius: 16px;
+    box-shadow: var(--dnx-tour-shadow);
+    padding: 10px;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.dnx-tour-menu-title {
+    padding: 6px 8px 9px;
+    font-weight: 800;
+    font-size: 14px;
+}
+
+.dnx-tour-menu button {
+    display: block;
+    width: 100%;
+    margin: 4px 0;
+    padding: 9px 10px;
+    border: 1px solid transparent;
+    border-radius: 11px;
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--dnx-tour-fg);
+    text-align: left;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.dnx-tour-menu button:hover {
+    background: rgba(255, 255, 255, 0.13);
+}
+
+@media (max-width: 640px) {
+    .dnx-tour-bubble {
+        left: 16px !important;
+        right: 16px !important;
+        top: auto !important;
+        bottom: 18px !important;
+        width: auto;
+    }
+
+    .dnx-tour-bubble::before {
+        display: none;
+    }
+
+    .dnx-tour-actions {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .dnx-tour-actions-left,
+    .dnx-tour-actions-right {
+        justify-content: space-between;
+    }
+}
