@@ -334,6 +334,120 @@
           "body": "The question mark opens Nexus Guide again. This gives users a safe way to rediscover features after updates or after they skip the first tour."
         }
       ]
+    },
+    {
+      "id": "admin.first_run.v1",
+      "scope": "admin",
+      "title": "Admin Panel tour",
+      "autoStart": true,
+      "steps": [
+        {
+          "id": "admin-overview",
+          "target": [
+            "[data-tour='admin-screen']",
+            "[data-view='admin']",
+            "#adminRoot",
+            "#adminPanel",
+            "#adminContent",
+            "#main",
+            ".admin-shell",
+            ".admin-main",
+            ".admin-content",
+            "text:h1:admin",
+            "text:h2:admin",
+            "main"
+          ],
+          "placement": "bottom",
+          "title": "Admin area",
+          "body": "This is the server-wide administration area. Admin pages control users, approvals, apps, workspaces, audit logs, statistics and global server settings."
+        },
+        {
+          "id": "admin-users",
+          "target": [
+            "[data-tour='admin-users']",
+            "#nav_admin_users",
+            "a[href*='admin_users']",
+            "a[href*='admin_users.html']",
+            "a[href*='admin_approvals']",
+            "a[href*='admin_approvals.html']",
+            "text:a:users",
+            "text:button:users",
+            "text:a:approvals",
+            "text:button:approvals"
+          ],
+          "placement": "right",
+          "title": "Users and approvals",
+          "body": "User administration is where new accounts can be approved, disabled or managed. This is one of the most important admin workflows."
+        },
+        {
+          "id": "admin-apps",
+          "target": [
+            "[data-tour='admin-apps']",
+            "#nav_admin_apps",
+            "a[href*='admin_apps']",
+            "a[href*='admin_apps.html']",
+            "text:a:apps",
+            "text:button:apps"
+          ],
+          "placement": "right",
+          "title": "Apps",
+          "body": "The Apps page controls installed DNA-Nexus apps. This becomes important as the server grows into a real app platform."
+        },
+        {
+          "id": "admin-workspaces",
+          "target": [
+            "[data-tour='admin-workspaces']",
+            "#nav_admin_workspaces",
+            "a[href*='admin_workspaces']",
+            "a[href*='admin_workspaces.html']",
+            "text:a:workspaces",
+            "text:button:workspaces"
+          ],
+          "placement": "right",
+          "title": "Workspaces",
+          "body": "Workspace administration helps admins review shared spaces, members, quotas and server-wide collaboration settings."
+        },
+        {
+          "id": "admin-audit",
+          "target": [
+            "[data-tour='admin-audit']",
+            "#nav_admin_audit",
+            "a[href*='admin_audit']",
+            "a[href*='admin_audit.html']",
+            "text:a:audit",
+            "text:button:audit"
+          ],
+          "placement": "right",
+          "title": "Audit and history",
+          "body": "Audit views help admins understand important server activity and investigate what happened."
+        },
+        {
+          "id": "admin-stats",
+          "target": [
+            "[data-tour='admin-stats']",
+            "#nav_admin_stats",
+            "a[href*='admin_stats']",
+            "a[href*='admin_stats.html']",
+            "text:a:stats",
+            "text:button:stats",
+            "text:a:statistics",
+            "text:button:statistics"
+          ],
+          "placement": "right",
+          "title": "Statistics",
+          "body": "Admin statistics give a quick overview of users, files, storage, workspaces and other server health information."
+        },
+        {
+          "id": "admin-guide-button",
+          "target": [
+            ".dnx-tour-help",
+            "button.dnx-tour-help"
+          ],
+          "placement": "top",
+          "title": "Admin help is available here too",
+          "body": "The question mark restarts Nexus Guide inside admin pages. This lets admins rediscover tools later after updates."
+        }
+      ]
     }
   ]
 }
