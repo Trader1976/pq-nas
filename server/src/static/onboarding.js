@@ -88,6 +88,29 @@
                     }
                 },
                 {
+                    "id": "shell-trusted-devices-admin",
+                    "target": [
+                        "#nav_trusted_devices",
+                        "button#nav_trusted_devices",
+                        "text:button:Trusted Devices",
+                        "text:button:Trusted devices",
+                        "#nav_trusted_devices.active",
+                        "[data-tour='nav-trusted-devices']",
+                        "[data-tour='trusted-devices']",
+                        "button[id='nav_trusted_devices']",
+                        "text:button:trusted devices",
+                        "[data-tour='nav-admin']"
+                    ],
+                    "placement": "right",
+                    "title": "Trusted Devices for admins",
+                    "body": "Admins can also guide or review trusted-device workflows. A paired mobile phone can be used with the DNA-Nexus mobile app for QR-based identity flows, login approval and safer account access.",
+                    "when": {
+                        "any": [
+                            "[data-tour='nav-admin']"
+                        ]
+                    }
+                },
+                {
                     "id": "shell-activity",
                     "target": [
                         "[data-tour='activity']",
@@ -157,6 +180,38 @@
                     "placement": "right",
                     "title": "Your personal Settings",
                     "body": "Normal users use Settings to adjust their own DNA-Nexus experience, such as browser theme and avatar. These settings affect only their own account/session, not the whole server.",
+                    "when": {
+                        "none": [
+                            "[data-tour='nav-admin']"
+                        ]
+                    }
+                },
+                {
+                    "id": "shell-trusted-devices-user",
+                    "target": [
+                        "#nav_trusted_devices",
+                        "button#nav_trusted_devices",
+                        "text:button:Trusted Devices",
+                        "text:button:Trusted devices",
+                        "#nav_trusted_devices.active",
+                        "[data-tour='nav-trusted-devices']",
+                        "[data-tour='trusted-devices']",
+                        "button[id='nav_trusted_devices']",
+                        "text:button:trusted devices",
+                        "[data-tour='nav-user-settings']",
+                        "[data-tour='user-settings']",
+                        "#nav_user_settings",
+                        "#nav_settings",
+                        "a[href*='settings']",
+                        "button[id*='settings']",
+                        "text:button:settings",
+                        "text:a:settings",
+                        "text:button:user settings",
+                        "text:a:user settings"
+                    ],
+                    "placement": "right",
+                    "title": "Trusted Devices live in Settings",
+                    "body": "Users can manage trusted devices from Settings. This is where they can pair a mobile phone using the DNA-Nexus mobile app, scan a QR code, and later review or revoke devices that are allowed to help with secure login.",
                     "when": {
                         "none": [
                             "[data-tour='nav-admin']"
@@ -317,6 +372,46 @@
                     "body": "Avatar controls let users personalize their account. This is especially helpful later when workspaces, activity timelines and collaboration features show people by name."
                 },
                 {
+                    "id": "settings-trusted-devices",
+                    "target": [
+                        "[data-tour='trusted-devices']",
+                        "[data-tour='settings-trusted-devices']",
+                        "[data-tour='admin-trusted-devices']",
+                        "[data-tour='device-pairing']",
+                        "[data-tour='pair-device']",
+                        "#trustedDevices",
+                        "#trusted_devices",
+                        "#trustedDevicesPanel",
+                        "#trustedDevicesSection",
+                        "#devicePairing",
+                        "#pairDevice",
+                        "#pairMobile",
+                        "#pairedDevices",
+                        ".trusted-devices",
+                        ".trustedDevices",
+                        ".device-pairing",
+                        ".paired-devices",
+                        "button[id*='trusted']",
+                        "button[id*='device']",
+                        "button[id*='pair']",
+                        "a[href*='devices']",
+                        "a[href*='trusted']",
+                        "text:h1:trusted devices",
+                        "text:h2:trusted devices",
+                        "text:h3:trusted devices",
+                        "text:*:trusted devices",
+                        "text:*:paired devices",
+                        "text:*:pair device",
+                        "text:*:pair mobile",
+                        "text:*:mobile app",
+                        "text:*:DNA Connect",
+                        "text:*:DNA-Nexus mobile"
+                    ],
+                    "placement": "bottom",
+                    "title": "Trusted devices",
+                    "body": "Trusted Devices is where you can pair a phone or another approved device with DNA-Nexus. For example, a user can use the DNA-Nexus mobile app / DNA Connect style flow to scan a QR code, approve logins, and manage which personal devices are allowed to access the account."
+                },
+                {
                     "id": "settings-personal-only",
                     "target": [
                         "text:*:These settings affect your own browser",
@@ -389,6 +484,46 @@
                     "body": "User administration is where new accounts can be approved, disabled or managed. This is one of the most important admin workflows."
                 },
                 {
+                    "id": "admin-trusted-devices",
+                    "target": [
+                        "[data-tour='trusted-devices']",
+                        "[data-tour='settings-trusted-devices']",
+                        "[data-tour='admin-trusted-devices']",
+                        "[data-tour='device-pairing']",
+                        "[data-tour='pair-device']",
+                        "#trustedDevices",
+                        "#trusted_devices",
+                        "#trustedDevicesPanel",
+                        "#trustedDevicesSection",
+                        "#devicePairing",
+                        "#pairDevice",
+                        "#pairMobile",
+                        "#pairedDevices",
+                        ".trusted-devices",
+                        ".trustedDevices",
+                        ".device-pairing",
+                        ".paired-devices",
+                        "button[id*='trusted']",
+                        "button[id*='device']",
+                        "button[id*='pair']",
+                        "a[href*='devices']",
+                        "a[href*='trusted']",
+                        "text:h1:trusted devices",
+                        "text:h2:trusted devices",
+                        "text:h3:trusted devices",
+                        "text:*:trusted devices",
+                        "text:*:paired devices",
+                        "text:*:pair device",
+                        "text:*:pair mobile",
+                        "text:*:mobile app",
+                        "text:*:DNA Connect",
+                        "text:*:DNA-Nexus mobile"
+                    ],
+                    "placement": "bottom",
+                    "title": "Trusted devices and mobile pairing",
+                    "body": "Trusted device management helps admins understand which phones or computers are paired with accounts. A paired phone using the DNA-Nexus mobile app can be used for QR-based identity flows, login approval, and safer account access. Admin views should make it clear when a device is trusted, revoked, or needs review."
+                },
+                {
                     "id": "admin-apps",
                     "target": [
                         "[data-tour='admin-apps']",
@@ -455,6 +590,61 @@
                     "placement": "top",
                     "title": "Admin help is available here too",
                     "body": "The question mark restarts Nexus Guide inside admin pages. This lets admins rediscover tools later after updates."
+                }
+            ]
+        },
+        {
+            "id": "trusted_devices.first_run.v1",
+            "scope": "trusted_devices",
+            "title": "Trusted Devices tour",
+            "autoStart": true,
+            "steps": [
+                {
+                    "id": "trusted-devices-overview",
+                    "target": [
+                        "#pairNewDeviceBtn",
+                        "text:h2:Trusted Devices",
+                        "text:h2:Trusted devices"
+                    ],
+                    "placement": "bottom",
+                    "title": "Trusted Devices",
+                    "body": "Trusted Devices is where DNA-Nexus remembers approved phones, computers or other devices. A trusted phone can use the DNA-Nexus mobile app / DNA Connect style flow to scan QR codes, approve identity actions and help with safer login."
+                },
+                {
+                    "id": "trusted-devices-pair-phone",
+                    "target": [
+                        "#pairNewDeviceBtn",
+                        "#pairStatusLine",
+                        "text:h3:Pair a new device",
+                        "text:button:Pair New Device",
+                        "text:button:Pair a new device",
+                        "text:*:Open the DNA-Nexus mobile app"
+                    ],
+                    "placement": "bottom",
+                    "title": "Pair your mobile phone",
+                    "body": "To pair a phone, the user opens the DNA-Nexus mobile app and scans the QR code shown by the server. After approval, that phone can become a trusted device for identity and login workflows."
+                },
+                {
+                    "id": "trusted-devices-review",
+                    "target": [
+                        "text:h3:Trusted devices",
+                        "text:h3:Trusted Devices",
+                        "text:h2:Trusted devices",
+                        "text:h2:Trusted Devices"
+                    ],
+                    "placement": "right",
+                    "title": "Review paired devices",
+                    "body": "This section lists devices that can access your DNA-Nexus account through app pairing. If a phone is lost or replaced, remove trust from the old device."
+                },
+                {
+                    "id": "trusted-devices-guide",
+                    "target": [
+                        ".dnx-tour-help",
+                        "button.dnx-tour-help"
+                    ],
+                    "placement": "top",
+                    "title": "Help is available here too",
+                    "body": "The question mark restarts Nexus Guide on the Trusted Devices page."
                 }
             ]
         }
@@ -548,6 +738,43 @@
 
         if (path.includes("/photogallery/") || path.includes("photogallery")) {
             return "photogallery";
+        }
+
+        const trustedDeviceHints = [
+            "#nav_trusted_devices.active",
+            "#pairNewDeviceBtn",
+            "#pairStopBtn",
+            "#pairStatusLine",
+            "[data-tour='trusted-devices']",
+            "[data-tour='nav-trusted-devices']"
+        ];
+
+        for (const selector of trustedDeviceHints) {
+            if (visibleSelector(selector)) {
+                return "trusted_devices";
+            }
+        }
+
+        if ((bodyText.includes("trusted devices") &&
+             bodyText.includes("pair a new device")) ||
+            bodyText.includes("open the dna-nexus mobile app") ||
+            bodyText.includes("no trusted devices yet")) {
+            return "trusted_devices";
+        }
+
+        if (path.includes("trusted") ||
+            path.includes("device") ||
+            path.includes("devices") ||
+            path.includes("pair") ||
+            hash.includes("trusted") ||
+            hash.includes("device") ||
+            hash.includes("devices") ||
+            hash.includes("pair") ||
+            search.includes("trusted") ||
+            search.includes("device") ||
+            search.includes("devices") ||
+            search.includes("pair")) {
+            return "trusted_devices";
         }
 
         if (path.includes("admin") ||
