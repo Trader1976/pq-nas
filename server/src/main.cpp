@@ -2354,6 +2354,7 @@ static std::string mime_for_ext(std::string ext) {
     if (ext == ".html")  return "text/html; charset=utf-8";
     if (ext == ".js")    return "application/javascript; charset=utf-8";
     if (ext == ".css")   return "text/css; charset=utf-8";
+    if (ext == ".json")  return "application/json; charset=utf-8";
     if (ext == ".svg")   return "image/svg+xml; charset=utf-8";
     if (ext == ".png")   return "image/png";
     if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";

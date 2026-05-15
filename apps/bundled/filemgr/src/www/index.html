@@ -1684,6 +1684,7 @@
   <noscript><link rel="stylesheet" href="./pdf_preview.css"></noscript>
   <link rel="preload" href="./audio_preview.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="./audio_preview.css"></noscript>
+  <link rel="stylesheet" href="/static/onboarding.css?v=guided-tours-filemgr-browser-v3">
 </head>
 
 <body>
@@ -1691,9 +1692,9 @@
   <div class="panel">
     <div class="bar">
       <div class="left">
-        <div class="title" id="titleLine">File Manager</div>
+        <div class="title" id="titleLine" data-tour="filemgr-screen">File Manager</div>
 
-        <div id="scopeBar" class="scopeBar hidden" aria-live="polite">
+        <div id="scopeBar" data-tour="filemgr-location" class="scopeBar hidden" aria-live="polite">
           <label for="scopeSelect" class="scopeLbl">Location</label>
 
           <select id="scopeSelect" class="scopeSelect">
@@ -1710,22 +1711,22 @@
           </div>
         </div>
 
-        <div id="pathLine" aria-label="Breadcrumb path">path: (loading)</div>
+        <div id="pathLine" data-tour="filemgr-path" aria-label="Breadcrumb path">path: (loading)</div>
       </div>
 
-      <div class="actions">
+      <div class="actions" data-tour="filemgr-actions">
         <span class="badge warn" id="badge">loading…</span>
 
-        <button class="btn secondary" id="upBtn" type="button" title="Up">
+        <button class="btn secondary" id="upBtn" data-tour="filemgr-up" type="button" title="Up">
           <img class="btnIco" id="upIcon" src="./icons/updir_small.png" alt="">
           <span class="btnTxt">Up</span>
         </button>
 
-        <button class="btn secondary" id="viewToggleBtn" type="button" title="Toggle list/grid view">
+        <button class="btn secondary" id="viewToggleBtn" data-tour="filemgr-view" type="button" title="Toggle list/grid view">
           <span class="btnTxt" id="viewToggleTxt">List</span>
         </button>
 
-        <button class="btn secondary" id="sortBtn" type="button" title="Sort: directories first">
+        <button class="btn secondary" id="sortBtn" data-tour="filemgr-sort" type="button" title="Sort: directories first">
           <svg
                   id="sortIcon"
                   viewBox="0 0 24 24"
@@ -1743,16 +1744,16 @@
           <span class="btnTxt" id="sortTxt">Dirs</span>
         </button>
 
-        <button class="btn secondary" id="favoritesToggleBtn" type="button" title="Show favorites only">
+        <button class="btn secondary" id="favoritesToggleBtn" data-tour="filemgr-favorites" type="button" title="Show favorites only">
           <span class="btnTxt" id="favoritesToggleTxt">Favorites</span>
         </button>
-        <button class="btn secondary" id="trashBtn" type="button" title="Open Trash">
+        <button class="btn secondary" id="trashBtn" data-tour="filemgr-trash" type="button" title="Open Trash">
   <span style="display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center;">
     🗑
   </span>
           <span class="btnTxt">Trash</span>
         </button>
-        <button class="btn" id="refreshBtn" type="button" title="Refresh">
+        <button class="btn" id="refreshBtn" data-tour="filemgr-refresh" type="button" title="Refresh">
           <span class="btnTxt">Refresh</span>
         </button>
 
@@ -1761,20 +1762,20 @@
       </div>
     </div>
 
-    <div class="gridWrap" id="gridWrap">
+    <div class="gridWrap" id="gridWrap" data-tour="filemgr-grid">
       <div class="dropOverlay" id="dropOverlay" aria-hidden="true">
         <div>
           <div class="big">Drop files or folders to upload</div>
           <div class="small">Uploads into the current folder</div>
         </div>
       </div>
-      <div id="emptyState" class="emptyState hidden" aria-live="polite"></div>
+      <div id="emptyState" data-tour="filemgr-empty-state" class="emptyState hidden" aria-live="polite"></div>
       <div class="grid" id="grid"></div>
     </div>
 
     <div class="footer">
-      <div id="status" class="mono">Ready.</div>
-      <div id="quotaLine" class="mono quotaLine hidden" aria-live="polite"></div>
+      <div id="status" data-tour="filemgr-status" class="mono">Ready.</div>
+      <div id="quotaLine" data-tour="filemgr-quota" class="mono quotaLine hidden" aria-live="polite"></div>
 
       <div id="uploadProg" style="display:none" aria-hidden="true">
         <div class="upRow">
@@ -2046,6 +2047,15 @@
 <script src="./filemgr_storage_insights.js"></script>
 <script src="./textedit.js"></script>
 <script src="./imagepreview.js"></script>
+  <script>
+    window.DNANexusOnboardingScope = "filemgr";
+  </script>
+
+<script id="dnxFilemgrOnboardingScope">
+  window.DNANexusOnboardingScope = "filemgr";
+</script>
+<script src="./filemgr_onboarding.js?v=guided-tours-filemgr-browser-v3"></script>
+<script src="/static/onboarding.js?v=guided-tours-filemgr-browser-v3"></script>
 
 </body>
 </html>

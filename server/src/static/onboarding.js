@@ -736,8 +736,45 @@
         const search = String(window.location.search || "").toLowerCase();
         const bodyText = String((document.body && document.body.innerText) || "").toLowerCase();
 
+        const forcedScope = String(window.DNANexusOnboardingScope || "").trim().toLowerCase();
+        if (forcedScope) {
+            return forcedScope;
+        }
+
+        if (path.includes("/filemgr/") ||
+            path.includes("/apps/filemgr/") ||
+            path.includes("filemgr")) {
+            return "filemgr";
+        }
+
+        const fileManagerHints = [
+            "#titleLine",
+            "#gridWrap",
+            "#grid",
+            "#pathLine",
+            "#status",
+            "#scopeSelect",
+            "#workspaceActions",
+            "#trashBtn",
+            "[data-tour='filemgr-screen']",
+            "[data-tour='filemgr-location']"
+        ];
+
+        for (const selector of fileManagerHints) {
+            if (visibleSelector(selector)) {
+                return "filemgr";
+            }
+        }
+
         if (path.includes("/photogallery/") || path.includes("photogallery")) {
             return "photogallery";
+        }
+
+        if (path.includes("/filemgr/") ||
+            path.includes("filemgr") ||
+            path.includes("file_manager") ||
+            path.includes("file-manager")) {
+            return "filemgr";
         }
 
         const trustedDeviceHints = [
@@ -821,6 +858,79 @@
         }
 
         return "shell";
+    }
+
+    function ensureFileManagerTour() {
+        if (!manifest || !Array.isArray(manifest.tours)) {
+            return;
+        }
+
+        const exists = manifest.tours.some(tour => tour && tour.scope === "filemgr");
+        if (exists) {
+            return;
+        }
+
+        const tour = {
+            id: "filemgr.first_run.v2",
+            scope: "filemgr",
+            title: "File Manager tour",
+            autoStart: true,
+            steps: [
+                {
+                    id: "filemgr-overview",
+                    target: ["[data-tour='filemgr-screen']", "#titleLine", "#gridWrap", "#status"],
+                    placement: "bottom",
+                    title: "File Manager",
+                    body: "File Manager is where users browse, upload, download, preview, share and organize their files."
+                },
+                {
+                    id: "filemgr-storage-location",
+                    target: ["[data-tour='filemgr-location']", "#status", "#quotaLine", "#scopeBar", "#scopeSelect", "#pathLine"],
+                    placement: "bottom",
+                    title: "Storage and location",
+                    body: "If this account has no personal storage allocated yet, File Manager cannot show normal files until an admin allocates storage. When storage is available, the Location selector can switch between My files and shared workspaces."
+                },
+                {
+                    id: "filemgr-main-grid",
+                    target: ["[data-tour='filemgr-grid']", "#gridWrap", "#grid", "#emptyState"],
+                    placement: "top",
+                    title: "Files appear here",
+                    body: "This main area shows folders and files. Users can open folders, select items, use context menus, and drag files here to upload.",
+                    notice: "Browser tip: Brave gives the best DNA-Nexus UX. Chrome is also good. Firefox currently has known UI issues, so use Brave or Chrome for the smoothest experience."
+                },
+                {
+                    id: "filemgr-toolbar",
+                    target: ["[data-tour='filemgr-toolbar']", "#upBtn", "#viewToggleBtn", "#sortBtn", "#favoritesToggleBtn", "#refreshBtn"],
+                    placement: "bottom",
+                    title: "View and navigation tools",
+                    body: "The toolbar lets users go up a folder, switch between list and grid views, sort folders first, filter favorites, and refresh the current view."
+                },
+                {
+                    id: "filemgr-workspaces",
+                    target: ["#scopeBar", "#scopeSelect", "#workspaceCreateSharedBtn", "#workspaceMembersBtn"],
+                    placement: "bottom",
+                    title: "Shared spaces",
+                    body: "When workspace features are available, users can switch locations, create shared spaces, and review workspace members from here."
+                },
+                {
+                    id: "filemgr-trash",
+                    target: ["[data-tour='filemgr-trash']", "#trashBtn"],
+                    placement: "bottom",
+                    title: "Trash",
+                    body: "Deleted files go to Trash first. From there they can be restored or permanently removed, depending on permissions."
+                },
+                {
+                    id: "filemgr-guide-button",
+                    target: [".dnx-tour-help", "button.dnx-tour-help"],
+                    placement: "top",
+                    title: "Restart help any time",
+                    body: "The question mark opens Nexus Guide again, so users can replay this tour later."
+                }
+            ]
+        };
+
+        const insertAt = manifest.tours.length ? 1 : 0;
+        manifest.tours.splice(insertAt, 0, tour);
     }
 
     function resolveTextTarget(selector) {
@@ -932,6 +1042,28 @@
         return true;
     }
 
+    function conditionMatches(when) {
+        if (!when) return true;
+
+        if (Array.isArray(when.any) && when.any.length && !anySelectorVisible(when.any)) {
+            return false;
+        }
+
+        if (Array.isArray(when.all) && when.all.length && !allSelectorsVisible(when.all)) {
+            return false;
+        }
+
+        const blocked = Array.isArray(when.none)
+            ? when.none
+            : (Array.isArray(when.not) ? when.not : []);
+
+        if (blocked.length && anySelectorVisible(blocked)) {
+            return false;
+        }
+
+        return true;
+    }
+
     function stepAllowed(step) {
         const when = step && step.when;
         if (!when) return true;
@@ -971,6 +1103,47 @@
                 return Object.assign({}, step, { __targetEl: el });
             })
             .filter(Boolean);
+    }
+
+    function isTourAvailableNow(tour) {
+        if (!tour || !tour.id) return false;
+        if (!conditionMatches(tour.when)) return false;
+        return getShowableSteps(tour).length > 0;
+    }
+
+    function isFileManagerStorageUnallocatedActive() {
+        try {
+            const state = window.DNANexusFileManagerTourState;
+            if (state && typeof state.isStorageUnallocated === "function") {
+                return !!state.isStorageUnallocated();
+            }
+        } catch (_) {
+            // ignore
+        }
+
+        return anySelectorVisible(["[data-tour-filemgr-storage-unallocated]"]);
+    }
+
+    function isTourAvailableNow(tour) {
+        if (!tour || !tour.id) return false;
+        if (!conditionMatches(tour.when)) return false;
+
+        const scope = String(tour.scope || "");
+        const id = String(tour.id || "");
+
+        if (scope === "filemgr") {
+            const unallocated = isFileManagerStorageUnallocatedActive();
+
+            if (id === "filemgr.storage_unallocated.v1") {
+                return unallocated && getShowableSteps(tour).length > 0;
+            }
+
+            if (unallocated) {
+                return false;
+            }
+        }
+
+        return getShowableSteps(tour).length > 0;
     }
 
     function createEl(tag, className, text) {
@@ -1053,7 +1226,8 @@
         bubble.style.top = top + "px";
     }
 
-    function renderStep() {
+    
+function renderStep() {
         if (!activeTour || !activeSteps.length) {
             stopTour(false);
             return;
@@ -1130,6 +1304,14 @@
         bubble.appendChild(kicker);
         bubble.appendChild(title);
         bubble.appendChild(body);
+
+        if (step.notice) {
+            const notice = createEl("div", "dnx-tour-notice");
+            notice.appendChild(createEl("span", "dnx-tour-notice-icon", "!"));
+            notice.appendChild(createEl("span", "dnx-tour-notice-text", String(step.notice || "")));
+            bubble.appendChild(notice);
+        }
+
         bubble.appendChild(actions);
 
         try {
@@ -1145,8 +1327,15 @@
         window.setTimeout(() => positionStep(step), 140);
     }
 
+
     function startTour(tour, force) {
         if (!tour || !tour.id) return false;
+
+        if (suppressParentGuideForEmbeddedApp()) {
+            return false;
+        }
+
+        if (!conditionMatches(tour.when)) return false;
 
         if (!force) {
             const status = getTourStatus(tour.id);
@@ -1186,13 +1375,84 @@
         }
     }
 
-    function toggleHelpMenu() {
+    function isTopLevelGuideWindow() {
+        try {
+            return window.self === window.top;
+        } catch (_) {
+            return true;
+        }
+    }
+
+    function isAppShellPage() {
+        const path = String(window.location.pathname || "").toLowerCase();
+        return path === "/app" || path.endsWith("/app") || path.includes("/app/");
+    }
+
+    function visibleEmbeddedAppFrame() {
+        if (!document.body) {
+            return null;
+        }
+
+        // Only the real top-level /app shell should yield to embedded apps.
+        // Iframe apps keep their own Nexus Guide.
+        if (!isTopLevelGuideWindow() || !isAppShellPage()) {
+            return null;
+        }
+
+        const frames = Array.from(document.querySelectorAll("iframe"));
+        for (const frame of frames) {
+            if (isVisible(frame)) {
+                return frame;
+            }
+        }
+
+        return null;
+    }
+
+    function parentShouldYieldToEmbeddedApp() {
+        return !!visibleEmbeddedAppFrame();
+    }
+
+    function removeOwnHelpButton() {
+        closeHelpMenu();
+
+        const buttons = Array.from(document.querySelectorAll(".dnx-tour-help"));
+        for (const btn of buttons) {
+            btn.remove();
+        }
+
+        helpButton = null;
+    }
+
+    function suppressParentGuideForEmbeddedApp() {
+        if (!parentShouldYieldToEmbeddedApp()) {
+            return false;
+        }
+
+        if (activeTour) {
+            stopTour();
+        }
+
+        removeOwnHelpButton();
+        return true;
+    }
+
+    
+function toggleHelpMenu() {
         if (helpMenu) {
             closeHelpMenu();
             return;
         }
 
-        const tours = getToursForCurrentScope();
+        const tours = getToursForCurrentScope()
+            .filter(tour => {
+                if (!tour) return false;
+                if (tour.showInMenu === false || tour.menuHidden === true || tour.hiddenInMenu === true) {
+                    return false;
+                }
+                return conditionMatches(tour.when);
+            });
+
         if (!tours.length) return;
 
         helpMenu = createEl("div", "dnx-tour-menu");
@@ -1217,12 +1477,91 @@
         document.body.appendChild(helpMenu);
     }
 
-    function ensureHelpButton() {
-        if (helpButton && document.body.contains(helpButton)) {
+
+    function hideParentGuideButtonForEmbeddedApp() {
+        if (!window.parent || window.parent === window) {
             return;
         }
 
+        let scope = "";
+        try {
+            scope = detectScope();
+        } catch (_) {
+            scope = "";
+        }
+
+        if (!scope || scope === "shell") {
+            return;
+        }
+
+        try {
+            const parentDoc = window.parent.document;
+            if (!parentDoc || !parentDoc.documentElement) {
+                return;
+            }
+
+            parentDoc.documentElement.classList.add("dnx-embedded-app-guide-active");
+
+            let style = parentDoc.getElementById("dnxEmbeddedAppGuideHideStyle");
+            if (!style) {
+                style = parentDoc.createElement("style");
+                style.id = "dnxEmbeddedAppGuideHideStyle";
+                parentDoc.head.appendChild(style);
+            }
+
+            style.textContent =
+                "html.dnx-embedded-app-guide-active .dnx-tour-help," +
+                "html.dnx-embedded-app-guide-active .dnx-tour-menu{" +
+                "display:none!important;" +
+                "}";
+        } catch (_) {
+            // Cross-frame access may fail if the app is ever served from another origin.
+        }
+    }
+
+    function restoreParentGuideButtonAfterEmbeddedApp() {
+        if (!window.parent || window.parent === window) {
+            return;
+        }
+
+        try {
+            const parentDoc = window.parent.document;
+            if (parentDoc && parentDoc.documentElement) {
+                parentDoc.documentElement.classList.remove("dnx-embedded-app-guide-active");
+            }
+        } catch (_) {
+            // ignore
+        }
+    }
+
+    function ensureHelpButton() {
+        hideParentGuideButtonForEmbeddedApp();
+
+        if (!document.body) {
+            return;
+        }
+
+        if (suppressParentGuideForEmbeddedApp()) {
+            return;
+        }
+
+        const existingButtons = Array.from(document.querySelectorAll(".dnx-tour-help"));
+
+        if (helpButton && document.body.contains(helpButton)) {
+            for (const btn of existingButtons) {
+                if (btn !== helpButton) {
+                    btn.remove();
+                }
+            }
+            return;
+        }
+
+        for (const btn of existingButtons) {
+            btn.remove();
+        }
+
         helpButton = createEl("button", "dnx-tour-help", "?");
+        helpButton.id = "dnxTourHelpButton";
         helpButton.type = "button";
         helpButton.title = "Nexus Guide";
         helpButton.setAttribute("aria-label", "Nexus Guide");
@@ -1230,9 +1569,29 @@
         document.body.appendChild(helpButton);
     }
 
+    if (!window.__DNX_EMBEDDED_GUIDE_UNLOAD_HOOK__) {
+        window.__DNX_EMBEDDED_GUIDE_UNLOAD_HOOK__ = true;
+        window.addEventListener("pagehide", restoreParentGuideButtonAfterEmbeddedApp);
+        window.addEventListener("beforeunload", restoreParentGuideButtonAfterEmbeddedApp);
+    }
+
     function autoStartTours(force) {
         const scope = detectScope();
-        const tours = getToursForCurrentScope().filter(tour => tour.autoStart);
+
+        if (suppressParentGuideForEmbeddedApp()) {
+            lastScope = scope;
+            return false;
+        }
+
+        if (scope === "filemgr" &&
+            window.DNANexusFileManagerTourState &&
+            typeof window.DNANexusFileManagerTourState.isReady === "function" &&
+            !window.DNANexusFileManagerTourState.isReady()) {
+            window.setTimeout(() => autoStartTours(!!force), 450);
+            return false;
+        }
+
+        const tours = getToursForCurrentScope().filter(tour => tour.autoStart && conditionMatches(tour.when));
 
         lastScope = scope;
 
@@ -1251,6 +1610,11 @@
 
     function maybeScopeChanged() {
         ensureHelpButton();
+
+        if (suppressParentGuideForEmbeddedApp()) {
+            lastScope = detectScope();
+            return;
+        }
 
         if (activeTour) return;
 
@@ -1301,6 +1665,7 @@
         ensureHelpButton();
         watchScopeChanges();
 
+        ensureFileManagerTour();
         window.setTimeout(() => autoStartTours(false), AUTO_START_DELAY_MS);
     }
 
@@ -1346,7 +1711,11 @@
                 scope: detectScope(),
                 tours: getToursForCurrentScope().map(t => t.id),
                 state: readState(),
-                helpButton: !!document.querySelector(".dnx-tour-help")
+                helpButton: !!document.querySelector(".dnx-tour-help"),
+                isTopLevelGuideWindow: isTopLevelGuideWindow(),
+                isAppShellPage: isAppShellPage(),
+                embeddedAppFrame: !!visibleEmbeddedAppFrame(),
+                parentShouldYieldToEmbeddedApp: parentShouldYieldToEmbeddedApp()
             };
         }
     };

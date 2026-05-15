@@ -222,6 +222,123 @@
       ]
     },
     {
+      "id": "filemgr.storage_unallocated.v1",
+      "scope": "filemgr",
+      "title": "File Manager setup",
+      "autoStart": true,
+      "when": {
+        "any": [
+          "[data-tour-filemgr-storage-unallocated]"
+        ],
+        "none": [
+          "[data-tour-filemgr-usable]"
+        ]
+      },
+      "steps": [
+        {
+          "id": "filemgr-storage-unallocated",
+          "target": [
+            "[data-tour-filemgr-storage-unallocated]",
+            "#emptyState"
+          ],
+          "placement": "bottom",
+          "title": "Storage is not allocated yet",
+          "body": "Your account exists, but File Manager cannot be used until storage is allocated. Ask an admin to allocate storage for this user. After allocation, reload DNA-Nexus and the normal File Manager tour can continue."
+        }
+      ],
+      "showInMenu": false,
+      "menuHidden": true
+    },
+    {
+      "id": "filemgr.first_run.v2",
+      "scope": "filemgr",
+      "title": "File Manager tour",
+      "autoStart": true,
+      "steps": [
+        {
+          "id": "filemgr-overview",
+          "target": [
+            "#titleLine",
+            ".panel"
+          ],
+          "placement": "bottom",
+          "title": "File Manager",
+          "body": "File Manager is where users browse, upload, download, preview, share and organize their files."
+        },
+        {
+          "id": "filemgr-location",
+          "target": [
+            "#scopeBar",
+            "#scopeSelect"
+          ],
+          "placement": "bottom",
+          "title": "Choose a location",
+          "body": "The Location menu switches between your own files and shared workspaces that you can access."
+        },
+        {
+          "id": "filemgr-actions",
+          "target": [
+            "#upBtn",
+            "#viewToggleBtn",
+            "#sortBtn",
+            "#favoritesToggleBtn",
+            "#trashBtn"
+          ],
+          "placement": "bottom",
+          "title": "Common actions",
+          "body": "These buttons handle navigation, list/grid view, sorting, favorites and Trash."
+        },
+        {
+          "id": "filemgr-files",
+          "target": [
+            "[data-tour-filemgr-usable]",
+            "#gridWrap",
+            "#grid"
+          ],
+          "placement": "top",
+          "title": "Your files and best browser experience",
+          "body": "Files and folders appear here. You can select items, open previews and use the context menu for actions.",
+          "notice": "Best UX: Brave is preferred. Chrome is also good. Firefox currently has known UI issues, so use Brave or Chrome for the smoothest DNA-Nexus experience."
+        },
+        {
+          "id": "filemgr-upload",
+          "target": [
+            "#gridWrap"
+          ],
+          "placement": "top",
+          "title": "Upload by drag and drop",
+          "body": "Drop files or folders into the file area to upload them into the current folder."
+        },
+        {
+          "id": "filemgr-status",
+          "target": [
+            "#status",
+            "#quotaLine",
+            ".footer"
+          ],
+          "placement": "top",
+          "title": "Status and quota",
+          "body": "The footer shows current status messages and storage quota information when available."
+        },
+        {
+          "id": "filemgr-guide",
+          "target": [
+            ".dnx-tour-help",
+            "button.dnx-tour-help"
+          ],
+          "placement": "top",
+          "title": "Restart help any time",
+          "body": "The question mark opens Nexus Guide again, so users can rediscover File Manager later."
+        }
+      ],
+      "when": {
+        "any": [
+          "[data-tour-filemgr-usable]"
+        ]
+      },
+      "showInMenu": true
+    },
+    {
       "id": "photogallery.first_run.v1",
       "scope": "photogallery",
       "title": "Photo Gallery tour",

@@ -222,6 +222,167 @@
       ]
     },
     {
+      "id": "filemgr.first_run.v1",
+      "scope": "filemgr",
+      "title": "File Manager tour",
+      "autoStart": true,
+      "steps": [
+        {
+          "id": "filemgr-storage-unallocated",
+          "target": [
+            "#emptyState[data-tour-filemgr-storage-unallocated]",
+            "[data-tour='filemgr-empty-state']"
+          ],
+          "placement": "bottom",
+          "title": "Storage needs allocation",
+          "body": "If File Manager shows this message, the account does not yet have usable storage. An admin must allocate storage before this user can browse, upload or organize files.",
+          "when": {
+            "any": [
+              "#emptyState[data-tour-filemgr-storage-unallocated]"
+            ]
+          }
+        },
+        {
+          "id": "filemgr-location",
+          "target": [
+            "[data-tour='filemgr-location']",
+            "#scopeBar",
+            "#scopeSelect",
+            "#titleLine"
+          ],
+          "placement": "bottom",
+          "title": "Choose where you are working",
+          "body": "The Location area lets users work in their own files or switch to shared workspaces when they have access.",
+          "when": {
+            "any": [
+              "#gridWrap[data-tour-filemgr-usable]"
+            ]
+          }
+        },
+        {
+          "id": "filemgr-path",
+          "target": [
+            "[data-tour='filemgr-path']",
+            "#pathLine"
+          ],
+          "placement": "bottom",
+          "title": "Current folder path",
+          "body": "This line shows the current folder. It helps users understand where uploads, new folders and file operations will happen.",
+          "when": {
+            "any": [
+              "#gridWrap[data-tour-filemgr-usable]"
+            ]
+          }
+        },
+        {
+          "id": "filemgr-main-area",
+          "target": [
+            "#gridWrap[data-tour-filemgr-usable]",
+            "[data-tour='filemgr-grid']",
+            "#grid"
+          ],
+          "placement": "top",
+          "title": "Browse files and folders",
+          "body": "The main area shows folders and files. Users can select items, open previews, use context menus, drag files in, and manage content here.",
+          "when": {
+            "any": [
+              "#gridWrap[data-tour-filemgr-usable]"
+            ]
+          }
+        },
+        {
+          "id": "filemgr-upload-dragdrop",
+          "target": [
+            "#gridWrap[data-tour-filemgr-usable]",
+            "[data-tour='filemgr-grid']"
+          ],
+          "placement": "top",
+          "title": "Upload by dropping files here",
+          "body": "Users can drag files or folders into this area to upload them into the current folder. Upload progress and conflicts are shown safely before replacing anything.",
+          "when": {
+            "any": [
+              "#gridWrap[data-tour-filemgr-usable]"
+            ]
+          }
+        },
+        {
+          "id": "filemgr-toolbar",
+          "target": [
+            "[data-tour='filemgr-actions']",
+            "#refreshBtn",
+            "#upBtn"
+          ],
+          "placement": "bottom",
+          "title": "Navigation and view controls",
+          "body": "The toolbar provides Up, Refresh, view switching, sorting, favorites and Trash. These are the basic controls most users need first.",
+          "when": {
+            "any": [
+              "#gridWrap[data-tour-filemgr-usable]"
+            ]
+          }
+        },
+        {
+          "id": "filemgr-view-sort-favorites",
+          "target": [
+            "[data-tour='filemgr-view']",
+            "#viewToggleBtn",
+            "#sortBtn",
+            "#favoritesToggleBtn"
+          ],
+          "placement": "bottom",
+          "title": "View, sort and filter",
+          "body": "Users can switch between list and grid view, keep folders first, and filter to favorites when the folder gets busy.",
+          "when": {
+            "any": [
+              "#gridWrap[data-tour-filemgr-usable]"
+            ]
+          }
+        },
+        {
+          "id": "filemgr-trash",
+          "target": [
+            "[data-tour='filemgr-trash']",
+            "#trashBtn"
+          ],
+          "placement": "bottom",
+          "title": "Trash and recovery",
+          "body": "Deleted files go through Trash when available. Users can review trashed files, restore them, or permanently purge them.",
+          "when": {
+            "any": [
+              "#gridWrap[data-tour-filemgr-usable]"
+            ]
+          }
+        },
+        {
+          "id": "filemgr-status-quota",
+          "target": [
+            "#quotaLine:not(.hidden)",
+            "[data-tour='filemgr-quota']",
+            "[data-tour='filemgr-status']",
+            "#status"
+          ],
+          "placement": "top",
+          "title": "Status and storage quota",
+          "body": "The footer reports current status, upload progress and storage quota information. This is useful when uploads are large or a soft quota is near.",
+          "when": {
+            "any": [
+              "#gridWrap[data-tour-filemgr-usable]"
+            ]
+          }
+        },
+        {
+          "id": "filemgr-guide-restart",
+          "target": [
+            ".dnx-tour-help",
+            "button.dnx-tour-help"
+          ],
+          "placement": "top",
+          "title": "Restart help any time",
+          "body": "The question mark opens Nexus Guide again. Users can restart this File Manager tour later after updates or if they skipped it."
+        }
+      ]
+    },
+    {
       "id": "photogallery.first_run.v1",
       "scope": "photogallery",
       "title": "Photo Gallery tour",

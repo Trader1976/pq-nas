@@ -235,3 +235,40 @@
         justify-content: space-between;
     }
 }
+
+/* Guided tour warning notice, used for browser compatibility tips. */
+.dnx-tour-bubble.dnx-tour-bubble-with-notice{
+    position: fixed;
+}
+
+.dnx-tour-bubble.dnx-tour-bubble-with-notice::after{
+    content: "⚠";
+    position: absolute;
+    right: 14px;
+    top: 12px;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ff4b4b;
+    font-size: 25px;
+    line-height: 1;
+    text-shadow: 0 1px 4px rgba(0,0,0,.45);
+    pointer-events: none;
+}
+
+.dnx-tour-bubble.dnx-tour-bubble-with-notice .dnx-tour-title{
+    padding-right: 38px;
+}
+
+.dnx-tour-notice{
+    margin-top: 10px;
+    padding: 9px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(255,75,75,.45);
+    background: rgba(255,75,75,.10);
+    color: inherit;
+    font-size: 13px;
+    line-height: 1.35;
+}
