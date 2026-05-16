@@ -953,8 +953,8 @@
             showInMenu: true,
             when: {
                 any: [
-                    "#shareModal.show [data-tour='filemgr-share-modal']",
-                    "#shareModal[aria-hidden='false'] [data-tour='filemgr-share-modal']"
+                    "#shareModal.show[data-share-mode='standard'] [data-tour='filemgr-share-modal']",
+                    "#shareModal[aria-hidden='false'][data-share-mode='standard'] [data-tour='filemgr-share-modal']"
                 ]
             },
             steps: [
@@ -1014,6 +1014,114 @@
 
         const afterFileMgr = manifest.tours.findIndex(tour => tour && tour.id === "filemgr.first_run.v2");
         const insertAt = afterFileMgr >= 0 ? afterFileMgr + 1 : manifest.tours.length;
+        manifest.tours.splice(insertAt, 0, tour);
+    }
+
+
+    function ensureFileManagerPqEnrolledShareTour() {
+        if (!manifest || !Array.isArray(manifest.tours)) {
+            return;
+        }
+
+        const id = "filemgr.pq_enrolled_share_first_open.v1";
+        const exists = manifest.tours.some(tour => tour && tour.id === id);
+        if (exists) {
+            return;
+        }
+
+        const tour = {
+            id: id,
+            scope: "filemgr",
+            title: "PQ enrolled share dialog",
+            autoStart: false,
+            showInMenu: true,
+            when: {
+                any: [
+                    "#shareModal.show[data-share-mode='pq-enrolled'] [data-tour='filemgr-share-modal']",
+                    "#shareModal[aria-hidden='false'][data-share-mode='pq-enrolled'] [data-tour='filemgr-share-modal']"
+                ]
+            },
+            steps: [
+                {
+                    id: "filemgr-pq-share-overview",
+                    target: [
+                        "[data-tour='filemgr-share-modal']",
+                        "#shareModal.show .modalCard"
+                    ],
+                    placement: "left",
+                    title: "PQ recipient-enrolled share",
+                    body: "This creates a recipient-enrolled share invite. It is different from a normal public share link: the recipient uses the invite to enroll with their DNA identity before access is granted."
+                },
+                {
+                    id: "filemgr-pq-share-recipient",
+                    target: [
+                        "[data-tour='filemgr-share-status']",
+                        "#shareStatus",
+                        "[data-tour='filemgr-share-modal']"
+                    ],
+                    placement: "left",
+                    title: "For a specific recipient",
+                    body: "Use this when you want the recipient to be tied to their own identity instead of only relying on a normal public URL. The invite URL starts the recipient enrollment flow."
+                },
+                {
+                    id: "filemgr-pq-share-expiry",
+                    target: [
+                        "[data-tour='filemgr-share-expiry']",
+                        "#shareExpiry"
+                    ],
+                    placement: "left",
+                    title: "Choose how long it should work",
+                    body: "Expiry limits the share lifetime. Shorter is safer. The recipient invite/enrollment window may also be limited separately by the server."
+                },
+                {
+                    id: "filemgr-pq-share-create",
+                    target: [
+                        "[data-tour='filemgr-share-create']",
+                        "#shareCreateBtn"
+                    ],
+                    placement: "left",
+                    title: "Create the PQ invite",
+                    body: "Create PQ invite generates the invite URL. Send that URL to the intended recipient so they can complete enrollment."
+                },
+                {
+                    id: "filemgr-pq-share-copy",
+                    target: [
+                        "#shareOutWrap:not(.hidden) [data-tour='filemgr-share-copy']",
+                        "#shareOutWrap:not(.hidden) #shareCopyBtn"
+                    ],
+                    placement: "left",
+                    title: "Copy the invite URL",
+                    body: "After the invite is created, Copy places the invite URL on your clipboard. Send it only to the intended recipient."
+                },
+                {
+                    id: "filemgr-pq-share-safety",
+                    target: [
+                        "[data-tour='filemgr-share-modal']",
+                        "#shareModal.show .modalCard"
+                    ],
+                    placement: "left",
+                    title: "Treat invites as sensitive",
+                    body: "A PQ invite is safer than a plain public link because it supports recipient enrollment, but the invite URL should still be protected. Revoke it if you sent it to the wrong place.",
+                    notice: "Only share PQ invite URLs with people you trust."
+                },
+                {
+                    id: "filemgr-pq-share-manager",
+                    target: [
+                        "[data-tour='filemgr-share-modal']",
+                        "#shareModal.show .modalCard"
+                    ],
+                    placement: "left",
+                    title: "Manage shares later",
+                    body: "After shares are created, they can be reviewed, copied, expired or revoked later from Shares Manager."
+                }
+            ]
+        };
+
+        const afterStandardShare = manifest.tours.findIndex(tour => tour && tour.id === "filemgr.share_link_first_open.v1");
+        const afterFileMgr = manifest.tours.findIndex(tour => tour && tour.id === "filemgr.first_run.v2");
+        const insertAt = afterStandardShare >= 0
+            ? afterStandardShare + 1
+            : (afterFileMgr >= 0 ? afterFileMgr + 1 : manifest.tours.length);
         manifest.tours.splice(insertAt, 0, tour);
     }
 
@@ -1751,6 +1859,7 @@ function toggleHelpMenu() {
 
         ensureFileManagerTour();
         ensureFileManagerShareLinkTour();
+        ensureFileManagerPqEnrolledShareTour();
         window.setTimeout(() => autoStartTours(false), AUTO_START_DELAY_MS);
     }
 

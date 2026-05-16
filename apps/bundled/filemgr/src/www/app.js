@@ -78,6 +78,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   const shareCopyBtn = document.getElementById("shareCopyBtn");
   const shareStatus = document.getElementById("shareStatus");
   const SHARE_LINK_FIRST_OPEN_TOUR_ID = "filemgr.share_link_first_open.v1";
+  const PQ_ENROLLED_SHARE_FIRST_OPEN_TOUR_ID = "filemgr.pq_enrolled_share_first_open.v1";
   const emptyState = document.getElementById("emptyState");
 
   const trashBtn = document.getElementById("trashBtn");
@@ -5093,6 +5094,34 @@ function describeMoveItems(items) {
     }, delayMs);
   }
 
+
+  function maybeStartPqEnrolledShareFirstOpenTour(attempt = 0) {
+    const maxAttempts = 10;
+    const delayMs = attempt === 0 ? 120 : 250;
+
+    window.setTimeout(() => {
+      if (!shareModal || !shareModal.classList.contains("show")) {
+        return;
+      }
+
+      const guide = window.DNANexusGuidedTours;
+      if (!guide || typeof guide.startTourByIdOnce !== "function") {
+        if (attempt < maxAttempts) {
+          maybeStartPqEnrolledShareFirstOpenTour(attempt + 1);
+        }
+        return;
+      }
+
+      const started = guide.startTourByIdOnce(PQ_ENROLLED_SHARE_FIRST_OPEN_TOUR_ID);
+
+      // Usually the manifest is loaded before a user opens the context menu.
+      // This retry covers very fast clicks immediately after page load.
+      if (!started && attempt < 3) {
+        maybeStartPqEnrolledShareFirstOpenTour(attempt + 1);
+      }
+    }, delayMs);
+  }
+
   function openShareDialogFor(item, opts = {}) {
     const rel = currentRelPathFor(item);
     const type = (item.type === "dir") ? "dir" : "file";
@@ -5199,7 +5228,10 @@ function describeMoveItems(items) {
       };
     }
 
-    openShareModal({ startShareLinkTour: !isPq });
+    openShareModal({
+      shareMode: isPq ? "pq-enrolled" : "standard",
+      shareTourId: isPq ? PQ_ENROLLED_SHARE_FIRST_OPEN_TOUR_ID : SHARE_LINK_FIRST_OPEN_TOUR_ID
+    });
   }
 
   function openPropsModal() {
@@ -5221,11 +5253,25 @@ function describeMoveItems(items) {
 
   function openShareModal(opts = {}) {
     if (!shareModal) return;
+
+    const shareMode = opts && opts.shareMode
+        ? String(opts.shareMode)
+        : "standard";
+
+    shareModal.dataset.shareMode = shareMode;
     shareModal.classList.add("show");
     shareModal.setAttribute("aria-hidden", "false");
 
     if (!opts || opts.startShareLinkTour !== false) {
-      maybeStartShareLinkFirstOpenTour();
+      const tourId = opts && opts.shareTourId
+          ? String(opts.shareTourId)
+          : SHARE_LINK_FIRST_OPEN_TOUR_ID;
+
+      if (tourId === PQ_ENROLLED_SHARE_FIRST_OPEN_TOUR_ID) {
+        maybeStartPqEnrolledShareFirstOpenTour();
+      } else {
+        maybeStartShareLinkFirstOpenTour();
+      }
     }
   }
 
