@@ -646,7 +646,8 @@ static std::mutex g_approvals_mu;
 
 // --- pending admin approval / browser-bound preauth ---
 struct PendingEntry {
-    std::string reason;             // e.g. "user_disabled"
+    std::string reason;
+    std::string fingerprint_hex;             // e.g. "user_disabled"
     long expires_at = 0;            // unix epoch seconds
     std::string browser_bind_hash;  // SHA-256 hex of preauth cookie minted by /api/v5/session
 };
@@ -10571,6 +10572,7 @@ v5.consume_app_mint =
         out.expires_at = p.expires_at;
         out.reason = p.reason;
         out.browser_bind_hash = p.browser_bind_hash;
+        out.fingerprint_hex = p.fingerprint_hex;
         return true;
     };
 
@@ -10579,14 +10581,22 @@ v5.consume_app_mint =
         p.expires_at = in.expires_at;
         p.reason = in.reason;
 
-        // Preserve existing browser binding if caller is only updating reason/expiry.
+        // Preserve browser binding and fingerprint independently.
+        // A pending-admin update often has a new fingerprint but wants to keep
+        // the browser binding minted earlier by /api/v5/session.
+        PendingEntry oldp;
+        const bool had_old_pending = pending_get(sid, oldp);
+
         if (!in.browser_bind_hash.empty()) {
             p.browser_bind_hash = in.browser_bind_hash;
-        } else {
-            PendingEntry oldp;
-            if (pending_get(sid, oldp)) {
-                p.browser_bind_hash = oldp.browser_bind_hash;
-            }
+        } else if (had_old_pending) {
+            p.browser_bind_hash = oldp.browser_bind_hash;
+        }
+
+        if (!in.fingerprint_hex.empty()) {
+            p.fingerprint_hex = in.fingerprint_hex;
+        } else if (had_old_pending) {
+            p.fingerprint_hex = oldp.fingerprint_hex;
         }
 
         pending_put(sid, p);
@@ -10811,7 +10821,7 @@ v5.app_pair_build_qr_uri =
 
 	// (leave v5.sign_token_v4_ed25519 unset for now; we’ll wire once v5 verify uses it)
 
-register_routes_v5(srv, v5);
+    register_routes_v5(srv, v5);
 
     pqnas::ActivityRoutesDeps activity_deps;
     activity_deps.users = &users;
@@ -20141,6 +20151,7 @@ c.approvals_pop = [&](const std::string& sid){ approvals_pop(sid); };
         out.expires_at = p.expires_at;
         out.reason = p.reason;
         out.browser_bind_hash = p.browser_bind_hash;
+        out.fingerprint_hex = p.fingerprint_hex;
         return true;
     };
 
@@ -20149,14 +20160,22 @@ c.approvals_pop = [&](const std::string& sid){ approvals_pop(sid); };
         p.expires_at = in.expires_at;
         p.reason = in.reason;
 
-        // Preserve existing browser binding if caller is only updating reason/expiry.
+        // Preserve browser binding and fingerprint independently.
+        // A pending-admin update often has a new fingerprint but wants to keep
+        // the browser binding minted earlier by /api/v5/session.
+        PendingEntry oldp;
+        const bool had_old_pending = pending_get(sid, oldp);
+
         if (!in.browser_bind_hash.empty()) {
             p.browser_bind_hash = in.browser_bind_hash;
-        } else {
-            PendingEntry oldp;
-            if (pending_get(sid, oldp)) {
-                p.browser_bind_hash = oldp.browser_bind_hash;
-            }
+        } else if (had_old_pending) {
+            p.browser_bind_hash = oldp.browser_bind_hash;
+        }
+
+        if (!in.fingerprint_hex.empty()) {
+            p.fingerprint_hex = in.fingerprint_hex;
+        } else if (had_old_pending) {
+            p.fingerprint_hex = oldp.fingerprint_hex;
         }
 
         pending_put(sid, p);

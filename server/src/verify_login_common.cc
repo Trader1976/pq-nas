@@ -329,10 +329,20 @@ void handle_verify_login_common(const httplib::Request& req,
                        saved ? "" : "users_save_failed");
 
             if (ctx.pending_put) {
-				VerifyLoginCommonContext::PendingEntry p;
-				p.expires_at = now + 120;
-				p.reason = "pending_admin";   // IMPORTANT
-				ctx.pending_put(approval_key, p);
+                VerifyLoginCommonContext::PendingEntry existing_pending;
+                VerifyLoginCommonContext::PendingEntry p;
+
+                if (ctx.pending_get && ctx.pending_get(approval_key, existing_pending)) {
+                    // Preserve the browser binding cookie created by /api/v5/session.
+                    // Without this, /api/v5/consume would fail after admin approval.
+                    p.browser_bind_hash = existing_pending.browser_bind_hash;
+                }
+
+                // Admin approval can take longer than the normal QR scan window.
+                p.expires_at = now + (15 * 60);
+                p.reason = "pending_admin";
+                p.fingerprint_hex = computed_fp;
+                ctx.pending_put(approval_key, p);
             }
             return fail(403, "user disabled");
         }
@@ -341,10 +351,20 @@ void handle_verify_login_common(const httplib::Request& req,
             audit_info("v5.user_disabled", "fail", "not_enabled");
 
             if (ctx.pending_put) {
-				VerifyLoginCommonContext::PendingEntry p;
-				p.expires_at = now + 120;
-				p.reason = "pending_admin";   // IMPORTANT
-				ctx.pending_put(approval_key, p);
+                VerifyLoginCommonContext::PendingEntry existing_pending;
+                VerifyLoginCommonContext::PendingEntry p;
+
+                if (ctx.pending_get && ctx.pending_get(approval_key, existing_pending)) {
+                    // Preserve the browser binding cookie created by /api/v5/session.
+                    // Without this, /api/v5/consume would fail after admin approval.
+                    p.browser_bind_hash = existing_pending.browser_bind_hash;
+                }
+
+                // Admin approval can take longer than the normal QR scan window.
+                p.expires_at = now + (15 * 60);
+                p.reason = "pending_admin";
+                p.fingerprint_hex = computed_fp;
+                ctx.pending_put(approval_key, p);
             }
             return fail(403, "user disabled");
         }

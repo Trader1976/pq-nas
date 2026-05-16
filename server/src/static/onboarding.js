@@ -651,6 +651,7 @@
     ]
 };
     const AUTO_START_DELAY_MS = 1200;
+    const AUTH_GATE_RETRY_MS = 5000;
 
     let manifest = null;
     let activeTour = null;
@@ -667,6 +668,134 @@
     let lastScope = null;
     let observer = null;
     let scopeTimer = null;
+
+    let authGateOk = false;
+    let authGateReason = "unchecked";
+    let authGateStarted = false;
+    let authGateTimer = null;
+
+
+    function setAuthGateStatus(ok, reason) {
+        authGateOk = !!ok;
+        authGateReason = reason || (ok ? "ok" : "unknown");
+
+        try {
+            if (document.documentElement) {
+                document.documentElement.setAttribute(
+                    "data-dnx-guided-tours-auth",
+                    authGateOk ? "ok" : authGateReason
+                );
+            }
+        } catch (_) {
+            // ignore
+        }
+    }
+
+    async function checkGuidedToursAuth() {
+        try {
+            const res = await fetch("/api/v4/me", {
+                credentials: "include",
+                cache: "no-store",
+                headers: {
+                    "Accept": "application/json"
+                }
+            });
+
+            const json = await res.json().catch(() => null);
+            const ok = !!(res.ok && json && json.ok);
+
+            if (ok) {
+                setAuthGateStatus(true, "ok");
+                return true;
+            }
+
+            let reason = "not-authenticated";
+            const err = String(json && json.error ? json.error : "").toLowerCase();
+            const msg = String(json && json.message ? json.message : "").toLowerCase();
+
+            if (res.status === 401 || err.includes("unauthorized") || msg.includes("unauthorized")) {
+                reason = "unauthenticated";
+            } else if (res.status === 403 || err.includes("disabled") || msg.includes("disabled")) {
+                reason = "disabled";
+            } else if (res.status) {
+                reason = "http-" + String(res.status);
+            }
+
+            setAuthGateStatus(false, reason);
+            return false;
+        } catch (_) {
+            setAuthGateStatus(false, "network");
+            return false;
+        }
+    }
+
+    function stopGuidedToursForAuthGate() {
+        if (activeTour) {
+            stopTour(false);
+        }
+
+        removeOwnHelpButton();
+    }
+
+    function scheduleAuthGateRetry() {
+        if (authGateStarted) {
+            return;
+        }
+
+        if (authGateTimer) {
+            window.clearTimeout(authGateTimer);
+            authGateTimer = null;
+        }
+
+        authGateTimer = window.setTimeout(() => {
+            authGateTimer = null;
+            startGuidedToursWhenAuthenticated();
+        }, AUTH_GATE_RETRY_MS);
+    }
+
+    function startGuidedToursRuntime() {
+        if (authGateStarted) {
+            ensureHelpButton();
+            return true;
+        }
+
+        authGateStarted = true;
+        ensureHelpButton();
+        watchScopeChanges();
+        window.setTimeout(() => autoStartTours(false), AUTO_START_DELAY_MS);
+        return true;
+    }
+
+    async function startGuidedToursWhenAuthenticated() {
+        const ok = await checkGuidedToursAuth();
+
+        if (!ok) {
+            stopGuidedToursForAuthGate();
+            scheduleAuthGateRetry();
+            return false;
+        }
+
+        startGuidedToursRuntime();
+        return true;
+    }
+
+    async function refreshGuidedToursAuthState() {
+        const ok = await checkGuidedToursAuth();
+
+        if (!ok) {
+            stopGuidedToursForAuthGate();
+            scheduleAuthGateRetry();
+            return false;
+        }
+
+        if (!authGateStarted) {
+            startGuidedToursRuntime();
+        } else {
+            ensureHelpButton();
+        }
+
+        return true;
+    }
 
     function readState() {
         try {
@@ -1523,6 +1652,8 @@ function renderStep() {
     function startTour(tour, force) {
         if (!tour || !tour.id) return false;
 
+        if (!authGateOk) return false;
+
         if (suppressParentGuideForEmbeddedApp()) {
             return false;
         }
@@ -1727,6 +1858,11 @@ function toggleHelpMenu() {
     }
 
     function ensureHelpButton() {
+        if (!authGateOk) {
+            removeOwnHelpButton();
+            return;
+        }
+
         hideParentGuideButtonForEmbeddedApp();
 
         if (!document.body) {
@@ -1768,6 +1904,8 @@ function toggleHelpMenu() {
     }
 
     function autoStartTours(force) {
+        if (!authGateOk) return false;
+
         const scope = detectScope();
 
         if (suppressParentGuideForEmbeddedApp()) {
@@ -1854,13 +1992,15 @@ function toggleHelpMenu() {
             manifest = INLINE_MANIFEST_V1;
         }
 
-        ensureHelpButton();
-        watchScopeChanges();
-
         ensureFileManagerTour();
-        ensureFileManagerShareLinkTour();
-        ensureFileManagerPqEnrolledShareTour();
-        window.setTimeout(() => autoStartTours(false), AUTO_START_DELAY_MS);
+        if (typeof ensureFileManagerShareLinkTour === "function") {
+            ensureFileManagerShareLinkTour();
+        }
+        if (typeof ensureFileManagerPqEnrolledShareTour === "function") {
+            ensureFileManagerPqEnrolledShareTour();
+        }
+
+        await startGuidedToursWhenAuthenticated();
     }
 
     window.addEventListener("resize", () => {
@@ -1875,6 +2015,17 @@ function toggleHelpMenu() {
             markTour(activeTour.id, "dismissed");
             stopTour(false);
         }
+    });
+
+
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+            refreshGuidedToursAuthState();
+        }
+    });
+
+    window.addEventListener("focus", () => {
+        refreshGuidedToursAuthState();
     });
 
     document.addEventListener("click", event => {
@@ -1948,7 +2099,10 @@ function toggleHelpMenu() {
                 isTopLevelGuideWindow: isTopLevelGuideWindow(),
                 isAppShellPage: isAppShellPage(),
                 embeddedAppFrame: !!visibleEmbeddedAppFrame(),
-                parentShouldYieldToEmbeddedApp: parentShouldYieldToEmbeddedApp()
+                parentShouldYieldToEmbeddedApp: parentShouldYieldToEmbeddedApp(),
+                authGateOk: authGateOk,
+                authGateReason: authGateReason,
+                authGateStarted: authGateStarted
             };
         }
     };

@@ -34,6 +34,7 @@
 // - All JSON responses are no-store to avoid caching sensitive flow state.
 
 #include "routes_v5.h"
+#include "users_registry.h"
 #include <openssl/sha.h>
 
 #include <algorithm>
@@ -394,6 +395,106 @@ static void audit_v5_req(const RoutesV5Context& ctx,
     });
 }
 
+
+static bool pending_admin_user_is_enabled(const RoutesV5Context& ctx,
+                                          const RoutesV5Context::PendingEntry& pe) {
+    if (pe.reason != "pending_admin") return false;
+    if (pe.fingerprint_hex.empty()) return false;
+    if (!ctx.users) return false;
+    return ctx.users->is_enabled_user(pe.fingerprint_hex);
+}
+
+static bool mint_approval_for_pending_admin(const RoutesV5Context& ctx,
+                                            const std::string& key,
+                                            const RoutesV5Context::PendingEntry& pe,
+                                            long now,
+                                            RoutesV5Context::ApprovalEntry& out,
+                                            std::string& err) {
+    if (!ctx.approvals_put) {
+        err = "approvals_put_not_configured";
+        return false;
+    }
+
+    if (!ctx.b64_std || !ctx.session_cookie_mint || !ctx.cookie_key) {
+        err = "cookie_mint_not_configured";
+        return false;
+    }
+
+    const long sess_iat = now;
+    const long sess_exp = now + (ctx.sess_ttl ? *ctx.sess_ttl : 3600);
+
+    const std::string fp_b64 = ctx.b64_std(
+        reinterpret_cast<const unsigned char*>(pe.fingerprint_hex.data()),
+        pe.fingerprint_hex.size()
+    );
+
+    std::string cookie_val;
+    if (!ctx.session_cookie_mint(ctx.cookie_key, fp_b64, sess_iat, sess_exp, cookie_val) ||
+        cookie_val.empty()) {
+        err = "cookie_mint_failed";
+        return false;
+    }
+
+    RoutesV5Context::ApprovalEntry ae;
+    ae.cookie_val = cookie_val;
+    ae.fingerprint = pe.fingerprint_hex;
+    ae.expires_at = now + 120;
+
+    ctx.approvals_put(key, ae);
+    out = ae;
+
+    if (ctx.audit_emit) {
+        ctx.audit_emit("v5.pending_admin_promoted", "ok",
+                       [&](std::map<std::string,std::string>& f) {
+            f["k"] = key;
+            f["fingerprint"] = pe.fingerprint_hex;
+            f["approval_expires_at"] = std::to_string(ae.expires_at);
+        });
+    }
+
+    return true;
+}
+
+static void reply_pending_or_promoted_status(const RoutesV5Context& ctx,
+                                             httplib::Response& res,
+                                             const std::string& key,
+                                             const RoutesV5Context::PendingEntry& pe,
+                                             long now) {
+    if (pending_admin_user_is_enabled(ctx, pe)) {
+        RoutesV5Context::ApprovalEntry ae;
+        std::string err;
+
+        if (!mint_approval_for_pending_admin(ctx, key, pe, now, ae, err)) {
+            reply_json(res, 500, json{
+                {"ok", false},
+                {"error", "server_error"},
+                {"message", err},
+                {"k", key}
+            }.dump());
+            return;
+        }
+
+        reply_json(res, 200, json{
+            {"ok", true},
+            {"approved", true},
+            {"state", "approved"},
+            {"k", key},
+            {"expires_at", ae.expires_at}
+        }.dump());
+        return;
+    }
+
+    reply_json(res, 200, json{
+        {"ok", true},
+        {"approved", false},
+        {"pending", true},
+        {"state", "pending"},
+        {"k", key},
+        {"expires_at", pe.expires_at},
+        {"reason", pe.reason}
+    }.dump());
+}
+
 void register_routes_v5(httplib::Server& srv, const RoutesV5Context& ctx) {
 
     // ---- POST/GET /api/v5/session ----
@@ -546,14 +647,7 @@ void register_routes_v5(httplib::Server& srv, const RoutesV5Context& ctx) {
 
         RoutesV5Context::PendingEntry pe;
         if (ctx.pending_get && ctx.pending_get(key, pe)) {
-            reply_json(res, 200, json{
-                {"ok", true},
-                {"approved", false},
-                {"pending", true},
-                {"k", key},
-                {"expires_at", pe.expires_at},
-                {"reason", pe.reason}
-            }.dump());
+            reply_pending_or_promoted_status(ctx, res, key, pe, now);
             return;
         }
 
@@ -595,14 +689,7 @@ void register_routes_v5(httplib::Server& srv, const RoutesV5Context& ctx) {
 
         RoutesV5Context::PendingEntry pe;
         if (ctx.pending_get && ctx.pending_get(k, pe)) {
-            reply_json(res, 200, json{
-                {"ok", true},
-                {"approved", false},
-                {"state", "pending"},
-                {"k", k},
-                {"expires_at", pe.expires_at},
-                {"reason", pe.reason}
-            }.dump());
+            reply_pending_or_promoted_status(ctx, res, k, pe, now);
             return;
         }
 

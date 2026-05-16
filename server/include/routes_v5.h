@@ -70,6 +70,7 @@ struct RoutesV5Context {
 	struct PendingEntry {
 		long expires_at = 0;
 		std::string reason;
+        std::string fingerprint_hex;
 		std::string browser_bind_hash;
 	};
 

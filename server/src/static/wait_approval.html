@@ -71,6 +71,46 @@
             color: var(--fg-dim);
         }
 
+
+        .brandLogo{
+            display:block;
+            width: 162px;
+            max-width: 100%;
+            height: auto;
+            object-fit: contain;
+            filter: drop-shadow(0 10px 24px rgba(0,0,0,0.20));
+        }
+        .brandLogoSmall{
+            width: 170px;
+            max-width: 100%;
+        }
+        .approvalHero{
+            display:flex;
+            align-items:center;
+            gap: 16px;
+            padding: 0 0 16px 0;
+            margin-bottom: 16px;
+            border-bottom: 1px solid rgba(var(--fg-rgb),0.10);
+        }
+        .approvalHeroText{
+            min-width:0;
+        }
+        .approvalHeroText .heroTitle{
+            font-size: 18px;
+            font-weight: 950;
+            letter-spacing: 0.2px;
+        }
+        .approvalHeroText .heroSub{
+            margin-top: 4px;
+            font-size: 13px;
+            color: var(--fg-dim);
+            line-height: 1.4;
+        }
+        @media (max-width: 700px){
+            .approvalHero{ align-items:flex-start; flex-direction:column; }
+            .brandLogoSmall{ width: 210px; }
+        }
+
         .bottom{
             border-top: 1px solid var(--border2);
             margin-top: auto;
@@ -237,7 +277,7 @@
 <div class="desktop">
     <aside class="sidebar">
         <div class="brand">
-            <div class="logoDot" aria-hidden="true"></div>
+            <img class="brandLogo" src="/static/img/logo/nexuslogo_text.svg" alt="DNA-Nexus" />
             <div style="min-width:0">
                 <h1>Sign-in</h1>
                 <div class="sub">Admin approval required</div>
@@ -263,7 +303,7 @@
     <main class="workspace">
         <div class="topbar">
             <div class="crumbs">
-                <div class="title">PQ-NAS • Waiting for admin approval</div>
+                <div class="title">DNA-Nexus • Waiting for admin approval</div>
                 <div class="sub">Your DNA identity was received. An admin must enable you.</div>
             </div>
             <span class="pill warn"><span class="k">Next:</span> <span class="v">/admin/users</span></span>
@@ -276,8 +316,16 @@
                     <span class="pill warn" id="mainPill"><span class="k">Access:</span> <span class="v">pending</span></span>
                 </div>
                 <div class="bd">
+                    <div class="approvalHero">
+                        <img class="brandLogo brandLogoSmall" src="/static/img/logo/nexuslogo_text.svg" alt="DNA-Nexus" />
+                        <div class="approvalHeroText">
+                            <div class="heroTitle">Your DNA identity was received</div>
+                            <div class="heroSub">DNA-Nexus is waiting for an admin to enable this new account.</div>
+                        </div>
+                    </div>
+
                     <p class="hint">
-                        This PQ-NAS server is configured to <span class="mono">fail-closed</span> for new identities.
+                        This DNA-Nexus server is configured to <span class="mono">fail-closed</span> for new identities.
                         Your fingerprint must be enabled by an administrator before the browser can finish sign-in.
                     </p>
 
@@ -358,9 +406,9 @@
                 }
 
                 if (j.state === "missing") {
-                    setPill(statusPill, "fail", "missing");
-                    setPill(mainPill, "fail", "missing");
-                    setText("This sign-in request is no longer known by the server. Go back and start again.");
+                    setPill(statusPill, "fail", "expired");
+                    setPill(mainPill, "fail", "expired");
+                    setText("This sign-in request expired or was already consumed. Go back and start a new QR sign-in.");
                     return;
                 }
 
