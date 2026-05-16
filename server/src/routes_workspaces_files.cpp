@@ -11810,27 +11810,62 @@ srv.Post("/api/v4/workspaces/files/versions/delete",
         return;
     }
 
-    pqnas::WorkspaceResolvedTarget target;
-    std::string terr;
-    if (!pqnas::resolve_workspace_member_target_default_pool_only(
-            deps.users_path,
-            *wopt,
-            actor_fp,
-            true,
-            path_rel,
-            &target,
-            &terr)) {
-        const bool forbidden =
-            terr.find("permission") != std::string::npos ||
-            terr.find("forbidden") != std::string::npos ||
-            terr.find("member") != std::string::npos ||
-            terr.find("write") != std::string::npos;
+    const pqnas::WorkspaceRec& w = *wopt;
 
-        reply(forbidden ? 403 : 400, json{
+    auto mopt = enabled_member_for_actor(w, actor_fp);
+    if (!mopt.has_value() || !(mopt->role == "owner" || mopt->role == "editor")) {
+        reply(403, json{
             {"ok", false},
-            {"error", forbidden ? "forbidden" : "bad_request"},
-            {"message", forbidden ? "editor access required" : "invalid workspace path"},
-            {"detail", terr}
+            {"error", "forbidden"},
+            {"message", "editor access required"}
+        });
+        return;
+    }
+
+    if (w.storage_state != "allocated") {
+        reply(403, json{
+            {"ok", false},
+            {"error", "storage_unallocated"},
+            {"message", "workspace storage not allocated"}
+        });
+        return;
+    }
+
+    if (!w.storage_pool_id.empty()) {
+        reply(400, json{
+            {"ok", false},
+            {"error", "pool_not_supported_yet"},
+            {"message", "workspace version delete currently supports default pool only"}
+        });
+        return;
+    }
+
+    std::string rel_norm;
+    std::string nerr;
+    if (!pqnas::normalize_user_rel_path_strict(path_rel, &rel_norm, &nerr)) {
+        reply(400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid workspace path"},
+            {"detail", nerr}
+        });
+        return;
+    }
+
+    const std::filesystem::path ws_root =
+        workspace_dir_for_default_pool_only(deps.users_path, w);
+
+    // Security check only: make sure the logical path resolves inside the workspace root.
+    // Do NOT stat/require the live file here. Historical versions must be deletable
+    // even after the current file was deleted, moved, or otherwise missing.
+    std::filesystem::path ignored_abs;
+    std::string perr;
+    if (!pqnas::resolve_user_path_strict(ws_root, rel_norm, &ignored_abs, &perr)) {
+        reply(400, json{
+            {"ok", false},
+            {"error", "bad_request"},
+            {"message", "invalid workspace path"},
+            {"detail", perr}
         });
         return;
     }
@@ -11840,8 +11875,8 @@ srv.Post("/api/v4/workspaces/files/versions/delete",
     if (!deps.file_versions->delete_single_version(
             "workspace",
             workspace_id,
-            target.ws_root,
-            target.rel_norm,
+            ws_root,
+            rel_norm,
             version_id,
             &dr,
             &derr)) {
@@ -11860,7 +11895,7 @@ srv.Post("/api/v4/workspaces/files/versions/delete",
         {"scope_type", "workspace"},
         {"scope_id", workspace_id},
         {"workspace_id", workspace_id},
-        {"path", target.rel_norm},
+        {"path", rel_norm},
         {"version_id", version_id},
         {"versions_deleted", dr.versions_deleted},
         {"version_bytes_deleted", dr.bytes_deleted},
