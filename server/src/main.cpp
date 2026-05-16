@@ -23274,6 +23274,27 @@ srv.Get("/api/v4/system/drives", [&](const httplib::Request& req, httplib::Respo
     reply_json(res, 200, out.dump());
 });
 
+// drive-health-refresh-now: backend: force a fresh SMART/NVMe probe from the System page.
+srv.Post("/api/v4/system/drives/refresh-now", [](const auto& /*req*/, auto& res) {
+    nlohmann::json out = nlohmann::json::object();
+
+    std::string err;
+    const bool ok = pqnas::drive_health_monitor_refresh_now(&err);
+    const auto snap = pqnas::drive_health_monitor_snapshot();
+
+    out["ok"] = ok;
+    out["ready"] = snap.ready;
+    out["updated_iso"] = snap.updated_iso;
+    out["last_error"] = snap.last_error;
+
+    if (!ok) {
+        res.status = 500;
+        out["message"] = err.empty() ? "drive health refresh failed" : err;
+    }
+
+    res.set_content(out.dump(), "application/json");
+});
+
 srv.Post("/api/v4/system/drives/selftest/start", [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp, role;
     if (!require_user_cookie_users_actor(req, res, COOKIE_KEY, &users, &actor_fp, &role)) return;

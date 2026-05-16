@@ -87,6 +87,25 @@
         return j;
     }
 
+
+    // drive-health-refresh-now: frontend: backend-triggered SMART/NVMe refresh.
+    async function refreshDriveSmartNow() {
+        const r = await fetch("/api/v4/system/drives/refresh-now", {
+            method: "POST",
+            cache: "no-store",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: "{}"
+        });
+        const txt = await r.text();
+        let j = null;
+        try { j = JSON.parse(txt); } catch {}
+        if (!r.ok || !j || !j.ok) {
+            throw new Error((j && (j.message || j.error || j.last_error)) || `HTTP ${r.status}`);
+        }
+        return j;
+    }
+
     function healthKind(s) {
         if (s === "fail") return "fail";
         if (s === "warn") return "warn";
@@ -96,6 +115,43 @@
     function fmtTempC(n) {
         return Number.isFinite(n) ? `${n}°C` : "—";
     }
+
+    // drive-health-refresh-now: frontend: small manual refresh control for the Drive Health card.
+    function fmtSmartAge(sec) {
+        if (!Number.isFinite(sec) || sec < 0) return "—";
+        sec = Math.floor(sec);
+        if (sec < 60) return `${sec}s`;
+        const min = Math.floor(sec / 60);
+        if (min < 60) return `${min}m`;
+        const h = Math.floor(min / 60);
+        const m = min % 60;
+        if (h < 48) return m ? `${h}h ${m}m` : `${h}h`;
+        const d = Math.floor(h / 24);
+        const rh = h % 24;
+        return rh ? `${d}d ${rh}h` : `${d}d`;
+    }
+
+    function ensureDriveRefreshControls() {
+        const upd = el("driveHealthUpdated");
+        if (!upd || !upd.parentNode) return;
+        if (el("btnDriveHealthRefreshNow")) return;
+
+        const row = document.createElement("div");
+        row.className = "driveHealthRefreshControls";
+        row.style.display = "flex";
+        row.style.alignItems = "center";
+        row.style.gap = "8px";
+        row.style.flexWrap = "wrap";
+        row.style.margin = "8px 0 12px 0";
+        row.innerHTML = `
+            <button class="btn" id="btnDriveHealthRefreshNow" type="button">
+                Refresh SMART now
+            </button>
+            <span class="note mono" id="driveHealthRefreshStatus"></span>
+        `;
+        upd.parentNode.insertBefore(row, upd.nextSibling);
+    }
+
     async function fetchStorage() {
         const r = await fetch("/api/v4/system/storage", { cache: "no-store", credentials: "include" });
         const txt = await r.text();
@@ -557,11 +613,16 @@
         if (upd) {
             if (j.updated_iso) {
                 const d = new Date(j.updated_iso);
-                upd.textContent = `Updated: ${d.toLocaleTimeString()} UTC`;
+                const ageSec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+                upd.textContent = `Last SMART refresh: ${d.toLocaleTimeString()} UTC (${fmtSmartAge(ageSec)} ago)`;
+                upd.title = j.updated_iso;
             } else {
-                upd.textContent = "Updated: —";
+                upd.textContent = "Last SMART refresh: —";
+                upd.title = "";
             }
         }
+        ensureDriveRefreshControls();
+
 
         const host = el("driveHealthList");
         const pill = el("driveHealthPill");
@@ -822,6 +883,32 @@
         await refreshOnce();
         await refreshStorageOnce();
         await refreshDrivesOnce();
+    });
+
+
+    // drive-health-refresh-now: frontend: manual refresh button for cached SMART data.
+    document.addEventListener("click", async (ev) => {
+        const btn = ev.target && ev.target.closest && ev.target.closest("#btnDriveHealthRefreshNow");
+        if (!btn) return;
+
+        const status = el("driveHealthRefreshStatus");
+        const oldText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Refreshing…";
+        if (status) status.textContent = "Running smartctl probe…";
+
+        try {
+            await refreshDriveSmartNow();
+            await refreshDrivesOnce();
+            if (status) status.textContent = "Refreshed.";
+        } catch (e) {
+            const msg = String(e && e.message ? e.message : e);
+            if (status) status.textContent = "Refresh failed: " + msg;
+            alert("Failed to refresh SMART data: " + msg);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = oldText;
+        }
     });
 
     document.addEventListener("click", async (ev) => {
