@@ -12164,6 +12164,7 @@ srv.Post("/api/v4/storage/pools/set-name", [&](const httplib::Request& req, http
     // ---- auth (need actor fingerprint for audit) ----
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json body;
     try {
@@ -12346,6 +12347,7 @@ srv.Post("/api/v4/storage/pools/rename", [&](const httplib::Request& req, httpli
     // ---- auth (need actor fingerprint for audit) ----
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json body;
     try {
@@ -12524,6 +12526,7 @@ srv.Post("/api/v4/poolmgr/add-slot", [&](const httplib::Request& req, httplib::R
         return;
     }
     if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
@@ -12608,6 +12611,7 @@ srv.Post("/api/v4/poolmgr/remove-slot", [&](const httplib::Request& req, httplib
         return;
     }
     if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
@@ -12718,6 +12722,7 @@ srv.Post("/api/v4/poolmgr/set-layout", [&](const httplib::Request& req, httplib:
         return;
     }
     if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
@@ -12842,6 +12847,7 @@ srv.Post("/api/v4/poolmgr/plan-layout", [&](const httplib::Request& req, httplib
         return;
     }
     if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
@@ -13006,6 +13012,7 @@ srv.Post("/api/v4/poolmgr/apply-layout", [&](const httplib::Request& req, httpli
 
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
@@ -13829,6 +13836,7 @@ srv.Post("/api/v4/raid/plan/scrub", [&](const httplib::Request& req, httplib::Re
         return;
     }
     if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
@@ -13975,6 +13983,7 @@ srv.Post("/api/v4/raid/execute/scrub", [&](const httplib::Request& req, httplib:
     // ---- auth (need actor fingerprint for audit) ----
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     // ---- audit helpers (match Files API style) ----
     auto audit_ua = [&]() -> std::string {
@@ -14628,6 +14637,7 @@ srv.Post("/api/v4/raid/plan/add-device", [&](const httplib::Request& req, httpli
         return;
     }
     if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
@@ -14965,6 +14975,7 @@ srv.Post("/api/v4/raid/plan/convert-mode", [&](const httplib::Request& req, http
         return;
     }
     if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
@@ -15236,6 +15247,7 @@ srv.Post("/api/v4/raid/execute/convert-mode", [&](const httplib::Request& req, h
 
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
@@ -15537,6 +15549,7 @@ srv.Post("/api/v4/raid/plan/remove-device", [&](const httplib::Request& req, htt
         return;
     }
     if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
@@ -15847,6 +15860,7 @@ srv.Post("/api/v4/raid/plan/create-pool", [&](const httplib::Request& req, httpl
         return;
     }
     if (!require_admin_cookie_users(req, res, COOKIE_KEY, users_path, &users)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json in;
     try {
@@ -16566,6 +16580,7 @@ srv.Post("/api/v4/raid/execute/destroy-pool", [&](const httplib::Request& req, h
     // ---- auth (need actor fingerprint for audit) ----
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json in;
     try { in = json::parse(req.body.empty() ? "{}" : req.body); }
@@ -18113,6 +18128,7 @@ srv.Get("/api/v4/raid/health", [&](const httplib::Request& req, httplib::Respons
         if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) {
             return;
         }
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
         pqnas::AuditLog::RotateOptions opt;
         pqnas::AuditLog::RotateResult rr;
@@ -18141,6 +18157,7 @@ srv.Get("/api/v4/raid/health", [&](const httplib::Request& req, httplib::Respons
 // ---- Admin: audit retention preview (dry-run) ----
 srv.Post("/api/v4/admin/audit/preview-prune", [&](const httplib::Request& req, httplib::Response& res) {
     if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     nlohmann::json in = nlohmann::json::object();
     if (!req.body.empty()) {
@@ -18162,6 +18179,7 @@ srv.Post("/api/v4/admin/audit/preview-prune", [&](const httplib::Request& req, h
 // ---- Admin: audit retention prune (delete candidates based on SAVED policy) ----
 srv.Post("/api/v4/admin/audit/prune", [&](const httplib::Request& req, httplib::Response& res) {
     if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     // Load saved retention policy from admin_settings_path
     nlohmann::json persisted = nlohmann::json::object();
@@ -18503,6 +18521,7 @@ json dna_connect_identity = json{
 
 srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const httplib::Request& req, httplib::Response& res) {
     if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     try {
         const json persisted = load_admin_settings_json_safe();
@@ -18576,6 +18595,7 @@ srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const http
  // Admin settings API
 srv.Post("/api/v4/admin/settings", [&](const httplib::Request& req, httplib::Response& res) {
     if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     auto load_settings_json = [&]() -> json {
         try {
@@ -19643,6 +19663,7 @@ auto normalize_tiering = [&](const json& in_tier, std::string& err) -> json {
 });
 srv.Post("/api/v4/admin/settings/create-dna-alert-identity", [&](const httplib::Request& req, httplib::Response& res) {
     if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     try {
         const json persisted = load_admin_settings_json_safe();
@@ -19739,6 +19760,7 @@ srv.Get("/api/v4/admin/settings/dna-alert-identity-info", [&](const httplib::Req
 
 srv.Post("/api/v4/admin/settings/send-dna-alert-contact-request", [&](const httplib::Request& req, httplib::Response& res) {
     if (!require_admin_cookie(req, res, COOKIE_KEY, allowlist_path, &allowlist)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     try {
         const json persisted = load_admin_settings_json_safe();
@@ -22375,9 +22397,37 @@ pqnas::register_workspace_external_session_routes(srv, ws_external_session_deps)
 
     // POST /api/v4/admin/users/status
     // Body: {"fingerprint":"...","status":"enabled|disabled|revoked"}
-	srv.Post("/api/v4/admin/users/status", [&](const httplib::Request& req, httplib::Response& res) {
+	
+    // Security: prevent admin lockout when disabling/revoking admins.
+    // Returns true only when the target is currently the sole enabled admin.
+    auto admin_would_remove_last_enabled_admin = [&](const std::string& target_fp_hex) -> bool {
+        auto target = users.get(target_fp_hex);
+        if (!target.has_value()) {
+            return false;
+        }
+
+        if (target->role != "admin" || target->status != "enabled") {
+            return false;
+        }
+
+        const auto snap = users.snapshot();
+        for (const auto& kv : snap) {
+            const auto& u = kv.second;
+            if (u.fingerprint == target_fp_hex) {
+                continue;
+            }
+            if (u.role == "admin" && u.status == "enabled") {
+                return false;
+            }
+        }
+
+        return true;
+    };
+
+srv.Post("/api/v4/admin/users/status", [&](const httplib::Request& req, httplib::Response& res) {
     	std::string actor_fp;
 	    if (!require_admin_auth_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     	json j;
     	try { j = json::parse(req.body); }
@@ -22421,6 +22471,13 @@ pqnas::register_workspace_external_session_routes(srv, ws_external_session_deps)
         	}).dump());
     	    return;
 	    }
+
+        if ((status == "disabled" || status == "revoked") && admin_would_remove_last_enabled_admin(fp)) {
+            res.status = 400;
+            res.set_content("{\"ok\":false,\"error\":\"last_admin\",\"message\":\"Cannot disable or revoke the last enabled admin.\"}", "application/json");
+            return;
+        }
+
 
     	if (!users.exists(fp)) {
         	reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
@@ -22468,6 +22525,7 @@ pqnas::register_workspace_external_session_routes(srv, ws_external_session_deps)
 srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp;
     if (!require_admin_auth_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     res.set_header("Cache-Control", "no-store");
 
@@ -41991,6 +42049,7 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
     srv.Post("/api/v4/admin/users/upsert", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
         if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
         json j;
         try { j = json::parse(req.body); }
@@ -42085,6 +42144,7 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
     srv.Post("/api/v4/admin/users/enable", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
         if (!require_admin_auth_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
         json j;
         try { j = json::parse(req.body); }
@@ -42144,6 +42204,7 @@ srv.Post("/api/v4/snapshots/restore/confirm", [&](const httplib::Request& req, h
 srv.Post("/api/v4/admin/users/avatar_upload", [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json j;
     try { j = json::parse(req.body); }
@@ -42346,6 +42407,7 @@ srv.Get("/api/v4/users/avatar", [&](const httplib::Request& req, httplib::Respon
     srv.Post("/api/v4/admin/users/avatar_remove", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
         if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
         json j;
         try { j = json::parse(req.body); }
@@ -43475,6 +43537,7 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
     srv.Post("/api/v4/admin/users/disable", [&](const httplib::Request& req, httplib::Response& res) {
         std::string actor_fp;
         if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
         json j;
         try { j = json::parse(req.body); }
@@ -43490,6 +43553,19 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         }
         if (!users.exists(fp)) {
             reply_json(res, 404, json({{"ok",false},{"error","not_found"},{"message","user not found"}}).dump());
+            return;
+        }
+
+
+        if (fp == actor_fp) {
+            res.status = 400;
+            res.set_content("{\"ok\":false,\"error\":\"self_disable\",\"message\":\"Cannot disable your own admin account.\"}", "application/json");
+            return;
+        }
+
+        if (admin_would_remove_last_enabled_admin(fp)) {
+            res.status = 400;
+            res.set_content("{\"ok\":false,\"error\":\"last_admin\",\"message\":\"Cannot disable the last enabled admin.\"}", "application/json");
             return;
         }
 
@@ -43558,6 +43634,7 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
 	srv.Post("/api/v4/admin/users/delete", [&](const httplib::Request& req, httplib::Response& res) {
     	std::string actor_fp;
 	    if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     	json j;
     	try { j = json::parse(req.body); }
@@ -45655,6 +45732,7 @@ srv.Get("/api/v4/shares/list", [&](const httplib::Request& req, httplib::Respons
 srv.Post("/api/v4/admin/users/migrate_storage", [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     res.set_header("Cache-Control", "no-store");
 
@@ -45805,6 +45883,7 @@ srv.Get("/api/v4/admin/users/migrate_storage_status", [&](const httplib::Request
 srv.Post("/api/v4/admin/users/cleanup_old_storage", [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     res.set_header("Cache-Control", "no-store");
 
@@ -45931,6 +46010,7 @@ srv.Get("/api/v4/admin/users/cleanup_old_storage_status", [&](const httplib::Req
 srv.Post("/api/v4/admin/storage/tiering/migrate_one", [&](const httplib::Request& req, httplib::Response& res) {
     std::string actor_fp;
     if (!require_admin_cookie_users_actor(req, res, COOKIE_KEY, users_path, &users, &actor_fp)) return;
+        if (!require_same_origin_for_cookie_mutation(req, res)) return;
 
     json j;
     try {
