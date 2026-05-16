@@ -77,6 +77,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   const shareOut = document.getElementById("shareOut");
   const shareCopyBtn = document.getElementById("shareCopyBtn");
   const shareStatus = document.getElementById("shareStatus");
+  const SHARE_LINK_FIRST_OPEN_TOUR_ID = "filemgr.share_link_first_open.v1";
   const emptyState = document.getElementById("emptyState");
 
   const trashBtn = document.getElementById("trashBtn");
@@ -5064,6 +5065,34 @@ function describeMoveItems(items) {
     }
   }
 
+
+  function maybeStartShareLinkFirstOpenTour(attempt = 0) {
+    const maxAttempts = 10;
+    const delayMs = attempt === 0 ? 120 : 250;
+
+    window.setTimeout(() => {
+      if (!shareModal || !shareModal.classList.contains("show")) {
+        return;
+      }
+
+      const guide = window.DNANexusGuidedTours;
+      if (!guide || typeof guide.startTourByIdOnce !== "function") {
+        if (attempt < maxAttempts) {
+          maybeStartShareLinkFirstOpenTour(attempt + 1);
+        }
+        return;
+      }
+
+      const started = guide.startTourByIdOnce(SHARE_LINK_FIRST_OPEN_TOUR_ID);
+
+      // Usually the manifest is loaded before a user opens the context menu.
+      // This retry covers very fast clicks immediately after page load.
+      if (!started && attempt < 3) {
+        maybeStartShareLinkFirstOpenTour(attempt + 1);
+      }
+    }, delayMs);
+  }
+
   function openShareDialogFor(item, opts = {}) {
     const rel = currentRelPathFor(item);
     const type = (item.type === "dir") ? "dir" : "file";
@@ -5170,7 +5199,7 @@ function describeMoveItems(items) {
       };
     }
 
-    openShareModal();
+    openShareModal({ startShareLinkTour: !isPq });
   }
 
   function openPropsModal() {
@@ -5190,10 +5219,14 @@ function describeMoveItems(items) {
     propsModal.setAttribute("aria-hidden", "true");
   }
 
-  function openShareModal() {
+  function openShareModal(opts = {}) {
     if (!shareModal) return;
     shareModal.classList.add("show");
     shareModal.setAttribute("aria-hidden", "false");
+
+    if (!opts || opts.startShareLinkTour !== false) {
+      maybeStartShareLinkFirstOpenTour();
+    }
   }
 
   function closeShareModal() {

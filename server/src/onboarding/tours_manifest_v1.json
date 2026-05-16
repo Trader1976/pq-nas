@@ -383,6 +383,72 @@
       ]
     },
     {
+      "id": "filemgr.share_link_first_open.v1",
+      "scope": "filemgr",
+      "title": "Share link dialog",
+      "autoStart": false,
+      "showInMenu": true,
+      "when": {
+        "any": [
+          "#shareModal.show [data-tour='filemgr-share-modal']",
+          "#shareModal[aria-hidden='false'] [data-tour='filemgr-share-modal']"
+        ]
+      },
+      "steps": [
+        {
+          "id": "filemgr-share-overview",
+          "target": [
+            "[data-tour='filemgr-share-modal']",
+            "#shareModal.show .modalCard"
+          ],
+          "placement": "left",
+          "title": "Public share link",
+          "body": "This dialog creates a public link for the selected file or folder. Anyone who has the link can open the shared item while the link is valid."
+        },
+        {
+          "id": "filemgr-share-expiry",
+          "target": [
+            "[data-tour='filemgr-share-expiry']",
+            "#shareExpiry"
+          ],
+          "placement": "left",
+          "title": "Choose an expiry",
+          "body": "Expiry controls how long the link works. Shorter expiry is safer for one-time sharing. Never expiring links should be used carefully."
+        },
+        {
+          "id": "filemgr-share-create",
+          "target": [
+            "[data-tour='filemgr-share-create']",
+            "#shareCreateBtn"
+          ],
+          "placement": "left",
+          "title": "Create the URL",
+          "body": "Create link generates the public URL. After the link appears below, use Copy to place it on your clipboard."
+        },
+        {
+          "id": "filemgr-share-copy",
+          "target": [
+            "#shareOutWrap:not(.hidden) [data-tour='filemgr-share-copy']",
+            "#shareOutWrap:not(.hidden) #shareCopyBtn"
+          ],
+          "placement": "left",
+          "title": "Copy the link",
+          "body": "When a link already exists or has just been created, Copy places the URL on your clipboard so you can send it."
+        },
+        {
+          "id": "filemgr-share-safety",
+          "target": [
+            "[data-tour='filemgr-share-modal']",
+            "#shareModal.show .modalCard"
+          ],
+          "placement": "left",
+          "title": "Share carefully",
+          "body": "Only send share links to people you trust.",
+          "notice": "Anyone with the link may access the shared item until the link expires or is revoked."
+        }
+      ]
+    },
+    {
       "id": "photogallery.first_run.v1",
       "scope": "photogallery",
       "title": "Photo Gallery tour",

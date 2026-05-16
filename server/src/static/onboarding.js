@@ -933,6 +933,90 @@
         manifest.tours.splice(insertAt, 0, tour);
     }
 
+
+    function ensureFileManagerShareLinkTour() {
+        if (!manifest || !Array.isArray(manifest.tours)) {
+            return;
+        }
+
+        const id = "filemgr.share_link_first_open.v1";
+        const exists = manifest.tours.some(tour => tour && tour.id === id);
+        if (exists) {
+            return;
+        }
+
+        const tour = {
+            id: id,
+            scope: "filemgr",
+            title: "Share link dialog",
+            autoStart: false,
+            showInMenu: true,
+            when: {
+                any: [
+                    "#shareModal.show [data-tour='filemgr-share-modal']",
+                    "#shareModal[aria-hidden='false'] [data-tour='filemgr-share-modal']"
+                ]
+            },
+            steps: [
+                {
+                    id: "filemgr-share-overview",
+                    target: [
+                        "[data-tour='filemgr-share-modal']",
+                        "#shareModal.show .modalCard"
+                    ],
+                    placement: "left",
+                    title: "Public share link",
+                    body: "This dialog creates a public link for the selected file or folder. Anyone who has the link can open the shared item while the link is valid."
+                },
+                {
+                    id: "filemgr-share-expiry",
+                    target: [
+                        "[data-tour='filemgr-share-expiry']",
+                        "#shareExpiry"
+                    ],
+                    placement: "left",
+                    title: "Choose an expiry",
+                    body: "Expiry controls how long the link works. Shorter expiry is safer for one-time sharing. Never expiring links should be used carefully."
+                },
+                {
+                    id: "filemgr-share-create",
+                    target: [
+                        "[data-tour='filemgr-share-create']",
+                        "#shareCreateBtn"
+                    ],
+                    placement: "left",
+                    title: "Create the URL",
+                    body: "Create link generates the public URL. After the link appears below, use Copy to place it on your clipboard."
+                },
+                {
+                    id: "filemgr-share-copy",
+                    target: [
+                        "#shareOutWrap:not(.hidden) [data-tour='filemgr-share-copy']",
+                        "#shareOutWrap:not(.hidden) #shareCopyBtn"
+                    ],
+                    placement: "left",
+                    title: "Copy the link",
+                    body: "When a link already exists or has just been created, Copy places the URL on your clipboard so you can send it."
+                },
+                {
+                    id: "filemgr-share-safety",
+                    target: [
+                        "[data-tour='filemgr-share-modal']",
+                        "#shareModal.show .modalCard"
+                    ],
+                    placement: "left",
+                    title: "Share carefully",
+                    body: "Only send share links to people you trust.",
+                    notice: "Anyone with the link may access the shared item until the link expires or is revoked."
+                }
+            ]
+        };
+
+        const afterFileMgr = manifest.tours.findIndex(tour => tour && tour.id === "filemgr.first_run.v2");
+        const insertAt = afterFileMgr >= 0 ? afterFileMgr + 1 : manifest.tours.length;
+        manifest.tours.splice(insertAt, 0, tour);
+    }
+
     function resolveTextTarget(selector) {
         if (!selector || !selector.startsWith("text:")) {
             return null;
@@ -1666,6 +1750,7 @@ function toggleHelpMenu() {
         watchScopeChanges();
 
         ensureFileManagerTour();
+        ensureFileManagerShareLinkTour();
         window.setTimeout(() => autoStartTours(false), AUTO_START_DELAY_MS);
     }
 
@@ -1699,9 +1784,48 @@ function toggleHelpMenu() {
         init();
     }
 
+
+    function findTourById(id) {
+        id = String(id || "").trim();
+        if (!id || !manifest || !Array.isArray(manifest.tours)) {
+            return null;
+        }
+
+        return manifest.tours.find(tour => tour && String(tour.id || "") === id) || null;
+    }
+
+    function startTourById(id, force) {
+        const tour = findTourById(id);
+        if (!tour) {
+            return false;
+        }
+
+        return startTour(tour, !!force);
+    }
+
+    function startTourByIdOnce(id) {
+        const tour = findTourById(id);
+        if (!tour) {
+            return false;
+        }
+
+        const status = getTourStatus(tour.id);
+        if (status === "completed" || status === "dismissed") {
+            return false;
+        }
+
+        return startTour(tour, false);
+    }
+
     window.DNANexusGuidedTours = {
         restartCurrentScope: function () {
             autoStartTours(true);
+        },
+        startTourById: function (id, force) {
+            return startTourById(id, !!force);
+        },
+        startTourByIdOnce: function (id) {
+            return startTourByIdOnce(id);
         },
         resetAll: function () {
             writeState({});
