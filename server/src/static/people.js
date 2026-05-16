@@ -15,7 +15,9 @@
         notice: "",
         noticeKind: "ok",
         editing: null,
-        search: ""
+        search: "",
+        selectedFp: "",
+        detailOpenFp: ""
     };
 
     function esc(s) {
@@ -156,6 +158,7 @@
         try {
             const j = await apiJson("/api/v4/people/list");
             state.contacts = Array.isArray(j.contacts) ? j.contacts : [];
+            ensureSelection();
         } catch (e) {
             state.error = String(e && e.message ? e.message : e);
         } finally {
@@ -654,6 +657,7 @@ html[data-theme="win_classic"] .modal.show{
 
         state.editing = null;
         state.notice = "";
+        state.detailOpenFp = c.subject_fingerprint || "";
 
         editor.open(c, {
             onSaved: async () => {
@@ -677,6 +681,7 @@ html[data-theme="win_classic"] .modal.show{
     function beginEdit(fp) {
         const c = state.contacts.find((x) => x.subject_fingerprint === fp);
         if (!c) return;
+        setSelectedFp(fp, { focus: false, scroll: false });
         openPeopleEditor({ ...c });
     }
 
@@ -741,37 +746,299 @@ html[data-theme="win_classic"] .modal.show{
         `;
     }
 
+
+    let peopleKeyboardInstalled = false;
+
+    function contactLabel(c) {
+        const nickname = String((c && c.nickname) || "").trim();
+        if (nickname) return nickname;
+
+        const short = String((c && c.subject_fingerprint_short) || "").trim();
+        if (short) return short;
+
+        const fp = String((c && c.subject_fingerprint) || "").trim();
+        return shortFp(fp);
+    }
+
+    function contactDisplayNameLine(c) {
+        const displayName = String((c && c.display_name) || "").trim();
+        if (!displayName) return "";
+
+        const nickname = String((c && c.nickname) || "").trim();
+        const fp = String((c && c.subject_fingerprint) || "").trim();
+        const fpShort = String((c && c.subject_fingerprint_short) || shortFp(fp)).trim();
+
+        if (displayName === nickname) return "";
+        if (displayName === fpShort) return "";
+        if (normalizeFingerprint(displayName) && normalizeFingerprint(displayName) === normalizeFingerprint(fp)) return "";
+
+        return displayName;
+    }
+
+    function contactInitials(c) {
+        const label = contactLabel(c).trim();
+        if (!label) return "?";
+
+        const words = label
+            .replace(/[^\p{L}\p{N}\s_-]+/gu, " ")
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean);
+
+        if (words.length >= 2) {
+            return (words[0][0] + words[1][0]).toUpperCase();
+        }
+
+        return label.slice(0, 2).toUpperCase();
+    }
+
+    function ensureSelection(visibleContacts) {
+        const visible = Array.isArray(visibleContacts) ? visibleContacts : filterContacts();
+
+        if (!visible.length) {
+            state.selectedFp = "";
+            return;
+        }
+
+        if (!state.selectedFp || !visible.some((c) => c.subject_fingerprint === state.selectedFp)) {
+            state.selectedFp = visible[0].subject_fingerprint || "";
+        }
+    }
+
+    function getContactByFp(fp) {
+        const clean = String(fp || "");
+        return (state.contacts || []).find((x) => x.subject_fingerprint === clean) || null;
+    }
+
+    function peopleCards() {
+        return Array.from(document.querySelectorAll(".peopleContactCard[data-fp]"));
+    }
+
+    function selectedCardElement() {
+        const fp = state.selectedFp || "";
+        return peopleCards().find((el) => el.getAttribute("data-fp") === fp) || null;
+    }
+
+    function updateSelectedCardDom() {
+        const selected = state.selectedFp || "";
+
+        for (const el of peopleCards()) {
+            const isSelected = !!selected && el.getAttribute("data-fp") === selected;
+            el.classList.toggle("selected", isSelected);
+            el.setAttribute("aria-selected", isSelected ? "true" : "false");
+        }
+    }
+
+    function setSelectedFp(fp, opts = {}) {
+        const clean = String(fp || "");
+        if (!clean) return;
+
+        state.selectedFp = clean;
+        updateSelectedCardDom();
+
+        const el = selectedCardElement();
+        if (!el) return;
+
+        if (opts.focus) {
+            try { el.focus({ preventScroll: true }); } catch (_) { el.focus(); }
+        }
+
+        if (opts.scroll) {
+            try {
+                el.scrollIntoView({ block: "nearest", inline: "nearest" });
+            } catch (_) {
+                el.scrollIntoView();
+            }
+        }
+    }
+
+    function openPersonDetails(fp) {
+        const c = getContactByFp(fp || state.selectedFp);
+        if (!c) return;
+
+        setSelectedFp(c.subject_fingerprint, { focus: false, scroll: false });
+        openPeopleEditor({ ...c });
+    }
+
+    function togglePersonDetails(fp) {
+        const selected = String(fp || state.selectedFp || "");
+        if (!selected) return;
+
+        const editor = window.PQPeopleEditor;
+        const editorOpen = !!(editor && typeof editor.isOpen === "function" && editor.isOpen());
+        const editorFp = editor && typeof editor.currentFingerprint === "function"
+            ? editor.currentFingerprint()
+            : "";
+
+        if (editorOpen && editorFp === selected) {
+            if (typeof editor.close === "function") editor.close();
+            state.detailOpenFp = "";
+            return;
+        }
+
+        openPersonDetails(selected);
+    }
+
+    function gridColumnCount() {
+        const cards = peopleCards();
+        if (!cards.length) return 1;
+
+        const firstTop = cards[0].offsetTop;
+        const cols = cards.filter((el) => el.offsetTop === firstTop).length;
+
+        return Math.max(1, cols || 1);
+    }
+
+    function moveSelection(delta) {
+        const visible = filterContacts();
+        ensureSelection(visible);
+        if (!visible.length) return;
+
+        let idx = visible.findIndex((c) => c.subject_fingerprint === state.selectedFp);
+        if (idx < 0) idx = 0;
+
+        const nextIdx = Math.max(0, Math.min(visible.length - 1, idx + delta));
+        const next = visible[nextIdx];
+        if (!next || !next.subject_fingerprint) return;
+
+        setSelectedFp(next.subject_fingerprint, { focus: true, scroll: true });
+    }
+
+    function isPeopleTypingTarget(ev) {
+        const t = ev && ev.target;
+        if (!t || !t.closest) return false;
+        return !!t.closest("input, textarea, select, button, a, [contenteditable='true']");
+    }
+
+    function handlePeopleKeydown(ev) {
+        if (!document.querySelector(".peopleView")) return;
+
+        const key = String(ev.key || "");
+        const keyLower = key.toLowerCase();
+        const editor = window.PQPeopleEditor;
+        const editorOpen = !!(editor && typeof editor.isOpen === "function" && editor.isOpen());
+
+        if (editorOpen && (ev.ctrlKey || ev.metaKey) && keyLower === "s") {
+            ev.preventDefault();
+            ev.stopPropagation();
+
+            if (typeof editor.saveCurrent === "function") {
+                editor.saveCurrent();
+            }
+
+            return;
+        }
+
+        if (isPeopleTypingTarget(ev)) return;
+
+        if (key === "ArrowRight") {
+            ev.preventDefault();
+            moveSelection(1);
+            return;
+        }
+
+        if (key === "ArrowLeft") {
+            ev.preventDefault();
+            moveSelection(-1);
+            return;
+        }
+
+        if (key === "ArrowDown") {
+            ev.preventDefault();
+            moveSelection(gridColumnCount());
+            return;
+        }
+
+        if (key === "ArrowUp") {
+            ev.preventDefault();
+            moveSelection(-gridColumnCount());
+            return;
+        }
+
+        if (key === "Home") {
+            const visible = filterContacts();
+            if (visible.length) {
+                ev.preventDefault();
+                setSelectedFp(visible[0].subject_fingerprint, { focus: true, scroll: true });
+            }
+            return;
+        }
+
+        if (key === "End") {
+            const visible = filterContacts();
+            if (visible.length) {
+                ev.preventDefault();
+                setSelectedFp(visible[visible.length - 1].subject_fingerprint, { focus: true, scroll: true });
+            }
+            return;
+        }
+
+        if (key === "Enter") {
+            ev.preventDefault();
+            openPersonDetails(state.selectedFp);
+            return;
+        }
+
+        if (key === " " || key === "Spacebar") {
+            ev.preventDefault();
+            togglePersonDetails(state.selectedFp);
+        }
+    }
+
+    function installPeopleKeyboard() {
+        if (peopleKeyboardInstalled) return;
+        peopleKeyboardInstalled = true;
+        document.addEventListener("keydown", handlePeopleKeydown, true);
+    }
+
+
     function renderContactCard(c) {
         const fp = c.subject_fingerprint || "";
         const isNew = isRecentlyAddedPerson(fp);
-        const label = c.display_name || shortFp(fp);
+        const selected = !!fp && fp === state.selectedFp;
+        const label = contactLabel(c) || shortFp(fp);
+        const initials = contactInitials(c);
+
         const note = c.notes ? `
-            <div class="mini" style="line-height:1.45; margin-top:8px;">${esc(c.notes)}</div>
+            <div class="mini peopleCardNotes">${esc(c.notes)}</div>
         ` : "";
 
-        const nick = c.nickname ? `
-            <div class="mini" style="margin-top:4px;">Nickname: ${esc(c.nickname)}</div>
+        const displayNameLine = contactDisplayNameLine(c);
+        const displayNameHtml = displayNameLine ? `
+            <div class="mini peopleCardNickname">Name: ${esc(displayNameLine)}</div>
         ` : "";
 
         return `
-            <div class="card peopleContactCard" style="padding:14px;">
-                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
-                    <div style="min-width:0;">
-                        <h3 style="margin:0; font-size:17px;">
-                            ${esc(label)}
-                            ${isNew ? '<span class="peopleNewPill">new</span>' : ''}
-                        </h3>
-                        <div class="mini" style="margin-top:5px;">
-                            ${esc(kindLabel(c.subject_kind))}
-                            <span class="mono" title="${esc(fp)}" style="margin-left:8px;">${esc(c.subject_fingerprint_short || shortFp(fp))}</span>
-                        </div>
-                        ${nick}
-                        ${note}
-                    </div>
+            <div class="card peopleContactCard${selected ? " selected" : ""}"
+                 style="padding:14px;"
+                 data-fp="${esc(fp)}"
+                 tabindex="0"
+                 role="button"
+                 aria-selected="${selected ? "true" : "false"}"
+                 aria-label="Open person ${esc(label)}">
+                <div class="peopleCardMain">
+                    <div class="peopleAvatar" aria-hidden="true">${esc(initials)}</div>
 
-                    <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end;">
-                        <button class="btn secondary peopleEditBtn" type="button" data-fp="${esc(fp)}">Edit</button>
-                        <button class="btn secondary peopleDeleteBtn" type="button" data-fp="${esc(fp)}" data-label="${esc(label)}">Delete</button>
+                    <div class="peopleCardText">
+                        <div class="peopleCardTop">
+                            <h3 title="${esc(label)}">
+                                ${esc(label)}
+                                ${isNew ? '<span class="peopleNewPill">new</span>' : ''}
+                            </h3>
+
+                            <div class="peopleCardActions">
+                                <button class="btn secondary peopleEditBtn" type="button" data-fp="${esc(fp)}">Edit</button>
+                                <button class="btn secondary peopleDeleteBtn" type="button" data-fp="${esc(fp)}" data-label="${esc(label)}" title="Delete">Del</button>
+                            </div>
+                        </div>
+
+                        <div class="mini peopleCardKind">
+                            ${esc(kindLabel(c.subject_kind))}
+                            <span class="mono" title="${esc(fp)}">${esc(c.subject_fingerprint_short || shortFp(fp))}</span>
+                        </div>
+
+                        ${displayNameHtml}
+                        ${note}
                     </div>
                 </div>
             </div>
@@ -797,6 +1064,7 @@ html[data-theme="win_classic"] .modal.show{
         }
 
         const contacts = filterContacts();
+        ensureSelection(contacts);
 
         if (!state.contacts.length) {
             return `
@@ -910,12 +1178,44 @@ html[data-theme="win_classic"] .modal.show{
             });
         }
 
+        for (const card of document.querySelectorAll(".peopleContactCard[data-fp]")) {
+            card.addEventListener("click", (ev) => {
+                if (ev.target && ev.target.closest && ev.target.closest(".peopleCardActions, button, a")) return;
+
+                const fp = card.getAttribute("data-fp") || "";
+                if (!fp) return;
+
+                setSelectedFp(fp, { focus: true, scroll: false });
+            });
+
+            card.addEventListener("dblclick", (ev) => {
+                if (ev.target && ev.target.closest && ev.target.closest(".peopleCardActions, button, a")) return;
+
+                const fp = card.getAttribute("data-fp") || "";
+                if (!fp) return;
+
+                setSelectedFp(fp, { focus: true, scroll: false });
+                openPersonDetails(fp);
+            });
+
+            card.addEventListener("focus", () => {
+                const fp = card.getAttribute("data-fp") || "";
+                if (fp) setSelectedFp(fp, { focus: false, scroll: false });
+            });
+        }
+
         for (const btn of document.querySelectorAll(".peopleEditBtn")) {
-            btn.addEventListener("click", () => beginEdit(btn.getAttribute("data-fp") || ""));
+            btn.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
+                beginEdit(btn.getAttribute("data-fp") || "");
+            });
         }
 
         for (const btn of document.querySelectorAll(".peopleDeleteBtn")) {
-            btn.addEventListener("click", () => {
+            btn.addEventListener("click", (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();
                 deleteContact(btn.getAttribute("data-fp") || "", btn.getAttribute("data-label") || "");
             });
         }
@@ -926,6 +1226,7 @@ html[data-theme="win_classic"] .modal.show{
         state.notice = (ctx && ctx.messageText) || state.notice || "";
         state.noticeKind = (ctx && ctx.messageKind) || state.noticeKind || "ok";
 
+        installPeopleKeyboard();
         draw();
         loadContacts();
     }

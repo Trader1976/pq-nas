@@ -380,6 +380,30 @@ html:not([data-theme="dark"]):not([data-theme="cpunk_orange"]):not([data-theme="
         current.drag = null;
     }
 
+    function isOpen() {
+        const root = $(ROOT_ID);
+        return !!(root && root.classList.contains("show"));
+    }
+
+    function currentFingerprint() {
+        const liveInput = $("peopleEditorFingerprint");
+        const liveValue = liveInput ? liveInput.value : "";
+        return normalizeFingerprint(liveValue || (current.contact && current.contact.subject_fingerprint) || "");
+    }
+
+    function submitCurrentForm() {
+        const form = $("peopleEditorForm");
+        if (!form || !isOpen()) return false;
+
+        if (typeof form.requestSubmit === "function") {
+            form.requestSubmit();
+        } else {
+            form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        }
+
+        return true;
+    }
+
     function startDrag(ev) {
         const card = document.querySelector(`#${ROOT_ID} .peopleEditorCard`);
         const head = ev.target && ev.target.closest ? ev.target.closest(".peopleEditorHead") : null;
@@ -575,25 +599,34 @@ html:not([data-theme="dark"]):not([data-theme="cpunk_orange"]):not([data-theme="
             }
         });
 
-        window.setTimeout(() => {
-            const first = $("peopleEditorDisplayName");
-            if (first) {
-                first.focus();
-                try { first.select(); } catch (_) {}
-            }
-        }, 0);
+        /* people-editor-no-autofocus-v1
+           Keep focus where it was opened from. This lets Space toggle the
+           detached editor from the selected People card instead of typing
+           into the Display name field. */
     }
 
     document.addEventListener("mousemove", moveDrag);
     document.addEventListener("mouseup", stopDrag);
     document.addEventListener("keydown", (ev) => {
-        if (ev.key === "Escape" && $(ROOT_ID)?.classList.contains("show")) {
+        const open = isOpen();
+
+        if (open && (ev.ctrlKey || ev.metaKey) && String(ev.key || "").toLowerCase() === "s") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            submitCurrentForm();
+            return;
+        }
+
+        if (ev.key === "Escape" && open) {
             close();
         }
     });
 
     window.PQPeopleEditor = {
         open: render,
-        close
+        close,
+        isOpen,
+        saveCurrent: submitCurrentForm,
+        currentFingerprint
     };
 })();
