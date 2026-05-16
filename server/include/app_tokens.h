@@ -105,6 +105,7 @@ public:
     void prune_expired_refresh_tokens(long now);
 
     bool revoke_device(const std::string& device_id, std::string* err);
+    bool revoke_devices_for_fingerprint(const std::string& fingerprint_hex, std::string* err);
 
     bool get_device(const std::string& device_id, TrustedAppDevice* out) const;
     bool get_refresh_expiry_for_device(const std::string& device_id,

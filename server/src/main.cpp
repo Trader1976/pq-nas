@@ -22485,6 +22485,10 @@ srv.Post("/api/v4/admin/users/status", [&](const httplib::Request& req, httplib:
     	}
 
     	const bool ok_set  = users.set_status(fp, status);
+        if (status == "disabled" || status == "revoked") {
+            std::string token_revoke_err;
+            (void)g_app_tokens.revoke_devices_for_fingerprint(fp, &token_revoke_err);
+        }
     	const bool ok_save = ok_set ? users.save(users_path) : false;
 
     	{
@@ -22860,8 +22864,6 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
             {"ok", false},
             {"error", "server_error"},
             {"message", "refusing to allocate: user_dir is not under data_root"},
-            {"data_root", data_root.string()},
-            {"user_dir", udir.string()}
         }).dump());
         return;
     }
@@ -22949,7 +22951,6 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
             {"pool_id", normalize_storage_pool_id(pool_id)},
             {"requested_quota_bytes", quota_bytes},
             {"used_bytes", used_bytes},
-            {"user_dir", udir.string()}
         }).dump());
         return;
     }
@@ -23017,14 +23018,11 @@ srv.Post("/api/v4/admin/users/storage", [&](const httplib::Request& req, httplib
         {"ok", true},
         {"fingerprint", fp},
         {"pool_id", pool_id},
-        {"pool_mount", pool_mount},
         {"storage_state", u.storage_state},
         {"quota_bytes", u.quota_bytes},
         {"root_rel", u.root_rel},
         {"storage_set_at", u.storage_set_at},
         {"storage_set_by", u.storage_set_by},
-        {"user_dir", udir.string()},
-        {"data_root", data_root.string()}
     }).dump());
 });
 
@@ -23183,9 +23181,6 @@ srv.Get("/api/v4/admin/users/storage_preview", [&](const httplib::Request& req, 
         {"ok", true},
         {"fingerprint", fp},
         {"pool_id", pool_id},
-        {"pool_mount", pool_mount},
-        {"data_root", data_root.string()},
-        {"user_dir", udir.string()},
         {"used_bytes", used_bytes},
         {"current_quota_bytes", current_quota_bytes},
         {"pool_total_bytes", pool_total_bytes},
@@ -43572,6 +43567,10 @@ srv.Post("/api/v4/apps/uninstall", [&](const httplib::Request& req, httplib::Res
         if (!users.set_status(fp, "disabled")) {
             reply_json(res, 500, json({{"ok",false},{"error","server_error"},{"message","set_status failed"}}).dump());
             return;
+        }
+        {
+            std::string token_revoke_err;
+            (void)g_app_tokens.revoke_devices_for_fingerprint(fp, &token_revoke_err);
         }
 
         const bool saved = users.save(users_path);

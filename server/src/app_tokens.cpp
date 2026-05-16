@@ -695,6 +695,57 @@ bool AppTokenStore::revoke_device(const std::string& device_id, std::string* err
     }
     return true;
 }
+
+bool AppTokenStore::revoke_devices_for_fingerprint(const std::string& fingerprint_hex, std::string* err) {
+    if (err) err->clear();
+    if (fingerprint_hex.empty()) {
+        if (err) *err = "empty fingerprint";
+        return false;
+    }
+
+    bool changed = false;
+
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+
+        for (auto& kv : devices_by_id_) {
+            TrustedAppDevice& d = kv.second;
+            if (d.fingerprint_hex == fingerprint_hex && !d.revoked) {
+                d.revoked = true;
+                changed = true;
+            }
+        }
+
+        for (auto& kv : refresh_by_hash_) {
+            AppRefreshSession& s = kv.second;
+            if (s.fingerprint_hex == fingerprint_hex && !s.revoked) {
+                s.revoked = true;
+                changed = true;
+            }
+        }
+
+        for (auto& kv : access_by_hash_) {
+            AppAccessSession& s = kv.second;
+            if (s.fingerprint_hex == fingerprint_hex && !s.revoked) {
+                s.revoked = true;
+                changed = true;
+            }
+        }
+    }
+
+    if (!changed) {
+        return true;
+    }
+
+    std::string save_err;
+    if (!save(&save_err)) {
+        if (err) *err = "save failed: " + save_err;
+        return false;
+    }
+
+    return true;
+}
+
     bool AppTokenStore::get_refresh_expiry_for_device(const std::string& device_id,
                                                       long* out_expires_at) const {
     if (out_expires_at) *out_expires_at = 0;
