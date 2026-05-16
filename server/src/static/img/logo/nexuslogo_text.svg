@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+  <title id="title">DNA-Nexus transparent logo</title>
+  <desc id="desc">Transparent cyberpunk style DNA-Nexus wordmark logo with circuit underline and tagline.</desc>
+  <defs>
+    <linearGradient id="orange" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff0a8"/>
+      <stop offset="0.18" stop-color="#ffb000"/>
+      <stop offset="0.55" stop-color="#ff6a00"/>
+      <stop offset="1" stop-color="#ff2e00"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e4fbff"/>
+      <stop offset="0.22" stop-color="#54eaff"/>
+      <stop offset="0.62" stop-color="#00b9e8"/>
+      <stop offset="1" stop-color="#006fc9"/>
+    </linearGradient>
+    <linearGradient id="steel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#dce7ed"/>
+      <stop offset="0.34" stop-color="#5d737e"/>
+      <stop offset="0.72" stop-color="#1d2b33"/>
+      <stop offset="1" stop-color="#060b0e"/>
+    </linearGradient>
+    <linearGradient id="darkSteel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26343c"/>
+      <stop offset="0.55" stop-color="#0b1217"/>
+      <stop offset="1" stop-color="#020506"/>
+    </linearGradient>
+    <filter id="softGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="1 0 0 0 0  0 1 0 0 0.55  0 0 1 0 0.18  0 0 0 0.85 0" result="glow"/>
+      <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="cyanGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0  0 0.8 0 0 0.9  0 0 1 0 1  0 0 0 0.9 0" result="glow"/>
+      <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="orangeGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="1 0 0 0 1  0 0.45 0 0 0.35  0 0 0 0 0  0 0 0 0.9 0" result="glow"/>
+      <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+    <style>
+      .stroke-dark{stroke:#071018;stroke-width:6;stroke-linejoin:round;stroke-linecap:round}
+      .thin{fill:none;stroke-width:5;stroke-linecap:round;stroke-linejoin:round}
+      .micro{fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+      .word{font-family:Orbitron, Eurostile, Bank Gothic, Rajdhani, Arial Black, sans-serif;font-weight:800;letter-spacing:8px}
+      .tag{font-family:Orbitron, Rajdhani, Arial, sans-serif;font-weight:700;letter-spacing:18px}
+    </style>
+  </defs>
+
+  <!-- wordmark -->
+  <g id="wordmark" transform="translate(0,-700)" filter="url(#shadow)">
+    <text x="485" y="925" text-anchor="end" class="word" font-size="98" fill="none" stroke="#071018" stroke-width="12" paint-order="stroke">DNA</text>
+    <text x="485" y="925" text-anchor="end" class="word" font-size="98" fill="url(#orange)" filter="url(#orangeGlow)">DNA</text>
+    <text x="515" y="925" text-anchor="middle" class="word" font-size="98" fill="#9aaab2" stroke="#071018" stroke-width="9" paint-order="stroke">-</text>
+    <text x="545" y="925" class="word" font-size="98" fill="none" stroke="#071018" stroke-width="12" paint-order="stroke">NEXUS</text>
+    <text x="545" y="925" class="word" font-size="98" fill="url(#cyan)" filter="url(#cyanGlow)">NEXUS</text>
+
+    <!-- circuit line -->
+    <g transform="translate(0,965)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M155 0 H330 l22 18 h92 l22 -18 h92" stroke="url(#orange)" stroke-width="5" filter="url(#orangeGlow)"/>
+      <path d="M645 0 h92 l22 18 h92 l22 -18 h172" stroke="url(#cyan)" stroke-width="5" filter="url(#cyanGlow)"/>
+      <circle cx="600" cy="7" r="18" fill="#11181d" stroke="#071018" stroke-width="6"/>
+      <circle cx="600" cy="7" r="10" fill="url(#orange)" filter="url(#orangeGlow)"/>
+      <circle cx="195" cy="0" r="5" fill="url(#orange)"/><circle cx="1025" cy="0" r="5" fill="url(#cyan)"/>
+    </g>
+
+    <text x="268" y="1042" class="tag" font-size="31" fill="url(#orange)">STORE.</text>
+    <text x="475" y="1042" class="tag" font-size="31" fill="#e9eef2" stroke="#071018" stroke-width="2" paint-order="stroke">CONNECT.</text>
+    <text x="754" y="1042" class="tag" font-size="31" fill="url(#cyan)">PROTECT.</text>
+  </g>
+</svg>

@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>DNA-Nexus NAS — Sign in with DNA</title>
+    <title>DNA-Nexus NAS · Sign in with DNA</title>
 
     <link rel="stylesheet" href="/static/theme.css">
     <script src="/static/theme.js"></script>
@@ -11,9 +11,8 @@
     <style>
         :root{
             --bg: #050712;
-
             --fg-dim: rgba(var(--fg-rgb),0.78);
-            --panel: rgba(255,255,255,0.03);
+            --panel: rgba(255,255,255,0.035);
             --border: rgba(var(--fg-rgb),0.26);
             --border2: rgba(var(--fg-rgb),0.14);
             --shadow: rgba(var(--fg-rgb),0.10);
@@ -22,90 +21,153 @@
 
         * { box-sizing: border-box; }
 
+        html, body{
+            min-height: 100%;
+        }
+
         body{
             margin: 0;
+            min-height: 100dvh;
             font-family: var(--sans);
-            padding: 28px 18px;
-            background: var(--bg);
+            background:
+                radial-gradient(circle at 27% 46%, rgba(var(--fg-rgb),0.13), transparent 33%),
+                radial-gradient(circle at 82% 18%, rgba(var(--fg-rgb),0.08), transparent 28%),
+                var(--bg);
             color: var(--fg);
+            overflow: hidden;
         }
 
         .wrap{
-            min-height: calc(100dvh - 56px);
+            min-height: 100dvh;
+            width: 100vw;
             display: grid;
-            place-items: center;
+            grid-template-columns: minmax(0, 1.618fr) minmax(380px, 1fr);
         }
 
-        .card{
-            width: 100%;
-            max-width: 720px;
-            border: 1px solid var(--border);
-            border-radius: 22px;
-            padding: 18px 18px 16px;
-            background: var(--panel);
-            box-shadow:
-                    0 0 0 1px var(--border2),
-                    0 18px 60px rgba(0,0,0,0.35),
-                    0 0 40px var(--shadow);
+        .logoPane{
+            position: relative;
+            min-width: 0;
+            min-height: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: clamp(34px, 6vw, 104px);
+            overflow: hidden;
+            border-right: 1px solid rgba(var(--fg-rgb),0.08);
+            background: transparent;
         }
+
+        .logoPane::before,
+
 
         .brand{
+            width: 100%;
             display: flex;
+            align-items: center;
             justify-content: center;
-            margin: 8px 0 14px;
+            background: transparent;
         }
 
         .brand img{
-            width: min(640px, 100%);
+            width: min(82%, 900px);
+            max-height: 74vh;
             height: auto;
             display: block;
+            object-fit: contain;
+            filter: none;
+            box-shadow: none;
+            background: transparent;
+        }
+
+        .loginPane{
+            min-width: 0;
+            min-height: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: clamp(22px, 4vw, 58px);
+            overflow: auto;
+        }
+
+        .card{
+            width: min(440px, 100%);
+            border: 1px solid var(--border);
+            border-radius: 26px;
+            padding: 24px 22px 18px;
+            background:
+                linear-gradient(180deg, rgba(var(--fg-rgb),0.055), transparent 42%),
+                var(--panel);
+            box-shadow:
+                0 0 0 1px var(--border2),
+                0 22px 68px rgba(0,0,0,0.38),
+                0 0 44px var(--shadow);
+            backdrop-filter: blur(10px);
+        }
+
+        .loginMark{
+            display: flex;
+            justify-content: center;
+            margin: 0 0 16px;
+        }
+
+        .loginMarkBadge{
+            border: 1px solid rgba(var(--fg-rgb),0.18);
+            background: rgba(var(--fg-rgb),0.055);
+            color: rgba(var(--fg-rgb),0.72);
+            border-radius: 999px;
+            padding: 8px 12px;
+            font-size: 12px;
+            font-weight: 900;
+            letter-spacing: 0.7px;
+            text-transform: uppercase;
         }
 
         h1{
-            margin: 6px 0 6px 0;
-            font-size: 20px;
+            margin: 0 0 8px 0;
+            font-size: clamp(24px, 2.2vw, 34px);
+            line-height: 1.05;
             text-align: center;
-            letter-spacing: 0.2px;
+            letter-spacing: -0.5px;
         }
 
         .hint{
             text-align: center;
             color: var(--fg-dim);
             font-size: 14px;
-            margin: 0 0 14px 0;
+            margin: 0 0 18px 0;
             line-height: 1.45;
         }
 
         .qr{
             display: flex;
             justify-content: center;
-            margin: 14px 0 10px;
+            margin: 16px 0 12px;
         }
 
         #qrimg{
-            width: 320px;
-            max-width: 100%;
-            border-radius: 14px;
+            width: min(320px, 100%);
+            border-radius: 18px;
             background: var(--qr-bg);
             padding: 12px;
             box-shadow:
-                    0 0 0 1px var(--border),
-                    0 0 22px rgba(var(--fg-rgb),0.18);
+                0 0 0 1px var(--border),
+                0 0 24px rgba(var(--fg-rgb),0.20);
         }
 
         .status{
-            margin-top: 12px;
-            padding: 10px 12px;
-            border-radius: 14px;
+            margin-top: 14px;
+            padding: 11px 12px;
+            border-radius: 16px;
             border: 1px solid var(--border2);
             background: rgba(var(--fg-rgb),0.06);
             color: var(--fg);
             text-align: center;
             font-size: 14px;
+            line-height: 1.35;
         }
 
         .footer{
-            margin-top: 12px;
+            margin-top: 14px;
             text-align: center;
             color: rgba(var(--fg-rgb),0.55);
             font-size: 12px;
@@ -113,18 +175,21 @@
             user-select: none;
         }
 
-        /* Spinner overlay */
         .busy .card { opacity: 0.90; }
+
         .busy::before{
             content: "";
             position: fixed;
             inset: 0;
+            z-index: 50;
             background: rgba(0,0,0,0.25);
             backdrop-filter: blur(2px);
         }
+
         .busy::after{
             content: "";
             position: fixed;
+            z-index: 51;
             left: 50%;
             top: 50%;
             width: 44px;
@@ -139,31 +204,130 @@
         }
 
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        html[data-theme="bright"] body,
+        html[data-theme="win_classic"] body{
+            background: #ececec !important;
+        }
+
+        html[data-theme="bright"] .wrap,
+        html[data-theme="bright"] .logoPane,
+        html[data-theme="bright"] .loginPane,
+        html[data-theme="win_classic"] .wrap,
+        html[data-theme="win_classic"] .logoPane,
+        html[data-theme="win_classic"] .loginPane{
+            background: #ececec;
+        }
+
+        html[data-theme="bright"] .logoPane,
+        html[data-theme="win_classic"] .logoPane{
+            border-right: 1px solid rgba(0,0,0,0.08);
+        }
+
+        html[data-theme="bright"] .card,
+        html[data-theme="win_classic"] .card{
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.22), transparent 42%),
+                rgba(255,255,255,0.38);
+        }
+
+        /* DNA-Nexus dark logo background match: begin */
+        html[data-theme="dark"] body{
+            background: #011321 !important;
+        }
+
+        html[data-theme="dark"] .wrap,
+        html[data-theme="dark"] .logoPane,
+        html[data-theme="dark"] .loginPane{
+            background: #011321;
+        }
+
+        html[data-theme="dark"] .logoPane{
+            border-right: 1px solid rgba(0,238,255,0.08);
+        }
+        /* DNA-Nexus dark logo background match: end */
+
+        /* DNA-Nexus orange logo background match: begin */
+        html[data-theme="cpunk_orange"] body{
+            background: #1f0701 !important;
+        }
+
+        html[data-theme="cpunk_orange"] .wrap,
+        html[data-theme="cpunk_orange"] .logoPane,
+        html[data-theme="cpunk_orange"] .loginPane{
+            background: #1f0701;
+        }
+
+        html[data-theme="cpunk_orange"] .logoPane{
+            border-right: 1px solid rgba(255,128,32,0.08);
+        }
+        /* DNA-Nexus orange logo background match: end */
+
+        @media (max-width: 900px){
+            body{
+                overflow: auto;
+            }
+
+            .wrap{
+                grid-template-columns: 1fr;
+                grid-template-rows: minmax(230px, 38dvh) auto;
+            }
+
+            .logoPane{
+                border-right: 0;
+                border-bottom: 1px solid rgba(var(--fg-rgb),0.10);
+                padding: 26px 22px;
+            }
+
+
+            .brand img{
+                width: min(78vw, 540px);
+                max-height: 30dvh;
+            }
+
+            .loginPane{
+                align-items: flex-start;
+                padding: 28px 18px 42px;
+            }
+
+            .card{
+                width: min(440px, 100%);
+            }
+        }
     </style>
 </head>
 
 <body>
 <div class="wrap">
-    <div class="card">
+    <section class="logoPane" aria-label="DNA-Nexus">
         <div class="brand">
             <img id="brandLogo"
-                 src="/static/pqnas_logo.png"
-                 alt="DNA PQ-NAS — Post Quantum Network Attached Storage" />
+                 src="/static/img/logo/Nexus_logo_dark.png"
+                 alt="DNA-Nexus" />
         </div>
+    </section>
 
-        <h1>Sign in with DNA</h1>
-        <div class="hint">
-            Open <b>DNA-Messenger</b> → <b>QR Reader</b> → scan the QR code.
+    <section class="loginPane" aria-label="Sign in">
+        <div class="card">
+            <div class="loginMark">
+                <div class="loginMarkBadge">Post-Quantum NAS</div>
+            </div>
+
+            <h1>Sign in with DNA</h1>
+
+            <div class="hint">
+                Open <b>DNA-Messenger</b> → <b>QR Reader</b> → scan the QR code.
+            </div>
+
+            <div class="qr">
+                <img id="qrimg" alt="QR code" />
+            </div>
+
+            <div id="status" class="status">Issuing session…</div>
+
+            <div class="footer">© CPUNK 2026 · DNA-Nexus</div>
         </div>
-
-        <div class="qr">
-            <img id="qrimg" alt="QR code" />
-        </div>
-
-        <div id="status" class="status">Issuing session…</div>
-
-        <div class="footer">© CPUNK 2026</div>
-    </div>
+    </section>
 </div>
 
 <script>
@@ -174,14 +338,13 @@
         function pickLogoForTheme(theme) {
             switch (theme) {
                 case "bright":
-                    return "/static/pqnas_logo_bright.png";
-                case "cpunk_orange":
-                    return "/static/pqnas_logo_orange.png";
                 case "win_classic":
-                    return "/static/pqnas_logo_win.png";
+                    return "/static/img/logo/Nexus_logo_bright.png";
+                case "cpunk_orange":
+                    return "/static/img/logo/Nexus_logo_orange.png";
                 case "dark":
                 default:
-                    return "/static/pqnas_logo.png";
+                    return "/static/img/logo/Nexus_logo_dark.png";
             }
         }
 
@@ -200,6 +363,8 @@
             attributes: true,
             attributeFilter: ["data-theme"]
         });
+
+        window.addEventListener("pqnas-theme-changed", applyThemeLogo);
     })();
 </script>
 

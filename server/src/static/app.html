@@ -457,6 +457,26 @@
             pointer-events: auto;
         }
 
+        /* DNA-Nexus single SVG sidebar wordmark logo: begin */
+        .brand{
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 14px 8px 10px;
+        }
+
+        .brandLogo{
+            display: block;
+            width: min(295px, 100%);
+            max-width: 100%;
+            max-height: 86px;
+            height: auto;
+            object-fit: contain;
+            margin: 0 auto;
+        }
+        /* DNA-Nexus single SVG sidebar wordmark logo: end */
+
     </style>
     <link rel="stylesheet" href="/static/onboarding.css?v=guided-tours-filemgr-browser-v3">
 </head>
@@ -465,7 +485,7 @@
 <div class="desktop">
     <aside class="sidebar">
         <div class="brand">
-            <img class="brandLogo" id="brandLogo" src="/static/img/logo/nexuslogo1_dark_small.png" alt="DNA-Nexus logo">
+            <img class="brandLogo" id="brandLogo" src="/static/img/logo/nexuslogo_text.svg" alt="DNA-Nexus logo">
         </div>
 
         <nav class="nav" aria-label="Main navigation">
@@ -568,27 +588,20 @@
 
 <script>
     (function () {
-        function pickBrandLogo() {
-            var theme = document.documentElement.getAttribute("data-theme")
-                || document.body.getAttribute("data-theme")
-                || "";
+        var LOGO_SRC = "/static/img/logo/nexuslogo_text.svg";
 
+        function applyBrandLogo() {
             var img = document.getElementById("brandLogo");
             if (!img) return;
 
-            var file = "nexuslogo1_dark_small.png";
-
-            if (theme === "bright") file = "nexuslogo1_bright_small.png";
-            else if (theme === "cpunk_orange") file = "nexuslogo1_orange_small.png";
-            else if (theme === "win_classic") file = "nexuslogo1_win_small.png";
-            else file = "nexuslogo1_dark_small.png";
-
-            img.src = "/static/img/logo/" + file;
+            if (img.getAttribute("src") !== LOGO_SRC) {
+                img.setAttribute("src", LOGO_SRC);
+            }
         }
 
-        document.addEventListener("DOMContentLoaded", pickBrandLogo);
-        window.addEventListener("load", pickBrandLogo);
-        window.addEventListener("pqnas-theme-changed", pickBrandLogo);
+        document.addEventListener("DOMContentLoaded", applyBrandLogo);
+        window.addEventListener("load", applyBrandLogo);
+        window.addEventListener("pqnas-theme-changed", applyBrandLogo);
     })();
 </script>
 <script src="/static/shell_sidebar.js?v=20260507-shell-clean-1"></script>
