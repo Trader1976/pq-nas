@@ -13890,6 +13890,49 @@ srv.Post("/api/v4/workspaces/files/move",
 
             mec.clear();
             std::filesystem::rename(src_path, dst_path, mec);
+            // PQNAS_VERSION_HISTORY_MOVE_AFTER_RENAME_V1
+            // File versions are keyed by logical path. After a successful filesystem
+            // rename/move, retarget the version rows so History follows the renamed item.
+            if (!mec) {
+                std::error_code pqnas_versions_type_ec;
+                const bool pqnas_versions_recursive =
+                    std::filesystem::is_directory(dst_path, pqnas_versions_type_ec);
+
+                    if (!deps.file_versions) {
+                        std::error_code pqnas_versions_rollback_ec;
+                        std::filesystem::rename(dst_path, src_path, pqnas_versions_rollback_ec);
+                        deps.reply_json(res, 500, json{
+                            {"ok", false},
+                            {"error", "server_error"},
+                            {"message", "file versions service missing; move was rolled back"},
+                            {"rollback_error", pqnas_versions_rollback_ec ? pqnas_versions_rollback_ec.message() : ""}
+                        }.dump());
+                        return false;
+                    }
+
+                pqnas::FileVersionsMoveResult pqnas_versions_move_result;
+                std::string pqnas_versions_move_err;
+                if (!deps.file_versions->move_versions_for_scope_path(
+                        "workspace",
+                        workspace_id,
+                        from_rel_norm,
+                        to_rel_norm,
+                        pqnas_versions_recursive,
+                        &pqnas_versions_move_result,
+                        &pqnas_versions_move_err)) {
+                    std::error_code pqnas_versions_rollback_ec;
+                    std::filesystem::rename(dst_path, src_path, pqnas_versions_rollback_ec);
+                    deps.reply_json(res, 500, json{
+                        {"ok", false},
+                        {"error", "server_error"},
+                        {"message", "failed to move file version history; filesystem move was rolled back"},
+                        {"detail", pqnas_versions_move_err},
+                        {"rollback_error", pqnas_versions_rollback_ec ? pqnas_versions_rollback_ec.message() : ""}
+                    }.dump());
+                    return false;
+                }
+            }
+
             if (!mec) return true;
 
             const bool is_exdev =

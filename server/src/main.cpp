@@ -25118,6 +25118,27 @@ srv.Post("/api/v4/files/move", [&](const httplib::Request& req, httplib::Respons
 
         mec.clear();
         std::filesystem::rename(src_path, dst_path, mec);
+        // PQNAS_VERSION_HISTORY_MOVE_AFTER_RENAME_V1
+        // Best-effort: keep My Files version history attached after rename/move.
+        // Version rows are path-keyed, so the filesystem rename alone would leave
+        // history under the old path until the file is renamed back.
+        if (!mec) {
+            std::error_code pqnas_versions_type_ec;
+            const bool pqnas_versions_recursive =
+                std::filesystem::is_directory(dst_path, pqnas_versions_type_ec);
+            pqnas::FileVersionsMoveResult pqnas_versions_move_result;
+            std::string pqnas_versions_move_err;
+            (void)file_versions_index.move_versions_for_scope_path(
+                "user",
+                fp_hex,
+                from_rel_norm,
+                to_rel_norm,
+                pqnas_versions_recursive,
+                &pqnas_versions_move_result,
+                &pqnas_versions_move_err);
+        }
+
+
         if (!mec) return true;
 
         const bool is_exdev =

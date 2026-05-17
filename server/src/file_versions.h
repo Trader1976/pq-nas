@@ -69,6 +69,12 @@ struct FileVersionFlagSummary {
     std::vector<FileVersionFlagRec> flags;
 };
 
+struct FileVersionsMoveResult {
+    std::uint64_t versions_updated = 0;
+    std::uint64_t flags_updated = 0;
+};
+
+
 struct FileVersionsScopeStats {
     std::uint64_t versions_count = 0;
     std::uint64_t versions_bytes = 0;
@@ -104,6 +110,14 @@ public:
                                                        const std::string& logical_rel_path,
                                                        std::size_t limit,
                                                        std::string* err);
+
+    bool move_versions_for_scope_path(const std::string& scope_type,
+                                      const std::string& scope_id,
+                                      const std::string& from_logical_rel_path,
+                                      const std::string& to_logical_rel_path,
+                                      bool recursive,
+                                      FileVersionsMoveResult* out,
+                                      std::string* err);
 
 
     bool flag_version(const std::string& scope_type,

@@ -773,6 +773,138 @@ bool FileVersionsIndex::scope_stats(const std::string& scope_type,
 }
 
 
+bool FileVersionsIndex::move_versions_for_scope_path(const std::string& scope_type,
+                                                     const std::string& scope_id,
+                                                     const std::string& from_logical_rel_path,
+                                                     const std::string& to_logical_rel_path,
+                                                     bool recursive,
+                                                     FileVersionsMoveResult* out,
+                                                     std::string* err) {
+    if (err) err->clear();
+    if (out) *out = FileVersionsMoveResult{};
+
+    if (!db_) {
+        if (err) *err = "db not open";
+        return false;
+    }
+
+    if (scope_type.empty() || scope_id.empty()) {
+        if (err) *err = "empty scope_type or scope_id";
+        return false;
+    }
+
+    if (from_logical_rel_path.empty()) {
+        if (err) *err = "empty from_logical_rel_path";
+        return false;
+    }
+
+    if (to_logical_rel_path.empty()) {
+        if (err) *err = "empty to_logical_rel_path";
+        return false;
+    }
+
+    if (from_logical_rel_path == to_logical_rel_path) {
+        return true;
+    }
+
+    auto exec_local = [&](const char* sql, std::string* e) -> bool {
+        char* msg = nullptr;
+        const int rc = sqlite3_exec(db_, sql, nullptr, nullptr, &msg);
+        if (rc != SQLITE_OK) {
+            if (e) *e = msg ? msg : sqlite3_errmsg(db_);
+            if (msg) sqlite3_free(msg);
+            return false;
+        }
+        if (msg) sqlite3_free(msg);
+        return true;
+    };
+
+    const std::string child_prefix = from_logical_rel_path + "/";
+
+    auto run_update = [&](const char* table,
+                          std::uint64_t* changed_out,
+                          std::string* uerr) -> bool {
+        if (changed_out) *changed_out = 0;
+
+        std::string sql;
+        if (recursive) {
+            sql =
+                std::string("UPDATE ") + table + " "
+                "SET logical_rel_path = CASE "
+                "  WHEN logical_rel_path = ?3 THEN ?4 "
+                "  ELSE ?4 || substr(logical_rel_path, ?5 + 1) "
+                "END "
+                "WHERE scope_type = ?1 AND scope_id = ?2 "
+                "AND (logical_rel_path = ?3 OR substr(logical_rel_path, 1, ?6) = ?7)";
+        } else {
+            sql =
+                std::string("UPDATE ") + table + " "
+                "SET logical_rel_path = ?4 "
+                "WHERE scope_type = ?1 AND scope_id = ?2 AND logical_rel_path = ?3";
+        }
+
+        sqlite3_stmt* stmt = nullptr;
+        const int rc_prep = sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr);
+        if (rc_prep != SQLITE_OK) {
+            if (uerr) *uerr = sqlite3_errmsg(db_);
+            return false;
+        }
+
+        sqlite3_bind_text(stmt, 1, scope_type.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, scope_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 3, from_logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 4, to_logical_rel_path.c_str(), -1, SQLITE_TRANSIENT);
+
+        if (recursive) {
+            sqlite3_bind_int64(stmt, 5, static_cast<sqlite3_int64>(from_logical_rel_path.size()));
+            sqlite3_bind_int64(stmt, 6, static_cast<sqlite3_int64>(child_prefix.size()));
+            sqlite3_bind_text(stmt, 7, child_prefix.c_str(), -1, SQLITE_TRANSIENT);
+        }
+
+        const int rc = sqlite3_step(stmt);
+        if (rc != SQLITE_DONE) {
+            if (uerr) *uerr = sqlite3_errmsg(db_);
+            sqlite3_finalize(stmt);
+            return false;
+        }
+
+        if (changed_out) {
+            *changed_out = static_cast<std::uint64_t>(sqlite3_changes(db_));
+        }
+
+        sqlite3_finalize(stmt);
+        return true;
+    };
+
+    if (!exec_local("BEGIN IMMEDIATE TRANSACTION;", err)) {
+        return false;
+    }
+
+    FileVersionsMoveResult result;
+    std::string uerr;
+
+    if (!run_update("file_versions", &result.versions_updated, &uerr)) {
+        (void)exec_local("ROLLBACK;", nullptr);
+        if (err) *err = uerr.empty() ? "failed to update file_versions" : uerr;
+        return false;
+    }
+
+    if (!run_update("file_version_flags", &result.flags_updated, &uerr)) {
+        (void)exec_local("ROLLBACK;", nullptr);
+        if (err) *err = uerr.empty() ? "failed to update file_version_flags" : uerr;
+        return false;
+    }
+
+    if (!exec_local("COMMIT;", err)) {
+        (void)exec_local("ROLLBACK;", nullptr);
+        return false;
+    }
+
+    if (out) *out = result;
+    return true;
+}
+
+
 bool FileVersionsIndex::delete_versions_for_scope_path(const std::string& scope_type,
                                                        const std::string& scope_id,
                                                        const std::filesystem::path& scope_root,
