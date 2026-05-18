@@ -1048,7 +1048,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       return {
         scope: "workspace",
         workspaceId,
-        label: `Workspace trash • ${workspaceId}`,
+        label: tr("filemgr.trash.workspace_label", { id: workspaceId }, `Workspace trash • ${workspaceId}`),
         canWrite: canWriteCurrentScope()
       };
     }
@@ -1056,7 +1056,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return {
       scope: "user",
       workspaceId: "",
-      label: "My trash",
+      label: tr("filemgr.trash.my_trash", null, "My trash"),
       canWrite: true
     };
   }
@@ -1090,16 +1090,16 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (!trashList) return;
 
     const info = currentTrashScopeInfo();
-    if (trashTitle) trashTitle.textContent = "Trash";
+    if (trashTitle) trashTitle.textContent = tr("filemgr.trash", null, "Trash");
     if (trashSub) trashSub.textContent = info.label;
-    if (trashCount) trashCount.textContent = `${trashItemsCache.length} item(s)`;
+    if (trashCount) trashCount.textContent = tr("filemgr.trash.count", { count: trashItemsCache.length }, `${trashItemsCache.length} item(s)`);
 
     trashList.innerHTML = "";
 
     if (!trashItemsCache.length) {
       const empty = document.createElement("div");
       empty.className = "trashEmpty";
-      empty.textContent = "Trash is empty.";
+      empty.textContent = tr("filemgr.trash.empty_state", null, "Trash is empty.");
       trashList.appendChild(empty);
       if (trashEmptyBtn) trashEmptyBtn.disabled = true;
       return;
@@ -1121,10 +1121,10 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       const meta = document.createElement("div");
       meta.className = "trashMeta";
       meta.innerHTML =
-          `<span>${rec.item_type === "dir" ? "Folder" : "File"}</span>` +
-          `<span>${fmtSize(rec.size_bytes || 0)}</span>` +
-          `<span>Deleted: ${fmtTrashWhen(rec.deleted_epoch)}</span>` +
-          `<span>Purge after: ${fmtTrashWhen(rec.purge_after_epoch)}</span>`;
+          `<span>${escapeHtml(rec.item_type === "dir" ? tr("filemgr.trash.folder", null, "Folder") : tr("filemgr.trash.file", null, "File"))}</span>` +
+          `<span>${escapeHtml(fmtSize(rec.size_bytes || 0))}</span>` +
+          `<span>${escapeHtml(tr("filemgr.trash.deleted", { time: fmtTrashWhen(rec.deleted_epoch) }, `Deleted: ${fmtTrashWhen(rec.deleted_epoch)}`))}</span>` +
+          `<span>${escapeHtml(tr("filemgr.trash.purge_after", { time: fmtTrashWhen(rec.purge_after_epoch) }, `Purge after: ${fmtTrashWhen(rec.purge_after_epoch)}`))}</span>`;
 
       const path = document.createElement("div");
       path.className = "trashPath";
@@ -1140,7 +1140,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       const restoreBtn = document.createElement("button");
       restoreBtn.type = "button";
       restoreBtn.className = "btn secondary";
-      restoreBtn.textContent = "Restore";
+      restoreBtn.textContent = tr("filemgr.trash.restore", null, "Restore");
       restoreBtn.disabled = !info.canWrite || trashBusy;
       restoreBtn.onclick = async () => {
         await restoreTrashItem(rec);
@@ -1149,7 +1149,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       const purgeBtn = document.createElement("button");
       purgeBtn.type = "button";
       purgeBtn.className = "btn secondary";
-      purgeBtn.textContent = "Delete permanently";
+      purgeBtn.textContent = tr("filemgr.trash.delete_permanently", null, "Delete permanently");
       purgeBtn.disabled = !info.canWrite || trashBusy;
       purgeBtn.onclick = async () => {
         await purgeTrashItem(rec);
@@ -1194,7 +1194,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     const info = currentTrashScopeInfo();
     trashBusy = true;
-    if (trashStatus) trashStatus.textContent = `Loading ${info.label}…`;
+    if (trashStatus) trashStatus.textContent = tr("filemgr.trash.loading", { label: info.label }, `Loading ${info.label}…`);
     if (trashEmptyBtn) trashEmptyBtn.disabled = true;
     renderTrashItems();
 
@@ -1215,11 +1215,11 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       }
 
       trashItemsCache = j.items.slice();
-      if (trashStatus) trashStatus.textContent = `Loaded ${trashItemsCache.length} item(s).`;
+      if (trashStatus) trashStatus.textContent = tr("filemgr.trash.loaded", { count: trashItemsCache.length }, `Loaded ${trashItemsCache.length} item(s).`);
     } catch (e) {
       trashItemsCache = [];
       if (trashStatus) {
-        trashStatus.textContent = `Trash load failed: ${String(e && e.message ? e.message : e)}`;
+        trashStatus.textContent = tr("filemgr.trash.load_failed", { error: String(e && e.message ? e.message : e) }, `Trash load failed: ${String(e && e.message ? e.message : e)}`);
       }
     } finally {
       trashBusy = false;
@@ -1232,7 +1232,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     trashBusy = true;
     renderTrashItems();
-    if (trashStatus) trashStatus.textContent = `Restoring ${rec.original_rel_path || rec.trash_id}…`;
+    if (trashStatus) trashStatus.textContent = tr("filemgr.trash.restoring", { path: rec.original_rel_path || rec.trash_id }, `Restoring ${rec.original_rel_path || rec.trash_id}…`);
 
     try {
       const r = await fetch("/api/v4/trash/restore", {
@@ -1255,14 +1255,14 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       }
 
       setBadge("ok", "ready");
-      status.textContent = `Restored: ${j.restored_rel_path || rec.original_rel_path}`;
+      status.textContent = tr("filemgr.trash.restored", { path: j.restored_rel_path || rec.original_rel_path }, `Restored: ${j.restored_rel_path || rec.original_rel_path}`);
       await loadTrashItems();
       clearFileListCache();
       await load(true);
     } catch (e) {
       setBadge("err", "error");
       if (trashStatus) {
-        trashStatus.textContent = `Restore failed: ${String(e && e.message ? e.message : e)}`;
+        trashStatus.textContent = tr("filemgr.trash.restore_failed", { error: String(e && e.message ? e.message : e) }, `Restore failed: ${String(e && e.message ? e.message : e)}`);
       }
     } finally {
       trashBusy = false;
@@ -1274,8 +1274,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (!rec || !rec.trash_id) return;
 
     const ok = await fmConfirmModal({
-      title: tr("filemgr.delete.title", null, "Move to trash?"),
-      subtitle: tr("filemgr.delete.subtitle", null, "The selected item will be moved to Trash."),
+      title: tr("filemgr.trash.purge_title", null, "Delete permanently?"),
+      subtitle: tr("filemgr.trash.purge_subtitle", null, "This item will be permanently deleted from Trash."),
       rows: [
         {
           label: tr("filemgr.delete.item", null, "Item"),
@@ -1283,8 +1283,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
           mono: true
         },
       ],
-      note: tr("filemgr.delete.note", null, "You can restore it later from Trash until it is permanently deleted."),
-      confirmText: tr("filemgr.delete.confirm", null, "Move to trash"),
+      note: tr("filemgr.trash.purge_note", null, "This cannot be undone."),
+      confirmText: tr("filemgr.trash.purge_confirm", null, "Delete permanently"),
       cancelText: tr("filemgr.cancel", null, "Cancel"),
       danger: true,
     });
@@ -1292,7 +1292,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     trashBusy = true;
     renderTrashItems();
-    if (trashStatus) trashStatus.textContent = `Deleting permanently ${rec.original_rel_path || rec.trash_id}…`;
+    if (trashStatus) trashStatus.textContent = tr("filemgr.trash.purging", { path: rec.original_rel_path || rec.trash_id }, `Deleting permanently ${rec.original_rel_path || rec.trash_id}…`);
 
     try {
       const r = await fetch("/api/v4/trash/purge", {
@@ -1312,14 +1312,14 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       }
 
       setBadge("ok", "ready");
-      status.textContent = `Deleted permanently: ${rec.original_rel_path || rec.trash_id}`;
+      status.textContent = tr("filemgr.trash.purged", { path: rec.original_rel_path || rec.trash_id }, `Deleted permanently: ${rec.original_rel_path || rec.trash_id}`);
       await loadTrashItems();
       clearFileListCache();
       await load(true);
     } catch (e) {
       setBadge("err", "error");
       if (trashStatus) {
-        trashStatus.textContent = `Permanent delete failed: ${String(e && e.message ? e.message : e)}`;
+        trashStatus.textContent = tr("filemgr.trash.purge_failed", { error: String(e && e.message ? e.message : e) }, `Permanent delete failed: ${String(e && e.message ? e.message : e)}`);
       }
     } finally {
       trashBusy = false;
@@ -1332,17 +1332,17 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (!active.length) return;
 
     const ok = await fmConfirmModal({
-      title: tr("filemgr.delete.title", null, "Move to trash?"),
-      subtitle: tr("filemgr.delete.subtitle", null, "The selected item will be moved to Trash."),
+      title: tr("filemgr.trash.empty_title", null, "Empty trash?"),
+      subtitle: tr("filemgr.trash.empty_subtitle", null, "All items in this Trash view will be permanently deleted."),
       rows: [
         {
-          label: tr("filemgr.delete.item", null, "Item"),
-          value: (typeof item !== "undefined" && item && item.name) ? item.name : tr("filemgr.delete.selected_item", null, "Selected item"),
-          mono: true
+          label: tr("filemgr.trash", null, "Trash"),
+          value: tr("filemgr.trash.empty_item_count", { count: active.length }, `${active.length} item(s)`),
+          mono: false
         },
       ],
-      note: tr("filemgr.delete.note", null, "You can restore it later from Trash until it is permanently deleted."),
-      confirmText: tr("filemgr.delete.confirm", null, "Move to trash"),
+      note: tr("filemgr.trash.empty_note", null, "This permanently deletes all listed Trash items and cannot be undone."),
+      confirmText: tr("filemgr.trash.empty_confirm", null, "Empty trash"),
       cancelText: tr("filemgr.cancel", null, "Cancel"),
       danger: true,
     });
@@ -1356,7 +1356,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     for (const rec of active) {
       if (trashStatus) {
-        trashStatus.textContent = `Emptying trash ${done + failed}/${active.length}…`;
+        trashStatus.textContent = tr("filemgr.trash.emptying", { done: done + failed, total: active.length }, `Emptying trash ${done + failed}/${active.length}…`);
       }
 
       try {
@@ -1383,10 +1383,10 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     if (failed > 0) {
       setBadge("warn", "partial");
-      status.textContent = `Trash emptied partially. Deleted permanently: ${done}. Failed: ${failed}.`;
+      status.textContent = tr("filemgr.trash.emptied_partial", { done, failed }, `Trash emptied partially. Deleted permanently: ${done}. Failed: ${failed}.`);
     } else {
       setBadge("ok", "ready");
-      status.textContent = `Trash emptied. Deleted permanently: ${done}.`;
+      status.textContent = tr("filemgr.trash.emptied", { done }, `Trash emptied. Deleted permanently: ${done}.`);
     }
   }
   function filetypeIconBase() {
@@ -2129,8 +2129,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
 
     const ok = await fmConfirmModal({
-      title: tr("filemgr.delete.title", null, "Move to trash?"),
-      subtitle: tr("filemgr.delete.subtitle", null, "The selected item will be moved to Trash."),
+      title: tr("filemgr.trash.purge_title", null, "Delete permanently?"),
+      subtitle: tr("filemgr.trash.purge_subtitle", null, "This item will be permanently deleted from Trash."),
       rows: [
         {
           label: tr("filemgr.delete.item", null, "Item"),
@@ -2138,8 +2138,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
           mono: true
         },
       ],
-      note: tr("filemgr.delete.note", null, "You can restore it later from Trash until it is permanently deleted."),
-      confirmText: tr("filemgr.delete.confirm", null, "Move to trash"),
+      note: tr("filemgr.trash.purge_note", null, "This cannot be undone."),
+      confirmText: tr("filemgr.trash.purge_confirm", null, "Delete permanently"),
       cancelText: tr("filemgr.cancel", null, "Cancel"),
       danger: true,
     });
@@ -4918,17 +4918,17 @@ function describeMoveItems(items) {
     const isDir = item.type === "dir";
 
     const ok = await fmConfirmModal({
-      title: tr("filemgr.delete.title", null, "Move to trash?"),
-      subtitle: tr("filemgr.delete.subtitle", null, "The selected item will be moved to Trash."),
+      title: tr("filemgr.trash.empty_title", null, "Empty trash?"),
+      subtitle: tr("filemgr.trash.empty_subtitle", null, "All items in this Trash view will be permanently deleted."),
       rows: [
         {
-          label: tr("filemgr.delete.item", null, "Item"),
-          value: (typeof item !== "undefined" && item && item.name) ? item.name : tr("filemgr.delete.selected_item", null, "Selected item"),
-          mono: true
+          label: tr("filemgr.trash", null, "Trash"),
+          value: tr("filemgr.trash.empty_item_count", { count: active.length }, `${active.length} item(s)`),
+          mono: false
         },
       ],
-      note: tr("filemgr.delete.note", null, "You can restore it later from Trash until it is permanently deleted."),
-      confirmText: tr("filemgr.delete.confirm", null, "Move to trash"),
+      note: tr("filemgr.trash.empty_note", null, "This permanently deletes all listed Trash items and cannot be undone."),
+      confirmText: tr("filemgr.trash.empty_confirm", null, "Empty trash"),
       cancelText: tr("filemgr.cancel", null, "Cancel"),
       danger: true,
     });
@@ -5146,14 +5146,14 @@ function describeMoveItems(items) {
 
     if (shareTitle) {
       shareTitle.textContent = isPq
-          ? "PQ recipient-enrolled share"
-          : "Share link";
+          ? tr("filemgr.share.pq_title", null, "PQ recipient-enrolled share")
+          : tr("filemgr.share.title", null, "Share link");
     }
 
     if (sharePath) sharePath.textContent = "/" + (rel || "");
     if (shareStatus) {
       shareStatus.textContent = isPq
-          ? "Creates an invite URL for recipient enrollment. Files only."
+          ? tr("filemgr.share.pq_hint", null, "Creates an invite URL for recipient enrollment. Files only.")
           : "";
     }
 
@@ -5166,22 +5166,25 @@ function describeMoveItems(items) {
       if (shareOut) shareOut.value = full;
       if (shareOutWrap) shareOutWrap.classList.remove("hidden");
 
-      const exp = existing.expires_at ? ` • expires ${existing.expires_at}` : " • no expiry";
-      if (shareStatus) shareStatus.textContent = `Already shared${exp}.`;
+      if (shareStatus) {
+        shareStatus.textContent = existing.expires_at
+            ? tr("filemgr.share.already_shared_expires", { expires: existing.expires_at }, `Already shared • expires ${existing.expires_at}.`)
+            : tr("filemgr.share.already_shared_no_expiry", null, "Already shared • no expiry.");
+      }
 
-      if (shareCreateBtn) shareCreateBtn.textContent = "Create new link (rotate)…";
+      if (shareCreateBtn) shareCreateBtn.textContent = tr("filemgr.share.rotate", null, "Create new link (rotate)…");
     } else {
       if (shareCreateBtn) {
         shareCreateBtn.textContent = isPq
-            ? "Create PQ invite"
-            : "Create link";
+            ? tr("filemgr.share.create_pq_invite", null, "Create PQ invite")
+            : tr("filemgr.share.create", null, "Create link");
       }
     }
 
     if (shareCreateBtn) {
       shareCreateBtn.onclick = async () => {
         try {
-          if (shareStatus) shareStatus.textContent = isPq ? "Creating PQ invite…" : "Creating…";
+          if (shareStatus) shareStatus.textContent = isPq ? tr("filemgr.share.creating_pq", null, "Creating PQ invite…") : tr("filemgr.share.creating", null, "Creating…");
 
           const expiresSec = expiresSecFromPreset(shareExpiry ? shareExpiry.value : "24h");
 
@@ -5216,12 +5219,12 @@ function describeMoveItems(items) {
           if (shareStatus) {
             if (isPq) {
               shareStatus.textContent = inviteUrl
-                  ? "PQ invite created. Copy this invite URL and send it to the recipient."
-                  : "PQ share created.";
+                  ? tr("filemgr.share.pq_invite_created", null, "PQ invite created. Copy this invite URL and send it to the recipient.")
+                  : tr("filemgr.share.pq_created", null, "PQ share created.");
             } else {
               shareStatus.textContent = existing
-                  ? "New link created (old revoked)."
-                  : "Link created.";
+                  ? tr("filemgr.share.new_link_created", null, "New link created (old revoked).")
+                  : tr("filemgr.share.link_created", null, "Link created.");
             }
           }
 
@@ -5229,7 +5232,7 @@ function describeMoveItems(items) {
           await load();
         } catch (e) {
           if (shareStatus) {
-            shareStatus.textContent = `Error: ${String(e && e.message ? e.message : e)}`;
+            shareStatus.textContent = tr("filemgr.share.error", { error: String(e && e.message ? e.message : e) }, `Error: ${String(e && e.message ? e.message : e)}`);
           }
         }
       };
@@ -5239,7 +5242,7 @@ function describeMoveItems(items) {
       shareCopyBtn.onclick = async () => {
         const link = shareOut ? shareOut.value : "";
         const ok = link ? await copyText(link) : false;
-        if (shareStatus) shareStatus.textContent = ok ? "Copied." : "Copy failed.";
+        if (shareStatus) shareStatus.textContent = ok ? tr("filemgr.share.copied", null, "Copied.") : tr("filemgr.share.copy_failed", null, "Copy failed.");
       };
     }
 
