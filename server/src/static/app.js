@@ -2134,9 +2134,9 @@
         setActiveNav("nav_people");
         setActiveApp("");
 
-        if (wsTitle) wsTitle.textContent = "People";
-        if (wsSubtitle) wsSubtitle.textContent = "Friendly names for DNA fingerprints and workspace collaborators";
-        if (mainPaneTitle) mainPaneTitle.textContent = "People";
+        if (wsTitle) wsTitle.textContent = tr("people.title", null, "People");
+        if (wsSubtitle) wsSubtitle.textContent = tr("people.subtitle", null, "Friendly names for DNA fingerprints and workspace collaborators");
+        if (mainPaneTitle) mainPaneTitle.textContent = tr("people.title", null, "People");
 
         if (!homeBlurb) return;
 
@@ -2154,8 +2154,8 @@
 
         homeBlurb.innerHTML = `
             <div class="card" style="padding:16px; margin-top:12px;">
-                <h3 style="margin:0 0 8px 0;">People unavailable</h3>
-                <div class="mini">The People UI module did not load. Hard-refresh the browser and try again.</div>
+                <h3 style="margin:0 0 8px 0;">${escapeHtml(tr("people.unavailable", null, "People unavailable"))}</h3>
+                <div class="mini">${escapeHtml(tr("people.module_missing", null, "The People UI module did not load. Hard-refresh the browser and try again."))}</div>
             </div>
         `;
     }

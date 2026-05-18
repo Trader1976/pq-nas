@@ -7,6 +7,15 @@
 (function () {
     "use strict";
 
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
     const state = {
         ctx: null,
         contacts: [],
@@ -43,9 +52,9 @@
     }
 
     function kindLabel(kind) {
-        if (kind === "local_user") return "Local user";
-        if (kind === "external_dna") return "External DNA";
-        return "Fingerprint";
+        if (kind === "local_user") return tr("people.kind.local_user", null, "Local user");
+        if (kind === "external_dna") return tr("people.kind.external_dna", null, "External DNA");
+        return tr("people.kind.fingerprint", null, "Fingerprint");
     }
 
     const PEOPLE_RECENT_KEY = "pqnas_people_recently_added_v1";
@@ -140,7 +149,7 @@
         try {
             j = text ? JSON.parse(text) : {};
         } catch (_) {
-            throw new Error(`Unexpected response from ${path}`);
+            throw new Error(tr("people.error.unexpected_response", { path }, `Unexpected response from ${path}`));
         }
 
         if (!r.ok || j.ok === false) {
@@ -177,14 +186,14 @@
         const notes = String(document.getElementById("peopleNotes")?.value || "").trim();
 
         if (!fp) {
-            state.notice = "Fingerprint is required.";
+            state.notice = tr("people.error.fingerprint_required", null, "Fingerprint is required.");
             state.noticeKind = "err";
             draw();
             return;
         }
 
         if (!displayName) {
-            state.notice = "Display name is required.";
+            state.notice = tr("people.error.display_name_required", null, "Display name is required.");
             state.noticeKind = "err";
             draw();
             return;
@@ -204,11 +213,11 @@
             });
 
             state.editing = null;
-            state.notice = "Person saved.";
+            state.notice = tr("people.saved", null, "Person saved.");
             state.noticeKind = "ok";
             await loadContacts();
         } catch (e) {
-            state.notice = `Save failed: ${String(e && e.message ? e.message : e)}`;
+            state.notice = tr("people.save_failed", { error: String(e && e.message ? e.message : e) }, `Save failed: ${String(e && e.message ? e.message : e)}`);
             state.noticeKind = "err";
             draw();
         }
@@ -374,7 +383,7 @@ html[data-theme="win_classic"] .peopleConfirmBackdrop{
 
             const title = document.createElement("div");
             title.className = "peopleConfirmTitle";
-            title.textContent = options.title || "Confirm action";
+            title.textContent = options.title || tr("people.confirm.title", null, "Confirm action");
 
             const sub = document.createElement("div");
             sub.className = "peopleConfirmSub";
@@ -417,12 +426,12 @@ html[data-theme="win_classic"] .peopleConfirmBackdrop{
             const cancelBtn = document.createElement("button");
             cancelBtn.type = "button";
             cancelBtn.className = "peopleConfirmBtn secondary";
-            cancelBtn.textContent = options.cancelText || "Cancel";
+            cancelBtn.textContent = options.cancelText || tr("people.cancel", null, "Cancel");
 
             const okBtn = document.createElement("button");
             okBtn.type = "button";
             okBtn.className = options.danger ? "peopleConfirmBtn danger" : "peopleConfirmBtn";
-            okBtn.textContent = options.confirmText || "OK";
+            okBtn.textContent = options.confirmText || tr("people.confirm.ok", null, "OK");
 
             foot.appendChild(spacer);
             foot.appendChild(cancelBtn);
@@ -614,15 +623,15 @@ html[data-theme="win_classic"] .modal.show{
         injectPeopleModalForceCss();
         const displayLabel = label || shortFp(fp);
         const ok = await openPeopleConfirmModal({
-            title: "Remove from People?",
-            subtitle: "This removes your private label for this person.",
+            title: tr("people.remove.title", null, "Remove from People?"),
+            subtitle: tr("people.remove.subtitle", null, "This removes your private label for this person."),
             rows: [
-                { label: "Person", value: displayLabel, mono: true },
-                { label: "Fingerprint", value: fp, mono: true },
+                { label: tr("people.remove.person", null, "Person"), value: displayLabel, mono: true },
+                { label: tr("people.remove.fingerprint", null, "Fingerprint"), value: fp, mono: true },
             ],
-            note: "This does not delete the real user, external member, or any files. It only removes the saved People label.",
-            confirmText: "Remove",
-            cancelText: "Cancel",
+            note: tr("people.remove.note", null, "This does not delete the real user, external member, or any files. It only removes the saved People label."),
+            confirmText: tr("people.remove.confirm", null, "Remove"),
+            cancelText: tr("people.cancel", null, "Cancel"),
             danger: true,
         });
         if (!ok) return;
@@ -634,11 +643,11 @@ html[data-theme="win_classic"] .modal.show{
                 body: JSON.stringify({ subject_fingerprint: fp })
             });
 
-            state.notice = "Person removed.";
+            state.notice = tr("people.deleted", null, "Person removed.");
             state.noticeKind = "ok";
             await loadContacts();
         } catch (e) {
-            state.notice = `Delete failed: ${String(e && e.message ? e.message : e)}`;
+            state.notice = tr("people.delete_failed", { error: String(e && e.message ? e.message : e) }, `Delete failed: ${String(e && e.message ? e.message : e)}`);
             state.noticeKind = "err";
             draw();
         }
@@ -661,7 +670,7 @@ html[data-theme="win_classic"] .modal.show{
 
         editor.open(c, {
             onSaved: async () => {
-                state.notice = "Person saved.";
+                state.notice = tr("people.saved", null, "Person saved.");
                 state.noticeKind = "ok";
                 await loadContacts();
             }
@@ -693,53 +702,48 @@ html[data-theme="win_classic"] .modal.show{
 
         return `
             <div class="card" style="padding:16px; margin-top:12px; border-color:rgba(var(--accent-rgb),0.35);">
-                <h3 style="margin:0 0 8px 0; font-size:17px;">${isExisting ? "Edit person" : "Add person"}</h3>
+                <h3 style="margin:0 0 8px 0; font-size:17px;">${isExisting ? tr("people.editor.edit_title", null, "Edit person") : tr("people.editor.add_title", null, "Add person")}</h3>
                 <div class="mini" style="line-height:1.5; margin-bottom:12px;">
-                    This only changes your private label for this fingerprint. It does not rename the real user globally.
+                    ${tr("people.editor.private_label_desc", null, "This only changes your private label for this fingerprint. It does not rename the real user globally.")}
                 </div>
 
                 <form id="peopleEditForm">
                     <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px;">
                         <label class="mini" style="display:flex; flex-direction:column; gap:6px;">
-                            Display name
-                            <input id="peopleDisplayName" type="text" maxlength="120" required
+                            ${tr("people.display_name", null, "Display name")}\n                            <input id="peopleDisplayName" type="text" maxlength="120" required
                                    value="${esc(c.display_name || "")}"
-                                   placeholder="Leo">
+                                   placeholder="${tr("people.display_name_placeholder", null, "Leo")}">
                         </label>
 
                         <label class="mini" style="display:flex; flex-direction:column; gap:6px;">
-                            Type
-                            <select id="peopleKind">
-                                <option value="fingerprint" ${c.subject_kind === "fingerprint" ? "selected" : ""}>Fingerprint</option>
-                                <option value="external_dna" ${c.subject_kind === "external_dna" ? "selected" : ""}>External DNA</option>
-                                <option value="local_user" ${c.subject_kind === "local_user" ? "selected" : ""}>Local user</option>
+                            ${tr("people.kind.type", null, "Type")}\n                            <select id="peopleKind">
+                                <option value="fingerprint" ${c.subject_kind === "fingerprint" ? "selected" : ""}>${tr("people.kind.fingerprint", null, "Fingerprint")}</option>
+                                <option value="external_dna" ${c.subject_kind === "external_dna" ? "selected" : ""}>${tr("people.kind.external_dna", null, "External DNA")}</option>
+                                <option value="local_user" ${c.subject_kind === "local_user" ? "selected" : ""}>${tr("people.kind.local_user", null, "Local user")}</option>
                             </select>
                         </label>
 
                         <label class="mini" style="display:flex; flex-direction:column; gap:6px;">
-                            Nickname
-                            <input id="peopleNickname" type="text" maxlength="120"
+                            ${tr("people.nickname", null, "Nickname")}\n                            <input id="peopleNickname" type="text" maxlength="120"
                                    value="${esc(c.nickname || "")}"
-                                   placeholder="Optional">
+                                   placeholder="${tr("people.optional", null, "Optional")}">
                         </label>
                     </div>
 
                     <label class="mini" style="display:flex; flex-direction:column; gap:6px; margin-top:12px;">
-                        Fingerprint
-                        <input id="peopleFingerprint" type="text" required ${isExisting ? "readonly" : ""}
+                        ${tr("people.kind.fingerprint", null, "Fingerprint")}\n                        <input id="peopleFingerprint" type="text" required ${isExisting ? "readonly" : ""}
                                value="${esc(c.subject_fingerprint || "")}"
-                               placeholder="hex fingerprint">
+                               placeholder="${tr("people.hex_fingerprint", null, "hex fingerprint")}">
                     </label>
 
                     <label class="mini" style="display:flex; flex-direction:column; gap:6px; margin-top:12px;">
-                        Notes
-                        <textarea id="peopleNotes" maxlength="2000" rows="4"
-                                  placeholder="Private note, e.g. John from motorbike club">${esc(c.notes || "")}</textarea>
+                        ${tr("people.notes", null, "Notes")}\n                        <textarea id="peopleNotes" maxlength="2000" rows="4"
+                                  placeholder="${tr("people.notes_placeholder", null, "Private note, e.g. John from motorbike club")}">${esc(c.notes || "")}</textarea>
                     </label>
 
                     <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;">
-                        <button class="btn" type="submit">Save</button>
-                        <button class="btn secondary" id="peopleCancelEdit" type="button">Cancel</button>
+                        <button class="btn" type="submit">${tr("people.save", null, "Save")}</button>
+                        <button class="btn secondary" id="peopleCancelEdit" type="button">${tr("people.cancel", null, "Cancel")}</button>
                     </div>
                 </form>
             </div>
@@ -1005,7 +1009,7 @@ html[data-theme="win_classic"] .modal.show{
 
         const displayNameLine = contactDisplayNameLine(c);
         const displayNameHtml = displayNameLine ? `
-            <div class="mini peopleCardNickname">Name: ${esc(displayNameLine)}</div>
+            <div class="mini peopleCardNickname">${esc(tr("people.name_line", { name: displayNameLine }, `Name: ${displayNameLine}`))}</div>
         ` : "";
 
         return `
@@ -1015,7 +1019,7 @@ html[data-theme="win_classic"] .modal.show{
                  tabindex="0"
                  role="button"
                  aria-selected="${selected ? "true" : "false"}"
-                 aria-label="Open person ${esc(label)}">
+                 aria-label="${esc(tr("people.open_person", { name: label }, `Open person ${label}`))}">
                 <div class="peopleCardMain">
                     <div class="peopleAvatar" aria-hidden="true">${esc(initials)}</div>
 
@@ -1023,12 +1027,12 @@ html[data-theme="win_classic"] .modal.show{
                         <div class="peopleCardTop">
                             <h3 title="${esc(label)}">
                                 ${esc(label)}
-                                ${isNew ? '<span class="peopleNewPill">new</span>' : ''}
+                                ${isNew ? `<span class="peopleNewPill">${esc(tr("people.new", null, "new"))}</span>` : ''}
                             </h3>
 
                             <div class="peopleCardActions">
-                                <button class="btn secondary peopleEditBtn" type="button" data-fp="${esc(fp)}">Edit</button>
-                                <button class="btn secondary peopleDeleteBtn" type="button" data-fp="${esc(fp)}" data-label="${esc(label)}" title="Delete">Del</button>
+                                <button class="btn secondary peopleEditBtn" type="button" data-fp="${esc(fp)}">${esc(tr("people.edit", null, "Edit"))}</button>
+                                <button class="btn secondary peopleDeleteBtn" type="button" data-fp="${esc(fp)}" data-label="${esc(label)}" title="${esc(tr("people.delete_title_attr", null, "Delete"))}">${esc(tr("people.delete_short", null, "Del"))}</button>
                             </div>
                         </div>
 
@@ -1049,7 +1053,7 @@ html[data-theme="win_classic"] .modal.show{
         if (state.loading) {
             return `
                 <div class="card" style="padding:16px; margin-top:12px;">
-                    <div class="mini">Loading people…</div>
+                    <div class="mini">${esc(tr("people.loading", null, "Loading people…"))}</div>
                 </div>
             `;
         }
@@ -1057,7 +1061,7 @@ html[data-theme="win_classic"] .modal.show{
         if (state.error) {
             return `
                 <div class="card" style="padding:16px; margin-top:12px; border-color:rgba(var(--fail-rgb),0.45);">
-                    <h3 style="margin:0 0 8px 0;">People unavailable</h3>
+                    <h3 style="margin:0 0 8px 0;">${esc(tr("people.unavailable", null, "People unavailable"))}</h3>
                     <div class="mini">${esc(state.error)}</div>
                 </div>
             `;
@@ -1069,10 +1073,9 @@ html[data-theme="win_classic"] .modal.show{
         if (!state.contacts.length) {
             return `
                 <div class="card" style="padding:16px; margin-top:12px;">
-                    <h3 style="margin:0 0 8px 0; font-size:17px;">No people saved yet</h3>
+                    <h3 style="margin:0 0 8px 0; font-size:17px;">${esc(tr("people.no_saved_title", null, "No people saved yet"))}</h3>
                     <div class="mini" style="line-height:1.55;">
-                        Add your first fingerprint label. Later, workspace members and external invite flows can offer
-                        “Add to People” automatically.
+                        ${esc(tr("people.no_saved_desc", null, "Add your first fingerprint label. Later, workspace members and external invite flows can offer “Add to People” automatically."))}
                     </div>
                 </div>
             `;
@@ -1081,7 +1084,7 @@ html[data-theme="win_classic"] .modal.show{
         if (!contacts.length) {
             return `
                 <div class="card" style="padding:16px; margin-top:12px;">
-                    <div class="mini">No people match this search.</div>
+                    <div class="mini">${esc(tr("people.no_search", null, "No people match this search."))}</div>
                 </div>
             `;
         }
@@ -1108,23 +1111,22 @@ html[data-theme="win_classic"] .modal.show{
             <div class="card peopleHeroCard" style="padding:18px; margin-top:12px;">
                 <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; flex-wrap:wrap;">
                     <div>
-                        <h3 style="margin:0 0 8px 0; font-size:20px;">People</h3>
+                        <h3 style="margin:0 0 8px 0; font-size:20px;">${esc(tr("people.title", null, "People"))}</h3>
                         <div class="mini" style="line-height:1.55; max-width:760px;">
-                            Save friendly names for DNA fingerprints, local users, external DNA Connect members,
-                            and workspace collaborators. These names are private to you and do not rename anyone globally.
+                            ${esc(tr("people.hero_desc", null, "Save friendly names for DNA fingerprints, local users, external DNA Connect members, and workspace collaborators. These names are private to you and do not rename anyone globally."))}
                         </div>
                     </div>
                     <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                        <button class="btn secondary" id="peopleRefreshBtn" type="button">Refresh</button>
-                        <button class="btn" id="peopleAddBtn" type="button">Add person</button>
+                        <button class="btn secondary" id="peopleRefreshBtn" type="button">${esc(tr("people.refresh", null, "Refresh"))}</button>
+                        <button class="btn" id="peopleAddBtn" type="button">${esc(tr("people.add_person", null, "Add person"))}</button>
                     </div>
                 </div>
 
                 <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:14px;">
                     <input id="peopleSearch" type="search" value="${esc(state.search)}"
-                           placeholder="Search people, notes, fingerprints…"
+                           placeholder="${esc(tr("people.search_placeholder", null, "Search people, notes, fingerprints…"))}"
                            style="min-width:min(420px,100%);">
-                    <div class="mini">${state.contacts.length} saved</div>
+                    <div class="mini">${esc(tr("people.saved_count", { count: state.contacts.length }, `${state.contacts.length} saved`))}</div>
                 </div>
             </div>
 
@@ -1133,10 +1135,9 @@ html[data-theme="win_classic"] .modal.show{
             ${renderContactsList()}
 
             <div class="card peopleFutureCard" style="padding:16px; margin-top:12px;">
-                <h3 style="margin:0 0 8px 0; font-size:17px;">Future use</h3>
+                <h3 style="margin:0 0 8px 0; font-size:17px;">${esc(tr("people.future_title", null, "Future use"))}</h3>
                 <div class="mini" style="line-height:1.6;">
-                    These labels will later appear in @mentions, file locks, comments, activity timelines,
-                    “what changed?” digests, and access maps.
+                    ${esc(tr("people.future_desc", null, "These labels will later appear in @mentions, file locks, comments, activity timelines, “what changed?” digests, and access maps."))}
                 </div>
             </div>
             </div>

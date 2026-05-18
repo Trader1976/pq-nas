@@ -4,6 +4,15 @@
 (function () {
     "use strict";
 
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
     const STYLE_ID = "pqnasPeopleEditorModalStyle";
     const ROOT_ID = "pqnasPeopleEditorModal";
 
@@ -55,7 +64,7 @@
         try {
             j = text ? JSON.parse(text) : {};
         } catch (_) {
-            throw new Error(`Unexpected response from ${path}`);
+            throw new Error(tr("people.error.unexpected_response", { path }, `Unexpected response from ${path}`));
         }
 
         if (!r.ok || j.ok === false) {
@@ -461,63 +470,57 @@ html:not([data-theme="dark"]):not([data-theme="cpunk_orange"]):not([data-theme="
             <div class="peopleEditorCard" role="dialog" aria-modal="false" aria-labelledby="peopleEditorTitle">
                 <div class="peopleEditorHead">
                     <div>
-                        <h3 id="peopleEditorTitle">${isExisting ? "Edit person" : "Add person"}</h3>
+                        <h3 id="peopleEditorTitle">${isExisting ? tr("people.editor.edit_title", null, "Edit person") : tr("people.editor.add_title", null, "Add person")}</h3>
                         <div class="peopleEditorSub">
-                            Private label for fingerprints, local users, and external DNA Connect identities.
-                            This does not rename anyone globally.
+                            ${tr("people.editor.detached_desc", null, "Private label for fingerprints, local users, and external DNA Connect identities. This does not rename anyone globally.")}
                         </div>
                     </div>
-                    <button class="btn secondary" type="button" data-action="close">Close</button>
+                    <button class="btn secondary" type="button" data-action="close">${tr("people.editor.close", null, "Close")}</button>
                 </div>
 
                 <form class="peopleEditorBody" id="peopleEditorForm">
                     <div class="peopleEditorGrid">
                         <label>
-                            Display name
-                            <input id="peopleEditorDisplayName" type="text" maxlength="120" required
-                                   value="${esc(c.display_name || "")}" placeholder="Leo">
+                            ${tr("people.display_name", null, "Display name")}\n                            <input id="peopleEditorDisplayName" type="text" maxlength="120" required
+                                   value="${esc(c.display_name || "")}" placeholder="${tr("people.display_name_placeholder", null, "Leo")}">
                         </label>
 
                         <label>
-                            Type
-                            <select id="peopleEditorKind">
-                                <option value="fingerprint" ${c.subject_kind === "fingerprint" ? "selected" : ""}>Fingerprint</option>
-                                <option value="external_dna" ${c.subject_kind === "external_dna" ? "selected" : ""}>External DNA</option>
-                                <option value="local_user" ${c.subject_kind === "local_user" ? "selected" : ""}>Local user</option>
+                            ${tr("people.kind.type", null, "Type")}\n                            <select id="peopleEditorKind">
+                                <option value="fingerprint" ${c.subject_kind === "fingerprint" ? "selected" : ""}>${tr("people.kind.fingerprint", null, "Fingerprint")}</option>
+                                <option value="external_dna" ${c.subject_kind === "external_dna" ? "selected" : ""}>${tr("people.kind.external_dna", null, "External DNA")}</option>
+                                <option value="local_user" ${c.subject_kind === "local_user" ? "selected" : ""}>${tr("people.kind.local_user", null, "Local user")}</option>
                             </select>
                         </label>
 
                         <label>
-                            Nickname
-                            <input id="peopleEditorNickname" type="text" maxlength="120"
-                                   value="${esc(c.nickname || "")}" placeholder="Optional">
+                            ${tr("people.nickname", null, "Nickname")}\n                            <input id="peopleEditorNickname" type="text" maxlength="120"
+                                   value="${esc(c.nickname || "")}" placeholder="${tr("people.optional", null, "Optional")}">
                         </label>
                     </div>
 
                     <label>
-                        Fingerprint
-                        <input id="peopleEditorFingerprint" type="text" required ${isExisting ? "readonly" : ""}
-                               value="${esc(c.subject_fingerprint || "")}" placeholder="hex fingerprint">
+                        ${tr("people.kind.fingerprint", null, "Fingerprint")}\n                        <input id="peopleEditorFingerprint" type="text" required ${isExisting ? "readonly" : ""}
+                               value="${esc(c.subject_fingerprint || "")}" placeholder="${tr("people.hex_fingerprint", null, "hex fingerprint")}">
                     </label>
 
                     <label>
-                        Notes
-                        <textarea id="peopleEditorNotes" maxlength="2000"
-                                  placeholder="Private note, e.g. John from motorbike club">${esc(c.notes || "")}</textarea>
+                        ${tr("people.notes", null, "Notes")}\n                        <textarea id="peopleEditorNotes" maxlength="2000"
+                                  placeholder="${tr("people.notes_placeholder", null, "Private note, e.g. John from motorbike club")}">${esc(c.notes || "")}</textarea>
                     </label>
 
                     <div class="peopleEditorMeta mono">
-                        <div><b>Short FP</b> ${esc(c.subject_fingerprint_short || "—")}</div>
-                        <div><b>Contact ID</b> ${esc(c.id || "—")}</div>
-                        <div><b>Created</b> ${esc(fmtEpoch(c.created_at_epoch))}</div>
-                        <div><b>Updated</b> ${esc(fmtEpoch(c.updated_at_epoch))}</div>
+                        <div><b>${tr("people.editor.short_fp", null, "Short FP")}</b> ${esc(c.subject_fingerprint_short || "—")}</div>
+                        <div><b>${tr("people.editor.contact_id", null, "Contact ID")}</b> ${esc(c.id || "—")}</div>
+                        <div><b>${tr("people.editor.created", null, "Created")}</b> ${esc(fmtEpoch(c.created_at_epoch))}</div>
+                        <div><b>${tr("people.editor.updated", null, "Updated")}</b> ${esc(fmtEpoch(c.updated_at_epoch))}</div>
                     </div>
 
                     <div class="peopleEditorFoot">
                         <div class="peopleEditorStatus mono"></div>
                         <div class="peopleEditorActions">
-                            <button class="btn" id="peopleEditorSave" type="submit">Save</button>
-                            <button class="btn secondary" type="button" data-action="close">Cancel</button>
+                            <button class="btn" id="peopleEditorSave" type="submit">${tr("people.save", null, "Save")}</button>
+                            <button class="btn secondary" type="button" data-action="close">${tr("people.cancel", null, "Cancel")}</button>
                         </div>
                     </div>
                 </form>
@@ -553,21 +556,21 @@ html:not([data-theme="dark"]):not([data-theme="cpunk_orange"]):not([data-theme="
             const notes = String($("peopleEditorNotes")?.value || "").trim();
 
             if (!fp) {
-                setStatus("Fingerprint is required.", "err");
+                setStatus(tr("people.error.fingerprint_required", null, "Fingerprint is required."), "err");
                 return;
             }
 
             if (!displayName) {
-                setStatus("Display name is required.", "err");
+                setStatus(tr("people.error.display_name_required", null, "Display name is required."), "err");
                 return;
             }
 
             const old = saveBtn ? saveBtn.textContent : "";
             if (saveBtn) {
                 saveBtn.disabled = true;
-                saveBtn.textContent = "Saving…";
+                saveBtn.textContent = tr("people.saving", null, "Saving…");
             }
-            setStatus("Saving…");
+            setStatus(tr("people.saving", null, "Saving…"));
 
             try {
                 const j = await apiJson("/api/v4/people/upsert", {
@@ -582,7 +585,7 @@ html:not([data-theme="dark"]):not([data-theme="cpunk_orange"]):not([data-theme="
                     })
                 });
 
-                setStatus("Saved.", "ok");
+                setStatus(tr("people.saved_status", null, "Saved."), "ok");
 
                 const onSaved = current.opts && current.opts.onSaved;
                 close();
@@ -591,10 +594,10 @@ html:not([data-theme="dark"]):not([data-theme="cpunk_orange"]):not([data-theme="
                     await onSaved(j);
                 }
             } catch (e) {
-                setStatus(`Save failed: ${String(e && e.message ? e.message : e)}`, "err");
+                setStatus(tr("people.save_failed", { error: String(e && e.message ? e.message : e) }, `Save failed: ${String(e && e.message ? e.message : e)}`), "err");
                 if (saveBtn) {
                     saveBtn.disabled = false;
-                    saveBtn.textContent = old || "Save";
+                    saveBtn.textContent = old || tr("people.save", null, "Save");
                 }
             }
         });
