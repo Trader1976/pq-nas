@@ -1,14 +1,52 @@
 (() => {
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
+    function applyStaticI18n() {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.apply === "function") {
+                window.PQNAS_I18N.apply(document);
+            }
+        } catch (_) {}
+    }
+
+    function launchLabel(v) {
+        const s = String(v || "auto");
+        if (s === "auto") return tr("admin.apps.auto", null, "Auto");
+        if (s === "embedded") return tr("admin.apps.embedded", null, "Embedded");
+        if (s === "detached") return tr("admin.apps.detached", null, "Detached");
+        return s;
+    }
+
+    function windowLabel(v) {
+        const s = String(v || "auto");
+        if (s === "auto") return tr("admin.apps.auto", null, "Auto");
+        if (s === "small") return tr("admin.apps.small", null, "Small");
+        if (s === "normal") return tr("admin.apps.normal", null, "Normal");
+        if (s === "large") return tr("admin.apps.large", null, "Large");
+        if (s === "full") return tr("admin.apps.full", null, "Full");
+        return s;
+    }
+
     const stateBadge = document.getElementById("stateBadge");
     const statusLine = document.getElementById("statusLine");
     const refreshBtn = document.getElementById("refreshBtn");
     const installedList = document.getElementById("installedList");
 
     const zipFile = document.getElementById("zipFile");
+    const zipPickBtn = document.getElementById("zipPickBtn");
+    const zipPickName = document.getElementById("zipPickName");
     const installBtn = document.getElementById("installBtn");
     const installOut = document.getElementById("installOut");
     const installAdminOnly = document.getElementById("installAdminOnly");
     let launchPolicyByAppId = {};
+    let lastInstalledItems = [];
 
     function setBadge(kind, text){
         stateBadge.className = `badge ${kind}`;
@@ -16,6 +54,19 @@
     }
 
     function esc(s){ return String(s ?? "").replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+    function updateZipPickName() {
+        if (!zipPickName) return;
+
+        const f = zipFile && zipFile.files && zipFile.files[0]
+            ? zipFile.files[0]
+            : null;
+
+        zipPickName.textContent = f
+            ? tr("admin.apps.selected_file", { name: f.name }, `Selected: ${f.name}`)
+            : tr("admin.apps.no_file_selected", null, "No file selected");
+    }
+
 
     function policyForApp(appId){
         const p = launchPolicyByAppId && launchPolicyByAppId[appId];
@@ -45,7 +96,7 @@
         if (!r.ok || !j || !j.ok) {
             throw new Error((j && (j.message || j.error))
                 ? `${j.error || ""} ${j.message || ""}`.trim()
-                : `save failed (${r.status})`);
+                : tr("admin.apps.save_failed_http", { status: r.status }, `save failed (${r.status})`));
         }
         return j;
     }
@@ -240,7 +291,7 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
 
             const title = document.createElement("div");
             title.className = "adminAppsConfirmTitle";
-            title.textContent = options.title || "Confirm action";
+            title.textContent = options.title || tr("admin.apps.confirm_action", null, "Confirm action");
 
             const sub = document.createElement("div");
             sub.className = "adminAppsConfirmSub";
@@ -282,12 +333,12 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
             const cancelBtn = document.createElement("button");
             cancelBtn.type = "button";
             cancelBtn.className = "adminAppsConfirmBtn secondary";
-            cancelBtn.textContent = options.cancelText || "Cancel";
+            cancelBtn.textContent = options.cancelText || tr("admin.apps.cancel", null, "Cancel");
 
             const okBtn = document.createElement("button");
             okBtn.type = "button";
             okBtn.className = options.danger ? "adminAppsConfirmBtn danger" : "adminAppsConfirmBtn";
-            okBtn.textContent = options.confirmText || "OK";
+            okBtn.textContent = options.confirmText || tr("admin.apps.ok", null, "OK");
 
             foot.appendChild(spacer);
             foot.appendChild(cancelBtn);
@@ -339,7 +390,7 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
     function renderInstalled(items){
         installedList.innerHTML = "";
         if (!items.length) {
-            installedList.innerHTML = `<div class="mono muted">(no installed apps)</div>`;
+            installedList.innerHTML = `<div class="mono muted">${esc(tr("admin.apps.no_installed", null, "(no installed apps)"))}</div>`;
             return;
         }
 
@@ -364,7 +415,7 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
 
             const meta = document.createElement("div");
             meta.className = "meta mono";
-            meta.textContent = `${it.has_manifest ? "manifest" : "no-manifest"} · ${it.root || ""}`;
+            meta.textContent = `${it.has_manifest ? tr("admin.apps.manifest", null, "manifest") : tr("admin.apps.no_manifest", null, "no-manifest")} · ${it.root || ""}`;
 
             left.appendChild(name);
             left.appendChild(meta);
@@ -374,7 +425,10 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
             const launchMeta = document.createElement("div");
             launchMeta.className = "meta";
             launchMeta.textContent =
-                `Launch: ${pol.default_launch} · Window: ${pol.window_profile} · User override: ${pol.allow_user_override ? "yes" : "no"} · Visibility: ${pol.admin_only ? "admin only" : "all users"}`;
+                `${tr("admin.apps.launch", null, "Launch")}: ${launchLabel(pol.default_launch)} · ` +
+                `${tr("admin.apps.window", null, "Window")}: ${windowLabel(pol.window_profile)} · ` +
+                `${tr("admin.apps.user_override", null, "User override")}: ${pol.allow_user_override ? tr("admin.apps.yes", null, "yes") : tr("admin.apps.no", null, "no")} · ` +
+                `${tr("admin.apps.visibility", null, "Visibility")}: ${pol.admin_only ? tr("admin.apps.admin_only", null, "admin only") : tr("admin.apps.all_users", null, "all users")}`;
 
             left.appendChild(launchMeta);
 
@@ -387,43 +441,43 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
             const launchField = document.createElement("div");
             launchField.className = "policyField";
             launchField.innerHTML = `
-    <label class="policyLbl">Default launch</label>
+    <label class="policyLbl">${esc(tr("admin.apps.default_launch", null, "Default launch"))}</label>
     <select class="policySel">
-        <option value="auto">Auto</option>
-        <option value="embedded">Embedded</option>
-        <option value="detached">Detached</option>
+        <option value="auto">${esc(tr("admin.apps.auto", null, "Auto"))}</option>
+        <option value="embedded">${esc(tr("admin.apps.embedded", null, "Embedded"))}</option>
+        <option value="detached">${esc(tr("admin.apps.detached", null, "Detached"))}</option>
     </select>
 `;
 
             const windowField = document.createElement("div");
             windowField.className = "policyField";
             windowField.innerHTML = `
-    <label class="policyLbl">Window profile</label>
+    <label class="policyLbl">${esc(tr("admin.apps.window_profile", null, "Window profile"))}</label>
     <select class="policySel">
-        <option value="auto">Auto</option>
-        <option value="small">Small</option>
-        <option value="normal">Normal</option>
-        <option value="large">Large</option>
-        <option value="full">Full</option>
+        <option value="auto">${esc(tr("admin.apps.auto", null, "Auto"))}</option>
+        <option value="small">${esc(tr("admin.apps.small", null, "Small"))}</option>
+        <option value="normal">${esc(tr("admin.apps.normal", null, "Normal"))}</option>
+        <option value="large">${esc(tr("admin.apps.large", null, "Large"))}</option>
+        <option value="full">${esc(tr("admin.apps.full", null, "Full"))}</option>
     </select>
 `;
 
             const overrideField = document.createElement("div");
             overrideField.className = "policyField";
             overrideField.innerHTML = `
-    <label class="policyLbl">User override</label>
+    <label class="policyLbl">${esc(tr("admin.apps.user_override", null, "User override"))}</label>
     <label class="policyChk">
         <input type="checkbox" />
-        <span>Allow user override</span>
+        <span>${esc(tr("admin.apps.allow_user_override", null, "Allow user override"))}</span>
     </label>
 `;
             const visibilityField = document.createElement("div");
             visibilityField.className = "policyField";
             visibilityField.innerHTML = `
-    <label class="policyLbl">Visibility</label>
+    <label class="policyLbl">${esc(tr("admin.apps.visibility", null, "Visibility"))}</label>
     <label class="policyChk">
         <input type="checkbox" />
-        <span>Admin only</span>
+        <span>${esc(tr("admin.apps.admin_only", null, "Admin only"))}</span>
     </label>
 `;
             const launchSel = launchField.querySelector("select");
@@ -447,12 +501,12 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
             const saveBtn = document.createElement("button");
             saveBtn.className = "btn secondary";
             saveBtn.type = "button";
-            saveBtn.textContent = "Save launch policy";
+            saveBtn.textContent = tr("admin.apps.save_launch_policy", null, "Save launch policy");
             saveBtn.addEventListener("click", async () => {
                 try {
                     saveBtn.disabled = true;
-                    setBadge("warn", "saving…");
-                    statusLine.textContent = `Saving launch policy for ${it.id}…`;
+                    setBadge("warn", tr("admin.apps.saving", null, "saving…"));
+                    statusLine.textContent = tr("admin.apps.saving_policy", { id: it.id }, `Saving launch policy for ${it.id}…`);
 
                     await saveLaunchPolicy(it.id, {
                         default_launch: launchSel.value,
@@ -462,10 +516,10 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
                     });
 
                     await load();
-                    setBadge("ok", "ready");
-                    statusLine.textContent = `Saved launch policy for ${it.id}`;
+                    setBadge("ok", tr("admin.apps.ready", null, "ready"));
+                    statusLine.textContent = tr("admin.apps.saved_policy", { id: it.id }, `Saved launch policy for ${it.id}`);
                 } catch (e) {
-                    setBadge("err", "error");
+                    setBadge("err", tr("admin.apps.error", null, "error"));
                     statusLine.textContent = String(e && e.message ? e.message : e);
                     alert(String(e && e.message ? e.message : e));
                 } finally {
@@ -475,7 +529,7 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
 
             const openBtn = document.createElement("a");
             openBtn.className = "btn secondary";
-            openBtn.textContent = "Open";
+            openBtn.textContent = tr("admin.apps.open", null, "Open");
             openBtn.href = `/apps/${encodeURIComponent(it.id)}/${encodeURIComponent(it.version)}/www/index.html`;
             openBtn.target = "_blank";
             openBtn.rel = "noopener";
@@ -483,26 +537,26 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
             const btn = document.createElement("button");
             btn.className = "btn danger";
             btn.type = "button";
-            btn.textContent = "Uninstall";
+            btn.textContent = tr("admin.apps.uninstall", null, "Uninstall");
             btn.addEventListener("click", async () => {
                 const ok = await openAdminAppsConfirmModal({
-                    title: "Uninstall app?",
-                    subtitle: "This removes the installed app package from this server.",
+                    title: tr("admin.apps.uninstall_title", null, "Uninstall app?"),
+                    subtitle: tr("admin.apps.uninstall_sub", null, "This removes the installed app package from this server."),
                     rows: [
-                        { label: "App", value: String(it.id || ""), mono: true },
-                        { label: "Version", value: String(it.version || ""), mono: true },
-                        { label: "Path", value: String(it.root || ""), mono: true },
+                        { label: tr("admin.apps.app", null, "App"), value: String(it.id || ""), mono: true },
+                        { label: tr("admin.apps.version", null, "Version"), value: String(it.version || ""), mono: true },
+                        { label: tr("admin.apps.path", null, "Path"), value: String(it.root || ""), mono: true },
                     ],
-                    note: "This removes the installed app files and registration for this version. User data stored elsewhere is not intentionally deleted.",
-                    confirmText: "Uninstall",
-                    cancelText: "Cancel",
+                    note: tr("admin.apps.uninstall_note", null, "This removes the installed app files and registration for this version. User data stored elsewhere is not intentionally deleted."),
+                    confirmText: tr("admin.apps.uninstall", null, "Uninstall"),
+                    cancelText: tr("admin.apps.cancel", null, "Cancel"),
                     danger: true,
                 });
                 if (!ok) return;
 
                 try {
-                    setBadge("warn", "working…");
-                    statusLine.textContent = `Uninstalling ${it.id} ${it.version}…`;
+                    setBadge("warn", tr("admin.apps.working", null, "working…"));
+                    statusLine.textContent = tr("admin.apps.uninstalling", { id: it.id, version: it.version }, `Uninstalling ${it.id} ${it.version}…`);
 
                     const r = await fetch("/api/v4/apps/uninstall", {
                         method: "POST",
@@ -512,17 +566,17 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
                     });
                     const j = await r.json().catch(() => null);
                     if (!r.ok || !j || !j.ok) {
-                        setBadge("err", "error");
+                        setBadge("err", tr("admin.apps.error", null, "error"));
                         statusLine.textContent = (j && (j.message || j.error))
-                            ? `Uninstall failed: ${`${j.error || ""} ${j.message || ""}`.trim()}`
-                            : `Uninstall failed: HTTP ${r.status}`;
+                            ? tr("admin.apps.uninstall_failed", { error: `${j.error || ""} ${j.message || ""}`.trim() }, `Uninstall failed: ${`${j.error || ""} ${j.message || ""}`.trim()}`)
+                            : tr("admin.apps.uninstall_failed_http", { status: r.status }, `Uninstall failed: HTTP ${r.status}`);
                         return;
                     }
 
                     await load();
                 } catch (e) {
-                    setBadge("err", "network");
-                    statusLine.textContent = `Network error: ${String(e && e.message ? e.message : e)}`;
+                    setBadge("err", tr("admin.apps.network", null, "network"));
+                    statusLine.textContent = tr("admin.apps.network_error", null, "Network error") + ": " + String(e && e.message ? e.message : e);
                 }
             });
 
@@ -541,15 +595,15 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
 
     async function load(){
         try {
-            setBadge("warn", "loading…");
-            statusLine.textContent = "Loading /api/v4/apps…";
+            setBadge("warn", tr("admin.apps.loading", null, "loading…"));
+            statusLine.textContent = tr("admin.apps.loading_api", null, "Loading /api/v4/apps…");
 
             const r = await fetch("/api/v4/apps", { credentials: "include", cache: "no-store" });
             const j = await r.json().catch(() => null);
 
             if (!r.ok || !j || !j.ok) {
-                setBadge("err", "error");
-                statusLine.textContent = `Load failed: HTTP ${r.status}`;
+                setBadge("err", tr("admin.apps.error", null, "error"));
+                statusLine.textContent = tr("admin.apps.load_failed_http", { status: r.status }, `Load failed: HTTP ${r.status}`);
                 return;
             }
 
@@ -558,12 +612,13 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
                 ? j.launch_policy_by_app_id
                 : {};
 
-            setBadge("ok", "ready");
-            statusLine.textContent = `Installed: ${installed.length}`;
+            setBadge("ok", tr("admin.apps.ready", null, "ready"));
+            statusLine.textContent = tr("admin.apps.installed_count", { count: installed.length }, `Installed: ${installed.length}`);
+            lastInstalledItems = installed;
             renderInstalled(installed);
         } catch (e) {
-            setBadge("err", "network");
-            statusLine.textContent = "Network error";
+            setBadge("err", tr("admin.apps.network", null, "network"));
+            statusLine.textContent = tr("admin.apps.network_error", null, "Network error");
             installedList.innerHTML = `<div class="mono">${esc(String(e && e.stack ? e.stack : e))}</div>`;
         }
     }
@@ -572,13 +627,13 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
         installOut.textContent = "";
         const f = zipFile?.files?.[0];
         if (!f) {
-            installOut.textContent = "Choose a .zip file first.";
+            installOut.textContent = tr("admin.apps.choose_zip", null, "Choose a .zip file first.");
             return;
         }
 
         try {
-            setBadge("warn", "uploading…");
-            statusLine.textContent = `Uploading ${f.name} (${f.size} bytes)…`;
+            setBadge("warn", tr("admin.apps.uploading", null, "uploading…"));
+            statusLine.textContent = tr("admin.apps.uploading_file", { name: f.name, size: f.size }, `Uploading ${f.name} (${f.size} bytes)…`);
 
             const r = await fetch("/api/v4/apps/upload_install", {
                 method: "POST",
@@ -594,30 +649,41 @@ html[data-theme="win_classic"] .adminAppsConfirmBackdrop{
 
             const j = await r.json().catch(() => null);
             if (!r.ok || !j || !j.ok) {
-                setBadge("err", "error");
-                statusLine.textContent = `Install failed: HTTP ${r.status}`;
+                setBadge("err", tr("admin.apps.error", null, "error"));
+                statusLine.textContent = tr("admin.apps.install_failed_http", { status: r.status }, `Install failed: HTTP ${r.status}`);
                 installOut.textContent = (j && (j.message || j.error))
                     ? `${j.error || ""} ${j.message || ""}`.trim()
-                    : "bad response";
+                    : tr("admin.apps.bad_response", null, "bad response");
                 return;
             }
 
-            setBadge("ok", "installed");
-            statusLine.textContent = `Installed ${j.id} ${j.version}`;
+            setBadge("ok", tr("admin.apps.installed", null, "installed"));
+            statusLine.textContent = tr("admin.apps.installed_app", { id: j.id, version: j.version }, `Installed ${j.id} ${j.version}`);
             installOut.textContent = JSON.stringify(j, null, 2);
 
             zipFile.value = "";
+            updateZipPickName();
             if (installAdminOnly) installAdminOnly.checked = false;
             await load();
         } catch (e) {
-            setBadge("err", "network");
-            statusLine.textContent = "Network error";
+            setBadge("err", tr("admin.apps.network", null, "network"));
+            statusLine.textContent = tr("admin.apps.network_error", null, "Network error");
             installOut.textContent = String(e && e.stack ? e.stack : e);
         }
     }
 
     refreshBtn?.addEventListener("click", load);
+    zipPickBtn?.addEventListener("click", () => zipFile?.click());
+    zipFile?.addEventListener("change", updateZipPickName);
     installBtn?.addEventListener("click", install);
 
+    window.addEventListener("pqnas-language-changed", () => {
+        applyStaticI18n();
+        updateZipPickName();
+        renderInstalled(lastInstalledItems || []);
+    });
+
+    applyStaticI18n();
+    updateZipPickName();
     load();
 })();
