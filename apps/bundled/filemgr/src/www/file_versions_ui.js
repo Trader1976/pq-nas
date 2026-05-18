@@ -6,6 +6,15 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const FM = window.PQNAS_FILEMGR;
     if (FM.fileVersions) return;
 
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
     const state = {
         item: null,
         relPath: "",
@@ -53,15 +62,15 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             row.actor_display ||
             row.actor_name_snapshot ||
             row.actor_fp ||
-            "Unknown"
+            tr("filemgr.versions.unknown", null, "Unknown")
         );
     }
 
     function kindLabel(row) {
-        if (row.is_deleted_event) return "Deleted file snapshot";
-        if (row.event_kind === "overwrite_preserve") return "Before overwrite";
-        if (row.event_kind === "delete_preserve") return "Before delete";
-        return String(row.event_kind || "Version");
+        if (row.is_deleted_event) return tr("filemgr.versions.deleted_snapshot", null, "Deleted file snapshot");
+        if (row.event_kind === "overwrite_preserve") return tr("filemgr.versions.before_overwrite", null, "Before overwrite");
+        if (row.event_kind === "delete_preserve") return tr("filemgr.versions.before_delete", null, "Before delete");
+        return String(row.event_kind || tr("filemgr.versions.version", null, "Version"));
     }
 
     function detailLine(row) {
@@ -89,11 +98,11 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             .map((f) => String(f.actor_display || f.actor_name_snapshot || f.actor_fp || "").trim())
             .filter(Boolean);
 
-        if (names.length === 1) return `⭐ ${names[0]} flagged this version`;
-        if (names.length === 2) return `⭐ ${names[0]} and ${names[1]} flagged this version`;
-        if (names.length > 2) return `⭐ ${names[0]}, ${names[1]} and ${names.length - 2} more flagged this version`;
+        if (names.length === 1) return tr("filemgr.versions.flagged_one", { name: names[0] }, `⭐ ${names[0]} flagged this version`);
+        if (names.length === 2) return tr("filemgr.versions.flagged_two", { name1: names[0], name2: names[1] }, `⭐ ${names[0]} and ${names[1]} flagged this version`);
+        if (names.length > 2) return tr("filemgr.versions.flagged_more", { name1: names[0], name2: names[1], count: names.length - 2 }, `⭐ ${names[0]}, ${names[1]} and ${names.length - 2} more flagged this version`);
 
-        return `⭐ Flagged by ${count} user${count === 1 ? "" : "s"}`;
+        return tr("filemgr.versions.flagged_by", { count, plural: count === 1 ? "" : "s" }, `⭐ Flagged by ${count} user${count === 1 ? "" : "s"}`);
     }
 
     function setGlobalStatus(text, badgeKind) {
@@ -236,7 +245,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
 
         titleEl = document.createElement("div");
         titleEl.className = "pqfvTitle";
-        titleEl.textContent = "File versions";
+        titleEl.textContent = tr("filemgr.versions.title", null, "File versions");
 
         pathEl = document.createElement("div");
         pathEl.className = "pqfvPath mono";
@@ -258,7 +267,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
         });
 
         const closeAfterTxt = document.createElement("span");
-        closeAfterTxt.textContent = "Close after restore";
+        closeAfterTxt.textContent = tr("filemgr.versions.close_after_restore", null, "Close after restore");
 
         closeAfterWrap.appendChild(closeAfterRestoreCb);
         closeAfterWrap.appendChild(closeAfterTxt);
@@ -266,7 +275,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
         refreshBtn = document.createElement("button");
         refreshBtn.type = "button";
         refreshBtn.className = "btn secondary";
-        refreshBtn.textContent = "Refresh";
+        refreshBtn.textContent = tr("filemgr.versions.refresh", null, "Refresh");
         refreshBtn.addEventListener("click", () => {
             loadVersions().catch((e) => {
                 setModalError(String(e && e.message ? e.message : e));
@@ -276,7 +285,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
         closeBtn = document.createElement("button");
         closeBtn.type = "button";
         closeBtn.className = "btn secondary";
-        closeBtn.textContent = "Close";
+        closeBtn.textContent = tr("filemgr.versions.close", null, "Close");
         closeBtn.addEventListener("click", close);
 
         headRightEl.appendChild(closeAfterWrap);
@@ -332,7 +341,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
 
             const title = document.createElement("div");
             title.className = "modalTitle";
-            title.textContent = options.title || "Confirm action";
+            title.textContent = options.title || tr("filemgr.versions.confirm_action", null, "Confirm action");
 
             const sub = document.createElement("div");
             sub.className = "modalSub";
@@ -392,12 +401,12 @@ html[data-theme="orange"] .pqfvFlagSummary{
             const cancelBtn = document.createElement("button");
             cancelBtn.type = "button";
             cancelBtn.className = "btn secondary";
-            cancelBtn.textContent = options.cancelText || "Cancel";
+            cancelBtn.textContent = options.cancelText || tr("filemgr.versions.cancel", null, "Cancel");
 
             const okBtn = document.createElement("button");
             okBtn.type = "button";
             okBtn.className = "btn";
-            okBtn.textContent = options.confirmText || "OK";
+            okBtn.textContent = options.confirmText || tr("filemgr.versions.ok", null, "OK");
 
             if (options.danger) {
                 okBtn.style.borderColor = "rgba(var(--fail-rgb),0.45)";
@@ -496,21 +505,21 @@ html[data-theme="orange"] .pqfvFlagSummary{
 
     function setModalLoading(text) {
         if (!bodyEl) return;
-        setModalStatus(text || "Loading…", "warn");
+        setModalStatus(text || tr("filemgr.versions.loading", null, "Loading…"), "warn");
         bodyEl.innerHTML = "";
         const div = document.createElement("div");
         div.className = "pqfvEmpty";
-        div.textContent = text || "Loading…";
+        div.textContent = text || tr("filemgr.versions.loading", null, "Loading…");
         bodyEl.appendChild(div);
     }
 
     function setModalError(text) {
         if (!bodyEl) return;
-        setModalStatus(text || "Failed to load versions", "err");
+        setModalStatus(text || tr("filemgr.versions.failed_load", null, "Failed to load versions"), "err");
         bodyEl.innerHTML = "";
         const div = document.createElement("div");
         div.className = "pqfvEmpty err";
-        div.textContent = text || "Failed to load versions";
+        div.textContent = text || tr("filemgr.versions.failed_load", null, "Failed to load versions");
         bodyEl.appendChild(div);
     }
 
@@ -527,7 +536,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
             const msg = j && (j.message || j.error)
                 ? `${j.error || ""} ${j.message || ""}`.trim()
                 : `HTTP ${r.status}`;
-            throw new Error(msg || "failed to load versions");
+            throw new Error(msg || tr("filemgr.versions.load_failed", null, "failed to load versions"));
         }
 
         return Array.isArray(j.versions) ? j.versions : [];
@@ -539,15 +548,15 @@ html[data-theme="orange"] .pqfvFlagSummary{
         bodyEl.innerHTML = "";
 
         if (!state.versions.length) {
-            setModalStatus("No preserved versions for this file.");
+            setModalStatus(tr("filemgr.versions.no_versions_status", null, "No preserved versions for this file."));
             const div = document.createElement("div");
             div.className = "pqfvEmpty";
-            div.textContent = "No preserved versions for this file yet.";
+            div.textContent = tr("filemgr.versions.no_versions_body", null, "No preserved versions for this file yet.");
             bodyEl.appendChild(div);
             return;
         }
 
-        setModalStatus(`${state.versions.length} version(s)`);
+        setModalStatus(tr("filemgr.versions.count", { count: state.versions.length }, `${state.versions.length} version(s)`));
 
         const listEl = document.createElement("div");
         listEl.className = "pqfvList";
@@ -586,7 +595,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
         const restoreBtn = document.createElement("button");
         restoreBtn.type = "button";
         restoreBtn.className = "btn";
-        restoreBtn.textContent = state.restoringVersionId === row.version_id ? "Restoring…" : "Restore";
+        restoreBtn.textContent = state.restoringVersionId === row.version_id ? tr("filemgr.versions.restoring", null, "Restoring…") : tr("filemgr.versions.restore", null, "Restore");
         restoreBtn.disabled = !!state.restoringVersionId;
         restoreBtn.addEventListener("click", () => {
             restoreVersion(row).catch((e) => {
@@ -597,21 +606,21 @@ html[data-theme="orange"] .pqfvFlagSummary{
         const copyBtn = document.createElement("button");
         copyBtn.type = "button";
         copyBtn.className = "btn secondary";
-        copyBtn.textContent = "Copy SHA";
+        copyBtn.textContent = tr("filemgr.versions.copy_sha", null, "Copy SHA");
         copyBtn.disabled = !row.sha256_hex;
         copyBtn.addEventListener("click", async () => {
             if (!row.sha256_hex) return;
             const ok = FM && typeof FM.copyText === "function"
                 ? await FM.copyText(row.sha256_hex)
                 : false;
-            copyBtn.textContent = ok ? "Copied" : "Copy failed";
-            setTimeout(() => { copyBtn.textContent = "Copy SHA"; }, 1000);
+            copyBtn.textContent = ok ? tr("filemgr.versions.copied", null, "Copied") : tr("filemgr.versions.copy_failed", null, "Copy failed");
+            setTimeout(() => { copyBtn.textContent = tr("filemgr.versions.copy_sha", null, "Copy SHA"); }, 1000);
         });
 
         const compareBtn = document.createElement("button");
         compareBtn.type = "button";
         compareBtn.className = "btn secondary";
-        compareBtn.textContent = "Compare";
+        compareBtn.textContent = tr("filemgr.versions.compare", null, "Compare");
         compareBtn.disabled = !(
             FM &&
             FM.fileVersionCompare &&
@@ -619,8 +628,8 @@ html[data-theme="orange"] .pqfvFlagSummary{
             FM.fileVersionCompare.canCompare(state.item)
         );
         compareBtn.title = compareBtn.disabled
-            ? "Compare is available for text-based files"
-            : "Compare this version with the current file";
+            ? tr("filemgr.versions.compare_text_only", null, "Compare is available for text-based files")
+            : tr("filemgr.versions.compare_title", null, "Compare this version with the current file");
         compareBtn.addEventListener("click", () => {
             if (!FM || !FM.fileVersionCompare || typeof FM.fileVersionCompare.open !== "function") return;
             FM.fileVersionCompare.open(state.item, row);
@@ -630,8 +639,8 @@ html[data-theme="orange"] .pqfvFlagSummary{
         const downloadBtn = document.createElement("button");
         downloadBtn.type = "button";
         downloadBtn.className = "btn secondary";
-        downloadBtn.textContent = "Download";
-        downloadBtn.title = "Download this preserved version without restoring it";
+        downloadBtn.textContent = tr("filemgr.versions.download", null, "Download");
+        downloadBtn.title = tr("filemgr.versions.download_title", null, "Download this preserved version without restoring it");
         downloadBtn.addEventListener("click", () => {
             const url = buildDownloadUrl(state.relPath, row.version_id);
             const a = document.createElement("a");
@@ -646,10 +655,10 @@ html[data-theme="orange"] .pqfvFlagSummary{
         const flagBtn = document.createElement("button");
         flagBtn.type = "button";
         flagBtn.className = row.flagged_by_me ? "btn" : "btn secondary";
-        flagBtn.textContent = row.flagged_by_me ? "⭐ Unflag" : "☆ Flag";
+        flagBtn.textContent = row.flagged_by_me ? tr("filemgr.versions.unflag", null, "⭐ Unflag") : tr("filemgr.versions.flag", null, "☆ Flag");
         flagBtn.title = row.flagged_by_me
-            ? "Remove your flag from this version"
-            : "Flag this version so other workspace members can see it";
+            ? tr("filemgr.versions.unflag_title", null, "Remove your flag from this version")
+            : tr("filemgr.versions.flag_title", null, "Flag this version so other workspace members can see it");
         flagBtn.addEventListener("click", () => {
             toggleFlag(row).catch((e) => {
                 setModalStatus(String(e && e.message ? e.message : e), "err");
@@ -662,9 +671,9 @@ html[data-theme="orange"] .pqfvFlagSummary{
 
         deleteBtn.className = "btn secondary";
 
-        deleteBtn.textContent = state.deletingVersionId === row.version_id ? "Deleting…" : "Delete";
+        deleteBtn.textContent = state.deletingVersionId === row.version_id ? tr("filemgr.versions.deleting", null, "Deleting…") : tr("filemgr.versions.delete", null, "Delete");
 
-        deleteBtn.title = "Delete this preserved version permanently";
+        deleteBtn.title = tr("filemgr.versions.delete_title_attr", null, "Delete this preserved version permanently");
 
         deleteBtn.disabled = !!state.restoringVersionId || !!state.deletingVersionId;
 
@@ -719,7 +728,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
 
     async function loadVersions() {
         state.loading = true;
-        setModalLoading("Loading versions…");
+        setModalLoading(tr("filemgr.versions.loading_versions", null, "Loading versions…"));
 
         try {
             state.versions = await fetchVersions();
@@ -734,7 +743,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
         if (!row || !row.version_id) return;
 
         const wasFlagged = !!row.flagged_by_me;
-        setModalStatus(wasFlagged ? "Removing flag…" : "Flagging version…", "warn");
+        setModalStatus(wasFlagged ? tr("filemgr.versions.removing_flag", null, "Removing flag…") : tr("filemgr.versions.flagging", null, "Flagging version…"), "warn");
 
         const r = await fetch(buildFlagUrl(wasFlagged), {
             method: "POST",
@@ -752,11 +761,11 @@ html[data-theme="orange"] .pqfvFlagSummary{
             const msg = j && (j.message || j.error)
                 ? `${j.error || ""} ${j.message || ""}`.trim()
                 : `HTTP ${r.status}`;
-            throw new Error(msg || "flag update failed");
+            throw new Error(msg || tr("filemgr.versions.flag_update_failed", null, "flag update failed"));
         }
 
         await loadVersions();
-        setModalStatus(wasFlagged ? "Flag removed." : "Version flagged.", "ok");
+        setModalStatus(wasFlagged ? tr("filemgr.versions.flag_removed", null, "Flag removed.") : tr("filemgr.versions.flagged", null, "Version flagged."), "ok");
     }
 
     async function deleteVersion(row) {
@@ -767,20 +776,20 @@ html[data-theme="orange"] .pqfvFlagSummary{
         const label = kindLabel(row);
 
         const flagCount = Number(row.flag_count || 0);        const ok = await confirmVersionAction({
-            title: "Delete preserved version?",
-            subtitle: "This removes only this saved version from history.",
+            title: tr("filemgr.versions.delete_confirm_title", null, "Delete preserved version?"),
+            subtitle: tr("filemgr.versions.delete_confirm_subtitle", null, "This removes only this saved version from history."),
             rows: [
-                { label: "Path", value: state.relPath, mono: true },
-                { label: "Kind", value: label },
-                { label: "Created", value: row.created_at || "" },
-                { label: "Size", value: fmtSize(row.bytes || 0) },
+                { label: tr("filemgr.versions.path", null, "Path"), value: state.relPath, mono: true },
+                { label: tr("filemgr.versions.kind", null, "Kind"), value: label },
+                { label: tr("filemgr.versions.created", null, "Created"), value: row.created_at || "" },
+                { label: tr("filemgr.versions.size", null, "Size"), value: fmtSize(row.bytes || 0) },
             ],
             warning: flagCount > 0
-                ? `This version is flagged by ${flagCount} user(s). Delete anyway?`
+                ? tr("filemgr.versions.flagged_warning", { count: flagCount }, `This version is flagged by ${flagCount} user(s). Delete anyway?`)
                 : "",
-            note: "This cannot be undone.",
-            confirmText: "Delete version",
-            cancelText: "Keep version",
+            note: tr("filemgr.versions.cannot_undo", null, "This cannot be undone."),
+            confirmText: tr("filemgr.versions.delete_version", null, "Delete version"),
+            cancelText: tr("filemgr.versions.keep_version", null, "Keep version"),
             danger: true,
         });
         if (!ok) return;
@@ -790,9 +799,9 @@ html[data-theme="orange"] .pqfvFlagSummary{
 
         renderVersions();
 
-        setModalStatus("Deleting version…", "warn");
+        setModalStatus(tr("filemgr.versions.deleting_version", null, "Deleting version…"), "warn");
 
-        setGlobalStatus(`Deleting version: ${state.relPath}`, "warn");
+        setGlobalStatus(tr("filemgr.versions.deleting_global", { path: state.relPath }, `Deleting version: ${state.relPath}`), "warn");
 
 
         try {
@@ -828,7 +837,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
 
                     : `HTTP ${r.status}`;
 
-                throw new Error(msg || "delete failed");
+                throw new Error(msg || tr("filemgr.versions.delete_failed", null, "delete failed"));
 
             }
 
@@ -840,9 +849,9 @@ html[data-theme="orange"] .pqfvFlagSummary{
 
             const freed = fmtSize(j.version_bytes_deleted || j.bytes_deleted || row.bytes || 0);
 
-            setModalStatus(`Version deleted. Freed ${freed}.`, "ok");
+            setModalStatus(tr("filemgr.versions.deleted_freed", { size: freed }, `Version deleted. Freed ${freed}.`), "ok");
 
-            setGlobalStatus(`Deleted version: ${state.relPath}`, "ok");
+            setGlobalStatus(tr("filemgr.versions.deleted_global", { path: state.relPath }, `Deleted version: ${state.relPath}`), "ok");
 
         } finally {
 
@@ -855,27 +864,27 @@ html[data-theme="orange"] .pqfvFlagSummary{
 
     async function restoreVersion(row) {
         const label = kindLabel(row);        const ok = await confirmVersionAction({
-            title: "Restore this version?",
-            subtitle: "The current file will be replaced by the selected version.",
+            title: tr("filemgr.versions.restore_confirm_title", null, "Restore this version?"),
+            subtitle: tr("filemgr.versions.restore_confirm_subtitle", null, "The current file will be replaced by the selected version."),
             rows: [
-                { label: "Path", value: state.relPath, mono: true },
-                { label: "Kind", value: label },
-                { label: "Created", value: row.created_at || "" },
-                { label: "Size", value: fmtSize(row.bytes || 0) },
+                { label: tr("filemgr.versions.path", null, "Path"), value: state.relPath, mono: true },
+                { label: tr("filemgr.versions.kind", null, "Kind"), value: label },
+                { label: tr("filemgr.versions.created", null, "Created"), value: row.created_at || "" },
+                { label: tr("filemgr.versions.size", null, "Size"), value: fmtSize(row.bytes || 0) },
             ],
-            note: "A preserved copy of the current file may be created before restore, depending on server versioning rules.",
-            confirmText: "Restore version",
-            cancelText: "Cancel",
+            note: tr("filemgr.versions.restore_note", null, "A preserved copy of the current file may be created before restore, depending on server versioning rules."),
+            confirmText: tr("filemgr.versions.restore_version", null, "Restore version"),
+            cancelText: tr("filemgr.versions.cancel", null, "Cancel"),
             danger: false,
         });
         if (!ok) return;
 
-        const successMsg = "Version restored. Current file replaced successfully.";
+        const successMsg = tr("filemgr.versions.restore_success", null, "Version restored. Current file replaced successfully.");
 
         state.restoringVersionId = row.version_id;
         renderVersions();
-        setModalStatus("Restoring version…", "warn");
-        setGlobalStatus(`Restoring version: ${state.relPath}`, "warn");
+        setModalStatus(tr("filemgr.versions.restoring_version", null, "Restoring version…"), "warn");
+        setGlobalStatus(tr("filemgr.versions.restoring_global", { path: state.relPath }, `Restoring version: ${state.relPath}`), "warn");
 
         try {
             const r = await fetch(buildRestoreUrl(), {
@@ -894,7 +903,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
                 const msg = j && (j.message || j.error)
                     ? `${j.error || ""} ${j.message || ""}`.trim()
                     : `HTTP ${r.status}`;
-                throw new Error(msg || "restore failed");
+                throw new Error(msg || tr("filemgr.versions.restore_failed", null, "restore failed"));
             }
 
             const loadFn = FM && typeof FM.getLoadFn === "function" ? FM.getLoadFn() : null;
@@ -903,7 +912,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
             }
 
             if (state.closeAfterRestore) {
-                setGlobalStatus(`Restored version: ${state.relPath}`, "ok");
+                setGlobalStatus(tr("filemgr.versions.restored_global", { path: state.relPath }, `Restored version: ${state.relPath}`), "ok");
                 close();
                 return;
             }
@@ -915,7 +924,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
         await loadVersions();
         renderVersions();
         setModalStatus(successMsg, "ok");
-        setGlobalStatus(`Restored version: ${state.relPath}`, "ok");
+        setGlobalStatus(tr("filemgr.versions.restored_global", { path: state.relPath }, `Restored version: ${state.relPath}`), "ok");
     }
 
     FM.fileVersions = {
@@ -933,7 +942,7 @@ html[data-theme="orange"] .pqfvFlagSummary{
             state.restoringVersionId = "";
             state.deletingVersionId = "";
 
-            titleEl.textContent = "File versions";
+            titleEl.textContent = tr("filemgr.versions.title", null, "File versions");
             pathEl.textContent = "/" + state.relPath;
 
             if (closeAfterRestoreCb) {

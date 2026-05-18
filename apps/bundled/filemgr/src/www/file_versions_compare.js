@@ -6,6 +6,15 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const FM = window.PQNAS_FILEMGR;
     if (!FM || FM.fileVersionCompare) return;
 
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
     const TEXT_EXTS = new Set([
         "txt", "md", "log", "json", "html", "htm", "css", "js", "ts",
         "c", "cc", "cpp", "h", "hpp", "py", "sh", "yml", "yaml",
@@ -455,7 +464,7 @@ html[data-theme="win_classic"] .pqfvcLine.skip{
 
         titleEl = document.createElement("div");
         titleEl.className = "pqfvcTitle";
-        titleEl.textContent = "Compare file version";
+        titleEl.textContent = tr("filemgr.compare.title", null, "Compare file version");
 
         pathEl = document.createElement("div");
         pathEl.className = "pqfvcPath mono";
@@ -477,7 +486,7 @@ html[data-theme="win_classic"] .pqfvcLine.skip{
         });
 
         const syncText = document.createElement("span");
-        syncText.textContent = "Sync scroll";
+        syncText.textContent = tr("filemgr.compare.sync_scroll", null, "Sync scroll");
 
         syncLabel.appendChild(syncCb);
         syncLabel.appendChild(syncText);
@@ -494,7 +503,7 @@ html[data-theme="win_classic"] .pqfvcLine.skip{
         });
 
         const hideText = document.createElement("span");
-        hideText.textContent = "Hide unchanged";
+        hideText.textContent = tr("filemgr.compare.hide_unchanged", null, "Hide unchanged");
 
         hideLabel.appendChild(hideCb);
         hideLabel.appendChild(hideText);
@@ -502,7 +511,7 @@ html[data-theme="win_classic"] .pqfvcLine.skip{
         const closeBtn = document.createElement("button");
         closeBtn.type = "button";
         closeBtn.className = "btn secondary";
-        closeBtn.textContent = "Close";
+        closeBtn.textContent = tr("filemgr.compare.close", null, "Close");
         closeBtn.addEventListener("click", close);
 
         actions.appendChild(syncLabel);
@@ -526,7 +535,7 @@ html[data-theme="win_classic"] .pqfvcLine.skip{
 
         const leftTitle = document.createElement("div");
         leftTitle.className = "pqfvcPaneTitle";
-        leftTitle.textContent = "Selected version";
+        leftTitle.textContent = tr("filemgr.compare.selected_version", null, "Selected version");
 
         leftMetaEl = document.createElement("div");
         leftMetaEl.className = "pqfvcPaneMeta mono";
@@ -549,7 +558,7 @@ html[data-theme="win_classic"] .pqfvcLine.skip{
 
         const rightTitle = document.createElement("div");
         rightTitle.className = "pqfvcPaneTitle";
-        rightTitle.textContent = "Current file";
+        rightTitle.textContent = tr("filemgr.compare.current_file", null, "Current file");
 
         rightMetaEl = document.createElement("div");
         rightMetaEl.className = "pqfvcPaneMeta mono";
@@ -712,7 +721,7 @@ html[data-theme="win_classic"] .pqfvcLine.skip{
             const msg = j && (j.message || j.error)
                 ? `${j.error || ""} ${j.message || ""}`.trim()
                 : `HTTP ${r.status}`;
-            throw new Error(msg || "request failed");
+            throw new Error(msg || tr("filemgr.compare.request_failed", null, "request failed"));
         }
 
         return j;
@@ -1002,7 +1011,7 @@ html[data-theme="win_classic"] .pqfvcLine.skip{
 
                 const code = document.createElement("div");
                 code.className = "pqfvcLineText";
-                code.textContent = `${Number(r.count || 0)} unchanged line(s) hidden`;
+                code.textContent = tr("filemgr.compare.unchanged_hidden", { count: Number(r.count || 0) }, `${Number(r.count || 0)} unchanged line(s) hidden`);
 
                 row.appendChild(no);
                 row.appendChild(markEl);
@@ -1077,15 +1086,15 @@ html[data-theme="win_classic"] .pqfvcLine.skip{
         state.relPath = getCurrentRelPathFor(item);
         state.loading = true;
 
-        titleEl.textContent = "Compare file version";
+        titleEl.textContent = tr("filemgr.compare.title", null, "Compare file version");
         pathEl.textContent = "/" + state.relPath;
-        leftMetaEl.textContent = "Loading selected version…";
-        rightMetaEl.textContent = "Loading current file…";
+        leftMetaEl.textContent = tr("filemgr.compare.loading_selected", null, "Loading selected version…");
+        rightMetaEl.textContent = tr("filemgr.compare.loading_current", null, "Loading current file…");
         leftArea.replaceChildren();
         rightArea.replaceChildren();
 
         show();
-        setStatus("Loading texts…", "warn");
+        setStatus(tr("filemgr.compare.loading_texts", null, "Loading texts…"), "warn");
 
         try {
             const [oldJ, curJ] = await Promise.all([
@@ -1114,14 +1123,23 @@ html[data-theme="win_classic"] .pqfvcLine.skip{
 
             const total = diff.stats.inserted + diff.stats.deleted + diff.stats.changed;
             const parts = [];
-            if (diff.stats.inserted) parts.push(`+${diff.stats.inserted} added`);
-            if (diff.stats.deleted) parts.push(`-${diff.stats.deleted} removed`);
-            if (diff.stats.changed) parts.push(`~${diff.stats.changed} changed`);
+            if (diff.stats.inserted) parts.push(tr("filemgr.compare.added", { count: diff.stats.inserted }, `+${diff.stats.inserted} added`));
+            if (diff.stats.deleted) parts.push(tr("filemgr.compare.removed", { count: diff.stats.deleted }, `-${diff.stats.deleted} removed`));
+            if (diff.stats.changed) parts.push(tr("filemgr.compare.changed", { count: diff.stats.changed }, `~${diff.stats.changed} changed`));
 
             setStatus(
                 total
-                    ? `Loaded. ${parts.join(" • ")}${diff.fallback ? " • large-file fallback" : ""}`
-                    : "Loaded. No line differences found.",
+                    ? tr(
+                        "filemgr.compare.loaded_summary",
+                        {
+                            summary: parts.join(" • "),
+                            fallback: diff.fallback
+                                ? " • " + tr("filemgr.compare.large_fallback", null, "large-file fallback")
+                                : ""
+                        },
+                        `Loaded. ${parts.join(" • ")}${diff.fallback ? " • large-file fallback" : ""}`
+                    )
+                    : tr("filemgr.compare.loaded_no_diff", null, "Loaded. No line differences found."),
                 "ok"
             );
         } catch (e) {
