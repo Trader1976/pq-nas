@@ -32,6 +32,46 @@
         return DEFAULT_LANG;
     }
 
+    function installBootHideStyle() {
+        if (document.getElementById("pqnasI18nBootHideStyle")) return;
+
+        const style = document.createElement("style");
+        style.id = "pqnasI18nBootHideStyle";
+        style.textContent = `
+html[data-i18n-pending="1"] body{
+    visibility:hidden !important;
+}
+`;
+        document.head.appendChild(style);
+    }
+
+    function setI18nPending(on) {
+        if (on) {
+            installBootHideStyle();
+            document.documentElement.setAttribute("data-i18n-pending", "1");
+            document.documentElement.removeAttribute("data-i18n-ready");
+            return;
+        }
+
+        document.documentElement.removeAttribute("data-i18n-pending");
+        document.documentElement.setAttribute("data-i18n-ready", "1");
+    }
+
+    function whenDomReady() {
+        if (document.readyState !== "loading") return Promise.resolve();
+        return new Promise((resolve) => {
+            document.addEventListener("DOMContentLoaded", resolve, { once: true });
+        });
+    }
+
+    function dispatchLanguageChanged(lang) {
+        try {
+            window.dispatchEvent(new CustomEvent("pqnas-language-changed", {
+                detail: { lang }
+            }));
+        } catch (_) {}
+    }
+
     function interpolate(text, vars) {
         let out = String(text ?? "");
         if (!vars || typeof vars !== "object") return out;
@@ -116,14 +156,12 @@
         }
 
         currentDict = await fetchDict(next);
+        await whenDomReady();
+
         document.documentElement.setAttribute("lang", next);
         apply(document);
-
-        try {
-            window.dispatchEvent(new CustomEvent("pqnas-language-changed", {
-                detail: { lang: next }
-            }));
-        } catch (_) {}
+        setI18nPending(false);
+        dispatchLanguageChanged(next);
 
         return next;
     }
@@ -134,7 +172,24 @@
 
     function init() {
         currentLang = loadLocalLanguage();
-        readyPromise = setLanguage(currentLang, { persist: false });
+        document.documentElement.setAttribute("lang", currentLang);
+
+        // Start fetching translations immediately from the <head>.
+        // Previously this waited until DOMContentLoaded, so File Manager painted
+        // English fallback text first and changed to Finnish a moment later.
+        setI18nPending(currentLang !== DEFAULT_LANG);
+
+        readyPromise = (async () => {
+            currentDict = await fetchDict(currentLang);
+            await whenDomReady();
+
+            document.documentElement.setAttribute("lang", currentLang);
+            apply(document);
+            setI18nPending(false);
+            dispatchLanguageChanged(currentLang);
+
+            return currentLang;
+        })();
     }
 
     window.PQNAS_I18N = {
@@ -155,9 +210,7 @@
         }
     });
 
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", init, { once: true });
-    } else {
-        init();
-    }
+    // Start immediately. If this script is in <head>, this overlaps the JSON
+    // fetch with HTML parsing and avoids the English → Finnish flicker.
+    init();
 })();
