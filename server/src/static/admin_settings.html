@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/static/theme.css">
     <link rel="stylesheet" href="/static/shell_menu.css">
     <script src="/static/theme.js"></script>
+    <script src="/static/i18n.js?v=20260518-admin-i18n-1"></script>
 
     <style>
         /* Settings page needs full-page scrolling */
@@ -892,6 +893,32 @@
                     <div class="note">
                         The test button sends a real message using the current saved settings.
                         This is optional and fully admin-controlled.
+                    </div>
+                </div>
+            </div>
+
+            <div class="card accordion" data-acc="settings">
+                <div class="hd" role="button" tabindex="0" aria-expanded="false">
+                    <div class="h" data-i18n="admin.language.title">UI Language</div>
+                    <div class="row">
+                        <span class="pill info" id="languagePill">
+                            <span class="k" data-i18n="admin.language.pill">Language</span><span class="k">:</span>
+                            <span class="v">—</span>
+                        </span>
+                    </div>
+                    <span class="chev" aria-hidden="true">▸</span>
+                </div>
+
+                <div class="bd">
+                    <div class="row">
+                        <select id="languageSelect" aria-label="UI language">
+                            <option value="en" data-i18n="admin.language.english">🇬🇧 English</option>
+                            <option value="fi" data-i18n="admin.language.finnish">🇫🇮 Suomi</option>
+                        </select>
+                    </div>
+
+                    <div class="note" data-i18n="admin.language.desc">
+                        Language is saved in this browser and applies instantly across DNA-Nexus pages.
                     </div>
                 </div>
             </div>

@@ -51,6 +51,10 @@
     const rotMaxMB = $("rotMaxMB");
     const btnRotatePolicySave = $("btnRotatePolicySave");
 
+    // --- language ---
+    const languagePill = $("languagePill");
+    const languageSelect = $("languageSelect");
+
     // --- theme ---
     const themePill = $("themePill");
     const themeSelect = $("themeSelect");
@@ -216,6 +220,15 @@
         )}</span>`;
     }
 
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
     function fmtBytes(n) {
         if (n === null || n === undefined) return "—";
         const x = Number(n);
@@ -237,6 +250,65 @@
             if (lvl === selected) opt.selected = true;
             levelSelect.appendChild(opt);
         }
+    }
+
+    // ---------------------------
+    // Language (browser-local i18n)
+    // ---------------------------
+    function normalizeLanguage(lang) {
+        const raw = String(lang || "").trim().toLowerCase();
+        if (raw === "fi") return "fi";
+        return "en";
+    }
+
+    function currentLanguageName() {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.getLanguage === "function") {
+                return normalizeLanguage(window.PQNAS_I18N.getLanguage());
+            }
+        } catch (_) {}
+
+        try {
+            return normalizeLanguage(localStorage.getItem("pqnas_lang") || "en");
+        } catch (_) {}
+
+        return "en";
+    }
+
+    function updateLanguagePill(lang) {
+        const l = normalizeLanguage(lang);
+        if (languageSelect) languageSelect.value = l;
+
+        const label = l === "fi"
+            ? tr("admin.language.finnish", null, "🇫🇮 Suomi")
+            : tr("admin.language.english", null, "🇬🇧 English");
+
+        if (languagePill) {
+            setSimplePill(languagePill, "info", tr("admin.language.pill", null, "Language"), label);
+        }
+    }
+
+    async function applyAdminLanguage(lang) {
+        const l = normalizeLanguage(lang);
+
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.setLanguage === "function") {
+                await window.PQNAS_I18N.setLanguage(l);
+            } else {
+                localStorage.setItem("pqnas_lang", l);
+                document.documentElement.setAttribute("lang", l);
+            }
+        } catch (_) {}
+
+        updateLanguagePill(l);
+
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.apply === "function") {
+                window.PQNAS_I18N.apply(document);
+            }
+        } catch (_) {}
+
+        showToast("ok", tr("admin.language.applied", null, "Language applied"), l === "fi" ? "🇫🇮 Suomi" : "🇬🇧 English");
     }
 
     // ---------------------------
@@ -1868,6 +1940,18 @@ html[data-theme="win_classic"] .adminConfirmBackdrop{
         }
     });
     // ---------------------------
+    // Wire language
+    // ---------------------------
+    languageSelect?.addEventListener("change", (ev) => {
+        ev.preventDefault();
+        applyAdminLanguage(languageSelect.value);
+    });
+
+    window.addEventListener("pqnas-language-changed", () => {
+        updateLanguagePill(currentLanguageName());
+    });
+
+    // ---------------------------
     // Wire theme
     // ---------------------------
     themeSelect?.addEventListener("change", () => {
@@ -1926,6 +2010,7 @@ html[data-theme="win_classic"] .adminConfirmBackdrop{
     });
 
     // init
+    updateLanguagePill(currentLanguageName());
     syncRotateModeUi();
     syncRetentionModeUi();
     refreshAll();
