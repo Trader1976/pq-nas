@@ -4250,6 +4250,95 @@ function describeMoveItems(items) {
     );
   }
 
+
+  async function confirmMoveToDestinationModal(items, destShown, affectedSharesResult) {
+    const list = Array.isArray(items) ? items : [];
+    const affected = affectedSharesResult && affectedSharesResult.ok === true && Array.isArray(affectedSharesResult.items)
+        ? affectedSharesResult.items
+        : [];
+
+    let warning = "";
+    if (!affectedSharesResult || affectedSharesResult.ok !== true) {
+      warning = tr(
+          "filemgr.move.confirm_unverified_warning",
+          null,
+          "Could not verify whether selected items have active share links."
+      );
+    } else if (affected.length) {
+      const preview = affected.slice(0, 6).map(shareMoveWarningLabel).join("\n");
+      const more = affected.length > 6
+          ? tr("filemgr.move.more_shares", { count: affected.length - 6 }, `\n… plus ${affected.length - 6} more`)
+          : "";
+
+      warning = tr(
+          "filemgr.move.confirm_breaks_shares_warning",
+          { count: affected.length, preview, more },
+          `Moving these item(s) will break ${affected.length} active share/PQ share link(s). The old public URLs will return Not found after the move.\n\n${preview}${more}`
+      );
+    }
+
+    return await fmConfirmModal({
+      title: tr("filemgr.move.confirm_title", null, "Move selected item(s)?"),
+      subtitle: tr("filemgr.move.confirm_subtitle", null, "Confirm the destination before moving."),
+      rows: [
+        {
+          label: tr("filemgr.move.confirm_items", null, "Items"),
+          value: tr("filemgr.move.confirm_items_count", { count: list.length }, `${list.length} item(s)`),
+          mono: false
+        },
+        {
+          label: tr("filemgr.move.confirm_destination", null, "Destination"),
+          value: destShown || "/",
+          mono: true
+        }
+      ],
+      warning,
+      note: tr(
+          "filemgr.move.confirm_note",
+          null,
+          "Existing destination names will fail; nothing is overwritten."
+      ),
+      confirmText: tr("filemgr.move.confirm_button", null, "Move here"),
+      cancelText: tr("filemgr.cancel", null, "Cancel"),
+      danger: affected.length > 0
+    });
+  }
+
+  async function confirmCopyToDestinationModal(items, destScope, destSnap, destPath) {
+    const list = Array.isArray(items) ? items : [];
+    const destShown = destPath ? `/${destPath}` : "/";
+    const scopeLabel = (destScope && destScope.label) || copyScopeNameFromSnapshot(destSnap);
+
+    return await fmConfirmModal({
+      title: tr("filemgr.copy.confirm_title", null, "Copy selected item(s)?"),
+      subtitle: tr("filemgr.copy.confirm_subtitle", null, "Confirm the destination before copying."),
+      rows: [
+        {
+          label: tr("filemgr.copy.confirm_items", null, "Items"),
+          value: tr("filemgr.copy.confirm_items_count", { count: list.length }, `${list.length} item(s)`),
+          mono: false
+        },
+        {
+          label: tr("filemgr.copy.confirm_location", null, "Location"),
+          value: scopeLabel || tr("filemgr.my_files", null, "My Files"),
+          mono: false
+        },
+        {
+          label: tr("filemgr.copy.confirm_destination", null, "Destination"),
+          value: destShown,
+          mono: true
+        }
+      ],
+      note: tr(
+          "filemgr.copy.confirm_note",
+          null,
+          "Existing destination names will fail; nothing is overwritten."
+      ),
+      confirmText: tr("filemgr.copy.confirm_button", null, "Copy here"),
+      cancelText: tr("filemgr.cancel", null, "Cancel")
+    });
+  }
+
   function collectSelectedMoveItems() {
     const out = [];
 
@@ -4329,7 +4418,7 @@ function describeMoveItems(items) {
     status.textContent = tr("filemgr.move.checking_shares", null, "Checking share links…");
     const affectedSharesResult = await collectAffectedSharesForMove(moveItems);
 
-    const ok = confirm(buildMoveConfirmText(destShown, affectedSharesResult));
+    const ok = await confirmMoveToDestinationModal(moveItems, destShown, affectedSharesResult);
     if (!ok) {
       status.textContent = tr("filemgr.move.cancelled", null, "Move cancelled.");
       return;
@@ -4666,15 +4755,7 @@ function describeMoveItems(items) {
       return;
     }
 
-    const destShown = destPath ? `/${destPath}` : "/";
-    const ok = confirm(tr(
-        "filemgr.copy.confirm",
-        {
-          count: clean.length,
-          dest: `${destScope.label || copyScopeNameFromSnapshot(destSnap)} ${destShown}`
-        },
-        `Copy ${clean.length} item(s) to:\n\n${destScope.label || copyScopeNameFromSnapshot(destSnap)} ${destShown}\n\nExisting destination names will fail; nothing is overwritten.`
-    ));
+    const ok = await confirmCopyToDestinationModal(clean, destScope, destSnap, destPath);
 
     if (!ok) {
       status.textContent = tr("filemgr.copy.cancelled", null, "Copy cancelled.");
