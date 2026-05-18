@@ -5,6 +5,15 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
   const FM = window.PQNAS_FILEMGR;
 
+  function tr(key, vars = null, fallback = "") {
+    try {
+      if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+        return window.PQNAS_I18N.t(key, vars, fallback || key);
+      }
+    } catch (_) {}
+    return fallback || key;
+  }
+
   const REFRESH_MS = 30 * 1000;
   const TRASH_RETENTION_DAYS = 30;
 
@@ -140,7 +149,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (!badge) {
       badge = document.createElement("span");
       badge.className = "pqsiTrashBadge";
-      badge.setAttribute("aria-label", "Trash item count");
+      badge.setAttribute("aria-label", tr("filemgr.trash.badge_aria", null, "Trash item count"));
       badge.hidden = true;
       btn.appendChild(badge);
     }
@@ -156,7 +165,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (count > 0) {
       badge.hidden = false;
       badge.textContent = String(count);
-      badge.title = `${count} item(s) in trash`;
+      badge.title = tr("filemgr.trash.badge_title", { count }, `${count} item(s) in trash`);
     } else {
       badge.hidden = true;
       badge.textContent = "";
@@ -176,14 +185,14 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       strip.className = "pqsiTrashStrip";
       strip.innerHTML = `
         <div class="pqsiTrashMetrics">
-          <span class="pqsiMetric" id="pqsiTrashItems">Trash: —</span>
-          <span class="pqsiMetric" id="pqsiTrashBytes">Space: —</span>
-          <span class="pqsiMetric" id="pqsiTrashNextPurge">Next auto-delete: —</span>
-          <span class="pqsiMetric" id="pqsiVersionsBytes">Versions: separate</span>
+          <span class="pqsiMetric" id="pqsiTrashItems">${tr("filemgr.trash.metric.items", { count: "—" }, "Trash: —")}</span>
+          <span class="pqsiMetric" id="pqsiTrashBytes">${tr("filemgr.trash.metric.bytes", { size: "—" }, "Trash uses: —")}</span>
+          <span class="pqsiMetric" id="pqsiTrashNextPurge">${tr("filemgr.trash.metric.next_none", null, "Next auto-delete: —")}</span>
+          <span class="pqsiMetric" id="pqsiVersionsBytes">${tr("filemgr.trash.metric.versions_initial", null, "Versions: separate")}</span>
         </div>
-        <div class="pqsiNote">
-          <strong>Note:</strong> Items in trash are automatically deleted after ${TRASH_RETENTION_DAYS} days.
-          File versions are stored separately and are not removed by trash cleanup.
+        <div class="pqsiNote" id="pqsiTrashNote">
+          <strong>${tr("filemgr.trash.note_label", null, "Note:")}</strong>
+          ${tr("filemgr.trash.note", { days: TRASH_RETENTION_DAYS }, `Items in trash are automatically deleted after ${TRASH_RETENTION_DAYS} days. File versions are stored separately and are not removed by trash cleanup.`)}
         </div>
       `;
 
@@ -204,26 +213,33 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const bytesEl = el("pqsiTrashBytes");
     const nextEl = el("pqsiTrashNextPurge");
     const versionsEl = el("pqsiVersionsBytes");
+    const noteEl = el("pqsiTrashNote");
+
+    if (noteEl) {
+      noteEl.innerHTML = `<strong>${tr("filemgr.trash.note_label", null, "Note:")}</strong> ${
+        tr("filemgr.trash.note", { days: TRASH_RETENTION_DAYS }, `Items in trash are automatically deleted after ${TRASH_RETENTION_DAYS} days. File versions are stored separately and are not removed by trash cleanup.`)
+      }`;
+    }
 
     const count = Number(stats && stats.count || 0);
     const bytes = Number(stats && stats.bytes || 0);
     const next = Number(stats && stats.nextPurgeAfterEpoch || 0);
 
-    if (countEl) countEl.textContent = `Trash: ${count} item(s)`;
-    if (bytesEl) bytesEl.textContent = `Trash uses: ${fmtSize(bytes)}`;
+    if (countEl) countEl.textContent = tr("filemgr.trash.metric.items", { count }, `Trash: ${count} item(s)`);
+    if (bytesEl) bytesEl.textContent = tr("filemgr.trash.metric.bytes", { size: fmtSize(bytes) }, `Trash uses: ${fmtSize(bytes)}`);
 
     if (nextEl) {
       const d = fmtDate(next);
-      nextEl.textContent = d ? `Next auto-delete: ${d}` : "Next auto-delete: —";
+      nextEl.textContent = d ? tr("filemgr.trash.metric.next", { time: d }, `Next auto-delete: ${d}`) : tr("filemgr.trash.metric.next_none", null, "Next auto-delete: —");
     }
 
     if (versionsEl) {
       if (stats && stats.versionsLoaded) {
-        versionsEl.textContent = `Versions use: ${fmtSize(stats.versionsBytes || 0)}`;
-        versionsEl.title = `${stats.versionsCount || 0} preserved file version(s)`;
+        versionsEl.textContent = tr("filemgr.trash.metric.versions", { size: fmtSize(stats.versionsBytes || 0) }, `Versions use: ${fmtSize(stats.versionsBytes || 0)}`);
+        versionsEl.title = tr("filemgr.trash.metric.versions_title", { count: stats.versionsCount || 0 }, `${stats.versionsCount || 0} preserved file version(s)`);
       } else {
-        versionsEl.textContent = "Versions: —";
-        versionsEl.title = "Version storage summary unavailable.";
+        versionsEl.textContent = tr("filemgr.trash.metric.versions_none", null, "Versions: —");
+        versionsEl.title = tr("filemgr.trash.metric.versions_unavailable", null, "Version storage summary unavailable.");
       }
     }
   }
@@ -313,6 +329,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
 
     window.addEventListener("focus", () => refresh(false));
+    window.addEventListener("pqnas-language-changed", () => applyStats(lastStats));
   }
 
   FM.storageInsights = {

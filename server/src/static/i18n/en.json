@@ -694,5 +694,18 @@
   "filemgr.ws.leave_confirm": "Leave workspace?\\n\\nWorkspace: {name}\\n\\nAfter leaving, it will disappear from the Location dropdown.",
   "filemgr.ws.leaving": "Leaving…",
   "filemgr.ws.left_workspace": "You left workspace: {name}",
-  "filemgr.ws.leave_failed": "Leave failed: {error}"
+  "filemgr.ws.leave_failed": "Leave failed: {error}",
+  "filemgr.trash.badge_aria": "Trash item count",
+  "filemgr.trash.badge_title": "{count} item(s) in trash",
+  "filemgr.trash.metric.items": "Trash: {count} item(s)",
+  "filemgr.trash.metric.bytes": "Trash uses: {size}",
+  "filemgr.trash.metric.next": "Next auto-delete: {time}",
+  "filemgr.trash.metric.next_none": "Next auto-delete: —",
+  "filemgr.trash.metric.versions": "Versions use: {size}",
+  "filemgr.trash.metric.versions_initial": "Versions: separate",
+  "filemgr.trash.metric.versions_none": "Versions: —",
+  "filemgr.trash.metric.versions_title": "{count} preserved file version(s)",
+  "filemgr.trash.metric.versions_unavailable": "Version storage summary unavailable.",
+  "filemgr.trash.note_label": "Note:",
+  "filemgr.trash.note": "Items in trash are automatically deleted after {days} days. File versions are stored separately and are not removed by trash cleanup."
 }

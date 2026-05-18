@@ -694,5 +694,18 @@
   "filemgr.ws.leave_confirm": "Poistutaanko työtilasta?\\n\\nTyötila: {name}\\n\\nPoistumisen jälkeen se katoaa Sijainti-valikosta.",
   "filemgr.ws.leaving": "Poistutaan…",
   "filemgr.ws.left_workspace": "Poistuit työtilasta: {name}",
-  "filemgr.ws.leave_failed": "Poistuminen epäonnistui: {error}"
+  "filemgr.ws.leave_failed": "Poistuminen epäonnistui: {error}",
+  "filemgr.trash.badge_aria": "Roskakorin kohteiden määrä",
+  "filemgr.trash.badge_title": "{count} kohdetta roskakorissa",
+  "filemgr.trash.metric.items": "Roskakori: {count} kohdetta",
+  "filemgr.trash.metric.bytes": "Roskakorin koko: {size}",
+  "filemgr.trash.metric.next": "Seuraava automaattipoisto: {time}",
+  "filemgr.trash.metric.next_none": "Seuraava automaattipoisto: —",
+  "filemgr.trash.metric.versions": "Versioiden koko: {size}",
+  "filemgr.trash.metric.versions_initial": "Versiot: erillään",
+  "filemgr.trash.metric.versions_none": "Versiot: —",
+  "filemgr.trash.metric.versions_title": "{count} säilytettyä tiedostoversiota",
+  "filemgr.trash.metric.versions_unavailable": "Versioiden tallennustilan yhteenveto ei ole saatavilla.",
+  "filemgr.trash.note_label": "Huomio:",
+  "filemgr.trash.note": "Roskakorissa olevat kohteet poistetaan automaattisesti {days} päivän jälkeen. Tiedostoversiot säilytetään erikseen, eikä roskakorin siivous poista niitä."
 }
