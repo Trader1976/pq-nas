@@ -1884,30 +1884,30 @@
                 <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="sharedSpaceCreateTitle">
                     <div class="modalHead">
                         <div>
-                            <div id="sharedSpaceCreateTitle" class="modalTitle">New Shared Space</div>
-                            <div class="modalSub mono">Create a private collaboration space</div>
+                            <div id="sharedSpaceCreateTitle" class="modalTitle">${tr("filemgr.ws.new_shared_space", null, "New Shared Space")}</div>
+                            <div class="modalSub mono">${tr("filemgr.ws.create_subtitle", null, "Create a private collaboration space")}</div>
                         </div>
-                        <button class="btn secondary" type="button" data-ss-cancel>Close</button>
+                        <button class="btn secondary" type="button" data-ss-cancel>${tr("filemgr.ws.close", null, "Close")}</button>
                     </div>
 
                     <div class="modalBody">
                         <div class="ssCreateForm">
                             <label class="ssFormField">
-                                <span style="font-weight:900;">Name</span>
+                                <span style="font-weight:900;">${tr("filemgr.ws.name", null, "Name")}</span>
                                 <input class="ssInput"
                                        data-ss-name
                                        maxlength="80"
                                        autocomplete="off"
-                                       placeholder="Family photos, Project files, Trip planning…" />
+                                       placeholder="${tr("filemgr.ws.name_placeholder", null, "Family photos, Project files, Trip planning…")}" />
                             </label>
 
                             <label class="ssFormField">
-                                <span style="font-weight:900;">Notes <span style="opacity:.65; font-weight:700;">optional</span></span>
+                                <span style="font-weight:900;">${tr("filemgr.ws.notes", null, "Notes")} <span style="opacity:.65; font-weight:700;">${tr("filemgr.ws.optional", null, "optional")}</span></span>
                                 <textarea class="ssTextarea"
                                           data-ss-notes
                                           maxlength="300"
                                           rows="4"
-                                          placeholder="What is this Shared Space for?"></textarea>
+                                          placeholder="${tr("filemgr.ws.notes_placeholder", null, "What is this Shared Space for?")}"></textarea>
                             </label>
 
                             <div data-ss-status class="mono" style="min-height:18px; opacity:.85;"></div>
@@ -1915,8 +1915,8 @@
                     </div>
 
                     <div class="modalFoot" style="display:flex; justify-content:flex-end; gap:10px;">
-                        <button class="btn secondary" type="button" data-ss-cancel>Cancel</button>
-                        <button class="btn" type="button" data-ss-create>Create Shared Space</button>
+                        <button class="btn secondary" type="button" data-ss-cancel>${tr("filemgr.ws.cancel", null, "Cancel")}</button>
+                        <button class="btn" type="button" data-ss-create>${tr("filemgr.ws.create_shared_space", null, "Create Shared Space")}</button>
                     </div>
                 </div>
             `;
@@ -2012,7 +2012,7 @@
                 const notes = String(notesInput?.value || "").trim();
 
                 if (!name) {
-                    if (statusEl) statusEl.textContent = "Shared Space name is required.";
+                    if (statusEl) statusEl.textContent = tr("filemgr.ws.name_required", null, "Shared Space name is required.");
                     nameInput?.focus();
                     return;
                 }
@@ -2048,13 +2048,13 @@
 
         const old = workspaceCreateSharedBtn.textContent;
         workspaceCreateSharedBtn.disabled = true;
-        workspaceCreateSharedBtn.textContent = "Creating…";
+        workspaceCreateSharedBtn.textContent = tr("filemgr.ws.creating", null, "Creating…");
 
         try {
             const j = await apiCreateSharedSpace(payload.name, payload.notes);
             const ws = j && j.workspace ? j.workspace : null;
             if (!ws || !ws.workspace_id) {
-                throw new Error("create response did not include workspace");
+                throw new Error(tr("filemgr.ws.create_response_missing", null, "create response did not include workspace"));
             }
 
             FM.scope.mode = "workspace";
@@ -2072,7 +2072,7 @@
             if (FM.clearSelection) FM.clearSelection();
             if (FM.setPathAndLoad) FM.setPathAndLoad("");
         } catch (e) {
-            alert("Create Shared Space failed:\\n" + String(e && e.message ? e.message : e));
+            alert(tr("filemgr.ws.create_failed", { error: String(e && e.message ? e.message : e) }, "Create Shared Space failed:\\n" + String(e && e.message ? e.message : e)));
         } finally {
             workspaceCreateSharedBtn.disabled = false;
             workspaceCreateSharedBtn.textContent = old;
@@ -2097,16 +2097,16 @@
         const workspaceName = FM.scope.workspaceName || workspaceId;
         if (!workspaceId) return;
 
-        const ok = confirm(
-            `Leave workspace?\n\n` +
-            `Workspace: ${workspaceName}\n\n` +
-            `After leaving, it will disappear from the Location dropdown.`
-        );
+        const ok = confirm(tr(
+            "filemgr.ws.leave_confirm",
+            { name: workspaceName },
+            `Leave workspace?\n\nWorkspace: ${workspaceName}\n\nAfter leaving, it will disappear from the Location dropdown.`
+        ));
         if (!ok) return;
 
         const old = workspaceLeaveBtn.textContent;
         workspaceLeaveBtn.disabled = true;
-        workspaceLeaveBtn.textContent = "Leaving…";
+        workspaceLeaveBtn.textContent = tr("filemgr.ws.leaving", null, "Leaving…");
 
         try {
             await apiLeaveWorkspace(workspaceId);
@@ -2118,7 +2118,7 @@
             if (FM.clearSelection) FM.clearSelection();
             if (FM.setPathAndLoad) FM.setPathAndLoad("");
 
-            alert(`You left workspace: ${workspaceName}`);
+            alert(tr("filemgr.ws.left_workspace", { name: workspaceName }, `You left workspace: ${workspaceName}`));
         } catch (e) {
             if (workspaceMembersStatus) {
                 workspaceMembersStatus.textContent =

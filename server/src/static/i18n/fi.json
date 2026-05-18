@@ -677,5 +677,22 @@
   "filemgr.ws.confirm_requires": "Tämä toiminto vaatii vahvistuksen.",
   "filemgr.ws.type_to_continue": "Kirjoita “{expected}” jatkaaksesi",
   "filemgr.ws.typed_name_mismatch": "Kirjoitettu nimi ei täsmää.",
-  "filemgr.ws.delete": "Poista"
+  "filemgr.ws.delete": "Poista",
+  "filemgr.ws.new_shared_space": "Uusi jaettu tila",
+  "filemgr.ws.create_shared_space_title": "Luo jaettu tila",
+  "filemgr.ws.create_subtitle": "Luo yksityinen yhteistyötila",
+  "filemgr.ws.close": "Sulje",
+  "filemgr.ws.name": "Nimi",
+  "filemgr.ws.name_placeholder": "Perhekuvat, projektitiedostot, matkasuunnittelu…",
+  "filemgr.ws.notes": "Muistiinpanot",
+  "filemgr.ws.optional": "valinnainen",
+  "filemgr.ws.notes_placeholder": "Mihin tätä jaettua tilaa käytetään?",
+  "filemgr.ws.name_required": "Jaetun tilan nimi vaaditaan.",
+  "filemgr.ws.create_shared_space": "Luo jaettu tila",
+  "filemgr.ws.create_response_missing": "luontivastaus ei sisältänyt työtilaa",
+  "filemgr.ws.create_failed": "Jaetun tilan luonti epäonnistui:\\n{error}",
+  "filemgr.ws.leave_confirm": "Poistutaanko työtilasta?\\n\\nTyötila: {name}\\n\\nPoistumisen jälkeen se katoaa Sijainti-valikosta.",
+  "filemgr.ws.leaving": "Poistutaan…",
+  "filemgr.ws.left_workspace": "Poistuit työtilasta: {name}",
+  "filemgr.ws.leave_failed": "Poistuminen epäonnistui: {error}"
 }

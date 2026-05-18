@@ -677,5 +677,22 @@
   "filemgr.ws.confirm_requires": "This action requires confirmation.",
   "filemgr.ws.type_to_continue": "Type “{expected}” to continue",
   "filemgr.ws.typed_name_mismatch": "The typed name does not match.",
-  "filemgr.ws.delete": "Delete"
+  "filemgr.ws.delete": "Delete",
+  "filemgr.ws.new_shared_space": "New Shared Space",
+  "filemgr.ws.create_shared_space_title": "Create a Shared Space",
+  "filemgr.ws.create_subtitle": "Create a private collaboration space",
+  "filemgr.ws.close": "Close",
+  "filemgr.ws.name": "Name",
+  "filemgr.ws.name_placeholder": "Family photos, Project files, Trip planning…",
+  "filemgr.ws.notes": "Notes",
+  "filemgr.ws.optional": "optional",
+  "filemgr.ws.notes_placeholder": "What is this Shared Space for?",
+  "filemgr.ws.name_required": "Shared Space name is required.",
+  "filemgr.ws.create_shared_space": "Create Shared Space",
+  "filemgr.ws.create_response_missing": "create response did not include workspace",
+  "filemgr.ws.create_failed": "Create Shared Space failed:\\n{error}",
+  "filemgr.ws.leave_confirm": "Leave workspace?\\n\\nWorkspace: {name}\\n\\nAfter leaving, it will disappear from the Location dropdown.",
+  "filemgr.ws.leaving": "Leaving…",
+  "filemgr.ws.left_workspace": "You left workspace: {name}",
+  "filemgr.ws.leave_failed": "Leave failed: {error}"
 }
