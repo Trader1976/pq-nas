@@ -3555,7 +3555,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const rows = [];
     rows.push(["Items", String(paths.length)]);
     rows.push(["Favorites", String(selectedFavoriteStats().fav)]);
-    rows.push(["Details", "Loading…"]);
+    rows.push([propLabel("details"), tr("filemgr.props.loading", null, "Loading…")]);
 
     if (propsBody) {
       for (const [k, v] of rows) {
@@ -3624,7 +3624,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     const rawDetails = document.createElement("details");
     const summary = document.createElement("summary");
-    summary.textContent = "Raw JSON";
+    summary.textContent = tr("filemgr.props.raw_json", null, "Raw JSON");
     rawDetails.appendChild(summary);
 
     const pre = document.createElement("pre");
@@ -6286,14 +6286,31 @@ function describeMoveItems(items) {
     b.className = "btn secondary";
     b.style.padding = "8px 10px";
     b.style.borderRadius = "12px";
-    b.textContent = "Copy";
+    b.textContent = tr("filemgr.props.copy", null, "Copy");
     b.onclick = async () => {
       const text = getTextFn ? String(getTextFn() || "") : "";
       const ok = text ? await copyText(text) : false;
-      b.textContent = ok ? "Copied" : "Copy failed";
-      setTimeout(() => (b.textContent = "Copy"), 1100);
+      b.textContent = ok ? tr("filemgr.props.copied", null, "Copied") : tr("filemgr.props.copy_failed", null, "Copy failed");
+      setTimeout(() => (b.textContent = tr("filemgr.props.copy", null, "Copy")), 1100);
     };
     return b;
+  }
+
+  function propLabel(key) {
+    return tr(`filemgr.props.${key}`, null, key);
+  }
+
+  function propTypeLabel(type) {
+    const t = String(type || "").toLowerCase();
+    if (t === "dir") return tr("filemgr.props.folder", null, "Folder");
+    if (t === "file") return tr("filemgr.props.file", null, "File");
+    return tr("filemgr.props.other", null, "Other");
+  }
+
+  function propYesNo(value) {
+    return value
+        ? tr("filemgr.props.yes", null, "Yes")
+        : tr("filemgr.props.no", null, "No");
   }
 
   async function showProperties(item) {
@@ -6311,7 +6328,7 @@ function describeMoveItems(items) {
     const sharesEnabled = caps.shares !== false;
     const pqSharesEnabled = caps.pqShares !== false;
 
-    if (propsTitle) propsTitle.textContent = isDirHint ? "Folder properties" : "File properties";
+    if (propsTitle) propsTitle.textContent = isDirHint ? tr("filemgr.props.folder_title", null, "Folder properties") : tr("filemgr.props.file_title", null, "File properties");
     if (propsPath) propsPath.textContent = "/" + (rel || "");
     if (propsBody) propsBody.innerHTML = "";
 
@@ -6349,7 +6366,7 @@ function describeMoveItems(items) {
 
     const fmtCountdownLocal = (msLeft) => {
       if (msLeft == null) return "";
-      if (msLeft <= 0) return "Expired";
+      if (msLeft <= 0) return tr("filemgr.props.expired", null, "Expired");
       const s = Math.floor(msLeft / 1000);
       const d = Math.floor(s / 86400);
       const h = Math.floor((s % 86400) / 3600);
@@ -6365,16 +6382,16 @@ function describeMoveItems(items) {
     };
 
     const rows = [];
-    pushRow(rows, "Name", item.name || "");
-    pushRow(rows, "Type", isDirHint ? "Folder" : "File");
+    pushRow(rows, propLabel("name"), item.name || "");
+    pushRow(rows, propLabel("type"), isDirHint ? propTypeLabel("dir") : propTypeLabel("file"));
     if (favoritesEnabled) {
-      pushRow(rows, "Favorite", isFavoriteItem(item) ? "Yes" : "No");
+      pushRow(rows, propLabel("favorite"), propYesNo(isFavoriteItem(item)));
     }
-    pushRow(rows, "Path", "/" + (rel || ""));
+    pushRow(rows, propLabel("path"), "/" + (rel || ""));
 
-    if (!isDirHint && item.size_bytes != null) pushRow(rows, "Size", fmtSize(item.size_bytes || 0));
-    if (item.mtime_unix) pushRow(rows, "Modified", fmtTime(item.mtime_unix));
-    rows.push(["Details", "Loading…"]);
+    if (!isDirHint && item.size_bytes != null) pushRow(rows, propLabel("size"), fmtSize(item.size_bytes || 0));
+    if (item.mtime_unix) pushRow(rows, propLabel("modified"), fmtTime(item.mtime_unix));
+    rows.push([propLabel("details"), tr("filemgr.props.loading", null, "Loading…")]);
 
     if (propsBody) {
       for (const [k, v] of rows) {
@@ -6406,9 +6423,9 @@ function describeMoveItems(items) {
     if (!st || !st.ok) {
       const msg = (st && (st.message || st.error))
           ? `${st.error || "error"}: ${st.message || ""}`.trim()
-          : "Failed to load properties";
+          : tr("filemgr.props.failed_load", null, "Failed to load properties");
 
-      for (const [k, v] of [["Name", item.name || ""], ["Favorite", isFavoriteItem(item) ? "Yes" : "No"], ["Path", "/" + (rel || "")], ["Error", msg]]) {
+      for (const [k, v] of [[propLabel("name"), item.name || ""], [propLabel("favorite"), propYesNo(isFavoriteItem(item))], [propLabel("path"), "/" + (rel || "")], [propLabel("error"), msg]]) {
         const [kEl, vEl] = kvRow(k, v);
         propsBody.appendChild(kEl);
         propsBody.appendChild(vEl);
@@ -6418,42 +6435,42 @@ function describeMoveItems(items) {
     }
 
     const isDir = st.type === "dir";
-    if (propsTitle) propsTitle.textContent = isDir ? "Folder properties" : (st.type === "file" ? "File properties" : "Item properties");
+    if (propsTitle) propsTitle.textContent = isDir ? tr("filemgr.props.folder_title", null, "Folder properties") : (st.type === "file" ? tr("filemgr.props.file_title", null, "File properties") : tr("filemgr.props.item_title", null, "Item properties"));
     if (propsPath) propsPath.textContent = st.path_norm || ("/" + (rel || ""));
 
     const rows2 = [];
-    pushRow(rows2, "Name", st.name || "");
-    pushRow(rows2, "Type", st.type === "dir" ? "Folder" : (st.type === "file" ? "File" : "Other"));
+    pushRow(rows2, propLabel("name"), st.name || "");
+    pushRow(rows2, propLabel("type"), propTypeLabel(st.type));
     if (favoritesEnabled) {
-      pushRow(rows2, "Favorite", isFavoriteItem(item) ? "Yes" : "No");
+      pushRow(rows2, propLabel("favorite"), propYesNo(isFavoriteItem(item)));
     }
-    pushRow(rows2, "Path", st.path_norm || ("/" + (rel || "")));
+    pushRow(rows2, propLabel("path"), st.path_norm || ("/" + (rel || "")));
 
     if (st.mode_octal) {
       const rwx = permsFromOctal(st.mode_octal);
-      pushRow(rows2, "Permissions", rwx ? `${st.mode_octal} (${rwx})` : st.mode_octal);
+      pushRow(rows2, propLabel("permissions"), rwx ? `${st.mode_octal} (${rwx})` : st.mode_octal);
     }
 
-    if (st.mtime_epoch) pushRow(rows2, "Modified", fmtUnix(st.mtime_epoch));
+    if (st.mtime_epoch) pushRow(rows2, propLabel("modified"), fmtUnix(st.mtime_epoch));
 
     if (st.type === "file") {
-      if (st.bytes != null) pushRow(rows2, "Size", fmtSize(st.bytes));
-      if (st.mime) pushRow(rows2, "MIME", st.mime);
-      if (typeof st.is_text === "boolean") pushRow(rows2, "Looks like text", st.is_text ? "Yes" : "No");
+      if (st.bytes != null) pushRow(rows2, propLabel("size"), fmtSize(st.bytes));
+      if (st.mime) pushRow(rows2, propLabel("mime"), st.mime);
+      if (typeof st.is_text === "boolean") pushRow(rows2, propLabel("looks_like_text"), propYesNo(st.is_text));
     }
 
     if (st.type === "dir") {
       if (st.children) {
         const c = st.children;
         const parts = [];
-        if (c.files != null) parts.push(`${c.files} files`);
-        if (c.dirs != null) parts.push(`${c.dirs} folders`);
-        if (c.other != null && c.other !== 0) parts.push(`${c.other} other`);
-        pushRow(rows2, "Children", parts.join(", "));
+        if (c.files != null) parts.push(tr("filemgr.props.files", { count: c.files }, `${c.files} files`));
+        if (c.dirs != null) parts.push(tr("filemgr.props.folders", { count: c.dirs }, `${c.dirs} folders`));
+        if (c.other != null && c.other !== 0) parts.push(tr("filemgr.props.other_count", { count: c.other }, `${c.other} other`));
+        pushRow(rows2, propLabel("children"), parts.join(", "));
       }
-      if (st.bytes_recursive != null) pushRow(rows2, "Size (recursive)", fmtSize(st.bytes_recursive));
-      if (st.recursive_scanned_entries != null) pushRow(rows2, "Scanned entries", String(st.recursive_scanned_entries));
-      if (typeof st.recursive_complete === "boolean") pushRow(rows2, "Scan complete", st.recursive_complete ? "Yes" : "No");
+      if (st.bytes_recursive != null) pushRow(rows2, propLabel("size_recursive"), fmtSize(st.bytes_recursive));
+      if (st.recursive_scanned_entries != null) pushRow(rows2, propLabel("scanned_entries"), String(st.recursive_scanned_entries));
+      if (typeof st.recursive_complete === "boolean") pushRow(rows2, propLabel("scan_complete"), propYesNo(st.recursive_complete));
     }
 
     for (const [k, v] of rows2) {
@@ -6463,7 +6480,7 @@ function describeMoveItems(items) {
     }
 
     if (favoritesEnabled) {
-      const [kEl, vEl] = kvRow("Favorite", "");
+      const [kEl, vEl] = kvRow(propLabel("favorite"), "");
       vEl.classList.remove("mono");
       vEl.innerHTML = "";
       vEl.style.display = "flex";
@@ -6471,16 +6488,16 @@ function describeMoveItems(items) {
       vEl.style.gap = "8px";
 
       const txt = document.createElement("div");
-      txt.textContent = isFavoriteItem(item) ? "This item is in favorites." : "This item is not in favorites.";
+      txt.textContent = isFavoriteItem(item) ? tr("filemgr.props.favorite_in", null, "This item is in favorites.") : tr("filemgr.props.favorite_not_in", null, "This item is not in favorites.");
 
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.textContent = isFavoriteItem(item) ? "Remove from favorites" : "Add to favorites";
+      btn.textContent = isFavoriteItem(item) ? tr("filemgr.tile.favorite_remove", null, "Remove from favorites") : tr("filemgr.tile.favorite_add", null, "Add to favorites");
       btn.onclick = async () => {
         try {
           const on = await toggleFavoriteRelPath(rel, item.type);
-          txt.textContent = on ? "This item is in favorites." : "This item is not in favorites.";
-          btn.textContent = on ? "Remove from favorites" : "Add to favorites";
+          txt.textContent = on ? tr("filemgr.props.favorite_in", null, "This item is in favorites.") : tr("filemgr.props.favorite_not_in", null, "This item is not in favorites.");
+          btn.textContent = on ? tr("filemgr.tile.favorite_remove", null, "Remove from favorites") : tr("filemgr.tile.favorite_add", null, "Add to favorites");
           setBadge("ok", "ready");
           status.textContent = on ? tr("filemgr.status.added_favorite", { name: item.name }, `Added to favorites: ${item.name}`) : tr("filemgr.status.removed_favorite", { name: item.name }, `Removed from favorites: ${item.name}`);
           await load();
@@ -6510,7 +6527,7 @@ function describeMoveItems(items) {
       line.className = "mono";
       line.style.wordBreak = "break-all";
       line.style.opacity = "0.92";
-      line.textContent = "Computing…";
+      line.textContent = tr("filemgr.props.computing", null, "Computing…");
 
       const btnCopy = miniCopyButton(() => line.textContent);
       btnCopy.disabled = true;
@@ -6550,7 +6567,7 @@ function describeMoveItems(items) {
         typeof window.PQNAS_FILEMGR.fileVersions.canOpenFor === "function" &&
         window.PQNAS_FILEMGR.fileVersions.canOpenFor(item)) {
 
-      const [kEl, vEl] = kvRow("Versions", "");
+      const [kEl, vEl] = kvRow(tr("filemgr.props.versions", null, "Versions"), "");
       vEl.classList.remove("mono");
       vEl.innerHTML = "";
       vEl.style.display = "flex";
@@ -6559,11 +6576,11 @@ function describeMoveItems(items) {
       vEl.style.flexWrap = "wrap";
 
       const txt = document.createElement("div");
-      txt.textContent = "Open preserved versions for this file and restore an older one.";
+      txt.textContent = tr("filemgr.props.versions_desc", null, "Open preserved versions for this file and restore an older one.");
 
       const btn = document.createElement("button");
       btn.type = "button";
-      btn.textContent = "Open versions…";
+      btn.textContent = tr("filemgr.props.open_versions", null, "Open versions…");
       btn.onclick = () => {
         closePropsModal();
         window.PQNAS_FILEMGR.fileVersions.open(item);
@@ -6579,7 +6596,7 @@ function describeMoveItems(items) {
       const type = (item.type === "dir") ? "dir" : "file";
       const share = existingShareFor(rel, type);
 
-      const [kEl, vEl] = kvRow("Share", "");
+      const [kEl, vEl] = kvRow(tr("filemgr.props.share", null, "Share"), "");
       vEl.classList.remove("mono");
       vEl.innerHTML = "";
       vEl.style.display = "flex";
@@ -6587,7 +6604,7 @@ function describeMoveItems(items) {
       vEl.style.gap = "8px";
 
       const topLine = document.createElement("div");
-      topLine.textContent = share ? "Shared" : "Not shared";
+      topLine.textContent = share ? tr("filemgr.props.shared", null, "Shared") : tr("filemgr.props.not_shared", null, "Not shared");
       topLine.style.opacity = "0.92";
       vEl.appendChild(topLine);
 
@@ -6608,11 +6625,11 @@ function describeMoveItems(items) {
 
         const btnCopy2 = document.createElement("button");
         btnCopy2.type = "button";
-        btnCopy2.textContent = "Copy";
+        btnCopy2.textContent = tr("filemgr.props.copy", null, "Copy");
         btnCopy2.onclick = async () => {
           const ok = await copyText(fullUrl);
-          btnCopy2.textContent = ok ? "Copied" : "Copy failed";
-          setTimeout(() => (btnCopy2.textContent = "Copy"), 1200);
+          btnCopy2.textContent = ok ? tr("filemgr.props.copied", null, "Copied") : tr("filemgr.props.copy_failed", null, "Copy failed");
+          setTimeout(() => (btnCopy2.textContent = tr("filemgr.props.copy", null, "Copy")), 1200);
         };
 
         urlRow.appendChild(inp);
@@ -6628,7 +6645,7 @@ function describeMoveItems(items) {
         const expMs = isoUtcToMsLocal(expAt);
 
         const expLabel = document.createElement("span");
-        expLabel.textContent = expAt ? `Expires: ${expAt}` : "Expires: never";
+        expLabel.textContent = expAt ? tr("filemgr.props.expires_at", { time: expAt }, `Expires: ${expAt}`) : tr("filemgr.props.expires_never", null, "Expires: never");
 
         const cdLabel = document.createElement("span");
         cdLabel.style.fontFamily = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
@@ -6637,7 +6654,7 @@ function describeMoveItems(items) {
         const updateCountdown = () => {
           if (!expMs) { cdLabel.textContent = ""; return; }
           const left = expMs - Date.now();
-          cdLabel.textContent = `Remaining: ${fmtCountdownLocal(left)}`;
+          cdLabel.textContent = tr("filemgr.props.remaining", { time: fmtCountdownLocal(left) }, `Remaining: ${fmtCountdownLocal(left)}`);
         };
         updateCountdown();
 
@@ -6648,7 +6665,7 @@ function describeMoveItems(items) {
 
         const dl = document.createElement("div");
         dl.style.opacity = "0.85";
-        if (share.downloads != null) dl.textContent = `Downloads: ${share.downloads}`;
+        if (share.downloads != null) dl.textContent = tr("filemgr.props.downloads", { count: share.downloads }, `Downloads: ${share.downloads}`);
 
         const actions = document.createElement("div");
         actions.style.display = "flex";
@@ -6657,13 +6674,13 @@ function describeMoveItems(items) {
 
         const btnRevoke = document.createElement("button");
         btnRevoke.type = "button";
-        btnRevoke.textContent = "Revoke";
+        btnRevoke.textContent = tr("filemgr.props.revoke", null, "Revoke");
         btnRevoke.onclick = async () => {
-          const ok = confirm("Revoke this share link?\n\nThis will invalidate the URL immediately.");
+          const ok = confirm(tr("filemgr.props.revoke_confirm", null, "Revoke this share link?\n\nThis will invalidate the URL immediately."));
           if (!ok) return;
 
           btnRevoke.disabled = true;
-          btnRevoke.textContent = "Revoking…";
+          btnRevoke.textContent = tr("filemgr.props.revoking", null, "Revoking…");
 
           try {
             const r = await fetch("/api/v4/shares/revoke", {
@@ -6685,9 +6702,9 @@ function describeMoveItems(items) {
             await showProperties(item);
             return;
           } catch (e) {
-            btnRevoke.textContent = "Revoke failed";
+            btnRevoke.textContent = tr("filemgr.props.revoke_failed", null, "Revoke failed");
             setTimeout(() => {
-              btnRevoke.textContent = "Revoke";
+              btnRevoke.textContent = tr("filemgr.props.revoke", null, "Revoke");
               btnRevoke.disabled = false;
             }, 1400);
             return;
@@ -6709,7 +6726,7 @@ function describeMoveItems(items) {
         if (sharesEnabled) {
           const btn = document.createElement("button");
           btn.type = "button";
-          btn.textContent = "Create share link…";
+          btn.textContent = tr("filemgr.props.create_share", null, "Create share link…");
           btn.onclick = () => openShareDialogFor(item);
           rowBtns.appendChild(btn);
         }
@@ -6717,7 +6734,7 @@ function describeMoveItems(items) {
         if (st.type === "file" && pqSharesEnabled) {
           const btnPq = document.createElement("button");
           btnPq.type = "button";
-          btnPq.textContent = "Create PQ invite…";
+          btnPq.textContent = tr("filemgr.props.create_pq_invite", null, "Create PQ invite…");
           btnPq.onclick = () => openShareDialogFor(item, {
             forceMode: "pq_recipient_enrolled_v1"
           });
@@ -6732,7 +6749,7 @@ function describeMoveItems(items) {
     }
 
     {
-      const [kEl, vEl] = kvRow("Details", "");
+      const [kEl, vEl] = kvRow(propLabel("details"), "");
       vEl.classList.remove("mono");
       vEl.innerHTML = "";
 
@@ -6740,7 +6757,7 @@ function describeMoveItems(items) {
       details.style.width = "100%";
 
       const summary = document.createElement("summary");
-      summary.textContent = "Raw JSON";
+      summary.textContent = tr("filemgr.props.raw_json", null, "Raw JSON");
       summary.style.cursor = "pointer";
       summary.style.userSelect = "none";
 
