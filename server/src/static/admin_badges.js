@@ -1,5 +1,15 @@
 // server/src/static/admin_badges.js
 (() => {
+    let lastRole = null;
+
+    function tr(key, vars, fallback) {
+        const api = window.PQNAS_I18N;
+        if (api && typeof api.t === "function") {
+            return api.t(key, vars || null, fallback);
+        }
+        return String(fallback ?? key);
+    }
+
     // -----------------------------
     // Small helper (non-throwing)
     // -----------------------------
@@ -21,14 +31,16 @@
         if (!badge) return;
 
         role = String(role || "").toLowerCase();
+        lastRole = role;
+
         if (role === "admin") {
-            badge.textContent = "role: admin";
+            badge.textContent = tr("admin.badges.role.admin", null, "role: admin");
             badge.className = "badge admin";
         } else if (role === "user") {
-            badge.textContent = "role: user";
+            badge.textContent = tr("admin.badges.role.user", null, "role: user");
             badge.className = "badge user";
         } else {
-            badge.textContent = "role: ?";
+            badge.textContent = tr("admin.badges.role.unknown", null, "role: ?");
             badge.className = "badge unknown";
         }
     }
@@ -50,7 +62,7 @@
         b = document.createElement("span");
         b.className = "navAlertBadge";
         b.textContent = "!";
-        b.title = "Pending approvals";
+        b.title = tr("admin.badges.pending_approvals", null, "Pending approvals");
         el.appendChild(b);
         return b;
     }
@@ -87,7 +99,9 @@
         if (badge) {
             badge.style.display = on ? "inline-flex" : "none";
             badge.textContent = "!";
-            badge.title = on ? `Pending approvals: ${pending}` : "No pending approvals";
+            badge.title = on
+                ? tr("admin.badges.pending_count", { pending, count: pending }, `Pending approvals: ${pending}`)
+                : tr("admin.badges.no_pending", null, "No pending approvals");
         }
     }
 
@@ -105,6 +119,11 @@
         // approvals poll as you had
         setInterval(refreshApprovalsOnce, 10000);
     }
+
+    window.addEventListener("pqnas-language-changed", () => {
+        setRoleBadge(lastRole);
+        refreshApprovalsOnce();
+    });
 
     window.addEventListener("load", start);
 })();

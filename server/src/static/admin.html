@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>DNA-Nexus NAS</title>
+    <title data-i18n="admin.overview.page_title">DNA-Nexus NAS • Admin Overview</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
 
     <style>
@@ -61,6 +61,7 @@
     <link rel="stylesheet" href="/static/theme.css">
     <link rel="stylesheet" href="/static/shell_menu.css">
     <script src="/static/theme.js"></script>
+    <script src="/static/i18n.js?v=20260518-admin-overview-i18n-1"></script>
     <link rel="stylesheet" href="/static/onboarding.css?v=guided-tours-clean-v1">
 </head>
 
@@ -70,47 +71,47 @@
         <div class="brand">
             <div class="logoDot" aria-hidden="true"></div>
             <div style="min-width:0">
-                <h1>Admin</h1>
-                <div class="sub">server-gated • static UI</div>
+                <h1 data-i18n="admin.settings.nav.admin">Admin</h1>
+                <div class="sub" data-i18n="admin.overview.brand_sub">server-gated • static UI</div>
             </div>
         </div>
 
-        <nav class="nav" aria-label="Admin navigation">
-            <div class="sectionLabel">Admin</div>
+        <nav class="nav" aria-label="Admin navigation" data-i18n-aria-label="admin.overview.nav_aria">
+            <div class="sectionLabel" data-i18n="admin.settings.nav.admin">Admin</div>
             <a class="navbtn active" href="/admin">
-                <span>Overview</span><span class="k">O</span>
+                <span data-i18n="admin.settings.nav.overview">Overview</span><span class="k">O</span>
             </a>
             <a class="navbtn" href="/admin/users">
-                <span>User profiles</span><span class="k">U</span>
+                <span data-i18n="admin.settings.nav.user_profiles">User profiles</span><span class="k">U</span>
             </a>
             <a class="navbtn" href="/admin/stats">
-                <span>Statistics</span><span class="k">Σ</span>
+                <span data-i18n="admin.settings.nav.statistics">Statistics</span><span class="k">Σ</span>
             </a>
             <a class="navbtn" href="/admin/approvals">
-                <span>Approvals</span><span class="k">A</span>
+                <span data-i18n="admin.settings.nav.approvals">Approvals</span><span class="k">A</span>
             </a>
             <a class="navbtn" href="/admin/apps">
-                <span>Apps</span><span class="k">📦</span>
+                <span data-i18n="admin.settings.nav.apps">Apps</span><span class="k">📦</span>
             </a>
             <a class="navbtn" href="/admin/audit">
-                <span>Audit log UI</span><span class="k">D</span>
+                <span data-i18n="admin.settings.nav.audit">Audit log UI</span><span class="k">D</span>
             </a>
             <a class="navbtn" href="/admin/settings">
-                <span>Settings</span><span class="k">S</span>
+                <span data-i18n="admin.settings.nav.settings">Settings</span><span class="k">S</span>
             </a>
             <a class="navbtn" href="/system">
-                <span>System</span><span class="k">Y</span>
+                <span data-i18n="admin.settings.nav.system">System</span><span class="k">Y</span>
             </a>
             <div class="sectionLabel"> </div>
             <a class="navbtn" href="/app">
-                <span>Back...</span><span class="k">↩</span>
+                <span data-i18n="admin.settings.nav.back">Back...</span><span class="k">↩</span>
             </a>
         </nav>
 
         <div class="bottom">
             <div class="statusCard">
                 <div id="roleBadge" class="badge unknown">role: ?</div>
-                <div class="mini" id="sidebarHint">
+                <div class="mini" id="sidebarHint" data-i18n="admin.overview.sidebar_hint">
                     Manage users, review audit logs, and verify server integrity.
                 </div>
             </div>
@@ -119,7 +120,7 @@
 
     <main class="workspace">
         <div class="content">
-            <section class="clockWrap" aria-label="Clock">
+            <section class="clockWrap" aria-label="Clock" data-i18n-aria-label="admin.overview.clock_aria">
                 <div id="clockTime" class="clockTime">--:--:--</div>
                 <div id="clockDate" class="clockDate">----</div>
             </section>
@@ -129,7 +130,7 @@
     </main>
 </div>
 
-<script src="/static/admin_badges.js"></script>
+<script src="/static/admin_badges.js?v=20260518-admin-overview-i18n-1"></script>
 <script>
     (function(){
         const timeEl = document.getElementById('clockTime');
@@ -137,6 +138,14 @@
 
         function pad(n){
             return String(n).padStart(2, '0');
+        }
+
+        function clockLocale(){
+            const api = window.PQNAS_I18N;
+            const lang = api && typeof api.getLanguage === 'function' ? api.getLanguage() : '';
+            if (lang === 'fi') return 'fi-FI';
+            if (lang === 'en') return 'en-GB';
+            return undefined;
         }
 
         function updateClock(){
@@ -147,7 +156,7 @@
             const ss = pad(now.getSeconds());
             timeEl.textContent = `${hh}:${mm}:${ss}`;
 
-            const dateText = now.toLocaleDateString(undefined, {
+            const dateText = now.toLocaleDateString(clockLocale(), {
                 weekday: 'long',
                 year: 'numeric',
                 month: 'long',
@@ -155,6 +164,20 @@
             });
             dateEl.textContent = dateText;
         }
+
+        if (window.PQNAS_I18N && typeof window.PQNAS_I18N.ready === 'function') {
+            window.PQNAS_I18N.ready().then(() => {
+                window.PQNAS_I18N.apply(document);
+                updateClock();
+            }).catch(updateClock);
+        }
+
+        window.addEventListener('pqnas-language-changed', () => {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.apply === 'function') {
+                window.PQNAS_I18N.apply(document);
+            }
+            updateClock();
+        });
 
         updateClock();
         setInterval(updateClock, 1000);

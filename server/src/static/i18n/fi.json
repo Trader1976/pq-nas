@@ -1406,5 +1406,16 @@
   "admin.audit_ui.integrity_label": "Eheys",
   "admin.audit_ui.rotate_action": "Luo kierrätetty tiedosto ja kirjoita rotate_header",
   "admin.audit_ui.rotate_integrity": "Hash-ketjun jatkuvuus säilyy",
-  "admin.audit_ui.rotate_note": "Sivu päivittää hännän ja tarkistaa eheyden kierron jälkeen."
+  "admin.audit_ui.rotate_note": "Sivu päivittää hännän ja tarkistaa eheyden kierron jälkeen.",
+  "admin.overview.page_title": "DNA-Nexus NAS • Ylläpidon yleiskuva",
+  "admin.overview.brand_sub": "palvelimen suojaama • staattinen käyttöliittymä",
+  "admin.overview.nav_aria": "Ylläpidon navigaatio",
+  "admin.overview.sidebar_hint": "Hallitse käyttäjiä, tarkista audit-lokit ja varmista palvelimen eheys.",
+  "admin.overview.clock_aria": "Kello",
+  "admin.badges.role.admin": "rooli: ylläpitäjä",
+  "admin.badges.role.user": "rooli: käyttäjä",
+  "admin.badges.role.unknown": "rooli: ?",
+  "admin.badges.pending_approvals": "Odottaa hyväksyntöjä",
+  "admin.badges.pending_count": "Hyväksyntöjä odottaa: {count}",
+  "admin.badges.no_pending": "Ei odottavia hyväksyntöjä"
 }

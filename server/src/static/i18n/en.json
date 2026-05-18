@@ -1406,5 +1406,16 @@
   "admin.audit_ui.integrity_label": "Integrity",
   "admin.audit_ui.rotate_action": "Create rotated file and write rotate_header",
   "admin.audit_ui.rotate_integrity": "Hash-chain continuity is preserved",
-  "admin.audit_ui.rotate_note": "The page refreshes the tail and verifies integrity after rotation."
+  "admin.audit_ui.rotate_note": "The page refreshes the tail and verifies integrity after rotation.",
+  "admin.overview.page_title": "DNA-Nexus NAS • Admin Overview",
+  "admin.overview.brand_sub": "server-gated • static UI",
+  "admin.overview.nav_aria": "Admin navigation",
+  "admin.overview.sidebar_hint": "Manage users, review audit logs, and verify server integrity.",
+  "admin.overview.clock_aria": "Clock",
+  "admin.badges.role.admin": "role: admin",
+  "admin.badges.role.user": "role: user",
+  "admin.badges.role.unknown": "role: ?",
+  "admin.badges.pending_approvals": "Pending approvals",
+  "admin.badges.pending_count": "Pending approvals: {count}",
+  "admin.badges.no_pending": "No pending approvals"
 }
