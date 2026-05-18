@@ -4,6 +4,15 @@
     const FM = window.PQNAS_FILEMGR;
     if (!FM) return;
 
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
     function fmApi() {
         return (FM && FM.api) ? FM.api : null;
     }
@@ -174,7 +183,7 @@
 
     function shortLeaseHolder(fp) {
         const s = String(fp || "").trim();
-        if (!s) return "another user";
+        if (!s) return tr("filemgr.textedit.another_user", null, "another user");
         if (s.length <= 24) return s;
         return `${s.slice(0, 10)}…${s.slice(-8)}`;
     }
@@ -182,20 +191,20 @@
     function leaseSummaryFrom(details) {
         const lease = details && details.lease ? details.lease : null;
         if (!lease) {
-            return "This file can only be opened in read-only mode right now.";
+            return tr("filemgr.textedit.readonly_generic", null, "This file can only be opened in read-only mode right now.");
         }
 
         const holder =
             lease.holder_fp
-                ? ` by ${String(lease.holder_fp).slice(0, 12)}…`
-                : " by another session";
+                ? tr("filemgr.textedit.locked_by_fp", { fp: String(lease.holder_fp).slice(0, 12) }, ` by ${String(lease.holder_fp).slice(0, 12)}…`)
+                : tr("filemgr.textedit.locked_by_session", null, " by another session");
 
         const until =
             lease.expires_at
-                ? ` It should become editable again after ${lease.expires_at}.`
+                ? tr("filemgr.textedit.editable_after", { time: lease.expires_at }, ` It should become editable again after ${lease.expires_at}.`)
                 : "";
 
-        return `This file is currently being edited${holder}. Opened in read-only mode.${until}`;
+        return tr("filemgr.textedit.locked_readonly", { holder, until }, `This file is currently being edited${holder}. Opened in read-only mode.${until}`);
     }
 
     async function acquireWorkspaceLease(relPath) {
@@ -203,7 +212,7 @@
         const sessionId = currentWorkspaceSessionId();
 
         if (!workspaceId || !sessionId) {
-            throw new Error("missing workspace editor session");
+            throw new Error(tr("filemgr.textedit.missing_workspace_session", null, "missing workspace editor session"));
         }
 
         const r = await fetch(apiEditLeaseAcquireUrl(), {
@@ -224,7 +233,7 @@
             const msg = j && (j.message || j.error)
                 ? `${j.error || ""} ${j.message || ""}`.trim()
                 : `HTTP ${r.status}`;
-            const err = new Error(msg || "edit lease acquire failed");
+            const err = new Error(msg || tr("filemgr.textedit.lease_acquire_failed", null, "edit lease acquire failed"));
             err.code = j && j.error ? String(j.error) : "";
             err.details = j;
             throw err;
@@ -260,7 +269,7 @@
             const msg = j && (j.message || j.error)
                 ? `${j.error || ""} ${j.message || ""}`.trim()
                 : `HTTP ${r.status}`;
-            const err = new Error(msg || "edit lease refresh failed");
+            const err = new Error(msg || tr("filemgr.textedit.lease_refresh_failed", null, "edit lease refresh failed"));
             err.code = j && j.error ? String(j.error) : "";
             err.details = j;
             throw err;
@@ -305,7 +314,7 @@
                 clearLeaseTimer();
                 state.lease = null;
                 setReadOnly(true);
-                setStatus(`${leaseSummaryFrom(e && e.details ? e.details : null)} Reload to try editing again.`);
+                setStatus(tr("filemgr.textedit.reload_try_editing", { reason: leaseSummaryFrom(e && e.details ? e.details : null) }, `${leaseSummaryFrom(e && e.details ? e.details : null)} Reload to try editing again.`));
             }
         }, 20000);
     }
@@ -397,7 +406,7 @@
             return;
         }
         if (!matches.length) {
-            setFindStatus("Not found");
+            setFindStatus(tr("filemgr.textedit.not_found", null, "Not found"));
             return;
         }
 
@@ -427,7 +436,7 @@
         const full = String(textEditArea.value || "");
         const matches = getFindMatches(full, query);
         if (!matches.length) {
-            setFindStatus("Not found");
+            setFindStatus(tr("filemgr.textedit.not_found", null, "Not found"));
             return;
         }
 
@@ -459,7 +468,7 @@
         const full = String(textEditArea.value || "");
         const matches = getFindMatches(full, query);
         if (!matches.length) {
-            setFindStatus("Not found");
+            setFindStatus(tr("filemgr.textedit.not_found", null, "Not found"));
             return;
         }
 
@@ -511,7 +520,7 @@
             const msg = j && (j.message || j.error)
                 ? `${j.error || ""} ${j.message || ""}`.trim()
                 : `HTTP ${r.status}`;
-            throw new Error(msg || "read text failed");
+            throw new Error(msg || tr("filemgr.textedit.read_failed", null, "read text failed"));
         }
         return j;
     }
@@ -542,7 +551,7 @@
             const msg = j && (j.message || j.error)
                 ? `${j.error || ""} ${j.message || ""}`.trim()
                 : `HTTP ${r.status}`;
-            const err = new Error(msg || "write text failed");
+            const err = new Error(msg || tr("filemgr.textedit.write_failed", null, "write text failed"));
             err.details = j;
             err.code = j && j.error ? String(j.error) : "";
             throw err;
@@ -581,14 +590,14 @@
             leaseTimer: 0
         };
 
-        if (textEditTitle) textEditTitle.textContent = "Edit text file";
+        if (textEditTitle) textEditTitle.textContent = tr("filemgr.textedit.title", null, "Edit text file");
         if (textEditPath) textEditPath.textContent = "/" + rel;
         if (textEditArea) {
             textEditArea.value = "";
             textEditArea.readOnly = true;
         }
 
-        setInfo("Loading?");
+        setInfo(tr("filemgr.textedit.loading", null, "Loading…"));
         setStatus("");
         setDirty(false);
         placeCardCentered();
@@ -617,14 +626,14 @@
             }
 
             const bytes = new Blob([state.originalText]).size;
-            let info = `Encoding: ${state.encoding} • ${FM.fmtSize(bytes)}`;
+            let info = tr("filemgr.textedit.encoding_info", { encoding: state.encoding, size: FM.fmtSize(bytes) }, `Encoding: ${state.encoding} • ${FM.fmtSize(bytes)}`);
 
             if (isWorkspaceScope()) {
                 const canWrite = !!(FM && typeof FM.canCurrentScopeWrite === "function" && FM.canCurrentScopeWrite());
 
                 if (!canWrite) {
                     setReadOnly(true);
-                    setStatus("This file can only be opened in read-only mode because your workspace role does not allow editing.");
+                    setStatus(tr("filemgr.textedit.readonly_role", null, "This file can only be opened in read-only mode because your workspace role does not allow editing."));
                 } else {
                     try {
                         const leasej = await acquireWorkspaceLease(rel);
@@ -633,7 +642,7 @@
                         startLeaseTimer();
 
                         if (leasej && leasej.lease && leasej.lease.expires_at) {
-                            info += ` • edit lock until ${leasej.lease.expires_at}`;
+                            info += tr("filemgr.textedit.edit_lock_until", { time: leasej.lease.expires_at }, ` • edit lock until ${leasej.lease.expires_at}`);
                         }
                     } catch (e) {
                         setReadOnly(true);
@@ -641,7 +650,7 @@
                             setStatus(leaseSummaryFrom(e.details));
                         } else {
                             console.warn("[textedit] lease acquire failed:", e);
-                            setStatus("This file can only be opened in read-only mode right now.");
+                            setStatus(tr("filemgr.textedit.readonly_generic", null, "This file can only be opened in read-only mode right now."));
                         }
                     }
                 }
@@ -655,7 +664,7 @@
             refreshFindStatus();
         } catch (e) {
             state.loading = false;
-            setInfo("Failed to load");
+            setInfo(tr("filemgr.textedit.failed_load", null, "Failed to load"));
             setStatus(String(e && e.message ? e.message : e));
             setReadOnly(true);
         }
@@ -666,14 +675,14 @@
         if (state.loading || state.saving) return;
 
         if (state.readOnly) {
-            setStatus("Read-only: cannot save.");
+            setStatus(tr("filemgr.textedit.readonly_save", null, "Read-only: cannot save."));
             return;
         }
 
         if (isWorkspaceScope()) {
             if (!state.lease) {
                 setReadOnly(true);
-                setStatus("This file is currently open in read-only mode. Reload to try acquiring edit access again.");
+                setStatus(tr("filemgr.textedit.readonly_open", null, "This file is currently open in read-only mode. Reload to try acquiring edit access again."));
                 return;
             }
 
@@ -681,14 +690,14 @@
                 await refreshWorkspaceLease();
             } catch (e) {
                 setReadOnly(true);
-                setStatus(`${leaseSummaryFrom(e && e.details ? e.details : null)} Reload to try editing again.`);
+                setStatus(tr("filemgr.textedit.reload_try_editing", { reason: leaseSummaryFrom(e && e.details ? e.details : null) }, `${leaseSummaryFrom(e && e.details ? e.details : null)} Reload to try editing again.`));
                 return;
             }
         }
 
         state.saving = true;
         setDirty(false);
-        setStatus("Saving?");
+        setStatus(tr("filemgr.textedit.saving", null, "Saving…"));
 
         try {
             const newText = String(textEditArea.value || "");
@@ -704,12 +713,12 @@
             state.sha256 = String(j.sha256 || state.sha256 || "");
             state.saving = false;
 
-            setStatus("Saved.");
+            setStatus(tr("filemgr.textedit.saved", null, "Saved."));
             setDirty(false);
 
             FM.setBadge("ok", "ready");
             const statusEl = FM.getStatusEl();
-            if (statusEl) statusEl.textContent = `Saved: ${state.relPath}`;
+            if (statusEl) statusEl.textContent = tr("filemgr.textedit.saved_file", { path: state.relPath }, `Saved: ${state.relPath}`);
 
             const load = FM.getLoadFn();
             if (load) await load();
@@ -718,17 +727,17 @@
             setDirty(textEditArea.value !== state.originalText);
 
             if (e && (e.code === "changed_on_server" || (e.details && e.details.error === "changed_on_server"))) {
-                setStatus("File changed on server. Reload and review before saving again.");
+                setStatus(tr("filemgr.textedit.changed_on_server", null, "File changed on server. Reload and review before saving again."));
             } else if (e && (e.code === "edit_locked" || e.code === "edit_lock_missing")) {
                 setReadOnly(true);
-                setStatus(`${leaseSummaryFrom(e && e.details ? e.details : null)} Reload to try editing again.`);
+                setStatus(tr("filemgr.textedit.reload_try_editing", { reason: leaseSummaryFrom(e && e.details ? e.details : null) }, `${leaseSummaryFrom(e && e.details ? e.details : null)} Reload to try editing again.`));
             } else {
                 setStatus(String(e && e.message ? e.message : e));
             }
 
             FM.setBadge("err", "error");
             const statusEl = FM.getStatusEl();
-            if (statusEl) statusEl.textContent = `Save failed: ${String(e && e.message ? e.message : e)}`;
+            if (statusEl) statusEl.textContent = tr("filemgr.textedit.save_failed", { error: String(e && e.message ? e.message : e) }, `Save failed: ${String(e && e.message ? e.message : e)}`);
         }
     }
 
@@ -736,7 +745,7 @@
         if (!state.relPath) return;
 
         if (state.dirty) {
-            const ok = confirm("Discard unsaved changes and reload from server?");
+            const ok = confirm(tr("filemgr.textedit.discard_reload", null, "Discard unsaved changes and reload from server?"));
             if (!ok) return;
         }
 
@@ -745,7 +754,7 @@
 
     async function tryClose() {
         if (state.dirty) {
-            const ok = confirm("Discard unsaved changes?");
+            const ok = confirm(tr("filemgr.textedit.discard_close", null, "Discard unsaved changes?"));
             if (!ok) return;
         }
 
