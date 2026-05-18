@@ -3,10 +3,11 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>DNA-Nexus NAS · Sign in with DNA</title>
+    <title data-i18n="login.page_title">DNA-Nexus NAS · Sign in with DNA</title>
 
     <link rel="stylesheet" href="/static/theme.css">
     <script src="/static/theme.js"></script>
+    <script src="/static/i18n.js?v=20260518-login-i18n-1"></script>
 
     <style>
         :root{
@@ -307,23 +308,23 @@
         </div>
     </section>
 
-    <section class="loginPane" aria-label="Sign in">
+    <section class="loginPane" aria-label="Sign in" data-i18n-aria-label="login.sign_in_aria">
         <div class="card">
             <div class="loginMark">
-                <div class="loginMarkBadge">Post-Quantum NAS</div>
+                <div class="loginMarkBadge" data-i18n="login.badge">Post-Quantum NAS</div>
             </div>
 
-            <h1>Sign in with DNA</h1>
+            <h1 data-i18n="login.title">Sign in with DNA</h1>
 
-            <div class="hint">
-                Open <b>DNA Connect</b> → <b>QR Reader</b> → scan the QR code.
+            <div class="hint" data-i18n="login.hint">
+                Open DNA Connect → QR Reader → scan the QR code.
             </div>
 
             <div class="qr">
-                <img id="qrimg" alt="QR code" />
+                <img id="qrimg" alt="QR code" data-i18n-aria-label="login.qr_alt" />
             </div>
 
-            <div id="status" class="status">Issuing session…</div>
+            <div id="status" class="status" data-i18n="login.issuing_session">Issuing session…</div>
 
             <div class="footer">© CPUNK 2026 · DNA-Nexus</div>
         </div>
@@ -368,6 +369,6 @@
     })();
 </script>
 
-<script src="/static/pqnas_v5.js"></script>
+<script src="/static/pqnas_v5.js?v=20260518-login-i18n-1"></script>
 </body>
 </html>

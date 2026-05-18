@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>DNA-Nexus NAS • Waiting for admin approval</title>
+    <title data-i18n="wait.page_title">DNA-Nexus NAS • Waiting for admin approval</title>
 
     <style>
         *{ box-sizing:border-box; }
@@ -271,6 +271,7 @@
 
     <link rel="stylesheet" href="/static/theme.css">
     <script src="/static/theme.js"></script>
+    <script src="/static/i18n.js?v=20260518-wait-approval-i18n-1"></script>
 </head>
 
 <body>
@@ -279,23 +280,23 @@
         <div class="brand">
             <img class="brandLogo" src="/static/img/logo/nexuslogo_text.svg" alt="DNA-Nexus" />
             <div style="min-width:0">
-                <h1>Sign-in</h1>
-                <div class="sub">Admin approval required</div>
+                <h1 data-i18n="wait.sign_in">Sign-in</h1>
+                <div class="sub" data-i18n="wait.admin_required">Admin approval required</div>
             </div>
         </div>
 
         <div class="bottom">
             <div class="statusCard">
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                    <div style="font-weight:950;">Approval status</div>
-                    <span id="statusPill" class="pill warn"><span class="k">State:</span> <span class="v">checking…</span></span>
+                    <div style="font-weight:950;" data-i18n="wait.approval_status">Approval status</div>
+                    <span id="statusPill" class="pill warn"><span class="k" data-i18n="wait.state">State:</span> <span class="v" data-i18n="common.checking">checking…</span></span>
                 </div>
-                <div class="mini" id="statusText">Checking /api/v5/status…</div>
+                <div class="mini" id="statusText" data-i18n="wait.checking_status">Checking /api/v5/status…</div>
             </div>
 
             <div class="statusCard">
-                <div style="font-weight:950;">Session</div>
-                <div class="mini mono" id="sid">(unknown)</div>
+                <div style="font-weight:950;" data-i18n="wait.session">Session</div>
+                <div class="mini mono" id="sid" data-i18n="wait.unknown">(unknown)</div>
             </div>
         </div>
     </aside>
@@ -303,45 +304,44 @@
     <main class="workspace">
         <div class="topbar">
             <div class="crumbs">
-                <div class="title">DNA-Nexus • Waiting for admin approval</div>
-                <div class="sub">Your DNA identity was received. An admin must enable you.</div>
+                <div class="title" data-i18n="wait.top_title">DNA-Nexus • Waiting for admin approval</div>
+                <div class="sub" data-i18n="wait.top_sub">Your DNA identity was received. An admin must enable you.</div>
             </div>
-            <span class="pill warn"><span class="k">Next:</span> <span class="v">/admin/users</span></span>
+            <span class="pill warn"><span class="k" data-i18n="wait.next">Next:</span> <span class="v">/admin/users</span></span>
         </div>
 
         <div class="content">
             <section class="card">
                 <div class="hd">
-                    <div class="h">What this means</div>
-                    <span class="pill warn" id="mainPill"><span class="k">Access:</span> <span class="v">pending</span></span>
+                    <div class="h" data-i18n="wait.what_this_means">What this means</div>
+                    <span class="pill warn" id="mainPill"><span class="k" data-i18n="wait.access">Access:</span> <span class="v" data-i18n="wait.pending">pending</span></span>
                 </div>
                 <div class="bd">
                     <div class="approvalHero">
                         <img class="brandLogo brandLogoSmall" src="/static/img/logo/nexuslogo_text.svg" alt="DNA-Nexus" />
                         <div class="approvalHeroText">
-                            <div class="heroTitle">Your DNA identity was received</div>
-                            <div class="heroSub">DNA-Nexus is waiting for an admin to enable this new account.</div>
+                            <div class="heroTitle" data-i18n="wait.hero_title">Your DNA identity was received</div>
+                            <div class="heroSub" data-i18n="wait.hero_sub">DNA-Nexus is waiting for an admin to enable this new account.</div>
                         </div>
                     </div>
 
-                    <p class="hint">
-                        This DNA-Nexus server is configured to <span class="mono">fail-closed</span> for new identities.
-                        Your fingerprint must be enabled by an administrator before the browser can finish sign-in.
+                    <p class="hint" data-i18n="wait.body_hint">
+                        This DNA-Nexus server is configured to fail-closed for new identities. Your fingerprint must be enabled by an administrator before the browser can finish sign-in.
                     </p>
 
                     <div class="kv">
-                        <div class="k">Where the admin approves</div>
+                        <div class="k" data-i18n="wait.where_approves">Where the admin approves</div>
                         <div class="v mono">/admin/users</div>
                     </div>
 
                     <div class="kv">
-                        <div class="k">What happens when approved</div>
-                        <div class="v">This page finalizes sign-in automatically</div>
+                        <div class="k" data-i18n="wait.when_approved">What happens when approved</div>
+                        <div class="v" data-i18n="wait.finalizes_auto">This page finalizes sign-in automatically</div>
                     </div>
 
                     <div class="kv">
-                        <div class="k">If you’re the admin</div>
-                        <div class="v">Open <span class="mono">/admin/users</span> in another tab</div>
+                        <div class="k" data-i18n="wait.if_admin">If you’re the admin</div>
+                        <div class="v" data-i18n="wait.open_admin_users">Open /admin/users in another tab</div>
                     </div>
                 </div>
                 <div class="footerline">© CPUNK 2026</div>
@@ -361,6 +361,21 @@
         const statusPill = document.getElementById("statusPill");
         const mainPill = document.getElementById("mainPill");
 
+        function tr(key, vars, fallback) {
+            const api = window.PQNAS_I18N;
+            if (api && typeof api.t === "function") {
+                return api.t(key, vars || null, fallback);
+            }
+            return String(fallback ?? key);
+        }
+
+        function applyStaticI18n() {
+            const api = window.PQNAS_I18N;
+            if (api && typeof api.apply === "function") {
+                api.apply(document);
+            }
+        }
+
         function setPill(pill, kind, text) {
             if (!pill) return;
             pill.className = "pill " + (kind || "");
@@ -374,19 +389,19 @@
 
         const body = () => (k ? { k } : (st ? { st } : null));
 
-        if (sidEl) sidEl.textContent = k ? ("k:" + k) : (st ? "st:(provided)" : "(missing k/st)");
+        if (sidEl) sidEl.textContent = k ? ("k:" + k) : (st ? tr("wait.st_provided", null, "st:(provided)") : tr("wait.missing_k_st_short", null, "(missing k/st)"));
 
         if (!body()) {
-            setPill(statusPill, "fail", "missing k");
-            setPill(mainPill, "fail", "error");
-            setText("Missing k (or st) in URL. Go back and start a new sign-in.");
+            setPill(statusPill, "fail", tr("wait.missing_k", null, "missing k"));
+            setPill(mainPill, "fail", tr("admin.common.error", null, "error"));
+            setText(tr("wait.missing_k_st", null, "Missing k (or st) in URL. Go back and start a new sign-in."));
             return;
         }
 
         async function pollOnce() {
             try {
-                setPill(statusPill, "warn", "checking…");
-                setText("Checking /api/v5/status…");
+                setPill(statusPill, "warn", tr("common.checking", null, "checking…"));
+                setText(tr("wait.checking_status", null, "Checking /api/v5/status…"));
 
                 const r = await fetch("/api/v5/status", {
                     method: "POST",
@@ -399,30 +414,30 @@
                 const j = await r.json().catch(() => ({}));
 
                 if (!r.ok || j.ok === false) {
-                    setPill(statusPill, "fail", "error");
-                    setPill(mainPill, "fail", "error");
-                    setText(`Status error: ${j.message || j.error || ("HTTP " + r.status)}`);
+                    setPill(statusPill, "fail", tr("admin.common.error", null, "error"));
+                    setPill(mainPill, "fail", tr("admin.common.error", null, "error"));
+                    setText(tr("wait.status_error", { error: j.message || j.error || ("HTTP " + r.status) }, `Status error: ${j.message || j.error || ("HTTP " + r.status)}`));
                     return;
                 }
 
                 if (j.state === "missing") {
-                    setPill(statusPill, "fail", "expired");
-                    setPill(mainPill, "fail", "expired");
-                    setText("This sign-in request expired or was already consumed. Go back and start a new QR sign-in.");
+                    setPill(statusPill, "fail", tr("wait.expired", null, "expired"));
+                    setPill(mainPill, "fail", tr("wait.expired", null, "expired"));
+                    setText(tr("wait.expired_body", null, "This sign-in request expired or was already consumed. Go back and start a new QR sign-in."));
                     return;
                 }
 
                 if (j.state === "pending") {
-                    setPill(statusPill, "warn", "pending");
-                    setPill(mainPill, "warn", "pending");
-                    setText("Waiting for admin approval…");
+                    setPill(statusPill, "warn", tr("wait.pending", null, "pending"));
+                    setPill(mainPill, "warn", tr("wait.pending", null, "pending"));
+                    setText(tr("wait.waiting_approval", null, "Waiting for admin approval…"));
                     return;
                 }
 
                 if (j.state === "approved" || j.approved === true) {
-                    setPill(statusPill, "ok", "approved");
-                    setPill(mainPill, "ok", "approved");
-                    setText("Approved ✔ Finalizing sign-in…");
+                    setPill(statusPill, "ok", tr("wait.approved", null, "approved"));
+                    setPill(mainPill, "ok", tr("wait.approved", null, "approved"));
+                    setText(tr("wait.approved_finalizing", null, "Approved ✔ Finalizing sign-in…"));
 
                     // Turn approval into a real cookie
                     const cres = await fetch("/api/v5/consume", {
@@ -435,9 +450,9 @@
 
                     const cj = await cres.json().catch(() => ({}));
                     if (!cres.ok || cj.ok === false) {
-                        setPill(statusPill, "fail", "cookie failed");
-                        setPill(mainPill, "fail", "error");
-                        setText(`Approved, but cookie set failed: ${cj.message || cj.error || ("HTTP " + cres.status)}`);
+                        setPill(statusPill, "fail", tr("wait.cookie_failed", null, "cookie failed"));
+                        setPill(mainPill, "fail", tr("admin.common.error", null, "error"));
+                        setText(tr("wait.cookie_set_failed", { error: cj.message || cj.error || ("HTTP " + cres.status) }, `Approved, but cookie set failed: ${cj.message || cj.error || ("HTTP " + cres.status)}`));
                         return;
                     }
 
@@ -448,9 +463,9 @@
                     });
 
                     if (!ping.ok) {
-                        setPill(statusPill, "fail", "no cookie");
-                        setPill(mainPill, "fail", "no cookie");
-                        setText(`Consume OK, but cookie did not stick: HTTP ${ping.status}`);
+                        setPill(statusPill, "fail", tr("wait.no_cookie", null, "no cookie"));
+                        setPill(mainPill, "fail", tr("wait.no_cookie", null, "no cookie"));
+                        setText(tr("wait.consume_cookie_failed", { status: ping.status }, `Consume OK, but cookie did not stick: HTTP ${ping.status}`));
                         return;
                     }
 
@@ -458,14 +473,22 @@
                     return;
                 }
 
-                setPill(statusPill, "warn", "waiting");
-                setPill(mainPill, "warn", "waiting");
-                setText("Waiting…");
+                setPill(statusPill, "warn", tr("wait.waiting", null, "waiting"));
+                setPill(mainPill, "warn", tr("wait.waiting", null, "waiting"));
+                setText(tr("wait.waiting_ellipsis", null, "Waiting…"));
             } catch (e) {
-                setPill(statusPill, "fail", "network");
-                setPill(mainPill, "fail", "network");
-                setText("Network error while checking approval status.");
+                setPill(statusPill, "fail", tr("wait.network", null, "network"));
+                setPill(mainPill, "fail", tr("wait.network", null, "network"));
+                setText(tr("wait.network_error", null, "Network error while checking approval status."));
             }
+        }
+
+        window.addEventListener("pqnas-language-changed", applyStaticI18n);
+
+        if (window.PQNAS_I18N && typeof window.PQNAS_I18N.ready === "function") {
+            window.PQNAS_I18N.ready().then(applyStaticI18n).catch(() => {});
+        } else {
+            applyStaticI18n();
         }
 
         pollOnce();

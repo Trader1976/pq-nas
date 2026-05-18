@@ -3,6 +3,21 @@
 
     const el = (id) => document.getElementById(id);
 
+    function tr(key, vars, fallback) {
+        const api = window.PQNAS_I18N;
+        if (api && typeof api.t === "function") {
+            return api.t(key, vars || null, fallback);
+        }
+        return String(fallback ?? key);
+    }
+
+    function applyStaticI18n() {
+        const api = window.PQNAS_I18N;
+        if (api && typeof api.apply === "function") {
+            api.apply(document);
+        }
+    }
+
     const statusEl = el("status");
     const sidEl = el("sid");
     const qrImg = el("qrimg");
@@ -38,10 +53,10 @@
     async function copyText(text) {
         try {
             await navigator.clipboard.writeText(text);
-            setStatus("Copied ✔");
-            setTimeout(() => setStatus("Waiting for approval…"), 800);
+            setStatus(tr("login.copied", null, "Copied ✔"));
+            setTimeout(() => setStatus(tr("login.waiting_approval", null, "Waiting for approval…")), 800);
         } catch {
-            setStatus("Copy failed (browser permission)");
+            setStatus(tr("login.copy_failed_permission", null, "Copy failed (browser permission)"));
         }
     }
 
@@ -81,14 +96,14 @@
         st = "";
         expiresAt = 0;
 
-        if (sidEl) sidEl.textContent = "(issuing…)";
-        if (qrUriTa) qrUriTa.value = "(loading…)";
+        if (sidEl) sidEl.textContent = tr("login.issuing_short", null, "(issuing…)");
+        if (qrUriTa) qrUriTa.value = tr("common.loading", null, "(loading…)");
         if (qrImg) qrImg.removeAttribute("src");
 
         clearTimers();
 
         setBusy(true);
-        setStatus("Issuing v5 session…");
+        setStatus(tr("login.issuing_v5", null, "Issuing v5 session…"));
 
         let r;
         try {
@@ -100,7 +115,7 @@
 
         } catch (e) {
             setBusy(false);
-            setStatus("Network error issuing v5 session");
+            setStatus(tr("login.network_error_issuing", null, "Network error issuing v5 session"));
             console.error(e);
             return;
         }
@@ -111,7 +126,7 @@
         if (!r.ok || !j || j.ok === false) {
             setBusy(false);
             const msg = (j && j.message) ? String(j.message) : ("HTTP " + r.status);
-            setStatus("v5 session not available: " + msg);
+            setStatus(tr("login.v5_unavailable", { msg }, "v5 session not available: " + msg));
             return;
         }
 
@@ -120,13 +135,13 @@
         st  = String(j.st || j.req || "").trim();
         expiresAt = Number(j.expires_at || j.exp || 0);
 
-        if (sidEl) sidEl.textContent = (k ? `k:${k.slice(0,10)}…` : (sid || "(no sid)"));
-        if (qrUriTa) qrUriTa.value = String(j.qr_uri || "").trim() || "(no qr_uri)";
+        if (sidEl) sidEl.textContent = (k ? `k:${k.slice(0,10)}…` : (sid || tr("login.no_sid", null, "(no sid)")));
+        if (qrUriTa) qrUriTa.value = String(j.qr_uri || "").trim() || tr("login.no_qr_uri", null, "(no qr_uri)");
 
         setQrFromResponse(j);
 
         setBusy(false);
-        setStatus("Waiting for approval…");
+        setStatus(tr("login.waiting_approval", null, "Waiting for approval…"));
 
         startCountdown();
         startPolling();
@@ -142,10 +157,10 @@
             const left = expiresAt - now;
 
             if (left > 0) {
-                setStatus(`Waiting for approval… (expires in ${fmtMMSS(left)})`);
+                setStatus(tr("login.waiting_expires", { time: fmtMMSS(left) }, `Waiting for approval… (expires in ${fmtMMSS(left)})`));
             } else {
                 stopped = true;
-                setStatus("Expired. Creating a new session…");
+                setStatus(tr("login.expired_new_session", null, "Expired. Creating a new session…"));
                 setTimeout(() => issueSession().catch(console.error), 900);
             }
         };
@@ -164,7 +179,7 @@
         };
 
         if (!statusBody()) {
-            setStatus("Server returned no k/st/sid (v5 session incomplete).");
+            setStatus(tr("login.incomplete_session", null, "Server returned no k/st/sid (v5 session incomplete)."));
             return;
         }
 
@@ -190,7 +205,7 @@
                 if (data && data.approved === true) {
                     stopped = true;
                     setBusy(true);
-                    setStatus("Approved ✔ Finalizing (consume)…");
+                    setStatus(tr("login.approved_finalizing_consume", null, "Approved ✔ Finalizing (consume)…"));
 
                     const body = k ? { k } : (st ? { st } : { sid });
 
@@ -204,7 +219,7 @@
 
                     if (!cres.ok) {
                         setBusy(false);
-                        setStatus("Failed to finalize session (consume): HTTP " + cres.status);
+                        setStatus(tr("login.consume_failed_http", { status: cres.status }, "Failed to finalize session (consume): HTTP " + cres.status));
                         return;
                     }
 
@@ -216,7 +231,7 @@
 
                     if (!ping.ok) {
                         setBusy(false);
-                        setStatus("Consume OK, but cookie did not stick (auth check failed): HTTP " + ping.status);
+                        setStatus(tr("login.cookie_failed_http", { status: ping.status }, "Consume OK, but cookie did not stick (auth check failed): HTTP " + ping.status));
                         return;
                     }
 
@@ -231,7 +246,7 @@
                     if (data.reason === "pending_admin" || data.reason === "awaiting_approval") {
                         stopped = true;
                         setBusy(false);
-                        setStatus("Not approved yet — waiting for admin approval.");
+                        setStatus(tr("login.not_approved_yet", null, "Not approved yet — waiting for admin approval."));
                         const qk = k || "";
                         const qst = (!qk && st) ? st : "";
                         window.location.href = qk
@@ -248,7 +263,7 @@
 // Missing: server doesn't know this k anymore (pruned / never stored) → re-issue
                 if (data && data.state === "missing") {
                     stopped = true;
-                    setStatus("Session lost. Creating a new session…");
+                    setStatus(tr("login.session_lost_new", null, "Session lost. Creating a new session…"));
                     setTimeout(() => issueSession().catch(console.error), 900);
                     return;
                 }
@@ -265,7 +280,7 @@
     if (copySidBtn) {
         copySidBtn.addEventListener("click", () => {
             const t = k || sid;
-            if (!t) return setStatus("No k/sid yet");
+            if (!t) return setStatus(tr("login.no_k_sid", null, "No k/sid yet"));
             copyText(t);
         });
     }
@@ -273,7 +288,7 @@
     if (copyQrBtn) {
         copyQrBtn.addEventListener("click", () => {
             const t = qrUriTa ? qrUriTa.value : "";
-            if (!t || t.startsWith("(")) return setStatus("No QR payload yet");
+            if (!t || t.startsWith("(")) return setStatus(tr("login.no_qr_payload", null, "No QR payload yet"));
             copyText(t);
         });
     }
@@ -284,9 +299,20 @@
         });
     }
 
-    issueSession().catch((e) => {
-        console.error(e);
-        setBusy(false);
-        setStatus("Error: " + e);
-    });
+    function startLogin() {
+        applyStaticI18n();
+        issueSession().catch((e) => {
+            console.error(e);
+            setBusy(false);
+            setStatus(tr("login.error_with_value", { error: String(e) }, "Error: " + e));
+        });
+    }
+
+    window.addEventListener("pqnas-language-changed", applyStaticI18n);
+
+    if (window.PQNAS_I18N && typeof window.PQNAS_I18N.ready === "function") {
+        window.PQNAS_I18N.ready().then(startLogin).catch(startLogin);
+    } else {
+        startLogin();
+    }
 })();
