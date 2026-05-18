@@ -1332,17 +1332,17 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (!active.length) return;
 
     const ok = await fmConfirmModal({
-      title: tr("filemgr.trash.empty_title", null, "Empty trash?"),
-      subtitle: tr("filemgr.trash.empty_subtitle", null, "All items in this Trash view will be permanently deleted."),
+      title: tr("filemgr.delete.title", null, "Move to trash?"),
+      subtitle: tr("filemgr.delete.subtitle", null, "The selected item will be moved to Trash."),
       rows: [
         {
-          label: tr("filemgr.trash", null, "Trash"),
-          value: tr("filemgr.trash.empty_item_count", { count: active.length }, `${active.length} item(s)`),
-          mono: false
+          label: tr("filemgr.delete.item", null, "Item"),
+          value: (typeof item !== "undefined" && item && item.name) ? item.name : tr("filemgr.delete.selected_item", null, "Selected item"),
+          mono: true
         },
       ],
-      note: tr("filemgr.trash.empty_note", null, "This permanently deletes all listed Trash items and cannot be undone."),
-      confirmText: tr("filemgr.trash.empty_confirm", null, "Empty trash"),
+      note: tr("filemgr.delete.note", null, "You can restore it later from Trash until it is permanently deleted."),
+      confirmText: tr("filemgr.delete.confirm", null, "Move to trash"),
       cancelText: tr("filemgr.cancel", null, "Cancel"),
       danger: true,
     });
@@ -4918,17 +4918,17 @@ function describeMoveItems(items) {
     const isDir = item.type === "dir";
 
     const ok = await fmConfirmModal({
-      title: tr("filemgr.trash.empty_title", null, "Empty trash?"),
-      subtitle: tr("filemgr.trash.empty_subtitle", null, "All items in this Trash view will be permanently deleted."),
+      title: tr("filemgr.delete.title", null, "Move to trash?"),
+      subtitle: tr("filemgr.delete.subtitle", null, "The selected item will be moved to Trash."),
       rows: [
         {
-          label: tr("filemgr.trash", null, "Trash"),
-          value: tr("filemgr.trash.empty_item_count", { count: active.length }, `${active.length} item(s)`),
-          mono: false
+          label: tr("filemgr.delete.item", null, "Item"),
+          value: (typeof item !== "undefined" && item && item.name) ? item.name : tr("filemgr.delete.selected_item", null, "Selected item"),
+          mono: true
         },
       ],
-      note: tr("filemgr.trash.empty_note", null, "This permanently deletes all listed Trash items and cannot be undone."),
-      confirmText: tr("filemgr.trash.empty_confirm", null, "Empty trash"),
+      note: tr("filemgr.delete.note", null, "You can restore it later from Trash until it is permanently deleted."),
+      confirmText: tr("filemgr.delete.confirm", null, "Move to trash"),
       cancelText: tr("filemgr.cancel", null, "Cancel"),
       danger: true,
     });
