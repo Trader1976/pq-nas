@@ -1,3 +1,20 @@
+function tr(key, vars = null, fallback = "") {
+    try {
+        if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+            return window.PQNAS_I18N.t(key, vars, fallback || key);
+        }
+    } catch (_) {}
+    return fallback || key;
+}
+
+function applyStaticI18n() {
+    try {
+        if (window.PQNAS_I18N && typeof window.PQNAS_I18N.apply === "function") {
+            window.PQNAS_I18N.apply(document);
+        }
+    } catch (_) {}
+}
+
 // PQ-NAS Admin Audit UI (static)
 // - Tail:   GET /api/v4/audit/tail?n=200  -> { lines: [...] }
 // - Verify: GET /api/v4/audit/verify     -> { ok: true/false, ... }
@@ -115,10 +132,10 @@ function inferStatus(e) {
 }
 
 function statusLabel(st) {
-    if (st === "ok") return "OK";
-    if (st === "fail") return "FAIL";
-    if (st === "warn") return "WARN";
-    return "INFO";
+    if (st === "ok") return tr("admin.audit_ui.status.ok", null, "OK");
+    if (st === "fail") return tr("admin.audit_ui.status.fail", null, "FAIL");
+    if (st === "warn") return tr("admin.audit_ui.status.warn", null, "WARN");
+    return tr("admin.audit_ui.status.info", null, "INFO");
 }
 
 function statusClass(st) {
@@ -270,9 +287,9 @@ function buildDetailRow(e, k) {
     <div class="detail">
       <pre class="mono">${escapeHtml(json)}</pre>
       <div class="detailActions">
-        <button class="btn" data-act="copy" type="button">Copy JSON</button>
-        <button class="btn" data-act="collapse" type="button">Collapse</button>
-        <div class="small">Row key:</div>
+        <button class="btn" data-act="copy" type="button">${escapeHtml(tr("admin.audit_ui.copy_json", null, "Copy JSON"))}</button>
+        <button class="btn" data-act="collapse" type="button">${escapeHtml(tr("admin.audit_ui.collapse", null, "Collapse"))}</button>
+        <div class="small">${escapeHtml(tr("admin.audit_ui.row_key", null, "Row key"))}:</div>
         <div class="pill"><span class="v mono" style="max-width:170px; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(k)}</span></div>
       </div>
     </div>
@@ -377,13 +394,13 @@ async function loadTail() {
         setPill($("lastFetchPill"), "ok", nowIsoCompact());
         applyFilters();
     } catch (e) {
-        setPill($("lastFetchPill"), "fail", "network error");
+        setPill($("lastFetchPill"), "fail", tr("admin.audit_ui.network_error", null, "network error"));
     }
 }
 
 async function verifyChain() {
     try {
-        setPill($("integrityPill"), "warn", "checking…");
+        setPill($("integrityPill"), "warn", tr("admin.audit_ui.checking", null, "checking…"));
         const r = await fetch("/api/v4/audit/verify", { cache: "no-store" });
         if (!r.ok) {
             setPill($("integrityPill"), "fail", `HTTP ${r.status}`);
@@ -391,13 +408,13 @@ async function verifyChain() {
         }
         const j = await r.json();
         if (j && j.ok === true) {
-            setPill($("integrityPill"), "ok", "OK");
+            setPill($("integrityPill"), "ok", tr("admin.audit_ui.ok", null, "OK"));
         } else {
-            setPill($("integrityPill"), "fail", "FAILED");
+            setPill($("integrityPill"), "fail", tr("admin.audit_ui.failed", null, "FAILED"));
             console.error("audit verify failed:", j);
         }
     } catch (e) {
-        setPill($("integrityPill"), "fail", "network error");
+        setPill($("integrityPill"), "fail", tr("admin.audit_ui.network_error", null, "network error"));
     }
 }
 
@@ -430,10 +447,10 @@ function syncAutoUi() {
 
     const autoPill = $("autoPill");
     if (on) {
-        setPill(autoPill, "on", "ON");
+        setPill(autoPill, "on", tr("admin.audit_ui.on", null, "ON"));
         $("btnRefresh").classList.add("glow");
     } else {
-        setPill(autoPill, "info", "OFF");
+        setPill(autoPill, "info", tr("admin.audit_ui.off", null, "OFF"));
         $("btnRefresh").classList.remove("glow");
     }
 }
@@ -716,7 +733,7 @@ function openAuditConfirmModal(opts = {}) {
 
         const title = document.createElement("div");
         title.className = "auditConfirmTitle";
-        title.textContent = options.title || "Confirm action";
+        title.textContent = options.title || tr("admin.audit_ui.confirm_action", null, "Confirm action");
 
         const sub = document.createElement("div");
         sub.className = "auditConfirmSub";
@@ -758,12 +775,12 @@ function openAuditConfirmModal(opts = {}) {
         const cancelBtn = document.createElement("button");
         cancelBtn.type = "button";
         cancelBtn.className = "auditConfirmBtn secondary";
-        cancelBtn.textContent = options.cancelText || "Cancel";
+        cancelBtn.textContent = options.cancelText || tr("admin.audit_ui.cancel", null, "Cancel");
 
         const okBtn = document.createElement("button");
         okBtn.type = "button";
         okBtn.className = options.warn ? "auditConfirmBtn warn" : "auditConfirmBtn";
-        okBtn.textContent = options.confirmText || "OK";
+        okBtn.textContent = options.confirmText || tr("admin.audit_ui.ok", null, "OK");
 
         foot.appendChild(spacer);
         foot.appendChild(cancelBtn);
@@ -820,16 +837,16 @@ async function doRotateAudit() {
     if (!rotateBtn) return;
 
     const ok = await openAuditConfirmModal({
-        title: "Rotate audit log now?",
-        subtitle: "This creates a rotated archive and starts a fresh active audit log.",
+        title: tr("admin.audit_ui.rotate_title", null, "Rotate audit log now?"),
+        subtitle: tr("admin.audit_ui.rotate_sub", null, "This creates a rotated archive and starts a fresh active audit log."),
         rows: [
-            { label: "Active log", value: "pqnas_audit.jsonl", mono: true },
-            { label: "Action", value: "Create rotated file and write rotate_header" },
-            { label: "Integrity", value: "Hash-chain continuity is preserved" },
+            { label: tr("admin.audit_ui.active_log", null, "Active log"), value: "pqnas_audit.jsonl", mono: true },
+            { label: tr("admin.audit_ui.action", null, "Action"), value: tr("admin.audit_ui.rotate_action", null, "Create rotated file and write rotate_header") },
+            { label: tr("admin.audit_ui.integrity_label", null, "Integrity"), value: tr("admin.audit_ui.rotate_integrity", null, "Hash-chain continuity is preserved") },
         ],
-        note: "The page refreshes the tail and verifies integrity after rotation.",
-        confirmText: "Rotate audit",
-        cancelText: "Cancel",
+        note: tr("admin.audit_ui.rotate_note", null, "The page refreshes the tail and verifies integrity after rotation."),
+        confirmText: tr("admin.audit_ui.rotate_audit", null, "Rotate audit"),
+        cancelText: tr("admin.audit_ui.cancel", null, "Cancel"),
         warn: true,
     });
     if (!ok) return;
@@ -838,18 +855,18 @@ async function doRotateAudit() {
     if (rotatePill) {
         rotatePill.style.display = "inline-flex";
         rotatePill.className = "pill info";
-        rotatePill.querySelector(".v").textContent = "rotating…";
+        rotatePill.querySelector(".v").textContent = tr("admin.audit_ui.rotating", null, "rotating…");
     }
 
     try {
         const r = await fetch("/api/v4/admin/rotate-audit", { method: "POST", cache: "no-store" });
         const j = await r.json();
-        if (!j.ok) throw new Error(j.error || "rotate failed");
+        if (!j.ok) throw new Error(j.error || tr("admin.audit_ui.rotate_failed", null, "rotate failed"));
 
         if (rotatePill) {
             rotatePill.className = "pill ok";
-            rotatePill.querySelector(".v").textContent = "OK";
-            rotatePill.title = j.rotated_jsonl_path || "OK";
+            rotatePill.querySelector(".v").textContent = tr("admin.audit_ui.ok", null, "OK");
+            rotatePill.title = j.rotated_jsonl_path || tr("admin.audit_ui.ok", null, "OK");
         }
 
         // Refresh after rotation so the operator immediately sees the new header line.
@@ -858,7 +875,7 @@ async function doRotateAudit() {
     } catch (e) {
         if (rotatePill) {
             rotatePill.className = "pill fail";
-            rotatePill.querySelector(".v").textContent = "ERROR";
+            rotatePill.querySelector(".v").textContent = tr("admin.audit_ui.error", null, "ERROR");
             rotatePill.title = String(e);
         }
     } finally {
@@ -903,7 +920,14 @@ function wire() {
 }
 
 
+window.addEventListener("pqnas-language-changed", () => {
+    applyStaticI18n();
+    syncAutoUi();
+    renderTable();
+});
+
 window.addEventListener("load", async () => {
+    applyStaticI18n();
     wire();
     syncAutoUi();
     await loadTail();
