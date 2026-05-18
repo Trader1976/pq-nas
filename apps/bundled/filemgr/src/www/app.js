@@ -1274,18 +1274,18 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (!rec || !rec.trash_id) return;
 
     const ok = await fmConfirmModal({
-      title: "Move to trash?",
-      subtitle: "The selected item will be moved to Trash.",
+      title: tr("filemgr.delete.title", null, "Move to trash?"),
+      subtitle: tr("filemgr.delete.subtitle", null, "The selected item will be moved to Trash."),
       rows: [
         {
-          label: "Item",
-          value: (typeof item !== "undefined" && item && item.name) ? item.name : "Selected item",
+          label: tr("filemgr.delete.item", null, "Item"),
+          value: (typeof item !== "undefined" && item && item.name) ? item.name : tr("filemgr.delete.selected_item", null, "Selected item"),
           mono: true
         },
       ],
-      note: "You can restore it later from Trash until it is permanently deleted.",
-      confirmText: "Move to trash",
-      cancelText: "Cancel",
+      note: tr("filemgr.delete.note", null, "You can restore it later from Trash until it is permanently deleted."),
+      confirmText: tr("filemgr.delete.confirm", null, "Move to trash"),
+      cancelText: tr("filemgr.cancel", null, "Cancel"),
       danger: true,
     });
     if (!ok) return;
@@ -1332,18 +1332,18 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (!active.length) return;
 
     const ok = await fmConfirmModal({
-      title: "Move to trash?",
-      subtitle: "The selected item will be moved to Trash.",
+      title: tr("filemgr.delete.title", null, "Move to trash?"),
+      subtitle: tr("filemgr.delete.subtitle", null, "The selected item will be moved to Trash."),
       rows: [
         {
-          label: "Item",
-          value: (typeof item !== "undefined" && item && item.name) ? item.name : "Selected item",
+          label: tr("filemgr.delete.item", null, "Item"),
+          value: (typeof item !== "undefined" && item && item.name) ? item.name : tr("filemgr.delete.selected_item", null, "Selected item"),
           mono: true
         },
       ],
-      note: "You can restore it later from Trash until it is permanently deleted.",
-      confirmText: "Move to trash",
-      cancelText: "Cancel",
+      note: tr("filemgr.delete.note", null, "You can restore it later from Trash until it is permanently deleted."),
+      confirmText: tr("filemgr.delete.confirm", null, "Move to trash"),
+      cancelText: tr("filemgr.cancel", null, "Cancel"),
       danger: true,
     });
     if (!ok) return;
@@ -2121,7 +2121,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   }
 
   async function deleteSelection() {
-    if (!requireWritableScopeOrExplain("Delete")) return;
+    if (!requireWritableScopeOrExplain(tr("filemgr.action.delete", null, "Delete"))) return;
     const paths = selectedRelPaths();
     if (!paths.length) {
       status.textContent = "Nothing selected.";
@@ -2129,18 +2129,18 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
 
     const ok = await fmConfirmModal({
-      title: "Move to trash?",
-      subtitle: "The selected item will be moved to Trash.",
+      title: tr("filemgr.delete.title", null, "Move to trash?"),
+      subtitle: tr("filemgr.delete.subtitle", null, "The selected item will be moved to Trash."),
       rows: [
         {
-          label: "Item",
-          value: (typeof item !== "undefined" && item && item.name) ? item.name : "Selected item",
+          label: tr("filemgr.delete.item", null, "Item"),
+          value: (typeof item !== "undefined" && item && item.name) ? item.name : tr("filemgr.delete.selected_item", null, "Selected item"),
           mono: true
         },
       ],
-      note: "You can restore it later from Trash until it is permanently deleted.",
-      confirmText: "Move to trash",
-      cancelText: "Cancel",
+      note: tr("filemgr.delete.note", null, "You can restore it later from Trash until it is permanently deleted."),
+      confirmText: tr("filemgr.delete.confirm", null, "Move to trash"),
+      cancelText: tr("filemgr.cancel", null, "Cancel"),
       danger: true,
     });
     if (!ok) return;
@@ -4013,29 +4013,29 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   }
 
   async function doRename(item) {
-    if (!requireWritableScopeOrExplain("Rename")) return;
+    if (!requireWritableScopeOrExplain(tr("filemgr.action.rename", null, "Rename"))) return;
     const oldRel = currentRelPathFor(item);
     const oldName = String(item.name || "");
     const newName = await fmPromptModal({
-      title: "Rename item",
-      subtitle: "Choose a new name for this file or folder.",
-      label: "New name",
+      title: tr("filemgr.rename.title", null, "Rename item"),
+      subtitle: tr("filemgr.rename.subtitle", null, "Choose a new name for this file or folder."),
+      label: tr("filemgr.rename.label", null, "New name"),
       value: oldName,
-      help: "Use only the item name, not a full path.",
-      confirmText: "Rename",
-      cancelText: "Cancel",
+      help: tr("filemgr.rename.help", null, "Use only the item name, not a full path."),
+      confirmText: tr("filemgr.rename.confirm", null, "Rename"),
+      cancelText: tr("filemgr.cancel", null, "Cancel"),
       validate(value) {
-        if (!value) return "Name is required.";
-        if (value === oldName) return "Name is unchanged.";
-        if (value.includes("/") || value.includes("\\")) return "Name cannot contain path separators.";
-        if (value === "." || value === "..") return "Invalid name.";
+        if (!value) return tr("filemgr.rename.required", null, "Name is required.");
+        if (value === oldName) return tr("filemgr.rename.unchanged", null, "Name is unchanged.");
+        if (value.includes("/") || value.includes("\\")) return tr("filemgr.rename.path_separators", null, "Name cannot contain path separators.");
+        if (value === "." || value === "..") return tr("filemgr.rename.invalid", null, "Invalid name.");
         return "";
       },
     });
     if (!newName) return;
 
     if (newName.includes("/") || newName.includes("\\")) {
-      alert("Name cannot contain '/' or '\\'.");
+      alert(tr("filemgr.rename.path_separators", null, "Name cannot contain path separators."));
       return;
     }
 
@@ -4044,7 +4044,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (newRel === oldRel) return;
 
     setBadge("warn", "working…");
-    status.textContent = "Renaming…";
+    status.textContent = tr("filemgr.rename.working", null, "Renaming…");
 
     const url = apiMoveUrl(oldRel, newRel);
     const r = await fetch(url, { method: "POST", credentials: "include", cache: "no-store" });
@@ -4053,7 +4053,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (!r.ok || !j || !j.ok) {
       setBadge("err", "error");
       const msg = j && (j.message || j.error) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`;
-      status.textContent = `Rename failed: ${msg}`;
+      status.textContent = tr("filemgr.rename.failed", { error: msg }, `Rename failed: ${msg}`);
       return;
     }
 
@@ -4063,7 +4063,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       console.warn("Favorites refresh after rename failed:", e);
     }
 
-    status.textContent = "Renamed.";
+    status.textContent = tr("filemgr.rename.done", null, "Renamed.");
     setBadge("ok", "ready");
     clearSelection();
     await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
@@ -4913,29 +4913,29 @@ function describeMoveItems(items) {
   }
 
   async function doDelete(item) {
-    if (!requireWritableScopeOrExplain("Delete")) return;
+    if (!requireWritableScopeOrExplain(tr("filemgr.action.delete", null, "Delete"))) return;
     const rel = currentRelPathFor(item);
     const isDir = item.type === "dir";
 
     const ok = await fmConfirmModal({
-      title: "Move to trash?",
-      subtitle: "The selected item will be moved to Trash.",
+      title: tr("filemgr.delete.title", null, "Move to trash?"),
+      subtitle: tr("filemgr.delete.subtitle", null, "The selected item will be moved to Trash."),
       rows: [
         {
-          label: "Item",
-          value: (typeof item !== "undefined" && item && item.name) ? item.name : "Selected item",
+          label: tr("filemgr.delete.item", null, "Item"),
+          value: (typeof item !== "undefined" && item && item.name) ? item.name : tr("filemgr.delete.selected_item", null, "Selected item"),
           mono: true
         },
       ],
-      note: "You can restore it later from Trash until it is permanently deleted.",
-      confirmText: "Move to trash",
-      cancelText: "Cancel",
+      note: tr("filemgr.delete.note", null, "You can restore it later from Trash until it is permanently deleted."),
+      confirmText: tr("filemgr.delete.confirm", null, "Move to trash"),
+      cancelText: tr("filemgr.cancel", null, "Cancel"),
       danger: true,
     });
     if (!ok) return;
 
     setBadge("warn", "moving to trash…");
-    status.textContent = "Moving to trash…";
+    status.textContent = tr("filemgr.delete.working", null, "Moving to trash…");
 
     const url = apiDeleteUrl(rel);
     const r = await fetch(url, {
@@ -4954,7 +4954,7 @@ function describeMoveItems(items) {
           : `HTTP ${r.status}`;
       status.textContent = locked
           ? msg
-          : `Move to trash failed: ${msg}`;
+          : tr("filemgr.delete.failed", { error: msg }, `Move to trash failed: ${msg}`);
       return;
     }
 
@@ -4964,9 +4964,7 @@ function describeMoveItems(items) {
       console.warn("Favorites refresh after delete failed:", e);
     }
 
-    status.textContent = j && j.trash_id
-        ? `Moved to trash.`
-        : `Moved to trash.`;
+    status.textContent = tr("filemgr.delete.done", null, "Moved to trash.");
     setBadge("ok", "ready");
     clearSelection();
     await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
@@ -4975,27 +4973,27 @@ function describeMoveItems(items) {
   }
 
   async function doMkdirAt(relDir) {
-    if (!requireWritableScopeOrExplain("Create folder")) return;
+    if (!requireWritableScopeOrExplain(tr("filemgr.action.create_folder", null, "Create folder"))) return;
     const baseShown = relDir ? `/${relDir}` : curPath ? `/${curPath}` : "/";
     const name = await fmPromptModal({
-      title: "New folder",
-      subtitle: `Create a folder in ${baseShown}.`,
-      label: "Folder name",
-      value: "New Folder",
-      help: "Use only the folder name, not a full path.",
-      confirmText: "Create folder",
-      cancelText: "Cancel",
+      title: tr("filemgr.mkdir.title", null, "New folder"),
+      subtitle: tr("filemgr.mkdir.subtitle", { path: baseShown }, `Create a folder in ${baseShown}.`),
+      label: tr("filemgr.mkdir.label", null, "Folder name"),
+      value: tr("filemgr.mkdir.default_name", null, "New Folder"),
+      help: tr("filemgr.mkdir.help", null, "Use only the folder name, not a full path."),
+      confirmText: tr("filemgr.mkdir.confirm", null, "Create folder"),
+      cancelText: tr("filemgr.cancel", null, "Cancel"),
       validate(value) {
-        if (!value) return "Folder name is required.";
-        if (value.includes("/") || value.includes("\\")) return "Folder name cannot contain path separators.";
-        if (value === "." || value === "..") return "Invalid folder name.";
+        if (!value) return tr("filemgr.mkdir.required", null, "Folder name is required.");
+        if (value.includes("/") || value.includes("\\")) return tr("filemgr.mkdir.path_separators", null, "Folder name cannot contain path separators.");
+        if (value === "." || value === "..") return tr("filemgr.mkdir.invalid", null, "Invalid folder name.");
         return "";
       },
     });
     if (!name) return;
 
     if (name.includes("/") || name.includes("\\")) {
-      alert("Folder name cannot contain '/' or '\\'.");
+      alert(tr("filemgr.mkdir.path_separators", null, "Folder name cannot contain path separators."));
       return;
     }
 
@@ -5003,7 +5001,7 @@ function describeMoveItems(items) {
     const newRel = base ? `${base}/${name}` : name;
 
     setBadge("warn", "working…");
-    status.textContent = "Creating folder…";
+    status.textContent = tr("filemgr.mkdir.working", null, "Creating folder…");
 
     const url = apiMkdirUrl(newRel);
     const r = await fetch(url, { method: "POST", credentials: "include", cache: "no-store" });
@@ -5012,12 +5010,12 @@ function describeMoveItems(items) {
     if (!r.ok || !j || !j.ok) {
       setBadge("err", "error");
       const msg = j && (j.message || j.error) ? `${j.error || ""} ${j.message || ""}`.trim() : `HTTP ${r.status}`;
-      status.textContent = `mkdir failed: ${msg}`;
+      status.textContent = tr("filemgr.mkdir.failed", { error: msg }, `mkdir failed: ${msg}`);
       return;
     }
 
     setBadge("ok", "ready");
-    status.textContent = "Folder created.";
+    status.textContent = tr("filemgr.mkdir.done", null, "Folder created.");
     clearSelection();
     await refreshQuotaInfoIfNeeded(true).then(applyQuotaUi).catch(() => {});
     clearFileListCache();
@@ -5335,6 +5333,8 @@ function describeMoveItems(items) {
     if (s === "partial") return tr("filemgr.badge.partial", null, "partial");
     if (s === "storage") return tr("filemgr.badge.storage", null, "storage");
     if (s === "browser") return tr("filemgr.badge.browser", null, "browser");
+    if (s === "working…") return tr("filemgr.badge.working", null, "working…");
+    if (s === "moving to trash…") return tr("filemgr.badge.moving_to_trash", null, "moving to trash…");
     return s;
   }
 
