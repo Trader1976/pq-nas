@@ -50,6 +50,14 @@
         return parts.length ? parts[parts.length - 1] : "";
     }
 
+    function isPqnasInternalFolderName(name) {
+        const n = String(name || "").trim().toLowerCase();
+
+        // Hide DNA-Nexus/PQ-NAS internal folders from destination pickers.
+        // Examples: .pqnas, .pqnas_activity, .pqnas_versions, .pqnas_locks.
+        return n === ".pqnas" || n.startsWith(".pqnas_") || n.startsWith(".pqnas-");
+    }
+
     function parentPath(p) {
         const parts = normalizeRelPath(p).split("/").filter(Boolean);
         parts.pop();
@@ -219,6 +227,7 @@
         function addName(name) {
             const n = String(name || "").trim();
             if (!n || n.includes("/")) return;
+            if (isPqnasInternalFolderName(n)) return;
             if (seen.has(n)) return;
             seen.add(n);
             out.push({ name: n });
@@ -251,7 +260,7 @@
         addArray(payload?.children);
 
         out.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
-        return out;
+        return out.filter((d) => d && !isPqnasInternalFolderName(d.name));
     }
 
     function ensurePickerStyles() {
