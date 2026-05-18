@@ -3,11 +3,12 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>DNA-Nexus NAS • System</title>
+    <title data-i18n="system.page_title">DNA-Nexus NAS • System</title>
 
     <link rel="stylesheet" href="/static/theme.css">
     <link rel="stylesheet" href="/static/shell_menu.css">
     <script src="/static/theme.js"></script>
+    <script src="/static/i18n.js?v=20260518-system-i18n-1"></script>
 
     <style>
         .btn{
@@ -278,50 +279,50 @@
         <div class="brand">
             <div class="logoDot" aria-hidden="true"></div>
             <div style="min-width:0">
-                <h1>System</h1>
-                <div class="sub">Overview • health • capacity</div>
+                <h1 data-i18n="system.title">System</h1>
+                <div class="sub" data-i18n="system.brand_sub">Overview • health • capacity</div>
             </div>
         </div>
 
-        <nav class="nav" aria-label="Admin navigation">
-            <div class="sectionLabel">Admin</div>
+        <nav class="nav" aria-label="Admin navigation" data-i18n-aria-label="admin.overview.nav_aria">
+            <div class="sectionLabel" data-i18n="admin.settings.nav.admin">Admin</div>
             <a class="navbtn" href="/admin">
-                <span>Overview</span><span class="k">O</span>
+                <span data-i18n="admin.settings.nav.overview">Overview</span><span class="k">O</span>
             </a>
             <a class="navbtn" href="/admin/users">
-                <span>User profiles</span><span class="k">U</span>
+                <span data-i18n="admin.settings.nav.user_profiles">User profiles</span><span class="k">U</span>
             </a>
             <a class="navbtn" href="/admin/stats">
-                <span>Statistics</span><span class="k">Σ</span>
+                <span data-i18n="admin.settings.nav.statistics">Statistics</span><span class="k">Σ</span>
             </a>
             <a class="navbtn" href="/admin/approvals">
-                <span>Approvals</span><span class="k">A</span>
+                <span data-i18n="admin.settings.nav.approvals">Approvals</span><span class="k">A</span>
             </a>
             <a class="navbtn" href="/admin/apps">
-                <span>Apps</span><span class="k">📦</span>
+                <span data-i18n="admin.settings.nav.apps">Apps</span><span class="k">📦</span>
             </a>
             <a class="navbtn" href="/admin/audit">
-                <span>Audit log UI</span><span class="k">D</span>
+                <span data-i18n="admin.settings.nav.audit">Audit log UI</span><span class="k">D</span>
             </a>
             <a class="navbtn" href="/admin/settings">
-                <span>Settings</span><span class="k">S</span>
+                <span data-i18n="admin.settings.nav.settings">Settings</span><span class="k">S</span>
             </a>
             <a class="navbtn active" href="/system">
-                <span>System</span><span class="k">Y</span>
+                <span data-i18n="admin.settings.nav.system">System</span><span class="k">Y</span>
             </a>
             <div class="sectionLabel"> </div>
             <a class="navbtn" href="/app">
-                <span>Back...</span><span class="k">↩</span>
+                <span data-i18n="admin.settings.nav.back">Back...</span><span class="k">↩</span>
             </a>
         </nav>
 
         <div class="bottom">
             <div class="statusCard">
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-                    <div style="font-weight:950;">Live status</div>
-                    <span id="livePill" class="pill warn"><span class="k">API:</span> <span class="v">loading…</span></span>
+                    <div style="font-weight:950;" data-i18n="system.live_status">Live status</div>
+                    <span id="livePill" class="pill warn"><span class="k" data-i18n="system.api">API:</span> <span class="v" data-i18n="common.loading">loading…</span></span>
                 </div>
-                <div class="mini" id="liveText">Fetching /api/v4/system…</div>
+                <div class="mini" id="liveText" data-i18n="system.fetching_api">Fetching /api/v4/system…</div>
             </div>
         </div>
     </aside>
@@ -329,12 +330,12 @@
     <main class="workspace">
         <div class="topbar">
             <div class="crumbs">
-                <div class="title">DNA-Nexus • System</div>
-                <div class="sub">CPU • Memory • Disk • Process</div>
+                <div class="title" data-i18n="system.top_title">DNA-Nexus • System</div>
+                <div class="sub" data-i18n="system.top_sub">CPU • Memory • Disk • Process</div>
             </div>
             <div class="actions">
-                <span class="pill" id="lastPill"><span class="k">Updated:</span> <span class="v">—</span></span>
-                <button class="btn" id="btnRefresh" type="button">Refresh</button>
+                <span class="pill" id="lastPill"><span class="k" data-i18n="system.updated">Updated:</span> <span class="v">—</span></span>
+                <button class="btn" id="btnRefresh" type="button" data-i18n="common.refresh">Refresh</button>
             </div>
         </div>
 
@@ -342,45 +343,45 @@
             <div class="grid">
                 <section class="card span-6">
                     <div class="hd">
-                        <div class="h">OS</div>
-                        <span class="pill ok" id="osPill"><span class="k">Kernel:</span> <span class="v">—</span></span>
+                        <div class="h" data-i18n="system.os">OS</div>
+                        <span class="pill ok" id="osPill"><span class="k" data-i18n="system.kernel">Kernel:</span> <span class="v">—</span></span>
                     </div>
                     <div class="bd">
-                        <div class="kv"><div class="k">Host</div><div class="v mono" id="osHost">—</div></div>
-                        <div class="kv"><div class="k">OS</div><div class="v" id="osPretty">—</div></div>
-                        <div class="kv"><div class="k">Kernel</div><div class="v mono" id="osKernel">—</div></div>
-                        <div class="kv"><div class="k">CPU model</div><div class="v" id="cpuModel">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.host">Host</div><div class="v mono" id="osHost">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.os">OS</div><div class="v" id="osPretty">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.kernel_plain">Kernel</div><div class="v mono" id="osKernel">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.cpu_model">CPU model</div><div class="v" id="cpuModel">—</div></div>
                     </div>
                 </section>
 
                 <section class="card span-6">
                     <div class="hd">
-                        <div class="h">CPU</div>
-                        <span class="pill ok" id="cpuPill"><span class="k">Load:</span> <span class="v">—</span></span>
+                        <div class="h" data-i18n="system.cpu">CPU</div>
+                        <span class="pill ok" id="cpuPill"><span class="k" data-i18n="system.load">Load:</span> <span class="v">—</span></span>
                     </div>
                     <div class="bd">
-                        <div class="note" style="margin-top:12px;">Per-core gauges</div>
+                        <div class="note" style="margin-top:12px;" data-i18n="system.per_core_gauges">Per-core gauges</div>
                         <div id="cpuGaugeGrid" class="cpuGaugeGrid"></div>
 
-                        <div class="kv"><div class="k">Cores</div><div class="v" id="cpuCores">—</div></div>
-                        <div class="kv"><div class="k">Load (1 / 5 / 15)</div><div class="v mono" id="cpuLoad">—</div></div>
-                        <div class="kv"><div class="k">Uptime</div><div class="v" id="uptime">—</div></div>
-                        <div class="kv"><div class="k">Usage (total)</div><div class="v mono" id="cpuUsageTotal">—</div></div>
-                        <div class="kv"><div class="k">Per-core</div><div class="v mono" id="cpuUsageCores">—</div></div>
-                        <div class="note">Load is system-wide. Usage is sampled from /proc/stat deltas.</div>
+                        <div class="kv"><div class="k" data-i18n="system.cores">Cores</div><div class="v" id="cpuCores">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.load_1_5_15">Load (1 / 5 / 15)</div><div class="v mono" id="cpuLoad">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.uptime">Uptime</div><div class="v" id="uptime">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.usage_total">Usage (total)</div><div class="v mono" id="cpuUsageTotal">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.per_core">Per-core</div><div class="v mono" id="cpuUsageCores">—</div></div>
+                        <div class="note" data-i18n="system.cpu_note">Load is system-wide. Usage is sampled from /proc/stat deltas.</div>
                     </div>
                 </section>
 
                 <section class="card span-6">
                     <div class="hd">
-                        <div class="h">Memory</div>
-                        <span class="pill ok" id="memPill"><span class="k">Used:</span> <span class="v">—</span></span>
+                        <div class="h" data-i18n="system.memory">Memory</div>
+                        <span class="pill ok" id="memPill"><span class="k" data-i18n="system.used">Used:</span> <span class="v">—</span></span>
                     </div>
                     <div class="bd">
-                        <div class="kv"><div class="k">Total</div><div class="v" id="memTotal">—</div></div>
-                        <div class="kv"><div class="k">Available</div><div class="v" id="memAvail">—</div></div>
-                        <div class="kv"><div class="k">Used</div><div class="v" id="memUsed">—</div></div>
-                        <div class="bar" title="Memory used"><div id="memBar"></div></div>
+                        <div class="kv"><div class="k" data-i18n="system.total">Total</div><div class="v" id="memTotal">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.available">Available</div><div class="v" id="memAvail">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.used_plain">Used</div><div class="v" id="memUsed">—</div></div>
+                        <div class="bar" title="Memory used" data-i18n-title="system.memory_used"><div id="memBar"></div></div>
                     </div>
                 </section>
 
@@ -390,16 +391,16 @@
 
                 <section class="card span-6">
                     <div class="hd">
-                        <div class="h">Storage</div>
+                        <div class="h" data-i18n="system.storage">Storage</div>
                     </div>
                     <div class="bd">
-                        <div class="kv"><div class="k">FS type</div><div class="v mono" id="fsType">—</div></div>
-                        <div class="kv"><div class="k">Data root</div><div class="v mono" id="fsRoot">—</div></div>
-                        <div class="kv"><div class="k">Mountpoint</div><div class="v mono" id="fsMount">—</div></div>
-                        <div class="kv"><div class="k">Source</div><div class="v mono" id="fsSource">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.fs_type">FS type</div><div class="v mono" id="fsType">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.data_root">Data root</div><div class="v mono" id="fsRoot">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.mountpoint">Mountpoint</div><div class="v mono" id="fsMount">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.source">Source</div><div class="v mono" id="fsSource">—</div></div>
 
                         <div class="note mono" style="overflow-wrap:anywhere;">
-                            <div style="margin-top:10px;"><b>Options</b></div>
+                            <div style="margin-top:10px;"><b data-i18n="system.options">Options</b></div>
                             <div id="fsOptions" style="opacity:.9;">—</div>
                             <div id="fsWarn" style="margin-top:8px; color: rgba(var(--warn-rgb),0.95);"></div>
                         </div>
@@ -408,29 +409,29 @@
 
                 <section class="card span-12">
                     <div class="hd">
-                        <div class="h">Drive health</div>
-                        <span class="pill" id="driveHealthPill"><span class="k">Status:</span> <span class="v">loading…</span></span>
+                        <div class="h" data-i18n="system.drive_health">Drive health</div>
+                        <span class="pill" id="driveHealthPill"><span class="k" data-i18n="admin.common.status">Status:</span> <span class="v" data-i18n="common.loading">loading…</span></span>
                     </div>
                     <div class="bd">
-                        <div class="note mono" id="driveHealthUpdated" style="margin-bottom:10px;">Updated: —</div>
+                        <div class="note mono" id="driveHealthUpdated" style="margin-bottom:10px;"><span data-i18n="system.updated">Updated:</span> —</div>
                         <div id="driveHealthList"></div>
                         <div class="note">
-                            Health data is shown for internal storage devices that expose SMART/NVMe diagnostics.
+                            <span data-i18n="system.drive_health_note">Health data is shown for internal storage devices that expose SMART/NVMe diagnostics.</span>
                         </div>
                     </div>
                 </section>
 
                 <section class="card span-12">
                     <div class="hd">
-                        <div class="h">Network</div>
-                        <span class="pill ok" id="netPill"><span class="k">IF:</span> <span class="v">—</span></span>
+                        <div class="h" data-i18n="system.network">Network</div>
+                        <span class="pill ok" id="netPill"><span class="k" data-i18n="system.iface_short">IF:</span> <span class="v">—</span></span>
                     </div>
                     <div class="bd">
-                        <div class="kv"><div class="k">Interface</div><div class="v mono" id="netIf">—</div></div>
-                        <div class="kv"><div class="k">RX</div><div class="v" id="netRx">—</div></div>
-                        <div class="kv"><div class="k">TX</div><div class="v" id="netTx">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.interface">Interface</div><div class="v mono" id="netIf">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.rx">RX</div><div class="v" id="netRx">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.tx">TX</div><div class="v" id="netTx">—</div></div>
 
-                        <div class="note">Live throughput (server-sampled).</div>
+                        <div class="note" data-i18n="system.net_note">Live throughput (server-sampled).</div>
                         <div style="margin-top:10px; border:1px solid rgba(var(--fg-rgb),0.12); border-radius:14px; background: rgba(0,0,0,0.18); padding:10px; overflow:hidden;">
                             <canvas id="netCanvas" width="1100" height="180" style="width:100%; height:180px; display:block;"></canvas>
                         </div>
@@ -439,14 +440,14 @@
 
                 <section class="card span-12">
                     <div class="hd">
-                        <div class="h">Process</div>
-                        <span class="pill ok" id="procPill"><span class="k">PID:</span> <span class="v">—</span></span>
+                        <div class="h" data-i18n="system.process">Process</div>
+                        <span class="pill ok" id="procPill"><span class="k" data-i18n="system.pid">PID:</span> <span class="v">—</span></span>
                     </div>
                     <div class="bd">
-                        <div class="kv"><div class="k">Executable</div><div class="v mono" id="procExe">—</div></div>
-                        <div class="kv"><div class="k">RSS</div><div class="v" id="procRss">—</div></div>
-                        <div class="kv"><div class="k">Started</div><div class="v" id="procStart">—</div></div>
-                        <div class="note">This is the DNA-Nexus server process. No admin rights needed to view.</div>
+                        <div class="kv"><div class="k" data-i18n="system.executable">Executable</div><div class="v mono" id="procExe">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.rss">RSS</div><div class="v" id="procRss">—</div></div>
+                        <div class="kv"><div class="k" data-i18n="system.started">Started</div><div class="v" id="procStart">—</div></div>
+                        <div class="note" data-i18n="system.process_note">This is the DNA-Nexus server process. No admin rights needed to view.</div>
                     </div>
                 </section>
             </div>
@@ -457,7 +458,7 @@
 </div>
 
 <script src="/static/admin_badges.js"></script>
-<script src="/static/system.js?v=9"></script>
+<script src="/static/system.js?v=20260518-system-i18n-2"></script>
 <script src="/static/shell_sidebar.js"></script>
 </body>
 </html>

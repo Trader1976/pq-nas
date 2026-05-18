@@ -1,6 +1,19 @@
 (() => {
     const el = (id) => document.getElementById(id);
 
+    let lastSystemPayload = null;
+    let lastStoragePayload = null;
+    let lastDrivesPayload = null;
+
+    function tr(key, vars, fallback) {
+        const api = window.PQNAS_I18N;
+        if (api && typeof api.t === "function") {
+            return api.t(key, vars || null, fallback);
+        }
+        return String(fallback ?? key);
+    }
+
+
     function cssVar(name, fallback) {
         try {
             const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -144,12 +157,16 @@
         row.style.flexWrap = "wrap";
         row.style.margin = "8px 0 12px 0";
         row.innerHTML = `
-            <button class="btn" id="btnDriveHealthRefreshNow" type="button">
-                Refresh SMART now
+            <button class="btn" id="btnDriveHealthRefreshNow" type="button" data-i18n="system.refresh_smart_now">
+                ${escapeHtml(tr("system.refresh_smart_now", null, "Refresh SMART now"))}
             </button>
             <span class="note mono" id="driveHealthRefreshStatus"></span>
         `;
         upd.parentNode.insertBefore(row, upd.nextSibling);
+
+        if (window.PQNAS_I18N && typeof window.PQNAS_I18N.apply === "function") {
+            window.PQNAS_I18N.apply(row);
+        }
     }
 
     async function fetchStorage() {
@@ -175,7 +192,7 @@
         set("fsOptions", s.options);
 
         const warn = el("fsWarn");
-        if (warn) warn.textContent = s.warning ? ("Note: " + s.warning) : "";
+        if (warn) warn.textContent = s.warning ? tr("system.note_with_value", { value: s.warning }, "Note: " + s.warning) : "";
     }
 
 
@@ -338,7 +355,7 @@
         host.innerHTML = arr.map((_, i) => `
         <div class="cpuGauge">
             <canvas id="cpuGauge_${i}" width="84" height="84" style="width:84px;height:84px;display:block;"></canvas>
-            <div class="lbl">core ${i}</div>
+            <div class="lbl">${escapeHtml(tr("system.core_n", { n: i }, `core ${i}`))}</div>
             <div class="val" id="cpuGaugeVal_${i}">—</div>
         </div>
     `).join("");
@@ -550,7 +567,7 @@
             const p = pct(used, total);
             const pillKind = diskKindFromPct(p);
 
-            const label = t.isSystem ? "System volume" : (t.isData ? "Data volume" : "Volume");
+            const label = t.isSystem ? tr("system.system_volume", null, "System volume") : (t.isData ? tr("system.data_volume", null, "Data volume") : tr("system.volume", null, "Volume"));
 
             const key = "mp_" + mp.replace(/[^a-zA-Z0-9]+/g, "_");
 
@@ -563,39 +580,39 @@
             title="${escapeHtml(mp)}">${escapeHtml(mp)}</span>
     </div>
     <span class="pill ${pillKind}">
-      <span class="k">Used:</span>
+      <span class="k">${escapeHtml(tr("system.used", null, "Used:"))}</span>
       <span class="v">${p.toFixed(1)}%</span>
     </span>
   </div>
 
   <div class="bd">
     <div class="kv">
-      <div class="k">FS type</div>
+      <div class="k">${escapeHtml(tr("system.fs_type", null, "FS type"))}</div>
       <div class="v mono">${escapeHtml(fstype)}</div>
     </div>
 
     <div class="kv">
-      <div class="k">Source</div>
+      <div class="k">${escapeHtml(tr("system.source", null, "Source"))}</div>
       <div class="v mono"
            title="${escapeHtml(src)}">${escapeHtml(shortSource(src))}</div>
     </div>
 
     <div class="kv">
-      <div class="k">Total</div>
+      <div class="k">${escapeHtml(tr("system.total", null, "Total"))}</div>
       <div class="v">${fmtBytes(total)}</div>
     </div>
 
     <div class="kv">
-      <div class="k">Free</div>
+      <div class="k">${escapeHtml(tr("system.free", null, "Free"))}</div>
       <div class="v">${fmtBytes(free)}</div>
     </div>
 
     <div class="kv">
-      <div class="k">Used</div>
+      <div class="k">${escapeHtml(tr("system.used_plain", null, "Used"))}</div>
       <div class="v">${fmtBytes(used)}</div>
     </div>
 
-    <div class="bar" title="Disk used">
+    <div class="bar" title="${escapeHtml(tr("system.disk_used", null, "Disk used"))}">
       <div id="bar_${key}"
            style="width:${p.toFixed(1)}%"></div>
     </div>
@@ -614,10 +631,10 @@
             if (j.updated_iso) {
                 const d = new Date(j.updated_iso);
                 const ageSec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
-                upd.textContent = `Last SMART refresh: ${d.toLocaleTimeString()} UTC (${fmtSmartAge(ageSec)} ago)`;
+                upd.textContent = tr("system.last_smart_refresh_age", { time: d.toLocaleTimeString(), age: fmtSmartAge(ageSec) }, `Last SMART refresh: ${d.toLocaleTimeString()} UTC (${fmtSmartAge(ageSec)} ago)`);
                 upd.title = j.updated_iso;
             } else {
-                upd.textContent = "Last SMART refresh: —";
+                upd.textContent = tr("system.last_smart_refresh_empty", null, "Last SMART refresh: —");
                 upd.title = "";
             }
         }
@@ -630,8 +647,8 @@
 
         const arr = Array.isArray(j.drives) ? j.drives : [];
         if (!arr.length) {
-            host.innerHTML = `<div class="note">No supported internal drives detected.</div>`;
-            setPill(pill, "warn", "none");
+            host.innerHTML = `<div class="note">${escapeHtml(tr("system.no_supported_drives", null, "No supported internal drives detected."))}</div>`;
+            setPill(pill, "warn", tr("system.none", null, "none"));
             return;
         }
 
@@ -643,9 +660,9 @@
         }
 
         const label =
-            worst === "fail" ? "attention" :
-                worst === "warn" ? "warning" :
-                    "healthy";
+            worst === "fail" ? tr("system.health.attention", null, "attention") :
+                worst === "warn" ? tr("system.health.warning", null, "warning") :
+                    tr("system.health.healthy", null, "healthy");
 
         setPill(
             pill,
@@ -654,11 +671,11 @@
         );
 
         host.innerHTML = arr.map(d => {
-            const model = escapeHtml(d.model || d.dev || "Drive");
+            const model = escapeHtml(d.model || d.dev || tr("system.drive", null, "Drive"));
             const dev = escapeHtml(d.dev || "—");
             const bus = escapeHtml((d.transport || d.kind || "unknown").toUpperCase());
             const size = fmtBytes(Number(d.size_bytes));
-            const healthText = escapeHtml(d.health_text || "Unknown");
+            const healthText = escapeHtml(d.health_text || tr("system.unknown", null, "Unknown"));
             const temp = fmtTempC(Number(d.temperature_c));
             const pUsed = Number(d.percentage_used);
             const spare = Number(d.available_spare);
@@ -698,17 +715,17 @@
             const writtenBytes = nvmeDataUnitsToBytes(duw);
 
             const extras = [];
-            if (Number.isFinite(pUsed) && pUsed >= 0) extras.push(`Wear: ${pUsed}%`);
-            if (Number.isFinite(spare) && spare >= 0) extras.push(`Spare: ${spare}%`);
-            if (Number.isFinite(media) && media >= 0) extras.push(`Media errors: ${media}`);
-            if (Number.isFinite(poh) && poh >= 0) extras.push(`Power-on: ${poh} h`);
-            if (Number.isFinite(readBytes)) extras.push(`Read: ${fmtBytes(readBytes)}`);
-            if (Number.isFinite(writtenBytes)) extras.push(`Written: ${fmtBytes(writtenBytes)}`);
-            if (Number.isFinite(realloc) && realloc >= 0) extras.push(`Realloc: ${realloc}`);
-            if (Number.isFinite(pending) && pending >= 0) extras.push(`Pending: ${pending}`);
-            if (Number.isFinite(offunc) && offunc >= 0) extras.push(`Offline unc: ${offunc}`);
-            if (Number.isFinite(repunc) && repunc >= 0) extras.push(`Reported unc: ${repunc}`);
-            if (Number.isFinite(crc) && crc >= 0) extras.push(`CRC: ${crc}`);
+            if (Number.isFinite(pUsed) && pUsed >= 0) extras.push(tr("system.drive.wear", { value: pUsed }, `Wear: ${pUsed}%`));
+            if (Number.isFinite(spare) && spare >= 0) extras.push(tr("system.drive.spare", { value: spare }, `Spare: ${spare}%`));
+            if (Number.isFinite(media) && media >= 0) extras.push(tr("system.drive.media_errors", { value: media }, `Media errors: ${media}`));
+            if (Number.isFinite(poh) && poh >= 0) extras.push(tr("system.drive.power_on", { value: poh }, `Power-on: ${poh} h`));
+            if (Number.isFinite(readBytes)) extras.push(tr("system.drive.read", { value: fmtBytes(readBytes) }, `Read: ${fmtBytes(readBytes)}`));
+            if (Number.isFinite(writtenBytes)) extras.push(tr("system.drive.written", { value: fmtBytes(writtenBytes) }, `Written: ${fmtBytes(writtenBytes)}`));
+            if (Number.isFinite(realloc) && realloc >= 0) extras.push(tr("system.drive.realloc", { value: realloc }, `Realloc: ${realloc}`));
+            if (Number.isFinite(pending) && pending >= 0) extras.push(tr("system.drive.pending", { value: pending }, `Pending: ${pending}`));
+            if (Number.isFinite(offunc) && offunc >= 0) extras.push(tr("system.drive.offline_unc", { value: offunc }, `Offline unc: ${offunc}`));
+            if (Number.isFinite(repunc) && repunc >= 0) extras.push(tr("system.drive.reported_unc", { value: repunc }, `Reported unc: ${repunc}`));
+            if (Number.isFinite(crc) && crc >= 0) extras.push(tr("system.drive.crc", { value: crc }, `CRC: ${crc}`));
 
             return `
             <div class="kv driveRow ${rowCls}">
@@ -719,11 +736,11 @@
                 <div class="v">${healthText} • 🌡 ${temp}</div>
             </div>
             <div class="note mono driveNote ${noteCls}" style="margin-top:6px; margin-bottom:8px;">
-                ${escapeHtml(extras.join(" • ") || "No extra health counters")}
+                ${escapeHtml(extras.join(" • ") || tr("system.drive.no_extra_counters", null, "No extra health counters"))}
                 <br>
-                Self-test: ${
+                ${escapeHtml(tr("system.self_test", null, "Self-test"))}: ${
                 selftestState === "running"
-                    ? `<b style="color:rgba(var(--warn-rgb),1)">RUNNING${
+                    ? `<b style="color:rgba(var(--warn-rgb),1)">${escapeHtml(tr("system.running", null, "RUNNING"))}${
                         selftestProgress >= 0 ? " " + selftestProgress + "%" : ""
                     }</b> • ${escapeHtml(selfText)}`
                     : escapeHtml(selfText)
@@ -746,18 +763,18 @@
                             data-dev="${escapeHtml(d.dev || "")}"
                             data-type="short"
                             ${canRunSelftest ? "" : "disabled"}>
-                        Run short test
+                        ${escapeHtml(tr("system.run_short_test", null, "Run short test"))}
                     </button>
                     <button class="btn js-drive-selftest"
                             type="button"
                             data-dev="${escapeHtml(d.dev || "")}"
                             data-type="extended"
                             ${canRunSelftest ? "" : "disabled"}>
-                        Run extended test
+                        ${escapeHtml(tr("system.run_extended_test", null, "Run extended test"))}
                     </button>
                     `
                     : `
-                    <span class="note">Self-test start not available for this drive.</span>
+                    <span class="note">${escapeHtml(tr("system.selftest_unavailable", null, "Self-test start not available for this drive."))}</span>
                     `
             }
             </div>
@@ -769,13 +786,14 @@
     async function refreshDrivesOnce() {
         try {
             const j = await fetchDrives();
+            lastDrivesPayload = j;
             renderDrives(j);
         } catch (e) {
             const host = el("driveHealthList");
             if (host) {
-                host.innerHTML = `<div class="note">Failed to probe drive health: ${escapeHtml(String(e && e.message ? e.message : e))}</div>`;
+                host.innerHTML = `<div class="note">${escapeHtml(tr("system.drive_probe_failed", { error: String(e && e.message ? e.message : e) }, `Failed to probe drive health: ${String(e && e.message ? e.message : e)}`))}</div>`;
             }
-            setPill(el("driveHealthPill"), "fail", "error");
+            setPill(el("driveHealthPill"), "fail", tr("admin.common.error", null, "error"));
         }
     }
     // ---------------- Existing render ----------------
@@ -845,37 +863,39 @@
 
         // Sidebar live
         setPill(el("livePill"), "ok", "OK");
-        el("liveText").textContent =
-            `Host: ${j.host || "—"}\n` +
-            `Time: ${j.now_iso || "—"}\n` +
-            `OS: ${(j.os && j.os.pretty) ? j.os.pretty : "—"}\n` +
-            `Kernel: ${j.kernel || "—"}\n` +
-            `CPU: ${(j.cpu && j.cpu.model) ? j.cpu.model : "—"}`;
+        el("liveText").textContent = [
+            tr("system.live.host", { value: j.host || "—" }, `Host: ${j.host || "—"}`),
+            tr("system.live.time", { value: j.now_iso || "—" }, `Time: ${j.now_iso || "—"}`),
+            tr("system.live.os", { value: (j.os && j.os.pretty) ? j.os.pretty : "—" }, `OS: ${(j.os && j.os.pretty) ? j.os.pretty : "—"}`),
+            tr("system.live.kernel", { value: j.kernel || "—" }, `Kernel: ${j.kernel || "—"}`),
+            tr("system.live.cpu", { value: (j.cpu && j.cpu.model) ? j.cpu.model : "—" }, `CPU: ${(j.cpu && j.cpu.model) ? j.cpu.model : "—"}`)
+        ].join("\n");
 
         // Updated pill
-        setPill(el("lastPill"), "ok", j.now_iso || "now");
+        setPill(el("lastPill"), "ok", j.now_iso || tr("admin.stats.now", null, "now"));
     }
 
     async function refreshOnce() {
-        setPill(el("livePill"), "warn", "loading…");
-        el("liveText").textContent = "Fetching /api/v4/system…";
+        setPill(el("livePill"), "warn", tr("common.loading", null, "loading…"));
+        el("liveText").textContent = tr("system.fetching_api", null, "Fetching /api/v4/system…");
 
         try {
             const j = await fetchSystem();
+            lastSystemPayload = j;
             try {
                 render(j);
             } catch (e2) {
                 // Frontend render error (NOT API)
-                setPill(el("livePill"), "fail", "UI ERROR");
+                setPill(el("livePill"), "fail", tr("system.ui_error", null, "UI ERROR"));
                 el("liveText").textContent = String(e2 && e2.message ? e2.message : e2);
                 // keep lastPill as-is or mark warn
                 return;
             }
 
         } catch (e) {
-            setPill(el("livePill"), "fail", "ERROR");
+            setPill(el("livePill"), "fail", tr("admin.common.error", null, "ERROR"));
             el("liveText").textContent = String(e && e.message ? e.message : e);
-            setPill(el("lastPill"), "fail", "failed");
+            setPill(el("lastPill"), "fail", tr("system.failed", null, "failed"));
         }
     }
 
@@ -894,17 +914,17 @@
         const status = el("driveHealthRefreshStatus");
         const oldText = btn.textContent;
         btn.disabled = true;
-        btn.textContent = "Refreshing…";
-        if (status) status.textContent = "Running smartctl probe…";
+        btn.textContent = tr("system.refreshing", null, "Refreshing…");
+        if (status) status.textContent = tr("system.running_smartctl", null, "Running smartctl probe…");
 
         try {
             await refreshDriveSmartNow();
             await refreshDrivesOnce();
-            if (status) status.textContent = "Refreshed.";
+            if (status) status.textContent = tr("system.refreshed", null, "Refreshed.");
         } catch (e) {
             const msg = String(e && e.message ? e.message : e);
-            if (status) status.textContent = "Refresh failed: " + msg;
-            alert("Failed to refresh SMART data: " + msg);
+            if (status) status.textContent = tr("system.refresh_failed", { error: msg }, "Refresh failed: " + msg);
+            alert(tr("system.smart_refresh_failed", { error: msg }, "Failed to refresh SMART data: " + msg));
         } finally {
             btn.disabled = false;
             btn.textContent = oldText;
@@ -920,19 +940,19 @@
         if (!dev) return;
 
         if (type === "extended") {
-            const ok = window.confirm(`Start extended self-test for ${dev}? This may take a long time.`);
+            const ok = window.confirm(tr("system.confirm_extended_selftest", { dev }, `Start extended self-test for ${dev}? This may take a long time.`));
             if (!ok) return;
         }
 
         const oldText = btn.textContent;
         btn.disabled = true;
-        btn.textContent = "Starting…";
+        btn.textContent = tr("system.starting", null, "Starting…");
 
         try {
             await startDriveSelftest(dev, type);
             await refreshDrivesOnce();
         } catch (e) {
-            alert("Failed to start self-test: " + String(e && e.message ? e.message : e));
+            alert(tr("system.selftest_start_failed", { error: String(e && e.message ? e.message : e) }, "Failed to start self-test: " + String(e && e.message ? e.message : e)));
         } finally {
             btn.disabled = false;
             btn.textContent = oldText;
@@ -946,12 +966,27 @@
     async function refreshStorageOnce() {
         try {
             const s = await fetchStorage();
+            lastStoragePayload = s;
             renderStorage(s);
         } catch (e) {
             const warn = el("fsWarn");
-            if (warn) warn.textContent = "Failed to probe storage: " + (e && e.message ? e.message : e);
+            if (warn) warn.textContent = tr("system.storage_probe_failed", { error: String(e && e.message ? e.message : e) }, "Failed to probe storage: " + (e && e.message ? e.message : e));
         }
     }
+    window.addEventListener("pqnas-language-changed", () => {
+        if (window.PQNAS_I18N && typeof window.PQNAS_I18N.apply === "function") {
+            window.PQNAS_I18N.apply(document);
+        }
+        ensureDriveRefreshControls();
+        if (lastSystemPayload) render(lastSystemPayload);
+        if (lastStoragePayload) renderStorage(lastStoragePayload);
+        if (lastDrivesPayload) renderDrives(lastDrivesPayload);
+    });
+
+    if (window.PQNAS_I18N && typeof window.PQNAS_I18N.ready === "function") {
+        window.PQNAS_I18N.ready().then(() => window.PQNAS_I18N.apply(document)).catch(() => {});
+    }
+
     refreshOnce();
     setInterval(refreshOnce, 3000);
 
