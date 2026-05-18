@@ -6,6 +6,15 @@
 (function () {
     "use strict";
 
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
     function shortFp(fp) {
         const s = String(fp || "");
         if (s.length <= 16) return s;
@@ -123,7 +132,7 @@
             }
             title.textContent = displayName;
             title.title = title.dataset.originalTitle && title.dataset.originalTitle !== displayName
-                ? `Workspace label: ${title.dataset.originalTitle}`
+                ? tr("filemgr.people.workspace_label", { label: title.dataset.originalTitle }, `Workspace label: ${title.dataset.originalTitle}`)
                 : displayName;
         }
 
@@ -166,7 +175,7 @@
 
             const title = document.createElement("div");
             title.className = "modalTitle";
-            title.textContent = options.title || "Edit People";
+            title.textContent = options.title || tr("filemgr.people.edit", null, "Edit People");
 
             const sub = document.createElement("div");
             sub.className = "modalSub";
@@ -182,7 +191,7 @@
 
             const nameLabel = document.createElement("div");
             nameLabel.className = "k";
-            nameLabel.textContent = "Display name";
+            nameLabel.textContent = tr("filemgr.people.display_name", null, "Display name");
 
             const nameWrap = document.createElement("div");
 
@@ -203,7 +212,7 @@
 
             const fpLabel = document.createElement("div");
             fpLabel.className = "k";
-            fpLabel.textContent = "Fingerprint";
+            fpLabel.textContent = tr("filemgr.people.fingerprint", null, "Fingerprint");
 
             const fpValue = document.createElement("div");
             fpValue.className = "v mono";
@@ -211,13 +220,13 @@
 
             const notesLabel = document.createElement("div");
             notesLabel.className = "k";
-            notesLabel.textContent = "Private notes";
+            notesLabel.textContent = tr("filemgr.people.private_notes", null, "Private notes");
 
             const notesWrap = document.createElement("div");
 
             const notesInput = document.createElement("textarea");
             notesInput.value = options.notes || "";
-            notesInput.placeholder = "Optional notes visible only in your People list";
+            notesInput.placeholder = tr("filemgr.people.notes_placeholder", null, "Optional notes visible only in your People list");
             notesInput.style.width = "100%";
             notesInput.style.minHeight = "110px";
             notesInput.style.resize = "vertical";
@@ -257,7 +266,7 @@
             hint.className = "v";
             hint.style.opacity = "0.75";
             hint.style.fontSize = "12px";
-            hint.textContent = "Saved only to your private People list.";
+            hint.textContent = tr("filemgr.people.saved_private", null, "Saved only to your private People list.");
 
             const spacer = document.createElement("div");
             spacer.style.flex = "1 1 auto";
@@ -265,12 +274,12 @@
             const cancelBtn = document.createElement("button");
             cancelBtn.type = "button";
             cancelBtn.className = "btn secondary";
-            cancelBtn.textContent = "Cancel";
+            cancelBtn.textContent = tr("filemgr.ws.cancel", null, "Cancel");
 
             const okBtn = document.createElement("button");
             okBtn.type = "button";
             okBtn.className = "btn";
-            okBtn.textContent = "Save People";
+            okBtn.textContent = tr("filemgr.people.save", null, "Save People");
 
             foot.appendChild(hint);
             foot.appendChild(spacer);
@@ -299,7 +308,7 @@
                 const notes = String(notesInput.value || "").trim();
 
                 if (!displayName) {
-                    showError("Display name is required.");
+                    showError(tr("filemgr.people.display_name_required", null, "Display name is required."));
                     nameInput.focus();
                     return;
                 }
@@ -358,14 +367,14 @@
         const btn = document.createElement("button");
         btn.className = "btn secondary";
         btn.type = "button";
-        btn.textContent = "People…";
+        btn.textContent = tr("filemgr.people.edit", null, "People…");
         btn.disabled = true;
 
         const hint = document.createElement("span");
         hint.className = "mono";
         hint.style.opacity = ".76";
         hint.style.fontSize = "12px";
-        hint.textContent = "Checking People…";
+        hint.textContent = tr("filemgr.people.checking", null, "Checking People…");
 
         wrap.appendChild(btn);
         wrap.appendChild(hint);
@@ -384,18 +393,18 @@
             }
 
             btn.disabled = false;
-            btn.textContent = resolved ? "Edit People" : "Add to People";
+            btn.textContent = resolved ? tr("filemgr.people.edit", null, "Edit People") : tr("filemgr.people.add", null, "Add to People");
             hint.textContent = resolved
                 ? "Saved in People"
                 : "Not saved in People";
 
             btn.addEventListener("click", async () => {
                 const defaultNotes = String(person.notes || "").trim() ||
-                    (workspaceName ? `Workspace collaborator: ${workspaceName}` : "");
+                    (workspaceName ? tr("filemgr.people.default_notes", { workspace: workspaceName }, `Workspace collaborator: ${workspaceName}`) : "");
 
                 const picked = await openPeopleEditModal({
-                    title: resolved ? "Edit People" : "Add to People",
-                    subtitle: "Save a private name and notes for this workspace member.",
+                    title: resolved ? tr("filemgr.people.modal_title_edit", null, "Edit People") : tr("filemgr.people.modal_title_add", null, "Add to People"),
+                    subtitle: tr("filemgr.people.modal_subtitle", null, "Save a private name and notes for this workspace member."),
                     displayName: currentName,
                     notes: defaultNotes,
                     fingerprint: fp
@@ -407,8 +416,8 @@
 
                 const old = btn.textContent;
                 btn.disabled = true;
-                btn.textContent = "Saving…";
-                hint.textContent = "Saving People label…";
+                btn.textContent = tr("filemgr.people.saving", null, "Saving…");
+                hint.textContent = tr("filemgr.people.saving_label", null, "Saving People label…");
 
                 try {
                     const saved = await savePerson({
@@ -426,26 +435,26 @@
 
                     applyResolvedPeopleLabel(row, savedPerson);
 
-                    btn.textContent = "Edit People";
-                    hint.textContent = "Saved in People";
-                    setStatus(statusEl, `Saved ${savedName} in People.`);
+                    btn.textContent = tr("filemgr.people.edit", null, "Edit People");
+                    hint.textContent = tr("filemgr.people.saved", null, "Saved in People");
+                    setStatus(statusEl, tr("filemgr.people.saved_name", { name: savedName }, `Saved ${savedName} in People.`));
                 } catch (e) {
                     btn.textContent = old;
                     hint.textContent = resolved
                         ? "Saved in People"
                         : "Not saved in People";
-                    setStatus(statusEl, `People save failed: ${String(e && e.message ? e.message : e)}`);
+                    setStatus(statusEl, tr("filemgr.people.save_failed", { error: String(e && e.message ? e.message : e) }, `People save failed: ${String(e && e.message ? e.message : e)}`));
                 } finally {
                     btn.disabled = false;
                 }
             });
         }).catch((e) => {
             btn.disabled = false;
-            btn.textContent = "Add to People";
-            hint.textContent = "People lookup unavailable";
+            btn.textContent = tr("filemgr.people.add", null, "Add to People");
+            hint.textContent = tr("filemgr.people.lookup_unavailable", null, "People lookup unavailable");
 
             btn.addEventListener("click", () => {
-                setStatus(statusEl, `People lookup failed: ${String(e && e.message ? e.message : e)}`);
+                setStatus(statusEl, tr("filemgr.people.lookup_failed", { error: String(e && e.message ? e.message : e) }, `People lookup failed: ${String(e && e.message ? e.message : e)}`));
             });
         });
     }

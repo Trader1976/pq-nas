@@ -4,6 +4,32 @@
     const FM = window.PQNAS_FILEMGR;
     if (!FM) return;
 
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
+    function workspaceRoleLabel(role) {
+        const r = String(role || "").toLowerCase();
+        if (r === "viewer") return tr("filemgr.ws.role.viewer", null, "viewer");
+        if (r === "editor") return tr("filemgr.ws.role.editor", null, "editor");
+        if (r === "owner") return tr("filemgr.ws.role.owner", null, "owner");
+        if (r === "member") return tr("filemgr.ws.role.member", null, "member");
+        return String(role || "");
+    }
+
+    function workspaceStatusLabel(status) {
+        const s = String(status || "").toLowerCase();
+        if (s === "enabled") return tr("filemgr.ws.status.enabled", null, "enabled");
+        if (s === "invited") return tr("filemgr.ws.status.invited", null, "invited");
+        if (s === "disabled") return tr("filemgr.ws.status.disabled", null, "disabled");
+        return tr("filemgr.ws.status.unknown", null, "unknown");
+    }
+
     const scopeBar = document.getElementById("scopeBar");
     const scopeSelect = document.getElementById("scopeSelect");
     const scopeRole = document.getElementById("scopeRole");
@@ -91,7 +117,7 @@
 
     function currentWorkspaceKindLabel() {
         if (!isWorkspaceScope()) return "";
-        return isCurrentScopePersonalSharedSpace() ? "Shared Space" : "Workspace";
+        return isCurrentScopePersonalSharedSpace() ? tr("filemgr.ws.shared_space", null, "Shared Space") : tr("filemgr.ws.workspace", null, "Workspace");
     }
 
     function canCurrentScopeManageMembers() {
@@ -247,7 +273,7 @@
 
         if (scopeRole) {
             if (inWorkspace) {
-                scopeRole.textContent = FM.scope.workspaceRole || "";
+                scopeRole.textContent = workspaceRoleLabel(FM.scope.workspaceRole || "");
                 scopeRole.classList.toggle("hidden", !FM.scope.workspaceRole);
             } else {
                 scopeRole.textContent = "";
@@ -532,11 +558,11 @@
 
         const optUser = document.createElement("option");
         optUser.value = "user";
-        optUser.textContent = "My files";
+        optUser.textContent = tr("filemgr.ws.my_files", null, "My files");
         optUser.dataset.kind = "user";
         optUser.dataset.displayKind = "my_files";
         optUser.dataset.role = "";
-        optUser.dataset.name = "My files";
+        optUser.dataset.name = tr("filemgr.ws.my_files", null, "My files");
         scopeSelect.appendChild(optUser);
 
         for (const ws of workspaces) {
@@ -546,7 +572,7 @@
             const displayKind = String(ws.display_kind || "");
             const isSharedSpace = kind === "personal" || displayKind === "shared_space";
             const name = String(ws.name || ws.workspace_id);
-            const label = isSharedSpace ? `Shared Space · ${name}` : `Workspace · ${name}`;
+            const label = isSharedSpace ? `${tr("filemgr.ws.shared_space", null, "Shared Space")} · ${name}` : `${tr("filemgr.ws.workspace", null, "Workspace")} · ${name}`;
 
             const opt = document.createElement("option");
             opt.value = `workspace:${ws.workspace_id}`;
@@ -796,7 +822,7 @@
 
             const title = document.createElement("div");
             title.className = "modalTitle";
-            title.textContent = options.title || "Confirm deletion";
+            title.textContent = options.title || tr("filemgr.ws.confirm_delete_title", null, "Confirm deletion");
 
             const sub = document.createElement("div");
             sub.className = "modalSub";
@@ -817,11 +843,11 @@
             warning.style.borderRadius = "14px";
             warning.style.background = "rgba(var(--fail-rgb),0.10)";
             warning.style.fontWeight = "850";
-            warning.textContent = options.warning || "This action requires confirmation.";
+            warning.textContent = options.warning || tr("filemgr.ws.confirm_requires", null, "This action requires confirmation.");
 
             const label = document.createElement("label");
             label.className = "k";
-            label.textContent = `Type “${expected}” to continue`;
+            label.textContent = tr("filemgr.ws.type_to_continue", { expected }, `Type “${expected}” to continue`);
 
             const input = document.createElement("input");
             input.type = "text";
@@ -866,12 +892,12 @@
             const cancelBtn = document.createElement("button");
             cancelBtn.type = "button";
             cancelBtn.className = "btn secondary";
-            cancelBtn.textContent = options.cancelText || "Cancel";
+            cancelBtn.textContent = options.cancelText || tr("filemgr.ws.cancel", null, "Cancel");
 
             const okBtn = document.createElement("button");
             okBtn.type = "button";
             okBtn.className = "btn";
-            okBtn.textContent = options.confirmText || "Delete";
+            okBtn.textContent = options.confirmText || tr("filemgr.ws.delete", null, "Delete");
             okBtn.style.borderColor = "rgba(var(--fail-rgb),0.45)";
             okBtn.style.background = "rgba(var(--fail-rgb),0.14)";
             okBtn.style.color = "var(--fg)";
@@ -901,7 +927,7 @@
             const submit = () => {
                 const typed = String(input.value || "");
                 if (typed !== expected) {
-                    showError("The typed name does not match.");
+                    showError(tr("filemgr.ws.typed_name_mismatch", null, "The typed name does not match."));
                     input.focus();
                     input.select();
                     return;
@@ -945,7 +971,7 @@
         if (!canCurrentScopeManageMembers()) return;
 
         const workspaceId = String((workspace && workspace.workspace_id) || FM.scope.workspaceId || "");
-        const workspaceName = String((workspace && workspace.name) || FM.scope.workspaceName || workspaceId || "this Shared Space");
+        const workspaceName = String((workspace && workspace.name) || FM.scope.workspaceName || workspaceId || tr("filemgr.ws.this_shared_space", null, "this Shared Space"));
         const workspaceKind = String((workspace && workspace.kind) || FM.scope.workspaceKind || "");
 
         if (workspaceKind && workspaceKind !== "personal") return;
@@ -962,35 +988,35 @@
 
         const title = document.createElement("div");
         title.style.fontWeight = "900";
-        title.textContent = "Danger Zone";
+        title.textContent = tr("filemgr.ws.danger_zone", null, "Danger Zone");
         box.appendChild(title);
 
         const text = document.createElement("div");
         text.style.fontSize = "13px";
         text.style.opacity = ".86";
-        text.textContent = "Delete this Shared Space. Files are preserved on disk, but the Shared Space is disabled and removed from member lists.";
+        text.textContent = tr("filemgr.ws.danger_desc", null, "Delete this Shared Space. Files are preserved on disk, but the Shared Space is disabled and removed from member lists.");
         box.appendChild(text);
 
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "danger";
-        btn.textContent = "Delete Shared Space";
+        btn.textContent = tr("filemgr.ws.delete_shared_space", null, "Delete Shared Space");
 
         btn.addEventListener("click", async () => {
             const expected = workspaceName;
             const ok = await openWorkspaceTypedConfirmModal({
-                title: "Delete Shared Space?",
-                subtitle: "This disables the Shared Space and removes it from member lists.",
+                title: tr("filemgr.ws.delete_shared_space_title", null, "Delete Shared Space?"),
+                subtitle: tr("filemgr.ws.delete_shared_space_subtitle", null, "This disables the Shared Space and removes it from member lists."),
                 expected,
-                warning: `Delete Shared Space “${workspaceName}”?`,
-                note: "Files are preserved on disk, but the Shared Space access container is removed.",
-                confirmText: "Delete Shared Space",
-                cancelText: "Cancel"
+                warning: tr("filemgr.ws.delete_shared_space_warning", { name: workspaceName }, `Delete Shared Space “${workspaceName}”?`),
+                note: tr("filemgr.ws.delete_shared_space_note", null, "Files are preserved on disk, but the Shared Space access container is removed."),
+                confirmText: tr("filemgr.ws.delete_shared_space", null, "Delete Shared Space"),
+                cancelText: tr("filemgr.ws.cancel", null, "Cancel")
             });
             if (!ok) return;
 
             try {
-                workspaceMembersStatus.textContent = "Deleting Shared Space…";
+                workspaceMembersStatus.textContent = tr("filemgr.ws.deleting_shared_space", null, "Deleting Shared Space…");
                 await apiDeleteWorkspace(workspaceId);
 
                 resetToUserScope();
@@ -1003,7 +1029,7 @@
 
                 workspaceMembersStatus.textContent = "";
             } catch (e) {
-                workspaceMembersStatus.textContent = "Delete failed: " + (e.message || e);
+                workspaceMembersStatus.textContent = tr("filemgr.ws.delete_failed", { error: String(e && e.message ? e.message : e) }, "Delete failed: " + (e.message || e));
             }
         });
 
@@ -1031,7 +1057,7 @@
 
             const title = document.createElement("div");
             title.className = "modalTitle";
-            title.textContent = options.title || "Confirm action";
+            title.textContent = options.title || tr("filemgr.ws.confirm_action", null, "Confirm action");
 
             const sub = document.createElement("div");
             sub.className = "modalSub";
@@ -1077,12 +1103,12 @@
             const cancelBtn = document.createElement("button");
             cancelBtn.type = "button";
             cancelBtn.className = "btn secondary";
-            cancelBtn.textContent = options.cancelText || "Cancel";
+            cancelBtn.textContent = options.cancelText || tr("filemgr.ws.cancel", null, "Cancel");
 
             const okBtn = document.createElement("button");
             okBtn.type = "button";
             okBtn.className = "btn";
-            okBtn.textContent = options.confirmText || "OK";
+            okBtn.textContent = options.confirmText || tr("filemgr.ws.ok", null, "OK");
 
             if (options.danger) {
                 okBtn.style.borderColor = "rgba(var(--fail-rgb),0.45)";
@@ -1149,7 +1175,7 @@
             const empty = document.createElement("div");
             empty.className = "mono";
             empty.style.opacity = ".8";
-            empty.textContent = "No members.";
+            empty.textContent = tr("filemgr.ws.no_members", null, "No members.");
             workspaceMembersList.appendChild(empty);
             return;
         }
@@ -1176,7 +1202,7 @@
             const status = String(m.status || "");
             const name = String(m.name || m.display_name || m.email || "");
             const avatar = String(m.avatar_url || "");
-            const label = name || (fp ? fp.slice(0, 18) + "…" : "Member");
+            const label = name || (fp ? fp.slice(0, 18) + "…" : tr("filemgr.ws.member", null, "Member"));
 
             const row = document.createElement("div");
             row.className = "memberRow";
@@ -1239,13 +1265,13 @@
 
             const statusPill = document.createElement("span");
             statusPill.className = "pill " + statusClass(status);
-            statusPill.textContent = status || "unknown";
+            statusPill.textContent = status ? workspaceStatusLabel(status) : tr("filemgr.ws.status.unknown", null, "unknown");
             styleWorkspaceMemberPill(statusPill);
             pills.appendChild(statusPill);
 
             const rolePill = document.createElement("span");
             rolePill.className = "pill";
-            rolePill.textContent = role;
+            rolePill.textContent = workspaceRoleLabel(role);
             styleWorkspaceMemberPill(rolePill);
             pills.appendChild(rolePill);
 
@@ -1265,8 +1291,8 @@
             meta.style.marginTop = "10px";
             meta.style.display = "grid";
             meta.style.gap = "4px";
-            addLine(meta, "Added", String(m.added_at || "—"));
-            addLine(meta, "Response", String(m.responded_at || "—"));
+            addLine(meta, tr("filemgr.ws.added", null, "Added"), String(m.added_at || "—"));
+            addLine(meta, tr("filemgr.ws.response", null, "Response"), String(m.responded_at || "—"));
             info.appendChild(meta);
 
             top.appendChild(avatarWrap);
@@ -1287,7 +1313,7 @@
                 for (const r of ["viewer", "editor", "owner"]) {
                     const opt = document.createElement("option");
                     opt.value = r;
-                    opt.textContent = r;
+                    opt.textContent = workspaceRoleLabel(r);
                     opt.selected = (r === role);
                     sel.appendChild(opt);
                 }
@@ -1296,16 +1322,16 @@
                 const apply = document.createElement("button");
                 apply.className = "btn secondary";
                 apply.type = "button";
-                apply.textContent = "Apply role";
+                apply.textContent = tr("filemgr.ws.apply_role", null, "Apply role");
                 apply.addEventListener("click", async () => {
                     const old = apply.textContent;
                     apply.disabled = true;
-                    apply.textContent = "Applying…";
+                    apply.textContent = tr("filemgr.ws.applying", null, "Applying…");
                     try {
                         await apiSetWorkspaceMemberRole(workspaceId, fp, String(sel.value || "viewer"));
                         await reloadMembers();
                     } catch (e) {
-                        if (workspaceMembersStatus) workspaceMembersStatus.textContent = "Role update failed: " + String(e && e.message ? e.message : e);
+                        if (workspaceMembersStatus) workspaceMembersStatus.textContent = tr("filemgr.ws.role_update_failed", { error: String(e && e.message ? e.message : e) }, "Role update failed: " + String(e && e.message ? e.message : e));
                         apply.disabled = false;
                         apply.textContent = old;
                     }
@@ -1316,16 +1342,16 @@
                     const reinvite = document.createElement("button");
                     reinvite.className = "btn secondary";
                     reinvite.type = "button";
-                    reinvite.textContent = "Re-invite";
+                    reinvite.textContent = tr("filemgr.ws.reinvite", null, "Re-invite");
                     reinvite.addEventListener("click", async () => {
                         const old = reinvite.textContent;
                         reinvite.disabled = true;
-                        reinvite.textContent = "Re-inviting…";
+                        reinvite.textContent = tr("filemgr.ws.reinviting", null, "Re-inviting…");
                         try {
                             await apiAddWorkspaceMember(workspaceId, fp, String(sel.value || "viewer"));
                             await reloadMembers();
                         } catch (e) {
-                            if (workspaceMembersStatus) workspaceMembersStatus.textContent = "Re-invite failed: " + String(e && e.message ? e.message : e);
+                            if (workspaceMembersStatus) workspaceMembersStatus.textContent = tr("filemgr.ws.reinvite_failed", { error: String(e && e.message ? e.message : e) }, "Re-invite failed: " + String(e && e.message ? e.message : e));
                             reinvite.disabled = false;
                             reinvite.textContent = old;
                         }
@@ -1336,31 +1362,31 @@
                 const remove = document.createElement("button");
                 remove.className = "btn danger";
                 remove.type = "button";
-                remove.textContent = "Remove";
+                remove.textContent = tr("filemgr.ws.remove", null, "Remove");
                 remove.addEventListener("click", async () => {
                     const ok = await openWorkspaceConfirmModal({
-                        title: "Remove member from Shared Space?",
-                        subtitle: "This removes the member from this Shared Space.",
+                        title: tr("filemgr.ws.remove_title", null, "Remove member from Shared Space?"),
+                        subtitle: tr("filemgr.ws.remove_subtitle", null, "This removes the member from this Shared Space."),
                         rows: [
-                            { label: "Member", value: fp || "Selected member", mono: true },
-                            { label: "Role", value: role || "member" },
-                            { label: "Status", value: status || "—" },
+                            { label: tr("filemgr.ws.member", null, "Member"), value: fp || tr("filemgr.ws.member", null, "Selected member"), mono: true },
+                            { label: tr("filemgr.props.type", null, "Role"), value: workspaceRoleLabel(role || "member") },
+                            { label: tr("filemgr.props.details", null, "Status"), value: status ? workspaceStatusLabel(status) : "—" },
                         ],
-                        note: "This does not delete the person or their files. It only removes Shared Space access.",
-                        confirmText: "Remove member",
-                        cancelText: "Cancel",
+                        note: tr("filemgr.ws.remove_note", null, "This does not delete the person or their files. It only removes Shared Space access."),
+                        confirmText: tr("filemgr.ws.remove_member", null, "Remove member"),
+                        cancelText: tr("filemgr.ws.cancel", null, "Cancel"),
                         danger: true,
                     });
                     if (!ok) return;
 
                     const old = remove.textContent;
                     remove.disabled = true;
-                    remove.textContent = "Removing…";
+                    remove.textContent = tr("filemgr.ws.removing", null, "Removing…");
                     try {
                         await apiRemoveWorkspaceMember(workspaceId, fp);
                         await reloadMembers();
                     } catch (e) {
-                        if (workspaceMembersStatus) workspaceMembersStatus.textContent = "Remove failed: " + String(e && e.message ? e.message : e);
+                        if (workspaceMembersStatus) workspaceMembersStatus.textContent = tr("filemgr.ws.remove_failed", { error: String(e && e.message ? e.message : e) }, "Remove failed: " + String(e && e.message ? e.message : e));
                         remove.disabled = false;
                         remove.textContent = old;
                     }
@@ -1398,36 +1424,36 @@
         panel.style.cssText = "margin-bottom:12px; padding:10px; border:1px solid rgba(255,128,0,.28); border-radius:14px; background:rgba(255,128,0,0.045);";
 
         panel.innerHTML = `
-            <div style="font-weight:900; margin-bottom:8px;">External member access</div>
+            <div style="font-weight:900; margin-bottom:8px;">${tr("filemgr.ws.external_title", null, "External member access")}</div>
             <div class="hint" style="margin-bottom:10px;">
-                Create a one-time invite for a new external DNA Connect identity. After they accept, give them the member access link for future visits.
+                ${tr("filemgr.ws.external_desc", null, "Create a one-time invite for a new external DNA Connect identity. After they accept, give them the member access link for future visits.")}
             </div>
 
             <div class="row" style="margin-bottom:12px;">
                 <button id="sharedSpaceCopyExternalAccessBtn" class="btn secondary" type="button">
-                    Copy member access link
+                    ${tr("filemgr.ws.copy_member_access", null, "Copy member access link")}
                 </button>
             </div>
 
             <div id="sharedSpaceExternalInviteControls">
                 <div class="hint" style="margin-bottom:8px;">
-                    Owner only: create a one-time invite. Send it to the outsider so they can open it and scan the QR with DNA Connect.
+                    ${tr("filemgr.ws.external_owner_help", null, "Owner only: create a one-time invite. Send it to the outsider so they can open it and scan the QR with DNA Connect.")}
                 </div>
 
                 <div class="row">
                     <select id="sharedSpaceExternalInviteRole">
-                        <option value="viewer">viewer</option>
-                        <option value="editor">editor</option>
+                        <option value="viewer">${tr("filemgr.ws.role.viewer", null, "viewer")}</option>
+                        <option value="editor">${tr("filemgr.ws.role.editor", null, "editor")}</option>
                     </select>
 
                     <select id="sharedSpaceExternalInviteExpiry">
-                        <option value="3600">1 hour</option>
-                        <option value="86400" selected>24 hours</option>
-                        <option value="604800">7 days</option>
+                        <option value="3600">${tr("filemgr.ws.expiry.1h", null, "1 hour")}</option>
+                        <option value="86400" selected>${tr("filemgr.ws.expiry.24h", null, "24 hours")}</option>
+                        <option value="604800">${tr("filemgr.ws.expiry.7d", null, "7 days")}</option>
                     </select>
 
                     <button id="sharedSpaceExternalInviteBtn" class="btn" type="button">
-                        Create one-time invite
+                        ${tr("filemgr.ws.create_one_time_invite", null, "Create one-time invite")}
                     </button>
                 </div>
 
@@ -1441,7 +1467,7 @@
         copyBtn?.addEventListener("click", async () => {
             const workspaceId = FM.scope.workspaceId || "";
             if (!workspaceId) {
-                if (workspaceMembersStatus) workspaceMembersStatus.textContent = "Copy failed: missing workspace.";
+                if (workspaceMembersStatus) workspaceMembersStatus.textContent = tr("filemgr.ws.copy_failed_missing_workspace", null, "Copy failed: missing workspace.");
                 return;
             }
 
@@ -1449,18 +1475,18 @@
             const old = copyBtn.textContent;
 
             copyBtn.disabled = true;
-            copyBtn.textContent = "Copying…";
+            copyBtn.textContent = tr("filemgr.ws.copying", null, "Copying…");
 
             try {
                 await copyTextToClipboard(url);
-                if (workspaceMembersStatus) workspaceMembersStatus.textContent = `Copied external access link: ${url}`;
-                copyBtn.textContent = "Copied";
+                if (workspaceMembersStatus) workspaceMembersStatus.textContent = tr("filemgr.ws.copied_external_access", { url }, `Copied external access link: ${url}`);
+                copyBtn.textContent = tr("filemgr.ws.copied", null, "Copied");
                 setTimeout(() => {
                     copyBtn.textContent = old;
                     copyBtn.disabled = false;
                 }, 1200);
             } catch (e) {
-                if (workspaceMembersStatus) workspaceMembersStatus.textContent = `Copy failed: ${String(e && e.message ? e.message : e)}`;
+                if (workspaceMembersStatus) workspaceMembersStatus.textContent = tr("filemgr.ws.copy_failed", { error: String(e && e.message ? e.message : e) }, `Copy failed: ${String(e && e.message ? e.message : e)}`);
                 copyBtn.textContent = old;
                 copyBtn.disabled = false;
             }
@@ -1474,13 +1500,13 @@
             const result = panel.querySelector("#sharedSpaceExternalInviteResult");
 
             if (!workspaceId) {
-                if (workspaceMembersStatus) workspaceMembersStatus.textContent = "External invite failed: missing workspace.";
+                if (workspaceMembersStatus) workspaceMembersStatus.textContent = tr("filemgr.ws.external_invite_missing_workspace", null, "External invite failed: missing workspace.");
                 return;
             }
 
             const old = inviteBtn.textContent;
             inviteBtn.disabled = true;
-            inviteBtn.textContent = "Creating…";
+            inviteBtn.textContent = tr("filemgr.ws.creating", null, "Creating…");
             if (result) result.innerHTML = "";
 
             try {
@@ -1488,14 +1514,14 @@
                 const inviteId = String(j.invite && j.invite.invite_id || "");
                 const qrPath = String(j.qr_svg || "");
 
-                if (!qrPath) throw new Error("server did not return qr_svg");
+                if (!qrPath) throw new Error(tr("filemgr.ws.no_qr", null, "server did not return qr_svg"));
 
                 const qrUrl = `${window.location.origin}${qrPath}`;
 
                 if (result) {
                     result.innerHTML = `
                         <div class="hint" style="margin-bottom:8px;">
-                            One-time invite: <span class="mono">${escapeHtml(inviteId)}</span>
+                            ${tr("filemgr.ws.one_time_invite", null, "One-time invite:")} <span class="mono">${escapeHtml(inviteId)}</span>
                         </div>
 
                         <div class="row" style="margin-bottom:10px;">
@@ -1503,7 +1529,7 @@
                                     class="btn secondary"
                                     type="button"
                                     data-url="${escapeHtml(qrUrl)}">
-                                Copy one-time invite link
+                                ${tr("filemgr.ws.copy_one_time_invite", null, "Copy one-time invite link")}
                             </button>
 
                             <a class="btn secondary"
@@ -1516,14 +1542,13 @@
                         </div>
 
                         <div style="display:inline-flex; background:#fff; border-radius:14px; padding:12px; max-width:280px;">
-                            <img alt="External invite QR"
+                            <img alt="${tr("filemgr.ws.external_qr_alt", null, "External invite QR")}"
                                  src="${escapeHtml(qrPath)}"
                                  style="width:240px; height:auto; display:block;">
                         </div>
 
                         <div class="hint" style="margin-top:8px;">
-                            Send the one-time invite link to the outsider. They open it and scan the QR with DNA Connect.
-                            After they accept, send them the member access link for future visits.
+                            ${tr("filemgr.ws.external_send_hint", null, "Send the one-time invite link to the outsider. They open it and scan the QR with DNA Connect. After they accept, send them the member access link for future visits.")}
                         </div>
                     `;
 
@@ -1532,21 +1557,21 @@
                         const url = copyQrLinkBtn.dataset.url || qrUrl;
                         const oldText = copyQrLinkBtn.textContent;
                         copyQrLinkBtn.disabled = true;
-                        copyQrLinkBtn.textContent = "Copying…";
+                        copyQrLinkBtn.textContent = tr("filemgr.ws.copying", null, "Copying…");
 
                         try {
                             await copyTextToClipboard(url);
                             if (workspaceMembersStatus) {
-                                workspaceMembersStatus.textContent = `Copied invite QR link: ${url}`;
+                                workspaceMembersStatus.textContent = tr("filemgr.ws.copied_qr", { url }, `Copied invite QR link: ${url}`);
                             }
-                            copyQrLinkBtn.textContent = "Copied";
+                            copyQrLinkBtn.textContent = tr("filemgr.ws.copied", null, "Copied");
                             setTimeout(() => {
                                 copyQrLinkBtn.textContent = oldText;
                                 copyQrLinkBtn.disabled = false;
                             }, 1200);
                         } catch (e) {
                             if (workspaceMembersStatus) {
-                                workspaceMembersStatus.textContent = `Copy one-time invite link failed: ${String(e && e.message ? e.message : e)}`;
+                                workspaceMembersStatus.textContent = `${tr("filemgr.ws.copy_one_time_invite", null, "Copy one-time invite link")} failed: ${String(e && e.message ? e.message : e)}`;
                             }
                             copyQrLinkBtn.textContent = oldText;
                             copyQrLinkBtn.disabled = false;
@@ -1554,9 +1579,9 @@
                     });
                 }
 
-                if (workspaceMembersStatus) workspaceMembersStatus.textContent = `One-time invite created for ${role}.`;
+                if (workspaceMembersStatus) workspaceMembersStatus.textContent = tr("filemgr.ws.invite_created", { role: workspaceRoleLabel(role) }, `One-time invite created for ${role}.`);
             } catch (e) {
-                if (workspaceMembersStatus) workspaceMembersStatus.textContent = `External invite failed: ${String(e && e.message ? e.message : e)}`;
+                if (workspaceMembersStatus) workspaceMembersStatus.textContent = tr("filemgr.ws.external_invite_failed", { error: String(e && e.message ? e.message : e) }, `External invite failed: ${String(e && e.message ? e.message : e)}`);
             } finally {
                 inviteBtn.disabled = false;
                 inviteBtn.textContent = old;
@@ -1574,18 +1599,18 @@
         panel.id = "sharedSpaceInvitePanel";
         panel.style.cssText = "display:none; margin-bottom:12px; padding:10px; border:1px solid rgba(var(--fg-rgb),0.16); border-radius:14px; background:rgba(255,255,255,0.035);";
         panel.innerHTML = `
-            <div style="font-weight:900; margin-bottom:8px;">Add member</div>
+            <div style="font-weight:900; margin-bottom:8px;">${tr("filemgr.ws.add_member_title", null, "Add member")}</div>
             <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                <input id="sharedSpaceInviteFp" class="mono" placeholder="Fingerprint" style="flex:1; min-width:260px;" />
+                <input id="sharedSpaceInviteFp" class="mono" placeholder="${tr("filemgr.ws.fingerprint_placeholder", null, "Fingerprint")}" style="flex:1; min-width:260px;" />
                 <select id="sharedSpaceInviteRole" style="min-width:120px;">
-                    <option value="viewer">viewer</option>
+                    <option value="viewer">${tr("filemgr.ws.role.viewer", null, "viewer")}</option>
                     <option value="editor" selected>editor</option>
-                    <option value="owner">owner</option>
+                    <option value="owner">${tr("filemgr.ws.role.owner", null, "owner")}</option>
                 </select>
-                <button id="sharedSpaceInviteBtn" class="btn" type="button">Add member</button>
+                <button id="sharedSpaceInviteBtn" class="btn" type="button">${tr("filemgr.ws.add_member", null, "Add member")}</button>
             </div>
             <div class="mono" style="opacity:.7; font-size:12px; margin-top:8px;">
-                The invited user will see this under Shared Space invites.
+                ${tr("filemgr.ws.add_member_help", null, "The invited user will see this under Shared Space invites.")}
             </div>
         `;
 
@@ -1600,13 +1625,13 @@
             const workspaceId = FM.scope.workspaceId || "";
 
             if (!workspaceId || !fp) {
-                if (workspaceMembersStatus) workspaceMembersStatus.textContent = "Add member failed: missing fingerprint.";
+                if (workspaceMembersStatus) workspaceMembersStatus.textContent = tr("filemgr.ws.add_missing_fp", null, "Add member failed: missing fingerprint.");
                 return;
             }
 
             const old = inviteBtn.textContent;
             inviteBtn.disabled = true;
-            inviteBtn.textContent = "Adding member…";
+            inviteBtn.textContent = tr("filemgr.ws.adding_member", null, "Adding member…");
 
             try {
                 await apiAddWorkspaceMember(workspaceId, fp, role);
@@ -1614,7 +1639,7 @@
                 await openWorkspaceMembersModal();
             } catch (e) {
                 if (workspaceMembersStatus) {
-                    workspaceMembersStatus.textContent = `Add member failed: ${String(e && e.message ? e.message : e)}`;
+                    workspaceMembersStatus.textContent = tr("filemgr.ws.add_failed", { error: String(e && e.message ? e.message : e) }, `Add member failed: ${String(e && e.message ? e.message : e)}`);
                 }
             } finally {
                 inviteBtn.disabled = false;
@@ -1725,13 +1750,13 @@
         workspaceMembersModal.setAttribute("aria-hidden", "false");
 
         if (workspaceMembersTitle) {
-            workspaceMembersTitle.textContent = canCurrentScopeManageMembers() ? "Manage Shared Space members" : `${currentWorkspaceKindLabel()} members`;
+            workspaceMembersTitle.textContent = canCurrentScopeManageMembers() ? tr("filemgr.ws.manage_members_title", null, "Manage Shared Space members") : tr("filemgr.ws.members_title", { kind: currentWorkspaceKindLabel() }, `${currentWorkspaceKindLabel()} members`);
         }
         if (workspaceMembersSub) {
             workspaceMembersSub.textContent = `${FM.scope.workspaceName || FM.scope.workspaceId}`;
         }
         if (workspaceMembersStatus) {
-            workspaceMembersStatus.textContent = "Loading members…";
+            workspaceMembersStatus.textContent = tr("filemgr.ws.loading_members", null, "Loading members…");
         }
         ensureSharedSpaceInvitePanel();
         ensureExternalWorkspaceAccessPanel();
@@ -1771,11 +1796,11 @@
             });
 
             if (workspaceMembersStatus) {
-                workspaceMembersStatus.textContent = `${Array.isArray(j.members) ? j.members.length : 0} member(s)`;
+                workspaceMembersStatus.textContent = tr("filemgr.ws.member_count", { count: Array.isArray(j.members) ? j.members.length : 0 }, `${Array.isArray(j.members) ? j.members.length : 0} member(s)`);
             }
         } catch (e) {
             if (workspaceMembersStatus) {
-                workspaceMembersStatus.textContent = `Failed to load members: ${String(e && e.message ? e.message : e)}`;
+                workspaceMembersStatus.textContent = tr("filemgr.ws.load_members_failed", { error: String(e && e.message ? e.message : e) }, `Failed to load members: ${String(e && e.message ? e.message : e)}`);
             }
             if (workspaceMembersList) {
                 workspaceMembersList.innerHTML = "";
@@ -2154,7 +2179,7 @@
             // workspace toolbar disappearing.
             if (scopeBar) scopeBar.classList.remove("hidden");
             if (scopeRole) {
-                scopeRole.textContent = "Workspace UI error";
+                scopeRole.textContent = tr("filemgr.ws.workspace_ui_error", null, "Workspace UI error");
                 scopeRole.classList.remove("hidden");
                 scopeRole.title = String(e && e.message ? e.message : e);
             }
