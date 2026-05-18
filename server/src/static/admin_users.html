@@ -3,11 +3,12 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>DNA-Nexus NAS — Admin Users</title>
+    <title data-i18n="admin.users.page_title">DNA-Nexus NAS — Admin Users</title>
 
     <link rel="stylesheet" href="/static/theme.css">
     <link rel="stylesheet" href="/static/shell_menu.css">
     <script src="/static/theme.js"></script>
+    <script src="/static/i18n.js?v=20260518-admin-users-i18n-1"></script>
 
     <style>
         :root{
@@ -609,47 +610,47 @@
         <div class="brand">
             <div class="logoDot" aria-hidden="true"></div>
             <div style="min-width:0">
-                <h1>Admin</h1>
-                <div class="sub">User profiles • storage • roles</div>
+                <h1 data-i18n="admin.settings.nav.admin">Admin</h1>
+                <div class="sub" data-i18n="admin.users.brand_sub">User profiles • storage • roles</div>
             </div>
         </div>
 
-        <nav class="nav" aria-label="Admin navigation">
-            <div class="sectionLabel">Admin</div>
+        <nav class="nav" aria-label="Admin navigation" data-i18n-aria-label="admin.settings.nav.admin">
+            <div class="sectionLabel" data-i18n="admin.settings.nav.admin">Admin</div>
             <a class="navbtn" href="/admin">
-                <span>Overview</span><span class="k">O</span>
+                <span data-i18n="admin.settings.nav.overview">Overview</span><span class="k">O</span>
             </a>
             <a class="navbtn active" href="/admin/users">
-                <span>User profiles</span><span class="k">U</span>
+                <span data-i18n="admin.settings.nav.user_profiles">User profiles</span><span class="k">U</span>
             </a>
             <a class="navbtn" href="/admin/stats">
-                <span>Statistics</span><span class="k">Σ</span>
+                <span data-i18n="admin.settings.nav.statistics">Statistics</span><span class="k">Σ</span>
             </a>
             <a class="navbtn" href="/admin/approvals">
-                <span>Approvals</span><span class="k">A</span>
+                <span data-i18n="admin.settings.nav.approvals">Approvals</span><span class="k">A</span>
             </a>
             <a class="navbtn" href="/admin/apps">
-                <span>Apps</span><span class="k">📦</span>
+                <span data-i18n="admin.settings.nav.apps">Apps</span><span class="k">📦</span>
             </a>
             <a class="navbtn" href="/admin/audit">
-                <span>Audit log UI</span><span class="k">D</span>
+                <span data-i18n="admin.settings.nav.audit">Audit log UI</span><span class="k">D</span>
             </a>
             <a class="navbtn" href="/admin/settings">
-                <span>Settings</span><span class="k">S</span>
+                <span data-i18n="admin.settings.nav.settings">Settings</span><span class="k">S</span>
             </a>
             <a class="navbtn" href="/system">
-                <span>System</span><span class="k">Y</span>
+                <span data-i18n="admin.settings.nav.system">System</span><span class="k">Y</span>
             </a>
             <div class="sectionLabel"> </div>
             <a class="navbtn" href="/app">
-                <span>Back...</span><span class="k">↩</span>
+                <span data-i18n="admin.settings.nav.back">Back...</span><span class="k">↩</span>
             </a>
         </nav>
 
         <div class="bottom">
             <div class="statusCard">
-                <div style="font-weight:900;">Users</div>
-                <div class="mini" id="msg">(loading…)</div>
+                <div style="font-weight:900;" data-i18n="admin.users.sidebar_title">Users</div>
+                <div class="mini" id="msg" data-i18n="admin.users.loading_short">(loading…)</div>
             </div>
         </div>
     </aside>
@@ -657,64 +658,60 @@
     <main class="workspace">
         <div class="topbar">
             <div class="crumbs">
-                <div class="title">Admin — User Profiles</div>
-                <div class="sub">Profile, role, and storage metadata • saved to <span class="mono">users.json</span></div>
+                <div class="title" data-i18n="admin.users.top_title">Admin — User Profiles</div>
+                <div class="sub"><span data-i18n="admin.users.top_sub">Profile, role, and storage metadata • saved to users.json</span></div>
             </div>
 
             <div class="actions">
-                <button class="btn secondary" id="btnRefresh" type="button">Refresh</button>
+                <button class="btn secondary" id="btnRefresh" type="button" data-i18n="admin.users.refresh">Refresh</button>
             </div>
         </div>
 
         <div class="content">
-            <section class="pane" aria-label="Controls">
-                <h2>Edit profile</h2>
+            <section class="pane" aria-label="Controls" data-i18n-aria-label="admin.users.controls">
+                <h2 data-i18n="admin.users.edit_profile">Edit profile</h2>
 
                 <div class="row" style="margin-bottom:10px;">
-                    <input id="filter" placeholder="Filter (fingerprint/name/email/notes/role/status/group/storage/quota)" style="min-width: 320px; flex:1;" />
+                    <input id="filter" placeholder="Filter (fingerprint/name/email/notes/role/status/group/storage/quota)" data-i18n-placeholder="admin.users.filter_placeholder" style="min-width: 320px; flex:1;" />
                 </div>
 
                 <div class="row" style="margin-bottom:10px;">
-                    <input id="fp" class="mono" placeholder="fingerprint hex" style="min-width: 520px; flex:1;" />
-                    <input id="name" placeholder="name" style="min-width: 180px;" />
-                    <input id="email" placeholder="email (optional)" style="min-width:260px;" />
-                    <input id="avatar_url" placeholder="avatar (click to choose; image will be resized…)" style="min-width:300px;" readonly />
+                    <input id="fp" class="mono" placeholder="fingerprint hex" data-i18n-placeholder="admin.users.fp_placeholder" style="min-width: 520px; flex:1;" />
+                    <input id="name" placeholder="name" data-i18n-placeholder="admin.users.name_placeholder" style="min-width: 180px;" />
+                    <input id="email" placeholder="email (optional)" data-i18n-placeholder="admin.users.email_placeholder" style="min-width:260px;" />
+                    <input id="avatar_url" placeholder="avatar (click to choose; image will be resized…)" data-i18n-placeholder="admin.users.avatar_placeholder" style="min-width:300px;" readonly />
                     <input id="avatar_file" type="file" accept="image/png,image/jpeg,image/webp" style="display:none;" />
                     <select id="role">
-                        <option value="user">user</option>
-                        <option value="admin">admin</option>
+                        <option value="user" data-i18n="admin.users.role.user">user</option>
+                        <option value="admin" data-i18n="admin.users.role.admin">admin</option>
                     </select>
-                    <button class="btn" id="btnAdd" type="button">Upsert</button>
+                    <button class="btn" id="btnAdd" type="button" data-i18n="admin.users.upsert">Upsert</button>
                 </div>
 
                 <div class="row">
-                    <textarea id="notes" placeholder="notes (optional)"></textarea>
-                    <div class="hint" style="max-width: 420px;">
-                        Use <b>Enable</b> to allow logins, <b>Disable</b> to require approval again, and <b>Revoke</b> to hard-block that fingerprint.
-                        <br><br>
-                        <span style="color: rgba(255,200,200,0.95);">Delete</span> removes the entry entirely (cleanup).
-                    </div>
+                    <textarea id="notes" placeholder="notes (optional)" data-i18n-placeholder="admin.users.notes_placeholder"></textarea>
+                    <div class="hint" style="max-width: 420px;" data-i18n="admin.users.help">Use Enable to allow logins, Disable to require approval again, and Revoke to hard-block that fingerprint. Delete removes the entry entirely (cleanup).</div>
                 </div>
             </section>
 
-            <section class="pane" aria-label="Users table" style="min-height:0;">
-                <h2>Users</h2>
+            <section class="pane" aria-label="Users table" data-i18n-aria-label="admin.users.users_table" style="min-height:0;">
+                <h2 data-i18n="admin.users.sidebar_title">Users</h2>
 
                 <div class="paneBody">
                     <div class="tableWrap">
                         <table>
                             <thead>
                             <tr>
-                                <th style="width:6%;">Avatar</th>
-                                <th style="width:28%;">Fingerprint</th>
-                                <th style="width:22%;">Name / Notes</th>
-                                <th style="width:6%;">Role</th>
-                                <th style="width:7%;">Status</th>
-                                <th style="width:8%;">Group</th>
-                                <th style="width:7%;">Storage</th>
-                                <th style="width:6%;">Quota</th>
-                                <th style="width:12%;">Added</th>
-                                <th style="width:20%;">Actions</th>
+                                <th style="width:6%;" data-i18n="admin.users.avatar">Avatar</th>
+                                <th style="width:28%;" data-i18n="admin.users.fingerprint">Fingerprint</th>
+                                <th style="width:22%;" data-i18n="admin.users.name_notes">Name / Notes</th>
+                                <th style="width:6%;" data-i18n="admin.users.role">Role</th>
+                                <th style="width:7%;" data-i18n="admin.users.status">Status</th>
+                                <th style="width:8%;" data-i18n="admin.users.group">Group</th>
+                                <th style="width:7%;" data-i18n="admin.users.storage">Storage</th>
+                                <th style="width:6%;" data-i18n="admin.users.quota">Quota</th>
+                                <th style="width:12%;" data-i18n="admin.users.added">Added</th>
+                                <th style="width:20%;" data-i18n="admin.users.actions">Actions</th>
                             </tr>
                             </thead>
                             <tbody id="tbody"></tbody>
@@ -729,36 +726,36 @@
 </div>
 
 <div id="allocModal" class="allocModal" aria-hidden="true">
-    <div class="allocCard" role="dialog" aria-modal="true" aria-label="Allocate storage">
+    <div class="allocCard" role="dialog" aria-modal="true" aria-label="Allocate storage" data-i18n-aria-label="admin.users.alloc_title">
         <div class="allocTop">
-            <div class="allocTitle">Allocate storage</div>
+            <div class="allocTitle" data-i18n="admin.users.alloc_title">Allocate storage</div>
             <div class="allocActions">
-                <button class="btn secondary" id="allocCancelBtn" type="button">Cancel</button>
-                <button class="btn" id="allocSaveBtn" type="button">Allocate</button>
+                <button class="btn secondary" id="allocCancelBtn" type="button" data-i18n="admin.users.cancel">Cancel</button>
+                <button class="btn" id="allocSaveBtn" type="button" data-i18n="admin.users.allocate">Allocate</button>
             </div>
         </div>
 
         <div class="allocBody">
             <div class="hint" style="margin-bottom:12px;">
-                User: <span class="mono" id="allocFpLabel">—</span>
+                <span data-i18n="admin.users.user">User</span>: <span class="mono" id="allocFpLabel">—</span>
             </div>
 
             <div class="allocGrid">
                 <div>
-                    <div class="muted" style="font-size:12px; margin-bottom:6px;">Pool</div>
+                    <div class="muted" style="font-size:12px; margin-bottom:6px;" data-i18n="admin.users.pool">Pool</div>
                     <select id="allocPoolSel"></select>
                     <div class="muted" id="allocPoolHint" style="font-size:12px; margin-top:6px;">—</div>
                 </div>
 
                 <div>
-                    <div class="muted" style="font-size:12px; margin-bottom:6px;">Amount (GB)</div>
-                    <input id="allocGb" type="number" min="0" step="1" placeholder="e.g. 10" />
-                    <div class="muted" style="font-size:12px; margin-top:6px;">Set a positive quota to allow uploads.</div>
+                    <div class="muted" style="font-size:12px; margin-bottom:6px;" data-i18n="admin.users.amount_gb">Amount (GB)</div>
+                    <input id="allocGb" type="number" min="0" step="1" placeholder="e.g. 10" data-i18n-placeholder="admin.users.amount_placeholder" />
+                    <div class="muted" style="font-size:12px; margin-top:6px;" data-i18n="admin.users.amount_help">Set a positive quota to allow uploads.</div>
                 </div>
             </div>
 
             <div id="allocPreview" class="allocPreviewBox">
-                <div class="muted">Loading pool preview…</div>
+                <div class="muted" data-i18n="admin.users.loading_pool_preview">Loading pool preview…</div>
             </div>
 
             <div id="allocErr" class="allocErr"></div>
@@ -767,37 +764,36 @@
 </div>
 
 <div id="migrateModal" class="allocModal" aria-hidden="true">
-    <div class="allocCard" role="dialog" aria-modal="true" aria-label="Migrate storage">
+    <div class="allocCard" role="dialog" aria-modal="true" aria-label="Migrate storage" data-i18n-aria-label="admin.users.migrate_title_modal">
         <div class="allocTop">
-            <div class="allocTitle">Migrate storage</div>
+            <div class="allocTitle" data-i18n="admin.users.migrate_title_modal">Migrate storage</div>
             <div class="allocActions">
-                <button class="btn secondary" id="migrateCancelBtn" type="button">Cancel</button>
-                <button class="btn" id="migrateSaveBtn" type="button">Migrate</button>
+                <button class="btn secondary" id="migrateCancelBtn" type="button" data-i18n="admin.users.cancel">Cancel</button>
+                <button class="btn" id="migrateSaveBtn" type="button" data-i18n="admin.users.migrate">Migrate</button>
             </div>
         </div>
 
         <div class="allocBody">
             <div class="hint" style="margin-bottom:12px;">
-                User: <span class="mono" id="migrateFpLabel">—</span>
+                <span data-i18n="admin.users.user">User</span>: <span class="mono" id="migrateFpLabel">—</span>
             </div>
 
             <div class="allocGrid">
                 <div>
-                    <div class="muted" style="font-size:12px; margin-bottom:6px;">Current pool</div>
+                    <div class="muted" style="font-size:12px; margin-bottom:6px;" data-i18n="admin.users.current_pool">Current pool</div>
                     <input id="migrateCurPool" readonly />
                     <div class="muted" id="migrateCurHint" style="font-size:12px; margin-top:6px;">—</div>
                 </div>
 
                 <div>
-                    <div class="muted" style="font-size:12px; margin-bottom:6px;">Destination pool</div>
+                    <div class="muted" style="font-size:12px; margin-bottom:6px;" data-i18n="admin.users.destination_pool">Destination pool</div>
                     <select id="migratePoolSel"></select>
                     <div class="muted" id="migratePoolHint" style="font-size:12px; margin-top:6px;">—</div>
                 </div>
             </div>
 
             <div class="hint" style="margin-top:12px;">
-                Migration copies user data to the destination pool, verifies it, then switches the user’s storage mapping.
-                Source data is kept for safety.
+                <span data-i18n="admin.users.migrate_help">Migration copies user data to the destination pool, verifies it, then switches the user’s storage mapping. Source data is kept for safety.</span>
             </div>
 
             <div id="migrateErr" class="allocErr"></div>
@@ -806,22 +802,22 @@
 </div>
 
 <div id="avatarModal" class="avatarModal" aria-hidden="true">
-    <div class="avatarModalCard" role="dialog" aria-modal="true" aria-label="Avatar preview">
+    <div class="avatarModalCard" role="dialog" aria-modal="true" aria-label="Avatar preview" data-i18n-aria-label="admin.users.avatar_preview">
         <div class="avatarModalTop">
-            <div class="avatarModalTitle">Avatar preview</div>
+            <div class="avatarModalTitle" data-i18n="admin.users.avatar_preview">Avatar preview</div>
             <div class="avatarModalActions">
-                <button class="btn danger" id="avatarRemoveBtn" type="button">Remove</button>
-                <button class="btn secondary" id="avatarCloseBtn" type="button">Close</button>
+                <button class="btn danger" id="avatarRemoveBtn" type="button" data-i18n="admin.users.remove">Remove</button>
+                <button class="btn secondary" id="avatarCloseBtn" type="button" data-i18n="admin.common.close">Close</button>
             </div>
         </div>
         <div class="avatarModalBody">
-            <img id="avatarModalImg" alt="avatar preview" />
+            <img id="avatarModalImg" alt="avatar preview" data-i18n-aria-label="admin.users.avatar_preview_alt" />
         </div>
     </div>
 </div>
 
 <script src="/static/admin_badges.js"></script>
-<script src="/static/admin_users.js"></script>
+<script src="/static/admin_users.js?v=20260518-admin-users-i18n-1"></script>
 <script src="/static/shell_sidebar.js"></script>
     <script src="/static/onboarding.js?v=guided-tours-clean-v1"></script>
 </body>

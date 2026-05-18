@@ -1,3 +1,42 @@
+function tr(key, vars = null, fallback = "") {
+    try {
+        if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+            return window.PQNAS_I18N.t(key, vars, fallback || key);
+        }
+    } catch (_) {}
+    return fallback || key;
+}
+
+function applyStaticI18n() {
+    try {
+        if (window.PQNAS_I18N && typeof window.PQNAS_I18N.apply === "function") {
+            window.PQNAS_I18N.apply(document);
+        }
+    } catch (_) {}
+}
+
+function statusLabel(status) {
+    const s = String(status || "unknown").toLowerCase();
+    if (s === "enabled") return tr("admin.users.status.enabled", null, "enabled");
+    if (s === "disabled") return tr("admin.users.status.disabled", null, "disabled");
+    if (s === "revoked") return tr("admin.users.status.revoked", null, "revoked");
+    return tr("admin.users.status.unknown", null, s || "unknown");
+}
+
+function roleLabel(role) {
+    const r = String(role || "").toLowerCase();
+    if (r === "admin") return tr("admin.users.role.admin", null, "admin");
+    if (r === "user") return tr("admin.users.role.user", null, "user");
+    return String(role || "");
+}
+
+function storageStateLabel(state) {
+    const s = String(state || "unallocated").toLowerCase();
+    if (s === "allocated") return tr("admin.users.storage.allocated", null, "allocated");
+    if (s === "unallocated") return tr("admin.users.storage.unallocated", null, "unallocated");
+    return s;
+}
+
 async function apiGet(path) {
     const r = await fetch(path, { headers: { "Accept": "application/json" }, cache: "no-store" });
     const j = await r.json().catch(() => ({}));
@@ -76,7 +115,7 @@ function blobToBase64(blob) {
             resolve(comma >= 0 ? s.slice(comma + 1) : s);
         };
 
-        rd.onerror = () => reject(new Error("failed to read avatar file"));
+        rd.onerror = () => reject(new Error(tr("admin.users.failed_read_avatar", null, "failed to read avatar file")));
         rd.readAsDataURL(blob);
     });
 }
@@ -85,7 +124,7 @@ function canvasToBlobSafe(canvas, type, quality) {
     return new Promise((resolve, reject) => {
         canvas.toBlob((blob) => {
             if (!blob) {
-                reject(new Error("avatar conversion failed"));
+                reject(new Error(tr("admin.users.avatar_conversion_failed", null, "avatar conversion failed")));
                 return;
             }
             resolve(blob);
@@ -105,7 +144,7 @@ function loadImageForAvatar(file) {
 
         img.onerror = () => {
             URL.revokeObjectURL(url);
-            reject(new Error("Could not read this image. Try PNG, JPEG, or WebP."));
+            reject(new Error(tr("admin.users.avatar_read_failed", null, "Could not read this image. Try PNG, JPEG, or WebP.")));
         };
 
         img.src = url;
@@ -113,7 +152,7 @@ function loadImageForAvatar(file) {
 }
 
 async function prepareAdminAvatarUploadBlob(file) {
-    if (!file) throw new Error("No avatar file selected.");
+    if (!file) throw new Error(tr("admin.users.no_avatar_selected", null, "No avatar file selected."));
 
     const originalMime = String(file.type || "").toLowerCase();
 
@@ -126,7 +165,7 @@ async function prepareAdminAvatarUploadBlob(file) {
         return {
             blob: file,
             mime: originalMime,
-            note: `Using original image (${fmtBytesForAvatar(file.size)}).`
+            note: tr("admin.users.using_original", { size: fmtBytesForAvatar(file.size) }, `Using original image (${fmtBytesForAvatar(file.size)}).`)
         };
     }
 
@@ -136,7 +175,7 @@ async function prepareAdminAvatarUploadBlob(file) {
     const srcH = img.naturalHeight || img.height || 0;
 
     if (!srcW || !srcH) {
-        throw new Error("Could not read image dimensions.");
+        throw new Error(tr("admin.users.avatar_dims_failed", null, "Could not read image dimensions."));
     }
 
     const scale = Math.min(1, ADMIN_AVATAR_MAX_DIM / Math.max(srcW, srcH));
@@ -166,7 +205,7 @@ async function prepareAdminAvatarUploadBlob(file) {
             return {
                 blob,
                 mime: "image/jpeg",
-                note: `Resized ${srcW}×${srcH} → ${dstW}×${dstH}, ${fmtBytesForAvatar(file.size)} → ${fmtBytesForAvatar(blob.size)}.`
+                note: tr("admin.users.resized_avatar", { srcW, srcH, dstW, dstH, oldSize: fmtBytesForAvatar(file.size), newSize: fmtBytesForAvatar(blob.size) }, `Resized ${srcW}×${srcH} → ${dstW}×${dstH}, ${fmtBytesForAvatar(file.size)} → ${fmtBytesForAvatar(blob.size)}.`)
             };
         }
     }
@@ -175,18 +214,18 @@ async function prepareAdminAvatarUploadBlob(file) {
         return {
             blob: best,
             mime: "image/jpeg",
-            note: `Resized ${srcW}×${srcH} → ${dstW}×${dstH}, ${fmtBytesForAvatar(file.size)} → ${fmtBytesForAvatar(best.size)}.`
+            note: tr("admin.users.resized_avatar", { srcW, srcH, dstW, dstH, oldSize: fmtBytesForAvatar(file.size), newSize: fmtBytesForAvatar(best.size) }, `Resized ${srcW}×${srcH} → ${dstW}×${dstH}, ${fmtBytesForAvatar(file.size)} → ${fmtBytesForAvatar(best.size)}.`)
         };
     }
 
     throw new Error(
-        `Avatar is still too large after resizing (${fmtBytesForAvatar(best ? best.size : file.size)}). Try a smaller image.`
+        tr("admin.users.avatar_too_large", { size: fmtBytesForAvatar(best ? best.size : file.size) }, `Avatar is still too large after resizing (${fmtBytesForAvatar(best ? best.size : file.size)}). Try a smaller image.`)
     );
 }
 
 function pill(status) {
     const cls = (status || "disabled");
-    return `<span class="pill ${cls}">${cls}</span>`;
+    return `<span class="pill ${cls}">${esc(statusLabel(cls))}</span>`;
 }
 
 function esc(s) {
@@ -223,10 +262,10 @@ function avatarThumb(u) {
     return `
       <img
         src="${esc(src)}"
-        alt="avatar"
+        alt="${esc(tr("admin.users.avatar_alt", null, "avatar"))}"
         style="width:26px;height:26px;border-radius:8px;object-fit:cover;border:1px solid var(--border);background:var(--panel2);"
         title="Avatar"
-        onerror="this.style.opacity='0.35'; this.title='Avatar failed to load';"
+        onerror="this.style.opacity='0.35'; this.title='${esc(tr("admin.users.avatar_failed", null, "Avatar failed to load"))}';"
       />
     `.trim();
 }
@@ -266,7 +305,7 @@ function closeAvatarModal() {
 function storagePill(state) {
     const s = (state || "unallocated");
     const cls = (s === "allocated") ? "enabled" : "disabled"; // reuse pill CSS classes
-    return `<span class="pill ${cls}">${esc(s)}</span>`;
+    return `<span class="pill ${cls}">${esc(storageStateLabel(s))}</span>`;
 }
 function storagePoolIdForUser(u) {
     const raw =
@@ -365,7 +404,7 @@ function renderAllocPreview(preview, requestedQuotaBytes = null) {
     if (!box) return;
 
     if (!preview || !preview.ok) {
-        box.innerHTML = `<div class="muted">No pool preview available.</div>`;
+        box.innerHTML = `<div class="muted">${esc(tr("admin.users.no_pool_preview", null, "No pool preview available."))}</div>`;
         return;
     }
 
@@ -385,22 +424,22 @@ function renderAllocPreview(preview, requestedQuotaBytes = null) {
     const warnHtml = (overAlloc || belowUsed)
         ? `
           <div class="allocPreviewWarn">
-            ${belowUsed ? `Requested quota is below current used space.` : ``}
+            ${belowUsed ? `${esc(tr("admin.users.warn_below_used", null, "Requested quota is below current used space."))}` : ``}
             ${belowUsed && overAlloc ? `<br>` : ``}
-            ${overAlloc ? `Requested quota exceeds remaining allocatable capacity on this pool.` : ``}
+            ${overAlloc ? `${esc(tr("admin.users.warn_over_alloc", null, "Requested quota exceeds remaining allocatable capacity on this pool."))}` : ``}
           </div>
         `
         : ``;
 
     box.innerHTML = `
       <div class="allocPreviewGrid">
-        <div class="detailKV"><div class="k">User used</div><div class="v mono">${esc(fmtBytes(used))}</div></div>
-        <div class="detailKV"><div class="k">Current quota</div><div class="v mono">${esc(currentQuota ? fmtBytes(currentQuota) : "—")}</div></div>
-        <div class="detailKV"><div class="k">Pool total</div><div class="v mono">${esc(fmtBytes(poolTotal))}</div></div>
-        <div class="detailKV"><div class="k">Pool free (fs)</div><div class="v mono">${esc(fmtBytes(poolFree))}</div></div>
-        <div class="detailKV"><div class="k">Allocated to others</div><div class="v mono">${esc(fmtBytes(allocatedOther))}</div></div>
-        <div class="detailKV"><div class="k">Remaining allocatable</div><div class="v mono">${esc(fmtBytes(remainingAlloc))}</div></div>
-        ${haveRq ? `<div class="detailKV"><div class="k">Requested quota</div><div class="v mono">${esc(fmtBytes(rq))}</div></div>` : ``}
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.user_used", null, "User used"))}</div><div class="v mono">${esc(fmtBytes(used))}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.current_quota", null, "Current quota"))}</div><div class="v mono">${esc(currentQuota ? fmtBytes(currentQuota) : "—")}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.pool_total", null, "Pool total"))}</div><div class="v mono">${esc(fmtBytes(poolTotal))}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.pool_free", null, "Pool free (fs)"))}</div><div class="v mono">${esc(fmtBytes(poolFree))}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.allocated_to_others", null, "Allocated to others"))}</div><div class="v mono">${esc(fmtBytes(allocatedOther))}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.remaining_allocatable", null, "Remaining allocatable"))}</div><div class="v mono">${esc(fmtBytes(remainingAlloc))}</div></div>
+        ${haveRq ? `<div class="detailKV"><div class="k">${esc(tr("admin.users.requested_quota", null, "Requested quota"))}</div><div class="v mono">${esc(fmtBytes(rq))}</div></div>` : ``}
       </div>
       ${warnHtml}
     `;
@@ -424,7 +463,7 @@ function normalizePoolsFromResponse(j) {
             mount === "/srv/pqnas/data";
 
         const id = isDefault ? "default" : rawId;
-        const name = isDefault ? "Default pool" : (disp || rawId);
+        const name = isDefault ? tr("admin.users.default_pool", null, "Default pool") : (disp || rawId);
 
         const hintParts = [];
         if (mount) hintParts.push(mount);
@@ -578,7 +617,7 @@ function closeAllocModal() {
 
     const box = $("allocPreview");
     if (box) {
-        box.innerHTML = `<div class="muted">Loading pool preview…</div>`;
+        box.innerHTML = `<div class="muted">${esc(tr("admin.users.loading_pool_preview", null, "Loading pool preview…"))}</div>`;
     }
 }
 
@@ -634,10 +673,10 @@ function openMigrateModal(fp, curUser) {
         if (candidates.length === 0) {
             const opt = document.createElement("option");
             opt.value = "";
-            opt.textContent = "No other pools available";
+            opt.textContent = tr("admin.users.no_other_pools", null, "No other pools available");
             poolSel.appendChild(opt);
             poolSel.disabled = true;
-            poolHint.textContent = "Create another pool first.";
+            poolHint.textContent = tr("admin.users.create_pool_first", null, "Create another pool first.");
             return;
         }
 
@@ -850,7 +889,7 @@ function openAdminUsersPromptModal(opts = {}) {
 
         const title = document.createElement("div");
         title.className = "adminUsersPromptTitle";
-        title.textContent = options.title || "Enter value";
+        title.textContent = options.title || tr("admin.users.prompt.enter_value", null, "Enter value");
 
         const sub = document.createElement("div");
         sub.className = "adminUsersPromptSub";
@@ -877,7 +916,7 @@ function openAdminUsersPromptModal(opts = {}) {
 
         const label = document.createElement("label");
         label.className = "adminUsersPromptKey";
-        label.textContent = options.label || "Value";
+        label.textContent = options.label || tr("admin.users.prompt.value", null, "Value");
 
         const input = document.createElement("input");
         input.type = "text";
@@ -910,12 +949,12 @@ function openAdminUsersPromptModal(opts = {}) {
         const cancelBtn = document.createElement("button");
         cancelBtn.type = "button";
         cancelBtn.className = "adminUsersPromptBtn";
-        cancelBtn.textContent = options.cancelText || "Cancel";
+        cancelBtn.textContent = options.cancelText || tr("admin.users.cancel", null, "Cancel");
 
         const okBtn = document.createElement("button");
         okBtn.type = "button";
         okBtn.className = options.warn ? "adminUsersPromptBtn warn" : "adminUsersPromptBtn";
-        okBtn.textContent = options.confirmText || "OK";
+        okBtn.textContent = options.confirmText || tr("admin.users.ok", null, "OK");
 
         foot.appendChild(spacer);
         foot.appendChild(cancelBtn);
@@ -942,7 +981,7 @@ function openAdminUsersPromptModal(opts = {}) {
             const value = String(input.value || "").trim();
 
             if (options.required !== false && !value) {
-                showError("Value is required.");
+                showError(tr("admin.users.prompt.value_required", null, "Value is required."));
                 input.focus();
                 return;
             }
@@ -1012,7 +1051,7 @@ function openAdminUsersConfirmModal(opts = {}) {
 
         const title = document.createElement("div");
         title.className = "adminUsersPromptTitle";
-        title.textContent = options.title || "Confirm action";
+        title.textContent = options.title || tr("admin.users.confirm_action", null, "Confirm action");
 
         const sub = document.createElement("div");
         sub.className = "adminUsersPromptSub";
@@ -1053,12 +1092,12 @@ function openAdminUsersConfirmModal(opts = {}) {
         const cancelBtn = document.createElement("button");
         cancelBtn.type = "button";
         cancelBtn.className = "adminUsersPromptBtn";
-        cancelBtn.textContent = options.cancelText || "Cancel";
+        cancelBtn.textContent = options.cancelText || tr("admin.users.cancel", null, "Cancel");
 
         const okBtn = document.createElement("button");
         okBtn.type = "button";
         okBtn.className = options.danger ? "adminUsersPromptBtn warn" : "adminUsersPromptBtn";
-        okBtn.textContent = options.confirmText || "OK";
+        okBtn.textContent = options.confirmText || tr("admin.users.ok", null, "OK");
 
         if (options.danger) {
             okBtn.style.borderColor = "rgba(var(--fail-rgb, 180,40,40),0.48)";
@@ -1118,24 +1157,28 @@ async function apiGetCleanupStatus(jobId) {
     return await apiGet(`/api/v4/admin/users/cleanup_old_storage_status?job_id=${q}`);
 }
 
+function kvLine(key, value) {
+    return `${key}: ${value}`;
+}
+
 function fmtMigText(job) {
     const state = String(job?.state || "unknown");
     const phase = String(job?.phase || "");
     const percent = Number(job?.percent);
     const msg = String(job?.message || "");
 
-    let out = `State: ${state}`;
-    if (phase) out += `\nPhase: ${phase}`;
-    if (Number.isFinite(percent)) out += `\nProgress: ${percent}%`;
-    if (msg) out += `\nMessage: ${msg}`;
+    let out = kvLine(tr("admin.users.state", null, "State"), state);
+    if (phase) out += "\n" + kvLine(tr("admin.users.phase", null, "Phase"), phase);
+    if (Number.isFinite(percent)) out += "\n" + kvLine(tr("admin.users.progress", null, "Progress"), `${percent}%`);
+    if (msg) out += "\n" + kvLine(tr("admin.users.message", null, "Message"), msg);
 
     const src = job?.resolved_source_pool_id || "default";
     const dst = job?.resolved_dest_pool_id || job?.requested_target_pool_id || "default";
 
-    if (src) out += `\nFrom: ${src}`;
-    if (dst) out += `\nTo: ${dst}`;
+    if (src) out += "\n" + kvLine(tr("admin.users.from", null, "From"), src);
+    if (dst) out += "\n" + kvLine(tr("admin.users.to", null, "To"), dst);
 
-    if (job?.error) out += `\nError: ${job.error}`;
+    if (job?.error) out += "\n" + kvLine(tr("admin.users.error", null, "Error"), job.error);
 
     return out;
 }
@@ -1156,7 +1199,7 @@ async function pollMigrationJob(jobId, fp) {
         const progressBits = [];
         if (phase) progressBits.push(phase);
         if (Number.isFinite(percent)) progressBits.push(`${percent}%`);
-        setMsg(progressBits.length ? `Migration ${progressBits.join(" · ")}` : `Migration ${state || "running"}…`);
+        setMsg(progressBits.length ? tr("admin.users.migration_progress", { progress: progressBits.join(" · ") }, `Migration ${progressBits.join(" · ")}`) : tr("admin.users.migration_state", { state: state || "running" }, `Migration ${state || "running"}…`));
 
         // Optional small toast on first visible transition
         const stateKey = `${state}:${phase}:${percent}`;
@@ -1167,24 +1210,24 @@ async function pollMigrationJob(jobId, fp) {
         if (state === "done") {
             closeMigrateModal();
             await refresh();
-            showToast("Storage migration completed\n" + fmtMigText(job));
-            setMsg("Migration completed");
+            showToast(tr("admin.users.migration_completed_toast", { details: fmtMigText(job) }, "Storage migration completed\n" + fmtMigText(job)));
+            setMsg(tr("admin.users.migration_completed", null, "Migration completed"));
             return;
         }
 
         if (state === "failed") {
             await refresh();
             const text = fmtMigText(job);
-            setMigrateError(job?.message || job?.error || "Migration failed");
-            showToast("Storage migration failed\n" + text, 15000);
-            setMsg("Migration failed");
+            setMigrateError(job?.message || job?.error || tr("admin.users.migration_failed", null, "Migration failed"));
+            showToast(tr("admin.users.migration_failed_toast", { details: text }, "Storage migration failed\n" + text), 15000);
+            setMsg(tr("admin.users.migration_failed", null, "Migration failed"));
             return;
         }
 
         if ((Date.now() - startedAt) > timeoutMs) {
-            setMigrateError("Migration polling timed out. Job is still on server; reopen status later.");
-            showToast(`Migration still in progress\nJob: ${jobId}`, 15000);
-            setMsg("Migration polling timed out");
+            setMigrateError(tr("admin.users.migration_timeout_detail", null, "Migration polling timed out. Job is still on server; reopen status later."));
+            showToast(tr("admin.users.migration_timeout_toast", { job: jobId }, `Migration still in progress\nJob: ${jobId}`), 15000);
+            setMsg(tr("admin.users.migration_timeout", null, "Migration polling timed out"));
             return;
         }
 
@@ -1198,22 +1241,22 @@ function fmtCleanupText(job) {
     const percent = Number(job?.percent);
     const msg = String(job?.message || "");
 
-    let out = `State: ${state}`;
-    if (phase) out += `\nPhase: ${phase}`;
-    if (Number.isFinite(percent)) out += `\nProgress: ${percent}%`;
-    if (msg) out += `\nMessage: ${msg}`;
+    let out = kvLine(tr("admin.users.state", null, "State"), state);
+    if (phase) out += "\n" + kvLine(tr("admin.users.phase", null, "Phase"), phase);
+    if (Number.isFinite(percent)) out += "\n" + kvLine(tr("admin.users.progress", null, "Progress"), `${percent}%`);
+    if (msg) out += "\n" + kvLine(tr("admin.users.message", null, "Message"), msg);
 
     const activePool = job?.resolved_active_pool_id || job?.expected_active_pool_id || "default";
     const oldPool = job?.resolved_old_pool_id || job?.old_pool_id || "?";
 
-    out += `\nActive pool: ${activePool}`;
-    out += `\nOld pool: ${oldPool}`;
+    out += "\n" + kvLine(tr("admin.users.active_pool", null, "Active pool"), activePool);
+    out += "\n" + kvLine(tr("admin.users.old_pool", null, "Old pool"), oldPool);
 
     if (job?.result?.removed_entries != null) {
-        out += `\nRemoved entries: ${job.result.removed_entries}`;
+        out += "\n" + kvLine(tr("admin.users.removed_entries", null, "Removed entries"), job.result.removed_entries);
     }
 
-    if (job?.error) out += `\nError: ${job.error}`;
+    if (job?.error) out += "\n" + kvLine(tr("admin.users.error", null, "Error"), job.error);
     return out;
 }
 
@@ -1232,12 +1275,12 @@ async function pollCleanupJob(jobId, fp) {
         const progressBits = [];
         if (phase) progressBits.push(phase);
         if (Number.isFinite(percent)) progressBits.push(`${percent}%`);
-        setMsg(progressBits.length ? `Cleanup ${progressBits.join(" · ")}` : `Cleanup ${state || "running"}…`);
+        setMsg(progressBits.length ? tr("admin.users.cleanup_progress", { progress: progressBits.join(" · ") }, `Cleanup ${progressBits.join(" · ")}`) : tr("admin.users.cleanup_state", { state: state || "running" }, `Cleanup ${state || "running"}…`));
 
         if (state === "done") {
             await refresh();
-            showToast("Old storage cleanup completed\n" + fmtCleanupText(job));
-            setMsg("Cleanup completed");
+            showToast(tr("admin.users.cleanup_completed_toast", { details: fmtCleanupText(job) }, "Old storage cleanup completed\n" + fmtCleanupText(job)));
+            setMsg(tr("admin.users.cleanup_completed", null, "Cleanup completed"));
             return;
         }
 
@@ -1246,19 +1289,19 @@ async function pollCleanupJob(jobId, fp) {
 
             const err = String(job?.error || "");
             if (err.includes("cleanup_not_needed")) {
-                showToast("Old storage cleanup not needed\nNo old inactive copy was found.");
-                setMsg("Cleanup not needed");
+                showToast(tr("admin.users.cleanup_not_needed_toast", null, "Old storage cleanup not needed\nNo old inactive copy was found."));
+                setMsg(tr("admin.users.cleanup_not_needed", null, "Cleanup not needed"));
                 return;
             }
 
-            showToast("Old storage cleanup failed\n" + fmtCleanupText(job), 15000);
-            setMsg("Cleanup failed");
+            showToast(tr("admin.users.cleanup_failed_toast", { details: fmtCleanupText(job) }, "Old storage cleanup failed\n" + fmtCleanupText(job)), 15000);
+            setMsg(tr("admin.users.cleanup_failed", null, "Cleanup failed"));
             return;
         }
 
         if ((Date.now() - startedAt) > timeoutMs) {
-            showToast(`Cleanup still in progress\nJob: ${jobId}`, 15000);
-            setMsg("Cleanup polling timed out");
+            showToast(tr("admin.users.cleanup_timeout_toast", { job: jobId }, `Cleanup still in progress\nJob: ${jobId}`), 15000);
+            setMsg(tr("admin.users.cleanup_timeout", null, "Cleanup polling timed out"));
             return;
         }
 
@@ -1274,7 +1317,7 @@ async function submitMigrationFromModal() {
     const pool_id = String(poolSel?.value || "").trim();
 
     if (!pool_id) {
-        setMigrateError("No destination pool selected.");
+        setMigrateError(tr("admin.users.no_destination_pool", null, "No destination pool selected."));
         return;
     }
 
@@ -1282,7 +1325,7 @@ async function submitMigrationFromModal() {
     const curPoolId = storagePoolIdForUser(cur);
 
     if (pool_id === curPoolId) {
-        setMigrateError("Destination pool must differ from current pool.");
+        setMigrateError(tr("admin.users.destination_diff", null, "Destination pool must differ from current pool."));
         return;
     }
 
@@ -1292,7 +1335,7 @@ async function submitMigrationFromModal() {
 
     try {
         setMigrateError("");
-        setMsg("Queuing migration…");
+        setMsg(tr("admin.users.queuing_migration", null, "Queuing migration…"));
 
         const j = await apiPost("/api/v4/admin/users/migrate_storage", {
             fingerprint: fp,
@@ -1301,20 +1344,17 @@ async function submitMigrationFromModal() {
 
         const jobId = String(j?.job_id || "").trim();
         if (!jobId) {
-            throw new Error("Migration job_id missing from server response");
+            throw new Error(tr("admin.users.migration_job_missing", null, "Migration job_id missing from server response"));
         }
 
         const dstPool = (gPools || []).find(x => x.id === pool_id);
         const dstName = dstPool?.name || pool_id;
 
         showToast(
-            "Storage migration queued\n" +
-            `Job: ${jobId}\n` +
-            `User: ${fp}\n` +
-            `To: ${dstName}`
+            tr("admin.users.migration_queued_toast", { job: jobId, user: fp, to: dstName }, `Storage migration queued\nJob: ${jobId}\nUser: ${fp}\nTo: ${dstName}`)
         );
 
-        setMsg("Migration queued");
+        setMsg(tr("admin.users.migration_queued", null, "Migration queued"));
         await pollMigrationJob(jobId, fp);
     } catch (e) {
         setMigrateError(String(e?.message || e));
@@ -1325,7 +1365,7 @@ async function submitMigrationFromModal() {
 async function submitCleanupOldCopy(fp) {
     const cur = allUsers.find(x => String(x.fingerprint || "") === String(fp)) || {};
     if (String(cur.storage_state || "").toLowerCase() !== "allocated") {
-        alert("Storage must be allocated before cleanup.");
+        alert(tr("admin.users.storage_required_migration", null, "Storage must be allocated before cleanup."));
         return;
     }
 
@@ -1345,28 +1385,28 @@ async function submitCleanupOldCopy(fp) {
             : ((typeof fp !== "undefined" && fp) ? String(fp) : "Selected user");
 
         oldPoolId = await openAdminUsersPromptModal({
-            title: "Cleanup old storage copy?",
-            subtitle: "Choose the old pool copy to remove for this user.",
+            title: tr("admin.users.cleanup_title", null, "Cleanup old storage copy?"),
+            subtitle: tr("admin.users.cleanup_sub", null, "Choose the old pool copy to remove for this user."),
             rows: [
                 { label: "User", value: cleanupUserLabel, mono: true },
-                { label: "Active pool", value: cleanupActivePool, mono: true },
+                { label: tr("admin.users.active_pool", null, "Active pool"), value: cleanupActivePool, mono: true },
             ],
-            label: "Old pool id",
+            label: tr("admin.users.old_pool_id", null, "Old pool id"),
             value: "raidtest",
-            placeholder: "old pool id, for example raidtest",
-            note: "Only the old inactive storage copy should be removed. The active pool is protected.",
-            confirmText: "Continue cleanup",
-            cancelText: "Cancel",
+            placeholder: tr("admin.users.old_pool_placeholder", null, "old pool id, for example raidtest"),
+            note: tr("admin.users.cleanup_note", null, "Only the old inactive storage copy should be removed. The active pool is protected."),
+            confirmText: tr("admin.users.continue_cleanup", null, "Continue cleanup"),
+            cancelText: tr("admin.users.cancel", null, "Cancel"),
             warn: true,
             validate(value) {
-                if (value === cleanupActivePool) return "Old pool id cannot be the active pool.";
-                if (value.includes("/") || value.includes("\\")) return "Use a pool id, not a path.";
+                if (value === cleanupActivePool) return tr("admin.users.old_pool_active_error", null, "Old pool id cannot be the active pool.");
+                if (value.includes("/") || value.includes("\\")) return tr("admin.users.pool_id_not_path", null, "Use a pool id, not a path.");
                 return "";
             },
         }) || "";
     } else {
         oldPoolId = prompt(
-            `Cleanup old copy from which pool?\n\nUser is currently active on ${activePoolId}.\nEnter old pool id to delete, or use "default" if the stale copy is there.`,
+            tr("admin.users.cleanup_prompt", { pool: activePoolId }, `Cleanup old copy from which pool?\n\nUser is currently active on ${activePoolId}.\nEnter old pool id to delete, or use "default" if the stale copy is there.`),
             "default"
         ) || "";
     }
@@ -1375,21 +1415,19 @@ async function submitCleanupOldCopy(fp) {
     if (!oldPoolId) return;
 
     if (oldPoolId === activePoolId) {
-        alert("Old pool must differ from the active pool.");
+        alert(tr("admin.users.old_pool_must_differ", null, "Old pool must differ from the active pool."));
         return;
     }
 
-    const ok = confirm(
-        `Delete old inactive storage copy?\n\n` +
-        `User: ${fp}\n` +
-        `Active pool: ${activePoolId}\n` +
-        `Old pool to delete: ${oldPoolId}\n\n` +
-        `This deletes the old user subtree from the old pool.`
-    );
+    const ok = confirm(tr(
+        "admin.users.cleanup_confirm",
+        { user: fp, active: activePoolId, old: oldPoolId },
+        `Delete old inactive storage copy?\n\nUser: ${fp}\nActive pool: ${activePoolId}\nOld pool to delete: ${oldPoolId}\n\nThis deletes the old user subtree from the old pool.`
+    ));
     if (!ok) return;
 
     try {
-        setMsg("Queuing cleanup…");
+        setMsg(tr("admin.users.queuing_cleanup", null, "Queuing cleanup…"));
 
         const j = await apiPost("/api/v4/admin/users/cleanup_old_storage", {
             fingerprint: fp,
@@ -1398,20 +1436,16 @@ async function submitCleanupOldCopy(fp) {
         });
 
         const jobId = String(j?.job_id || "").trim();
-        if (!jobId) throw new Error("Cleanup job_id missing from server response");
+        if (!jobId) throw new Error(tr("admin.users.cleanup_job_missing", null, "Cleanup job_id missing from server response"));
 
         showToast(
-            "Old storage cleanup queued\n" +
-            `Job: ${jobId}\n` +
-            `User: ${fp}\n` +
-            `Active pool: ${activePoolId}\n` +
-            `Old pool: ${oldPoolId}`
+            tr("admin.users.cleanup_queued_toast", { job: jobId, user: fp, active: activePoolId, old: oldPoolId }, `Old storage cleanup queued\nJob: ${jobId}\nUser: ${fp}\nActive pool: ${activePoolId}\nOld pool: ${oldPoolId}`)
         );
 
-        setMsg("Cleanup queued");
+        setMsg(tr("admin.users.cleanup_queued", null, "Cleanup queued"));
         await pollCleanupJob(jobId, fp);
     } catch (e) {
-        alert("Cleanup failed: " + (e?.message || e));
+        alert(tr("admin.users.cleanup_failed", null, "Cleanup failed") + ": " + (e?.message || e));
         setMsg("Error: " + (e?.message || e));
     }
 }
@@ -1427,7 +1461,7 @@ async function submitAllocationFromModal() {
     const quota_gb = Number(String(gbInp?.value || "").trim());
 
     if (!isFinite(quota_gb) || quota_gb < 0) {
-        setAllocError("Invalid amount. Enter a number ≥ 0.");
+        setAllocError(tr("admin.users.invalid_amount", null, "Invalid amount. Enter a number ≥ 0."));
         return;
     }
 
@@ -1436,12 +1470,12 @@ async function submitAllocationFromModal() {
     const force = isAllocated;
 
     if (isAllocated) {
-        if (!confirm("Storage is already allocated for this user.\n\nChange pool/quota anyway?")) return;
+        if (!confirm(tr("admin.users.already_allocated_confirm", null, "Storage is already allocated for this user.\n\nChange pool/quota anyway?"))) return;
     }
 
     try {
         setAllocError("");
-        setMsg(isAllocated ? "Updating storage…" : "Allocating…");
+        setMsg(isAllocated ? tr("admin.users.updating_storage", null, "Updating storage…") : tr("admin.users.allocating", null, "Allocating…"));
 
         // Reuse your existing endpoint; we add pool_id
         const j = await apiPost("/api/v4/admin/users/storage", {
@@ -1460,14 +1494,23 @@ async function submitAllocationFromModal() {
         const at = j.storage_set_at || "";
 
         showToast(
-            (isAllocated ? "Storage updated (click to copy)\n" : "Storage allocated\n") +
-            `Pool: ${pool_id}\n` +
-            (root ? `Path: ${root}\n` : "") +
-            `Quota: ${quotaText}\n` +
-            (at ? `Set at: ${at}` : "")
+            tr(
+                isAllocated ? "admin.users.storage_updated_toast" : "admin.users.storage_allocated_toast",
+                {
+                    pool: pool_id,
+                    path: root ? tr("admin.users.path", { path: root }, `Path: ${root}\n`) : "",
+                    quota: quotaText,
+                    setAt: at ? tr("admin.users.set_at", { time: at }, `Set at: ${at}`) : ""
+                },
+                (isAllocated ? "Storage updated (click to copy)\n" : "Storage allocated\n") +
+                `Pool: ${pool_id}\n` +
+                (root ? `Path: ${root}\n` : "") +
+                `Quota: ${quotaText}\n` +
+                (at ? `Set at: ${at}` : "")
+            )
         );
 
-        setMsg(isAllocated ? "Storage updated" : "Allocated");
+        setMsg(isAllocated ? tr("admin.users.storage_updated", null, "Storage updated") : tr("admin.users.allocated", null, "Allocated"));
     } catch (e) {
         setAllocError(String(e?.message || e));
         setMsg("Error: " + (e?.message || e));
@@ -1508,7 +1551,7 @@ function render() {
         const isSelf = actorFp && fp === actorFp;
 
         const selfTag = isSelf
-            ? `<span class="pill enabled" title="This is you" style="margin-left:8px;">you</span>`
+            ? `<span class="pill enabled" title="${esc(tr("admin.users.this_is_you", null, "This is you"))}" style="margin-left:8px;">${esc(tr("admin.users.you", null, "you"))}</span>`
             : "";
 
         // Disallow self-modification (Allocate is allowed for self)
@@ -1517,7 +1560,7 @@ function render() {
         const disEditClass = "";
 
         const disDangerAttr = isSelf
-            ? ` disabled title="Refusing to modify your own admin entry"`
+            ? ` disabled title="${esc(tr("admin.users.refuse_self", null, "Refusing to modify your own admin entry"))}"`
             : "";
 
         const disDangerClass = isSelf
@@ -1546,54 +1589,54 @@ function render() {
   <td colspan="10">
     <div class="detailGrid">
       <div class="detailBox">
-        <h3>Profile</h3>
+        <h3>${esc(tr("admin.users.profile", null, "Profile"))}</h3>
         ${avatarSrc(u) ? `
           <div style="display:flex; gap:12px; align-items:center; margin:10px 0 14px;">
             <img
               src="${esc(avatarSrc(u))}"
-              alt="avatar"
+              alt="${esc(tr("admin.users.avatar_alt", null, "avatar"))}"
               data-avatar-open="1"
               data-fp="${esc(fp)}"
               style="width:128px; height:128px; border-radius:22px; object-fit:cover; border:1px solid var(--border); background:var(--panel2); cursor:pointer;"
-              title="Click to preview"
-              onerror="this.style.borderColor='red'; this.title='Avatar failed to load';"
+              title="${esc(tr("admin.users.click_preview", null, "Click to preview"))}"
+              onerror="this.style.borderColor='red'; this.title='${esc(tr("admin.users.avatar_failed", null, "Avatar failed to load"))}';"
             />
 
 
             <div class="muted" style="line-height:1.25;">
-              Avatar<br/>
+              ${esc(tr("admin.users.avatar", null, "Avatar"))}<br/>
               <span class="mono" style="font-size:12px;">${esc(avatarSrc(u))}</span>
             </div>
           </div>
         ` : `
           <div class="muted" style="margin:8px 0 14px;">
-            Avatar: <span class="mono">—</span>
+            ${esc(tr("admin.users.avatar", null, "Avatar"))}: <span class="mono">—</span>
           </div>
         `}
 
         <div class="detailActions">
-            <button class="btn secondary" data-edit="${esc(fp)}" type="button" title="Load this user into the edit form" ${disEditAttr}${disEditClass}>Edit</button>
+            <button class="btn secondary" data-edit="${esc(fp)}" type="button" title="${esc(tr("admin.users.load_edit_title", null, "Load this user into the edit form"))}" ${disEditAttr}${disEditClass}>${esc(tr("admin.users.edit", null, "Edit"))}</button>
         </div>
 
-        <div class="detailKV"><div class="k">Fingerprint</div><div class="v mono">${esc(fp)}</div></div>
-        <div class="detailKV"><div class="k">Name</div><div class="v">${esc(u.name || "—")}</div></div>
-        <div class="detailKV"><div class="k">Role</div><div class="v">${esc(u.role || "—")}</div></div>
-        <div class="detailKV"><div class="k">Status</div><div class="v">${pill(u.status)}</div></div>
-        <div class="detailKV"><div class="k">Group</div><div class="v">${esc(u.group || "—")}</div></div>
-        <div class="detailKV"><div class="k">Email</div><div class="v">${esc(u.email || "—")}</div></div>
-        <div class="detailKV"><div class="k">Storage</div><div class="v">${storageCellHtml(u)}</div></div>
-        <div class="detailKV"><div class="k">Quota</div><div class="v mono">${esc(quotaText)}</div></div>
-        <div class="detailKV"><div class="k">Added</div><div class="v mono">${esc(u.added_at || "—")}</div></div>
-        <div class="detailKV"><div class="k">Last seen</div><div class="v mono">${esc(u.last_seen || "—")}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.fingerprint", null, "Fingerprint"))}</div><div class="v mono">${esc(fp)}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.name_placeholder", null, "Name"))}</div><div class="v">${esc(u.name || "—")}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.role", null, "Role"))}</div><div class="v">${esc(u.role || "—")}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.status", null, "Status"))}</div><div class="v">${pill(u.status)}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.group", null, "Group"))}</div><div class="v">${esc(u.group || "—")}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.email", null, "Email"))}</div><div class="v">${esc(u.email || "—")}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.storage", null, "Storage"))}</div><div class="v">${storageCellHtml(u)}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.quota", null, "Quota"))}</div><div class="v mono">${esc(quotaText)}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.added", null, "Added"))}</div><div class="v mono">${esc(u.added_at || "—")}</div></div>
+        <div class="detailKV"><div class="k">${esc(tr("admin.users.last_seen", null, "Last seen"))}</div><div class="v mono">${esc(u.last_seen || "—")}</div></div>
       </div>
 
       <div class="detailBox">
-        <h3>Notes</h3>
+        <h3>${esc(tr("admin.users.notes", null, "Notes"))}</h3>
         <pre class="detailPre">${esc(u.notes || "—")}</pre>
 
         <div class="quotaBox">
           <div class="quotaTop">
-            <div class="quotaLabel">Storage usage</div>
+            <div class="quotaLabel">${esc(tr("admin.users.storage_usage", null, "Storage usage"))}</div>
             <div class="quotaNum mono">${esc(quotaUsageText(u.used_bytes ?? u.storage_used_bytes, u.quota_bytes))}</div>
           </div>
             <div class="quotaBar" title="${esc(quotaUsageText(usedBytes, quotaBytes2))}">
@@ -1603,60 +1646,60 @@ function render() {
       </div>
 
 <div class="detailBox">
-  <h3>Actions</h3>
+  <h3>${esc(tr("admin.users.actions", null, "Actions"))}</h3>
   <div class="detailActions">
     <button class="btn secondary"
             data-act="enable"
             data-fp="${esc(fp)}"
             type="button"
-            title="Allow this fingerprint to log in again"
-            ${disDangerAttr}${disDangerClass}>Enable</button>
+            title="${esc(tr("admin.users.enable_title", null, "Allow this fingerprint to log in again"))}"
+            ${disDangerAttr}${disDangerClass}>${esc(tr("admin.users.enable", null, "Enable"))}</button>
 
     <button class="btn secondary"
             data-act="disable"
             data-fp="${esc(fp)}"
             type="button"
-            title="Disable login until an admin enables it again"
-            ${disDangerAttr}${disDangerClass}>Disable</button>
+            title="${esc(tr("admin.users.disable_title", null, "Disable login until an admin enables it again"))}"
+            ${disDangerAttr}${disDangerClass}>${esc(tr("admin.users.disable", null, "Disable"))}</button>
 
     <button class="btn secondary"
             data-act="revoke"
             data-fp="${esc(fp)}"
             type="button"
-            title="Hard-block this fingerprint from logging in"
-            ${disDangerAttr}${disDangerClass}>Revoke</button>
+            title="${esc(tr("admin.users.revoke_title", null, "Hard-block this fingerprint from logging in"))}"
+            ${disDangerAttr}${disDangerClass}>${esc(tr("admin.users.revoke", null, "Revoke"))}</button>
 
     <button class="btn secondary"
             data-act="allocate"
             data-fp="${esc(fp)}"
             type="button"
-            title="Allocate storage and set quota for this user">Allocate</button>
+            title="${esc(tr("admin.users.allocate_title", null, "Allocate storage and set quota for this user"))}">${esc(tr("admin.users.allocate", null, "Allocate"))}</button>
             
     ${String(u.storage_state || "").toLowerCase() === "allocated" ? `
         <button class="btn secondary"
             data-act="migrate"
             data-fp="${esc(fp)}"
             type="button"
-            title="Move user storage to another pool with async copy and verify">Migrate</button>
+            title="${esc(tr("admin.users.migrate_title", null, "Move user storage to another pool with async copy and verify"))}">${esc(tr("admin.users.migrate", null, "Migrate"))}</button>
 
         <button class="btn secondary"
             data-act="cleanup-old-copy"
             data-fp="${esc(fp)}"
             type="button"
-            title="Delete the old inactive storage copy left behind after migration">Cleanup old copy</button>
+            title="${esc(tr("admin.users.cleanup_title", null, "Delete the old inactive storage copy left behind after migration"))}">${esc(tr("admin.users.cleanup_old_copy", null, "Cleanup old copy"))}</button>
     ` : ``}
     
     <button class="btn danger"
             data-act="delete"
             data-fp="${esc(fp)}"
             type="button"
-            title="Remove this entry from users.json; the user can reappear if they scan again"
-            ${disDangerAttr}${disDangerClass}>Delete</button>
+            title="${esc(tr("admin.users.delete_title", null, "Remove this entry from users.json; the user can reappear if they scan again"))}"
+            ${disDangerAttr}${disDangerClass}>${esc(tr("admin.users.delete", null, "Delete"))}</button>
   </div>
 
   ${isSelf
             ? `<div class="muted" style="margin-top:10px;">
-         Self-protection: enable / disable / revoke / delete are blocked for your own fingerprint.
+         ${esc(tr("admin.users.self_protection", null, "Self-protection: enable / disable / revoke / delete are blocked for your own fingerprint."))}
        </div>`
             : ``}
 </div>
@@ -1672,7 +1715,7 @@ function render() {
   <td>${avatarThumb(u)}</td>
 
   <td class="mono">
-    <button class="expBtn" data-exp="${esc(fp)}" type="button" aria-expanded="${isOpen ? "true" : "false"}" title="Expand/collapse">
+    <button class="expBtn" data-exp="${esc(fp)}" type="button" aria-expanded="${isOpen ? "true" : "false"}" title="${esc(tr("admin.users.expand_collapse", null, "Expand/collapse"))}">
       ${isOpen ? "▾" : "▸"}
     </button>
     <span style="margin-left:8px;" title="${esc(fp)}">${esc(shortFp(fp))}</span>
@@ -1683,7 +1726,7 @@ function render() {
     <div class="muted" style="white-space:pre-wrap;">${esc(u.notes || "")}</div>
   </td>
 
-  <td>${esc(u.role || "")}</td>
+  <td>${esc(roleLabel(u.role || ""))}</td>
   <td>${pill(u.status)}</td>
   <td>${esc(u.group || "")}</td>
     <td>${storageCellHtml(u)}</td>
@@ -1691,7 +1734,7 @@ function render() {
   <td class="mono">${esc(u.added_at || "")}</td>
 
   <td class="row-actions">
-    <span class="muted">Open ▸</span>
+    <span class="muted">${esc(tr("admin.users.open", null, "Open ▸"))}</span>
   </td>
 </tr>
 ${detailRow}
@@ -1773,50 +1816,50 @@ ${detailRow}
 
             const isSelf = actorFp && fp === actorFp;
             if (isSelf && (act === "enable" || act === "disable" || act === "revoke" || act === "delete")) {
-                alert("Refusing to modify your own admin entry (prevents lockout or role change).");
+                alert(tr("admin.users.refuse_self", null, "Refusing to modify your own admin entry (prevents lockout or role change)."));
                 return;
             }
 
             if (act === "delete") {
                 const targetUser = allUsers.find(x => String(x.fingerprint || "") === String(fp)) || {};
                 const ok = await openAdminUsersConfirmModal({
-                    title: "Delete user entry?",
-                    subtitle: "This removes the entry from users.json.",
+                    title: tr("admin.users.delete_confirm_title", null, "Delete user entry?"),
+                    subtitle: tr("admin.users.delete_confirm_sub", null, "This removes the entry from users.json."),
                     rows: [
-                        { label: "User", value: String(targetUser.name || targetUser.email || fp), mono: true },
-                        { label: "Fingerprint", value: fp, mono: true },
-                        { label: "Status", value: String(targetUser.status || "—") },
+                        { label: tr("admin.users.user", null, "User"), value: String(targetUser.name || targetUser.email || fp), mono: true },
+                        { label: tr("admin.users.fingerprint", null, "Fingerprint"), value: fp, mono: true },
+                        { label: tr("admin.users.status", null, "Status"), value: statusLabel(targetUser.status || "—") },
                     ],
-                    note: "This removes the entry entirely as cleanup. If they scan again, they will re-appear as disabled.",
-                    confirmText: "Delete user",
-                    cancelText: "Cancel",
+                    note: tr("admin.users.delete_confirm_note", null, "This removes the entry entirely as cleanup. If they scan again, they will re-appear as disabled."),
+                    confirmText: tr("admin.users.delete_user", null, "Delete user"),
+                    cancelText: tr("admin.users.cancel", null, "Cancel"),
                     danger: true,
                 });
                 if (!ok) return;
 
                 try {
-                    setMsg("Deleting…");
+                    setMsg(tr("admin.users.deleting", null, "Deleting…"));
                     await apiPost("/api/v4/admin/users/delete", { fingerprint: fp });
                     await refresh();
-                    setMsg("Delete OK");
-                    showToast("User deleted");
+                    setMsg(tr("admin.users.delete_ok", null, "Delete OK"));
+                    showToast(tr("admin.users.user_deleted", null, "User deleted"));
                 } catch (e) {
-                    setMsg("Error: " + e.message);
-                    showToast("Delete failed: " + e.message, 15000);
+                    setMsg(tr("admin.users.error", { error: e.message }, "Error: " + e.message));
+                    showToast(tr("admin.users.delete_failed", { error: e.message }, "Delete failed: " + e.message), 15000);
                 }
                 return;
             }
 
             if (act === "enable") {
                 try {
-                    setMsg("Enabling…");
+                    setMsg(tr("admin.users.enabling", null, "Enabling…"));
                     await apiPost("/api/v4/admin/users/enable", { fingerprint: fp });
                     await refresh();
-                    setMsg("Enabled");
-                    showToast("User enabled");
+                    setMsg(tr("admin.users.enabled", null, "Enabled"));
+                    showToast(tr("admin.users.user_enabled", null, "User enabled"));
                 } catch (e) {
-                    alert("Failed: " + e.message);
-                    setMsg("Error: " + e.message);
+                    alert(tr("admin.users.failed", { error: e.message }, "Failed: " + e.message));
+                    setMsg(tr("admin.users.error", { error: e.message }, "Error: " + e.message));
                 }
                 return;
             }
@@ -1829,7 +1872,7 @@ ${detailRow}
             if (act === "migrate") {
                 const cur = allUsers.find(x => String(x.fingerprint || "") === String(fp)) || {};
                 if (String(cur.storage_state || "").toLowerCase() !== "allocated") {
-                    alert("Storage must be allocated before migration.");
+                    alert(tr("admin.users.storage_required_migration", null, "Storage must be allocated before migration."));
                     return;
                 }
                 openMigrateModal(fp, cur);
@@ -1848,42 +1891,42 @@ ${detailRow}
             if (act === "revoke") {
                 const targetUser = allUsers.find(x => String(x.fingerprint || "") === String(fp)) || {};
                 const ok = await openAdminUsersConfirmModal({
-                    title: "Revoke user?",
-                    subtitle: "This hard-blocks login for this fingerprint.",
+                    title: tr("admin.users.revoke_confirm_title", null, "Revoke user?"),
+                    subtitle: tr("admin.users.revoke_confirm_sub", null, "This hard-blocks login for this fingerprint."),
                     rows: [
-                        { label: "User", value: String(targetUser.name || targetUser.email || fp), mono: true },
-                        { label: "Fingerprint", value: fp, mono: true },
-                        { label: "Current status", value: String(targetUser.status || "—") },
+                        { label: tr("admin.users.user", null, "User"), value: String(targetUser.name || targetUser.email || fp), mono: true },
+                        { label: tr("admin.users.fingerprint", null, "Fingerprint"), value: fp, mono: true },
+                        { label: tr("admin.users.current_status", null, "Current status"), value: statusLabel(targetUser.status || "—") },
                     ],
-                    note: "Use this when this identity should not be allowed to log in again.",
-                    confirmText: "Revoke user",
-                    cancelText: "Cancel",
+                    note: tr("admin.users.revoke_confirm_note", null, "Use this when this identity should not be allowed to log in again."),
+                    confirmText: tr("admin.users.revoke_user", null, "Revoke user"),
+                    cancelText: tr("admin.users.cancel", null, "Cancel"),
                     danger: true,
                 });
                 if (!ok) return;
             }
 
             try {
-                setMsg("Saving…");
+                setMsg(tr("admin.users.saving", null, "Saving…"));
                 await apiPost("/api/v4/admin/users/status", { fingerprint: fp, status });
                 await refresh();
-                setMsg("Saved");
-                showToast(`User status: ${status}`);
+                setMsg(tr("admin.users.saved", null, "Saved"));
+                showToast(tr("admin.users.status_saved", { status: statusLabel(status) }, `User status: ${status}`));
             } catch (e) {
-                alert("Failed: " + e.message);
-                setMsg("Error: " + e.message);
+                alert(tr("admin.users.failed", { error: e.message }, "Failed: " + e.message));
+                setMsg(tr("admin.users.error", { error: e.message }, "Error: " + e.message));
             }
         });
     });
 }
 
 async function refresh() {
-    setMsg("Loading users…");
+    setMsg(tr("admin.users.loading_users", null, "Loading users…"));
     const j = await apiGet("/api/v4/admin/users");
     actorFp = String(j.actor_fp || "");
     allUsers = (j.users || []).sort((a,b) => (a.fingerprint||"").localeCompare(b.fingerprint||""));
     render();
-    setMsg(`Loaded ${allUsers.length} users`);
+    setMsg(tr("admin.users.loaded_users", { count: allUsers.length }, `Loaded ${allUsers.length} users`));
 }
 
 async function upsertFromForm() {
@@ -1895,7 +1938,7 @@ async function upsertFromForm() {
     const email = ($("email")?.value || "").trim();
     const avatar_url = ($("avatar_url")?.value || "").trim(); // only if you add this input
 
-    if (!fp || fp.length < 32) throw new Error("fingerprint looks invalid");
+    if (!fp || fp.length < 32) throw new Error(tr("admin.users.fp_invalid", null, "fingerprint looks invalid"));
 
     await apiPost("/api/v4/admin/users/upsert", {
         fingerprint: fp,
@@ -1907,8 +1950,8 @@ async function upsertFromForm() {
     });
 
     await refresh();
-    setMsg("Upsert OK");
-    showToast("User upserted");
+    setMsg(tr("admin.users.upsert_ok", null, "Upsert OK"));
+    showToast(tr("admin.users.user_upserted", null, "User upserted"));
 }
 
 
@@ -1919,7 +1962,7 @@ window.addEventListener("load", async () => {
     $("btnAdd")?.addEventListener("click", async () => {
         setMsg("");
         try { await upsertFromForm(); }
-        catch (e) { setMsg("Error: " + e.message); }
+        catch (e) { setMsg(tr("admin.users.error", { error: e.message }, "Error: " + e.message)); }
     });
 
     // ---------------- Avatar picker wiring ----------------
@@ -1960,15 +2003,15 @@ window.addEventListener("load", async () => {
         if (!confirm("Remove this user's avatar?")) return;
 
         try {
-            setMsg("Removing avatar…");
+            setMsg(tr("admin.users.removing_avatar", null, "Removing avatar…"));
             await apiPost("/api/v4/admin/users/avatar_remove", { fingerprint: avatarModalFp });
             closeAvatarModal();
             await refresh();
-            setMsg("Avatar removed");
-            showToast("Avatar removed");
+            setMsg(tr("admin.users.avatar_removed", null, "Avatar removed"));
+            showToast(tr("admin.users.avatar_removed", null, "Avatar removed"));
         } catch (e) {
-            setMsg("Error: " + e.message);
-            alert("Remove failed: " + e.message);
+            setMsg(tr("admin.users.error", { error: e.message }, "Error: " + e.message));
+            alert(tr("admin.users.remove_failed", { error: e.message }, "Remove failed: " + e.message));
         }
     });
 
@@ -1982,18 +2025,18 @@ window.addEventListener("load", async () => {
 
         const fp = ($("fp")?.value || "").trim();
         if (!fp || fp.length < 32) {
-            showToast("Select a user first (fingerprint missing).");
+            showToast(tr("admin.users.select_user_first", null, "Select a user first (fingerprint missing)."));
             $("avatar_file").value = "";
             return;
         }
 
         try {
-            setMsg("Preparing avatar…");
+            setMsg(tr("admin.users.preparing_avatar", null, "Preparing avatar…"));
 
             const prepared = await prepareAdminAvatarUploadBlob(file);
             const data_b64 = await blobToBase64(prepared.blob);
 
-            setMsg("Uploading avatar…");
+            setMsg(tr("admin.users.uploading_avatar", null, "Uploading avatar…"));
 
             const body = {
                 fingerprint: fp,
@@ -2006,14 +2049,12 @@ window.addEventListener("load", async () => {
 
             $("avatar_url").value = j.avatar_url || "";
 
-            setMsg("Avatar uploaded (click Upsert to save)");
+            setMsg(tr("admin.users.avatar_uploaded_save", null, "Avatar uploaded (click Upsert to save)"));
             showToast(
-                "Avatar uploaded\n" +
-                (prepared.note ? prepared.note + "\n" : "") +
-                "Click Upsert to save this avatar URL into the user profile."
+                tr("admin.users.avatar_uploaded_toast", { note: prepared.note ? prepared.note + "\n" : "" }, "Avatar uploaded\n" + (prepared.note ? prepared.note + "\n" : "") + "Click Upsert to save this avatar URL into the user profile.")
             );
         } catch (e) {
-            const msg = "Upload failed: " + (e?.message || e);
+            const msg = tr("admin.users.upload_failed", { error: e?.message || e }, "Upload failed: " + (e?.message || e));
             setMsg("Error: " + (e?.message || e));
             alert(msg);
             showToast(msg, 15000);
@@ -2026,6 +2067,12 @@ window.addEventListener("load", async () => {
     // ------------------------------------------------------
 
     try { await refresh(); }
-    catch (e) { setMsg("Failed to load users: " + e.message); }
+    catch (e) { setMsg(tr("admin.users.failed", { error: e.message }, "Failed: " + e.message)); }
 });
 
+
+
+window.addEventListener("pqnas-language-changed", () => {
+    applyStaticI18n();
+    try { render(); } catch (_) {}
+});
