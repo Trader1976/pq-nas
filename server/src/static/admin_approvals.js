@@ -1,3 +1,35 @@
+function tr(key, vars = null, fallback = "") {
+    try {
+        if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+            return window.PQNAS_I18N.t(key, vars, fallback || key);
+        }
+    } catch (_) {}
+    return fallback || key;
+}
+
+function applyStaticI18n() {
+    try {
+        if (window.PQNAS_I18N && typeof window.PQNAS_I18N.apply === "function") {
+            window.PQNAS_I18N.apply(document);
+        }
+    } catch (_) {}
+}
+
+function statusLabel(status) {
+    const s = String(status || "disabled").toLowerCase();
+    if (s === "enabled") return tr("admin.approvals.status.enabled", null, "enabled");
+    if (s === "disabled") return tr("admin.approvals.status.disabled", null, "disabled");
+    if (s === "revoked") return tr("admin.approvals.status.revoked", null, "revoked");
+    return tr("admin.approvals.status.unknown", null, s || "unknown");
+}
+
+function roleLabel(role) {
+    const r = String(role || "").toLowerCase();
+    if (r === "admin") return tr("admin.approvals.role.admin", null, "admin");
+    if (r === "user") return tr("admin.approvals.role.user", null, "user");
+    return String(role || "");
+}
+
 async function apiGet(path) {
     const r = await fetch(path, { headers: { "Accept": "application/json" }, cache: "no-store" });
     const j = await r.json().catch(() => ({}));
@@ -21,7 +53,7 @@ function $(id) { return document.getElementById(id); }
 
 function pill(status) {
     const cls = (status || "disabled");
-    return `<span class="pill ${cls}">${cls}</span>`;
+    return `<span class="pill ${cls}">${esc(statusLabel(cls))}</span>`;
 }
 
 function esc(s) {
@@ -225,7 +257,7 @@ function openApprovalsConfirmModal(opts = {}) {
 
         const title = document.createElement("div");
         title.className = "approvalsConfirmTitle";
-        title.textContent = options.title || "Confirm action";
+        title.textContent = options.title || tr("admin.approvals.confirm_action", null, "Confirm action");
 
         const sub = document.createElement("div");
         sub.className = "approvalsConfirmSub";
@@ -266,12 +298,12 @@ function openApprovalsConfirmModal(opts = {}) {
         const cancelBtn = document.createElement("button");
         cancelBtn.type = "button";
         cancelBtn.className = "approvalsConfirmBtn secondary";
-        cancelBtn.textContent = options.cancelText || "Cancel";
+        cancelBtn.textContent = options.cancelText || tr("admin.approvals.cancel", null, "Cancel");
 
         const okBtn = document.createElement("button");
         okBtn.type = "button";
         okBtn.className = options.danger ? "approvalsConfirmBtn danger" : "approvalsConfirmBtn";
-        okBtn.textContent = options.confirmText || "OK";
+        okBtn.textContent = options.confirmText || tr("admin.approvals.ok", null, "OK");
 
         foot.appendChild(spacer);
         foot.appendChild(cancelBtn);
@@ -350,17 +382,17 @@ function render() {
                 <div class="muted" style="white-space:pre-wrap;">${esc(u.notes || "")}</div>
             </td>
 
-            <td>${esc(u.role || "")}</td>
+            <td>${esc(roleLabel(u.role || ""))}</td>
             <td>${pill(u.status)}</td>
 
             <td class="mono">${esc(u.added_at || "")}</td>
             <td class="mono">${esc(u.last_seen || "")}</td>
 
             <td class="row-actions">
-                <button class="btn secondary" data-act="enable" data-fp="${esc(u.fingerprint)}" type="button">Enable</button>
-                <button class="btn secondary" data-act="disable" data-fp="${esc(u.fingerprint)}" type="button">Disable</button>
-                <button class="btn secondary" data-act="revoke" data-fp="${esc(u.fingerprint)}" type="button">Revoke</button>
-                <button class="btn danger" data-act="delete" data-fp="${esc(u.fingerprint)}" type="button">Delete</button>
+                <button class="btn secondary" data-act="enable" data-fp="${esc(u.fingerprint)}" type="button">${esc(tr("admin.approvals.enable", null, "Enable"))}</button>
+                <button class="btn secondary" data-act="disable" data-fp="${esc(u.fingerprint)}" type="button">${esc(tr("admin.approvals.disable", null, "Disable"))}</button>
+                <button class="btn secondary" data-act="revoke" data-fp="${esc(u.fingerprint)}" type="button">${esc(tr("admin.approvals.revoke", null, "Revoke"))}</button>
+                <button class="btn danger" data-act="delete" data-fp="${esc(u.fingerprint)}" type="button">${esc(tr("admin.approvals.delete", null, "Delete"))}</button>
             </td>
         </tr>`;
     }).join("");
@@ -374,37 +406,37 @@ function render() {
 
             if (act === "delete") {
                 const ok = await openApprovalsConfirmModal({
-                    title: "Delete user entry?",
-                    subtitle: "This removes the user from users.json.",
+                    title: tr("admin.approvals.delete_title", null, "Delete user entry?"),
+                    subtitle: tr("admin.approvals.delete_sub", null, "This removes the user from users.json."),
                     rows: [
-                        { label: "Fingerprint", value: fp, mono: true },
+                        { label: tr("admin.approvals.fingerprint", null, "Fingerprint"), value: fp, mono: true },
                     ],
-                    note: "This removes the entry entirely as cleanup. If they scan again, they will re-appear as disabled.",
-                    confirmText: "Delete",
-                    cancelText: "Cancel",
+                    note: tr("admin.approvals.delete_note", null, "This removes the entry entirely as cleanup. If they scan again, they will re-appear as disabled."),
+                    confirmText: tr("admin.approvals.delete", null, "Delete"),
+                    cancelText: tr("admin.approvals.cancel", null, "Cancel"),
                     danger: true,
                 });
                 if (!ok) return;
 
                 try {
-                    setMsg("Deleting…");
+                    setMsg(tr("admin.approvals.deleting", null, "Deleting…"));
                     await apiPost("/api/v4/admin/users/delete", { fingerprint: fp });
                     await refresh();
-                    setMsg("Delete OK");
+                    setMsg(tr("admin.approvals.delete_ok", null, "Delete OK"));
                 } catch (e) {
-                    setMsg("Error: " + e.message);
+                    setMsg(tr("admin.approvals.error", { error: e.message }, "Error: " + e.message));
                 }
                 return;
             }
 
             if (act === "enable") {
                 try {
-                    setMsg("Enabling…");
+                    setMsg(tr("admin.approvals.enabling", null, "Enabling…"));
                     await apiPost("/api/v4/admin/users/enable", { fingerprint: fp });
                     await refresh();
-                    setMsg("Enabled");
+                    setMsg(tr("admin.approvals.enabled", null, "Enabled"));
                 } catch (e) {
-                    setMsg("Error: " + e.message);
+                    setMsg(tr("admin.approvals.error", { error: e.message }, "Error: " + e.message));
                 }
                 return;
             }
@@ -417,38 +449,38 @@ function render() {
 
             if (act === "revoke") {
                 const ok = await openApprovalsConfirmModal({
-                    title: "Revoke user?",
-                    subtitle: "This hard-blocks login for this fingerprint.",
+                    title: tr("admin.approvals.revoke_title", null, "Revoke user?"),
+                    subtitle: tr("admin.approvals.revoke_sub", null, "This hard-blocks login for this fingerprint."),
                     rows: [
-                        { label: "Fingerprint", value: fp, mono: true },
+                        { label: tr("admin.approvals.fingerprint", null, "Fingerprint"), value: fp, mono: true },
                     ],
-                    note: "Use this when the identity should not be allowed to log in again.",
-                    confirmText: "Revoke",
-                    cancelText: "Cancel",
+                    note: tr("admin.approvals.revoke_note", null, "Use this when the identity should not be allowed to log in again."),
+                    confirmText: tr("admin.approvals.revoke", null, "Revoke"),
+                    cancelText: tr("admin.approvals.cancel", null, "Cancel"),
                     danger: true,
                 });
                 if (!ok) return;
             }
 
             try {
-                setMsg("Saving…");
+                setMsg(tr("admin.approvals.saving", null, "Saving…"));
                 await apiPost("/api/v4/admin/users/status", { fingerprint: fp, status });
                 await refresh();
-                setMsg("Saved");
+                setMsg(tr("admin.approvals.saved", null, "Saved"));
             } catch (e) {
-                alert("Failed: " + e.message);
-                setMsg("Error: " + e.message);
+                alert(tr("admin.approvals.failed", { error: e.message }, "Failed: " + e.message));
+                setMsg(tr("admin.approvals.error", { error: e.message }, "Error: " + e.message));
             }
         });
     });
 }
 
 async function refresh() {
-    setMsg("Loading users…");
+    setMsg(tr("admin.approvals.loading_users", null, "Loading users…"));
     const j = await apiGet("/api/v4/admin/users");
     allUsers = (j.users || []).sort((a,b) => (a.fingerprint||"").localeCompare(b.fingerprint||""));
     render();
-    setMsg(`Loaded ${allUsers.length} users`);
+    setMsg(tr("admin.approvals.loaded_users", { count: allUsers.length }, `Loaded ${allUsers.length} users`));
 }
 
 window.addEventListener("load", async () => {
@@ -457,5 +489,11 @@ window.addEventListener("load", async () => {
     $("filter")?.addEventListener("input", render);
 
     try { await refresh(); }
-    catch (e) { setMsg("Failed to load users: " + e.message); }
+    catch (e) { setMsg(tr("admin.approvals.failed_load", { error: e.message }, "Failed to load users: " + e.message)); }
+});
+
+
+window.addEventListener("pqnas-language-changed", () => {
+    applyStaticI18n();
+    try { render(); } catch (_) {}
 });
