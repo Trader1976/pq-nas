@@ -518,7 +518,7 @@
             }
 
             if (currentView === "user_settings") {
-                renderUserSettings("Theme saved.", "ok");
+                renderUserSettings(tr("settings.theme.saved", null, "Theme saved."), "ok");
             }
         }
     }
@@ -1810,9 +1810,9 @@
         setActiveNav("nav_user_settings");
         setActiveApp("");
 
-        if (wsTitle) wsTitle.textContent = "Settings";
-        if (wsSubtitle) wsSubtitle.textContent = "Personal DNA-Nexus preferences";
-        if (mainPaneTitle) mainPaneTitle.textContent = "Settings";
+        if (wsTitle) wsTitle.textContent = tr("settings.page.title", null, "Settings");
+        if (wsSubtitle) wsSubtitle.textContent = tr("settings.page.subtitle", null, "Personal DNA-Nexus preferences");
+        if (mainPaneTitle) mainPaneTitle.textContent = tr("settings.page.title", null, "Settings");
 
         if (!homeBlurb) return;
 
@@ -1832,35 +1832,35 @@
         const profileCard = `
     <div class="card" style="padding:14px; margin-top:12px;">
         <h3 style="margin:0 0 8px 0; font-size:18px;">
-            Profile
+            ${escapeHtml(tr("settings.profile.title", null, "Profile"))}
         </h3>
 
         <div class="mini" style="line-height:1.5; margin-bottom:12px;">
-            Edit your personal profile. Role, status, quota, storage, and admin notes are not editable here.
+            ${escapeHtml(tr("settings.profile.desc", null, "Edit your personal profile. Role, status, quota, storage, and admin notes are not editable here."))}
         </div>
 
         ${userProfileLoading ? `
-            <div class="mini">Loading profile…</div>
+            <div class="mini">${escapeHtml(tr("settings.profile.loading", null, "Loading profile…"))}</div>
         ` : userProfileError ? `
             <div class="bigState" style="display:block; margin-top:8px;">
-                <h3>Could not load profile</h3>
+                <h3>${escapeHtml(tr("settings.profile.load_failed", null, "Could not load profile"))}</h3>
                 <p>${escapeHtml(userProfileError)}</p>
             </div>
         ` : `
             <div style="display:grid; gap:10px; max-width:540px;">
                 <label>
-                    <div class="mini" style="margin-bottom:4px;">Name</div>
+                    <div class="mini" style="margin-bottom:4px;">${escapeHtml(tr("settings.profile.name", null, "Name"))}</div>
                     <input
                         id="userProfileName"
                         type="text"
                         value="${escapeHtml(p.name || "")}"
-                        placeholder="Your name"
+                        placeholder="${escapeHtml(tr("settings.profile.name_placeholder", null, "Your name"))}"
                         style="width:100%; box-sizing:border-box;"
                     >
                 </label>
 
                 <label>
-                    <div class="mini" style="margin-bottom:4px;">Email</div>
+                    <div class="mini" style="margin-bottom:4px;">${escapeHtml(tr("settings.profile.email", null, "Email"))}</div>
                     <input
                         id="userProfileEmail"
                         type="email"
@@ -1887,9 +1887,9 @@
                     ${p.avatar_url ? `
                         <img
                             src="${escapeHtml(avatarUrlWithBust(p.avatar_url))}"
-                            alt="avatar"
+                            alt="${escapeHtml(tr("settings.profile.avatar_alt", null, "avatar"))}"
                             style="width:72px; height:72px; border-radius:16px; object-fit:cover; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.18);"
-                            onerror="this.style.opacity='0.35'; this.title='Avatar failed to load';"
+                            onerror="this.style.opacity='0.35'; this.title='${escapeHtml(tr("settings.profile.avatar_failed", null, "Avatar failed to load"))}';"
                         >
                     ` : `
                         <div style="width:72px; height:72px; border-radius:16px; display:flex; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,0.12); background:rgba(0,0,0,0.18); color:var(--fg-dim);">
@@ -1899,15 +1899,14 @@
 
                     <div style="display:flex; gap:10px; flex-wrap:wrap;">
                         <button class="btn secondary" id="userProfilePickAvatarBtn" type="button">
-                            Choose avatar
+                            ${escapeHtml(tr("settings.profile.choose_avatar", null, "Choose avatar"))}
                         </button>
                         <div class="mini" style="margin-top:6px; line-height:1.4;">
-                            You can pick a normal photo. DNA-Nexus will resize it to a small avatar automatically.
-                            PNG, JPEG, and WebP work best.
+                            ${escapeHtml(tr("settings.profile.avatar_help", null, "You can pick a normal photo. DNA-Nexus will resize it to a small avatar automatically. PNG, JPEG, and WebP work best."))}
                         </div>
                         ${p.avatar_url ? `
                             <button class="btn secondary" id="userProfileRemoveAvatarBtn" type="button">
-                                Remove avatar
+                                ${escapeHtml(tr("settings.profile.remove_avatar", null, "Remove avatar"))}
                             </button>
                         ` : ""}
                     </div>
@@ -1915,10 +1914,10 @@
 
                 <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;">
                     <button class="btn" id="userProfileSaveBtn" type="button">
-                        Save profile
+                        ${escapeHtml(tr("settings.profile.save", null, "Save profile"))}
                     </button>
                     <button class="btn secondary" id="userProfileReloadBtn" type="button">
-                        Reload
+                        ${escapeHtml(tr("settings.profile.reload", null, "Reload"))}
                     </button>
                 </div>
             </div>
@@ -1949,9 +1948,9 @@
                         style="margin-top:4px;"
                     >
                     <div>
-                        <div style="font-weight:900;">${escapeHtml(t.title)}</div>
-                        <div class="mini">${escapeHtml(t.desc)}</div>
-                        <div class="mini" style="margin-top:4px;">Theme ID: ${escapeHtml(t.id)}</div>
+                        <div style="font-weight:900;">${escapeHtml(tr(`settings.theme.${t.id}.title`, null, t.title))}</div>
+                        <div class="mini">${escapeHtml(tr(`settings.theme.${t.id}.desc`, null, t.desc))}</div>
+                        <div class="mini" style="margin-top:4px;">${escapeHtml(tr("settings.theme.id", { id: t.id }, `Theme ID: ${t.id}`))}</div>
                     </div>
                 </div>
             </label>
@@ -1961,16 +1960,16 @@
         const homeContent = setHomeContentHtml(`
         <div style="max-width:760px; font-family:var(--sans);">
             <h3 style="margin:0 0 8px 0; font-size:18px; font-family:inherit;">
-                General settings
+                ${escapeHtml(tr("settings.general.title", null, "General settings"))}
             </h3>
 
             <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:14px; font-family:inherit;">
-                These settings affect your own browser. They do not change the global admin theme.
+                ${escapeHtml(tr("settings.general.desc", null, "These settings affect your own browser. They do not change the global admin theme."))}
             </div>
 
             ${messageText ? `
                 <div class="bigState" style="display:block; margin-top:8px;">
-                    <h3>${messageKind === "ok" ? "Saved" : "Settings"}</h3>
+                    <h3>${messageKind === "ok" ? escapeHtml(tr("settings.message.saved", null, "Saved")) : escapeHtml(tr("settings.message.settings", null, "Settings"))}</h3>
                     <p>${escapeHtml(messageText)}</p>
                 </div>
             ` : ""}
@@ -2011,11 +2010,11 @@
 
             <div class="card" style="padding:14px; margin-top:12px;">
                 <h3 style="margin:0 0 8px 0; font-size:18px;">
-                    Theme
+                    ${escapeHtml(tr("settings.theme.title", null, "Theme"))}
                 </h3>
 
                 <div class="mini" style="line-height:1.5;">
-                    Choose how DNA-Nexus looks on this device.
+                    ${escapeHtml(tr("settings.theme.desc", null, "Choose how DNA-Nexus looks on this device."))}
                 </div>
 
                 <div style="margin-top:12px;">
@@ -2024,7 +2023,7 @@
 
                 <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:14px;">
                     <button class="btn secondary" id="userThemeDefaultBtn" type="button">
-                        Use default dark theme
+                        ${escapeHtml(tr("settings.theme.default_dark", null, "Use default dark theme"))}
                     </button>
                 </div>
             </div>
@@ -2034,13 +2033,13 @@
         if (profileSaveBtn) {
             profileSaveBtn.addEventListener("click", async () => {
                 profileSaveBtn.disabled = true;
-                profileSaveBtn.textContent = "Saving…";
+                profileSaveBtn.textContent = tr("settings.profile.saving", null, "Saving…");
 
                 try {
                     await saveUserProfileFromSettings();
-                    renderUserSettings("Profile saved.", "ok");
+                    renderUserSettings(tr("settings.profile.saved", null, "Profile saved."), "ok");
                 } catch (e) {
-                    renderUserSettings(`Profile save failed: ${String(e && e.message ? e.message : e)}`, "err");
+                    renderUserSettings(tr("settings.profile.save_failed", { error: String(e && e.message ? e.message : e) }, `Profile save failed: ${String(e && e.message ? e.message : e)}`), "err");
                 }
             });
         }
@@ -2049,13 +2048,13 @@
         if (profileReloadBtn) {
             profileReloadBtn.addEventListener("click", async () => {
                 profileReloadBtn.disabled = true;
-                profileReloadBtn.textContent = "Reloading…";
+                profileReloadBtn.textContent = tr("settings.profile.reloading", null, "Reloading…");
 
                 try {
                     await loadUserProfile();
                     renderUserSettings();
                 } catch (e) {
-                    renderUserSettings(`Profile reload failed: ${String(e && e.message ? e.message : e)}`, "err");
+                    renderUserSettings(tr("settings.profile.reload_failed", { error: String(e && e.message ? e.message : e) }, `Profile reload failed: ${String(e && e.message ? e.message : e)}`), "err");
                 }
             });
         }
@@ -2073,13 +2072,13 @@
                 if (!file) return;
 
                 pickAvatarBtn.disabled = true;
-                pickAvatarBtn.textContent = "Uploading…";
+                pickAvatarBtn.textContent = tr("settings.profile.uploading", null, "Uploading…");
 
                 try {
                     const result = await uploadUserAvatarFromSettings(file);
-                    renderUserSettings(result && result.note ? `Avatar uploaded. ${result.note}` : "Avatar uploaded.", "ok");
+                    renderUserSettings(result && result.note ? tr("settings.profile.avatar_uploaded_note", { note: result.note }, `Avatar uploaded. ${result.note}`) : tr("settings.profile.avatar_uploaded", null, "Avatar uploaded."), "ok");
                 } catch (e) {
-                    const msg = `Avatar upload failed: ${String(e && e.message ? e.message : e)}`;
+                    const msg = tr("settings.profile.avatar_upload_failed", { error: String(e && e.message ? e.message : e) }, `Avatar upload failed: ${String(e && e.message ? e.message : e)}`);
                     alert(msg);
                     renderUserSettings(msg, "err");
                 } finally {
@@ -2091,16 +2090,16 @@
         const removeAvatarBtn = (homeContent || homeBlurb).querySelector("#userProfileRemoveAvatarBtn");
         if (removeAvatarBtn) {
             removeAvatarBtn.addEventListener("click", async () => {
-                if (!confirm("Remove your avatar?")) return;
+                if (!confirm(tr("settings.profile.remove_confirm", null, "Remove your avatar?"))) return;
 
                 removeAvatarBtn.disabled = true;
-                removeAvatarBtn.textContent = "Removing…";
+                removeAvatarBtn.textContent = tr("settings.profile.removing", null, "Removing…");
 
                 try {
                     await removeUserAvatarFromSettings();
-                    renderUserSettings("Avatar removed.", "ok");
+                    renderUserSettings(tr("settings.profile.avatar_removed", null, "Avatar removed."), "ok");
                 } catch (e) {
-                    renderUserSettings(`Avatar remove failed: ${String(e && e.message ? e.message : e)}`, "err");
+                    renderUserSettings(tr("settings.profile.avatar_remove_failed", { error: String(e && e.message ? e.message : e) }, `Avatar remove failed: ${String(e && e.message ? e.message : e)}`), "err");
                 }
             });
         }
