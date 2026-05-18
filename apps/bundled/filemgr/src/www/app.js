@@ -4,6 +4,23 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   "use strict";
   const el = (id) => document.getElementById(id);
 
+  function tr(key, vars = null, fallback = "") {
+    try {
+      if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+        return window.PQNAS_I18N.t(key, vars, fallback || key);
+      }
+    } catch (_) {}
+    return fallback || key;
+  }
+
+  function applyI18n(root = document) {
+    try {
+      if (window.PQNAS_I18N && typeof window.PQNAS_I18N.apply === "function") {
+        window.PQNAS_I18N.apply(root || document);
+      }
+    } catch (_) {}
+  }
+
   try {
     if (window.self !== window.top) document.body.classList.add("embedded");
   } catch (_) {
@@ -3449,29 +3466,29 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     ctxEl.innerHTML = "";
     if (caps.properties !== false) {
-      ctxEl.appendChild(menuItem(`Properties (selection)…`, "", () => showSelectionProperties()));
+      ctxEl.appendChild(menuItem(tr("filemgr.menu.selection_properties", null, "Properties (selection)…"), "", () => showSelectionProperties()));
       ctxEl.appendChild(menuSep());
     }
 
     if (caps.favorites !== false) {
-      if (!allFav) ctxEl.appendChild(menuItem(`Add selection to favorites (${stats.total})`, "", async () => await addSelectionToFavorites()));
-      if (someFav || allFav) ctxEl.appendChild(menuItem(`Remove selection from favorites (${stats.fav})`, "", async () => await removeSelectionFromFavorites()));
+      if (!allFav) ctxEl.appendChild(menuItem(tr("filemgr.menu.add_selection_favorites", { count: stats.total }, `Add selection to favorites (${stats.total})`), "", async () => await addSelectionToFavorites()));
+      if (someFav || allFav) ctxEl.appendChild(menuItem(tr("filemgr.menu.remove_selection_favorites", { count: stats.fav }, `Remove selection from favorites (${stats.fav})`), "", async () => await removeSelectionFromFavorites()));
       ctxEl.appendChild(menuSep());
     }
 
     if (caps.zipSelection !== false) {
-      ctxEl.appendChild(menuItem(`Download selection (zip) (${selectedKeys.size})`, "", () => downloadSelectionZip()));
+      ctxEl.appendChild(menuItem(tr("filemgr.menu.download_selection_zip", { count: selectedKeys.size }, `Download selection (zip) (${selectedKeys.size})`), "", () => downloadSelectionZip()));
     }
 
     if (canWriteCurrentScope()) {
       ctxEl.appendChild(menuSep());
       if (caps.copy !== false) {
-        ctxEl.appendChild(menuItem(`Copy selection… (${selectedKeys.size})`, "", () => openCopyModalForSelection()));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.copy_selection", { count: selectedKeys.size }, `Copy selection… (${selectedKeys.size})`), "", () => openCopyModalForSelection()));
       }
       if (caps.move !== false) {
-        ctxEl.appendChild(menuItem(`Move selection… (${selectedKeys.size})`, "", () => openMoveModalForSelection()));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.move_selection", { count: selectedKeys.size }, `Move selection… (${selectedKeys.size})`), "", () => openMoveModalForSelection()));
       }
-      ctxEl.appendChild(menuItem(`Move selection to trash (${selectedKeys.size})…`, "🗑", () => deleteSelection(), { danger: true }));
+      ctxEl.appendChild(menuItem(tr("filemgr.menu.move_selection_trash", { count: selectedKeys.size }, `Move selection to trash (${selectedKeys.size})…`), "🗑", () => deleteSelection(), { danger: true }));
     }
   }
 
@@ -5311,9 +5328,19 @@ function describeMoveItems(items) {
 
   let warnTimer = null;
 
+  function fmBadgeText(text) {
+    const s = String(text || "");
+    if (s === "ready") return tr("filemgr.badge.ready", null, "ready");
+    if (s === "error") return tr("filemgr.badge.error", null, "error");
+    if (s === "partial") return tr("filemgr.badge.partial", null, "partial");
+    if (s === "storage") return tr("filemgr.badge.storage", null, "storage");
+    if (s === "browser") return tr("filemgr.badge.browser", null, "browser");
+    return s;
+  }
+
   function setBadge(kind, text) {
     badge.className = `badge ${kind}`;
-    badge.textContent = text;
+    badge.textContent = fmBadgeText(text);
   }
 
   function hideEmptyState() {
@@ -5591,11 +5618,15 @@ function describeMoveItems(items) {
     const canWrite = canWriteCurrentScope();
     const share = existingShareFor(rel, item.type === "dir" ? "dir" : "file");
     const shareLabel = share
-        ? (isShareExpired(share) ? "Manage share link… (expired)" : "Manage share link…")
-        : "Create share link…";
+        ? (isShareExpired(share)
+            ? tr("filemgr.menu.manage_share_expired", null, "Manage share link… (expired)")
+            : tr("filemgr.menu.manage_share", null, "Manage share link…"))
+        : tr("filemgr.menu.create_share", null, "Create share link…");
 
     const fav = isFavoriteItem(item);
-    const favLabel = fav ? "Remove from favorites" : "Add to favorites";
+    const favLabel = fav
+        ? tr("filemgr.menu.remove_favorite", null, "Remove from favorites")
+        : tr("filemgr.menu.add_favorite", null, "Add to favorites");
 
     const selectionMode = (selectedKeys && selectedKeys.size > 1 && selectedKeys.has(key));
     if (selectionMode) {
@@ -5606,14 +5637,14 @@ function describeMoveItems(items) {
     }
 
     if (item.type === "dir") {
-      ctxEl.appendChild(menuItem("Open", "↩", () => {
+      ctxEl.appendChild(menuItem(tr("filemgr.menu.open", null, "Open"), "↩", () => {
         curPath = joinPath(curPath, item.name);
         clearSelection();
         load();
       }));
 
       if (caps.zipFolder !== false) {
-        ctxEl.appendChild(menuItem("Download folder (zip)", "", () => {
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.download_folder_zip", null, "Download folder (zip)"), "", () => {
           const relDir = joinPath(curPath, item.name);
           downloadFolderZip(relDir);
         }));
@@ -5624,11 +5655,11 @@ function describeMoveItems(items) {
           try {
             const on = await toggleFavoriteRelPath(rel, item.type);
             setBadge("ok", "ready");
-            status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
+            status.textContent = on ? tr("filemgr.status.added_favorite", { name: item.name }, `Added to favorites: ${item.name}`) : tr("filemgr.status.removed_favorite", { name: item.name }, `Removed from favorites: ${item.name}`);
             await load();
           } catch (err) {
             setBadge("err", "error");
-            status.textContent = `Favorites update failed: ${String(err && err.message ? err.message : err)}`;
+            status.textContent = tr("filemgr.status.favorites_failed", { error: String(err && err.message ? err.message : err) }, `Favorites update failed: ${String(err && err.message ? err.message : err)}`);
           }
         }));
       }
@@ -5638,75 +5669,75 @@ function describeMoveItems(items) {
       }
 
       if (canWrite) {
-        ctxEl.appendChild(menuItem("New folder here…", "", () => {
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.new_folder_here", null, "New folder here…"), "", () => {
           const relDir = joinPath(curPath, item.name);
           doMkdirAt(relDir);
         }));
 
         ctxEl.appendChild(menuSep());
         if (caps.copy !== false && item.type !== "dir") {
-          ctxEl.appendChild(menuItem("Copy to…", "", () => openCopyModalForItem(item)));
+          ctxEl.appendChild(menuItem(tr("filemgr.menu.copy_to", null, "Copy to…"), "", () => openCopyModalForItem(item)));
         }
         if (caps.move !== false) {
-          ctxEl.appendChild(menuItem("Move…", "", () => openMoveModalForItem(item)));
+          ctxEl.appendChild(menuItem(tr("filemgr.menu.move", null, "Move…"), "", () => openMoveModalForItem(item)));
         }
-        ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
-        ctxEl.appendChild(menuItem("Move to trash…", "🗑", () => doDelete(item), { danger: true }));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.rename", null, "Rename…"), "", () => doRename(item)));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.move_to_trash", null, "Move to trash…"), "🗑", () => doDelete(item), { danger: true }));
       }
 
       if (caps.properties !== false && !(selectedKeys && selectedKeys.size > 1)) {
         ctxEl.appendChild(menuSep());
-        ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.properties", null, "Properties…"), "", () => showProperties(item)));
       }
     } else {
       if (caps.imagePreview !== false &&
           window.PQNAS_FILEMGR &&
           window.PQNAS_FILEMGR.imagePreview &&
           isProbablyImagePreviewableName(item.name)) {
-        ctxEl.appendChild(menuItem("Open preview", "", () => window.PQNAS_FILEMGR.imagePreview.open(item)));
-        ctxEl.appendChild(menuItem("Open original", "", () => doOpenOriginal(item)));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.open_preview", null, "Open preview"), "", () => window.PQNAS_FILEMGR.imagePreview.open(item)));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.open_original", null, "Open original"), "", () => doOpenOriginal(item)));
       }
       if (caps.pdfPreview !== false &&
           window.PQNAS_FILEMGR &&
           window.PQNAS_FILEMGR.pdfPreview &&
           isProbablyPdfPreviewableName(item.name)) {
-        ctxEl.appendChild(menuItem("Open PDF preview", "", () => window.PQNAS_FILEMGR.pdfPreview.open(item)));
-        ctxEl.appendChild(menuItem("Open original", "", () => doOpenOriginal(item)));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.open_pdf_preview", null, "Open PDF preview"), "", () => window.PQNAS_FILEMGR.pdfPreview.open(item)));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.open_original", null, "Open original"), "", () => doOpenOriginal(item)));
       }
       if (caps.videoPreview !== false &&
           window.PQNAS_FILEMGR &&
           window.PQNAS_FILEMGR.videoPreview &&
           isProbablyVideoPreviewableName(item.name)) {
-        ctxEl.appendChild(menuItem("Open video preview", "", () => window.PQNAS_FILEMGR.videoPreview.open(item)));
-        ctxEl.appendChild(menuItem("Open original", "", () => doOpenOriginal(item)));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.open_video_preview", null, "Open video preview"), "", () => window.PQNAS_FILEMGR.videoPreview.open(item)));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.open_original", null, "Open original"), "", () => doOpenOriginal(item)));
       }
       if (caps.audioPreview !== false &&
           window.PQNAS_FILEMGR &&
           window.PQNAS_FILEMGR.audioPreview &&
           isProbablyAudioPreviewableName(item.name)) {
-        ctxEl.appendChild(menuItem("Open audio preview", "", () => window.PQNAS_FILEMGR.audioPreview.open(item)));
-        ctxEl.appendChild(menuItem("Open original", "", () => doOpenOriginal(item)));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.open_audio_preview", null, "Open audio preview"), "", () => window.PQNAS_FILEMGR.audioPreview.open(item)));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.open_original", null, "Open original"), "", () => doOpenOriginal(item)));
       }
 
       if (caps.textEdit !== false &&
           window.PQNAS_FILEMGR &&
           window.PQNAS_FILEMGR.textEdit &&
           isProbablyTextEditableName(item.name)) {
-        ctxEl.appendChild(menuItem("Open / edit text?", "", () => {
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.open_edit_text", null, "Open / edit text?"), "", () => {
           console.log("[app.ctx.textedit] item =", item);
           console.log("[app.ctx.textedit] rel =", currentRelPathFor(item));
           window.PQNAS_FILEMGR.textEdit.open(item);
         }));
       }
 
-      ctxEl.appendChild(menuItem("Download", "⤓", () => doDownload(item)));
+      ctxEl.appendChild(menuItem(tr("filemgr.menu.download", null, "Download"), "⤓", () => doDownload(item)));
 
       if (caps.versions !== false &&
           window.PQNAS_FILEMGR &&
           window.PQNAS_FILEMGR.fileVersions &&
           typeof window.PQNAS_FILEMGR.fileVersions.canOpenFor === "function" &&
           window.PQNAS_FILEMGR.fileVersions.canOpenFor(item)) {
-        ctxEl.appendChild(menuItem("Versions…", "", () => {
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.versions", null, "Versions…"), "", () => {
           window.PQNAS_FILEMGR.fileVersions.open(item);
         }));
       }
@@ -5716,11 +5747,11 @@ function describeMoveItems(items) {
           try {
             const on = await toggleFavoriteRelPath(rel, item.type);
             setBadge("ok", "ready");
-            status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
+            status.textContent = on ? tr("filemgr.status.added_favorite", { name: item.name }, `Added to favorites: ${item.name}`) : tr("filemgr.status.removed_favorite", { name: item.name }, `Removed from favorites: ${item.name}`);
             await load();
           } catch (err) {
             setBadge("err", "error");
-            status.textContent = `Favorites update failed: ${String(err && err.message ? err.message : err)}`;
+            status.textContent = tr("filemgr.status.favorites_failed", { error: String(err && err.message ? err.message : err) }, `Favorites update failed: ${String(err && err.message ? err.message : err)}`);
           }
         }));
       }
@@ -5730,7 +5761,7 @@ function describeMoveItems(items) {
       }
 
       if (caps.pqShares !== false) {
-        ctxEl.appendChild(menuItem("PQ recipient-enrolled share…", "", () => openShareDialogFor(item, {
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.pq_share", null, "PQ recipient-enrolled share…"), "", () => openShareDialogFor(item, {
           forceMode: "pq_recipient_enrolled_v1"
         })));
       }
@@ -5738,18 +5769,18 @@ function describeMoveItems(items) {
       if (canWrite) {
         ctxEl.appendChild(menuSep());
         if (caps.copy !== false && item.type !== "dir") {
-          ctxEl.appendChild(menuItem("Copy to…", "", () => openCopyModalForItem(item)));
+          ctxEl.appendChild(menuItem(tr("filemgr.menu.copy_to", null, "Copy to…"), "", () => openCopyModalForItem(item)));
         }
         if (caps.move !== false) {
-          ctxEl.appendChild(menuItem("Move…", "", () => openMoveModalForItem(item)));
+          ctxEl.appendChild(menuItem(tr("filemgr.menu.move", null, "Move…"), "", () => openMoveModalForItem(item)));
         }
-        ctxEl.appendChild(menuItem("Rename…", "", () => doRename(item)));
-        ctxEl.appendChild(menuItem("Move to trash…", "🗑", () => doDelete(item), { danger: true }));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.rename", null, "Rename…"), "", () => doRename(item)));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.move_to_trash", null, "Move to trash…"), "🗑", () => doDelete(item), { danger: true }));
       }
 
       if (caps.properties !== false && !(selectedKeys && selectedKeys.size > 1)) {
         ctxEl.appendChild(menuSep());
-        ctxEl.appendChild(menuItem("Properties…", "", () => showProperties(item)));
+        ctxEl.appendChild(menuItem(tr("filemgr.menu.properties", null, "Properties…"), "", () => showProperties(item)));
       }
     }
 
@@ -5797,41 +5828,41 @@ function describeMoveItems(items) {
     if (storageBlocked) {
       ctxEl.innerHTML = "";
       ctxOpenForKey = "__blocked__";
-      ctxEl.appendChild(menuItem("Storage not allocated", "", () => {}, {}));
+      ctxEl.appendChild(menuItem(tr("filemgr.menu.storage_not_allocated", null, "Storage not allocated"), "", () => {}, {}));
       ctxEl.appendChild(menuSep());
-      ctxEl.appendChild(menuItem("Open Admin → User profiles", "", () => { window.location.href = "/admin/users"; }));
-      ctxEl.appendChild(menuItem("Refresh", "", () => load()));
+      ctxEl.appendChild(menuItem(tr("filemgr.menu.open_admin_users", null, "Open Admin → User profiles"), "", () => { window.location.href = "/admin/users"; }));
+      ctxEl.appendChild(menuItem(tr("filemgr.menu.refresh", null, "Refresh"), "", () => load()));
       ctxEl.setAttribute("aria-hidden", "false");
       placeMenu(x, y);
       return;
     }
 
     if (canWrite) {
-      ctxEl.appendChild(menuItem("Upload files…", "", () => pickFiles()));
-      ctxEl.appendChild(menuItem("Upload folder…", "", () => pickFolder()));
+      ctxEl.appendChild(menuItem(tr("filemgr.menu.upload_files", null, "Upload files…"), "", () => pickFiles()));
+      ctxEl.appendChild(menuItem(tr("filemgr.menu.upload_folder", null, "Upload folder…"), "", () => pickFolder()));
       ctxEl.appendChild(menuSep());
     }
 
     if (caps.favorites !== false) {
-      ctxEl.appendChild(menuItem(favoritesOnly ? "Show all items" : "Show favorites only", "", () => toggleFavoritesOnly()));
+      ctxEl.appendChild(menuItem(favoritesOnly ? tr("filemgr.menu.show_all", null, "Show all items") : tr("filemgr.menu.show_favorites_only", null, "Show favorites only"), "", () => toggleFavoritesOnly()));
       ctxEl.appendChild(menuSep());
     }
 
     if (caps.zipFolder !== false) {
-      ctxEl.appendChild(menuItem("Download current folder (zip)", "", () => downloadFolderZip(curPath)));
+      ctxEl.appendChild(menuItem(tr("filemgr.menu.download_current_folder_zip", null, "Download current folder (zip)"), "", () => downloadFolderZip(curPath)));
     }
 
     if (canWrite) {
-      ctxEl.appendChild(menuItem("New folder…", "", () => doMkdirAt(curPath)));
+      ctxEl.appendChild(menuItem(tr("filemgr.menu.new_folder", null, "New folder…"), "", () => doMkdirAt(curPath)));
       ctxEl.appendChild(menuSep());
     }
 
-    ctxEl.appendChild(menuItem("Open trash", "🗑", async () => {
+    ctxEl.appendChild(menuItem(tr("filemgr.menu.open_trash", null, "Open trash"), "🗑", async () => {
       openTrashModal();
       await loadTrashItems();
     }));
 
-    ctxEl.appendChild(menuItem("Refresh", "", () => load()));
+    ctxEl.appendChild(menuItem(tr("filemgr.menu.refresh", null, "Refresh"), "", () => load()));
 
     ctxEl.setAttribute("aria-hidden", "false");
     placeMenu(x, y);
@@ -5878,6 +5909,31 @@ function describeMoveItems(items) {
       status.textContent = `Selected: ${selectedKeys.size}`;
     }
   });
+
+  function filemgrLanguageChanged() {
+    applyI18n(document);
+    closeMenu();
+
+    // Refresh favorite button titles because they are dynamic DOM nodes.
+    try {
+      for (const btn of document.querySelectorAll(".favBtn")) {
+        const tileEl = btn.closest(".tile");
+        const item = tileEl
+            ? {
+                type: tileEl.dataset.itemType || "file",
+                name: tileEl.dataset.name || ""
+              }
+            : null;
+        if (!item) continue;
+        const fav = btn.classList.contains("isFav");
+        btn.title = fav
+            ? tr("filemgr.tile.favorite_remove", null, "Remove from favorites")
+            : tr("filemgr.tile.favorite_add", null, "Add to favorites");
+      }
+    } catch (_) {}
+  }
+
+  window.addEventListener("pqnas-language-changed", filemgrLanguageChanged);
 
   window.addEventListener("scroll", closeMenu, true);
   window.addEventListener("resize", closeMenu);
@@ -6007,7 +6063,7 @@ function describeMoveItems(items) {
     const refresh = () => {
       const fav = isFavoriteItem(item);
       btn.textContent = fav ? "★" : "☆";
-      btn.title = fav ? "Remove from favorites" : "Add to favorites";
+      btn.title = fav ? tr("filemgr.tile.favorite_remove", null, "Remove from favorites") : tr("filemgr.tile.favorite_add", null, "Add to favorites");
       btn.style.opacity = fav ? "1" : "0.82";
 
       btn.classList.toggle("isFav", fav);
@@ -6022,13 +6078,13 @@ function describeMoveItems(items) {
         const on = await toggleFavoriteRelPath(currentRelPathFor(item), item.type);
         refresh();
         setBadge("ok", "ready");
-        status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
+        status.textContent = on ? tr("filemgr.status.added_favorite", { name: item.name }, `Added to favorites: ${item.name}`) : tr("filemgr.status.removed_favorite", { name: item.name }, `Removed from favorites: ${item.name}`);
         if (favoritesOnly && !on) {
           await load();
         }
       } catch (err) {
         setBadge("err", "error");
-        status.textContent = `Favorites update failed: ${String(err && err.message ? err.message : err)}`;
+        status.textContent = tr("filemgr.status.favorites_failed", { error: String(err && err.message ? err.message : err) }, `Favorites update failed: ${String(err && err.message ? err.message : err)}`);
       }
     });
 
@@ -6381,11 +6437,11 @@ function describeMoveItems(items) {
           txt.textContent = on ? "This item is in favorites." : "This item is not in favorites.";
           btn.textContent = on ? "Remove from favorites" : "Add to favorites";
           setBadge("ok", "ready");
-          status.textContent = on ? `Added to favorites: ${item.name}` : `Removed from favorites: ${item.name}`;
+          status.textContent = on ? tr("filemgr.status.added_favorite", { name: item.name }, `Added to favorites: ${item.name}`) : tr("filemgr.status.removed_favorite", { name: item.name }, `Removed from favorites: ${item.name}`);
           await load();
         } catch (err) {
           setBadge("err", "error");
-          status.textContent = `Favorites update failed: ${String(err && err.message ? err.message : err)}`;
+          status.textContent = tr("filemgr.status.favorites_failed", { error: String(err && err.message ? err.message : err) }, `Favorites update failed: ${String(err && err.message ? err.message : err)}`);
         }
       };
 

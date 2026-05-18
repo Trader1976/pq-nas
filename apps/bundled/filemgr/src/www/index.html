@@ -8,6 +8,7 @@
   <!-- Use PQ-NAS global themes -->
   <link rel="stylesheet" href="/static/theme.css">
   <script src="/static/theme.js"></script>
+  <script src="/static/i18n.js?v=20260518-filemgr-i18n-1"></script>
 
   <style>
     :root{
@@ -1692,26 +1693,26 @@
   <div class="panel">
     <div class="bar">
       <div class="left">
-        <div class="title" id="titleLine" data-tour="filemgr-screen">File Manager</div>
+        <div class="title" id="titleLine" data-tour="filemgr-screen" data-i18n="filemgr.title">File Manager</div>
 
         <div id="scopeBar" data-tour="filemgr-location" class="scopeBar hidden" aria-live="polite">
-          <label for="scopeSelect" class="scopeLbl">Location</label>
+          <label for="scopeSelect" class="scopeLbl" data-i18n="filemgr.location">Location</label>
 
           <select id="scopeSelect" class="scopeSelect">
-            <option value="user">My files</option>
+            <option value="user" data-i18n="filemgr.my_files">My files</option>
           </select>
 
           <span id="scopeRole" class="scopeRole hidden"></span>
 
           <div id="workspaceActions" class="scopeActions">
-            <button id="workspaceCreateSharedBtn" class="btn secondary" type="button" title="Create a Shared Space">New Shared Space</button>
+            <button id="workspaceCreateSharedBtn" class="btn secondary" type="button" title="Create a Shared Space" data-i18n="filemgr.new_shared_space">New Shared Space</button>
             <button id="workspaceMembersBtn" class="btn secondary hidden" type="button" title="List workspace members">
-              <span class="btnTxt">Members</span>
+              <span class="btnTxt" data-i18n="filemgr.members">Members</span>
             </button>
           </div>
         </div>
 
-        <div id="pathLine" data-tour="filemgr-path" aria-label="Breadcrumb path">path: (loading)</div>
+        <div id="pathLine" data-tour="filemgr-path" aria-label="Breadcrumb path" data-i18n="filemgr.path_loading">path: (loading)</div>
       </div>
 
       <div class="actions" data-tour="filemgr-actions">
@@ -1719,11 +1720,11 @@
 
         <button class="btn secondary" id="upBtn" data-tour="filemgr-up" type="button" title="Up">
           <img class="btnIco" id="upIcon" src="./icons/updir_small.png" alt="">
-          <span class="btnTxt">Up</span>
+          <span class="btnTxt" data-i18n="filemgr.up">Up</span>
         </button>
 
         <button class="btn secondary" id="viewToggleBtn" data-tour="filemgr-view" type="button" title="Toggle list/grid view">
-          <span class="btnTxt" id="viewToggleTxt">List</span>
+          <span class="btnTxt" id="viewToggleTxt" data-i18n="filemgr.view.list">List</span>
         </button>
 
         <button class="btn secondary" id="sortBtn" data-tour="filemgr-sort" type="button" title="Sort: directories first">
@@ -1741,20 +1742,20 @@
             <path d="M16 5l3 2-3 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
             <path d="M19 15l-3 2 3 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
           </svg>
-          <span class="btnTxt" id="sortTxt">Dirs</span>
+          <span class="btnTxt" id="sortTxt" data-i18n="filemgr.sort.dirs">Dirs</span>
         </button>
 
         <button class="btn secondary" id="favoritesToggleBtn" data-tour="filemgr-favorites" type="button" title="Show favorites only">
-          <span class="btnTxt" id="favoritesToggleTxt">Favorites</span>
+          <span class="btnTxt" id="favoritesToggleTxt" data-i18n="filemgr.favorites">Favorites</span>
         </button>
         <button class="btn secondary" id="trashBtn" data-tour="filemgr-trash" type="button" title="Open Trash">
   <span style="display:inline-flex; width:16px; height:16px; align-items:center; justify-content:center;">
     🗑
   </span>
-          <span class="btnTxt">Trash</span>
+          <span class="btnTxt" data-i18n="filemgr.trash">Trash</span>
         </button>
         <button class="btn" id="refreshBtn" data-tour="filemgr-refresh" type="button" title="Refresh">
-          <span class="btnTxt">Refresh</span>
+          <span class="btnTxt" data-i18n="common.refresh">Refresh</span>
         </button>
 
         <input id="filePick" type="file" multiple style="display:none" />
@@ -1765,8 +1766,8 @@
     <div class="gridWrap" id="gridWrap" data-tour="filemgr-grid">
       <div class="dropOverlay" id="dropOverlay" aria-hidden="true">
         <div>
-          <div class="big">Drop files or folders to upload</div>
-          <div class="small">Uploads into the current folder</div>
+          <div class="big" data-i18n="filemgr.drop.title">Drop files or folders to upload</div>
+          <div class="small" data-i18n="filemgr.drop.subtitle">Uploads into the current folder</div>
         </div>
       </div>
       <div id="emptyState" data-tour="filemgr-empty-state" class="emptyState hidden" aria-live="polite"></div>
@@ -1774,24 +1775,24 @@
     </div>
 
     <div class="footer">
-      <div id="status" data-tour="filemgr-status" class="mono">Ready.</div>
+      <div id="status" data-tour="filemgr-status" class="mono" data-i18n="filemgr.ready">Ready.</div>
       <div id="quotaLine" data-tour="filemgr-quota" class="mono quotaLine hidden" aria-live="polite"></div>
 
       <div id="uploadProg" style="display:none" aria-hidden="true">
         <div class="upRow">
           <div class="upLeft">
-            <div id="uploadProgText" class="upText">Uploading…</div>
+            <div id="uploadProgText" class="upText" data-i18n="filemgr.uploading">Uploading…</div>
             <span id="uploadProgPill" class="upPill hidden"></span>
           </div>
           <div id="uploadProgPct" class="upPct">0%</div>
         </div>
-        <button id="uploadCancelBtn" class="btn secondary hidden" type="button">Cancel</button>
+        <button id="uploadCancelBtn" class="btn secondary hidden" type="button" data-i18n="filemgr.cancel">Cancel</button>
         <div class="upBar">
           <div id="uploadProgFill" class="upFill" style="width:0%"></div>
         </div>
       </div>
 
-      <div class="mono">PQ-NAS bundled app • filemgr 1.0.0</div>
+      <div class="mono" data-i18n="filemgr.footer">PQ-NAS bundled app • filemgr 1.0.0</div>
     </div>
   </div>
 </div>
@@ -1800,11 +1801,11 @@
   <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="propsTitle">
     <div class="modalHead">
       <div>
-        <div id="propsTitle" class="modalTitle">Properties</div>
+        <div id="propsTitle" class="modalTitle" data-i18n="filemgr.properties">Properties</div>
         <div id="propsPath" class="modalSub mono">/</div>
       </div>
       <button id="propsClose" class="btn secondary" type="button" title="Close">
-        <span class="btnTxt">Close</span>
+        <span class="btnTxt" data-i18n="filemgr.close">Close</span>
       </button>
     </div>
 
@@ -1815,14 +1816,14 @@
   <div id="textEditCard" class="modalCard" style="width:min(1100px,96vw); max-height:90vh; display:flex; flex-direction:column; position:absolute; left:50%; top:28px; transform:translateX(-50%);">
     <div id="textEditHead" class="modalHead" style="cursor:move; user-select:none;">
       <div>
-        <div id="textEditTitle" class="modalTitle">Edit text file</div>
+        <div id="textEditTitle" class="modalTitle" data-i18n="filemgr.textedit.title">Edit text file</div>
         <div id="textEditPath" class="mono" style="opacity:.8; margin-top:4px;"></div>
       </div>
       <button id="textEditClose" class="iconBtn" type="button" aria-label="Close">✕</button>
     </div>
 
     <div style="padding:12px 16px 0 16px;">
-      <div id="textEditInfo" style="opacity:.8; font-size:12px;">Ready.</div>
+      <div id="textEditInfo" style="opacity:.8; font-size:12px;" data-i18n="filemgr.ready">Ready.</div>
       <div id="textEditStatus" style="margin-top:6px; min-height:18px; font-size:12px; line-height:1.35; opacity:.9;"></div>
     </div>
 
@@ -1837,26 +1838,26 @@
     </div>
 
     <div class="modalFoot">
-      <button id="textEditReloadBtn" class="btn secondary" type="button">Reload</button>
-      <button id="textEditFindToggleBtn" class="btn secondary" type="button" title="Find">Find</button>
+      <button id="textEditReloadBtn" class="btn secondary" type="button" data-i18n="filemgr.textedit.reload">Reload</button>
+      <button id="textEditFindToggleBtn" class="btn secondary" type="button" title="Find" data-i18n="filemgr.textedit.find">Find</button>
 
       <div id="textEditFindBar" class="findBar hidden">
         <input
                 id="textEditFindInput"
                 type="text"
                 class="mono"
-                placeholder="Find…"
+                placeholder="Find…" data-i18n-placeholder="filemgr.textedit.find_placeholder"
                 aria-label="Find text"
         />
-        <button id="textEditFindPrevBtn" class="btn secondary" type="button" title="Previous match">Prev</button>
-        <button id="textEditFindNextBtn" class="btn secondary" type="button" title="Next match">Next</button>
+        <button id="textEditFindPrevBtn" class="btn secondary" type="button" title="Previous match" data-i18n="filemgr.textedit.prev">Prev</button>
+        <button id="textEditFindNextBtn" class="btn secondary" type="button" title="Next match" data-i18n="filemgr.textedit.next">Next</button>
         <button id="textEditFindCaseBtn" class="btn secondary" type="button" title="Match case">Aa</button>
         <div id="textEditFindStatus" class="mono findStatus"></div>
         <button id="textEditFindCloseBtn" class="btn secondary" type="button" title="Close find">×</button>
       </div>
 
       <div style="flex:1 1 auto;"></div>
-      <button id="textEditSaveBtn" class="btn" type="button" disabled>Save</button>
+      <button id="textEditSaveBtn" class="btn" type="button" disabled data-i18n="filemgr.textedit.save">Save</button>
     </div>
   </div>
 </div>
@@ -1864,35 +1865,35 @@
   <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="shareTitle" data-tour="filemgr-share-modal">
     <div class="modalHead">
       <div>
-        <div id="shareTitle" class="modalTitle" data-tour="filemgr-share-title">Share link</div>
+        <div id="shareTitle" class="modalTitle" data-tour="filemgr-share-title" data-i18n="filemgr.share.title">Share link</div>
         <div id="sharePath" class="modalSub mono">/</div>
       </div>
-      <button id="shareClose" class="btn secondary" type="button">Close</button>
+      <button id="shareClose" class="btn secondary" type="button" data-i18n="filemgr.close">Close</button>
     </div>
 
     <div class="modalBody">
-      <div class="k">Expiry</div>
+      <div class="k" data-i18n="filemgr.share.expiry">Expiry</div>
       <div class="v">
         <select id="shareExpiry" class="mono" data-tour="filemgr-share-expiry" style="width:100%; padding:10px 12px; border-radius:12px; border:1px solid var(--border2); background:rgba(0,0,0,0.22); color:var(--fg);">
-          <option value="1h">1 hour</option>
-          <option value="24h" selected>24 hours</option>
-          <option value="7d">7 days</option>
-          <option value="never">Never</option>
+          <option value="1h" data-i18n="filemgr.share.expiry_1h">1 hour</option>
+          <option value="24h" selected data-i18n="filemgr.share.expiry_24h">24 hours</option>
+          <option value="7d" data-i18n="filemgr.share.expiry_7d">7 days</option>
+          <option value="never" data-i18n="filemgr.share.expiry_never">Never</option>
         </select>
       </div>
 
-      <div class="k">Action</div>
+      <div class="k" data-i18n="filemgr.share.action">Action</div>
       <div class="v" style="display:flex; gap:10px; flex-wrap:wrap;">
-        <button id="shareCreateBtn" class="btn" type="button" data-tour="filemgr-share-create">Create link</button>
+        <button id="shareCreateBtn" class="btn" type="button" data-tour="filemgr-share-create" data-i18n="filemgr.share.create">Create link</button>
         <div id="shareStatus" class="mono" data-tour="filemgr-share-status" style="align-self:center; opacity:.85;">&nbsp;</div>
       </div>
 
       <div id="shareOutWrap" class="hidden" data-tour="filemgr-share-output" style="grid-column: 1 / -1;">
-        <div class="k" style="margin-bottom:8px;">Link</div>
+        <div class="k" style="margin-bottom:8px;" data-i18n="filemgr.share.link">Link</div>
         <div class="v" style="display:flex; gap:10px; align-items:center;">
           <input id="shareOut" class="mono" readonly data-tour="filemgr-share-url"
                  style="flex:1 1 auto; min-width:0; padding:10px 12px; border-radius:12px; border:1px solid var(--border2); background:rgba(0,0,0,0.22); color:var(--fg);" />
-          <button id="shareCopyBtn" class="btn secondary" type="button" data-tour="filemgr-share-copy">Copy</button>
+          <button id="shareCopyBtn" class="btn secondary" type="button" data-tour="filemgr-share-copy" data-i18n="filemgr.share.copy">Copy</button>
         </div>
       </div>
     </div>
@@ -1902,46 +1903,46 @@
   <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="uploadConflictTitle">
     <div class="modalHead">
       <div>
-        <div id="uploadConflictTitle" class="modalTitle">File already exists</div>
+        <div id="uploadConflictTitle" class="modalTitle" data-i18n="filemgr.conflict.title">File already exists</div>
         <div id="uploadConflictPath" class="modalSub mono">/</div>
       </div>
-      <button id="uploadConflictClose" class="btn secondary" type="button">Close</button>
+      <button id="uploadConflictClose" class="btn secondary" type="button" data-i18n="filemgr.close">Close</button>
     </div>
     <div class="modalBody">
-      <div class="k">Existing file</div>
+      <div class="k" data-i18n="filemgr.conflict.existing">Existing file</div>
       <div id="uploadConflictExisting" class="v"></div>
 
-      <div class="k">New file</div>
+      <div class="k" data-i18n="filemgr.conflict.new">New file</div>
       <div id="uploadConflictIncoming" class="v"></div>
 
-      <div class="k">Choice</div>
+      <div class="k" data-i18n="filemgr.conflict.choice">Choice</div>
       <div class="v" style="display:grid; gap:10px;">
         <label style="display:flex; gap:10px; align-items:flex-start;">
           <input type="radio" name="uploadConflictChoice" id="uploadConflictKeepOld" value="keep_old" checked>
           <span>
-            <strong>Keep existing</strong><br>
-            <span style="opacity:.82;">Skip this upload and keep the file already stored in PQ-NAS.</span>
+            <strong data-i18n="filemgr.conflict.keep">Keep existing</strong><br>
+            <span style="opacity:.82;" data-i18n="filemgr.conflict.keep_desc">Skip this upload and keep the file already stored in PQ-NAS.</span>
           </span>
         </label>
 
         <label style="display:flex; gap:10px; align-items:flex-start;">
           <input type="radio" name="uploadConflictChoice" id="uploadConflictReplace" value="replace">
           <span>
-            <strong>Replace with new</strong><br>
-            <span style="opacity:.82;">Upload this new file and replace the existing one.</span>
+            <strong data-i18n="filemgr.conflict.replace">Replace with new</strong><br>
+            <span style="opacity:.82;" data-i18n="filemgr.conflict.replace_desc">Upload this new file and replace the existing one.</span>
           </span>
         </label>
 
         <label style="display:flex; gap:10px; align-items:center; margin-top:8px;">
           <input type="checkbox" id="uploadConflictApplyAll">
-          <span>Use this choice for all remaining conflicts in this upload</span>
+          <span data-i18n="filemgr.conflict.apply_all">Use this choice for all remaining conflicts in this upload</span>
         </label>
       </div>
 
-      <div class="k">Action</div>
+      <div class="k" data-i18n="filemgr.share.action">Action</div>
       <div class="v" style="display:flex; gap:10px; flex-wrap:wrap;">
-        <button id="uploadConflictOkBtn" class="btn" type="button">Continue</button>
-        <button id="uploadConflictCancelBtn" class="btn secondary" type="button">Cancel upload</button>
+        <button id="uploadConflictOkBtn" class="btn" type="button" data-i18n="filemgr.conflict.continue">Continue</button>
+        <button id="uploadConflictCancelBtn" class="btn secondary" type="button" data-i18n="filemgr.conflict.cancel_upload">Cancel upload</button>
       </div>
     </div>
   </div>
@@ -1950,19 +1951,19 @@
   <div id="imagePreviewCard" class="modalCard" style="width:min(1200px,96vw); max-height:92vh; display:flex; flex-direction:column; position:absolute; left:50%; top:80px; transform:translateX(-50%);">
     <div id="imagePreviewHead" class="modalHead" style="cursor:move; user-select:none;">
       <div>
-        <div id="imagePreviewTitle" class="modalTitle">Image preview</div>
+        <div id="imagePreviewTitle" class="modalTitle" data-i18n="filemgr.image_preview">Image preview</div>
         <div id="imagePreviewPath" class="modalSub mono">/</div>
       </div>
 
       <div style="display:flex; align-items:center; gap:8px;">
-        <button id="imagePreviewPrevBtn" class="btn secondary" type="button" title="Previous image">←</button>
-        <button id="imagePreviewNextBtn" class="btn secondary" type="button" title="Next image">→</button>
+        <button id="imagePreviewPrevBtn" class="btn secondary" type="button" title="Previous image" data-i18n-title="filemgr.image_prev">←</button>
+        <button id="imagePreviewNextBtn" class="btn secondary" type="button" title="Next image" data-i18n-title="filemgr.image_next">→</button>
         <button id="imagePreviewClose" class="iconBtn" type="button" aria-label="Close">✕</button>
       </div>
     </div>
 
     <div style="padding:10px 14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--border2);">
-      <button id="imagePreviewFitBtn" class="btn secondary" type="button">Fit</button>
+      <button id="imagePreviewFitBtn" class="btn secondary" type="button" data-i18n="filemgr.fit">Fit</button>
       <button id="imagePreviewActualBtn" class="btn secondary" type="button">100%</button>
       <div id="imagePreviewInfo" class="mono" style="opacity:.8;"></div>
     </div>
@@ -1976,10 +1977,10 @@
     <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="workspaceMembersTitle">
       <div class="modalHead">
         <div>
-          <div id="workspaceMembersTitle" class="modalTitle">Workspace members</div>
+          <div id="workspaceMembersTitle" class="modalTitle" data-i18n="filemgr.workspace.members_title">Workspace members</div>
           <div id="workspaceMembersSub" class="modalSub mono"></div>
         </div>
-        <button id="workspaceMembersClose" class="btn secondary" type="button">Close</button>
+        <button id="workspaceMembersClose" class="btn secondary" type="button" data-i18n="filemgr.close">Close</button>
       </div>
 
       <div class="modalBody" style="display:block;">
@@ -1988,18 +1989,18 @@
         <div id="workspaceMembersList" style="display:grid; gap:10px;"></div>
 
         <div style="margin-top:16px; padding-top:16px; border-top:1px solid var(--border2); display:grid; gap:10px;">
-          <div class="k">Management</div>
+          <div class="k" data-i18n="filemgr.workspace.management">Management</div>
 
           <div class="v">
-            Workspace member changes are managed outside File Manager.
+            <span data-i18n="filemgr.workspace.managed_elsewhere">Workspace member changes are managed outside File Manager.</span>
           </div>
 
           <div class="v">
-            You can leave this workspace yourself. After leaving, it will disappear from the Location dropdown.
+            <span data-i18n="filemgr.workspace.leave_help">You can leave this workspace yourself. After leaving, it will disappear from the Location dropdown.</span>
           </div>
 
           <div style="display:flex; gap:10px; flex-wrap:wrap;">
-            <button id="workspaceLeaveBtn" class="btn secondary" type="button">Leave workspace</button>
+            <button id="workspaceLeaveBtn" class="btn secondary" type="button" data-i18n="filemgr.workspace.leave">Leave workspace</button>
           </div>
         </div>
       </div>
@@ -2009,20 +2010,20 @@
   <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="trashTitle" style="width:min(980px, calc(100vw - 24px));">
     <div class="modalHead">
       <div>
-        <div id="trashTitle" class="modalTitle">Trash</div>
-        <div id="trashSub" class="modalSub mono">Current scope</div>
+        <div id="trashTitle" class="modalTitle" data-i18n="filemgr.trash">Trash</div>
+        <div id="trashSub" class="modalSub mono" data-i18n="filemgr.trash.current_scope">Current scope</div>
       </div>
-      <button id="trashClose" class="btn secondary" type="button">Close</button>
+      <button id="trashClose" class="btn secondary" type="button" data-i18n="filemgr.close">Close</button>
     </div>
 
     <div class="modalBody" style="display:block;">
-      <div id="trashStatus" class="mono" style="margin-bottom:12px; opacity:.85;">Ready.</div>
+      <div id="trashStatus" class="mono" style="margin-bottom:12px; opacity:.85;" data-i18n="filemgr.ready">Ready.</div>
       <div id="trashList" class="trashList"></div>
     </div>
 
     <div class="modalFoot">
-      <button id="trashRefreshBtn" class="btn secondary" type="button">Refresh</button>
-      <button id="trashEmptyBtn" class="btn secondary" type="button">Empty trash</button>
+      <button id="trashRefreshBtn" class="btn secondary" type="button" data-i18n="common.refresh">Refresh</button>
+      <button id="trashEmptyBtn" class="btn secondary" type="button" data-i18n="filemgr.trash.empty">Empty trash</button>
       <div style="flex:1 1 auto;"></div>
       <span id="trashCount" class="mono" style="opacity:.8;"></span>
     </div>
@@ -2037,7 +2038,7 @@
 <script src="./audio_preview.js"></script>
 <script src="./office_preview.js"></script>
 <script src="/static/pqnas_folder_picker.js?v=3"></script>
-<script src="./app.js?v=lock-pill-color-1778487093"></script>
+<script src="./app.js?v=filemgr-i18n-dynamic-1"></script>
 <script src="./filemgr_people.js?v=people-member-link-new-pill-1"></script>
 <script src="./filemgr_workspaces.js?v=shared-spaces-ui-1"></script>
 <script src="./filemgr_annotations.js?v=file-annotations-4"></script>
