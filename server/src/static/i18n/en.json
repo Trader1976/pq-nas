@@ -509,5 +509,10 @@
   "filemgr.compare.changed": "~{count} changed",
   "filemgr.compare.large_fallback": "large-file fallback",
   "filemgr.compare.loaded_summary": "Loaded. {summary}{fallback}",
-  "filemgr.compare.loaded_no_diff": "Loaded. No line differences found."
+  "filemgr.compare.loaded_no_diff": "Loaded. No line differences found.",
+  "filemgr.image.loading": "Loading…",
+  "filemgr.image.alt": "image",
+  "filemgr.image.failed": "Failed to load preview",
+  "filemgr.image.position": "{width} × {height}{position}",
+  "filemgr.image.position_suffix": " • {index} / {total}"
 }

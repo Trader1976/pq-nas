@@ -509,5 +509,10 @@
   "filemgr.compare.changed": "~{count} muutettu",
   "filemgr.compare.large_fallback": "suuren tiedoston varatila",
   "filemgr.compare.loaded_summary": "Ladattu. {summary}{fallback}",
-  "filemgr.compare.loaded_no_diff": "Ladattu. Rivieroja ei löytynyt."
+  "filemgr.compare.loaded_no_diff": "Ladattu. Rivieroja ei löytynyt.",
+  "filemgr.image.loading": "Ladataan…",
+  "filemgr.image.alt": "kuva",
+  "filemgr.image.failed": "Esikatselun lataus epäonnistui",
+  "filemgr.image.position": "{width} × {height}{position}",
+  "filemgr.image.position_suffix": " • {index} / {total}"
 }

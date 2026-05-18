@@ -4,6 +4,15 @@
     const FM = window.PQNAS_FILEMGR;
     if (!FM) return;
 
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
     const imagePreviewModal = document.getElementById("imagePreviewModal");
     const imagePreviewCard = document.getElementById("imagePreviewCard");
     const imagePreviewHead = document.getElementById("imagePreviewHead");
@@ -153,22 +162,22 @@
 
         state.relPath = rel;
 
-        if (imagePreviewTitle) imagePreviewTitle.textContent = "Image preview";
+        if (imagePreviewTitle) imagePreviewTitle.textContent = tr("filemgr.image_preview", null, "Image preview");
         if (imagePreviewPath) imagePreviewPath.textContent = "/" + rel;
-        if (imagePreviewInfo) imagePreviewInfo.textContent = "Loading…";
+        if (imagePreviewInfo) imagePreviewInfo.textContent = tr("filemgr.image.loading", null, "Loading…");
 
         if (imagePreviewImg) {
-            imagePreviewImg.alt = item.name || "image";
+            imagePreviewImg.alt = item.name || tr("filemgr.image.alt", null, "image");
             imagePreviewImg.onload = () => {
                 if (imagePreviewInfo) {
                     const { items, idx } = currentImageIndex();
-                    const pos = (idx >= 0 && items.length > 1) ? ` • ${idx + 1} / ${items.length}` : "";
-                    imagePreviewInfo.textContent = `${imagePreviewImg.naturalWidth} × ${imagePreviewImg.naturalHeight}${pos}`;
+                    const pos = (idx >= 0 && items.length > 1) ? tr("filemgr.image.position_suffix", { index: idx + 1, total: items.length }, ` • ${idx + 1} / ${items.length}`) : "";
+                    imagePreviewInfo.textContent = tr("filemgr.image.position", { width: imagePreviewImg.naturalWidth, height: imagePreviewImg.naturalHeight, position: pos }, `${imagePreviewImg.naturalWidth} × ${imagePreviewImg.naturalHeight}${pos}`);
                 }
                 updateNavButtons();
             };
             imagePreviewImg.onerror = () => {
-                if (imagePreviewInfo) imagePreviewInfo.textContent = "Failed to load preview";
+                if (imagePreviewInfo) imagePreviewInfo.textContent = tr("filemgr.image.failed", null, "Failed to load preview");
             };
             imagePreviewImg.src = src;
         }
