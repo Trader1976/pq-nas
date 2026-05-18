@@ -3,6 +3,23 @@
 
     const $ = (id) => document.getElementById(id);
 
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
+    function applyStaticI18n() {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.apply === "function") {
+                window.PQNAS_I18N.apply(document);
+            }
+        } catch (_) {}
+    }
+
     let currentTrendPeriod = "7d";
     let latestSummary = null;
     let latestTrendPayload = null;
@@ -98,10 +115,10 @@
 
     function fmtDays(days) {
         if (!Number.isFinite(days) || days < 0) return "—";
-        if (days < 1) return "less than 1 day";
-        if (days < 60) return `${Math.round(days)} days`;
-        if (days < 730) return `${Math.round(days / 30.4375)} months`;
-        return `${(days / 365.25).toFixed(1)} years`;
+        if (days < 1) return tr("admin.stats.less_than_day", null, "less than 1 day");
+        if (days < 60) return tr("admin.stats.days", { count: Math.round(days) }, `${Math.round(days)} days`);
+        if (days < 730) return tr("admin.stats.months", { count: Math.round(days / 30.4375) }, `${Math.round(days / 30.4375)} months`);
+        return tr("admin.stats.years", { count: (days / 365.25).toFixed(1) }, `${(days / 365.25).toFixed(1)} years`);
     }
 
     function renderGrowthInsights() {
@@ -110,10 +127,10 @@
             : [];
 
         if (points.length < 2) {
-            setInsight("insightStorageChange", "—", "Need at least 2 samples");
-            setInsight("insightFilesChange", "—", "Need at least 2 samples");
-            setInsight("insightGrowthPerDay", "—", "Need at least 2 samples");
-            setInsight("insightQuotaHorizon", "—", "Need more trend data");
+            setInsight("insightStorageChange", "—", tr("admin.stats.need_2_samples", null, "Need at least 2 samples"));
+            setInsight("insightFilesChange", "—", tr("admin.stats.need_2_samples", null, "Need at least 2 samples"));
+            setInsight("insightGrowthPerDay", "—", tr("admin.stats.need_2_samples", null, "Need at least 2 samples"));
+            setInsight("insightQuotaHorizon", "—", tr("admin.stats.need_more_trend", null, "Need more trend data"));
             return;
         }
 
@@ -142,7 +159,7 @@
         setInsight(
             "insightFilesChange",
             signedNum(deltaFiles),
-            `${fmtNum(firstFiles)} → ${fmtNum(lastFiles)} files`,
+            tr("admin.stats.files_count", { count: `${fmtNum(firstFiles)} → ${fmtNum(lastFiles)}` }, `${fmtNum(firstFiles)} → ${fmtNum(lastFiles)} files`),
             fileKind
         );
 
@@ -152,7 +169,7 @@
             setInsight(
                 "insightGrowthPerDay",
                 signedBytes(perDay),
-                `Based on ${points.length} points / ${days.toFixed(days < 2 ? 1 : 0)} days`,
+                tr("admin.stats.based_on_points", { points: points.length, days: days.toFixed(days < 2 ? 1 : 0) }, `Based on ${points.length} points / ${days.toFixed(days < 2 ? 1 : 0)} days`),
                 perDayKind
             );
 
@@ -165,8 +182,8 @@
                 if (remaining <= 0) {
                     setInsight(
                         "insightQuotaHorizon",
-                        "over quota",
-                        `${fmtBytes(lastBytes)} used of ${fmtBytes(totalQuota)} allocated`,
+                        tr("admin.stats.over_quota", null, "over quota"),
+                        tr("admin.stats.used_of_allocated", { used: fmtBytes(lastBytes), total: fmtBytes(totalQuota) }, `${fmtBytes(lastBytes)} used of ${fmtBytes(totalQuota)} allocated`),
                         "bad"
                     );
                 } else {
@@ -174,30 +191,30 @@
                     setInsight(
                         "insightQuotaHorizon",
                         fmtDays(daysLeft),
-                        `${fmtBytes(remaining)} remaining of allocated quota`,
+                        tr("admin.stats.remaining_allocated", { remaining: fmtBytes(remaining) }, `${fmtBytes(remaining)} remaining of allocated quota`),
                         daysLeft < 30 ? "bad" : (daysLeft < 90 ? "warn" : "good")
                     );
                 }
             } else if (totalQuota > 0) {
                 setInsight(
                     "insightQuotaHorizon",
-                    "stable",
-                    `${fmtBytes(lastBytes)} used of ${fmtBytes(totalQuota)} allocated`,
+                    tr("admin.stats.stable", null, "stable"),
+                    tr("admin.stats.used_of_allocated", { used: fmtBytes(lastBytes), total: fmtBytes(totalQuota) }, `${fmtBytes(lastBytes)} used of ${fmtBytes(totalQuota)} allocated`),
                     "good"
                 );
             } else {
-                setInsight("insightQuotaHorizon", "—", "No allocated quota total");
+                setInsight("insightQuotaHorizon", "—", tr("admin.stats.no_allocated_quota", null, "No allocated quota total"));
             }
         } else {
-            setInsight("insightGrowthPerDay", "—", "Samples too close together");
-            setInsight("insightQuotaHorizon", "—", "Samples too close together");
+            setInsight("insightGrowthPerDay", "—", tr("admin.stats.samples_too_close", null, "Samples too close together"));
+            setInsight("insightQuotaHorizon", "—", tr("admin.stats.samples_too_close", null, "Samples too close together"));
         }
     }
 
 
     function rowsHtml(rows, nameKey, emptyText) {
         if (!Array.isArray(rows) || rows.length === 0) {
-            return `<tr><td colspan="3">${esc(emptyText || "No data")}</td></tr>`;
+            return `<tr><td colspan="3">${esc(emptyText || tr("admin.stats.no_data", null, "No data"))}</td></tr>`;
         }
 
         return rows.map(r => `
@@ -213,6 +230,19 @@
         if (period === "24h" || period === "7d") return "hour";
         if (period === "all") return "day";
         return "day";
+    }
+
+    function trendBucketLabel(bucket) {
+        const b = String(bucket || "raw");
+        if (b === "hour") return tr("admin.stats.bucket.hour", null, "hour");
+        if (b === "day") return tr("admin.stats.bucket.day", null, "day");
+        return tr("admin.stats.bucket.raw", null, b);
+    }
+
+    function trendPointWord(count) {
+        return Number(count) === 1
+            ? tr("admin.stats.point_one", null, "point")
+            : tr("admin.stats.point_many", null, "points");
     }
 
     function setTrendStatus(text) {
@@ -273,7 +303,7 @@
         ctx.fillStyle = textColor(0.62);
 
         if (!arr.length || !values.length) {
-            ctx.fillText("No trend data yet", padL, padT + 24);
+            ctx.fillText(tr("admin.stats.no_trend_data", null, "No trend data yet"), padL, padT + 24);
             return;
         }
 
@@ -352,10 +382,10 @@
 
         const firstLabel = firstDate && !Number.isNaN(firstDate.getTime())
             ? firstDate.toLocaleDateString()
-            : "start";
+            : tr("admin.stats.start", null, "start");
         const lastLabel = lastDate && !Number.isNaN(lastDate.getTime())
             ? lastDate.toLocaleDateString()
-            : "now";
+            : tr("admin.stats.now", null, "now");
 
         ctx.fillText(firstLabel, padL, cssH - 7);
         ctx.textAlign = "right";
@@ -367,7 +397,7 @@
         const points = Array.isArray(j.points) ? j.points : [];
 
         if (!points.length) {
-            setTrendStatus("No samples");
+            setTrendStatus(tr("admin.stats.no_samples", null, "No samples"));
             ["trendStorageValue", "trendFilesValue", "trendUsersValue", "trendWorkspacesValue"].forEach(id => setText(id, "—"));
             drawLineChart($("trendStorageCanvas"), [], p => p.files_total_bytes, fmtShortBytes);
             drawLineChart($("trendFilesCanvas"), [], p => p.files_total_count, fmtNum);
@@ -379,9 +409,9 @@
 
         const last = points[points.length - 1] || {};
         setText("trendStorageValue", fmtBytes(last.files_total_bytes));
-        setText("trendFilesValue", `${fmtNum(last.files_total_count)} files`);
-        setText("trendUsersValue", `${fmtNum(last.users_enabled)} enabled / ${fmtNum(last.users_total)} total`);
-        setText("trendWorkspacesValue", `${fmtNum(last.workspaces_enabled)} enabled / ${fmtNum(last.workspaces_total)} total`);
+        setText("trendFilesValue", tr("admin.stats.files_count", { count: fmtNum(last.files_total_count) }, `${fmtNum(last.files_total_count)} files`));
+        setText("trendUsersValue", tr("admin.stats.enabled_total", { enabled: fmtNum(last.users_enabled), total: fmtNum(last.users_total) }, `${fmtNum(last.users_enabled)} enabled / ${fmtNum(last.users_total)} total`));
+        setText("trendWorkspacesValue", tr("admin.stats.enabled_total", { enabled: fmtNum(last.workspaces_enabled), total: fmtNum(last.workspaces_total) }, `${fmtNum(last.workspaces_enabled)} enabled / ${fmtNum(last.workspaces_total)} total`));
 
         drawLineChart($("trendStorageCanvas"), points, p => p.files_total_bytes, fmtShortBytes);
         drawLineChart($("trendFilesCanvas"), points, p => p.files_total_count, fmtNum);
@@ -389,7 +419,15 @@
         drawLineChart($("trendWorkspacesCanvas"), points, p => p.workspaces_total, fmtNum);
 
         const bucket = j.bucket || "raw";
-        setTrendStatus(`${fmtNum(points.length)} point${points.length === 1 ? "" : "s"} · ${bucket}`);
+        setTrendStatus(tr(
+            "admin.stats.trend_points",
+            {
+                count: fmtNum(points.length),
+                pointWord: trendPointWord(points.length),
+                bucket: trendBucketLabel(bucket)
+            },
+            `${fmtNum(points.length)} ${points.length === 1 ? "point" : "points"} · ${bucket}`
+        ));
 
         renderGrowthInsights();
     }
@@ -401,7 +439,7 @@
         const bucket = trendBucketForPeriod(period);
         const url = `/api/v4/admin/stats/trends?period=${encodeURIComponent(period)}&bucket=${encodeURIComponent(bucket)}`;
 
-        setTrendStatus("Loading…");
+        setTrendStatus(tr("admin.stats.loading", null, "Loading…"));
 
         try {
             const r = await fetch(url, {
@@ -423,17 +461,17 @@
                 setText(id, "—");
             });
 
-            setInsight("insightStorageChange", "—", "Trend request failed");
-            setInsight("insightFilesChange", "—", "Trend request failed");
-            setInsight("insightGrowthPerDay", "—", "Trend request failed");
-            setInsight("insightQuotaHorizon", "—", "Trend request failed");
+            setInsight("insightStorageChange", "—", tr("admin.stats.trend_failed", null, "Trend request failed"));
+            setInsight("insightFilesChange", "—", tr("admin.stats.trend_failed", null, "Trend request failed"));
+            setInsight("insightGrowthPerDay", "—", tr("admin.stats.trend_failed", null, "Trend request failed"));
+            setInsight("insightQuotaHorizon", "—", tr("admin.stats.trend_failed", null, "Trend request failed"));
 
             drawLineChart($("trendStorageCanvas"), [], p => p.files_total_bytes, fmtShortBytes);
             drawLineChart($("trendFilesCanvas"), [], p => p.files_total_count, fmtNum);
             drawLineChart($("trendUsersCanvas"), [], p => p.users_total, fmtNum);
             drawLineChart($("trendWorkspacesCanvas"), [], p => p.workspaces_total, fmtNum);
 
-            setTrendStatus(`Failed: ${e.message || e}`);
+            setTrendStatus(tr("admin.stats.failed", { error: e.message || e }, `Failed: ${e.message || e}`));
         }
     }
 
@@ -443,7 +481,7 @@
         const status = $("status");
 
         if (btn) btn.disabled = true;
-        if (status) status.textContent = force ? "Scanning live storage…" : "Loading statistics…";
+        if (status) status.textContent = force ? tr("admin.stats.scanning_live", null, "Scanning live storage…") : tr("admin.stats.loading_statistics", null, "Loading statistics…");
 
         try {
             const r = await fetch(url, {
@@ -466,50 +504,50 @@
             setText("cardUsers", fmtNum(users.total));
             setText(
                 "cardUsersMini",
-                `${fmtNum(users.enabled)} enabled · ${fmtNum(users.disabled)} disabled · ${fmtNum(users.admins)} admin`
+                tr("admin.stats.enabled_disabled_admin", { enabled: fmtNum(users.enabled), disabled: fmtNum(users.disabled), admins: fmtNum(users.admins) }, `${fmtNum(users.enabled)} enabled · ${fmtNum(users.disabled)} disabled · ${fmtNum(users.admins)} admin`)
             );
 
             setText("cardFiles", fmtNum(files.total_count));
             setText(
                 "cardFilesMini",
-                `${fmtNum(files.scanned_roots)} roots scanned · ${fmtNum(files.skipped_roots)} skipped`
+                tr("admin.stats.roots_scanned", { scanned: fmtNum(files.scanned_roots), skipped: fmtNum(files.skipped_roots) }, `${fmtNum(files.scanned_roots)} roots scanned · ${fmtNum(files.skipped_roots)} skipped`)
             );
 
             setText("cardBytes", fmtBytes(files.total_bytes));
-            setText("cardBytesMini", `Largest file ${fmtBytes(files.largest_bytes)}`);
+            setText("cardBytesMini", tr("admin.stats.largest_file", { size: fmtBytes(files.largest_bytes) }, `Largest file ${fmtBytes(files.largest_bytes)}`));
 
             setText("cardWorkspaces", fmtNum(workspaces.total));
             setText(
                 "cardWorkspacesMini",
-                `${fmtNum(workspaces.enabled)} enabled · ${fmtNum(workspaces.user_created)} user-created · avg file ${fmtBytes(files.average_bytes)}`
+                tr("admin.stats.workspace_mini", { enabled: fmtNum(workspaces.enabled), userCreated: fmtNum(workspaces.user_created), avg: fmtBytes(files.average_bytes) }, `${fmtNum(workspaces.enabled)} enabled · ${fmtNum(workspaces.user_created)} user-created · avg file ${fmtBytes(files.average_bytes)}`)
             );
 
-            $("mimeRows").innerHTML = rowsHtml(j.top_mime_types, "mime", "No MIME data");
-            $("extRows").innerHTML = rowsHtml(j.top_extensions, "extension", "No extension data");
-            $("scopeRows").innerHTML = rowsHtml(j.files_by_scope, "scope", "No scope data");
+            $("mimeRows").innerHTML = rowsHtml(j.top_mime_types, "mime", tr("admin.stats.no_mime", null, "No MIME data"));
+            $("extRows").innerHTML = rowsHtml(j.top_extensions, "extension", tr("admin.stats.no_extension", null, "No extension data"));
+            $("scopeRows").innerHTML = rowsHtml(j.files_by_scope, "scope", tr("admin.stats.no_scope", null, "No scope data"));
 
             const warnings = Array.isArray(j.warnings) ? j.warnings : [];
             const warningHtml = warnings.length
-                ? `<tr><th>Warnings</th><td class="warn">${warnings.map(esc).join("<br>")}</td></tr>`
-                : `<tr><th>Warnings</th><td>None</td></tr>`;
+                ? `<tr><th>${esc(tr("admin.stats.warnings", null, "Warnings"))}</th><td class="warn">${warnings.map(esc).join("<br>")}</td></tr>`
+                : `<tr><th>${esc(tr("admin.stats.warnings", null, "Warnings"))}</th><td>${esc(tr("admin.stats.none", null, "None"))}</td></tr>`;
 
             $("detailRows").innerHTML = `
-                <tr><th>Generated</th><td class="mono">${esc(j.generated_at_iso || "—")}</td></tr>
-                <tr><th>Method</th><td>${esc(j.method || "—")}</td></tr>
-                <tr><th>Notes</th><td>${esc(j.note || "—")}</td></tr>
+                <tr><th>${esc(tr("admin.stats.generated", null, "Generated"))}</th><td class="mono">${esc(j.generated_at_iso || "—")}</td></tr>
+                <tr><th>${esc(tr("admin.stats.method", null, "Method"))}</th><td>${esc(j.method || "—")}</td></tr>
+                <tr><th>${esc(tr("admin.stats.notes", null, "Notes"))}</th><td>${esc(j.note || "—")}</td></tr>
                 ${warningHtml}
             `;
 
             if (status) {
-                status.textContent = `Updated ${j.generated_at_iso || "now"}`;
+                status.textContent = tr("admin.stats.updated_at", { time: j.generated_at_iso || tr("admin.stats.now", null, "now") }, `Updated ${j.generated_at_iso || "now"}`);
             }
 
             renderGrowthInsights();
         } catch (e) {
-            if (status) status.textContent = `Failed: ${e.message || e}`;
+            if (status) status.textContent = tr("admin.stats.failed", { error: e.message || e }, `Failed: ${e.message || e}`);
             ["mimeRows", "extRows", "scopeRows"].forEach(id => {
                 const el = $(id);
-                if (el) el.innerHTML = `<tr><td colspan="3">Failed to load statistics.</td></tr>`;
+                if (el) el.innerHTML = `<tr><td colspan="3">${esc(tr("admin.stats.failed_load", null, "Failed to load statistics."))}</td></tr>`;
             });
         } finally {
             if (btn) btn.disabled = false;
@@ -531,8 +569,15 @@
             });
         });
 
+        applyStaticI18n();
         loadStats(false);
         loadTrends(currentTrendPeriod);
+
+        window.addEventListener("pqnas-language-changed", () => {
+            applyStaticI18n();
+            renderGrowthInsights();
+            if (latestTrendPayload) renderTrends(latestTrendPayload);
+        });
 
         window.addEventListener("resize", () => {
             loadTrends(currentTrendPeriod);
