@@ -2156,24 +2156,24 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
 
     const ok = await fmConfirmModal({
-      title: tr("filemgr.trash.purge_title", null, "Delete permanently?"),
-      subtitle: tr("filemgr.trash.purge_subtitle", null, "This item will be permanently deleted from Trash."),
+      title: tr("filemgr.selection.delete_title", null, "Move selection to trash?"),
+      subtitle: tr("filemgr.selection.delete_subtitle", null, "The selected items will be moved to Trash."),
       rows: [
         {
-          label: tr("filemgr.delete.item", null, "Item"),
-          value: (typeof item !== "undefined" && item && item.name) ? item.name : tr("filemgr.delete.selected_item", null, "Selected item"),
-          mono: true
+          label: tr("filemgr.selection.delete_count_label", null, "Selected items"),
+          value: tr("filemgr.selection.delete_count", { count: paths.length }, `${paths.length} item(s)`),
+          mono: false
         },
       ],
-      note: tr("filemgr.trash.purge_note", null, "This cannot be undone."),
-      confirmText: tr("filemgr.trash.purge_confirm", null, "Delete permanently"),
+      note: tr("filemgr.selection.delete_note", null, "You can restore them later from Trash until they are permanently deleted."),
+      confirmText: tr("filemgr.selection.delete_confirm", null, "Move selection to trash"),
       cancelText: tr("filemgr.cancel", null, "Cancel"),
       danger: true,
     });
     if (!ok) return;
 
     setBadge("warn", "moving to trash…");
-    status.textContent = `Moving to trash 0/${paths.length}…`;
+    status.textContent = tr("filemgr.selection.moving_progress", { done: 0, total: paths.length }, `Moving to trash 0/${paths.length}…`);
 
     let done = 0;
     let failed = 0;
@@ -2207,18 +2207,18 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
       }
 
       done++;
-      status.textContent = `Moving to trash ${done}/${paths.length}…`;
+      status.textContent = tr("filemgr.selection.moving_progress", { done, total: paths.length }, `Moving to trash ${done}/${paths.length}…`);
     }
 
     clearSelection();
 
     if (failed > 0) {
       setBadge("err", "partial");
-      status.textContent = `Moved ${done}/${paths.length} item(s) to trash. Failed: ${failed}. See console.`;
+      status.textContent = tr("filemgr.selection.moved_partial", { done, total: paths.length, failed }, `Moved ${done}/${paths.length} item(s) to trash. Failed: ${failed}. See console.`);
       console.warn("Multi-delete failures:", failures);
     } else {
       setBadge("ok", "ready");
-      status.textContent = `Moved ${done} item(s) to trash.`;
+      status.textContent = tr("filemgr.selection.moved_done", { done }, `Moved ${done} item(s) to trash.`);
     }
     try {
       await fetchFavoritesFromServer();
@@ -5379,6 +5379,8 @@ function describeMoveItems(items) {
     if (s === "moving to trash…") return tr("filemgr.badge.moving_to_trash", null, "moving to trash…");
     if (s === "copying…") return tr("filemgr.badge.copying", null, "copying…");
     if (s === "moving…") return tr("filemgr.badge.moving", null, "moving…");
+    if (s === "loading…") return tr("filemgr.badge.loading", null, "loading…");
+    if (s === "network") return tr("filemgr.badge.network", null, "network");
     return s;
   }
 
@@ -5950,7 +5952,7 @@ function describeMoveItems(items) {
           Array.from(gridEl.querySelectorAll(".tile")).map(tileEl => tileEl.dataset.key)
       );
       applySelectionToDom();
-      status.textContent = `Selected: ${selectedKeys.size}`;
+      status.textContent = tr("filemgr.list.selected", { count: selectedKeys.size }, `Selected: ${selectedKeys.size}`);
     }
   });
 
@@ -6047,12 +6049,12 @@ function describeMoveItems(items) {
 
     const hasExpired = b.classList.contains("expired");
     if (hasExpired === wantExpired && b.textContent) {
-      b.title = wantExpired ? "Share link expired" : "Shared";
+      b.title = wantExpired ? tr("filemgr.list.share_expired", null, "Share link expired") : tr("filemgr.list.shared", null, "Shared");
       return;
     }
 
     b.className = "shareBadge" + (wantExpired ? " expired" : "");
-    b.title = wantExpired ? "Share link expired" : "Shared";
+    b.title = wantExpired ? tr("filemgr.list.share_expired", null, "Share link expired") : tr("filemgr.list.shared", null, "Shared");
     b.textContent = wantExpired ? "⏰" : "🔗";
   }
 
@@ -6167,7 +6169,7 @@ function describeMoveItems(items) {
     meta.className = "meta";
 
     const left = document.createElement("span");
-    left.textContent = item.type === "dir" ? "dir" : fmtSize(item.size_bytes || 0);
+    left.textContent = item.type === "dir" ? tr("filemgr.list.dir", null, "dir") : fmtSize(item.size_bytes || 0);
 
     const right = document.createElement("span");
     right.textContent = fmtTime(item.mtime_unix);
@@ -6794,7 +6796,7 @@ function describeMoveItems(items) {
 
     closeMenu();
     setBadge("warn", "loading…");
-    status.textContent = "Loading…";
+    status.textContent = tr("filemgr.list.loading", null, "Loading…");
     if (gridEl) gridEl.replaceChildren();
 
     const favoritesPromise = fetchFavoritesFromServer().catch((e) => {
@@ -6835,13 +6837,13 @@ function describeMoveItems(items) {
         setBadge("err", "error");
         const msg = j && (j.message || j.error)
             ? `${j.error || ""} ${j.message || ""}`.trim()
-            : `List failed`;
-        status.textContent = msg || "List failed";
+            : tr("filemgr.list.list_failed", null, `List failed`);
+        status.textContent = msg || tr("filemgr.list.list_failed", null, "List failed");
 
         const err = document.createElement("div");
         err.className = "tile mono";
         err.style.cursor = "default";
-        err.textContent = msg || "bad response";
+        err.textContent = msg || tr("filemgr.list.bad_response", null, "bad response");
         gridEl.appendChild(err);
         return;
       }
@@ -6881,19 +6883,19 @@ function describeMoveItems(items) {
       lastListedItems = items.slice();
       setBadge("ok", "ready");
 
-      const sortSuffix = sortMode ? ` • Sort: ${sortMode.shortLabel}` : "";
+      const sortSuffix = sortMode ? tr("filemgr.list.sort_suffix", { sort: sortMode.shortLabel }, ` • Sort: ${sortMode.shortLabel}`) : "";
 
       status.textContent = (favoritesEnabled && favoritesOnly)
-          ? `Favorites: ${items.length} / ${allItems.length}${sortSuffix}`
-          : `Items: ${items.length}${sortSuffix}`;
+          ? tr("filemgr.list.favorites", { shown: items.length, total: allItems.length, sort: sortSuffix }, `Favorites: ${items.length} / ${allItems.length}${sortSuffix}`)
+          : tr("filemgr.list.items", { count: items.length, sort: sortSuffix }, `Items: ${items.length}${sortSuffix}`);
 
       if (!items.length) {
         const empty = document.createElement("div");
         empty.className = "tile mono";
         empty.style.cursor = "default";
         empty.textContent = (favoritesEnabled && favoritesOnly)
-            ? "(no favorites in this folder)\n\nTip: click ☆ on any item or use the context menu."
-            : "(empty)\n\nTip: drag & drop files/folders here to upload.";
+            ? tr("filemgr.list.empty_favorites", null, "(no favorites in this folder)\n\nTip: click ☆ on any item or use the context menu.")
+            : tr("filemgr.list.empty", null, "(empty)\n\nTip: drag & drop files/folders here to upload.");
         gridEl.appendChild(empty);
 
         quotaPromise
@@ -6932,7 +6934,7 @@ function describeMoveItems(items) {
       }
 
       setBadge("err", "network");
-      status.textContent = "Network error";
+      status.textContent = tr("filemgr.list.network_error", null, "Network error");
 
       const err = document.createElement("div");
       err.className = "tile mono";
@@ -6965,7 +6967,7 @@ function describeMoveItems(items) {
     applySortUi();
     clearSelection();
     setBadge("ok", "ready");
-    status.textContent = `Sort: ${mode.title}`;
+    status.textContent = tr("filemgr.list.sort_status", { sort: mode.title }, `Sort: ${mode.title}`);
     load();
   });
 
