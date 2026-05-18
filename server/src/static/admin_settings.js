@@ -141,10 +141,45 @@
             .replaceAll('"', "&quot;")
             .replaceAll("'", "&#39;");
     }
+    function adminLabel(label) {
+        const s = String(label || "");
+        const map = {
+            "Status": "admin.common.status",
+            "Persisted": "admin.common.persisted",
+            "Runtime": "admin.common.runtime",
+            "Policy": "admin.common.policy",
+            "Active log": "admin.common.active_log",
+            "Preview": "admin.common.preview",
+            "Summary": "admin.common.summary",
+            "Theme": "admin.theme.pill",
+            "Tiering": "admin.uploads.tiering_label",
+            "Mount": "admin.uploads.mount",
+            "Space": "admin.uploads.space",
+            "Eligibility": "admin.uploads.eligibility",
+            "Warnings": "admin.uploads.warnings",
+            "Route": "admin.dna.route",
+            "PQ-NAS ID": "admin.dna.pqnas_id",
+            "Soft cap": "admin.uploads.soft_cap",
+            "Hard cap": "admin.uploads.hard_cap",
+            "Effective": "admin.uploads.effective"
+        };
+        const key = map[s];
+        return key ? tr(key, null, s) : s;
+    }
+
+    function adminStatusText(text) {
+        const s = String(text || "");
+        if (s === "loading…" || s === "loading...") return tr("admin.common.loading", null, "loading…");
+        if (s === "ready") return tr("admin.common.ready", null, "ready");
+        if (s === "error") return tr("admin.common.error", null, "error");
+        if (s === "saving…" || s === "saving...") return tr("admin.common.saving", null, "saving…");
+        return s;
+    }
+
     function setSnapshotsPill(kind, text) {
         if (!snapPill) return;
         snapPill.className = "pill " + (kind || "");
-        snapPill.innerHTML = `<span class="k">Status:</span> <span class="v">${escapeHtml(text)}</span>`;
+        snapPill.innerHTML = `<span class="k">${escapeHtml(adminLabel("Status"))}:</span> <span class="v">${escapeHtml(adminStatusText(text))}</span>`;
     }
     function tpdOptionsHtml(selected) {
         const vals = [1,2,4,6,12,24];
@@ -207,17 +242,13 @@
     function setStatusPill(kind, text) {
         if (!statusPill) return;
         statusPill.className = "pill " + (kind || "");
-        statusPill.innerHTML = `<span class="k">Status:</span> <span class="v">${escapeHtml(
-            text
-        )}</span>`;
+        statusPill.innerHTML = `<span class="k">${escapeHtml(adminLabel("Status"))}:</span> <span class="v">${escapeHtml(adminStatusText(text))}</span>`;
     }
 
     function setSimplePill(el, kind, k, v) {
         if (!el) return;
         el.className = "pill " + (kind || "");
-        el.innerHTML = `<span class="k">${escapeHtml(k)}:</span> <span class="v">${escapeHtml(
-            v
-        )}</span>`;
+        el.innerHTML = `<span class="k">${escapeHtml(adminLabel(k))}:</span> <span class="v">${escapeHtml(v)}</span>`;
     }
 
     function tr(key, vars = null, fallback = "") {
@@ -335,7 +366,7 @@
         } catch (_) {}
 
         if (themeSelect) themeSelect.value = t;
-        if (themePill) setSimplePill(themePill, "info", "Theme", t);
+        if (themePill) setSimplePill(themePill, "info", tr("admin.theme.pill", null, "Theme"), t);
         return t;
     }
     async function apiCreateDnaAlertIdentity() {
@@ -646,7 +677,7 @@ html[data-theme="win_classic"] .adminConfirmBackdrop{
 
             const title = document.createElement("div");
             title.className = "adminConfirmTitle";
-            title.textContent = options.title || "Confirm action";
+            title.textContent = options.title || tr("admin.confirm.title", null, "Confirm action");
 
             const sub = document.createElement("div");
             sub.className = "adminConfirmSub";
@@ -688,12 +719,12 @@ html[data-theme="win_classic"] .adminConfirmBackdrop{
             const cancelBtn = document.createElement("button");
             cancelBtn.type = "button";
             cancelBtn.className = "adminConfirmBtn secondary";
-            cancelBtn.textContent = options.cancelText || "Cancel";
+            cancelBtn.textContent = options.cancelText || tr("admin.common.cancel", null, "Cancel");
 
             const okBtn = document.createElement("button");
             okBtn.type = "button";
             okBtn.className = options.warn ? "adminConfirmBtn warn" : "adminConfirmBtn";
-            okBtn.textContent = options.confirmText || "OK";
+            okBtn.textContent = options.confirmText || tr("admin.common.ok", null, "OK");
 
             foot.appendChild(spacer);
             foot.appendChild(cancelBtn);
@@ -1710,16 +1741,16 @@ html[data-theme="win_classic"] .adminConfirmBackdrop{
         ev.preventDefault();
 
         const ok = await openAdminConfirmModal({
-            title: "Run audit prune now?",
-            subtitle: "This deletes rotated audit archives according to the saved retention policy.",
+            title: tr("admin.confirm.run_prune_title", null, "Run audit prune now?"),
+            subtitle: tr("admin.confirm.run_prune_sub", null, "This deletes rotated audit archives according to the saved retention policy."),
             rows: [
                 { label: "Target", value: "Rotated audit archives only" },
                 { label: "Active log", value: "pqnas_audit.jsonl is never deleted", mono: true },
                 { label: "Policy", value: "Uses the currently saved retention policy" },
             ],
             note: "This is permanent for selected rotated archive files. Preview prune first if you want to review candidates.",
-            confirmText: "Run prune now",
-            cancelText: "Cancel",
+            confirmText: tr("admin.audit.run_prune", null, "Run prune now"),
+            cancelText: tr("admin.common.cancel", null, "Cancel"),
             warn: true,
         });
         if (!ok) return;
@@ -1792,16 +1823,16 @@ html[data-theme="win_classic"] .adminConfirmBackdrop{
         ev.preventDefault();
 
         const ok = await openAdminConfirmModal({
-            title: "Rotate audit log now?",
-            subtitle: "This closes the current audit log and starts a fresh active log.",
+            title: tr("admin.confirm.rotate_title", null, "Rotate audit log now?"),
+            subtitle: tr("admin.confirm.rotate_sub", null, "This closes the current audit log and starts a fresh active log."),
             rows: [
                 { label: "Active log", value: "pqnas_audit.jsonl", mono: true },
                 { label: "Action", value: "Rename current log into timestamped archive" },
                 { label: "Chain", value: "Continuity preserved by rotate header" },
             ],
             note: "Already-written audit lines remain unchanged. New audit events will continue in the fresh log.",
-            confirmText: "Rotate now",
-            cancelText: "Cancel",
+            confirmText: tr("admin.audit.rotate_now", null, "Rotate now"),
+            cancelText: tr("admin.common.cancel", null, "Cancel"),
             warn: true,
         });
         if (!ok) return;
@@ -1947,8 +1978,18 @@ html[data-theme="win_classic"] .adminConfirmBackdrop{
         applyAdminLanguage(languageSelect.value);
     });
 
+    function applyAdminStaticI18n() {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.apply === "function") {
+                window.PQNAS_I18N.apply(document);
+            }
+        } catch (_) {}
+    }
+
     window.addEventListener("pqnas-language-changed", () => {
         updateLanguagePill(currentLanguageName());
+        applyAdminStaticI18n();
+        if (themePill && themeSelect) setSimplePill(themePill, "info", tr("admin.theme.pill", null, "Theme"), themeSelect.value || "dark");
     });
 
     // ---------------------------

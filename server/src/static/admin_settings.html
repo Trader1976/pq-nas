@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>DNA-Nexus NAS • Admin Settings</title>
+    <title data-i18n="admin.settings.title">DNA-Nexus NAS • Admin Settings</title>
 
     <link rel="stylesheet" href="/static/theme.css">
     <link rel="stylesheet" href="/static/shell_menu.css">
@@ -462,34 +462,32 @@
         <div class="brand">
             <div class="logoDot" aria-hidden="true"></div>
             <div style="min-width:0">
-                <h1>Admin</h1>
-                <div class="sub">Settings • runtime controls</div>
+                <h1 data-i18n="admin.settings.nav.admin">Admin</h1>
+                <div class="sub" data-i18n="admin.settings.brand_sub">Settings • runtime controls</div>
             </div>
         </div>
 
         <nav class="nav" aria-label="Admin navigation">
-            <div class="sectionLabel">Admin</div>
-            <a class="navbtn" href="/admin"><span>Overview</span><span class="k">O</span></a>
-            <a class="navbtn" href="/admin/users"><span>User profiles</span><span class="k">U</span></a>
+            <div class="sectionLabel" data-i18n="admin.settings.nav.admin">Admin</div>
+            <a class="navbtn" href="/admin"><span data-i18n="admin.settings.nav.overview">Overview</span><span class="k">O</span></a>
+            <a class="navbtn" href="/admin/users"><span data-i18n="admin.settings.nav.user_profiles">User profiles</span><span class="k">U</span></a>
             <a class="navbtn" href="/admin/stats">
-                <span>Statistics</span><span class="k">Σ</span>
+                <span data-i18n="admin.settings.nav.statistics">Statistics</span><span class="k">Σ</span>
             </a>
-            <a class="navbtn" href="/admin/approvals"><span>Approvals</span><span class="k">A</span></a>
-            <a class="navbtn" href="/admin/apps"><span>Apps</span><span class="k">📦</span></a>
-            <a class="navbtn" href="/admin/audit"><span>Audit log UI</span><span class="k">D</span></a>
-            <a class="navbtn active" href="/admin/settings"><span>Settings</span><span class="k">S</span></a>
-            <a class="navbtn" href="/system"><span>System</span><span class="k">Y</span></a>
+            <a class="navbtn" href="/admin/approvals"><span data-i18n="admin.settings.nav.approvals">Approvals</span><span class="k">A</span></a>
+            <a class="navbtn" href="/admin/apps"><span data-i18n="admin.settings.nav.apps">Apps</span><span class="k">📦</span></a>
+            <a class="navbtn" href="/admin/audit"><span data-i18n="admin.settings.nav.audit">Audit log UI</span><span class="k">D</span></a>
+            <a class="navbtn active" href="/admin/settings"><span data-i18n="admin.settings.nav.settings">Settings</span><span class="k">S</span></a>
+            <a class="navbtn" href="/system"><span data-i18n="admin.settings.nav.system">System</span><span class="k">Y</span></a>
             <div class="sectionLabel"> </div>
-            <a class="navbtn" href="/app"><span>Back...</span><span class="k">↩</span></a>
+            <a class="navbtn" href="/app"><span data-i18n="admin.settings.nav.back">Back...</span><span class="k">↩</span></a>
         </nav>
 
         <div class="bottom">
             <div class="statusCard" id="notesCard">
-                <div style="font-weight:950;">Notes</div>
+                <div style="font-weight:950;" data-i18n="admin.settings.notes.title">Notes</div>
                 <div class="mini">
-                    Settings are admin-only.
-                    They affect logging going forward.
-                    Already-written audit lines remain unchanged.
+                    <span data-i18n="admin.settings.notes.body">Settings are admin-only. They affect logging going forward. Already-written audit lines remain unchanged.</span>
                 </div>
             </div>
         </div>
@@ -498,11 +496,11 @@
     <main class="workspace">
         <div class="topbar">
             <div class="crumbs">
-                <div class="title">Admin • Settings</div>
-                <div class="sub">Admin-only runtime controls</div>
+                <div class="title" data-i18n="admin.settings.top.title">Admin • Settings</div>
+                <div class="sub" data-i18n="admin.settings.top.sub">Admin-only runtime controls</div>
             </div>
             <div class="actions">
-                <a class="btn" href="/admin">Back</a>
+                <a class="btn" href="/admin" data-i18n="admin.settings.back">Back</a>
             </div>
         </div>
 
@@ -510,19 +508,19 @@
 
             <div class="card accordion open" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="true">
-                    <div class="h">Audit verbosity</div>
-                    <div class="pill warn" id="statusPill"><span class="k">Status:</span> <span class="v">loading…</span></div>
+                    <div class="h"><span data-i18n="admin.audit.verbosity">Audit verbosity</span></div>
+                    <div class="pill warn" id="statusPill"><span class="k" data-i18n="admin.common.status">Status:</span> <span class="v">loading…</span></div>
                     <span class="chev" aria-hidden="true">▸</span>
                 </div>
                 <div class="bd">
                     <div class="row">
-                        <span class="pill"><span class="k">Persisted:</span> <span class="v mono" id="persistedVal">—</span></span>
-                        <span class="pill"><span class="k">Runtime:</span> <span class="v mono" id="runtimeVal">—</span></span>
+                        <span class="pill"><span class="k" data-i18n="admin.common.persisted">Persisted:</span> <span class="v mono" id="persistedVal">—</span></span>
+                        <span class="pill"><span class="k" data-i18n="admin.common.runtime">Runtime:</span> <span class="v mono" id="runtimeVal">—</span></span>
                     </div>
                     <div class="row">
                         <select id="levelSelect" aria-label="audit minimum level"></select>
-                        <button id="btnSave" class="btn primary" type="button">Save</button>
-                        <button id="btnReload" class="btn" type="button">Reload</button>
+                        <button id="btnSave" class="btn primary" type="button"><span data-i18n="admin.common.save">Save</span></button>
+                        <button id="btnReload" class="btn" type="button"><span data-i18n="admin.common.reload">Reload</span></button>
                     </div>
                     <div class="note">
                         <b>Meaning:</b> DEBUG logs everything • INFO hides noisy lifecycle • ADMIN is default • SECURITY keeps only security-relevant events.
@@ -534,34 +532,33 @@
 
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
-                    <div class="h">Audit rotation</div>
-                    <div class="pill info" id="activeSizePill"><span class="k">Active log:</span> <span class="v">—</span></div>
+                    <div class="h"><span data-i18n="admin.audit.rotation">Audit rotation</span></div>
+                    <div class="pill info" id="activeSizePill"><span class="k" data-i18n="admin.common.active_log">Active log:</span> <span class="v">—</span></div>
                     <span class="chev" aria-hidden="true">▸</span>
                 </div>
                 <div class="bd">
                     <div class="row">
-                        <button id="btnRotateNow" class="btn" type="button">Rotate now</button>
+                        <button id="btnRotateNow" class="btn" type="button"><span data-i18n="admin.audit.rotate_now">Rotate now</span></button>
                     </div>
                     <div class="note">
-                        Rotation renames the active <span class="mono">pqnas_audit.jsonl</span> into a timestamped archive
-                        and starts a fresh active log. Retention rules apply only to rotated archives.
+                        <span data-i18n="admin.audit.rotation_note">Rotation renames the active Retention rules apply only to rotated archives.</span>
                     </div>
                 </div>
             </div>
 
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
-                    <div class="h">Audit rotation policy</div>
-                    <div class="pill info" id="rotatePolicyPill"><span class="k">Policy:</span> <span class="v">—</span></div>
+                    <div class="h"><span data-i18n="admin.audit.rotation_policy">Audit rotation policy</span></div>
+                    <div class="pill info" id="rotatePolicyPill"><span class="k" data-i18n="admin.common.policy">Policy:</span> <span class="v">—</span></div>
                     <span class="chev" aria-hidden="true">▸</span>
                 </div>
                 <div class="bd">
                     <div class="row">
                         <select id="rotMode" aria-label="Rotation mode">
-                            <option value="manual">Manual</option>
-                            <option value="daily">Daily (UTC)</option>
-                            <option value="size_mb">When active log exceeds N MB</option>
-                            <option value="daily_or_size_mb">Size OR daily (whichever first)</option>
+                            <option value="manual" data-i18n="admin.audit.rot.manual">Manual</option>
+                            <option value="daily" data-i18n="admin.audit.rot.daily">Daily (UTC)</option>
+                            <option value="size_mb" data-i18n="admin.audit.rot.size_mb">When active log exceeds N MB</option>
+                            <option value="daily_or_size_mb" data-i18n="admin.audit.rot.daily_or_size_mb">Size OR daily (whichever first)</option>
                         </select>
 
                         <input id="rotMaxMB"
@@ -570,32 +567,31 @@
                                type="number"
                                min="1"
                                max="1000000"
-                               placeholder="rotate MB (e.g. 512)" />
+                               placeholder="rotate MB (e.g. 512)" data-i18n-placeholder="admin.audit.rotate_mb_placeholder" />
 
-                        <button id="btnRotatePolicySave" class="btn primary" type="button">Save policy</button>
+                        <button id="btnRotatePolicySave" class="btn primary" type="button"><span data-i18n="admin.audit.save_policy">Save policy</span></button>
                     </div>
 
                     <div class="note">
-                        Automatic rotation is enforced server-side (best-effort) before appending audit lines.
-                        Retention rules still apply only to rotated archives, never the active log.
+                        <span data-i18n="admin.audit.rotation_policy_note">Automatic rotation is enforced server-side never the active log.</span>
                     </div>
                 </div>
             </div>
 
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
-                    <div class="h">Audit retention</div>
-                    <div class="pill info" id="retentionPill"><span class="k">Policy:</span> <span class="v">—</span></div>
+                    <div class="h"><span data-i18n="admin.audit.retention">Audit retention</span></div>
+                    <div class="pill info" id="retentionPill"><span class="k" data-i18n="admin.common.policy">Policy:</span> <span class="v">—</span></div>
                     <span class="chev" aria-hidden="true">▸</span>
                 </div>
 
                 <div class="bd">
                     <div class="row">
                         <select id="retMode" aria-label="Retention mode">
-                            <option value="never">Never delete automatically</option>
-                            <option value="days">Keep last N days (rotated files)</option>
-                            <option value="files">Keep last N rotated files</option>
-                            <option value="size_mb">Keep up to N MB total (rotated files)</option>
+                            <option value="never" data-i18n="admin.audit.ret.never">Never delete automatically</option>
+                            <option value="days" data-i18n="admin.audit.ret.days">Keep last N days (rotated files)</option>
+                            <option value="files" data-i18n="admin.audit.ret.files">Keep last N rotated files</option>
+                            <option value="size_mb" data-i18n="admin.audit.ret.size_mb">Keep up to N MB total (rotated files)</option>
                         </select>
 
                         <select id="retDays" aria-label="Days to keep" class="hidden">
@@ -605,15 +601,15 @@
                             <option value="365">365 days</option>
                         </select>
 
-                        <input id="retMaxFiles" class="input mono hidden" style="min-width:180px" type="number" min="1" max="5000" placeholder="max files (e.g. 50)" />
-                        <input id="retMaxMB" class="input mono hidden" style="min-width:180px" type="number" min="1" max="1000000" placeholder="max MB (e.g. 20480)" />
+                        <input id="retMaxFiles" class="input mono hidden" style="min-width:180px" type="number" min="1" max="5000" placeholder="max files (e.g. 50)" data-i18n-placeholder="admin.audit.ret.max_files_placeholder" />
+                        <input id="retMaxMB" class="input mono hidden" style="min-width:180px" type="number" min="1" max="1000000" placeholder="max MB (e.g. 20480)" data-i18n-placeholder="admin.audit.ret.max_mb_placeholder" />
                     </div>
 
                     <div class="row">
-                        <button id="btnRetentionSave" class="btn primary" type="button">Save policy</button>
-                        <button id="btnRetentionPreview" class="btn" type="button">Preview prune</button>
-                        <button id="btnRetentionPrune" class="btn" type="button">Run prune now</button>
-                        <span class="pill warn" id="retPreviewPill"><span class="k">Preview:</span> <span class="v">—</span></span>
+                        <button id="btnRetentionSave" class="btn primary" type="button"><span data-i18n="admin.audit.save_policy">Save policy</span></button>
+                        <button id="btnRetentionPreview" class="btn" type="button"><span data-i18n="admin.audit.preview_prune">Preview prune</span></button>
+                        <button id="btnRetentionPrune" class="btn" type="button"><span data-i18n="admin.audit.run_prune">Run prune now</span></button>
+                        <span class="pill warn" id="retPreviewPill"><span class="k" data-i18n="admin.common.preview">Preview:</span> <span class="v">—</span></span>
                     </div>
 
                     <div class="note">
@@ -621,17 +617,17 @@
                     </div>
 
                     <div class="row" style="margin-top:12px;">
-                        <span class="pill info" id="retSummaryPill"><span class="k">Summary:</span> <span class="v">—</span></span>
+                        <span class="pill info" id="retSummaryPill"><span class="k" data-i18n="admin.common.summary">Summary:</span> <span class="v">—</span></span>
                     </div>
 
                     <div class="tableWrap" style="margin-top:12px;">
                         <table>
                             <thead>
                             <tr>
-                                <th style="width:52%;">File</th>
-                                <th style="width:14%;">Size</th>
-                                <th style="width:18%;">Modified</th>
-                                <th style="width:16%;">Reason</th>
+                                <th style="width:52%;" data-i18n="admin.audit.file">File</th>
+                                <th style="width:14%;" data-i18n="admin.audit.size">Size</th>
+                                <th style="width:18%;" data-i18n="admin.audit.modified">Modified</th>
+                                <th style="width:16%;" data-i18n="admin.audit.reason">Reason</th>
                             </tr>
                             </thead>
                             <tbody id="retTbody"></tbody>
@@ -639,49 +635,49 @@
                     </div>
 
                     <div class="note">
-                        Preview is a dry-run: it lists what would be deleted. “Run prune now” deletes only those candidates, and logs an admin audit event.
+                        <span data-i18n="admin.audit.preview_note">Preview is a dry-run: admin audit event.</span>
                     </div>
                 </div>
             </div>
 
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
-                    <div class="h">Snapshots (Btrfs)</div>
-                    <div class="pill info" id="snapPill"><span class="k">Status:</span> <span class="v">—</span></div>
+                    <div class="h"><span data-i18n="admin.snap.title">Snapshots (Btrfs)</span></div>
+                    <div class="pill info" id="snapPill"><span class="k" data-i18n="admin.common.status">Status:</span> <span class="v">—</span></div>
                     <span class="chev" aria-hidden="true">▸</span>
                 </div>
 
                 <div class="bd">
                     <div class="row">
                         <label class="pill" style="gap:10px;">
-                            <span class="k">Enabled</span>
+                            <span class="k" data-i18n="admin.common.enabled">Enabled</span>
                             <input id="snapEnabled" type="checkbox" />
                         </label>
 
                         <label class="pill" style="gap:10px;">
-                            <span class="k">Automatic schedule</span>
+                            <span class="k" data-i18n="admin.snap.automatic">Automatic schedule</span>
                             <input id="snapAuto" type="checkbox" />
                         </label>
 
                         <label class="pill" style="gap:10px;">
-                            <span class="k">Per-volume schedule</span>
+                            <span class="k" data-i18n="admin.snap.per_volume">Per-volume schedule</span>
                             <input id="snapPerVolume" type="checkbox" />
                         </label>
 
                         <select id="snapTimesPerDay" aria-label="Snapshots per day">
-                            <option value="1">1 / day</option>
-                            <option value="2">2 / day</option>
-                            <option value="4">4 / day</option>
-                            <option value="6">6 / day</option>
-                            <option value="12">12 / day</option>
-                            <option value="24">24 / day</option>
+                            <option value="1" data-i18n="admin.snap.per_day" data-i18n-fallback="1 / day">1 / day</option>
+                            <option value="2" data-i18n="admin.snap.per_day" data-i18n-fallback="2 / day">2 / day</option>
+                            <option value="4" data-i18n="admin.snap.per_day" data-i18n-fallback="4 / day">4 / day</option>
+                            <option value="6" data-i18n="admin.snap.per_day" data-i18n-fallback="6 / day">6 / day</option>
+                            <option value="12" data-i18n="admin.snap.per_day" data-i18n-fallback="12 / day">12 / day</option>
+                            <option value="24" data-i18n="admin.snap.per_day" data-i18n-fallback="24 / day">24 / day</option>
                         </select>
 
                         <input id="snapJitter" class="input mono" style="min-width:180px" type="number" min="0" max="3600"
-                               placeholder="jitter seconds (0..3600)" />
+                               placeholder="jitter seconds (0..3600)" data-i18n-placeholder="admin.snap.jitter_placeholder" />
 
-                        <button id="btnSnapSave" class="btn primary" type="button">Save snapshots</button>
-                        <button id="btnSnapReload" class="btn" type="button">Reload</button>
+                        <button id="btnSnapSave" class="btn primary" type="button"><span data-i18n="admin.snap.save">Save snapshots</span></button>
+                        <button id="btnSnapReload" class="btn" type="button"><span data-i18n="admin.common.reload">Reload</span></button>
                     </div>
 
                     <div class="row">
@@ -694,10 +690,10 @@
                             <table>
                                 <thead>
                                 <tr>
-                                    <th style="width:28%;">Volume</th>
-                                    <th style="width:42%;">Source subvolume</th>
-                                    <th style="width:15%;">Times/day</th>
-                                    <th style="width:15%;">Jitter (s)</th>
+                                    <th style="width:28%;" data-i18n="admin.snap.volume">Volume</th>
+                                    <th style="width:42%;" data-i18n="admin.snap.source_subvolume">Source subvolume</th>
+                                    <th style="width:15%;" data-i18n="admin.snap.times_day">Times/day</th>
+                                    <th style="width:15%;" data-i18n="admin.snap.jitter_s">Jitter (s)</th>
                                 </tr>
                                 </thead>
                                 <tbody id="snapVolTbody"></tbody>
@@ -706,52 +702,45 @@
                     </div>
 
                     <div class="note">
-                        If <b>Automatic schedule</b> is unchecked while snapshots remain enabled, snapshots are
-                        <b>manual only</b>: users/admins can still trigger “snapshot now”, but the scheduler does not run.
-                        <br/>
-                        If per-volume schedule is enabled, each volume can override the global times/day + jitter.
-                        Otherwise the global schedule applies to all volumes.
+                        <span data-i18n="admin.snap.note1">If Otherwise the global schedule applies to all volumes.</span>
                     </div>
 
                     <div class="note">
-                        Uses <span class="mono">btrfs subvolume snapshot -r</span>.
-                        The destination must be an empty path (server cleans up if it exists).
-                        <br/>
-                        If snapshots are disabled, settings stay visible but inputs are greyed out.
+                        <span data-i18n="admin.snap.note2">Uses If snapshots are disabled, settings stay visible but inputs are greyed out.</span>
                     </div>
                 </div>
             </div>
 
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
-                    <div class="h">Uploads</div>
+                    <div class="h"><span data-i18n="admin.uploads.title">Uploads</span></div>
                     <span class="chev" aria-hidden="true">▸</span>
                 </div>
 
                 <div class="bd uploadsCardBody">
                     <button id="btnUploadsHelp" class="btn uploadsHelpBtn" type="button">?</button>
                     <div class="row">
-                        <div style="font-weight:950;">Upload tiering</div>
-                        <span class="pill info" id="tieringPill"><span class="k">Tiering:</span> <span class="v">—</span></span>
+                        <div style="font-weight:950;"><span data-i18n="admin.uploads.tiering">Upload tiering</span></div>
+                        <span class="pill info" id="tieringPill"><span class="k" data-i18n="admin.uploads.tiering_label">Tiering:</span> <span class="v">—</span></span>
                     </div>
 
                     <div class="row">
                         <label class="pill" style="gap:10px;">
-                            <span class="k">Enabled</span>
+                            <span class="k" data-i18n="admin.common.enabled">Enabled</span>
                             <input id="tieringEnabled" type="checkbox" />
                         </label>
 
                         <select id="tieringLandingPool" aria-label="Landing pool" style="min-width:320px;">
-                            <option value="">(no pools)</option>
+                            <option value="" data-i18n="admin.uploads.no_pools">(no pools)</option>
                         </select>
 
-                        <button id="btnTieringSave" class="btn primary" type="button">Save tiering</button>
-                        <button id="btnTieringReload" class="btn" type="button">Reload</button>
+                        <button id="btnTieringSave" class="btn primary" type="button"><span data-i18n="admin.uploads.save_tiering">Save tiering</span></button>
+                        <button id="btnTieringReload" class="btn" type="button"><span data-i18n="admin.common.reload">Reload</span></button>
                     </div>
 
                     <div class="row">
                         <label class="tierField">
-                            <span class="tierFieldLabel">Worker interval (sec)</span>
+                            <span class="tierFieldLabel" data-i18n="admin.uploads.worker_interval">Worker interval (sec)</span>
                             <input id="tieringIntervalSec"
                                    class="input mono"
                                    type="number"
@@ -761,7 +750,7 @@
                         </label>
 
                         <label class="tierField">
-                            <span class="tierFieldLabel">Minimum landing age (sec)</span>
+                            <span class="tierFieldLabel" data-i18n="admin.uploads.min_age">Minimum landing age (sec)</span>
                             <input id="tieringMinAgeSec"
                                    class="input mono"
                                    type="number"
@@ -771,7 +760,7 @@
                         </label>
 
                         <label class="tierField">
-                            <span class="tierFieldLabel">Max files per pass</span>
+                            <span class="tierFieldLabel" data-i18n="admin.uploads.max_pass">Max files per pass</span>
                             <input id="tieringMaxPass"
                                    class="input mono"
                                    type="number"
@@ -782,18 +771,18 @@
                     </div>
 
                     <div class="row">
-                        <span class="pill info" id="tieringMountPill"><span class="k">Mount:</span> <span class="v mono">—</span></span>
-                        <span class="pill info" id="tieringSpacePill"><span class="k">Space:</span> <span class="v mono">—</span></span>
-                        <span class="pill info" id="tieringEligibilityPill"><span class="k">Eligibility:</span> <span class="v">—</span></span>
-                        <span class="pill warn" id="tieringWarnPill"><span class="k">Warnings:</span> <span class="v">—</span></span>
+                        <span class="pill info" id="tieringMountPill"><span class="k" data-i18n="admin.uploads.mount">Mount:</span> <span class="v mono">—</span></span>
+                        <span class="pill info" id="tieringSpacePill"><span class="k" data-i18n="admin.uploads.space">Space:</span> <span class="v mono">—</span></span>
+                        <span class="pill info" id="tieringEligibilityPill"><span class="k" data-i18n="admin.uploads.eligibility">Eligibility:</span> <span class="v">—</span></span>
+                        <span class="pill warn" id="tieringWarnPill"><span class="k" data-i18n="admin.uploads.warnings">Warnings:</span> <span class="v">—</span></span>
                     </div>
 
                     <div class="note">
-                        These values control how often the migration worker runs and how aggressively it drains landing storage.
+                        <span data-i18n="admin.uploads.note1">These values control landing storage.</span>
                     </div>
 
                     <div class="note">
-                        <b>Upload tiering</b> lets new uploads land in a fast pool first,
+                        <b><span data-i18n="admin.uploads.tiering">Upload tiering</span></b> lets new uploads land in a fast pool first,
                         then migrate to capacity storage.
 
                         <br><br>
@@ -812,9 +801,9 @@
 
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
-                    <div class="h">DNA Connect alerts</div>
+                    <div class="h"><span data-i18n="admin.dna.title">DNA Connect alerts</span></div>
                     <div class="pill info" id="dnaAlertsPill">
-                        <span class="k">DNA alerts:</span>
+                        <span class="k" data-i18n="admin.dna.alerts">DNA alerts:</span>
                         <span class="v">—</span>
                     </div>
                     <span class="chev" aria-hidden="true">▸</span>
@@ -823,29 +812,29 @@
                 <div class="bd">
                     <div class="row">
                         <label class="pill" style="gap:10px;">
-                            <span class="k">Enabled</span>
+                            <span class="k" data-i18n="admin.common.enabled">Enabled</span>
                             <input id="dnaAlertsEnabled" type="checkbox" />
                         </label>
 
                         <select id="dnaAlertsMinLevel" aria-label="DNA alert minimum level">
-                            <option value="security">Security</option>
-                            <option value="error">Error</option>
-                            <option value="warning">Warning</option>
-                            <option value="info">Info</option>
+                            <option value="security" data-i18n="admin.dna.security">Security</option>
+                            <option value="error" data-i18n="admin.dna.error">Error</option>
+                            <option value="warning" data-i18n="admin.dna.warning">Warning</option>
+                            <option value="info" data-i18n="admin.dna.info">Info</option>
                         </select>
 
-                        <button id="btnDnaAlertsSave" class="btn primary" type="button">Save DNA alerts</button>
-                        <button id="btnDnaAlertsReload" class="btn" type="button">Reload</button>
-                        <button id="btnDnaAlertsTest" class="btn" type="button">Send test alert</button>
+                        <button id="btnDnaAlertsSave" class="btn primary" type="button"><span data-i18n="admin.dna.save">Save DNA alerts</span></button>
+                        <button id="btnDnaAlertsReload" class="btn" type="button"><span data-i18n="admin.common.reload">Reload</span></button>
+                        <button id="btnDnaAlertsTest" class="btn" type="button"><span data-i18n="admin.dna.send_test">Send test alert</span></button>
                     </div>
 
                     <div class="row">
-                        <button id="btnDnaAlertsCreateId" class="btn" type="button">Create PQ-NAS ID</button>
-                        <button id="btnDnaAlertsShowId" class="btn" type="button">Show ID info</button>
-                        <button id="btnDnaAlertsSendRequest" class="btn" type="button">Send contact request</button>
+                        <button id="btnDnaAlertsCreateId" class="btn" type="button"><span data-i18n="admin.dna.create_id">Create PQ-NAS ID</span></button>
+                        <button id="btnDnaAlertsShowId" class="btn" type="button"><span data-i18n="admin.dna.show_id">Show ID info</span></button>
+                        <button id="btnDnaAlertsSendRequest" class="btn" type="button"><span data-i18n="admin.dna.send_request">Send contact request</span></button>
 
                         <span class="pill info" id="dnaAlertsIdentityPill">
-                            <span class="k">PQ-NAS ID:</span>
+                            <span class="k" data-i18n="admin.dna.pqnas_id">PQ-NAS ID:</span>
                             <span class="v">—</span>
                         </span>
                     </div>
@@ -855,13 +844,13 @@
                                class="input mono"
                                style="min-width:320px; flex:1 1 260px;"
                                type="text"
-                               placeholder="recipient name or fingerprint" />
+                               placeholder="recipient name or fingerprint" data-i18n-placeholder="admin.dna.recipient_placeholder" />
 
                         <input id="dnaAlertsCliPath"
                                class="input mono"
                                style="min-width:320px; flex:1 1 260px;"
                                type="text"
-                               placeholder="/usr/local/bin/dna-connect-cli" />
+                               placeholder="/usr/local/bin/dna-connect-cli" data-i18n-placeholder="admin.dna.cli_placeholder" />
                     </div>
 
                     <div class="row">
@@ -869,12 +858,12 @@
                                class="input mono"
                                style="min-width:520px; flex:1 1 auto;"
                                type="text"
-                               placeholder="/var/lib/pqnas/dna-alerts" />
+                               placeholder="/var/lib/pqnas/dna-alerts" data-i18n-placeholder="admin.dna.data_dir_placeholder" />
                     </div>
 
                     <div class="row">
                         <span class="pill info" id="dnaAlertsInfoPill">
-                            <span class="k">Route:</span>
+                            <span class="k" data-i18n="admin.dna.route">Route:</span>
                             <span class="v">—</span>
                         </span>
                     </div>
@@ -885,14 +874,11 @@
                     </div>
 
                     <div class="note">
-                        A dedicated PQ-NAS DNA identity must already exist in the configured
-                        <span class="mono">DNA data directory</span>, and the recipient should already
-                        have accepted that identity as a contact.
+                        <span data-i18n="admin.dna.note2">A dedicated PQ-NAS DNA identity as a contact.</span>
                     </div>
 
                     <div class="note">
-                        The test button sends a real message using the current saved settings.
-                        This is optional and fully admin-controlled.
+                        <span data-i18n="admin.dna.note3">The test button sends admin-controlled.</span>
                     </div>
                 </div>
             </div>
@@ -925,9 +911,9 @@
 
             <div class="card accordion" data-acc="settings">
                 <div class="hd" role="button" tabindex="0" aria-expanded="false">
-                    <div class="h">UI Theme</div>
+                    <div class="h"><span data-i18n="admin.theme.title">UI Theme</span></div>
                     <div class="row">
-                        <span class="pill info" id="themePill"><span class="k">Theme:</span> <span class="v">—</span></span>
+                        <span class="pill info" id="themePill"><span class="k" data-i18n="admin.theme.pill">Theme:</span> <span class="v">—</span></span>
                     </div>
                     <span class="chev" aria-hidden="true">▸</span>
                 </div>
@@ -935,19 +921,18 @@
                 <div class="bd">
                     <div class="row">
                         <select id="themeSelect" aria-label="UI theme">
-                            <option value="dark">Dark (default)</option>
-                            <option value="bright">Bright</option>
-                            <option value="cpunk_orange">CPUNK Orange</option>
-                            <option value="win_classic">win_classic</option>
+                            <option value="dark" data-i18n="admin.theme.dark">Dark (default)</option>
+                            <option value="bright" data-i18n="admin.theme.bright">Bright</option>
+                            <option value="cpunk_orange" data-i18n="admin.theme.cpunk">CPUNK Orange</option>
+                            <option value="win_classic" data-i18n="admin.theme.win_classic">win_classic</option>
                         </select>
 
-                        <button id="btnThemeSave" class="btn primary" type="button">Save theme</button>
-                        <button id="btnThemeApply" class="btn" type="button">Apply now</button>
+                        <button id="btnThemeSave" class="btn primary" type="button"><span data-i18n="admin.theme.save">Save theme</span></button>
+                        <button id="btnThemeApply" class="btn" type="button"><span data-i18n="admin.theme.apply">Apply now</span></button>
                     </div>
 
                     <div class="note">
-                        Theme is saved in <span class="mono">admin_settings.json</span> and also cached in your browser
-                        so all pages can apply it instantly.
+                        <span data-i18n="admin.theme.desc">Theme is saved apply it instantly.</span>
                     </div>
                 </div>
             </div>
@@ -963,8 +948,8 @@
 <div id="dnaIdentityModalBackdrop" class="modalBackdrop hidden">
     <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="dnaIdentityModalTitle">
         <div class="modalHd">
-            <div id="dnaIdentityModalTitle" style="font-weight:950;">PQ-NAS DNA Identity</div>
-            <button id="btnDnaIdentityModalClose" class="btn" type="button">Close</button>
+            <div id="dnaIdentityModalTitle" style="font-weight:950;" data-i18n="admin.dna.identity_title">PQ-NAS DNA Identity</div>
+            <button id="btnDnaIdentityModalClose" class="btn" type="button"><span data-i18n="admin.common.close">Close</span></button>
         </div>
         <div class="modalBd">
             <div class="note mono" id="dnaIdentityModalBody">—</div>
@@ -975,41 +960,16 @@
 <div id="helpModalBackdrop" class="modalBackdrop hidden">
     <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
         <div class="modalHd">
-            <div id="helpModalTitle" style="font-weight:950;">Uploads &amp; Tiering Help</div>
-            <button id="btnHelpModalClose" class="btn" type="button">Close</button>
+            <div id="helpModalTitle" style="font-weight:950;" data-i18n="admin.uploads.help_title">Uploads &amp; Tiering Help</div>
+            <button id="btnHelpModalClose" class="btn" type="button"><span data-i18n="admin.common.close">Close</span></button>
         </div>
 
         <div class="modalBd">
             <div class="note">
-                <b>Upload limits</b><br>
-                <br><br>
+                <span data-i18n="admin.uploads.help_body">Upload limits
 
-                <b>Upload tiering</b><br>
-                New uploads land in a fast internal pool first and later migrate to capacity storage.
-                <br><br>
-
-                USB / removable pools are automatically blocked for safety.
-                <br><br>
-
-                <b>Worker interval</b><br>
-                How often the migration worker wakes up and scans landing storage.
-                <br><br>
-
-                <b>Minimum landing age</b><br>
-                A file must remain in landing at least this long before migration is allowed.
-                <br><br>
-
-                <b>Max files per pass</b><br>
-                Maximum number of eligible files migrated during one worker scan.
-                <br><br>
-
-                Example:<br>
-                interval = 60<br>
-                min age = 60<br>
-                max/pass = 8<br><br>
-
-                Worker wakes every 60 seconds, migrates files older than 60 seconds,
-                and processes up to 8 files each cycle.
+Upload tiering
+New uploads land in a fast internal pool first and later migrate to capacity storage.</span>
             </div>
         </div>
     </div>
@@ -1052,7 +1012,7 @@
 </script>
 
 <script src="/static/admin_badges.js"></script>
-<script src="/static/admin_settings.js?v=6"></script>
+<script src="/static/admin_settings.js?v=20260518-admin-settings-i18n-1"></script>
 <script src="/static/shell_sidebar.js"></script>
     <script src="/static/onboarding.js?v=guided-tours-clean-v1"></script>
 </body>
