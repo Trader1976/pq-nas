@@ -1635,19 +1635,19 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   }
 
   function describeExistingConflict(existing) {
-    if (!existing || typeof existing !== "object") return "Unknown";
+    if (!existing || typeof existing !== "object") return tr("filemgr.upload.unknown", null, "Unknown");
     const parts = [];
-    if (existing.size_bytes != null) parts.push(`Size: ${fmtSize(existing.size_bytes)}`);
-    if (existing.mtime_epoch) parts.push(`Modified: ${fmtEpochLocal(existing.mtime_epoch)}`);
-    return parts.length ? parts.join(" • ") : "Unknown";
+    if (existing.size_bytes != null) parts.push(tr("filemgr.upload.size", { size: fmtSize(existing.size_bytes) }, `Size: ${fmtSize(existing.size_bytes)}`));
+    if (existing.mtime_epoch) parts.push(tr("filemgr.upload.modified", { time: fmtEpochLocal(existing.mtime_epoch) }, `Modified: ${fmtEpochLocal(existing.mtime_epoch)}`));
+    return parts.length ? parts.join(" • ") : tr("filemgr.upload.unknown", null, "Unknown");
   }
 
   function describeIncomingConflict(file) {
-    if (!file) return "Unknown";
+    if (!file) return tr("filemgr.upload.unknown", null, "Unknown");
     const parts = [];
-    if (file.size != null) parts.push(`Size: ${fmtSize(file.size)}`);
-    if (file.lastModified) parts.push(`Modified: ${fmtBrowserFileTime(file.lastModified)}`);
-    return parts.length ? parts.join(" • ") : "Unknown";
+    if (file.size != null) parts.push(tr("filemgr.upload.size", { size: fmtSize(file.size) }, `Size: ${fmtSize(file.size)}`));
+    if (file.lastModified) parts.push(tr("filemgr.upload.modified", { time: fmtBrowserFileTime(file.lastModified) }, `Modified: ${fmtBrowserFileTime(file.lastModified)}`));
+    return parts.length ? parts.join(" • ") : tr("filemgr.upload.unknown", null, "Unknown");
   }
 
   function isFileExistsConflict(errLike) {
@@ -1664,7 +1664,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         return;
       }
 
-      if (uploadConflictTitle) uploadConflictTitle.textContent = "File already exists";
+      if (uploadConflictTitle) uploadConflictTitle.textContent = tr("filemgr.upload.file_exists", null, "File already exists");
       if (uploadConflictPath) uploadConflictPath.textContent = "/" + String(rel || "");
       if (uploadConflictExisting) uploadConflictExisting.textContent = describeExistingConflict(existing);
       if (uploadConflictIncoming) uploadConflictIncoming.textContent = describeIncomingConflict(file);
@@ -1944,6 +1944,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     document.body.appendChild(backdrop);
 
+    refreshFileMgrUploadProgressLabels(backdrop);
+
     const requestCancel = () => cancelCurrentUpload();
 
     backdrop.querySelector("#fmUploadProgressCancel")?.addEventListener("click", requestCancel);
@@ -1955,6 +1957,22 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     return backdrop;
   }
 
+  function refreshFileMgrUploadProgressLabels(backdrop) {
+    if (!backdrop) return;
+
+    const kicker = backdrop.querySelector(".fmUploadProgressKicker");
+    const title = backdrop.querySelector("#fmUploadProgressTitle");
+    const close = backdrop.querySelector("#fmUploadProgressCloseBtn");
+    const cancel = backdrop.querySelector("#fmUploadProgressCancel");
+    const cancelTop = backdrop.querySelector("#fmUploadProgressCancelTop");
+
+    if (kicker) kicker.textContent = tr("filemgr.upload.kicker", null, "DNA-Nexus upload");
+    if (title) title.textContent = tr("filemgr.upload.title", null, "Uploading files");
+    if (close) close.textContent = tr("filemgr.upload.close", null, "Close");
+    if (cancel) cancel.textContent = tr("filemgr.upload.cancel_upload", null, "Cancel upload");
+    if (cancelTop) cancelTop.textContent = tr("filemgr.upload.cancel", null, "Cancel");
+  }
+
   function openFileMgrUploadProgressModal(fileCount, totalBytes) {
     fmUploadModalTotals = {
       fileCount: Number(fileCount || 0),
@@ -1962,6 +1980,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     };
 
     const backdrop = ensureFileMgrUploadProgressModal();
+    refreshFileMgrUploadProgressLabels(backdrop);
 
     const sub = backdrop.querySelector("#fmUploadProgressSub");
     const fileEl = backdrop.querySelector("#fmUploadProgressFile");
@@ -1975,29 +1994,37 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     if (sub) {
       const n = fmUploadModalTotals.fileCount;
-      sub.textContent = `${n} file${n === 1 ? "" : "s"} · ${fmtSize(fmUploadModalTotals.totalBytes)} total`;
+      sub.textContent = tr(
+        "filemgr.upload.summary",
+        {
+          count: n,
+          plural: n === 1 ? "" : "s",
+          size: fmtSize(fmUploadModalTotals.totalBytes)
+        },
+        `${n} file${n === 1 ? "" : "s"} · ${fmtSize(fmUploadModalTotals.totalBytes)} total`
+      );
     }
 
     if (fileEl) {
-      fileEl.textContent = "Preparing upload…";
+      fileEl.textContent = tr("filemgr.upload.preparing", null, "Preparing upload…");
       fileEl.classList.remove("fmUploadProgressOk", "fmUploadProgressFail");
     }
 
     if (textEl) textEl.textContent = `0 B / ${fmtSize(fmUploadModalTotals.totalBytes)}`;
     if (pctEl) pctEl.textContent = "0%";
     if (fillEl) fillEl.style.width = "0%";
-    if (metaEl) metaEl.textContent = "Ready.";
+    if (metaEl) metaEl.textContent = tr("filemgr.upload.ready", null, "Ready.");
 
     if (close) close.hidden = true;
     if (cancel) {
       cancel.hidden = false;
       cancel.disabled = false;
-      cancel.textContent = "Cancel upload";
+      cancel.textContent = tr("filemgr.upload.cancel_upload", null, "Cancel upload");
     }
     if (cancelTop) {
       cancelTop.hidden = false;
       cancelTop.disabled = false;
-      cancelTop.textContent = "Cancel";
+      cancelTop.textContent = tr("filemgr.upload.cancel", null, "Cancel");
     }
 
     backdrop.hidden = false;
@@ -2037,7 +2064,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const fillEl = backdrop.querySelector("#fmUploadProgressFill");
     const metaEl = backdrop.querySelector("#fmUploadProgressMeta");
 
-    const shownText = String(text || "Uploading…");
+    const shownText = String(text || tr("filemgr.upload.default", null, "Uploading…"));
     const kind = classifyFileMgrUploadModalKind(shownText, pillKind);
 
     if (fileEl) {
@@ -2055,7 +2082,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (fillEl) fillEl.style.width = `${pct.toFixed(1)}%`;
 
     if (metaEl) {
-      metaEl.textContent = String(pillText || "").trim() || "Uploading…";
+      metaEl.textContent = String(pillText || "").trim() || tr("filemgr.upload.default", null, "Uploading…");
       metaEl.classList.toggle("fmUploadProgressMetaErr", kind === "err");
     }
   }
@@ -2071,13 +2098,13 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (cancel) {
       cancel.hidden = !on;
       cancel.disabled = !on;
-      if (on) cancel.textContent = "Cancel upload";
+      if (on) cancel.textContent = tr("filemgr.upload.cancel_upload", null, "Cancel upload");
     }
 
     if (cancelTop) {
       cancelTop.hidden = !on;
       cancelTop.disabled = !on;
-      if (on) cancelTop.textContent = "Cancel";
+      if (on) cancelTop.textContent = tr("filemgr.upload.cancel", null, "Cancel");
     }
 
     if (close) close.hidden = !!on;
@@ -2093,15 +2120,15 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     if (cancel) {
       cancel.disabled = true;
-      cancel.textContent = "Cancelling…";
+      cancel.textContent = tr("filemgr.upload.cancelling", null, "Cancelling…");
     }
 
     if (cancelTop) {
       cancelTop.disabled = true;
-      cancelTop.textContent = "Cancelling…";
+      cancelTop.textContent = tr("filemgr.upload.cancelling", null, "Cancelling…");
     }
 
-    if (metaEl) metaEl.textContent = "Cancelling upload…";
+    if (metaEl) metaEl.textContent = tr("filemgr.upload.cancelling_upload", null, "Cancelling upload…");
   }
 
   function showUploadProgress(show) {
@@ -5929,6 +5956,7 @@ function describeMoveItems(items) {
 
   function filemgrLanguageChanged() {
     applyI18n(document);
+    refreshFileMgrUploadProgressLabels(document.getElementById("fmUploadProgressBackdrop"));
     closeMenu();
 
     // Refresh favorite button titles because they are dynamic DOM nodes.

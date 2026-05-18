@@ -300,5 +300,21 @@
   "folderpicker.name_no_separators": "Name cannot contain '/' or '\\\\'.",
   "folderpicker.creating_folder": "Creating folder…",
   "folderpicker.create_failed": "Create folder failed: {error}",
-  "folderpicker.failed": "Folder picker failed: {error}"
+  "folderpicker.failed": "Folder picker failed: {error}",
+  "filemgr.upload.kicker": "DNA-Nexus upload",
+  "filemgr.upload.title": "Uploading files",
+  "filemgr.upload.preparing": "Preparing upload…",
+  "filemgr.upload.waiting": "Waiting…",
+  "filemgr.upload.ready": "Ready.",
+  "filemgr.upload.cancel": "Cancel",
+  "filemgr.upload.cancel_upload": "Cancel upload",
+  "filemgr.upload.close": "Close",
+  "filemgr.upload.cancelling": "Cancelling…",
+  "filemgr.upload.cancelling_upload": "Cancelling upload…",
+  "filemgr.upload.default": "Uploading…",
+  "filemgr.upload.summary": "{count} file{plural} · {size} total",
+  "filemgr.upload.unknown": "Unknown",
+  "filemgr.upload.size": "Size: {size}",
+  "filemgr.upload.modified": "Modified: {time}",
+  "filemgr.upload.file_exists": "File already exists"
 }

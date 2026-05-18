@@ -300,5 +300,21 @@
   "folderpicker.name_no_separators": "Nimi ei saa sisältää merkkejä '/' tai '\\\\'.",
   "folderpicker.creating_folder": "Luodaan kansiota…",
   "folderpicker.create_failed": "Kansion luonti epäonnistui: {error}",
-  "folderpicker.failed": "Kansiovalitsin epäonnistui: {error}"
+  "folderpicker.failed": "Kansiovalitsin epäonnistui: {error}",
+  "filemgr.upload.kicker": "DNA-Nexus-lataus",
+  "filemgr.upload.title": "Ladataan tiedostoja",
+  "filemgr.upload.preparing": "Valmistellaan latausta…",
+  "filemgr.upload.waiting": "Odotetaan…",
+  "filemgr.upload.ready": "Valmis.",
+  "filemgr.upload.cancel": "Peruuta",
+  "filemgr.upload.cancel_upload": "Peruuta lataus",
+  "filemgr.upload.close": "Sulje",
+  "filemgr.upload.cancelling": "Perutaan…",
+  "filemgr.upload.cancelling_upload": "Perutaan latausta…",
+  "filemgr.upload.default": "Ladataan…",
+  "filemgr.upload.summary": "{count} tiedosto{plural} · yhteensä {size}",
+  "filemgr.upload.unknown": "Tuntematon",
+  "filemgr.upload.size": "Koko: {size}",
+  "filemgr.upload.modified": "Muokattu: {time}",
+  "filemgr.upload.file_exists": "Tiedosto on jo olemassa"
 }
