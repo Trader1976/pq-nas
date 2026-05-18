@@ -1,4 +1,22 @@
 # Building DNA-Nexus Server from Source
+## Recommended Installation
+
+Most users should install DNA-Nexus Server from a prebuilt release tarball.
+
+The release installer handles:
+
+- OS runtime dependencies
+- Python installer environment
+- server binary installation
+- static web assets
+- bundled apps
+- default configuration
+- service user setup
+- systemd service setup
+- storage initialization
+- optional reverse proxy setup
+
+Building from source is intended for developers, contributors, and advanced users.
 
 This document explains how to build and install **DNA-Nexus Server** from source on Linux.
 
