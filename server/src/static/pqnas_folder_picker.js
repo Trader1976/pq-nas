@@ -3,6 +3,15 @@
 
     const api = window.PQNAS_FOLDER_PICKER = window.PQNAS_FOLDER_PICKER || {};
 
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
     let overlay = null;
     let cardEl = null;
     let dragHandleEl = null;
@@ -70,7 +79,7 @@
         const p = normalizeRelPath(path);
         for (const r of blockedRoots()) {
             if (isSameOrUnder(p, r)) {
-                return "Cannot choose the source folder or one of its subfolders.";
+                return tr("folderpicker.cannot_choose_source", null, "Cannot choose the source folder or one of its subfolders.");
             }
         }
         return "";
@@ -186,7 +195,7 @@
 
     function activeScopeRootLabel() {
         const sc = activeScope();
-        return sc && sc.label ? String(sc.label) : "My Files";
+        return sc && sc.label ? String(sc.label) : tr("filemgr.my_files", null, "My Files");
     }
 
     function listUrl(path) {
@@ -824,7 +833,7 @@ html[data-theme="win_classic"] .pqFolderPicker [data-pqfp-choose]{
 
         const kicker = document.createElement("div");
         kicker.className = "pqFolderPickerKicker";
-        kicker.textContent = "DNA-Nexus folder picker";
+        kicker.textContent = tr("folderpicker.kicker", null, "DNA-Nexus folder picker");
         titleEl.parentElement?.insertBefore(kicker, titleEl);
     }
 
@@ -879,6 +888,8 @@ function ensureModal() {
         chooseBtn = overlay.querySelector("[data-pqfp-choose]");
         newFolderBtn = overlay.querySelector("[data-pqfp-new-folder]");
 
+        refreshStaticLabels();
+
         dragHandleEl?.addEventListener("pointerdown", beginDrag);
         cardEl?.addEventListener("pointermove", dragMove);
         cardEl?.addEventListener("pointerup", endDrag);
@@ -919,7 +930,7 @@ function ensureModal() {
 
             const nextPath = row.getAttribute("data-pqfp-open-path") || "";
             openPath(nextPath).catch((e) => {
-                setStatus(`Open folder failed: ${String(e && e.message ? e.message : e)}`);
+                setStatus(tr("folderpicker.open_failed", { error: String(e && e.message ? e.message : e) }, `Open folder failed: ${String(e && e.message ? e.message : e)}`));
                 setBusy(false);
                 renderActionState();
             });
@@ -933,6 +944,19 @@ function ensureModal() {
             ev.stopPropagation();
             if (ev.key === "Escape") close(null);
         });
+    }
+
+    function refreshStaticLabels() {
+        try {
+            const closeBtn = overlay ? overlay.querySelector("[data-pqfp-close]") : null;
+            const cancelBtn = overlay ? overlay.querySelector("[data-pqfp-cancel]") : null;
+            if (closeBtn) closeBtn.textContent = tr("folderpicker.close", null, "Close");
+            if (cancelBtn) cancelBtn.textContent = tr("folderpicker.cancel", null, "Cancel");
+            if (newFolderBtn) newFolderBtn.textContent = tr("folderpicker.new_folder_here", null, "New folder here…");
+            if (chooseBtn && !opts.chooseLabel) chooseBtn.textContent = tr("folderpicker.choose_folder", null, "Choose folder");
+            const kicker = cardEl ? cardEl.querySelector(".pqFolderPickerKicker") : null;
+            if (kicker) kicker.textContent = tr("folderpicker.kicker", null, "DNA-Nexus folder picker");
+        } catch (_) {}
     }
 
     function setStatus(msg) {
@@ -982,7 +1006,7 @@ function ensureModal() {
         scopeEl.style.marginBottom = "8px";
 
         const label = document.createElement("div");
-        label.textContent = "Destination location";
+        label.textContent = tr("folderpicker.destination_location", null, "Destination location");
         label.style.fontWeight = "800";
         label.style.whiteSpace = "nowrap";
 
@@ -1001,7 +1025,7 @@ function ensureModal() {
             const id = String(sc.id || "");
             const opt = document.createElement("option");
             opt.value = id;
-            opt.textContent = String(sc.label || id || "Location");
+            opt.textContent = String(sc.label || id || tr("folderpicker.location", null, "Location"));
             if (id === String(activeScopeId || "")) opt.selected = true;
             select.appendChild(opt);
         }
@@ -1011,7 +1035,7 @@ function ensureModal() {
             const sc = activeScope();
             currentPath = normalizeRelPath(sc && sc.initialPath ? sc.initialPath : "");
             openPath(currentPath).catch((e) => {
-                setStatus(`Open location failed: ${String(e && e.message ? e.message : e)}`);
+                setStatus(tr("folderpicker.open_location_failed", { error: String(e && e.message ? e.message : e) }, `Open location failed: ${String(e && e.message ? e.message : e)}`));
                 setBusy(false);
                 renderActionState();
             });
@@ -1027,11 +1051,11 @@ function ensureModal() {
 
         if (chooseBtn) {
             const sc = activeScope();
-            const scopeProblem = sc && sc.canChoose === false ? "Destination location is read-only." : "";
+            const scopeProblem = sc && sc.canChoose === false ? tr("folderpicker.read_only", null, "Destination location is read-only.") : "";
             const finalProblem = scopeProblem || problem;
             chooseBtn.disabled = busy || !!finalProblem;
-            chooseBtn.textContent = opts.chooseLabel || "Choose folder";
-            chooseBtn.title = finalProblem || `Choose ${activeScopeRootLabel()} ${shown}`;
+            chooseBtn.textContent = opts.chooseLabel || tr("folderpicker.choose_folder", null, "Choose folder");
+            chooseBtn.title = finalProblem || tr("folderpicker.choose_title", { scope: activeScopeRootLabel(), path: shown }, `Choose ${activeScopeRootLabel()} ${shown}`);
         }
 
         if (newFolderBtn) {
@@ -1040,7 +1064,7 @@ function ensureModal() {
         }
 
         if (statusEl && !busy) {
-            statusEl.textContent = problem || `Destination: ${activeScopeRootLabel()} ${shown}`;
+            statusEl.textContent = problem || tr("folderpicker.destination", { scope: activeScopeRootLabel(), path: shown }, `Destination: ${activeScopeRootLabel()} ${shown}`);
         }
     }
 
@@ -1120,14 +1144,14 @@ function ensureModal() {
 
         if (currentPath) {
             const upPath = parentPath(currentPath);
-            appendRow("..", "Parent folder", () => openPath(upPath), { path: upPath });
+            appendRow("..", tr("folderpicker.parent_folder", null, "Parent folder"), () => openPath(upPath), { path: upPath });
         }
 
         if (!dirs.length) {
             const empty = document.createElement("div");
             empty.className = "fmMoveDirRow";
             empty.setAttribute("aria-disabled", "true");
-            empty.textContent = "No folders here";
+            empty.textContent = tr("folderpicker.no_folders", null, "No folders here");
             listEl.appendChild(empty);
             return;
         }
@@ -1137,7 +1161,7 @@ function ensureModal() {
             const blocked = blockedRoots().some((root) => isSameOrUnder(rel, root));
             appendRow(
                 d.name,
-                blocked ? "Cannot choose source" : "Folder",
+                blocked ? tr("folderpicker.cannot_choose_source_short", null, "Cannot choose source") : tr("folderpicker.folder", null, "Folder"),
                 () => openPath(rel),
                 { disabled: blocked, path: rel }
             );
@@ -1156,13 +1180,13 @@ function ensureModal() {
         renderScopes();
         renderBreadcrumb();
         setBusy(true);
-        setStatus(`Loading ${activeScopeRootLabel()} /${currentPath || ""}`);
+        setStatus(tr("folderpicker.loading", { scope: activeScopeRootLabel(), path: currentPath || "" }, `Loading ${activeScopeRootLabel()} /${currentPath || ""}`));
 
         clear(listEl);
         const loading = document.createElement("div");
         loading.className = "fmMoveDirRow";
         loading.setAttribute("aria-disabled", "true");
-        loading.textContent = "Loading folders…";
+        loading.textContent = tr("folderpicker.loading_folders", null, "Loading folders…");
         listEl.appendChild(loading);
 
         try {
@@ -1187,7 +1211,7 @@ function ensureModal() {
             const err = document.createElement("div");
             err.className = "fmMoveDirRow";
             err.setAttribute("aria-disabled", "true");
-            err.textContent = `Failed to load folders: ${String(e && e.message ? e.message : e)}`;
+            err.textContent = tr("folderpicker.load_failed", { error: String(e && e.message ? e.message : e) }, `Failed to load folders: ${String(e && e.message ? e.message : e)}`);
             listEl.appendChild(err);
         } finally {
             if (mySeq === loadSeq) {
@@ -1208,13 +1232,13 @@ function ensureModal() {
         }
 
         const shown = currentPath ? `/${currentPath}` : "/";
-        const raw = prompt(`New folder name in ${shown}:`, "New Folder");
+        const raw = prompt(tr("folderpicker.new_folder_prompt", { path: shown }, `New folder name in ${shown}:`), tr("folderpicker.default_folder_name", null, "New Folder"));
         if (!raw) return;
 
         const name = String(raw).trim();
         if (!name) return;
         if (name.includes("/") || name.includes("\\")) {
-            alert("Name cannot contain '/' or '\\'.");
+            alert(tr("folderpicker.name_no_separators", null, "Name cannot contain '/' or '\\'.") );
             return;
         }
 
@@ -1222,7 +1246,7 @@ function ensureModal() {
 
         try {
             setBusy(true);
-            setStatus("Creating folder…");
+            setStatus(tr("folderpicker.creating_folder", null, "Creating folder…"));
 
             const r = await fetch(mkdirUrl(rel), {
                 method: "POST",
@@ -1240,7 +1264,7 @@ function ensureModal() {
             currentPath = rel;
             await loadCurrentPath();
         } catch (e) {
-            setStatus(`Create folder failed: ${String(e && e.message ? e.message : e)}`);
+            setStatus(tr("folderpicker.create_failed", { error: String(e && e.message ? e.message : e) }, `Create folder failed: ${String(e && e.message ? e.message : e)}`));
             setBusy(false);
             renderActionState();
         }
@@ -1255,6 +1279,17 @@ function ensureModal() {
         resolver = null;
         if (r) r(value);
     }
+
+    function folderPickerLanguageChanged() {
+        refreshStaticLabels();
+        if (overlay && overlay.getAttribute("aria-hidden") === "false") {
+            renderScopes();
+            renderBreadcrumb();
+            renderActionState();
+        }
+    }
+
+    window.addEventListener("pqnas-language-changed", folderPickerLanguageChanged);
 
     api.open = function openFolderPicker(openOpts = {}) {
         ensureModal();
@@ -1276,7 +1311,9 @@ function ensureModal() {
             ""
         );
 
-        if (titleEl) titleEl.textContent = opts.title || "Choose folder";
+        refreshStaticLabels();
+
+        if (titleEl) titleEl.textContent = opts.title || tr("folderpicker.choose_folder", null, "Choose folder");
         if (subEl) subEl.textContent = opts.subtitle || "";
         if (sourceEl) sourceEl.textContent = opts.source ? String(opts.source) : "";
 
@@ -1290,7 +1327,7 @@ function ensureModal() {
         }, 0);
 
         loadCurrentPath().catch((e) => {
-            setStatus(`Folder picker failed: ${String(e && e.message ? e.message : e)}`);
+            setStatus(tr("folderpicker.failed", { error: String(e && e.message ? e.message : e) }, `Folder picker failed: ${String(e && e.message ? e.message : e)}`));
             setBusy(false);
         });
 

@@ -2124,7 +2124,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (!requireWritableScopeOrExplain(tr("filemgr.action.delete", null, "Delete"))) return;
     const paths = selectedRelPaths();
     if (!paths.length) {
-      status.textContent = "Nothing selected.";
+      status.textContent = tr("filemgr.common.nothing_selected", null, "Nothing selected.");
       return;
     }
 
@@ -3664,7 +3664,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
   async function downloadSelectionZip() {
     const paths = selectedRelPaths();
     if (!paths.length) {
-      status.textContent = "Nothing selected.";
+      status.textContent = tr("filemgr.common.nothing_selected", null, "Nothing selected.");
       return;
     }
 
@@ -4104,26 +4104,26 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     const dest = normalizeRelPath(destPath);
     const list = Array.isArray(items) ? items : [];
 
-    if (!list.length) return "Nothing selected.";
+    if (!list.length) return tr("filemgr.common.nothing_selected", null, "Nothing selected.");
 
     if (destinationInsideSelectedDir(dest, list)) {
-      return "Cannot move a folder into itself or one of its subfolders.";
+      return tr("filemgr.move.cannot_move_inside_self", null, "Cannot move a folder into itself or one of its subfolders.");
     }
 
     const allAlreadyHere = list.every((it) => pathEq(parentPath(it.rel), dest));
     if (modeOpts.sameScope !== false && allAlreadyHere) {
-      return "Choose a different destination folder.";
+      return tr("filemgr.common.choose_different_destination", null, "Choose a different destination folder.");
     }
 
     return "";
   }
 function describeMoveItems(items) {
     const list = Array.isArray(items) ? items : [];
-    if (list.length === 1) return `Move: /${list[0].rel}`;
+    if (list.length === 1) return tr("filemgr.move.single_source", { path: list[0].rel }, `Move: /${list[0].rel}`);
 
     const names = list.slice(0, 4).map((it) => it.name || basenamePath(it.rel)).join(", ");
-    const more = list.length > 4 ? `, +${list.length - 4} more` : "";
-    return `Move ${list.length} item(s): ${names}${more}`;
+    const more = list.length > 4 ? tr("filemgr.move.more", { count: list.length - 4 }, `, +${list.length - 4} more`) : "";
+    return tr("filemgr.move.multi_source", { count: list.length, names, more }, `Move ${list.length} item(s): ${names}${more}`);
   }
 
   async function collectAffectedSharesForMove(items) {
@@ -4192,40 +4192,35 @@ function describeMoveItems(items) {
   function shareMoveWarningLabel(share) {
     const mode = String(share && share.mode ? share.mode : "").toLowerCase();
     const isPq = mode.includes("pq");
-    const kind = isPq ? "PQ share" : "Share link";
+    const kind = isPq ? tr("filemgr.move.share_kind_pq", null, "PQ share") : tr("filemgr.move.share_kind_standard", null, "Share link");
     const path = share && share.path ? share.path : "";
     return `${kind}: /${path}`;
   }
 
   function buildMoveConfirmText(destShown, affectedSharesResult) {
-    let text =
-        `Move ${moveItems.length} item(s) to:\n\n` +
-        `${destShown}\n\n` +
-        `Existing destination names will fail; nothing is overwritten.`;
+    const base = tr(
+        "filemgr.move.confirm",
+        { count: moveItems.length, dest: destShown },
+        `Move ${moveItems.length} item(s) to:\n\n${destShown}\n\nExisting destination names will fail; nothing is overwritten.`
+    );
 
     if (!affectedSharesResult || affectedSharesResult.ok !== true) {
-      text +=
-          `\n\nWarning:\n` +
-          `Could not verify whether selected items have active share links.`;
-      return text;
+      return tr("filemgr.move.confirm_unverified", { base }, `${base}\n\nWarning:\nCould not verify whether selected items have active share links.`);
     }
 
     const affected = affectedSharesResult.items || [];
-    if (!affected.length) return text;
+    if (!affected.length) return base;
 
-    const preview = affected.slice(0, 6).map(shareMoveWarningLabel);
-    const more = affected.length > preview.length
-        ? `\n… plus ${affected.length - preview.length} more`
+    const preview = affected.slice(0, 6).map(shareMoveWarningLabel).join("\n");
+    const more = affected.length > 6
+        ? tr("filemgr.move.more_shares", { count: affected.length - 6 }, `\n… plus ${affected.length - 6} more`)
         : "";
 
-    text +=
-        `\n\nWarning:\n` +
-        `Moving these item(s) will break ${affected.length} active share/PQ share link(s). ` +
-        `The old public URLs will return Not found after the move.\n\n` +
-        preview.join("\n") +
-        more;
-
-    return text;
+    return tr(
+        "filemgr.move.confirm_breaks_shares",
+        { base, count: affected.length, preview, more },
+        `${base}\n\nWarning:\nMoving these item(s) will break ${affected.length} active share/PQ share link(s). The old public URLs will return Not found after the move.\n\n${preview}${more}`
+    );
   }
 
   function collectSelectedMoveItems() {
@@ -4247,11 +4242,11 @@ function describeMoveItems(items) {
   }
 
   async function openMoveModalForItems(items) {
-    if (!requireWritableScopeOrExplain("Move")) return;
+    if (!requireWritableScopeOrExplain(tr("filemgr.move.title", null, "Move"))) return;
 
     const picker = window.PQNAS_FOLDER_PICKER;
     if (!picker || typeof picker.open !== "function") {
-      status.textContent = "Move dialog failed: shared folder picker module is not loaded. Refresh the page.";
+      status.textContent = tr("filemgr.move.dialog_missing", null, "Move dialog failed: shared folder picker module is not loaded. Refresh the page.");
       return;
     }
 
@@ -4267,7 +4262,7 @@ function describeMoveItems(items) {
       .filter(Boolean);
 
     if (!clean.length) {
-      status.textContent = "Nothing selected.";
+      status.textContent = tr("filemgr.common.nothing_selected", null, "Nothing selected.");
       return;
     }
 
@@ -4278,11 +4273,11 @@ function describeMoveItems(items) {
       .map((it) => it.rel);
 
     const picked = await picker.open({
-      title: "Move",
-      subtitle: "Select destination folder",
+      title: tr("filemgr.move.title", null, "Move"),
+      subtitle: tr("filemgr.move.subtitle", null, "Select destination folder"),
       source: describeMoveItems(clean),
       initialPath: curPath || "",
-      chooseLabel: "Move here",
+      chooseLabel: tr("filemgr.move.choose_here", null, "Move here"),
       canCreate: canWriteCurrentScope(),
       blockedPaths,
       listUrl: (path) => apiListUrl(path || ""),
@@ -4290,7 +4285,7 @@ function describeMoveItems(items) {
     });
 
     if (picked === null) {
-      status.textContent = "Move cancelled.";
+      status.textContent = tr("filemgr.move.cancelled", null, "Move cancelled.");
       return;
     }
 
@@ -4304,12 +4299,12 @@ function describeMoveItems(items) {
 
     const destShown = moveDestPath ? `/${moveDestPath}` : "/";
 
-    status.textContent = "Checking share links…";
+    status.textContent = tr("filemgr.move.checking_shares", null, "Checking share links…");
     const affectedSharesResult = await collectAffectedSharesForMove(moveItems);
 
     const ok = confirm(buildMoveConfirmText(destShown, affectedSharesResult));
     if (!ok) {
-      status.textContent = "Move cancelled.";
+      status.textContent = tr("filemgr.move.cancelled", null, "Move cancelled.");
       return;
     }
 
@@ -4335,16 +4330,16 @@ function describeMoveItems(items) {
     const dest = normalizeRelPath(destPath);
     const list = Array.isArray(items) ? items : [];
 
-    if (!list.length) return "Nothing selected.";
+    if (!list.length) return tr("filemgr.common.nothing_selected", null, "Nothing selected.");
 
     const firstDir = list.find((it) => it && it.type === "dir");
     if (firstDir && modeOpts.crossScope) {
-      return "Cross-scope copy currently supports files only. Folder copy comes next.";
+      return tr("filemgr.copy.cross_scope_files_only", null, "Cross-scope copy currently supports files only. Folder copy comes next.");
     }
 
     const allAlreadyHere = list.every((it) => pathEq(parentPath(it.rel), dest));
     if (modeOpts.sameScope !== false && allAlreadyHere) {
-      return "Choose a different destination folder.";
+      return tr("filemgr.common.choose_different_destination", null, "Choose a different destination folder.");
     }
 
     return "";
@@ -4352,11 +4347,11 @@ function describeMoveItems(items) {
 
   function describeCopyItems(items) {
     const list = Array.isArray(items) ? items : [];
-    if (list.length === 1) return `Copy: /${list[0].rel}`;
+    if (list.length === 1) return tr("filemgr.copy.single_source", { path: list[0].rel }, `Copy: /${list[0].rel}`);
 
     const names = list.slice(0, 4).map((it) => it.name || basenamePath(it.rel)).join(", ");
-    const more = list.length > 4 ? `, +${list.length - 4} more` : "";
-    return `Copy ${list.length} item(s): ${names}${more}`;
+    const more = list.length > 4 ? tr("filemgr.move.more", { count: list.length - 4 }, `, +${list.length - 4} more`) : "";
+    return tr("filemgr.copy.multi_source", { count: list.length, names, more }, `Copy ${list.length} item(s): ${names}${more}`);
   }
 
   function collectSelectedCopyItems() {
@@ -4369,7 +4364,7 @@ function describeMoveItems(items) {
   }
 
   function copyScopeNameFromSnapshot(snap) {
-    if (!snap || !snap.inWorkspace) return "My Files";
+    if (!snap || !snap.inWorkspace) return tr("filemgr.my_files", null, "My Files");
     return `Workspace ${String(snap.workspaceId || "?")}`;
   }
 
@@ -4432,7 +4427,7 @@ function describeMoveItems(items) {
     scopes.push({
       id: "user",
       kind: "user",
-      label: "My Files",
+      label: tr("filemgr.my_files", null, "My Files"),
       canCreate: true,
       canChoose: true,
       listUrl: (path) => userListUrlForCopy(path || ""),
@@ -4505,11 +4500,11 @@ function describeMoveItems(items) {
 
     const firstDir = list.find((it) => it && it.type === "dir");
     if (firstDir) {
-      throw new Error("Cross-scope copy currently supports files only.");
+      throw new Error(tr("filemgr.copy.cross_scope_files_only", null, "Cross-scope copy currently supports files only."));
     }
 
     setBadge("warn", "copying…");
-    status.textContent = `Copying 0/${list.length}…`;
+    status.textContent = tr("filemgr.copy.progress", { done: 0, total: list.length }, `Copying 0/${list.length}…`);
 
     let done = 0;
     let skipped = 0;
@@ -4549,7 +4544,7 @@ function describeMoveItems(items) {
         failures.push(`${from} → ${to} — ${String(e && e.message ? e.message : e)}`);
       }
 
-      status.textContent = `Copying ${done + failed + skipped}/${list.length}…`;
+      status.textContent = tr("filemgr.copy.progress", { done: done + failed + skipped, total: list.length }, `Copying ${done + failed + skipped}/${list.length}…`);
     }
 
     clearSelection();
@@ -4570,7 +4565,7 @@ function describeMoveItems(items) {
   async function openCopyModalForItems(items) {
     const picker = window.PQNAS_FOLDER_PICKER;
     if (!picker || typeof picker.open !== "function") {
-      status.textContent = "Copy dialog failed: shared folder picker module is not loaded. Refresh the page.";
+      status.textContent = tr("filemgr.copy.dialog_missing", null, "Copy dialog failed: shared folder picker module is not loaded. Refresh the page.");
       return;
     }
 
@@ -4590,7 +4585,7 @@ function describeMoveItems(items) {
       .filter(Boolean);
 
     if (!clean.length) {
-      status.textContent = "Nothing selected.";
+      status.textContent = tr("filemgr.common.nothing_selected", null, "Nothing selected.");
       return;
     }
 
@@ -4598,26 +4593,26 @@ function describeMoveItems(items) {
     const scopes = buildCopyDestinationScopes();
 
     if (!scopes.length) {
-      status.textContent = "No writable copy destinations available.";
+      status.textContent = tr("filemgr.copy.no_destinations", null, "No writable copy destinations available.");
       return;
     }
 
     const initialScopeId = copyScopeIdFromSnapshot(sourceSnap);
 
     const picked = await picker.open({
-      title: "Copy",
-      subtitle: "Select destination location and folder",
+      title: tr("filemgr.copy.title", null, "Copy"),
+      subtitle: tr("filemgr.copy.subtitle", null, "Select destination location and folder"),
       source: describeCopyItems(clean),
       initialScopeId,
       initialPath: curPath || "",
-      chooseLabel: "Copy here",
+      chooseLabel: tr("filemgr.copy.choose_here", null, "Copy here"),
       canCreate: true,
       blockedPaths: [],
       scopes
     });
 
     if (picked === null) {
-      status.textContent = "Copy cancelled.";
+      status.textContent = tr("filemgr.copy.cancelled", null, "Copy cancelled.");
       return;
     }
 
@@ -4645,14 +4640,17 @@ function describeMoveItems(items) {
     }
 
     const destShown = destPath ? `/${destPath}` : "/";
-    const ok = confirm(
-        `Copy ${clean.length} item(s) to:\n\n` +
-        `${destScope.label || copyScopeNameFromSnapshot(destSnap)} ${destShown}\n\n` +
-        `Existing destination names will fail; nothing is overwritten.`
-    );
+    const ok = confirm(tr(
+        "filemgr.copy.confirm",
+        {
+          count: clean.length,
+          dest: `${destScope.label || copyScopeNameFromSnapshot(destSnap)} ${destShown}`
+        },
+        `Copy ${clean.length} item(s) to:\n\n${destScope.label || copyScopeNameFromSnapshot(destSnap)} ${destShown}\n\nExisting destination names will fail; nothing is overwritten.`
+    ));
 
     if (!ok) {
-      status.textContent = "Copy cancelled.";
+      status.textContent = tr("filemgr.copy.cancelled", null, "Copy cancelled.");
       return;
     }
 
@@ -4677,32 +4675,32 @@ function describeMoveItems(items) {
   function friendlyMoveCopyFailureReason(raw) {
     const s = String(raw || "").trim();
 
-    if (!s) return "unknown error";
+    if (!s) return tr("filemgr.copy.reason.unknown", null, "unknown error");
 
     const lower = s.toLowerCase();
 
     if (lower.includes("dest_exists") || lower.includes("destination already exists")) {
-      return "destination already exists";
+      return tr("filemgr.copy.reason.dest_exists", null, "destination already exists");
     }
 
     if (lower.includes("locked") || lower.includes("item is locked")) {
-      return "item is locked";
+      return tr("filemgr.copy.reason.locked", null, "item is locked");
     }
 
     if (lower.includes("quota") || lower.includes("storage limit")) {
-      return "storage quota would be exceeded";
+      return tr("filemgr.copy.reason.quota", null, "storage quota would be exceeded");
     }
 
     if (lower.includes("not_found") || lower.includes("source not found")) {
-      return "source file was not found";
+      return tr("filemgr.copy.reason.not_found", null, "source file was not found");
     }
 
     if (lower.includes("forbidden") || lower.includes("permission")) {
-      return "permission denied";
+      return tr("filemgr.copy.reason.permission", null, "permission denied");
     }
 
     if (lower.includes("source must be a file") || lower.includes("directories not supported")) {
-      return "folder copy is not supported yet";
+      return tr("filemgr.copy.reason.folder_copy", null, "folder copy is not supported yet");
     }
 
     return s
@@ -4734,21 +4732,35 @@ function describeMoveItems(items) {
   function friendlyMoveCopyStatus(actionPast, done, total, failed, skipped, failures) {
     const list = Array.isArray(failures) ? failures : [];
     const first = list.length ? friendlyMoveCopyFailureLine(list[0]) : "";
-    const skippedPart = skipped ? `, ${skipped} skipped` : "";
+    const skippedPart = skipped
+        ? tr("filemgr.copy.status_skipped_part", { skipped }, `, ${skipped} skipped`)
+        : "";
 
     if (failed > 0 && done === 0) {
-      return `${actionPast} failed: ${first || `${failed} item(s) failed`}`;
+      const problem = first || `${failed} item(s) failed`;
+      return tr("filemgr.copy.status_failed", { action: actionPast, problem }, `${actionPast} failed: ${problem}`);
     }
 
     if (failed > 0) {
-      return `${actionPast} partially completed: ${done}/${total} succeeded, ${failed} failed${skippedPart}. ${first ? "First problem: " + first : ""}`.trim();
+      const firstProblem = first
+          ? tr("filemgr.copy.status_first_problem", { problem: first }, `First problem: ${first}`)
+          : "";
+      return tr(
+          "filemgr.copy.status_partial",
+          { action: actionPast, done, total, failed, skippedPart, firstProblem },
+          `${actionPast} partially completed: ${done}/${total} succeeded, ${failed} failed${skippedPart}. ${firstProblem}`
+      ).trim();
     }
 
     if (skipped) {
-      return `${actionPast} ${done} item(s). Skipped: ${skipped}.`;
+      return actionPast === "Move"
+          ? tr("filemgr.move.done_skipped", { done, skipped }, `Moved ${done} item(s). Skipped: ${skipped}.`)
+          : tr("filemgr.copy.done_skipped", { done, skipped }, `Copied ${done} item(s). Skipped: ${skipped}.`);
     }
 
-    return `${actionPast} ${done} item(s).`;
+    return actionPast === "Move"
+        ? tr("filemgr.move.done", { done }, `Moved ${done} item(s).`)
+        : tr("filemgr.copy.done", { done }, `Copied ${done} item(s).`);
   }
 
   async function copyItemsToDestination(items, destPath) {
@@ -4758,7 +4770,7 @@ function describeMoveItems(items) {
     if (!list.length) return;
 
     setBadge("warn", "copying…");
-    status.textContent = `Copying 0/${list.length}…`;
+    status.textContent = tr("filemgr.copy.progress", { done: 0, total: list.length }, `Copying 0/${list.length}…`);
 
     let done = 0;
     let skipped = 0;
@@ -4803,7 +4815,7 @@ function describeMoveItems(items) {
         failures.push(`${from} → ${to} — ${String(e && e.message ? e.message : e)}`);
       }
 
-      status.textContent = `Copying ${done + failed + skipped}/${list.length}…`;
+      status.textContent = tr("filemgr.copy.progress", { done: done + failed + skipped, total: list.length }, `Copying ${done + failed + skipped}/${list.length}…`);
     }
 
     clearSelection();
@@ -4818,8 +4830,8 @@ function describeMoveItems(items) {
     } else {
       setBadge("ok", "ready");
       status.textContent = skipped > 0
-          ? `Copied ${done} item(s). Skipped: ${skipped}.`
-          : `Copied ${done} item(s).`;
+          ? tr("filemgr.copy.done_skipped", { done, skipped }, `Copied ${done} item(s). Skipped: ${skipped}.`)
+          : tr("filemgr.copy.done", { done }, `Copied ${done} item(s).`);
     }
   }
 
@@ -4829,7 +4841,7 @@ function describeMoveItems(items) {
 
     if (!list.length) return;
     setBadge("warn", "moving…");
-    status.textContent = `Moving 0/${list.length}…`;
+    status.textContent = tr("filemgr.move.progress", { done: 0, total: list.length }, `Moving 0/${list.length}…`);
 
     let done = 0;
     let skipped = 0;
@@ -4874,7 +4886,7 @@ function describeMoveItems(items) {
         failures.push(`${from} → ${to} — ${String(e && e.message ? e.message : e)}`);
       }
 
-      status.textContent = `Moving ${done + failed + skipped}/${list.length}…`;
+      status.textContent = tr("filemgr.move.progress", { done: done + failed + skipped, total: list.length }, `Moving ${done + failed + skipped}/${list.length}…`);
     }
     clearSelection();
 
@@ -4895,8 +4907,8 @@ function describeMoveItems(items) {
     } else {
       setBadge("ok", "ready");
       status.textContent = skipped > 0
-          ? `Moved ${done} item(s). Skipped: ${skipped}.`
-          : `Moved ${done} item(s).`;
+          ? tr("filemgr.move.done_skipped", { done, skipped }, `Moved ${done} item(s). Skipped: ${skipped}.`)
+          : tr("filemgr.move.done", { done }, `Moved ${done} item(s).`);
     }
   }
 
@@ -5338,6 +5350,8 @@ function describeMoveItems(items) {
     if (s === "browser") return tr("filemgr.badge.browser", null, "browser");
     if (s === "working…") return tr("filemgr.badge.working", null, "working…");
     if (s === "moving to trash…") return tr("filemgr.badge.moving_to_trash", null, "moving to trash…");
+    if (s === "copying…") return tr("filemgr.badge.copying", null, "copying…");
+    if (s === "moving…") return tr("filemgr.badge.moving", null, "moving…");
     return s;
   }
 
