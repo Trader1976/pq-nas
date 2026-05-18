@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/static/theme.css">
     <link rel="stylesheet" href="/static/shell_menu.css?v=20260507-shell-clean-1">
     <script src="/static/theme.js"></script>
+    <script src="/static/i18n.js?v=20260518-shell-i18n-1"></script>
     <link rel="stylesheet" href="/static/people.css?v=20260516-people-selected-visibility-1">
 
     <style>
@@ -488,86 +489,80 @@
             <img class="brandLogo" id="brandLogo" src="/static/img/logo/nexuslogo_text.svg" alt="DNA-Nexus logo">
         </div>
 
-        <nav class="nav" aria-label="Main navigation">
-            <div class="sectionLabel">Workspace</div>
+        <nav class="nav" aria-label="Main navigation" data-i18n-aria-label="shell.nav_aria">
+            <div class="sectionLabel" data-i18n="shell.section.workspace">Workspace</div>
             <button class="navbtn active" id="nav_home" type="button">
-                <span>Home</span><span class="k">H</span>
+                <span data-i18n="shell.nav.home">Home</span><span class="k">H</span>
             </button>
             <button class="navbtn" id="nav_trusted_devices" type="button">
-                <span>Trusted Devices</span><span class="k">D</span>
+                <span data-i18n="shell.nav.trusted_devices">Trusted Devices</span><span class="k">D</span>
             </button>
             <button class="navbtn" id="nav_people" type="button" style="display:none">
-                <span>People</span><span class="k">P</span>
+                <span data-i18n="shell.nav.people">People</span><span class="k">P</span>
             </button>
             <button class="navbtn" id="nav_user_settings" type="button" style="display:none">
-                <span>Settings</span><span class="k">⚙</span>
+                <span data-i18n="shell.nav.settings">Settings</span><span class="k">⚙</span>
             </button>
-            <div class="sectionLabel">Apps</div>
+            <div class="sectionLabel" data-i18n="shell.section.apps">Apps</div>
             <div id="appsList"></div>
 
-            <div class="sectionLabel">Admin</div>
+            <div class="sectionLabel" data-i18n="shell.section.admin">Admin</div>
             <a class="navbtn" id="nav_admin" href="/admin" style="display:none" data-tour="nav-admin">
-                <span>Admin</span><span class="k">A</span>
+                <span data-i18n="shell.nav.admin">Admin</span><span class="k">A</span>
             </a>
 
-            <div class="sectionLabel">Session</div>
+            <div class="sectionLabel" data-i18n="shell.section.session">Session</div>
             <a class="navbtn" id="nav_login" href="/" style="display:none">
-                <span>Sign in</span><span class="k">↩</span>
+                <span data-i18n="shell.nav.sign_in">Sign in</span><span class="k">↩</span>
             </a>
             <a class="navbtn" id="nav_logout" href="/">
-                <span>Logout</span><span class="k">⎋</span>
+                <span data-i18n="shell.nav.logout">Logout</span><span class="k">⎋</span>
             </a>
         </nav>
 
         <div class="bottom">
             <div class="statusCard">
                 <button class="navbtn" id="toggleActivityBtn" type="button" style="justify-content:center;">
-                    My Activity
+                    <span data-i18n="shell.activity.my_activity">My Activity</span>
                     <span class="k">A</span>
                 </button>
-                <div id="stateBadge" class="badge warn">checking…</div>
-                <div class="mini" id="statusLine">Loading…</div>
+                <div id="stateBadge" class="badge warn" data-i18n="common.checking">checking…</div>
+                <div class="mini" id="statusLine" data-i18n="common.loading">Loading…</div>
             </div>
         </div>
     </aside>
 
     <main class="workspace">
         <div class="content" id="contentGrid">
-            <section class="pane mainArea" data-main-host aria-label="Main pane">
+            <section class="pane mainArea" data-main-host aria-label="Main pane" data-i18n-aria-label="shell.main_pane_aria">
                 <h2 id="mainPaneTitle" style="display:none"></h2>
 
                 <div id="state_disabled" class="bigState">
-                    <h3>Waiting for admin approval…</h3>
-                    <p>
-                        Your identity has been received, but your account is currently <b>disabled</b>.
-                        Ask an admin to enable your fingerprint in <code>/admin/users</code>.
-                        This page will update automatically.
-                    </p>
+                    <h3 data-i18n="state.disabled.title">Waiting for admin approval…</h3>
+                    <p data-i18n="state.disabled.body">Your identity has been received, but your account is currently disabled. Ask an admin to enable your fingerprint in /admin/users. This page will update automatically.</p>
                 </div>
 
                 <div id="state_unauth" class="bigState">
-                    <h3>Not signed in</h3>
-                    <p>
-                        You don’t have a valid session cookie. Go to the login page and scan the QR code to sign in.
-                    </p>
+                    <h3 data-i18n="state.unauth.title">Not signed in</h3>
+                    <p data-i18n="state.unauth.body">You don’t have a valid session cookie. Go to the login page and scan the QR code to sign in.</p>
                     <div style="margin-top:10px">
-                        <a class="btn" href="/">Go to login</a>
+                        <a class="btn" href="/" data-i18n="state.unauth.go_login">Go to login</a>
                     </div>
                 </div>
 
                 <div class="mono" id="homeBlurb">
-                    <div id="desktopSurface" class="desktopSurface" aria-label="Desktop"></div>
+                    <div id="desktopSurface" class="desktopSurface" aria-label="Desktop" data-i18n-aria-label="shell.desktop_aria"></div>
                 </div>
             </section>
 
-            <aside class="pane" aria-label="My Activity pane" id="activityPane" style="display:none">
-                <h2>My Activity</h2>
+            <aside class="pane" aria-label="My Activity pane" data-i18n-aria-label="shell.activity.pane_aria" id="activityPane" style="display:none">
+                <h2 data-i18n="shell.activity.my_activity">My Activity</h2>
                 <div class="activityToolbar">
-                    <div class="mini" id="activityStatus">Recent account activity</div>
-                    <button class="btn secondary" id="activityRefreshBtn" type="button">Refresh</button>
+                    <div class="mini" id="activityStatus" data-i18n="shell.activity.recent">Recent account activity</div>
+                    <button class="btn secondary" id="activityRefreshBtn" type="button" data-i18n="common.refresh">Refresh</button>
                 </div>
                 <div id="activityList" class="activityList">
-                    <div class="activityEmpty">Open this panel to load your recent activity.</div>
+                    <div class="activityEmpty" data-i18n="shell.activity.open_to_load">Open this panel to load your recent activity.</div>
                 </div>
             </aside>
         </div>

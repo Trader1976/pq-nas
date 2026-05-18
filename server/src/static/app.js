@@ -36,6 +36,46 @@
     const contentGrid = document.getElementById("contentGrid");
 
     const appsList = document.getElementById("appsList");
+
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch {}
+        return fallback || key;
+    }
+
+    function currentLanguageName() {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.getLanguage === "function") {
+                return window.PQNAS_I18N.getLanguage();
+            }
+        } catch {}
+
+        try {
+            return (localStorage.getItem("pqnas_lang") || "en").trim() || "en";
+        } catch {}
+
+        return "en";
+    }
+
+    async function applyUserLanguage(langName) {
+        const lang = String(langName || "en").trim() || "en";
+
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.setLanguage === "function") {
+                await window.PQNAS_I18N.setLanguage(lang);
+            } else {
+                localStorage.setItem("pqnas_lang", lang);
+                document.documentElement.setAttribute("lang", lang);
+            }
+        } catch {}
+
+        if (currentView === "user_settings") {
+            renderUserSettings(tr("settings.language.saved", null, "Language saved."), "ok");
+        }
+    }
     function getMainHost() {
         return document.querySelector("[data-main-host]")
             || (homeBlurb ? homeBlurb.closest(".mainArea") : null)
@@ -1782,6 +1822,7 @@
         homeBlurb.classList.remove("appHostBlurb");
 
         const activeTheme = currentThemeName();
+        const activeLanguage = currentLanguageName();
         if (!userProfile && !userProfileLoading && !userProfileError && authed) {
             loadUserProfile().then(() => {
                 if (currentView === "user_settings") renderUserSettings();
@@ -1940,6 +1981,38 @@
         
             <div class="card" style="padding:14px; margin-top:12px;">
                 <h3 style="margin:0 0 8px 0; font-size:18px;">
+                    ${escapeHtml(tr("settings.language.title", null, "Language"))}
+                </h3>
+
+                <div class="mini" style="line-height:1.5; margin-bottom:10px;">
+                    ${escapeHtml(tr("settings.language.desc", null, "Choose the language used by DNA-Nexus on this device."))}
+                </div>
+
+                <select
+                    id="userLanguageSelect"
+                    style="
+                        min-width:220px;
+                        max-width:100%;
+                        padding:10px 12px;
+                        border-radius:12px;
+                        border:1px solid rgba(255,255,255,0.16);
+                        background:rgba(0,0,0,0.22);
+                        color:var(--fg);
+                        font-family:var(--sans);
+                        font-weight:850;
+                    "
+                >
+                    <option value="en" ${activeLanguage === "en" ? "selected" : ""}>
+                        ${escapeHtml(tr("settings.language.english", null, "🇬🇧 English"))}
+                    </option>
+                    <option value="fi" ${activeLanguage === "fi" ? "selected" : ""}>
+                        ${escapeHtml(tr("settings.language.finnish", null, "🇫🇮 Suomi"))}
+                    </option>
+                </select>
+            </div>
+
+            <div class="card" style="padding:14px; margin-top:12px;">
+                <h3 style="margin:0 0 8px 0; font-size:18px;">
                     Theme
                 </h3>
 
@@ -2033,6 +2106,13 @@
                 }
             });
         }
+        const languageSelect = document.getElementById("userLanguageSelect");
+        if (languageSelect) {
+            languageSelect.addEventListener("change", () => {
+                applyUserLanguage(languageSelect.value);
+            });
+        }
+
         for (const input of (homeContent || homeBlurb).querySelectorAll('input[name="userTheme"]')) {
             input.addEventListener("change", () => {
                 if (!input.checked) return;
