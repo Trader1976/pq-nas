@@ -1472,13 +1472,12 @@
                             ? Math.max(0, sj.expires_at - sj.now)
                             : 0;
 
-                        statusEl.textContent =
-                            `Waiting for phone to scan and confirm… Expires ${fmtDateTime(sj.expires_at)} (${fmtRemainingSec(left)} left)`;
+                        statusEl.textContent = tr("shell.trusted.waiting_expires", { expires: fmtDateTime(sj.expires_at), left: fmtRemainingSec(left) }, `Waiting for phone to scan and confirm… Expires ${fmtDateTime(sj.expires_at)} (${fmtRemainingSec(left)} left)`);
                         return;
                     }
 
                     if (sj.state === "consumed") {
-                        statusEl.textContent = `Paired successfully. Device ID: ${sj.device_id || "?"}`;
+                        statusEl.textContent = tr("shell.trusted.paired_success", { id: sj.device_id || "?" }, `Paired successfully. Device ID: ${sj.device_id || "?"}`);
                         stopPairPolling();
                         await loadTrustedDevices();
                         renderTrustedDevices();
@@ -1486,13 +1485,13 @@
                     }
 
                     if (sj.state === "expired") {
-                        statusEl.textContent = "Pairing request expired. Start a new one.";
+                        statusEl.textContent = tr("shell.trusted.request_expired", null, "Pairing request expired. Start a new one.");
                         stopPairPolling();
                         return;
                     }
 
                     if (sj.state === "missing") {
-                        statusEl.textContent = "Pairing request missing.";
+                        statusEl.textContent = tr("shell.trusted.request_missing", null, "Pairing request missing.");
                         stopPairPolling();
                     }
                 } catch {
@@ -1501,7 +1500,7 @@
             }, 1500);
         } catch (e) {
             currentPairing = null;
-            renderTrustedDevices(`Failed to start pairing: ${String(e && e.message ? e.message : e)}`, "err");
+            renderTrustedDevices(tr("shell.trusted.failed_start", { error: String(e && e.message ? e.message : e) }, `Failed to start pairing: ${String(e && e.message ? e.message : e)}`), "err");
         }
     }
 
@@ -1512,9 +1511,9 @@
         setActiveNav("nav_trusted_devices");
         setActiveApp("");
 
-        if (wsTitle) wsTitle.textContent = "Trusted Devices";
-        if (wsSubtitle) wsSubtitle.textContent = "Pair this phone or other devices with your DNA-Nexus account";
-        if (mainPaneTitle) mainPaneTitle.textContent = "Trusted Devices";
+        if (wsTitle) wsTitle.textContent = tr("shell.trusted.title", null, "Trusted Devices");
+        if (wsSubtitle) wsSubtitle.textContent = tr("shell.trusted.subtitle", null, "Pair this phone or other devices with your DNA-Nexus account");
+        if (mainPaneTitle) mainPaneTitle.textContent = tr("shell.trusted.title", null, "Trusted Devices");
 
         if (!homeBlurb) return;
 
@@ -1525,16 +1524,16 @@
         <div style="margin-top:16px; display:flex; flex-direction:column; gap:12px; align-items:flex-start;">
             <img
                 src="${currentPairing.qr_svg}"
-                alt="Pairing QR"
+                alt="${tr("shell.trusted.qr_alt", null, "Pairing QR")}"
                 style="width:280px; height:280px; border-radius:16px; border:1px solid rgba(255,255,255,0.12); background:#fff; padding:12px;"
             />
-            <div class="mini" id="pairStatusLine">Waiting for phone to scan and confirm…</div>
+            <div class="mini" id="pairStatusLine">${tr("shell.trusted.waiting_initial", null, "Waiting for phone to scan and confirm…")}</div>
             <div class="mini" style="word-break:break-all;">
                 ${currentPairing.qr_uri || ""}
             </div>
         </div>
     ` : `
-        <div class="mini" id="pairStatusLine">No active pairing request.</div>
+        <div class="mini" id="pairStatusLine">${tr("shell.trusted.no_active_pair", null, "No active pairing request.")}</div>
     `;
         const deviceRows = trustedDevices.map((d) => {
             const trustedUntil = d.refresh_expires_at ? fmtDateTime(d.refresh_expires_at) : "—";
@@ -1542,23 +1541,23 @@
         <div class="card" style="padding:12px; margin-top:10px;">
             <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start;">
                 <div>
-                    <div style="font-weight:600;">${d.device_name || "Unnamed device"}</div>
+                    <div style="font-weight:600;">${d.device_name || tr("shell.trusted.unnamed_device", null, "Unnamed device")}</div>
                     <div class="mini">
     ${[
                 d.device_manufacturer,
                 d.device_model,
                 d.os_version,
-                d.app_version ? `app ${d.app_version}` : ""
+                d.app_version ? tr("shell.trusted.app_version", { version: d.app_version }, `app ${d.app_version}`) : ""
             ].filter(Boolean).join(" · ") || (d.platform || "?")}
 </div>
-                    <div class="mini">Paired: ${fmtDateTime(d.created_at)}</div>
-                    <div class="mini">Last seen: ${fmtDateTime(d.last_seen_at)}</div>
-                    <div class="mini">Trusted until: ${trustedUntil}</div>
-                    ${d.revoked ? `<div class="mini">Status: revoked</div>` : `<div class="mini">Status: active</div>`}
+                    <div class="mini">${tr("shell.trusted.paired", { time: fmtDateTime(d.created_at) }, `Paired: ${fmtDateTime(d.created_at)}`)}</div>
+                    <div class="mini">${tr("shell.trusted.last_seen", { time: fmtDateTime(d.last_seen_at) }, `Last seen: ${fmtDateTime(d.last_seen_at)}`)}</div>
+                    <div class="mini">${tr("shell.trusted.trusted_until", { time: trustedUntil }, `Trusted until: ${trustedUntil}`)}</div>
+                    ${d.revoked ? `<div class="mini">${tr("shell.trusted.status_revoked", null, "Status: revoked")}</div>` : `<div class="mini">${tr("shell.trusted.status_active", null, "Status: active")}</div>`}
                 </div>
                 ${d.revoked ? "" : `
                     <button class="btn secondary trustedRevokeBtn" type="button" data-device-id="${String(d.device_id || "")}">
-                        Forget pairing
+                        ${tr("shell.trusted.forget_pairing", null, "Forget pairing")}
                     </button>
                 `}
             </div>
@@ -1568,36 +1567,35 @@
 
         const devicesBlock = `
     <div style="margin-top:24px;">
-        <h3 style="margin:0 0 8px 0; font-size:18px;">Trusted devices</h3>
+        <h3 style="margin:0 0 8px 0; font-size:18px;">${tr("shell.trusted.devices_title", null, "Trusted devices")}</h3>
         <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:12px;">
-            Devices that can access your DNA-Nexus account through app pairing.
+            ${tr("shell.trusted.devices_desc", null, "Devices that can access your DNA-Nexus account through app pairing.")}
         </div>
         ${trustedDevicesError ? `
             <div class="bigState" style="display:block; margin-top:8px;">
-                <h3>Could not load devices</h3>
+                <h3>${tr("shell.trusted.could_not_load", null, "Could not load devices")}</h3>
                 <p>${trustedDevicesError}</p>
             </div>
         ` : ""}
-        ${trustedDevices.length ? deviceRows : `<div class="mini">No trusted devices yet.</div>`}
+        ${trustedDevices.length ? deviceRows : `<div class="mini">${tr("shell.trusted.no_devices", null, "No trusted devices yet.")}</div>`}
     </div>
 `;
 
     const homeContent = setHomeContentHtml(`
     <div style="max-width:760px; font-family:var(--sans);">
-        <h3 style="margin:0 0 8px 0; font-size:18px; font-family:inherit;">Pair a new device</h3>
+        <h3 style="margin:0 0 8px 0; font-size:18px; font-family:inherit;">${tr("shell.trusted.pair_title", null, "Pair a new device")}</h3>
         <div style="color:var(--fg-dim); line-height:1.5; margin-bottom:14px; font-family:inherit;">
-            Open the DNA-Nexus mobile app, choose scan/pair, and scan the QR code shown here.
-            After you confirm on the phone, this page will update automatically.
+            ${tr("shell.trusted.pair_intro", null, "Open the DNA-Nexus mobile app, choose scan/pair, and scan the QR code shown here. After you confirm on the phone, this page will update automatically.")}
         </div>
 
         <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; font-family:inherit;">
-            <button class="btn" id="pairNewDeviceBtn" type="button">Pair New Device</button>
-            <button class="btn secondary" id="pairStopBtn" type="button">Cancel pairing</button>
+            <button class="btn" id="pairNewDeviceBtn" type="button">${tr("shell.trusted.pair_new", null, "Pair New Device")}</button>
+            <button class="btn secondary" id="pairStopBtn" type="button">${tr("shell.trusted.cancel_pairing", null, "Cancel pairing")}</button>
         </div>
 
         ${messageText ? `
             <div class="bigState" style="display:block; margin-top:8px;">
-                <h3>${messageKind === "ok" ? "Success" : "Pairing error"}</h3>
+                <h3>${messageKind === "ok" ? tr("shell.trusted.success", null, "Success") : tr("shell.trusted.pairing_error", null, "Pairing error")}</h3>
                 <p>${messageText}</p>
             </div>
             ` : ""}
@@ -1621,9 +1619,9 @@
                 try {
                     await revokeTrustedDevice(deviceId);
                     await loadTrustedDevices();
-                    renderTrustedDevices(`Pairing forgotten for device: ${deviceId}`, "ok");
+                    renderTrustedDevices(tr("shell.trusted.forgotten", { id: deviceId }, `Pairing forgotten for device: ${deviceId}`), "ok");
                 } catch (e) {
-                    renderTrustedDevices("Device removed from trusted devices.", "ok");
+                    renderTrustedDevices(tr("shell.trusted.removed", null, "Device removed from trusted devices."), "ok");
                 }
             });
         }
@@ -1640,7 +1638,7 @@
                     await loadTrustedDevices();
                     renderTrustedDevices();
                 } catch (e) {
-                    renderTrustedDevices(`Failed to cancel pairing: ${String(e && e.message ? e.message : e)}`);
+                    renderTrustedDevices(tr("shell.trusted.failed_cancel", { error: String(e && e.message ? e.message : e) }, `Failed to cancel pairing: ${String(e && e.message ? e.message : e)}`));
                 }
             });
         }
