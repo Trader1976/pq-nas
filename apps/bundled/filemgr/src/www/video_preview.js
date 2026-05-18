@@ -5,6 +5,16 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     const FM = window.PQNAS_FILEMGR;
 
+
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
     let modal = null;
     let titleEl = null;
     let pathEl = null;
@@ -56,7 +66,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
 
     function safeName(item) {
-        return String(item && item.name ? item.name : "Video preview");
+        return String(item && item.name ? item.name : tr("filemgr.video.title", null, "Video preview"));
     }
 
     function relPathFor(item) {
@@ -193,16 +203,16 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         modal.setAttribute("aria-hidden", "true");
 
         modal.innerHTML = `
-      <div class="videoPreviewBox" role="dialog" aria-modal="false" aria-label="Video preview">
+      <div class="videoPreviewBox" role="dialog" aria-modal="false" aria-label="${tr("filemgr.video.title", null, "Video preview")}">
         <div class="videoPreviewHead">
           <div class="videoPreviewTitleWrap">
-            <div id="videoPreviewTitle" class="videoPreviewTitle">Video preview</div>
+            <div id="videoPreviewTitle" class="videoPreviewTitle">${tr("filemgr.video.title", null, "Video preview")}</div>
             <div id="videoPreviewPath" class="videoPreviewPath mono"></div>
           </div>
           <div class="videoPreviewActions">
-            <button id="videoPreviewOpenOriginal" type="button" class="btn secondary">Open original</button>
-            <button id="videoPreviewDownload" type="button" class="btn secondary">Download</button>
-            <button id="videoPreviewClose" type="button" class="btn secondary">Close</button>
+            <button id="videoPreviewOpenOriginal" type="button" class="btn secondary">${tr("filemgr.preview.open_original", null, "Open original")}</button>
+            <button id="videoPreviewDownload" type="button" class="btn secondary">${tr("filemgr.preview.download", null, "Download")}</button>
+            <button id="videoPreviewClose" type="button" class="btn secondary">${tr("filemgr.preview.close", null, "Close")}</button>
           </div>
         </div>
         <div class="videoPreviewBody">
@@ -270,7 +280,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
         if (FM && typeof FM.setBadge === "function") FM.setBadge("warn", "loading…");
         const status = FM && typeof FM.getStatusEl === "function" ? FM.getStatusEl() : null;
-        if (status) status.textContent = `Loading video preview: ${safeName(item)}…`;
+        if (status) status.textContent = tr("filemgr.video.loading", { name: safeName(item) }, `Loading video preview: ${safeName(item)}…`);
 
         if (openOriginalBtn) {
             openOriginalBtn.onclick = () => {
@@ -315,13 +325,13 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             }
 
             if (FM && typeof FM.setBadge === "function") FM.setBadge("ok", "preview");
-            if (status) status.textContent = `Previewing video: ${safeName(item)}`;
+            if (status) status.textContent = tr("filemgr.video.previewing", { name: safeName(item) }, `Previewing video: ${safeName(item)}`);
         } catch (e) {
             if (seq !== openSeq) return;
 
             if (FM && typeof FM.setBadge === "function") FM.setBadge("err", "error");
             if (status) {
-                status.textContent = `Video preview failed: ${String(e && e.message ? e.message : e)}`;
+                status.textContent = tr("filemgr.video.failed", { error: String(e && e.message ? e.message : e) }, `Video preview failed: ${String(e && e.message ? e.message : e)}`);
             }
 
             if (videoEl) {

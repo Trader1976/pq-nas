@@ -5,6 +5,16 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     const FM = window.PQNAS_FILEMGR;
 
+
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
     let modal = null;
     let titleEl = null;
     let pathEl = null;
@@ -62,7 +72,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
 
     function safeName(item) {
-        return String(item && item.name ? item.name : "Audio preview");
+        return String(item && item.name ? item.name : tr("filemgr.audio.title", null, "Audio preview"));
     }
 
     function relPathFor(item) {
@@ -190,6 +200,22 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         window.addEventListener("resize", keepModalInViewport);
     }
 
+    function refreshAudioPreviewLabels() {
+        if (!modal) return;
+
+        const box = modal.querySelector(".audioPreviewBox");
+        const openBtn = modal.querySelector("#audioPreviewOpenOriginal");
+        const dlBtn = modal.querySelector("#audioPreviewDownload");
+        const closeBtn = modal.querySelector("#audioPreviewClose");
+        const hint = modal.querySelector(".audioPreviewHint");
+
+        if (box) box.setAttribute("aria-label", tr("filemgr.audio.title", null, "Audio preview"));
+        if (openBtn) openBtn.textContent = tr("filemgr.preview.open_original", null, "Open original");
+        if (dlBtn) dlBtn.textContent = tr("filemgr.preview.download", null, "Download");
+        if (closeBtn) closeBtn.textContent = tr("filemgr.preview.close", null, "Close");
+        if (hint) hint.textContent = tr("filemgr.audio.native", null, "Browser-native audio playback");
+    }
+
     function ensureModal() {
         if (modal) return modal;
 
@@ -199,16 +225,16 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         modal.setAttribute("aria-hidden", "true");
 
         modal.innerHTML = `
-      <div class="audioPreviewBox" role="dialog" aria-modal="false" aria-label="Audio preview">
+      <div class="audioPreviewBox" role="dialog" aria-modal="false" aria-label="${tr("filemgr.audio.title", null, "Audio preview")}">
         <div class="audioPreviewHead">
           <div class="audioPreviewTitleWrap">
-            <div id="audioPreviewTitle" class="audioPreviewTitle">Audio preview</div>
+            <div id="audioPreviewTitle" class="audioPreviewTitle">${tr("filemgr.audio.title", null, "Audio preview")}</div>
             <div id="audioPreviewPath" class="audioPreviewPath mono"></div>
           </div>
           <div class="audioPreviewActions">
-            <button id="audioPreviewOpenOriginal" type="button" class="btn secondary">Open original</button>
-            <button id="audioPreviewDownload" type="button" class="btn secondary">Download</button>
-            <button id="audioPreviewClose" type="button" class="btn secondary">Close</button>
+            <button id="audioPreviewOpenOriginal" type="button" class="btn secondary">${tr("filemgr.preview.open_original", null, "Open original")}</button>
+            <button id="audioPreviewDownload" type="button" class="btn secondary">${tr("filemgr.preview.download", null, "Download")}</button>
+            <button id="audioPreviewClose" type="button" class="btn secondary">${tr("filemgr.preview.close", null, "Close")}</button>
           </div>
         </div>
 
@@ -216,7 +242,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
           <div class="audioPreviewIcon" aria-hidden="true">♪</div>
           <div class="audioPreviewNow">
             <div id="audioPreviewNowTitle" class="audioPreviewNowTitle"></div>
-            <div class="audioPreviewHint">Browser-native audio playback</div>
+            <div class="audioPreviewHint">${tr("filemgr.audio.native", null, "Browser-native audio playback")}</div>
           </div>
           <audio
             id="audioPreviewPlayer"
@@ -235,6 +261,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         audioEl = modal.querySelector("#audioPreviewPlayer");
         openOriginalBtn = modal.querySelector("#audioPreviewOpenOriginal");
         downloadBtn = modal.querySelector("#audioPreviewDownload");
+
+        refreshAudioPreviewLabels();
 
         const closeBtn = modal.querySelector("#audioPreviewClose");
         const nowTitle = modal.querySelector("#audioPreviewNowTitle");
@@ -257,6 +285,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         if (!canOpenFor(item)) return;
 
         ensureModal();
+        refreshAudioPreviewLabels();
         placeInitialModal();
         keepModalInViewport();
 
@@ -285,7 +314,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
         if (FM && typeof FM.setBadge === "function") FM.setBadge("warn", "loading…");
         const status = FM && typeof FM.getStatusEl === "function" ? FM.getStatusEl() : null;
-        if (status) status.textContent = `Loading audio preview: ${safeName(item)}…`;
+        if (status) status.textContent = tr("filemgr.audio.loading", { name: safeName(item) }, `Loading audio preview: ${safeName(item)}…`);
 
         if (openOriginalBtn) {
             openOriginalBtn.onclick = () => {
@@ -330,13 +359,13 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             }
 
             if (FM && typeof FM.setBadge === "function") FM.setBadge("ok", "preview");
-            if (status) status.textContent = `Previewing audio: ${safeName(item)}`;
+            if (status) status.textContent = tr("filemgr.audio.previewing", { name: safeName(item) }, `Previewing audio: ${safeName(item)}`);
         } catch (e) {
             if (seq !== openSeq) return;
 
             if (FM && typeof FM.setBadge === "function") FM.setBadge("err", "error");
             if (status) {
-                status.textContent = `Audio preview failed: ${String(e && e.message ? e.message : e)}`;
+                status.textContent = tr("filemgr.audio.failed", { error: String(e && e.message ? e.message : e) }, `Audio preview failed: ${String(e && e.message ? e.message : e)}`);
             }
 
             if (audioEl) {
@@ -363,6 +392,10 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
         revokeCurrentBlobUrl();
     }
+
+    window.addEventListener("pqnas-language-changed", () => {
+        refreshAudioPreviewLabels();
+    });
 
     FM.audioPreview = {
         open,

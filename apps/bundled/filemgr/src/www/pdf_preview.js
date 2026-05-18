@@ -5,6 +5,16 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     const FM = window.PQNAS_FILEMGR;
 
+
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
     let modal = null;
     let titleEl = null;
     let pathEl = null;
@@ -29,22 +39,22 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         modal.setAttribute("aria-hidden", "true");
 
         modal.innerHTML = `
-      <div class="pdfPreviewBox" role="dialog" aria-modal="true" aria-label="PDF preview">
+      <div class="pdfPreviewBox" role="dialog" aria-modal="true" aria-label="${tr("filemgr.pdf.title", null, "PDF preview")}">
         <div class="pdfPreviewHead">
           <div class="pdfPreviewTitleWrap">
-            <div id="pdfPreviewTitle" class="pdfPreviewTitle">PDF preview</div>
+            <div id="pdfPreviewTitle" class="pdfPreviewTitle">${tr("filemgr.pdf.title", null, "PDF preview")}</div>
             <div id="pdfPreviewPath" class="pdfPreviewPath mono"></div>
           </div>
           <div class="pdfPreviewActions">
-            <button id="pdfPreviewOpenOriginal" type="button" class="btn secondary">Open original</button>
-            <button id="pdfPreviewDownload" type="button" class="btn secondary">Download</button>
-            <button id="pdfPreviewClose" type="button" class="btn secondary">Close</button>
+            <button id="pdfPreviewOpenOriginal" type="button" class="btn secondary">${tr("filemgr.preview.open_original", null, "Open original")}</button>
+            <button id="pdfPreviewDownload" type="button" class="btn secondary">${tr("filemgr.preview.download", null, "Download")}</button>
+            <button id="pdfPreviewClose" type="button" class="btn secondary">${tr("filemgr.preview.close", null, "Close")}</button>
           </div>
         </div>
         <iframe
           id="pdfPreviewFrame"
           class="pdfPreviewFrame"
-          title="PDF preview"
+          title="${tr("filemgr.pdf.title", null, "PDF preview")}"
           referrerpolicy="same-origin"
         ></iframe>
       </div>
@@ -182,7 +192,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         currentBlobUrl = "";
     }
     function safeName(item) {
-        return String(item && item.name ? item.name : "PDF preview");
+        return String(item && item.name ? item.name : tr("filemgr.pdf.title", null, "PDF preview"));
     }
 
     function relPathFor(item) {
@@ -226,7 +236,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
         if (FM && typeof FM.setBadge === "function") FM.setBadge("warn", "loading…");
         const status = FM && typeof FM.getStatusEl === "function" ? FM.getStatusEl() : null;
-        if (status) status.textContent = `Loading PDF preview: ${safeName(item)}…`;
+        if (status) status.textContent = tr("filemgr.pdf.loading", { name: safeName(item) }, `Loading PDF preview: ${safeName(item)}…`);
 
         if (openOriginalBtn) {
             openOriginalBtn.onclick = () => {
@@ -268,13 +278,13 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             if (frameEl) frameEl.src = blobUrl;
 
             if (FM && typeof FM.setBadge === "function") FM.setBadge("ok", "preview");
-            if (status) status.textContent = `Previewing PDF: ${safeName(item)}`;
+            if (status) status.textContent = tr("filemgr.pdf.previewing", { name: safeName(item) }, `Previewing PDF: ${safeName(item)}`);
         } catch (e) {
             if (seq !== openSeq) return;
 
             if (FM && typeof FM.setBadge === "function") FM.setBadge("err", "error");
             if (status) {
-                status.textContent = `PDF preview failed: ${String(e && e.message ? e.message : e)}`;
+                status.textContent = tr("filemgr.pdf.failed", { error: String(e && e.message ? e.message : e) }, `PDF preview failed: ${String(e && e.message ? e.message : e)}`);
             }
 
             if (frameEl) {

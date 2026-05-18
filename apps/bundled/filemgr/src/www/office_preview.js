@@ -5,6 +5,16 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
     const FM = window.PQNAS_FILEMGR;
 
+
+    function tr(key, vars = null, fallback = "") {
+        try {
+            if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+                return window.PQNAS_I18N.t(key, vars, fallback || key);
+            }
+        } catch (_) {}
+        return fallback || key;
+    }
+
     let modal = null;
     let titleEl = null;
     let pathEl = null;
@@ -44,7 +54,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     }
 
     function safeName(item) {
-        return String(item && item.name ? item.name : "Office preview");
+        return String(item && item.name ? item.name : tr("filemgr.office.title", null, "Office preview"));
     }
 
     function relPathFor(item) {
@@ -185,26 +195,26 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         modal.setAttribute("aria-hidden", "true");
 
         modal.innerHTML = `
-      <div class="officePreviewBox" role="dialog" aria-modal="false" aria-label="Office document preview">
+      <div class="officePreviewBox" role="dialog" aria-modal="false" aria-label="${tr("filemgr.office.aria", null, "Office document preview")}">
         <div class="officePreviewHead">
           <div class="officePreviewTitleWrap">
-            <div id="officePreviewTitle" class="officePreviewTitle">Office preview</div>
+            <div id="officePreviewTitle" class="officePreviewTitle">${tr("filemgr.office.title", null, "Office preview")}</div>
             <div id="officePreviewPath" class="officePreviewPath mono"></div>
           </div>
           <div class="officePreviewActions">
-            <button id="officePreviewDownloadOriginal" type="button" class="btn secondary">Download original</button>
-            <button id="officePreviewClose" type="button" class="btn secondary">Close</button>
+            <button id="officePreviewDownloadOriginal" type="button" class="btn secondary">${tr("filemgr.office.download_original", null, "Download original")}</button>
+            <button id="officePreviewClose" type="button" class="btn secondary">${tr("filemgr.preview.close", null, "Close")}</button>
           </div>
         </div>
 
         <div id="officePreviewLoading" class="officePreviewLoading">
-          Converting document to PDF…
+          ${tr("filemgr.office.converting", null, "Converting document to PDF…")}
         </div>
 
         <iframe
           id="officePreviewFrame"
           class="officePreviewFrame"
-          title="Office document preview"
+          title="${tr("filemgr.office.aria", null, "Office document preview")}"
           referrerpolicy="same-origin"
         ></iframe>
       </div>
@@ -238,7 +248,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
         if (!loading) return;
 
         loading.classList.toggle("hidden", !on);
-        loading.textContent = text || "Converting document to PDF…";
+        loading.textContent = text || tr("filemgr.office.converting", null, "Converting document to PDF…");
     }
 
     async function open(item) {
@@ -262,7 +272,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
         modal.classList.add("show");
         modal.setAttribute("aria-hidden", "false");
-        setLoading(true, "Converting document to PDF…");
+        setLoading(true, tr("filemgr.office.converting", null, "Converting document to PDF…"));
 
         if (downloadOriginalBtn) {
             downloadOriginalBtn.onclick = () => {
@@ -272,7 +282,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
 
         if (FM && typeof FM.setBadge === "function") FM.setBadge("warn", "converting…");
         const status = FM && typeof FM.getStatusEl === "function" ? FM.getStatusEl() : null;
-        if (status) status.textContent = `Converting document preview: ${safeName(item)}…`;
+        if (status) status.textContent = tr("filemgr.office.converting_status", { name: safeName(item) }, `Converting document preview: ${safeName(item)}…`);
 
         try {
             const r = await fetch(previewUrl, {
@@ -308,7 +318,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             setLoading(false);
 
             if (FM && typeof FM.setBadge === "function") FM.setBadge("ok", "preview");
-            if (status) status.textContent = `Previewing Office document: ${safeName(item)}`;
+            if (status) status.textContent = tr("filemgr.office.previewing", { name: safeName(item) }, `Previewing Office document: ${safeName(item)}`);
         } catch (e) {
             if (seq !== openSeq) return;
 
@@ -318,7 +328,7 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
             close();
 
             if (FM && typeof FM.setBadge === "function") FM.setBadge("ok", "download");
-            if (status) status.textContent = `Office preview unavailable. Downloading: ${safeName(item)}`;
+            if (status) status.textContent = tr("filemgr.office.unavailable_downloading", { name: safeName(item) }, `Office preview unavailable. Downloading: ${safeName(item)}`);
 
             window.location.href = downloadUrl;
         }

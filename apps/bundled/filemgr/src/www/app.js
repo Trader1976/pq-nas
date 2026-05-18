@@ -5381,6 +5381,9 @@ function describeMoveItems(items) {
     if (s === "moving…") return tr("filemgr.badge.moving", null, "moving…");
     if (s === "loading…") return tr("filemgr.badge.loading", null, "loading…");
     if (s === "network") return tr("filemgr.badge.network", null, "network");
+    if (s === "preview") return tr("filemgr.badge.preview", null, "preview");
+    if (s === "download") return tr("filemgr.badge.download", null, "download");
+    if (s === "converting…") return tr("filemgr.badge.converting", null, "converting…");
     return s;
   }
 
