@@ -1892,5 +1892,18 @@
   "admin.users.cleanup_confirm_title": "Poistetaanko vanha passiivinen tallennuskopio?",
   "admin.users.cleanup_confirm_subtitle": "Tämä poistaa vanhan passiivisen kopion onnistuneen tallennussiirron jälkeen.",
   "admin.users.cleanup_confirm_note": "Tämä poistaa käyttäjän vanhan alihakemiston vanhasta poolista. Nykyinen aktiivinen pooli on suojattu.",
-  "admin.users.delete_old_copy": "Poista vanha kopio"
+  "admin.users.delete_old_copy": "Poista vanha kopio",
+  "raidmgr.action.close": "Sulje",
+  "raidmgr.action.cancel": "Peruuta",
+  "raidmgr.destroy.title": "Tuhoa tallennuspooli",
+  "raidmgr.destroy.warning_body": "Tämä irrottaa poolin ja poistaa sen PQ-NASin poolimäärityksistä. Valinnaisesti se voi tyhjentää jäsenlevyt (ERITTÄIN tuhoavaa).",
+  "raidmgr.destroy.mount": "Liitoskohta",
+  "raidmgr.destroy.wipe_label": "Tyhjennä jäsenlevyt (tuhoava)",
+  "raidmgr.destroy.wipe_help": "Kun tämä on päällä, PQ-NAS ajaa wipefs/sgdisk-toiminnot jokaiselle jäsenlaitteelle irrotuksen jälkeen.",
+  "raidmgr.destroy.type_confirm": "Kirjoita DESTROY vahvistaaksesi",
+  "raidmgr.destroy.refusing_mount": "Kieltäydytään: liitoskohta ei ole /srv/pqnas/pools/ -polun alla",
+  "raidmgr.destroy.type_destroy_to_confirm": "Kirjoita DESTROY vahvistaaksesi.",
+  "raidmgr.destroy.started": "Tuhoaminen käynnistetty…",
+  "raidmgr.destroy.failed": "Tuhoaminen epäonnistui: {error}",
+  "raidmgr.destroy.ui_crashed": "Tuhoamisikkuna kaatui: {error}"
 }

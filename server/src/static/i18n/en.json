@@ -1875,5 +1875,18 @@
   "admin.users.cleanup_confirm_title": "Delete old inactive storage copy?",
   "admin.users.cleanup_confirm_subtitle": "This removes the old passive copy after a successful storage migration.",
   "admin.users.cleanup_confirm_note": "This deletes the old user subtree from the old pool. The currently active pool is protected.",
-  "admin.users.delete_old_copy": "Delete old copy"
+  "admin.users.delete_old_copy": "Delete old copy",
+  "raidmgr.action.close": "Close",
+  "raidmgr.action.cancel": "Cancel",
+  "raidmgr.destroy.title": "Destroy storage pool",
+  "raidmgr.destroy.warning_body": "This will unmount the pool and remove it from PQ-NAS pools config. Optionally it can wipe member disks (VERY destructive).",
+  "raidmgr.destroy.mount": "Mount",
+  "raidmgr.destroy.wipe_label": "Wipe member disks (destructive)",
+  "raidmgr.destroy.wipe_help": "When ON, PQ-NAS will wipefs/sgdisk each member device after unmount.",
+  "raidmgr.destroy.type_confirm": "Type DESTROY to confirm",
+  "raidmgr.destroy.refusing_mount": "Refusing: mount is not under /srv/pqnas/pools/",
+  "raidmgr.destroy.type_destroy_to_confirm": "Type DESTROY to confirm.",
+  "raidmgr.destroy.started": "Destroy started…",
+  "raidmgr.destroy.failed": "Destroy failed: {error}",
+  "raidmgr.destroy.ui_crashed": "Destroy UI crashed: {error}"
 }

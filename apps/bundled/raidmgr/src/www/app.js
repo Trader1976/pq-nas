@@ -3963,18 +3963,17 @@ ${rows}
   box-shadow: 0 20px 60px rgba(0,0,0,0.45);
 ">
   <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
-    <div style="font-weight:950;">Destroy storage pool</div>
-    <button id="poolDestroyCloseBtn" class="btn secondary" type="button">Close</button>
+    <div style="font-weight:950;">${esc(tr("raidmgr.destroy.title", null, "Destroy storage pool"))}</div>
+    <button id="poolDestroyCloseBtn" class="btn secondary" type="button">${esc(tr("raidmgr.action.close", null, "Close"))}</button>
   </div>
 
   <div class="card" style="margin-top:10px;">
     <div class="v" style="opacity:.9; white-space:pre-line;">
-This will unmount the pool and remove it from PQ-NAS pools config.
-Optionally it can wipe member disks (VERY destructive).
+${esc(tr("raidmgr.destroy.warning_body", null, "This will unmount the pool and remove it from PQ-NAS pools config. Optionally it can wipe member disks (VERY destructive)."))}
     </div>
 
     <div style="margin-top:12px;">
-      <div class="k" style="margin-bottom:6px;">Mount</div>
+      <div class="k" style="margin-bottom:6px;">${esc(tr("raidmgr.destroy.mount", null, "Mount"))}</div>
       <input id="poolDestroyMountInp" type="text" readonly
              style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14);
                     background:rgba(0,0,0,0.18); color:var(--fg); font-family:var(--mono);">
@@ -3984,28 +3983,28 @@ Optionally it can wipe member disks (VERY destructive).
       <label style="display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:14px;
                     border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18);">
         <input id="poolDestroyWipeChk" type="checkbox" style="transform:scale(1.1);">
-        <span class="v" style="opacity:.95;">Wipe member disks (destructive)</span>
+        <span class="v" style="opacity:.95;">${esc(tr("raidmgr.destroy.wipe_label", null, "Wipe member disks (destructive)"))}</span>
       </label>
       <div class="v" style="opacity:.75; margin-top:6px;">
-        When ON, PQ-NAS will wipefs/sgdisk each member device after unmount.
+        ${esc(tr("raidmgr.destroy.wipe_help", null, "When ON, PQ-NAS will wipefs/sgdisk each member device after unmount."))}
       </div>
     </div>
 
     <div style="margin-top:12px;">
-      <div class="k" style="margin-bottom:6px;">Type DESTROY to confirm</div>
+      <div class="k" style="margin-bottom:6px;">${esc(tr("raidmgr.destroy.type_confirm", null, "Type DESTROY to confirm"))}</div>
       <input id="poolDestroyTypeInp" type="text" placeholder="DESTROY"
              style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14);
                     background:rgba(0,0,0,0.18); color:var(--fg); font-family:var(--mono);">
     </div>
 
     <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px;">
-      <button id="poolDestroyCancelBtn" class="btn secondary" type="button">Cancel</button>
-      <button id="poolDestroyDoBtn" class="btn danger" type="button" disabled>Destroy</button>
+      <button id="poolDestroyCancelBtn" class="btn secondary" type="button">${esc(tr("raidmgr.action.cancel", null, "Cancel"))}</button>
+      <button id="poolDestroyDoBtn" class="btn danger" type="button" disabled>${esc(tr("raidmgr.action.destroy", null, "Destroy"))}</button>
     </div>
 
     <details class="card" style="margin-top:12px;">
       <summary style="cursor:pointer; font-weight:900;">${esc(tr("raidmgr.advanced", null, "Advanced"))}</summary>
-      <pre id="poolDestroyDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
+      <pre id="poolDestroyDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">${esc(tr("raidmgr.idle", null, "(idle)"))}</pre>
     </details>
   </div>
 </div>
@@ -4046,13 +4045,13 @@ Optionally it can wipe member disks (VERY destructive).
                 // 🔒 Hard guard: only allow pools under /srv/pqnas/pools
                 const mnt = String(mountInp.value || "").trim();
                 if (!mnt.startsWith("/srv/pqnas/pools/")) {
-                    showToast("err", "Refusing: mount is not under /srv/pqnas/pools/", 6500);
+                    showToast("err", tr("raidmgr.destroy.refusing_mount", null, "Refusing: mount is not under /srv/pqnas/pools/"), 6500);
                     return;
                 }
 
                 const okType = String(typeInp.value || "").trim().toUpperCase() === "DESTROY";
                 if (!okType) {
-                    showToast("warn", "Type DESTROY to confirm.", 4200);
+                    showToast("warn", tr("raidmgr.destroy.type_destroy_to_confirm", null, "Type DESTROY to confirm."), 4200);
                     return;
                 }
 
@@ -4063,14 +4062,14 @@ Optionally it can wipe member disks (VERY destructive).
                 const body = { mount: mnt, plan_id, plan_nonce, confirm: true, force_wipe };
 
                 dbg.textContent = JSON.stringify({ note: "POST destroy-pool", request: body }, null, 2);
-                showToast("info", "Destroy started…", 2200);
+                showToast("info", tr("raidmgr.destroy.started", null, "Destroy started…"), 2200);
 
                 const { r, j, txt } = await postJson("/api/v4/raid/execute/destroy-pool", body);
 
                 dbg.textContent = JSON.stringify({ http: r.status, response: j ?? txt, request: body }, null, 2);
 
                 if (!r.ok || !j || j.ok !== true) {
-                    showToast("err", `Destroy failed: ${prettyError(j, r, txt)}`, 6500);
+                    showToast("err", tr("raidmgr.destroy.failed", { error: prettyError(j, r, txt) }, `Destroy failed: ${prettyError(j, r, txt)}`), 6500);
                     return;
                 }
 
@@ -4653,7 +4652,7 @@ Optionally it can wipe member disks (VERY destructive).
                     try {
                         await openDestroyPoolModal(mount);
                     } catch (e) {
-                        showToast("err", `Destroy UI crashed: ${String(e && (e.stack || e.message) ? (e.stack || e.message) : e)}`, 6500);
+                        showToast("err", tr("raidmgr.destroy.ui_crashed", { error: String(e && (e.stack || e.message) ? (e.stack || e.message) : e) }, `Destroy UI crashed: ${String(e && (e.stack || e.message) ? (e.stack || e.message) : e)}`), 6500);
                     }
                     return;
                 }
