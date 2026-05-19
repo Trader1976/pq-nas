@@ -698,16 +698,16 @@ html[data-theme="bright"] .externalDialogInput{
             <div class="fmUploadProgressCard" role="dialog" aria-modal="true" aria-labelledby="fmUploadProgressTitle">
                 <div class="fmUploadProgressHead">
                     <div>
-                        <div class="fmUploadProgressKicker">DNA-Nexus upload</div>
-                        <div id="fmUploadProgressTitle" class="fmUploadProgressTitle">Uploading files</div>
-                        <p id="fmUploadProgressSub">Preparing upload…</p>
+                        <div class="fmUploadProgressKicker">${escapeHtml(tr("external.upload.kicker", null, "DNA-Nexus upload"))}</div>
+                        <div id="fmUploadProgressTitle" class="fmUploadProgressTitle">${escapeHtml(tr("external.upload.uploading_files", null, "Uploading files"))}</div>
+                        <p id="fmUploadProgressSub">${escapeHtml(tr("external.upload.preparing", null, "Preparing upload…"))}</p>
                     </div>
-                    <button id="fmUploadProgressCancelTop" class="fmUploadProgressX" type="button" title="Cancel upload">×</button>
+                    <button id="fmUploadProgressCancelTop" class="fmUploadProgressX" type="button" title="${escapeHtml(tr("external.upload.cancel_upload", null, "Cancel upload"))}">×</button>
                 </div>
                 <div class="fmUploadProgressBody">
-                    <div id="fmUploadProgressFile" class="fmUploadProgressFile">Preparing upload…</div>
+                    <div id="fmUploadProgressFile" class="fmUploadProgressFile">${escapeHtml(tr("external.upload.preparing", null, "Preparing upload…"))}</div>
                     <div class="fmUploadProgressLine">
-                        <div id="fmUploadProgressText">Starting…</div>
+                        <div id="fmUploadProgressText">${escapeHtml(tr("external.upload.starting", null, "Starting…"))}</div>
                         <div id="fmUploadProgressPct" class="fmUploadProgressPct">0%</div>
                     </div>
                     <div class="fmUploadProgressBar">
@@ -716,8 +716,8 @@ html[data-theme="bright"] .externalDialogInput{
                     <div id="fmUploadProgressMeta" class="fmUploadProgressMeta"></div>
                 </div>
                 <div class="fmUploadProgressActions">
-                    <button id="fmUploadProgressCloseBtn" class="fmUploadProgressBtn secondary" type="button" hidden>Close</button>
-                    <button id="fmUploadProgressCancel" class="fmUploadProgressBtn secondary" type="button">Cancel upload</button>
+                    <button id="fmUploadProgressCloseBtn" class="fmUploadProgressBtn secondary" type="button" hidden>${escapeHtml(tr("external.modal.close", null, "Close"))}</button>
+                    <button id="fmUploadProgressCancel" class="fmUploadProgressBtn secondary" type="button">${escapeHtml(tr("external.upload.cancel_upload", null, "Cancel upload"))}</button>
                 </div>
             </div>
         `;
@@ -1056,10 +1056,10 @@ html[data-theme="bright"] .externalDialogInput{
                 <div class="externalUploadConflictCard" role="dialog" aria-modal="true">
                     <div class="externalUploadConflictHead">
                         <div>
-                            <div class="externalUploadConflictTitle">File already exists</div>
+                            <div class="externalUploadConflictTitle">${escapeHtml(tr("external.upload.file_exists", null, "File already exists"))}</div>
                             <div class="externalUploadConflictPath">/${escapeHtml(rel)}</div>
                         </div>
-                        <button type="button" class="externalUploadConflictClose" data-action="cancel">Close</button>
+                        <button type="button" class="externalUploadConflictClose" data-action="cancel">${escapeHtml(tr("external.modal.close", null, "Close"))}</button>
                     </div>
                     <div class="externalUploadConflictBody">
                         <div class="externalUploadConflictGrid">
@@ -1086,8 +1086,8 @@ html[data-theme="bright"] .externalDialogInput{
                         </div>
                     </div>
                     <div class="externalUploadConflictActions">
-                        <button type="button" class="fmUploadProgressBtn secondary" data-action="continue">Continue</button>
-                        <button type="button" class="fmUploadProgressBtn secondary" data-action="cancel">Cancel upload</button>
+                        <button type="button" class="fmUploadProgressBtn secondary" data-action="continue">${escapeHtml(tr("external.upload.continue", null, "Continue"))}</button>
+                        <button type="button" class="fmUploadProgressBtn secondary" data-action="cancel">${escapeHtml(tr("external.upload.cancel_upload", null, "Cancel upload"))}</button>
                     </div>
                 </div>
             `;
@@ -1162,7 +1162,7 @@ html[data-theme="bright"] .externalDialogInput{
 
             const showFileStart = () => {
                 setUploadModalProgress({
-                    title: "Uploading files",
+                    title: tr("external.upload.uploading_files", null, "Uploading files"),
                     sub: `${i + 1} / ${files.length}`,
                     file: displayName,
                     text: `Uploading ${fmtSize(item.file.size || 0)}…`,
@@ -1184,7 +1184,7 @@ html[data-theme="bright"] .externalDialogInput{
                         : "";
 
                     setUploadModalProgress({
-                        title: "Uploading files",
+                        title: tr("external.upload.uploading_files", null, "Uploading files"),
                         sub: `${i + 1} / ${files.length}`,
                         file: displayName,
                         text: `${fmtSize(loaded)} / ${fmtSize(total)}`,
@@ -1214,12 +1214,12 @@ html[data-theme="bright"] .externalDialogInput{
                                 decision = { action: conflictActionAll, applyAll: true };
                             } else {
                                 setUploadModalProgress({
-                                    title: "Upload conflict",
-                                    sub: `${completed} file(s) uploaded, ${skipped} skipped.`,
+                                    title: tr("external.upload.conflict_title", null, "Upload conflict"),
+                                    sub: tr("external.upload.uploaded_skipped", { uploaded: completed, skipped }, `${completed} file(s) uploaded, ${skipped} skipped.`),
                                     file: displayName,
-                                    text: "File already exists",
+                                    text: tr("external.upload.file_exists", null, "File already exists"),
                                     pct: (committedBytes / totalBytes) * 100,
-                                    meta: `Already exists: /${target}`,
+                                    meta: tr("external.upload.already_exists_at", { path: "/" + target }, `Already exists: /${target}`),
                                     done: false
                                 });
 
@@ -1267,12 +1267,12 @@ html[data-theme="bright"] .externalDialogInput{
                 completed++;
 
                 setUploadModalProgress({
-                    title: "Uploading files",
-                    sub: `${completed} / ${files.length} uploaded`,
+                    title: tr("external.upload.uploading_files", null, "Uploading files"),
+                    sub: tr("external.upload.progress_count", { done: completed, total: files.length }, `${completed} / ${files.length} uploaded`),
                     file: displayName,
-                    text: "Uploaded",
+                    text: tr("external.upload.uploaded", null, "Uploaded"),
                     pct: (committedBytes / totalBytes) * 100,
-                    meta: `Stored at /${target}`,
+                    meta: tr("external.upload.stored_at", { path: "/" + target }, `Stored at /${target}`),
                     done: false
                 });
             } catch (e) {
@@ -1280,10 +1280,10 @@ html[data-theme="bright"] .externalDialogInput{
                 const cancelled = e && e.kind === "cancelled";
 
                 setUploadModalProgress({
-                    title: cancelled ? "Upload cancelled" : "Upload failed",
-                    sub: cancelled ? `${completed} file(s) uploaded before cancel.` : `${completed} file(s) uploaded before failure.`,
+                    title: cancelled ? tr("external.upload.cancelled_title", null, "Upload cancelled") : tr("external.upload.failed_title", null, "Upload failed"),
+                    sub: cancelled ? tr("external.upload.uploaded_before_cancel", { count: completed }, `${completed} file(s) uploaded before cancel.`) : tr("external.upload.uploaded_before_failure", { count: completed }, `${completed} file(s) uploaded before failure.`),
                     file: displayName,
-                    text: cancelled ? "Cancelled" : "Failed",
+                    text: cancelled ? tr("external.upload.cancelled", null, "Cancelled") : tr("external.upload.failed", null, "Failed"),
                     pct: cancelled ? 100 : (committedBytes / totalBytes) * 100,
                     meta: msg,
                     done: true
@@ -1302,16 +1302,16 @@ html[data-theme="bright"] .externalDialogInput{
         uploadCurrentXhr = null;
 
         setUploadModalProgress({
-            title: "Upload complete",
-            sub: `${completed} file(s) uploaded${skipped ? `, ${skipped} skipped` : ""}.`,
-            file: "Finished",
-            text: "Uploaded",
+            title: tr("external.upload.complete_title", null, "Upload complete"),
+            sub: tr("external.upload.complete_sub", { uploaded: completed, skipped }, `${completed} file(s) uploaded${skipped ? `, ${skipped} skipped` : ""}.`),
+            file: tr("external.upload.finished", null, "Finished"),
+            text: tr("external.upload.uploaded", null, "Uploaded"),
             pct: 100,
-            meta: "Workspace file list refreshed.",
+            meta: tr("external.upload.file_list_refreshed", null, "Workspace file list refreshed."),
             done: true
         });
 
-        setStatus(`Uploaded ${completed} file(s)${skipped ? `, skipped ${skipped}` : ""}.`, "good");
+        setStatus(tr("external.upload.complete_status", { uploaded: completed, skipped }, `Uploaded ${completed} file(s)${skipped ? `, skipped ${skipped}` : ""}.`), "good");
         await loadFiles(currentPath);
     }
 
