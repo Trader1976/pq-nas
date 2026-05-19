@@ -1590,7 +1590,7 @@ html[data-theme="bright"] .externalDialogInput{
     async function downloadSelectionZip() {
         const items = selectedItems();
         if (!items.length) {
-            setStatus("No items selected.", "bad");
+            setStatus(tr("external.no_items_selected", null, "No items selected."), "bad");
             return;
         }
 
@@ -2243,7 +2243,7 @@ html[data-theme="bright"] .externalDialogInput{
         if (!item || !item.rel) return;
 
         if (!canEdit) {
-            setStatus("This workspace session is view-only.", "bad");
+            setStatus(tr("external.readonly", null, "This workspace session is view-only."), "bad");
             return;
         }
 
@@ -2733,7 +2733,7 @@ html[data-theme="bright"] .externalDialogInput{
             row.original_name ||
             basenameFromPath(row.original_rel_path || row.path || row.rel_path || row.path_norm || "") ||
             row.trash_id ||
-            "Trashed item"
+            tr("external.trash.trashed_item", null, "Trashed item")
         );
     }
 
@@ -2761,7 +2761,7 @@ html[data-theme="bright"] .externalDialogInput{
         if (type) parts.push(type);
 
         const bytes = row.size_bytes ?? row.bytes ?? row.file_size ?? null;
-        if (bytes != null && type !== "Folder") parts.push(fmtSize(bytes));
+        if (bytes != null && type !== tr("external.trash.type_folder", null, "Folder")) parts.push(fmtSize(bytes));
 
         const when = row.deleted_at || row.trashed_at || row.created_at || "";
         if (when) parts.push(String(when));
@@ -2775,9 +2775,9 @@ html[data-theme="bright"] .externalDialogInput{
     function renderTrashBreadcrumbs() {
         if (!breadcrumbs) return;
         breadcrumbs.innerHTML = `
-            <button class="crumb" type="button" id="trashBackToWorkspace">Workspace root</button>
+            <button class="crumb" type="button" id="trashBackToWorkspace">${escapeHtml(tr("external.trash.workspace_root", null, "Workspace root"))}</button>
             <span class="crumbSep">/</span>
-            <span class="crumb" style="cursor:default;">Trash</span>
+            <span class="crumb" style="cursor:default;">${escapeHtml(tr("external.trash.detached.title", null, "Trash"))}</span>
         `;
 
         const back = document.getElementById("trashBackToWorkspace");
@@ -2796,7 +2796,7 @@ html[data-theme="bright"] .externalDialogInput{
         filesEl.innerHTML = "";
 
         if (!rows.length) {
-            filesEl.innerHTML = `<div class="empty">Trash is empty.</div>`;
+            filesEl.innerHTML = `<div class="empty">${escapeHtml(tr("external.trash.empty", null, "Trash is empty."))}</div>`;
             return;
         }
 
@@ -2805,7 +2805,7 @@ html[data-theme="bright"] .externalDialogInput{
             const path = trashItemPath(row);
             const type = trashItemType(row);
             const meta = trashItemMeta(row);
-            const icon = type === "Folder" ? "🗂️" : "🗑️";
+            const icon = type === tr("external.trash.type_folder", null, "Folder") ? "🗂️" : "🗑️";
 
             return `
                 <div class="fileRow" data-trash-id="${escapeHtml(row.trash_id || row.id || "")}" title="${escapeHtml(path || name)}">
@@ -2823,7 +2823,7 @@ html[data-theme="bright"] .externalDialogInput{
 
     async function openTrash() {
         if (!signedIn) {
-            setStatus("Sign in before opening trash.", "bad");
+            setStatus(tr("external.trash.sign_in_first", null, "Sign in before opening trash."), "bad");
             return;
         }
 
@@ -2832,10 +2832,10 @@ html[data-theme="bright"] .externalDialogInput{
         hideContextMenus();
         renderTrashBreadcrumbs();
 
-        if (fileSub) fileSub.textContent = "Trash. Deleted workspace items are shown here.";
-        if (filesEl) filesEl.innerHTML = `<div class="empty">Loading trash…</div>`;
+        if (fileSub) fileSub.textContent = tr("external.trash.inline_subtitle", null, "Trash. Deleted workspace items are shown here.");
+        if (filesEl) filesEl.innerHTML = `<div class="empty">${escapeHtml(tr("external.trash.loading_trash", null, "Loading trash…"))}</div>`;
 
-        setStatus("Loading trash…", "good");
+        setStatus(tr("external.trash.loading_trash", null, "Loading trash…"), "good");
 
         const j = await apiJson(trashListUrl());
 
@@ -2847,7 +2847,7 @@ html[data-theme="bright"] .externalDialogInput{
             [];
 
         renderTrashRows(rows);
-        setStatus(`Trash loaded. ${rows.length} item${rows.length === 1 ? "" : "s"}.`, "good");
+        setStatus(tr("external.trash.loaded", { count: rows.length }, `Trash loaded. ${rows.length} item${rows.length === 1 ? "" : "s"}.`), "good");
     }
 
 
@@ -2897,7 +2897,7 @@ resetMarqueeVisual();
             const isDir = type === "dir" || type === "folder" || it.is_dir === true;
             const rel = childPath(currentPath, name);
             const mtime = fmtTime(it.mtime_unix);
-            const size = isDir ? "Folder" : fmtSize(it.size_bytes || it.size || it.bytes || 0);
+            const size = isDir ? tr("external.trash.type_folder", null, "Folder") : fmtSize(it.size_bytes || it.size || it.bytes || 0);
             const meta = mtime ? `${size} · ${mtime}` : size;
 
             if (isDir) {
@@ -3169,12 +3169,12 @@ resetMarqueeVisual();
 
     async function trashItem(item) {
         if (!canEdit) {
-            setStatus("This workspace session is view-only.", "bad");
+            setStatus(tr("external.readonly", null, "This workspace session is view-only."), "bad");
             return;
         }
 
         if (!item || !item.rel) {
-            setStatus("No item selected.", "bad");
+            setStatus(tr("external.no_item_selected", null, "No item selected."), "bad");
             return;
         }
 
@@ -3190,11 +3190,11 @@ resetMarqueeVisual();
         });
 
         if (!ok) {
-            setStatus("Move to trash cancelled.");
+            setStatus(tr("external.trash.move_cancelled", null, "Move to trash cancelled."));
             return;
         }
 
-        setStatus(`Moving ${item.name || label} to trash…`);
+        setStatus(tr("external.trash.moving_one", { name: item.name || label }, `Moving ${item.name || label} to trash…`));
 
         await apiJson(deleteUrl(item.rel), {
             method: "POST",
@@ -3202,19 +3202,19 @@ resetMarqueeVisual();
             body: ""
         });
 
-        setStatus(`Moved ${item.name || label} to trash.`, "good");
+        setStatus(tr("external.trash.moved_one", { name: item.name || label }, `Moved ${item.name || label} to trash.`), "good");
         hideContextMenus();
         await loadFiles(currentPath);
     }
 
     async function copyItem(item) {
         if (!canEdit) {
-            setStatus("This workspace session is view-only.", "bad");
+            setStatus(tr("external.readonly", null, "This workspace session is view-only."), "bad");
             return;
         }
 
         if (!item || !item.rel) {
-            setStatus("No item selected.", "bad");
+            setStatus(tr("external.no_item_selected", null, "No item selected."), "bad");
             return;
         }
 
@@ -3249,12 +3249,12 @@ resetMarqueeVisual();
 
     async function moveItem(item) {
         if (!canEdit) {
-            setStatus("This workspace session is view-only.", "bad");
+            setStatus(tr("external.readonly", null, "This workspace session is view-only."), "bad");
             return;
         }
 
         if (!item || !item.rel) {
-            setStatus("No item selected.", "bad");
+            setStatus(tr("external.no_item_selected", null, "No item selected."), "bad");
             return;
         }
 
@@ -3289,12 +3289,12 @@ resetMarqueeVisual();
 
     async function renameItem(item) {
         if (!canEdit) {
-            setStatus("This workspace session is view-only.", "bad");
+            setStatus(tr("external.readonly", null, "This workspace session is view-only."), "bad");
             return;
         }
 
         if (!item || !item.rel) {
-            setStatus("No item selected.", "bad");
+            setStatus(tr("external.no_item_selected", null, "No item selected."), "bad");
             return;
         }
 
@@ -3345,7 +3345,7 @@ resetMarqueeVisual();
 
     async function createFolder(nameOverride = null) {
         if (!canEdit) {
-            setStatus("This workspace session is view-only.", "bad");
+            setStatus(tr("external.readonly", null, "This workspace session is view-only."), "bad");
             return;
         }
 
@@ -3661,13 +3661,13 @@ resetMarqueeVisual();
 
     async function copySelectedItems() {
         if (!canEdit) {
-            setStatus("This workspace session is view-only.", "bad");
+            setStatus(tr("external.readonly", null, "This workspace session is view-only."), "bad");
             return;
         }
 
         const items = selectedItems();
         if (!items.length) {
-            setStatus("No items selected.", "bad");
+            setStatus(tr("external.no_items_selected", null, "No items selected."), "bad");
             return;
         }
 
@@ -3749,13 +3749,13 @@ resetMarqueeVisual();
 
     async function moveSelectedItems() {
         if (!canEdit) {
-            setStatus("This workspace session is view-only.", "bad");
+            setStatus(tr("external.readonly", null, "This workspace session is view-only."), "bad");
             return;
         }
 
         const items = selectedItems();
         if (!items.length) {
-            setStatus("No items selected.", "bad");
+            setStatus(tr("external.no_items_selected", null, "No items selected."), "bad");
             return;
         }
 
@@ -3838,13 +3838,13 @@ resetMarqueeVisual();
 
     async function trashSelectedItems() {
         if (!canEdit) {
-            setStatus("This workspace session is view-only.", "bad");
+            setStatus(tr("external.readonly", null, "This workspace session is view-only."), "bad");
             return;
         }
 
         const items = selectedItems();
         if (!items.length) {
-            setStatus("No items selected.", "bad");
+            setStatus(tr("external.no_items_selected", null, "No items selected."), "bad");
             return;
         }
 
@@ -3856,7 +3856,7 @@ resetMarqueeVisual();
             danger: true
         });
         if (!ok) {
-            setStatus("Move to trash cancelled.");
+            setStatus(tr("external.trash.move_cancelled", null, "Move to trash cancelled."));
             return;
         }
 
@@ -3876,7 +3876,7 @@ resetMarqueeVisual();
                 failed++;
                 errors.push(`${item.rel}: ${e.message || e}`);
             }
-            setStatus(`Moving to trash ${done + failed}/${items.length}…`);
+            setStatus(tr("external.trash.moving_selected_progress", { done: done + failed, total: items.length }, `Moving to trash ${done + failed}/${items.length}…`));
         }
 
         clearSelection();
@@ -3886,7 +3886,7 @@ resetMarqueeVisual();
         if (failed) {
             setStatus(`Moved ${done}, failed ${failed}. ${errors.slice(0, 2).join(" | ")}`, "bad");
         } else {
-            setStatus(`Moved ${done} item${done === 1 ? "" : "s"} to trash.`, "good");
+            setStatus(tr("external.trash.moved_selected", { count: done }, `Moved ${done} item${done === 1 ? "" : "s"} to trash.`), "good");
         }
     }
 
@@ -4339,7 +4339,7 @@ resetMarqueeVisual();
         }
 
         if (action === "multi-trash") {
-            trashSelectedItems().catch((e) => setStatus(`Move to trash failed: ${e.message || e}`, "bad"));
+            trashSelectedItems().catch((e) => setStatus(tr("external.trash.move_failed", { error: String(e && e.message ? e.message : e) }, `Move to trash failed: ${e.message || e}`), "bad"));
             return;
         }
 
@@ -4431,7 +4431,7 @@ resetMarqueeVisual();
         hideContextMenus();
 
         if (action === "upload") {
-            if (!canEdit) return setStatus("This workspace session is view-only.", "bad");
+            if (!canEdit) return setStatus(tr("external.readonly", null, "This workspace session is view-only."), "bad");
             uploadOpen = true;
             syncUploadPanel();
             launchExternalUploadPicker(false);
@@ -4439,7 +4439,7 @@ resetMarqueeVisual();
         }
 
         if (action === "new-folder") {
-            if (!canEdit) return setStatus("This workspace session is view-only.", "bad");
+            if (!canEdit) return setStatus(tr("external.readonly", null, "This workspace session is view-only."), "bad");
 
             const raw = await openExternalPromptModal({
                 title: tr("external.folder.new_title", null, "New folder"),
@@ -4550,7 +4550,7 @@ resetMarqueeVisual();
             return;
         }
         if (action === "trash-item") {
-            trashItem(item).catch((e) => setStatus(`Move to trash failed: ${e.message || e}`, "bad"));
+            trashItem(item).catch((e) => setStatus(tr("external.trash.move_failed", { error: String(e && e.message ? e.message : e) }, `Move to trash failed: ${e.message || e}`), "bad"));
             return;
         }
     });
@@ -4616,9 +4616,21 @@ resetMarqueeVisual();
 
     function externalTrashName(item) {
         const rel = String((item && item.original_rel_path) || "");
-        if (!rel) return "Deleted item";
+        if (!rel) return tr("external.trash.deleted_item", null, "Deleted item");
         const parts = rel.split("/").filter(Boolean);
         return parts.length ? parts[parts.length - 1] : rel;
+    }
+
+    function externalTrashCountLabel(count) {
+        const n = Number(count || 0);
+        return tr("external.trash.count", { count: n }, `${n} item${n === 1 ? "" : "s"}`);
+    }
+
+    function externalTrashKindLabel(kind) {
+        const k = String(kind || "item").toLowerCase();
+        if (k === "dir" || k === "folder" || k === "directory") return tr("external.trash.kind_folder", null, "folder");
+        if (k === "file") return tr("external.trash.kind_file", null, "file");
+        return tr("external.trash.kind_item", null, "item");
     }
 
     function closeExternalTrashDetached() {
@@ -4642,9 +4654,9 @@ resetMarqueeVisual();
 
         const head = externalTrashMakeEl("div", "externalTrashDetachedHead");
         const headLeft = externalTrashMakeEl("div", "");
-        const title = externalTrashMakeEl("div", "externalTrashDetachedTitle", "Trash");
-        const sub = externalTrashMakeEl("div", "externalTrashDetachedSub mono", "Workspace trash");
-        const closeBtn = externalTrashMakeEl("button", "btn secondary", "Close");
+        const title = externalTrashMakeEl("div", "externalTrashDetachedTitle", tr("external.trash.detached.title", null, "Trash"));
+        const sub = externalTrashMakeEl("div", "externalTrashDetachedSub mono", tr("external.trash.detached.subtitle", null, "Workspace trash"));
+        const closeBtn = externalTrashMakeEl("button", "btn secondary", tr("external.modal.close", null, "Close"));
         closeBtn.type = "button";
 
         headLeft.appendChild(title);
@@ -4652,11 +4664,11 @@ resetMarqueeVisual();
         head.appendChild(headLeft);
         head.appendChild(closeBtn);
 
-        const status = externalTrashMakeEl("div", "externalTrashDetachedStatus", "Loading…");
+        const status = externalTrashMakeEl("div", "externalTrashDetachedStatus", tr("external.trash.loading", null, "Loading…"));
         const body = externalTrashMakeEl("div", "externalTrashDetachedBody");
 
         const foot = externalTrashMakeEl("div", "externalTrashDetachedFoot");
-        const refreshBtn = externalTrashMakeEl("button", "btn secondary", "Refresh");
+        const refreshBtn = externalTrashMakeEl("button", "btn secondary", tr("common.refresh", null, "Refresh"));
         refreshBtn.type = "button";
         const count = externalTrashMakeEl("div", "externalTrashDetachedCount mono", "—");
         foot.appendChild(refreshBtn);
@@ -4679,7 +4691,7 @@ resetMarqueeVisual();
         closeBtn.addEventListener("click", closeExternalTrashDetached);
         refreshBtn.addEventListener("click", function () {
             loadExternalTrashDetached().catch(function (e) {
-                status.textContent = "Trash load failed: " + (e && e.message ? e.message : e);
+                status.textContent = tr("external.trash.load_failed", { error: String(e && e.message ? e.message : e) }, "Trash load failed: " + (e && e.message ? e.message : e));
                 status.className = "externalTrashDetachedStatus bad";
             });
         });
@@ -4827,21 +4839,21 @@ resetMarqueeVisual();
         if (!ok) return;
 
         externalTrashBusyButtons(buttons, true);
-        externalTrashDetachedState.status.textContent = "Restoring " + label + "…";
+        externalTrashDetachedState.status.textContent = tr("external.trash.restoring", { path: label }, `Restoring ${label}…`);
         externalTrashDetachedState.status.className = "externalTrashDetachedStatus";
 
         try {
             const j = await externalTrashPost("/api/v4/workspaces/files/trash/restore", item);
             const restored = j && j.restored_path ? "/" + j.restored_path : label;
-            externalTrashDetachedState.status.textContent = "Restored " + restored + ".";
+            externalTrashDetachedState.status.textContent = tr("external.trash.restored", { path: restored }, `Restored ${restored}.`);
             externalTrashDetachedState.status.className = "externalTrashDetachedStatus good";
-            setStatus("Restored from trash: " + restored, "good");
+            setStatus(tr("external.trash.restored_status", { path: restored }, `Restored from trash: ${restored}`), "good");
             await externalTrashRefreshAfterMutation();
         } catch (e) {
             const msg = String(e && e.message ? e.message : e);
-            externalTrashDetachedState.status.textContent = "Restore failed: " + msg;
+            externalTrashDetachedState.status.textContent = tr("external.trash.restore_failed", { error: msg }, `Restore failed: ${msg}`);
             externalTrashDetachedState.status.className = "externalTrashDetachedStatus bad";
-            setStatus("Restore failed: " + msg, "bad");
+            setStatus(tr("external.trash.restore_failed", { error: msg }, `Restore failed: ${msg}`), "bad");
             externalTrashBusyButtons(buttons, false);
         }
     }
@@ -4859,20 +4871,20 @@ resetMarqueeVisual();
         if (!ok) return;
 
         externalTrashBusyButtons(buttons, true);
-        externalTrashDetachedState.status.textContent = "Permanently deleting " + label + "…";
+        externalTrashDetachedState.status.textContent = tr("external.trash.purging", { path: label }, `Permanently deleting ${label}…`);
         externalTrashDetachedState.status.className = "externalTrashDetachedStatus";
 
         try {
             await externalTrashPost("/api/v4/workspaces/files/trash/purge", item);
-            externalTrashDetachedState.status.textContent = "Permanently deleted " + label + ".";
+            externalTrashDetachedState.status.textContent = tr("external.trash.purged", { path: label }, `Permanently deleted ${label}.`);
             externalTrashDetachedState.status.className = "externalTrashDetachedStatus good";
-            setStatus("Permanently deleted from trash: " + label, "good");
+            setStatus(tr("external.trash.purged_status", { path: label }, `Permanently deleted from trash: ${label}`), "good");
             await externalTrashRefreshAfterMutation();
         } catch (e) {
             const msg = String(e && e.message ? e.message : e);
-            externalTrashDetachedState.status.textContent = "Permanent delete failed: " + msg;
+            externalTrashDetachedState.status.textContent = tr("external.trash.purge_failed", { error: msg }, `Permanent delete failed: ${msg}`);
             externalTrashDetachedState.status.className = "externalTrashDetachedStatus bad";
-            setStatus("Permanent delete failed: " + msg, "bad");
+            setStatus(tr("external.trash.purge_failed", { error: msg }, `Permanent delete failed: ${msg}`), "bad");
             externalTrashBusyButtons(buttons, false);
         }
     }
@@ -4885,24 +4897,24 @@ resetMarqueeVisual();
         body.textContent = "";
 
         if (!items.length) {
-            body.appendChild(externalTrashMakeEl("div", "externalTrashDetachedEmpty", "Trash is empty."));
-            status.textContent = "Trash is empty.";
+            body.appendChild(externalTrashMakeEl("div", "externalTrashDetachedEmpty", tr("external.trash.empty", null, "Trash is empty.")));
+            status.textContent = tr("external.trash.empty", null, "Trash is empty.");
             status.className = "externalTrashDetachedStatus";
-            count.textContent = "0 item(s)";
+            count.textContent = externalTrashCountLabel(0);
             return;
         }
 
         const totalBytes = Number((meta && (meta.trash_bytes || meta.total_bytes)) || 0);
 
-        status.textContent = "Loaded " + items.length + " item" + (items.length === 1 ? "" : "s") + ".";
+        status.textContent = tr("external.trash.loaded", { count: items.length }, `Loaded ${items.length} item${items.length === 1 ? "" : "s"}.`);
         status.className = "externalTrashDetachedStatus good";
-        count.textContent = items.length + " item" + (items.length === 1 ? "" : "s") +
+        count.textContent = externalTrashCountLabel(items.length) +
             (totalBytes ? " • " + fmtSize(totalBytes) : "");
 
         const summary = externalTrashMakeEl("div", "externalTrashDetachedSummary");
-        summary.appendChild(externalTrashMakeEl("span", "pill readonly", "Trash: " + items.length + " item" + (items.length === 1 ? "" : "s")));
-        if (totalBytes) summary.appendChild(externalTrashMakeEl("span", "pill readonly", "Uses: " + fmtSize(totalBytes)));
-        summary.appendChild(externalTrashMakeEl("span", "externalTrashDetachedNote", "Items in trash are stored separately from file versions."));
+        summary.appendChild(externalTrashMakeEl("span", "pill readonly", tr("external.trash.summary_count", { count: items.length }, `Trash: ${items.length} item${items.length === 1 ? "" : "s"}`)));
+        if (totalBytes) summary.appendChild(externalTrashMakeEl("span", "pill readonly", tr("external.trash.uses", { size: fmtSize(totalBytes) }, `Uses: ${fmtSize(totalBytes)}`)));
+        summary.appendChild(externalTrashMakeEl("span", "externalTrashDetachedNote", tr("external.trash.note_versions", null, "Items in trash are stored separately from file versions.")));
         body.appendChild(summary);
 
         const list = externalTrashMakeEl("div", "externalTrashDetachedList");
@@ -4910,7 +4922,7 @@ resetMarqueeVisual();
         items.forEach(function (item) {
             const name = externalTrashName(item);
             const rel = String((item && item.original_rel_path) || "");
-            const kind = String((item && item.item_type) || "item");
+            const kind = externalTrashKindLabel((item && item.item_type) || "item");
             const size = fmtSize(Number((item && item.size_bytes) || 0));
             const deleted = externalTrashTime(item && item.deleted_epoch);
             const purgeAfter = externalTrashTime(item && item.purge_after_epoch);
@@ -4922,15 +4934,15 @@ resetMarqueeVisual();
             main.appendChild(externalTrashMakeEl(
                 "div",
                 "externalTrashDetachedRowMeta",
-                kind + " · " + size + " · Deleted: " + deleted + " · Purge after: " + purgeAfter
+                tr("external.trash.row_meta", { kind, size, deleted, purge_after: purgeAfter }, `${kind} · ${size} · Deleted: ${deleted} · Purge after: ${purgeAfter}`)
             ));
             main.appendChild(externalTrashMakeEl("div", "externalTrashDetachedRowPath mono", rel));
 
             const actions = externalTrashMakeEl("div", "externalTrashDetachedRowActions");
-            const restoreBtn = externalTrashMakeEl("button", "btn secondary", "Restore");
+            const restoreBtn = externalTrashMakeEl("button", "btn secondary", tr("external.trash.restore", null, "Restore"));
             restoreBtn.type = "button";
 
-            const purgeBtn = externalTrashMakeEl("button", "btn secondary", "Delete permanently");
+            const purgeBtn = externalTrashMakeEl("button", "btn secondary", tr("external.trash.delete_permanently", null, "Delete permanently"));
             purgeBtn.type = "button";
 
             restoreBtn.addEventListener("click", function () {
@@ -4955,11 +4967,11 @@ resetMarqueeVisual();
     async function loadExternalTrashDetached() {
         ensureExternalTrashDetachedDom();
 
-        externalTrashDetachedState.status.textContent = "Loading trash…";
+        externalTrashDetachedState.status.textContent = tr("external.trash.loading_trash", null, "Loading trash…");
         externalTrashDetachedState.status.className = "externalTrashDetachedStatus";
-        externalTrashDetachedState.count.textContent = "Loading…";
+        externalTrashDetachedState.count.textContent = tr("common.loading", null, "Loading…");
         externalTrashDetachedState.body.textContent = "";
-        externalTrashDetachedState.body.appendChild(externalTrashMakeEl("div", "externalTrashDetachedEmpty", "Loading trash…"));
+        externalTrashDetachedState.body.appendChild(externalTrashMakeEl("div", "externalTrashDetachedEmpty", tr("external.trash.loading_trash", null, "Loading trash…")));
 
         const j = await apiJson(externalTrashListUrl(), { method: "GET" });
         const items = Array.isArray(j.items) ? j.items : [];
@@ -4969,17 +4981,17 @@ resetMarqueeVisual();
     function openExternalTrashDetached() {
         ensureExternalTrashDetachedDom();
 
-        externalTrashDetachedState.sub.textContent = "Workspace trash · " + (workspaceId || "missing workspace");
+        externalTrashDetachedState.sub.textContent = tr("external.trash.workspace_subtitle", { workspace: workspaceId || tr("external.trash.missing_workspace", null, "missing workspace") }, "Workspace trash · " + (workspaceId || "missing workspace"));
         externalTrashDetachedState.root.classList.add("show");
         externalTrashDetachedState.root.setAttribute("aria-hidden", "false");
 
         loadExternalTrashDetached().catch(function (e) {
             const msg = String(e && e.message ? e.message : e);
-            externalTrashDetachedState.status.textContent = "Trash load failed: " + msg;
+            externalTrashDetachedState.status.textContent = tr("external.trash.load_failed", { error: msg }, `Trash load failed: ${msg}`);
             externalTrashDetachedState.status.className = "externalTrashDetachedStatus bad";
             externalTrashDetachedState.body.textContent = "";
             externalTrashDetachedState.body.appendChild(externalTrashMakeEl("div", "externalTrashDetachedEmpty bad", msg));
-            externalTrashDetachedState.count.textContent = "Failed";
+            externalTrashDetachedState.count.textContent = tr("external.trash.failed", null, "Failed");
         });
     }
 
@@ -5188,7 +5200,7 @@ resetMarqueeVisual();
 
     btnToggleUpload?.addEventListener("click", () => {
         if (!canEdit) {
-            setStatus("This workspace session is view-only.", "bad");
+            setStatus(tr("external.readonly", null, "This workspace session is view-only."), "bad");
             return;
         }
         uploadOpen = !uploadOpen;
