@@ -126,6 +126,149 @@
         textEditModal.classList.remove("show");
         textEditModal.setAttribute("aria-hidden", "true");
     }
+
+    function ensureTextEditConfirmCss() {
+        if (document.getElementById("fmTextEditConfirmCss")) return;
+
+        const style = document.createElement("style");
+        style.id = "fmTextEditConfirmCss";
+        style.textContent = `
+.fmTextEditConfirmBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:100000;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(0,0,0,.55);
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+}
+.fmTextEditConfirmCard{
+    width:min(560px, calc(100vw - 24px));
+    border:1px solid var(--border2, rgba(120,120,120,.42));
+    border-radius:18px;
+    overflow:hidden;
+    background:linear-gradient(180deg, var(--panel2, #f8f8f8), var(--panel, #eeeeee));
+    color:var(--fg, #111);
+    box-shadow:0 18px 70px rgba(0,0,0,.42);
+}
+.fmTextEditConfirmHead{
+    padding:14px 16px;
+    border-bottom:1px solid var(--border2, rgba(120,120,120,.32));
+    background:rgba(0,0,0,.08);
+}
+.fmTextEditConfirmTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+}
+.fmTextEditConfirmBody{
+    padding:16px;
+}
+.fmTextEditConfirmNote{
+    padding:10px 12px;
+    border-radius:14px;
+    border:1px solid rgba(var(--warn-rgb, 180,120,20),.35);
+    background:rgba(var(--warn-rgb, 180,120,20),.10);
+}
+.fmTextEditConfirmFoot{
+    display:flex;
+    justify-content:flex-end;
+    gap:10px;
+    padding:12px 16px;
+    border-top:1px solid var(--border2, rgba(120,120,120,.32));
+    background:rgba(0,0,0,.08);
+}
+html[data-theme="bright"] .fmTextEditConfirmCard{
+    background:linear-gradient(180deg, #fff, #f2f4f7) !important;
+    color:#111827 !important;
+}
+`;
+        document.head.appendChild(style);
+    }
+
+    function openTextEditConfirmModal(opts = {}) {
+        ensureTextEditConfirmCss();
+
+        return new Promise((resolve) => {
+            const options = opts || {};
+            const modal = document.createElement("div");
+            modal.className = "fmTextEditConfirmBackdrop";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "fmTextEditConfirmCard";
+
+            const head = document.createElement("div");
+            head.className = "fmTextEditConfirmHead";
+
+            const title = document.createElement("div");
+            title.className = "fmTextEditConfirmTitle";
+            title.textContent = options.title || tr("filemgr.textedit.confirm_title", null, "Confirm action");
+            head.appendChild(title);
+
+            const body = document.createElement("div");
+            body.className = "fmTextEditConfirmBody";
+
+            const note = document.createElement("div");
+            note.className = "fmTextEditConfirmNote";
+            note.textContent = options.message || "";
+            body.appendChild(note);
+
+            const foot = document.createElement("div");
+            foot.className = "fmTextEditConfirmFoot";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || tr("common.cancel", null, "Cancel");
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn danger";
+            okBtn.textContent = options.confirmText || tr("filemgr.textedit.discard_changes", null, "Discard changes");
+
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(!!value);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(false);
+                }
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(true);
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish(false);
+            });
+            cancelBtn.addEventListener("click", () => finish(false));
+            okBtn.addEventListener("click", () => finish(true));
+
+            window.setTimeout(() => cancelBtn.focus(), 0);
+        });
+    }
+
     function openFindBar(selectText = true) {
         if (!textEditFindBar) return;
         textEditFindBar.classList.remove("hidden");
@@ -745,7 +888,12 @@
         if (!state.relPath) return;
 
         if (state.dirty) {
-            const ok = confirm(tr("filemgr.textedit.discard_reload", null, "Discard unsaved changes and reload from server?"));
+            const ok = await openTextEditConfirmModal({
+                title: tr("filemgr.textedit.reload_title", null, "Reload from server?"),
+                message: tr("filemgr.textedit.discard_reload", null, "Discard unsaved changes and reload from server?"),
+                confirmText: tr("filemgr.textedit.reload_anyway", null, "Reload anyway"),
+                cancelText: tr("common.cancel", null, "Cancel")
+            });
             if (!ok) return;
         }
 
@@ -754,7 +902,12 @@
 
     async function tryClose() {
         if (state.dirty) {
-            const ok = confirm(tr("filemgr.textedit.discard_close", null, "Discard unsaved changes?"));
+            const ok = await openTextEditConfirmModal({
+                title: tr("filemgr.textedit.close_title", null, "Close text editor?"),
+                message: tr("filemgr.textedit.discard_close", null, "Discard unsaved changes?"),
+                confirmText: tr("filemgr.textedit.discard_changes", null, "Discard changes"),
+                cancelText: tr("common.cancel", null, "Cancel")
+            });
             if (!ok) return;
         }
 

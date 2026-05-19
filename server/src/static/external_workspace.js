@@ -127,6 +127,14 @@ let signedIn = false;
     let textEditFindMatches = [];
     let textEditFindIndex = -1;
 
+    function tr(key, vars, fallback) {
+        const api = window.PQNAS_I18N;
+        if (api && typeof api.t === "function") {
+            return api.t(key, vars || null, fallback);
+        }
+        return String(fallback ?? key);
+    }
+
     function setStatus(text, kind) {
         statusEl.textContent = text || "";
         statusEl.classList.toggle("good", kind === "good");
@@ -238,6 +246,290 @@ let signedIn = false;
             .replaceAll(">", "&gt;")
             .replaceAll("\"", "&quot;")
             .replaceAll("'", "&#39;");
+    }
+
+    function ensureExternalDialogCss() {
+        if (document.getElementById("externalDialogCss")) return;
+
+        const style = document.createElement("style");
+        style.id = "externalDialogCss";
+        style.textContent = `
+.externalDialogBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:100000;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(0,0,0,.55);
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+}
+.externalDialogCard{
+    width:min(640px, calc(100vw - 24px));
+    border:1px solid var(--border2, rgba(120,120,120,.42));
+    border-radius:18px;
+    overflow:hidden;
+    background:linear-gradient(180deg, var(--panel2, #f8f8f8), var(--panel, #eeeeee));
+    color:var(--fg, #111);
+    box-shadow:0 18px 70px rgba(0,0,0,.42);
+}
+.externalDialogHead{
+    padding:14px 16px;
+    border-bottom:1px solid var(--border2, rgba(120,120,120,.32));
+    background:rgba(0,0,0,.08);
+}
+.externalDialogTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+}
+.externalDialogSub{
+    margin-top:4px;
+    font-size:12px;
+    color:var(--fg-dim, rgba(0,0,0,.66));
+    overflow-wrap:anywhere;
+}
+.externalDialogBody{
+    padding:16px;
+    display:grid;
+    gap:10px;
+}
+.externalDialogNote{
+    padding:10px 12px;
+    border-radius:14px;
+    border:1px solid rgba(var(--warn-rgb, 180,120,20),.35);
+    background:rgba(var(--warn-rgb, 180,120,20),.10);
+    white-space:pre-wrap;
+}
+.externalDialogInput{
+    width:100%;
+    box-sizing:border-box;
+    padding:10px 12px;
+    border-radius:12px;
+    border:1px solid var(--border2, rgba(120,120,120,.45));
+    background:rgba(0,0,0,.18);
+    color:var(--fg, #111);
+    font:inherit;
+}
+.externalDialogLabel{
+    font-weight:850;
+    color:var(--fg-dim, rgba(0,0,0,.70));
+}
+.externalDialogFoot{
+    display:flex;
+    justify-content:flex-end;
+    gap:10px;
+    padding:12px 16px;
+    border-top:1px solid var(--border2, rgba(120,120,120,.32));
+    background:rgba(0,0,0,.08);
+}
+html[data-theme="bright"] .externalDialogCard{
+    background:linear-gradient(180deg, #fff, #f2f4f7) !important;
+    color:#111827 !important;
+}
+html[data-theme="bright"] .externalDialogInput{
+    background:#fff !important;
+    color:#111827 !important;
+}
+`;
+        document.head.appendChild(style);
+    }
+
+    function openExternalConfirmModal(opts = {}) {
+        ensureExternalDialogCss();
+
+        return new Promise((resolve) => {
+            const options = opts || {};
+            const modal = document.createElement("div");
+            modal.className = "externalDialogBackdrop";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "externalDialogCard";
+
+            const head = document.createElement("div");
+            head.className = "externalDialogHead";
+
+            const title = document.createElement("div");
+            title.className = "externalDialogTitle";
+            title.textContent = options.title || tr("external.modal.confirm", null, "Confirm action");
+
+            const sub = document.createElement("div");
+            sub.className = "externalDialogSub";
+            sub.textContent = options.subtitle || "";
+
+            head.appendChild(title);
+            if (sub.textContent) head.appendChild(sub);
+
+            const body = document.createElement("div");
+            body.className = "externalDialogBody";
+
+            const note = document.createElement("div");
+            note.className = "externalDialogNote";
+            note.textContent = options.message || "";
+            body.appendChild(note);
+
+            const foot = document.createElement("div");
+            foot.className = "externalDialogFoot";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || tr("external.modal.cancel", null, "Cancel");
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = options.danger ? "btn danger" : "btn";
+            okBtn.textContent = options.confirmText || tr("external.modal.continue", null, "Continue");
+
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(!!value);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(false);
+                }
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(true);
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish(false);
+            });
+            cancelBtn.addEventListener("click", () => finish(false));
+            okBtn.addEventListener("click", () => finish(true));
+
+            window.setTimeout(() => cancelBtn.focus(), 0);
+        });
+    }
+
+    function openExternalPromptModal(opts = {}) {
+        ensureExternalDialogCss();
+
+        return new Promise((resolve) => {
+            const options = opts || {};
+            const modal = document.createElement("div");
+            modal.className = "externalDialogBackdrop";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "externalDialogCard";
+
+            const head = document.createElement("div");
+            head.className = "externalDialogHead";
+
+            const title = document.createElement("div");
+            title.className = "externalDialogTitle";
+            title.textContent = options.title || tr("external.modal.enter_value", null, "Enter value");
+
+            const sub = document.createElement("div");
+            sub.className = "externalDialogSub";
+            sub.textContent = options.subtitle || "";
+
+            head.appendChild(title);
+            if (sub.textContent) head.appendChild(sub);
+
+            const body = document.createElement("div");
+            body.className = "externalDialogBody";
+
+            const label = document.createElement("label");
+            label.className = "externalDialogLabel";
+            label.textContent = options.label || tr("external.modal.value", null, "Value");
+
+            const input = document.createElement("input");
+            input.type = "text";
+            input.className = "externalDialogInput";
+            input.value = options.value || "";
+            input.placeholder = options.placeholder || "";
+            input.autocomplete = "off";
+            input.spellcheck = false;
+
+            body.appendChild(label);
+            body.appendChild(input);
+
+            if (options.note) {
+                const note = document.createElement("div");
+                note.className = "externalDialogNote";
+                note.textContent = String(options.note || "");
+                body.appendChild(note);
+            }
+
+            const foot = document.createElement("div");
+            foot.className = "externalDialogFoot";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || tr("external.modal.cancel", null, "Cancel");
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = options.confirmText || tr("external.modal.ok", null, "OK");
+
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(value);
+            };
+
+            const submit = () => finish(String(input.value || ""));
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(null);
+                }
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    submit();
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish(null);
+            });
+            cancelBtn.addEventListener("click", () => finish(null));
+            okBtn.addEventListener("click", submit);
+
+            window.setTimeout(() => {
+                input.focus();
+                input.select();
+            }, 0);
+        });
     }
 
 
@@ -1789,9 +2081,15 @@ let signedIn = false;
         }, 0);
     }
 
-    function closeTextEditor(force = false) {
+    async function closeTextEditor(force = false) {
         if (!force && textEditDirty()) {
-            const ok = confirm("Close text editor?\n\nUnsaved changes will be lost.");
+            const ok = await openExternalConfirmModal({
+                title: tr("external.textedit.close_title", null, "Close text editor?"),
+                message: tr("external.textedit.unsaved_lost", null, "Unsaved changes will be lost."),
+                confirmText: tr("external.textedit.discard_changes", null, "Discard changes"),
+                cancelText: tr("external.modal.cancel", null, "Cancel"),
+                danger: true
+            });
             if (!ok) return false;
         }
 
@@ -1900,7 +2198,13 @@ let signedIn = false;
         }
 
         if (textEditDirty()) {
-            const ok = confirm("Open another file?\n\nUnsaved changes in the current editor will be lost.");
+            const ok = await openExternalConfirmModal({
+                title: tr("external.textedit.open_another_title", null, "Open another file?"),
+                message: tr("external.textedit.unsaved_current_lost", null, "Unsaved changes in the current editor will be lost."),
+                confirmText: tr("external.modal.open_anyway", null, "Open anyway"),
+                cancelText: tr("external.modal.cancel", null, "Cancel"),
+                danger: true
+            });
             if (!ok) return;
         }
 
@@ -1942,7 +2246,13 @@ let signedIn = false;
     async function reloadTextEditor() {
         if (!textEditState) return;
         if (textEditDirty()) {
-            const ok = confirm("Reload from server?\n\nUnsaved changes will be lost.");
+            const ok = await openExternalConfirmModal({
+                title: tr("external.textedit.reload_title", null, "Reload from server?"),
+                message: tr("external.textedit.unsaved_lost", null, "Unsaved changes will be lost."),
+                confirmText: tr("external.modal.reload", null, "Reload"),
+                cancelText: tr("external.modal.cancel", null, "Cancel"),
+                danger: true
+            });
             if (!ok) return;
         }
 
@@ -2810,10 +3120,14 @@ resetMarqueeVisual();
 
         const kind = item.isDir ? "folder" : "file";
         const label = item.rel || item.name || "selected item";
-        const ok = confirm(
-            `Move ${kind} to trash?\n\n/${label}\n\n` +
-            `The owner can restore it from Trash until retention expires.`
-        );
+        const ok = await openExternalConfirmModal({
+            title: tr("external.trash.move_one_title", { kind }, `Move ${kind} to trash?`),
+            subtitle: "/" + label,
+            message: tr("external.trash.move_one_note", null, "The owner can restore it from Trash until retention expires."),
+            confirmText: tr("external.trash.move_to_trash", null, "Move to trash"),
+            cancelText: tr("external.modal.cancel", null, "Cancel"),
+            danger: true
+        });
 
         if (!ok) {
             setStatus("Move to trash cancelled.");
@@ -2925,7 +3239,14 @@ resetMarqueeVisual();
         }
 
         const oldName = basenameFromPath(item.rel);
-        const nextName = prompt("Rename item", oldName);
+        const nextName = await openExternalPromptModal({
+            title: tr("external.rename.title", null, "Rename item"),
+            subtitle: "/" + normalizeRelPath(item.rel || ""),
+            label: tr("external.rename.new_name", null, "New name"),
+            value: oldName,
+            confirmText: tr("external.rename.save", null, "Rename"),
+            cancelText: tr("external.modal.cancel", null, "Cancel")
+        });
         if (nextName == null) return;
 
         const cleanName = String(nextName || "").trim();
@@ -3311,10 +3632,13 @@ resetMarqueeVisual();
             return;
         }
 
-        const destLabel = destFolder ? `/${destFolder}` : "workspace root";
-        const ok = confirm(
-            `Copy ${items.length} selected item${items.length === 1 ? "" : "s"} to ${destLabel}?`
-        );
+        const destLabel = destFolder ? `/${destFolder}` : tr("external.workspace_root", null, "workspace root");
+        const ok = await openExternalConfirmModal({
+            title: tr("external.copy_selected.title", { count: items.length }, `Copy ${items.length} selected item${items.length === 1 ? "" : "s"}?`),
+            message: tr("external.copy_selected.message", { count: items.length, dest: destLabel }, `Copy ${items.length} selected item${items.length === 1 ? "" : "s"} to ${destLabel}?`),
+            confirmText: tr("external.copy.copy", null, "Copy"),
+            cancelText: tr("external.modal.cancel", null, "Cancel")
+        });
 
         if (!ok) {
             setStatus("Copy selected cancelled.");
@@ -3396,10 +3720,13 @@ resetMarqueeVisual();
             return;
         }
 
-        const destLabel = destFolder ? `/${destFolder}` : "workspace root";
-        const ok = confirm(
-            `Move ${items.length} selected item${items.length === 1 ? "" : "s"} to ${destLabel}?`
-        );
+        const destLabel = destFolder ? `/${destFolder}` : tr("external.workspace_root", null, "workspace root");
+        const ok = await openExternalConfirmModal({
+            title: tr("external.move_selected.title", { count: items.length }, `Move ${items.length} selected item${items.length === 1 ? "" : "s"}?`),
+            message: tr("external.move_selected.message", { count: items.length, dest: destLabel }, `Move ${items.length} selected item${items.length === 1 ? "" : "s"} to ${destLabel}?`),
+            confirmText: tr("external.move.move", null, "Move"),
+            cancelText: tr("external.modal.cancel", null, "Cancel")
+        });
 
         if (!ok) {
             setStatus("Move selected cancelled.");
@@ -3461,10 +3788,13 @@ resetMarqueeVisual();
             return;
         }
 
-        const ok = confirm(
-            `Move ${items.length} selected item${items.length === 1 ? "" : "s"} to trash?\n\n` +
-            `The owner can restore them from Trash until retention expires.`
-        );
+        const ok = await openExternalConfirmModal({
+            title: tr("external.trash.move_selected_title", { count: items.length }, `Move ${items.length} selected item${items.length === 1 ? "" : "s"} to trash?`),
+            message: tr("external.trash.move_selected_note", null, "The owner can restore them from Trash until retention expires."),
+            confirmText: tr("external.trash.move_to_trash", null, "Move to trash"),
+            cancelText: tr("external.modal.cancel", null, "Cancel"),
+            danger: true
+        });
         if (!ok) {
             setStatus("Move to trash cancelled.");
             return;
@@ -3985,7 +4315,7 @@ resetMarqueeVisual();
         loadFiles(btn.dataset.crumb || "").catch((e) => setStatus(`Open path failed: ${e.message || e}`, "bad"));
     });
 
-    emptyContextMenu.addEventListener("click", (ev) => {
+    emptyContextMenu.addEventListener("click", async (ev) => {
         const btn = ev.target.closest("[data-action]");
         if (!btn || btn.disabled) return;
 
@@ -4003,9 +4333,15 @@ resetMarqueeVisual();
         if (action === "new-folder") {
             if (!canEdit) return setStatus("This workspace session is view-only.", "bad");
 
-            const raw = prompt("New folder name");
+            const raw = await openExternalPromptModal({
+                title: tr("external.folder.new_title", null, "New folder"),
+                label: tr("external.folder.name", null, "Folder name"),
+                placeholder: tr("external.folder.name_placeholder", null, "Folder name"),
+                confirmText: tr("external.folder.create", null, "Create folder"),
+                cancelText: tr("external.modal.cancel", null, "Cancel")
+            });
             if (raw == null) {
-                setStatus("New folder cancelled.");
+                setStatus(tr("external.folder.cancelled", null, "New folder cancelled."));
                 return;
             }
 
@@ -4119,7 +4455,7 @@ resetMarqueeVisual();
     document.addEventListener("keydown", (ev) => {
         if (ev.key !== "Escape") return;
         if (textEditModal && textEditModal.classList.contains("show")) {
-            closeTextEditor();
+            closeTextEditor().catch((e) => setTextEditStatus(`Close failed: ${e.message || e}`, "bad"));
             return;
         }
         if (propsModal && propsModal.classList.contains("show")) {
@@ -4373,11 +4709,13 @@ resetMarqueeVisual();
 
     async function externalTrashRestoreItem(item, buttons) {
         const label = externalTrashRelLabel(item);
-        const ok = confirm(
-            "Restore this item from trash?\n\n" +
-            label + "\n\n" +
-            "If the original path is already occupied, DNA-Nexus will restore it with a conflict-safe name."
-        );
+        const ok = await openExternalConfirmModal({
+            title: tr("external.trash.restore_title", null, "Restore this item from trash?"),
+            subtitle: label,
+            message: tr("external.trash.restore_note", null, "If the original path is already occupied, DNA-Nexus will restore it with a conflict-safe name."),
+            confirmText: tr("external.trash.restore", null, "Restore"),
+            cancelText: tr("external.modal.cancel", null, "Cancel")
+        });
         if (!ok) return;
 
         externalTrashBusyButtons(buttons, true);
@@ -4402,11 +4740,14 @@ resetMarqueeVisual();
 
     async function externalTrashPurgeItem(item, buttons) {
         const label = externalTrashRelLabel(item);
-        const ok = confirm(
-            "Permanently delete this trashed item?\n\n" +
-            label + "\n\n" +
-            "This cannot be undone."
-        );
+        const ok = await openExternalConfirmModal({
+            title: tr("external.trash.purge_title", null, "Permanently delete this trashed item?"),
+            subtitle: label,
+            message: tr("external.trash.purge_note", null, "This cannot be undone."),
+            confirmText: tr("external.trash.delete_permanently", null, "Delete permanently"),
+            cancelText: tr("external.modal.cancel", null, "Cancel"),
+            danger: true
+        });
         if (!ok) return;
 
         externalTrashBusyButtons(buttons, true);
@@ -4606,7 +4947,14 @@ resetMarqueeVisual();
             return;
         }
 
-        const name = prompt("New folder name");
+        const name = await openExternalPromptModal({
+            title: tr("external.folder.new_title", null, "New folder"),
+            subtitle: "/" + (pickerPath || ""),
+            label: tr("external.folder.name", null, "Folder name"),
+            placeholder: tr("external.folder.name_placeholder", null, "Folder name"),
+            confirmText: tr("external.folder.create", null, "Create folder"),
+            cancelText: tr("external.modal.cancel", null, "Cancel")
+        });
         if (name == null) return;
 
         const clean = String(name || "").trim();
@@ -4661,7 +5009,7 @@ resetMarqueeVisual();
         });
     }
 
-    if (textEditClose) textEditClose.addEventListener("click", () => closeTextEditor());
+    if (textEditClose) textEditClose.addEventListener("click", () => closeTextEditor().catch((e) => setTextEditStatus(`Close failed: ${e.message || e}`, "bad")));
     if (textEditReloadBtn) textEditReloadBtn.addEventListener("click", () => {
         reloadTextEditor().catch((e) => setTextEditStatus(`Reload failed: ${e.message || e}`, "bad"));
     });
@@ -4698,7 +5046,7 @@ resetMarqueeVisual();
 
     if (textEditModal) {
         textEditModal.addEventListener("click", (ev) => {
-            if (ev.target === textEditModal) closeTextEditor();
+            if (ev.target === textEditModal) closeTextEditor().catch((e) => setTextEditStatus(`Close failed: ${e.message || e}`, "bad"));
         });
     }
 
