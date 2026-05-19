@@ -102,6 +102,85 @@
     const mapCanvas = el("mapCanvas");
     const albumsWrap = el("albumsWrap");
 
+    function applyTopbarTooltipTranslations() {
+        const items = [
+            ["slideshowBtn", "photogallery.start_slideshow", "Aloita diaesitys", "Aloita diaesitys"],
+            ["statsBtn", "photogallery.stats_tooltip", "Näytä kuvatilastot", "Tilastot"],
+            ["gridBtn", "photogallery.grid_tooltip", "Ruudukkonäkymä", "Ruudukko"],
+            ["mapBtn", "photogallery.map_tooltip", "Karttanäkymä", "Kartta"],
+            ["albumsBtn", "photogallery.albums_tooltip", "Albumit", "Albumit"],
+            ["upBtn", "photogallery.up_tooltip", "Ylös kansiotasolla", "Ylös"],
+            ["refreshBtn", "common.refresh", "Päivitä", "Päivitä"],
+        ];
+
+        for (const [id, key, fallbackTitle, fallbackText] of items) {
+            const node = el(id);
+            if (!node) continue;
+
+            const title = pgT(key, null, fallbackTitle);
+            node.setAttribute("title", title);
+            node.setAttribute("aria-label", title);
+            node.setAttribute("data-i18n-title", key);
+            node.setAttribute("data-i18n-aria-label", key);
+
+            if (["gridBtn", "mapBtn", "albumsBtn", "slideshowBtn"].includes(id)) {
+                const textKey = id === "gridBtn"
+                    ? "photogallery.grid"
+                    : id === "mapBtn"
+                        ? "photogallery.map"
+                        : id === "albumsBtn"
+                            ? "photogallery.albums"
+                            : "photogallery.slideshow";
+                node.textContent = pgT(textKey, null, fallbackText);
+            }
+        }
+    }
+
+    function scheduleTopbarTooltipTranslations() {
+        applyTopbarTooltipTranslations();
+        window.setTimeout(applyTopbarTooltipTranslations, 0);
+        window.setTimeout(applyTopbarTooltipTranslations, 100);
+    }
+
+    scheduleTopbarTooltipTranslations();
+    window.addEventListener("load", scheduleTopbarTooltipTranslations);
+
+    for (const id of ["slideshowBtn", "statsBtn", "gridBtn", "mapBtn", "albumsBtn", "upBtn", "refreshBtn"]) {
+        el(id)?.addEventListener("click", () => {
+            window.setTimeout(applyTopbarTooltipTranslations, 0);
+            window.setTimeout(applyTopbarTooltipTranslations, 80);
+        });
+    }
+
+    function forceTopbarFinnishLabelsAndTitles() {
+        const values = [
+            ["slideshowBtn", "photogallery.slideshow", "Diaesitys", "photogallery.start_slideshow", "Aloita diaesitys"],
+            ["gridBtn", "photogallery.grid", "Ruudukko", "photogallery.switch_to_grid_view", "Siirry ruudukkonäkymään"],
+            ["mapBtn", "photogallery.map", "Kartta", "photogallery.switch_to_map_view", "Siirry karttanäkymään"],
+            ["albumsBtn", "photogallery.albums", "Albumit", "photogallery.switch_to_albums_view", "Siirry albumeihin"],
+            ["statsBtn", "photogallery.stats", "Tilastot", "photogallery.stats_tooltip", "Näytä kuvatilastot"],
+        ];
+
+        for (const [id, textKey, fallbackText, titleKey, fallbackTitle] of values) {
+            const node = el(id);
+            if (!node) continue;
+            node.textContent = pgT(textKey, null, fallbackText);
+            const title = pgT(titleKey, null, fallbackTitle);
+            node.setAttribute("title", title);
+            node.setAttribute("aria-label", title);
+            node.setAttribute("data-i18n", textKey);
+            node.setAttribute("data-i18n-title", titleKey);
+            node.setAttribute("data-i18n-aria-label", titleKey);
+        }
+    }
+
+    function scheduleTopbarFinnishLabelsAndTitles() {
+        forceTopbarFinnishLabelsAndTitles();
+        window.setTimeout(forceTopbarFinnishLabelsAndTitles, 0);
+        window.setTimeout(forceTopbarFinnishLabelsAndTitles, 100);
+        window.setTimeout(forceTopbarFinnishLabelsAndTitles, 500);
+    }
+
     const panelEl = document.querySelector(".panel");
 
     let metaSaveInFlight = false;
@@ -111,6 +190,12 @@
     let searchSeq = 0;
     let filterTimer = 0;
     const externalSearchFilters = [];
+
+    scheduleTopbarFinnishLabelsAndTitles();
+    window.addEventListener("load", scheduleTopbarFinnishLabelsAndTitles);
+    for (const id of ["slideshowBtn", "gridBtn", "mapBtn", "albumsBtn", "statsBtn"]) {
+        el(id)?.addEventListener("click", scheduleTopbarFinnishLabelsAndTitles);
+    }
 
     const FOLDER_LIST_CACHE_TTL_MS = 30 * 1000;
     const ENABLE_AUTO_TREE_STATS = true;
