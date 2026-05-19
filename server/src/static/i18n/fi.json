@@ -2799,5 +2799,7 @@
   "photogallery.exif.summary.iso": "ISO",
   "photogallery.exif.summary.gps": "GPS",
   "photogallery.exif.summary.no_gps": "ei GPS",
-  "photogallery.exif.summary.date": "päivä"
+  "photogallery.exif.summary.date": "päivä",
+  "photogallery.filter_by_star_rating": "Suodata tähtiarvion mukaan",
+  "photogallery.thumbnail_size": "Pikkukuvan koko"
 }
