@@ -14,6 +14,237 @@
     }
 
 
+    function ensureSystemModalCss() {
+        if (document.getElementById("systemModalCss")) return;
+
+        const style = document.createElement("style");
+        style.id = "systemModalCss";
+        style.textContent = `
+.systemModalBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:100000;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(0,0,0,.55);
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+}
+.systemModalCard{
+    width:min(620px, calc(100vw - 24px));
+    border:1px solid var(--border2, rgba(120,120,120,.42));
+    border-radius:18px;
+    overflow:hidden;
+    background:linear-gradient(180deg, var(--panel2, #f8f8f8), var(--panel, #eeeeee));
+    color:var(--fg, #111);
+    box-shadow:0 18px 70px rgba(0,0,0,.42);
+}
+.systemModalHead{
+    padding:14px 16px;
+    border-bottom:1px solid var(--border2, rgba(120,120,120,.32));
+    background:rgba(0,0,0,.08);
+}
+.systemModalTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+}
+.systemModalSub{
+    margin-top:4px;
+    font-size:12px;
+    color:var(--fg-dim, rgba(0,0,0,.66));
+    overflow-wrap:anywhere;
+}
+.systemModalBody{
+    padding:16px;
+    display:grid;
+    gap:10px;
+}
+.systemModalNote{
+    padding:10px 12px;
+    border-radius:14px;
+    border:1px solid rgba(var(--warn-rgb, 180,120,20),.35);
+    background:rgba(var(--warn-rgb, 180,120,20),.10);
+    white-space:pre-wrap;
+}
+.systemModalFoot{
+    display:flex;
+    justify-content:flex-end;
+    gap:10px;
+    padding:12px 16px;
+    border-top:1px solid var(--border2, rgba(120,120,120,.32));
+    background:rgba(0,0,0,.08);
+}
+html[data-theme="bright"] .systemModalCard{
+    background:linear-gradient(180deg, #fff, #f2f4f7) !important;
+    color:#111827 !important;
+}
+`;
+        document.head.appendChild(style);
+    }
+
+    function openSystemInfoModal(opts = {}) {
+        ensureSystemModalCss();
+
+        return new Promise((resolve) => {
+            const options = opts || {};
+            const modal = document.createElement("div");
+            modal.className = "systemModalBackdrop";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "systemModalCard";
+
+            const head = document.createElement("div");
+            head.className = "systemModalHead";
+
+            const title = document.createElement("div");
+            title.className = "systemModalTitle";
+            title.textContent = options.title || tr("system.modal.notice", null, "Notice");
+
+            const sub = document.createElement("div");
+            sub.className = "systemModalSub";
+            sub.textContent = options.subtitle || "";
+
+            head.appendChild(title);
+            if (sub.textContent) head.appendChild(sub);
+
+            const body = document.createElement("div");
+            body.className = "systemModalBody";
+
+            const note = document.createElement("div");
+            note.className = "systemModalNote";
+            note.textContent = options.message || "";
+            body.appendChild(note);
+
+            const foot = document.createElement("div");
+            foot.className = "systemModalFoot";
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = options.okText || tr("system.modal.ok", null, "OK");
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = () => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve();
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape" || ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish();
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish();
+            });
+            okBtn.addEventListener("click", finish);
+            window.setTimeout(() => okBtn.focus(), 0);
+        });
+    }
+
+    function openSystemConfirmModal(opts = {}) {
+        ensureSystemModalCss();
+
+        return new Promise((resolve) => {
+            const options = opts || {};
+            const modal = document.createElement("div");
+            modal.className = "systemModalBackdrop";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "systemModalCard";
+
+            const head = document.createElement("div");
+            head.className = "systemModalHead";
+
+            const title = document.createElement("div");
+            title.className = "systemModalTitle";
+            title.textContent = options.title || tr("system.modal.confirm", null, "Confirm action");
+
+            const sub = document.createElement("div");
+            sub.className = "systemModalSub";
+            sub.textContent = options.subtitle || "";
+
+            head.appendChild(title);
+            if (sub.textContent) head.appendChild(sub);
+
+            const body = document.createElement("div");
+            body.className = "systemModalBody";
+
+            const note = document.createElement("div");
+            note.className = "systemModalNote";
+            note.textContent = options.message || "";
+            body.appendChild(note);
+
+            const foot = document.createElement("div");
+            foot.className = "systemModalFoot";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || tr("system.modal.cancel", null, "Cancel");
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = options.confirmText || tr("system.modal.continue", null, "Continue");
+
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(!!value);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(false);
+                }
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(true);
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish(false);
+            });
+            cancelBtn.addEventListener("click", () => finish(false));
+            okBtn.addEventListener("click", () => finish(true));
+
+            window.setTimeout(() => cancelBtn.focus(), 0);
+        });
+    }
+
+
     function cssVar(name, fallback) {
         try {
             const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -924,7 +1155,11 @@
         } catch (e) {
             const msg = String(e && e.message ? e.message : e);
             if (status) status.textContent = tr("system.refresh_failed", { error: msg }, "Refresh failed: " + msg);
-            alert(tr("system.smart_refresh_failed", { error: msg }, "Failed to refresh SMART data: " + msg));
+            await openSystemInfoModal({
+                title: tr("system.smart_refresh_failed_title", null, "SMART refresh failed"),
+                message: tr("system.smart_refresh_failed", { error: msg }, "Failed to refresh SMART data: " + msg),
+                okText: tr("system.modal.ok", null, "OK")
+            });
         } finally {
             btn.disabled = false;
             btn.textContent = oldText;
@@ -940,7 +1175,13 @@
         if (!dev) return;
 
         if (type === "extended") {
-            const ok = window.confirm(tr("system.confirm_extended_selftest", { dev }, `Start extended self-test for ${dev}? This may take a long time.`));
+            const ok = await openSystemConfirmModal({
+                title: tr("system.selftest_extended_title", null, "Start extended self-test?"),
+                subtitle: dev,
+                message: tr("system.confirm_extended_selftest", { dev }, `Start extended self-test for ${dev}? This may take a long time.`),
+                confirmText: tr("system.start_selftest", null, "Start self-test"),
+                cancelText: tr("system.modal.cancel", null, "Cancel")
+            });
             if (!ok) return;
         }
 
@@ -952,7 +1193,11 @@
             await startDriveSelftest(dev, type);
             await refreshDrivesOnce();
         } catch (e) {
-            alert(tr("system.selftest_start_failed", { error: String(e && e.message ? e.message : e) }, "Failed to start self-test: " + String(e && e.message ? e.message : e)));
+            await openSystemInfoModal({
+                title: tr("system.selftest_start_failed_title", null, "Self-test start failed"),
+                message: tr("system.selftest_start_failed", { error: String(e && e.message ? e.message : e) }, "Failed to start self-test: " + String(e && e.message ? e.message : e)),
+                okText: tr("system.modal.ok", null, "OK")
+            });
         } finally {
             btn.disabled = false;
             btn.textContent = oldText;

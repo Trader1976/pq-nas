@@ -1961,5 +1961,14 @@
   "raidmgr.rename.save": "Tallenna nimi",
   "raidmgr.rename.failed": "Nimeäminen epäonnistui: {error}",
   "raidmgr.rename.saved": "Nimetty ✓",
-  "raidmgr.rename.crashed": "Nimeämisikkuna kaatui: {error}"
+  "raidmgr.rename.crashed": "Nimeämisikkuna kaatui: {error}",
+  "system.modal.notice": "Huomautus",
+  "system.modal.confirm": "Vahvista toiminto",
+  "system.modal.ok": "OK",
+  "system.modal.cancel": "Peruuta",
+  "system.modal.continue": "Jatka",
+  "system.smart_refresh_failed_title": "SMART-päivitys epäonnistui",
+  "system.selftest_extended_title": "Käynnistetäänkö laajennettu itsetesti?",
+  "system.start_selftest": "Käynnistä itsetesti",
+  "system.selftest_start_failed_title": "Itsetestin käynnistys epäonnistui"
 }

@@ -1944,5 +1944,14 @@
   "raidmgr.rename.save": "Save name",
   "raidmgr.rename.failed": "Rename failed: {error}",
   "raidmgr.rename.saved": "Renamed ✓",
-  "raidmgr.rename.crashed": "Rename crashed: {error}"
+  "raidmgr.rename.crashed": "Rename crashed: {error}",
+  "system.modal.notice": "Notice",
+  "system.modal.confirm": "Confirm action",
+  "system.modal.ok": "OK",
+  "system.modal.cancel": "Cancel",
+  "system.modal.continue": "Continue",
+  "system.smart_refresh_failed_title": "SMART refresh failed",
+  "system.selftest_extended_title": "Start extended self-test?",
+  "system.start_selftest": "Start self-test",
+  "system.selftest_start_failed_title": "Self-test start failed"
 }
