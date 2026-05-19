@@ -807,7 +807,7 @@
       </div>
 
       <div class="formField">
-        <div class="k">Devices</div>
+        <div class="k">${esc(tr("raidmgr.summary.devices", null, "Devices"))}</div>
         <input id="poolConvertDevicesInp" type="text" readonly>
         <div class="formHelp">Current member count</div>
       </div>
@@ -2371,7 +2371,7 @@
       </div>
 
       <div class="formField">
-        <div class="k">Mode</div>
+        <div class="k">${esc(tr("raidmgr.summary.mode", null, "Mode"))}</div>
         <select id="poolEditModeSel">
           <option value="single">single</option>
           <option value="raid1">raid1</option>
@@ -2676,9 +2676,9 @@
             const assigned = !!slot?.assigned;
             const present = !!slot?.present;
 
-            if (!assigned) return `<span class="badge info">empty</span>`;
-            if (present) return `<span class="badge ok">present</span>`;
-            return `<span class="badge warn">missing</span>`;
+            if (!assigned) return `<span class="badge info">${esc(tr("raidmgr.slot.empty", null, "empty"))}</span>`;
+            if (present) return `<span class="badge ok">${esc(tr("raidmgr.slot.present", null, "present"))}</span>`;
+            return `<span class="badge warn">${esc(tr("raidmgr.slot.missing", null, "missing"))}</span>`;
         }
 
         function modePillOpts(p) {
@@ -2699,11 +2699,11 @@
         }
         function fmtPoolHealth(p) {
             const st = p?.status || {};
-            if (!st.mounted) return `<span class="badge warn">offline</span>`;
-            if (st.busy) return `<span class="badge warn">busy</span>`;
-            if (st.degraded) return `<span class="badge warn">degraded</span>`;
-            if (st.layout_drift) return `<span class="badge warn">layout drift</span>`;
-            return `<span class="badge ok">online</span>`;
+            if (!st.mounted) return `<span class="badge warn">${esc(tr("raidmgr.health.offline", null, "offline"))}</span>`;
+            if (st.busy) return `<span class="badge warn">${esc(tr("raidmgr.health.busy", null, "busy"))}</span>`;
+            if (st.degraded) return `<span class="badge warn">${esc(tr("raidmgr.health.degraded", null, "degraded"))}</span>`;
+            if (st.layout_drift) return `<span class="badge warn">${esc(tr("raidmgr.health.layout_drift", null, "layout drift"))}</span>`;
+            return `<span class="badge ok">${esc(tr("raidmgr.health.online", null, "online"))}</span>`;
         }
         function poolPendingState(p) {
             const slots = Array.isArray(p?.slots) ? p.slots : [];
@@ -2730,13 +2730,13 @@
             }
 
             if (toAdd.length && toRemove.length) {
-                return `<span class="badge warn">pending change</span>`;
+                return `<span class="badge warn">${esc(tr("raidmgr.pending.change", null, "pending change"))}</span>`;
             }
             if (toAdd.length) {
-                return `<span class="badge warn">pending add</span>`;
+                return `<span class="badge warn">${esc(tr("raidmgr.pending.add", null, "pending add"))}</span>`;
             }
             if (toRemove.length) {
-                return `<span class="badge warn">pending remove</span>`;
+                return `<span class="badge warn">${esc(tr("raidmgr.pending.remove", null, "pending remove"))}</span>`;
             }
             return "";
         }
@@ -2748,8 +2748,8 @@
             return `
 <div class="pqSlotRow ${editable ? "pqSlotRowEditable" : ""}">
   <div class="pqSlotLeft">
-    <div class="pqSlotTitle">Slot ${idx}</div>
-    <div class="pqSlotDev">${dev ? esc(dev) : "(empty)"}</div>
+    <div class="pqSlotTitle">${esc(tr("raidmgr.slot.n", { n: idx }, `Slot ${idx}`))}</div>
+    <div class="pqSlotDev">${dev ? esc(dev) : esc(tr("raidmgr.slot.empty_paren", null, "(empty)"))}</div>
   </div>
   <div class="pqSlotRight">
     ${stateHtml}
@@ -2773,35 +2773,35 @@
             return `
 <div class="pqPoolSummaryGrid">
   <div class="pqPoolStat">
-    <div class="k">Mode</div>
+    <div class="k">${esc(tr("raidmgr.summary.mode", null, "Mode"))}</div>
     <div class="pqPoolStatValue">${esc(fmtPoolMode(p))}</div>
   </div>
   <div class="pqPoolStat">
-    <div class="k">Devices</div>
+    <div class="k">${esc(tr("raidmgr.summary.devices", null, "Devices"))}</div>
     <div class="pqPoolStatValue">${esc(String(p?.devices ?? 0))}</div>
   </div>
   <div class="pqPoolStat">
-    <div class="k">Used (fs)</div>
+    <div class="k">${esc(tr("raidmgr.summary.used_fs", null, "Used (fs)"))}</div>
     <div class="pqPoolStatValue">${esc(fmtBytes(used))}</div>
   </div>
   <div class="pqPoolStat">
-    <div class="k">Free (fs)</div>
+    <div class="k">${esc(tr("raidmgr.summary.free_fs", null, "Free (fs)"))}</div>
     <div class="pqPoolStatValue">${esc(fmtBytes(free))}</div>
   </div>
   <div class="pqPoolStat">
-    <div class="k">Committed users</div>
+    <div class="k">${esc(tr("raidmgr.summary.committed_users", null, "Committed users"))}</div>
     <div class="pqPoolStatValue">${esc(fmtBytes(allocatedUsers))}</div>
   </div>
   <div class="pqPoolStat">
-    <div class="k">Committed workspaces</div>
+    <div class="k">${esc(tr("raidmgr.summary.committed_workspaces", null, "Committed workspaces"))}</div>
     <div class="pqPoolStatValue">${esc(fmtBytes(allocatedWorkspaces))}</div>
   </div>
   <div class="pqPoolStat">
-    <div class="k">Committed total</div>
+    <div class="k">${esc(tr("raidmgr.summary.committed_total", null, "Committed total"))}</div>
     <div class="pqPoolStatValue">${esc(fmtBytes(allocatedTotal))}</div>
   </div>
   <div class="pqPoolStat">
-    <div class="k">Remaining allocatable</div>
+    <div class="k">${esc(tr("raidmgr.summary.remaining_allocatable", null, "Remaining allocatable"))}</div>
     <div class="pqPoolStatValue">${esc(fmtBytes(remainingAllocatable))}</div>
   </div>
 </div>`;
@@ -2810,7 +2810,7 @@
         const pools = Array.isArray(g_pools) ? g_pools : [];
         const tier = await loadTieringStatus().catch(() => ({ ok: false, error: "fetch_failed" }));
         if (!pools.length) {
-            poolsOut.innerHTML = `<div class="v" style="opacity:.8;">No pools found.</div>`;
+            poolsOut.innerHTML = `<div class="v" style="opacity:.8;">${esc(tr("raidmgr.no_pools", null, "No pools found."))}</div>`;
             return;
         }
         function svgSingleDrive({ label = "" } = {}) {
@@ -3281,8 +3281,8 @@ Tip: these are the Btrfs member devices that form this pool.
 
     <div id="tierFlowStatus" class="pqTierFlowStatus">
         ${Number(bytes.landing_bytes || 0) > 0
-                ? `Waiting in landing tier: ${fmtBytes(Number(bytes.landing_bytes || 0))}`
-                : `No landing-tier backlog`}
+                ? tr("raidmgr.tiering.waiting_landing", { size: fmtBytes(Number(bytes.landing_bytes || 0)) }, `Waiting in landing tier: ${fmtBytes(Number(bytes.landing_bytes || 0))}`)
+                : tr("raidmgr.tiering.no_backlog", null, "No landing-tier backlog")}
     </div>
   </div>
 </div>`;
@@ -3302,7 +3302,7 @@ Tip: these are the Btrfs member devices that form this pool.
 
             const slotHtml = slots.length
                 ? slots.map((slot) => slotRowHtml(slot, editable)).join("")
-                : `<div class="v" style="opacity:.75;">No slots defined.</div>`;
+                : `<div class="v" style="opacity:.75;">${esc(tr("raidmgr.no_slots_defined", null, "No slots defined."))}</div>`;
 
             return `
 <div class="card pqPoolCard ${editable ? "" : "pqPoolReadonly"}">
@@ -3312,53 +3312,53 @@ Tip: these are the Btrfs member devices that form this pool.
       <div class="pqPoolMount">${esc(mount)}</div>
 
 <div class="pqPoolMetaPills">
-  ${fstype ? pill(`fs: ${fstype}`) : ""}
-  ${pill(`mode: ${fmtPoolMode(p)}`, modePillOpts(p))}
-  ${pill(`slots: ${String(p?.slot_count ?? slots.length ?? 0)}`)}
-  ${uuid ? pill(`uuid: ${uuid.slice(0, 12)}…`) : ""}
+  ${fstype ? pill(`${tr("raidmgr.meta.fs", null, "fs")}: ${fstype}`) : ""}
+  ${pill(`${tr("raidmgr.meta.mode", null, "mode")}: ${fmtPoolMode(p)}`, modePillOpts(p))}
+  ${pill(`${tr("raidmgr.meta.slots", null, "slots")}: ${String(p?.slot_count ?? slots.length ?? 0)}`)}
+  ${uuid ? pill(`${tr("raidmgr.meta.uuid", null, "uuid")}: ${uuid.slice(0, 12)}…`) : ""}
   ${statusHtml}
   ${pendingHtml}
-  ${editable ? `<span class="badge ok">editable</span>` : `<span class="badge info">system volume</span>`}
+  ${editable ? `<span class="badge ok">${esc(tr("raidmgr.badge.editable", null, "editable"))}</span>` : `<span class="badge info">${esc(tr("raidmgr.badge.system_volume", null, "system volume"))}</span>`}
 </div>
     </div>
 
     <div class="pqPoolActions">
-      ${editable ? `<button class="btn secondary" type="button" data-pool-action="remove" data-mount="${esc(mount)}">Remove drive</button>` : ``}
-      ${editable ? `<button class="btn secondary" type="button" data-pool-action="rename" data-mount="${esc(mount)}">Rename</button>` : ``}
-      ${editable ? `<button class="btn secondary" type="button" data-pool-action="convert" data-mount="${esc(mount)}">Convert RAID</button>` : ``}
-      ${editable ? `<button class="btn danger" type="button" data-pool-action="destroy" data-mount="${esc(mount)}">Destroy</button>` : ``}
+      ${editable ? `<button class="btn secondary" type="button" data-pool-action="remove" data-mount="${esc(mount)}">${esc(tr("raidmgr.action.remove_drive", null, "Remove drive"))}</button>` : ``}
+      ${editable ? `<button class="btn secondary" type="button" data-pool-action="rename" data-mount="${esc(mount)}">${esc(tr("raidmgr.action.rename", null, "Rename"))}</button>` : ``}
+      ${editable ? `<button class="btn secondary" type="button" data-pool-action="convert" data-mount="${esc(mount)}">${esc(tr("raidmgr.action.convert_raid", null, "Convert RAID"))}</button>` : ``}
+      ${editable ? `<button class="btn danger" type="button" data-pool-action="destroy" data-mount="${esc(mount)}">${esc(tr("raidmgr.action.destroy", null, "Destroy"))}</button>` : ``}
     </div>
   </div>
 
 <div class="pqPoolSection">
-  <div class="pqPoolSectionTitle">Slots</div>
+  <div class="pqPoolSectionTitle">${esc(tr("raidmgr.section.slots", null, "Slots"))}</div>
   <div class="pqSlotList">${slotHtml}</div>
 
   ${
                 editable ? `
 <div class="pqSlotActionRow">
-  <button class="btn secondary" type="button" data-pool-action="edit-slots" data-mount="${esc(mount)}">Edit slots</button>
-  <button class="btn secondary" type="button" data-pool-action="add-slot" data-mount="${esc(mount)}">Add slot</button>
-  <button class="btn secondary" type="button" data-pool-action="remove-slot" data-mount="${esc(mount)}">Remove empty slot</button>
-  <button class="btn" type="button" data-pool-action="apply-layout" data-mount="${esc(mount)}">Apply layout</button>
+  <button class="btn secondary" type="button" data-pool-action="edit-slots" data-mount="${esc(mount)}">${esc(tr("raidmgr.action.edit_slots", null, "Edit slots"))}</button>
+  <button class="btn secondary" type="button" data-pool-action="add-slot" data-mount="${esc(mount)}">${esc(tr("raidmgr.action.add_slot", null, "Add slot"))}</button>
+  <button class="btn secondary" type="button" data-pool-action="remove-slot" data-mount="${esc(mount)}">${esc(tr("raidmgr.action.remove_empty_slot", null, "Remove empty slot"))}</button>
+  <button class="btn" type="button" data-pool-action="apply-layout" data-mount="${esc(mount)}">${esc(tr("raidmgr.action.apply_layout", null, "Apply layout"))}</button>
 </div>
       <div class="pqPoolNote">
-  ${pendingHtml ? "Saved slot layout differs from current pool membership. Use Apply layout to make Btrfs match the saved layout." : "Saved slot layout matches the current pool membership."}
+  ${pendingHtml ? esc(tr("raidmgr.note.layout_differs", null, "Saved slot layout differs from current pool membership. Use Apply layout to make Btrfs match the saved layout.")) : esc(tr("raidmgr.note.layout_matches", null, "Saved slot layout matches the current pool membership."))}
 </div>
     ` : `
-      <div class="pqPoolNote">This is a detected Btrfs system volume. It is shown for visibility, not managed as a normal pool.</div>
+      <div class="pqPoolNote">${esc(tr("raidmgr.note.system_volume", null, "This is a detected Btrfs system volume. It is shown for visibility, not managed as a normal pool."))}</div>
     `
             }
 </div>
 
     <div class="pqPoolSection">
-      <div class="pqPoolSectionTitle">Summary</div>
+      <div class="pqPoolSectionTitle">${esc(tr("raidmgr.section.summary", null, "Summary"))}</div>
       ${poolSummaryHtml(p)}
 
       <div style="margin-top:12px;">
-        <div class="pqPoolSectionTitle" style="margin-bottom:6px;">Member drives</div>
+        <div class="pqPoolSectionTitle" style="margin-bottom:6px;">${esc(tr("raidmgr.section.member_drives", null, "Member drives"))}</div>
         <div id="${hostId}" class="pqPoolMembersHost">
-          <span class="v" style="opacity:.75;">(loading…)</span>
+          <span class="v" style="opacity:.75;">${esc(tr("common.loading", null, "loading…"))}</span>
         </div>
       </div>
     </div>
@@ -3843,7 +3843,7 @@ ${rows}
       </div>
 
       <div class="formField">
-        <div class="k">Mode</div>
+        <div class="k">${esc(tr("raidmgr.summary.mode", null, "Mode"))}</div>
         <select id="poolModeSel">
           <option value="single">single</option>
           <option value="raid1">raid1</option>
@@ -4384,7 +4384,7 @@ Optionally it can wipe member disks (VERY destructive).
                     const bdevs = Array.isArray(disc?.btrfs?.devices) ? disc.btrfs.devices : [];
 
                     if (!bdevs.length) {
-                        host.innerHTML = `<span class="v" style="opacity:.75;">(no devices found)</span>`;
+                        host.innerHTML = `<span class="v" style="opacity:.75;">${esc(tr("raidmgr.no_devices_found", null, "(no devices found)"))}</span>`;
                         return;
                     }
 
@@ -4412,7 +4412,7 @@ Optionally it can wipe member disks (VERY destructive).
                     }
 
                 } catch (_) {
-                    host.innerHTML = `<span class="v" style="opacity:.75;">(discovery failed)</span>`;
+                    host.innerHTML = `<span class="v" style="opacity:.75;">${esc(tr("raidmgr.discovery_failed", null, "(discovery failed)"))}</span>`;
                 }
             });
 
@@ -4710,10 +4710,10 @@ Optionally it can wipe member disks (VERY destructive).
             saveTab(g_tab);
             applyTabToUi();
         }
-        setBadge("info", "pools");
+        setBadge("info", tr("raidmgr.badge.pools", null, "pools"));
         stopMountPolling();
 
-        if (subLine) subLine.textContent = "Manage storage pools (create/rename/convert/destroy).";
+        if (subLine) subLine.textContent = tr("raidmgr.subtitle_full", null, "Manage storage pools (create/rename/convert/destroy).");
         if (rawOut) rawOut.textContent = "";
         if (actionsOut) actionsOut.textContent = "";
 
@@ -4726,7 +4726,7 @@ Optionally it can wipe member disks (VERY destructive).
             // show WHY in UI (so you immediately see 401/403 etc.)
             if (poolsOut) {
                 poolsOut.innerHTML = `
-        <div class="v" style="opacity:.9;">Failed to load pools.</div>
+        <div class="v" style="opacity:.9;">${esc(tr("raidmgr.failed_load_pools", null, "Failed to load pools."))}</div>
         <pre style="margin-top:10px; max-height:45vh; overflow:auto;">
 ${esc(JSON.stringify({ http: lp.http, error: lp.error, json: lp.j || null, txt: (lp.txt || "").slice(0, 2000) }, null, 2))}
         </pre>`;
@@ -4753,24 +4753,22 @@ ${esc(JSON.stringify({ http: lp.http, error: lp.error, json: lp.j || null, txt: 
             if (poolsOut) {
                 poolsOut.innerHTML = `
             <div class="card" style="margin-top:10px;">
-              <div style="font-weight:950; margin-bottom:8px;">No managed Btrfs pools found</div>
+              <div style="font-weight:950; margin-bottom:8px;">${esc(tr("raidmgr.no_managed_title", null, "No managed Btrfs pools found"))}</div>
             
               <div class="v" style="opacity:.88;">
-                Storage Manager has nothing to manage on this server right now.
+                ${esc(tr("raidmgr.no_managed_body1", null, "Storage Manager has nothing to manage on this server right now."))}
               </div>
             
               <div class="v" style="opacity:.78; margin-top:10px; line-height:1.45;">
-                This usually means DNA-Nexus server is currently using a single storage volume,
-                or Btrfs pool mounts have not been created / mounted yet.
+                ${esc(tr("raidmgr.no_managed_body2", null, "This usually means DNA-Nexus server is currently using a single storage volume, or Btrfs pool mounts have not been created / mounted yet."))}
               </div>
             
               <div class="v" style="opacity:.78; margin-top:10px; line-height:1.45;">
-                System storage may still be <span class="mono">${esc(rootFs)}</span>, and that is fine.
-                What matters here is whether DNA-Nexus server has managed Btrfs pools available.
+                ${esc(tr("raidmgr.no_managed_body3_prefix", null, "System storage may still be"))} <span class="mono">${esc(rootFs)}</span>, ${esc(tr("raidmgr.no_managed_body3_suffix", null, "and that is fine. What matters here is whether DNA-Nexus server has managed Btrfs pools available."))}
               </div>
             
               <div class="v" style="opacity:.72; margin-top:10px;">
-                When Btrfs pools exist, they will appear here automatically.
+                ${esc(tr("raidmgr.no_managed_body4", null, "When Btrfs pools exist, they will appear here automatically."))}
               </div>
             </div>`;
             }
