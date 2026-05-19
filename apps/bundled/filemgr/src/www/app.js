@@ -21,6 +21,15 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     } catch (_) {}
   }
 
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   try {
     if (window.self !== window.top) document.body.classList.add("embedded");
   } catch (_) {
