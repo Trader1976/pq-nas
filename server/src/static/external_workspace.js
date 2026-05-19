@@ -765,7 +765,7 @@ html[data-theme="bright"] .externalDialogInput{
 
     function requestUploadCancel() {
         uploadCancelRequested = true;
-        setStatus("Cancelling upload…", "bad");
+        setStatus(tr("external.upload.cancelling", null, "Cancelling upload…"), "bad");
 
         try {
             if (uploadCurrentXhr) uploadCurrentXhr.abort();
@@ -1123,7 +1123,7 @@ html[data-theme="bright"] .externalDialogInput{
 
     async function uploadRelFiles(relFiles) {
         if (!canEdit) {
-            setStatus("Upload requires editor access.", "bad");
+            setStatus(tr("external.upload.requires_editor", null, "Upload requires editor access."), "bad");
             return;
         }
 
@@ -1136,7 +1136,7 @@ html[data-theme="bright"] .externalDialogInput{
             .filter((x) => x.rel && x.file);
 
         if (!files.length) {
-            setStatus("No files selected for upload.", "bad");
+            setStatus(tr("external.upload.no_files_selected", null, "No files selected for upload."), "bad");
             return;
         }
 
@@ -1439,7 +1439,7 @@ html[data-theme="bright"] .externalDialogInput{
 
             if (!signedIn || !canEdit) {
                 if (ev.dataTransfer) ev.dataTransfer.dropEffect = "none";
-                setStatus("Upload requires editor access.", "bad");
+                setStatus(tr("external.upload.requires_editor", null, "Upload requires editor access."), "bad");
                 return;
             }
 
@@ -1487,17 +1487,17 @@ html[data-theme="bright"] .externalDialogInput{
             showDropOverlay(false);
 
             if (!signedIn || !canEdit) {
-                setStatus("Upload requires editor access.", "bad");
+                setStatus(tr("external.upload.requires_editor", null, "Upload requires editor access."), "bad");
                 return;
             }
 
             try {
-                setStatus("Reading dropped files…", "good");
+                setStatus(tr("external.upload.reading_dropped", null, "Reading dropped files…"), "good");
 
                 const relFiles = await droppedFilesFromDataTransfer(ev.dataTransfer);
 
                 if (!relFiles.length) {
-                    setStatus("Drag & drop did not provide files. Use Upload instead.", "bad");
+                    setStatus(tr("external.upload.drop_no_files", null, "Drag & drop did not provide files. Use Upload instead."), "bad");
                     return;
                 }
 
@@ -1555,7 +1555,7 @@ html[data-theme="bright"] .externalDialogInput{
 
     function downloadFolderZip(item) {
         if (!item || !item.rel) {
-            setStatus("No folder selected.", "bad");
+            setStatus(tr("external.upload.no_folder_selected", null, "No folder selected."), "bad");
             return;
         }
         const rel = normalizeRelPath(item.rel) || ".";
@@ -1599,7 +1599,7 @@ html[data-theme="bright"] .externalDialogInput{
             .filter(Boolean);
 
         if (!paths.length) {
-            setStatus("No downloadable selection.", "bad");
+            setStatus(tr("external.download.no_selection", null, "No downloadable selection."), "bad");
             return;
         }
 
@@ -1671,7 +1671,7 @@ html[data-theme="bright"] .externalDialogInput{
 
     function syncUploadPanel() {
         if (uploadBox) uploadBox.classList.add("hidden");
-        if (btnToggleUpload) btnToggleUpload.textContent = "Upload";
+        if (btnToggleUpload) btnToggleUpload.textContent = tr("external.upload.action", null, "Upload");
     }
 
     function applyAccessInfo(j) {
@@ -1898,13 +1898,13 @@ html[data-theme="bright"] .externalDialogInput{
         const name = item.name || basenameFromPath(rel);
 
         if (!isTextPreviewableName(name)) {
-            setStatus("Preview is enabled for text/code files only.", "bad");
+            setStatus(tr("external.preview.text_only", null, "Preview is enabled for text/code files only."), "bad");
             return;
         }
 
-        if (textPreviewTitle) textPreviewTitle.textContent = "Text preview";
+        if (textPreviewTitle) textPreviewTitle.textContent = tr("external.preview.title", null, "Text preview");
         if (textPreviewPath) textPreviewPath.textContent = "/" + rel;
-        if (textPreviewMeta) textPreviewMeta.textContent = "Loading…";
+        if (textPreviewMeta) textPreviewMeta.textContent = tr("common.loading", null, "Loading…");
         if (textPreviewBody) textPreviewBody.textContent = "";
 
         openTextPreviewModal();
@@ -1913,7 +1913,7 @@ html[data-theme="bright"] .externalDialogInput{
         try {
             j = await apiJson(textPreviewUrl(rel));
         } catch (e) {
-            if (textPreviewMeta) textPreviewMeta.textContent = "Preview failed.";
+            if (textPreviewMeta) textPreviewMeta.textContent = tr("external.preview.failed", null, "Preview failed.");
             if (textPreviewBody) textPreviewBody.textContent = String(e && e.message ? e.message : e);
             throw e;
         }
@@ -1966,12 +1966,12 @@ html[data-theme="bright"] .externalDialogInput{
         const b = document.createElement("button");
         b.type = "button";
         b.className = "propsMiniBtn";
-        b.textContent = "Copy";
+        b.textContent = tr("common.copy", null, "Copy");
         b.onclick = async () => {
             const text = getTextFn ? String(getTextFn() || "") : "";
             const ok = text ? await copyText(text) : false;
             b.textContent = ok ? "Copied" : "Copy failed";
-            setTimeout(() => { b.textContent = "Copy"; }, 1100);
+            setTimeout(() => { b.textContent = tr("common.copy", null, "Copy"); }, 1100);
         };
         return b;
     }
@@ -2251,7 +2251,7 @@ html[data-theme="bright"] .externalDialogInput{
         const name = item.name || basenameFromPath(rel);
 
         if (!isTextPreviewableName(name)) {
-            setStatus("Text editor is only enabled for text/code files.", "bad");
+            setStatus(tr("external.textedit.text_only", null, "Text editor is only enabled for text/code files."), "bad");
             return;
         }
 
@@ -2268,7 +2268,7 @@ html[data-theme="bright"] .externalDialogInput{
 
         resetTextEditorPosition();
 
-        if (textEditTitle) textEditTitle.textContent = "Edit text file";
+        if (textEditTitle) textEditTitle.textContent = tr("external.textedit.title", null, "Edit text file");
         if (textEditPath) textEditPath.textContent = "/" + rel;
         if (textEditArea) {
             textEditArea.value = "";
@@ -2517,7 +2517,7 @@ html[data-theme="bright"] .externalDialogInput{
             line.className = "mono";
             line.style.wordBreak = "break-all";
             line.style.opacity = "0.92";
-            line.textContent = "Computing…";
+            line.textContent = tr("external.hash.computing", null, "Computing…");
 
             const btnCopy = miniCopyButton(() => line.textContent);
             btnCopy.disabled = true;
@@ -2573,7 +2573,7 @@ html[data-theme="bright"] .externalDialogInput{
         {
             const kEl = document.createElement("div");
             kEl.className = "k";
-            kEl.textContent = "Details";
+            kEl.textContent = tr("external.props.details", null, "Details");
 
             const vEl = document.createElement("div");
             vEl.className = "v";
@@ -2581,7 +2581,7 @@ html[data-theme="bright"] .externalDialogInput{
             details.style.width = "100%";
 
             const summary = document.createElement("summary");
-            summary.textContent = "Raw JSON";
+            summary.textContent = tr("external.props.raw_json", null, "Raw JSON");
             summary.style.cursor = "pointer";
             summary.style.userSelect = "none";
 
@@ -2620,7 +2620,7 @@ html[data-theme="bright"] .externalDialogInput{
         if (shell) shell.classList.add("signedIn");
 
         if (accessSub) {
-            accessSub.textContent = "You are signed in with DNA Connect. Use a new QR only when this session expires or you want to sign in again.";
+            accessSub.textContent = tr("external.access.signed_in", null, "You are signed in with DNA Connect. Use a new QR only when this session expires or you want to sign in again.");
         }
         qrBox.innerHTML = `
             <div class="hint" style="text-align:center; color:#444;">
@@ -2632,8 +2632,8 @@ html[data-theme="bright"] .externalDialogInput{
 
     async function startSession() {
         if (!workspaceId) {
-            setStatus("Missing workspace_id in URL.", "bad");
-            qrBox.innerHTML = `<div class="hint">Missing workspace_id.</div>`;
+            setStatus(tr("external.access.missing_workspace_id", null, "Missing workspace_id in URL."), "bad");
+            qrBox.innerHTML = `<div class="hint">${escapeHtml(tr("external.access.missing_workspace_id_short", null, "Missing workspace_id."))}</div>`;
             return;
         }
 
@@ -2646,10 +2646,10 @@ html[data-theme="bright"] .externalDialogInput{
         if (shell) shell.classList.remove("signedIn");
 
         if (accessSub) {
-            accessSub.textContent = "Scan the QR code with DNA Connect to prove your identity and open this workspace.";
+            accessSub.textContent = tr("external.access.scan_qr_help", null, "Scan the QR code with DNA Connect to prove your identity and open this workspace.");
         }
 
-        setStatus("Creating a fresh QR login session…");
+        setStatus(tr("external.access.creating_qr", null, "Creating a fresh QR login session…"));
 
         const j = await apiJson("/api/v4/workspaces/external-sessions/start", {
             method: "POST",
@@ -2665,7 +2665,7 @@ html[data-theme="bright"] .externalDialogInput{
         }
 
         qrBox.innerHTML = `<img alt="DNA Connect QR" src="${escapeHtml(qrPath)}">`;
-        setStatus("Scan the QR with DNA Connect. Waiting for approval…");
+        setStatus(tr("external.access.waiting_qr_approval", null, "Scan the QR with DNA Connect. Waiting for approval…"));
 
         pollTimer = setInterval(() => pollStatus().catch((e) => {
             setStatus(`Status check failed: ${e.message || e}`, "bad");
@@ -2682,7 +2682,7 @@ html[data-theme="bright"] .externalDialogInput{
         if (state === "approved") {
             clearInterval(pollTimer);
             pollTimer = null;
-            setStatus("QR approved. Opening workspace…", "good");
+            setStatus(tr("external.access.qr_approved", null, "QR approved. Opening workspace…"), "good");
             await consumeSession();
             await loadFiles();
             return;
@@ -2695,7 +2695,7 @@ html[data-theme="bright"] .externalDialogInput{
             return;
         }
 
-        setStatus("Waiting for DNA Connect scan…");
+        setStatus(tr("external.access.waiting_scan", null, "Waiting for DNA Connect scan…"));
     }
 
     async function consumeSession() {
@@ -2708,7 +2708,7 @@ html[data-theme="bright"] .externalDialogInput{
         });
 
         showSignedInState();
-        setStatus("Workspace session ready.", "good");
+        setStatus(tr("external.access.session_ready", null, "Workspace session ready."), "good");
     }
 
     function updateExternalWorkspaceFooter(j) {
@@ -2886,7 +2886,7 @@ resetMarqueeVisual();
         const rows = [];
 
         if (!items.length) {
-            filesEl.innerHTML = `<div class="empty">This folder is empty.</div>`;
+            filesEl.innerHTML = `<div class="empty">${escapeHtml(tr("external.files.empty_folder", null, "This folder is empty."))}</div>`;
             setTopReadyBadge("ready", "good");
             return;
         }
@@ -3056,7 +3056,7 @@ resetMarqueeVisual();
 
     async function loadPickerFolder(path) {
         pickerPath = normalizeRelPath(path);
-        if (extPickerStatus) extPickerStatus.textContent = "Loading folders...";
+        if (extPickerStatus) extPickerStatus.textContent = tr("external.picker.loading_folders", null, "Loading folders...");
         renderPickerCrumbs();
         if (extPickerDest) extPickerDest.textContent = pickerDestLabel();
 
@@ -3223,12 +3223,12 @@ resetMarqueeVisual();
 
         const targetPath = await chooseFolderForItem(item, "copy");
         if (targetPath === null) {
-            setStatus("Copy cancelled.");
+            setStatus(tr("external.copy.cancelled", null, "Copy cancelled."));
             return;
         }
 
         if (targetPath === oldPath) {
-            setStatus("Choose a different destination folder.", "bad");
+            setStatus(tr("external.picker.choose_different_destination", null, "Choose a different destination folder."), "bad");
             return;
         }
 
@@ -3263,12 +3263,12 @@ resetMarqueeVisual();
 
         const targetPath = await chooseFolderForItem(item, "move");
         if (targetPath === null) {
-            setStatus("Move cancelled.");
+            setStatus(tr("external.move.cancelled", null, "Move cancelled."));
             return;
         }
 
         if (targetPath === oldPath) {
-            setStatus("Choose a different destination folder.", "bad");
+            setStatus(tr("external.picker.choose_different_destination", null, "Choose a different destination folder."), "bad");
             return;
         }
 
@@ -3311,17 +3311,17 @@ resetMarqueeVisual();
 
         const cleanName = String(nextName || "").trim();
         if (!cleanName) {
-            setStatus("Name cannot be empty.", "bad");
+            setStatus(tr("external.rename.name_empty", null, "Name cannot be empty."), "bad");
             return;
         }
 
         if (cleanName === "." || cleanName === ".." || cleanName.includes("/") || cleanName.includes("\\")) {
-            setStatus("Use a simple name without slashes.", "bad");
+            setStatus(tr("external.rename.simple_name", null, "Use a simple name without slashes."), "bad");
             return;
         }
 
         if (cleanName === oldName) {
-            setStatus("Name did not change.");
+            setStatus(tr("external.rename.unchanged", null, "Name did not change."));
             return;
         }
 
@@ -3351,13 +3351,13 @@ resetMarqueeVisual();
 
         const raw = String(nameOverride != null ? nameOverride : (newFolderName ? newFolderName.value : "")).trim();
         if (!raw) {
-            setStatus("Enter a folder name.", "bad");
+            setStatus(tr("external.folder.enter_name", null, "Enter a folder name."), "bad");
             if (newFolderName) newFolderName.focus();
             return;
         }
 
         if (raw === "." || raw === ".." || raw.includes("/") || raw.includes("\\")) {
-            setStatus("Use a simple folder name without slashes.", "bad");
+            setStatus(tr("external.folder.simple_name", null, "Use a simple folder name without slashes."), "bad");
             if (newFolderName) newFolderName.focus();
             return;
         }
@@ -3599,7 +3599,7 @@ resetMarqueeVisual();
             ev.stopPropagation();
             clearSelection();
             hideContextMenus();
-            setStatus("Selection cleared.");
+            setStatus(tr("external.selection.cleared", null, "Selection cleared."));
             return true;
         } else {
             return false;
@@ -3673,7 +3673,7 @@ resetMarqueeVisual();
 
         const destFolder = await chooseFolderForSelection(items, "copy");
         if (destFolder === null) {
-            setStatus("Copy cancelled.");
+            setStatus(tr("external.copy.cancelled", null, "Copy cancelled."));
             return;
         }
 
@@ -3688,7 +3688,7 @@ resetMarqueeVisual();
         );
 
         if (allSame) {
-            setStatus("Choose a different destination folder.", "bad");
+            setStatus(tr("external.picker.choose_different_destination", null, "Choose a different destination folder."), "bad");
             return;
         }
 
@@ -3701,7 +3701,7 @@ resetMarqueeVisual();
         });
 
         if (!ok) {
-            setStatus("Copy selected cancelled.");
+            setStatus(tr("external.copy.selected_cancelled", null, "Copy selected cancelled."));
             return;
         }
 
@@ -3761,7 +3761,7 @@ resetMarqueeVisual();
 
         const destFolder = await chooseFolderForSelection(items, "move");
         if (destFolder === null) {
-            setStatus("Move selected cancelled.");
+            setStatus(tr("external.move.selected_cancelled", null, "Move selected cancelled."));
             return;
         }
 
@@ -3776,7 +3776,7 @@ resetMarqueeVisual();
         );
 
         if (allSame) {
-            setStatus("Choose a different destination folder.", "bad");
+            setStatus(tr("external.picker.choose_different_destination", null, "Choose a different destination folder."), "bad");
             return;
         }
 
@@ -3789,7 +3789,7 @@ resetMarqueeVisual();
         });
 
         if (!ok) {
-            setStatus("Move selected cancelled.");
+            setStatus(tr("external.move.selected_cancelled", null, "Move selected cancelled."));
             return;
         }
 
@@ -4117,7 +4117,7 @@ resetMarqueeVisual();
             ev.stopPropagation();
             clearSelection();
             hideContextMenus();
-            setStatus("Selection cleared.");
+            setStatus(tr("external.selection.cleared", null, "Selection cleared."));
             return true;
         } else {
             return false;
@@ -4329,7 +4329,7 @@ resetMarqueeVisual();
 
         if (action === "multi-clear") {
             clearSelection();
-            setStatus("Selection cleared.");
+            setStatus(tr("external.selection.cleared", null, "Selection cleared."));
             return;
         }
 
@@ -4392,15 +4392,15 @@ resetMarqueeVisual();
             const previewBtn = itemContextMenu.querySelector('[data-action="preview"]');
             const editorOnly = itemContextMenu.querySelectorAll('[data-action="copy"], [data-action="move"], [data-action="rename"], [data-action="trash-item"]');
             if (contextItem && contextItem.isDir) {
-                openBtn.textContent = "Open folder";
-                downloadBtn.textContent = "Download folder (zip)";
+                openBtn.textContent = tr("external.menu.open_folder", null, "Open folder");
+                downloadBtn.textContent = tr("external.menu.download_folder_zip", null, "Download folder (zip)");
                 previewBtn.textContent = tr("external.menu.open_edit_text", null, "Open / edit text?");
                 previewBtn.disabled = true;
                 downloadBtn.disabled = false;
             } else {
                 const canTextPreview = isTextPreviewableName(contextItem && (contextItem.name || contextItem.rel) || "");
-                openBtn.textContent = "Open original";
-                downloadBtn.textContent = "Download";
+                openBtn.textContent = tr("external.menu.open_original", null, "Open original");
+                downloadBtn.textContent = tr("external.menu.download", null, "Download");
                 previewBtn.textContent = tr("external.menu.open_edit_text", null, "Open / edit text?");
                 previewBtn.disabled = !canTextPreview;
                 downloadBtn.disabled = false;
@@ -5083,7 +5083,7 @@ resetMarqueeVisual();
 
     extPickerNewFolder.addEventListener("click", async () => {
         if (!canEdit) {
-            if (extPickerStatus) extPickerStatus.textContent = "This workspace session is view-only.";
+            if (extPickerStatus) extPickerStatus.textContent = tr("external.readonly", null, "This workspace session is view-only.");
             return;
         }
 
@@ -5099,7 +5099,7 @@ resetMarqueeVisual();
 
         const clean = String(name || "").trim();
         if (!clean || clean === "." || clean === ".." || clean.includes("/") || clean.includes("\\")) {
-            if (extPickerStatus) extPickerStatus.textContent = "Use a simple folder name without slashes.";
+            if (extPickerStatus) extPickerStatus.textContent = tr("external.folder.simple_name", null, "Use a simple folder name without slashes.");
             return;
         }
 
@@ -5109,7 +5109,7 @@ resetMarqueeVisual();
         qs.set("path", target);
 
         try {
-            if (extPickerStatus) extPickerStatus.textContent = "Creating folder...";
+            if (extPickerStatus) extPickerStatus.textContent = tr("external.folder.creating", null, "Creating folder...");
             await apiJson(`/api/v4/workspaces/files/mkdir?${qs.toString()}`, { method:"POST" });
             await loadPickerFolder(target);
         } catch (e) {
@@ -5269,7 +5269,7 @@ resetMarqueeVisual();
     loadFiles()
         .then(() => {
             showSignedInState();
-            setStatus("Existing workspace session is active.", "good");
+            setStatus(tr("external.access.existing_session_active", null, "Existing workspace session is active."), "good");
         })
         .catch(() => startSession().catch((e) => setStatus(`Failed to start QR session: ${e.message || e}`, "bad")));
 
@@ -5286,12 +5286,12 @@ resetMarqueeVisual();
     function updateAccessUi() {
         uploadOpen = false;
         if (uploadBox) uploadBox.classList.add("hidden");
-        if (btnToggleUpload) btnToggleUpload.textContent = "Upload";
+        if (btnToggleUpload) btnToggleUpload.textContent = tr("external.upload.action", null, "Upload");
     }
 
     function launchExternalUploadPicker(folderMode) {
         if (!canEdit) {
-            setStatus("Upload requires editor access.", "bad");
+            setStatus(tr("external.upload.requires_editor", null, "Upload requires editor access."), "bad");
             return;
         }
 
@@ -5337,7 +5337,7 @@ resetMarqueeVisual();
         if (!btnToggleUpload || btnToggleUpload.__externalDirectUploadWired) return;
 
         btnToggleUpload.__externalDirectUploadWired = true;
-        btnToggleUpload.textContent = "Upload";
+        btnToggleUpload.textContent = tr("external.upload.action", null, "Upload");
 
         btnToggleUpload?.addEventListener("click", (ev) => {
             ev.preventDefault();
