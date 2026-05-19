@@ -1931,5 +1931,18 @@
   "raidmgr.apply_layout.remove_failed": "Apply remove-device failed: {error}",
   "raidmgr.apply_layout.crashed": "Apply layout crashed: {error}",
   "raidmgr.convert.ui_crashed": "Convert RAID UI crashed: {error}",
-  "raidmgr.rename.prompt": "Rename pool:\n{pool}\n\nEnter a display name (empty = reset to label):"
+  "raidmgr.rename.prompt": "Rename pool:\n{pool}\n\nEnter a display name (empty = reset to label):",
+  "raidmgr.prompt.title": "Enter value",
+  "raidmgr.prompt.value": "Value",
+  "raidmgr.action.ok": "OK",
+  "raidmgr.saving": "Saving…",
+  "raidmgr.rename.title": "Rename pool",
+  "raidmgr.rename.subtitle": "Pool: {pool}",
+  "raidmgr.rename.display_name": "Display name",
+  "raidmgr.rename.placeholder": "Empty = reset to label",
+  "raidmgr.rename.note": "Leave empty to reset the display name back to the pool label.",
+  "raidmgr.rename.save": "Save name",
+  "raidmgr.rename.failed": "Rename failed: {error}",
+  "raidmgr.rename.saved": "Renamed ✓",
+  "raidmgr.rename.crashed": "Rename crashed: {error}"
 }

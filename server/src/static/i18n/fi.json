@@ -1948,5 +1948,18 @@
   "raidmgr.apply_layout.remove_failed": "Levyn poistamisen käyttöönotto epäonnistui: {error}",
   "raidmgr.apply_layout.crashed": "Rakenteen käyttöönotto kaatui: {error}",
   "raidmgr.convert.ui_crashed": "RAID-muunnosikkuna kaatui: {error}",
-  "raidmgr.rename.prompt": "Nimeä pooli:\n{pool}\n\nAnna näyttönimi (tyhjä = palauta nimeksi tunniste):"
+  "raidmgr.rename.prompt": "Nimeä pooli:\n{pool}\n\nAnna näyttönimi (tyhjä = palauta nimeksi tunniste):",
+  "raidmgr.prompt.title": "Anna arvo",
+  "raidmgr.prompt.value": "Arvo",
+  "raidmgr.action.ok": "OK",
+  "raidmgr.saving": "Tallennetaan…",
+  "raidmgr.rename.title": "Nimeä pooli",
+  "raidmgr.rename.subtitle": "Pooli: {pool}",
+  "raidmgr.rename.display_name": "Näyttönimi",
+  "raidmgr.rename.placeholder": "Tyhjä = palauta tunnisteeseen",
+  "raidmgr.rename.note": "Jätä tyhjäksi palauttaaksesi näyttönimen takaisin poolin tunnisteeksi.",
+  "raidmgr.rename.save": "Tallenna nimi",
+  "raidmgr.rename.failed": "Nimeäminen epäonnistui: {error}",
+  "raidmgr.rename.saved": "Nimetty ✓",
+  "raidmgr.rename.crashed": "Nimeämisikkuna kaatui: {error}"
 }

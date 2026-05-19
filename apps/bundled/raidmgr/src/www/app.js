@@ -25,6 +25,207 @@
         }
     }
 
+    function ensureRaidPromptCss() {
+        if (document.getElementById("raidMgrPromptCss")) return;
+
+        const style = document.createElement("style");
+        style.id = "raidMgrPromptCss";
+        style.textContent = `
+.raidPromptBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:100000;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(0,0,0,.55);
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+}
+.raidPromptCard{
+    width:min(620px, calc(100vw - 24px));
+    border:1px solid var(--border2, rgba(120,120,120,.42));
+    border-radius:18px;
+    background:linear-gradient(180deg, var(--panel2, #f8f8f8), var(--panel, #eeeeee));
+    color:var(--fg, #111);
+    box-shadow:0 18px 70px rgba(0,0,0,.42);
+    overflow:hidden;
+}
+.raidPromptHead{
+    padding:14px 16px;
+    border-bottom:1px solid var(--border2, rgba(120,120,120,.32));
+    background:rgba(0,0,0,.08);
+}
+.raidPromptTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+}
+.raidPromptSub{
+    margin-top:4px;
+    font-size:12px;
+    color:var(--fg-dim, rgba(0,0,0,.66));
+    overflow-wrap:anywhere;
+}
+.raidPromptBody{
+    padding:16px;
+    display:grid;
+    gap:10px;
+}
+.raidPromptLabel{
+    font-weight:850;
+    color:var(--fg-dim, rgba(0,0,0,.70));
+}
+.raidPromptInput{
+    width:100%;
+    box-sizing:border-box;
+    padding:10px 12px;
+    border-radius:12px;
+    border:1px solid var(--border2, rgba(120,120,120,.45));
+    background:rgba(0,0,0,.18);
+    color:var(--fg, #111);
+    font:inherit;
+}
+.raidPromptNote{
+    padding:10px 12px;
+    border-radius:14px;
+    border:1px solid rgba(var(--warn-rgb, 180,120,20),.35);
+    background:rgba(var(--warn-rgb, 180,120,20),.10);
+    font-size:13px;
+}
+.raidPromptFoot{
+    display:flex;
+    justify-content:flex-end;
+    gap:10px;
+    padding:12px 16px;
+    border-top:1px solid var(--border2, rgba(120,120,120,.32));
+    background:rgba(0,0,0,.08);
+}
+html[data-theme="bright"] .raidPromptCard{
+    background:linear-gradient(180deg, #fff, #f2f4f7) !important;
+    color:#111827 !important;
+}
+html[data-theme="bright"] .raidPromptInput{
+    background:#fff !important;
+    color:#111827 !important;
+}
+`;
+        document.head.appendChild(style);
+    }
+
+    function openRaidPromptModal(opts = {}) {
+        ensureRaidPromptCss();
+
+        return new Promise((resolve) => {
+            const options = opts || {};
+            const modal = document.createElement("div");
+            modal.className = "raidPromptBackdrop";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "raidPromptCard";
+
+            const head = document.createElement("div");
+            head.className = "raidPromptHead";
+
+            const title = document.createElement("div");
+            title.className = "raidPromptTitle";
+            title.textContent = options.title || tr("raidmgr.prompt.title", null, "Enter value");
+
+            const sub = document.createElement("div");
+            sub.className = "raidPromptSub";
+            sub.textContent = options.subtitle || "";
+
+            head.appendChild(title);
+            if (sub.textContent) head.appendChild(sub);
+
+            const body = document.createElement("div");
+            body.className = "raidPromptBody";
+
+            const label = document.createElement("label");
+            label.className = "raidPromptLabel";
+            label.textContent = options.label || tr("raidmgr.prompt.value", null, "Value");
+
+            const input = document.createElement("input");
+            input.type = "text";
+            input.className = "raidPromptInput";
+            input.value = options.value || "";
+            input.placeholder = options.placeholder || "";
+            input.autocomplete = "off";
+            input.spellcheck = false;
+
+            body.appendChild(label);
+            body.appendChild(input);
+
+            if (options.note) {
+                const note = document.createElement("div");
+                note.className = "raidPromptNote";
+                note.textContent = String(options.note || "");
+                body.appendChild(note);
+            }
+
+            const foot = document.createElement("div");
+            foot.className = "raidPromptFoot";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || tr("raidmgr.action.cancel", null, "Cancel");
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = options.confirmText || tr("raidmgr.action.ok", null, "OK");
+
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(value);
+            };
+
+            const submit = () => {
+                finish(String(input.value || ""));
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(null);
+                    return;
+                }
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    submit();
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish(null);
+            });
+            cancelBtn.addEventListener("click", () => finish(null));
+            okBtn.addEventListener("click", submit);
+
+            window.setTimeout(() => {
+                input.focus();
+                input.select();
+            }, 0);
+        });
+    }
+
+
     function refreshChromeText() {
         if (titleLine) {
             titleLine.textContent = appVer
@@ -4698,17 +4899,23 @@ ${esc(tr("raidmgr.destroy.warning_body", null, "This will unmount the pool and r
 
                 const current = String(p?.display_name || "").trim();
 
-                const name = window.prompt(
-                    tr("raidmgr.rename.prompt", { pool: mount }, `Rename pool:\n${mount}\n\nEnter a display name (empty = reset to label):`),
-                    current
-                );
+                const name = await openRaidPromptModal({
+                    title: tr("raidmgr.rename.title", null, "Rename pool"),
+                    subtitle: tr("raidmgr.rename.subtitle", { pool: mount }, "Pool: {pool}"),
+                    label: tr("raidmgr.rename.display_name", null, "Display name"),
+                    value: current,
+                    placeholder: tr("raidmgr.rename.placeholder", null, "Empty = reset to label"),
+                    note: tr("raidmgr.rename.note", null, "Leave empty to reset the display name back to the pool label."),
+                    confirmText: tr("raidmgr.rename.save", null, "Save name"),
+                    cancelText: tr("raidmgr.action.cancel", null, "Cancel"),
+                });
 
                 if (name === null) return;
 
                 const newName = String(name).trim();
 
                 try {
-                    showToast("info", "Saving…", 1200);
+                    showToast("info", tr("raidmgr.saving", null, "Saving…"), 1200);
 
                     const { r, j, txt } = await postJson("/api/v4/storage/pools/set-name", {
                         mount,
@@ -4716,11 +4923,11 @@ ${esc(tr("raidmgr.destroy.warning_body", null, "This will unmount the pool and r
                     });
 
                     if (!r.ok || !j || j.ok !== true) {
-                        showToast("err", `Rename failed: ${prettyError(j, r, txt)}`, 5200);
+                        showToast("err", tr("raidmgr.rename.failed", { error: prettyError(j, r, txt) }, `Rename failed: ${prettyError(j, r, txt)}`), 5200);
                         return;
                     }
 
-                    showToast("ok", "Renamed ✓", 2000);
+                    showToast("ok", tr("raidmgr.rename.saved", null, "Renamed ✓"), 2000);
 
                     await refreshPoolsState();
 
@@ -4729,7 +4936,7 @@ ${esc(tr("raidmgr.destroy.warning_body", null, "This will unmount the pool and r
 
                     await renderPoolsTab();
                 } catch (e) {
-                    showToast("err", `Rename crashed: ${String(e && e.message ? e.message : e)}`, 5200);
+                    showToast("err", tr("raidmgr.rename.crashed", { error: String(e && e.message ? e.message : e) }, `Rename crashed: ${String(e && e.message ? e.message : e)}`), 5200);
                 }
             });
         });
