@@ -1,6 +1,79 @@
 (() => {
     "use strict";
 
+    function tr(key, vars, fallback) {
+        const api = window.PQNAS_I18N;
+        if (api && typeof api.t === "function") {
+            return api.t(key, vars || null, fallback);
+        }
+        return String(fallback ?? key);
+    }
+
+    async function forceSelectedLanguage() {
+        const api = window.PQNAS_I18N;
+        if (!api) return;
+
+        let lang = "";
+        try {
+            lang = String(localStorage.getItem("pqnas_lang") || "").trim();
+        } catch (_) {}
+
+        if (!lang && typeof api.getLanguage === "function") {
+            try { lang = String(api.getLanguage() || "").trim(); } catch (_) {}
+        }
+
+        if (!lang) {
+            try { lang = String(navigator.language || "").trim(); } catch (_) {}
+        }
+
+        if (!lang) lang = "en";
+
+        if (typeof api.setLanguage === "function") {
+            await api.setLanguage(lang);
+        } else if (typeof api.ready === "function") {
+            await api.ready();
+        }
+    }
+
+    async function ensureI18nReady() {
+        if (window.PQNAS_I18N && typeof window.PQNAS_I18N.ready === "function") {
+            await window.PQNAS_I18N.ready().catch(() => {});
+            await forceSelectedLanguage().catch(() => {});
+            return;
+        }
+
+        return new Promise((resolve) => {
+            const existing = document.querySelector('script[src^="/static/i18n.js"]');
+            if (existing) {
+                existing.addEventListener("load", () => {
+                    if (window.PQNAS_I18N && typeof window.PQNAS_I18N.ready === "function") {
+                        window.PQNAS_I18N.ready()
+                            .then(() => forceSelectedLanguage())
+                            .finally(resolve);
+                    } else {
+                        resolve();
+                    }
+                }, { once: true });
+                existing.addEventListener("error", resolve, { once: true });
+                return;
+            }
+
+            const script = document.createElement("script");
+            script.src = "/static/i18n.js?v=20260518-pq-share-i18n-2";
+            script.onload = () => {
+                if (window.PQNAS_I18N && typeof window.PQNAS_I18N.ready === "function") {
+                    window.PQNAS_I18N.ready()
+                        .then(() => forceSelectedLanguage())
+                        .finally(resolve);
+                } else {
+                    resolve();
+                }
+            };
+            script.onerror = resolve;
+            document.head.appendChild(script);
+        });
+    }
+
     const boot = (window.PQ_SHARE_INVITE_BOOT && typeof window.PQ_SHARE_INVITE_BOOT === "object")
         ? window.PQ_SHARE_INVITE_BOOT
         : {};
@@ -34,7 +107,7 @@
 
     function defaultDeviceLabel() {
         if (labelHint) return labelHint;
-        return looksMobile() ? "My phone browser" : "This browser";
+        return looksMobile() ? tr("pqshare.invite.default_phone", null, "My phone browser") : tr("pqshare.invite.default_browser", null, "This browser");
     }
 
     function algBlurb() {
@@ -43,14 +116,14 @@
             : String(preferredKemAlg || "ML-KEM-768");
 
         if (norm !== "ML-KEM-768") {
-            return "This invite requires ML-KEM-768. Legacy non-post-quantum enrollment is not supported on this page.";
+            return tr("pqshare.invite.requires_mlkem", null, "This invite requires ML-KEM-768. Legacy non-post-quantum enrollment is not supported on this page.");
         }
 
-        return "This browser will generate a local ML-KEM-768 keypair. The file key is wrapped for this browser using post-quantum key encapsulation, and the shared file is decrypted locally in your browser.";
+        return tr("pqshare.invite.alg_blurb", null, "This browser will generate a local ML-KEM-768 keypair. The file key is wrapped for this browser using post-quantum key encapsulation, and the shared file is decrypted locally in your browser.");
     }
 
     async function ensureInviteUnlock() {
-        if (!window.PqShareUnlockV1) throw new Error("PQ unlock helper not loaded");
+        if (!window.PqShareUnlockV1) throw new Error(tr("pqshare.error.unlock_helper_missing", null, "PQ unlock helper not loaded"));
         await window.PqShareUnlockV1.ensureUnlocked({
             preferredAlg: preferredKemAlg,
             purpose: "enroll"
@@ -58,11 +131,11 @@
     }
 
     async function enroll(inviteId, deviceLabel, statusEl, submitBtn) {
-        if (!inviteId) throw new Error("Missing invite id");
-        if (!deviceLabel) throw new Error("Please enter a device name");
-        if (!window.PqShareKeysV1) throw new Error("PQ key helper not loaded");
+        if (!inviteId) throw new Error(tr("pqshare.invite.missing_id", null, "Missing invite id"));
+        if (!deviceLabel) throw new Error(tr("pqshare.invite.enter_device_name", null, "Please enter a device name"));
+        if (!window.PqShareKeysV1) throw new Error(tr("pqshare.error.key_helper_missing", null, "PQ key helper not loaded"));
 
-        statusEl.textContent = "Preparing secure browser enrollment…";
+        statusEl.textContent = tr("pqshare.invite.preparing_enrollment", null, "Preparing secure browser enrollment…");
         submitBtn.disabled = true;
 
         await ensureInviteUnlock();
@@ -71,7 +144,7 @@
             preferredAlg: preferredKemAlg
         });
 
-        statusEl.textContent = "Enrolling this browser…";
+        statusEl.textContent = tr("pqshare.invite.enrolling", null, "Enrolling this browser…");
 
         const r = await fetch("/api/v4/shares/pq/enroll", {
             method: "POST",
@@ -94,20 +167,20 @@
             const msg = j && (j.message || j.error)
                 ? `${j.error || ""} ${j.message || ""}`.trim()
                 : `HTTP ${r.status}`;
-            throw new Error(msg || "Enrollment failed");
+            throw new Error(msg || tr("pqshare.invite.enrollment_failed", null, "Enrollment failed"));
         }
 
         if (!j.recipient_device_id) {
-            throw new Error("Enrollment succeeded but recipient_device_id is missing");
+            throw new Error(tr("pqshare.invite.missing_recipient_device", null, "Enrollment succeeded but recipient_device_id is missing"));
         }
 
         await window.PqShareKeysV1.claimPendingEnrollment(inviteId, j.recipient_device_id);
 
-        statusEl.textContent = "Enrollment complete. Opening share…";
+        statusEl.textContent = tr("pqshare.invite.complete_opening", null, "Enrollment complete. Opening share…");
 
         const target = String(j.share_url || "").trim();
         if (!target) {
-            throw new Error("Enrollment succeeded but share URL is missing");
+            throw new Error(tr("pqshare.invite.missing_share_url", null, "Enrollment succeeded but share URL is missing"));
         }
 
         window.location.assign(target);
@@ -117,8 +190,8 @@
         if (!inviteId) {
             host.innerHTML = `
         <div style="max-width:720px;margin:40px auto;padding:24px;font-family:system-ui,sans-serif">
-          <h2>Invalid invite</h2>
-          <p>Missing invite id.</p>
+          <h2>${escapeHtml(tr("pqshare.invite.invalid_title", null, "Invalid invite"))}</h2>
+          <p>${escapeHtml(tr("pqshare.invite.missing_id_sentence", null, "Missing invite id."))}</p>
         </div>
       `;
             return;
@@ -269,35 +342,35 @@
 
       <div class="wrap">
         <div class="card">
-        <div class="eyebrow">DNA-Nexus Post-Quantum Share</div>
-        <h1>Open post-quantum protected share</h1>
+        <div class="eyebrow">${escapeHtml(tr("pqshare.eyebrow", null, "DNA-Nexus Post-Quantum Share"))}</div>
+        <h1>${escapeHtml(tr("pqshare.invite.title", null, "Open post-quantum protected share"))}</h1>
         <p class="lead">
-          This page enrolls this browser with ML-KEM-768 and then opens the shared file locally.
+          ${escapeHtml(tr("pqshare.invite.lead", null, "This page enrolls this browser with ML-KEM-768 and then opens the shared file locally."))}
         </p>
 
           <div class="good">
-            This invite is one-time and stays valid until enrollment succeeds or the invite expires.
+            ${escapeHtml(tr("pqshare.invite.good", null, "This invite is one-time and stays valid until enrollment succeeds or the invite expires."))}
           </div>
 
           <div class="meta">
-            <div class="k">Invite ID</div>
+            <div class="k">${escapeHtml(tr("pqshare.invite.invite_id", null, "Invite ID"))}</div>
             <div class="v mono">${escapeHtml(inviteId)}</div>
 
-            <div class="k">Expires</div>
+            <div class="k">${escapeHtml(tr("pqshare.invite.expires", null, "Expires"))}</div>
             <div class="v">${escapeHtml(fmtDateTime(expiresAt))}</div>
 
-            <div class="k">Post-Quantum KEM</div>
+            <div class="k">${escapeHtml(tr("pqshare.invite.kem", null, "Post-Quantum KEM"))}</div>
             <div class="v">${escapeHtml(preferredKemAlg || "ML-KEM-768")}</div>
           </div>
 
           <div class="field">
-            <label for="deviceLabel">Device name</label>
-            <input id="deviceLabel" type="text" maxlength="80" placeholder="My phone browser" value="${escapeHtml(defaultDeviceLabel())}">
+            <label for="deviceLabel">${escapeHtml(tr("pqshare.invite.device_name", null, "Device name"))}</label>
+            <input id="deviceLabel" type="text" maxlength="80" placeholder="${escapeHtml(tr("pqshare.invite.default_phone", null, "My phone browser"))}" value="${escapeHtml(defaultDeviceLabel())}">
           </div>
 
           <div class="row">
-            <button id="enrollBtn" type="button">Continue</button>
-            <button id="copyInviteBtn" type="button" class="secondary">Copy invite ID</button>
+            <button id="enrollBtn" type="button">${escapeHtml(tr("pqshare.invite.continue", null, "Continue"))}</button>
+            <button id="copyInviteBtn" type="button" class="secondary">${escapeHtml(tr("pqshare.invite.copy_id", null, "Copy invite ID"))}</button>
           </div>
 
           <div id="status" class="status"></div>
@@ -317,9 +390,9 @@
         copyInviteBtn.addEventListener("click", async () => {
             try {
                 await navigator.clipboard.writeText(inviteId);
-                statusEl.textContent = "Invite ID copied.";
+                statusEl.textContent = tr("pqshare.invite.id_copied", null, "Invite ID copied.");
             } catch (_) {
-                statusEl.textContent = "Copy failed.";
+                statusEl.textContent = tr("pqshare.invite.copy_failed", null, "Copy failed.");
             }
         });
 
@@ -328,7 +401,7 @@
             try {
                 await enroll(inviteId, deviceLabel, statusEl, enrollBtn);
             } catch (e) {
-                statusEl.textContent = `Error: ${String(e && e.message ? e.message : e)}`;
+                statusEl.textContent = tr("login.error_with_value", { error: String(e && e.message ? e.message : e) }, `Error: ${String(e && e.message ? e.message : e)}`);
                 enrollBtn.disabled = false;
             }
         };
@@ -342,5 +415,7 @@
         });
     }
 
-    render();
+    window.addEventListener("pqnas-language-changed", render);
+
+    ensureI18nReady().then(render).catch(render);
 })();
