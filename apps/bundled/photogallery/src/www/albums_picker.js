@@ -53,6 +53,60 @@
         return `/api/v4/gallery/thumb?${qs.toString()}`;
     }
 
+    function albumPickerAlertModal(opts) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+
+            const modal = document.createElement("div");
+            modal.className = "pgAlbumCreateBackdrop";
+            modal.innerHTML = `
+                <div class="pgAlbumCreateCard" role="dialog" aria-modal="true">
+                    <div class="pgAlbumCreateHead">
+                        <div>
+                            <div class="pgAlbumPickerTitle">${escapeHtml(options.title || albumT("common.notice", null, "Notice"))}</div>
+                            ${options.subtitle ? `<div class="pgAlbumPickerSub">${escapeHtml(options.subtitle)}</div>` : ""}
+                        </div>
+                    </div>
+
+                    ${options.note ? `
+                        <div class="pgAlbumCreateBody">
+                            <div class="mono" style="white-space:pre-wrap; opacity:.92;">${escapeHtml(options.note)}</div>
+                        </div>
+                    ` : ""}
+
+                    <div class="pgAlbumCreateFoot">
+                        <button class="btn" type="button" data-pg-alert-ok>${escapeHtml(options.confirmText || albumT("common.ok", null, "OK"))}</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(modal);
+
+            const finish = () => {
+                document.removeEventListener("keydown", onKey, true);
+                try { modal.remove(); } catch (_) {}
+                resolve(true);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape" || ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish();
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal || ev.target.closest("[data-pg-alert-ok]")) finish();
+            });
+
+            window.setTimeout(() => {
+                modal.querySelector("[data-pg-alert-ok]")?.focus();
+            }, 0);
+        });
+    }
+
     function closePicker(backdrop, resolve, value) {
         try {
             backdrop.remove();
@@ -215,7 +269,11 @@
                                 close(created.album || null);
                             } catch (e) {
                                 if (okBtn) okBtn.disabled = false;
-                                alert(albumT("photogallery.albums.create_failed", { error: String(e && e.message ? e.message : e) }, "Create album failed: {error}"));
+                                await albumPickerAlertModal({
+                                    title: albumT("photogallery.albums.create_failed_title", null, "Create album failed"),
+                                    note: String(e && e.message ? e.message : e),
+                                    confirmText: albumT("common.ok", null, "OK"),
+                                });
                             }
                         }
                     });

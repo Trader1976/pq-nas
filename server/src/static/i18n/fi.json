@@ -2552,7 +2552,7 @@
   "photogallery.expiry.7d": "7 päivää",
   "photogallery.expiry.never": "Ei koskaan",
   "photogallery.create_link": "Luo linkki",
-  "photogallery.revoke": "Peruuta",
+  "photogallery.revoke": "Peruuta jako",
   "photogallery.link": "Linkki",
   "photogallery.start_slideshow": "Aloita diaesitys",
   "photogallery.using_current_filtered_view": "Käytetään nykyistä suodatettua näkymää",
@@ -2771,5 +2771,9 @@
   "photogallery.albums.delete_failed": "Albumin poisto epäonnistui: {error}",
   "photogallery.albums.setting_cover": "Asetetaan albumin kantta: {name}…",
   "photogallery.albums.cover_set": "Albumin kansi asetettu: {name}",
-  "photogallery.albums.set_cover_failed": "Kannen asetus epäonnistui: {error}"
+  "photogallery.albums.set_cover_failed": "Kannen asetus epäonnistui: {error}",
+  "common.confirm": "Vahvista",
+  "photogallery.share.revoke_title": "Perutaanko jakolinkki?",
+  "photogallery.share.revoke_note": "Tämä mitätöi URL-osoitteen heti.",
+  "photogallery.albums.create_failed_title": "Albumin luonti epäonnistui"
 }

@@ -2754,5 +2754,9 @@
   "photogallery.albums.delete_failed": "Delete album failed: {error}",
   "photogallery.albums.setting_cover": "Setting album cover: {name}…",
   "photogallery.albums.cover_set": "Album cover set: {name}",
-  "photogallery.albums.set_cover_failed": "Set cover failed: {error}"
+  "photogallery.albums.set_cover_failed": "Set cover failed: {error}",
+  "common.confirm": "Confirm",
+  "photogallery.share.revoke_title": "Revoke share link?",
+  "photogallery.share.revoke_note": "This will invalidate the URL immediately.",
+  "photogallery.albums.create_failed_title": "Create album failed"
 }
