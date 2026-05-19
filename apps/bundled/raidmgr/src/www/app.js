@@ -785,20 +785,20 @@
         ov.innerHTML = `
 <div class="uiDialog raidDialogShell compact">
   <div class="uiDialogHeader raidDialogHeader">
-    <div id="poolConvertRaidTitle" style="font-weight:950;">Convert RAID</div>
-    <button id="poolConvertRaidCloseBtn" class="btn secondary" type="button">Close</button>
+    <div id="poolConvertRaidTitle" style="font-weight:950;">${esc(tr("raidmgr.convert.title", null, "Convert RAID"))}</div>
+    <button id="poolConvertRaidCloseBtn" class="btn secondary" type="button">${esc(tr("admin.common.close", null, "Close"))}</button>
   </div>
 
   <div class="raidDialogInnerCard" style="margin-top:10px; padding:14px;">
     <div class="formGrid3">
       <div class="formField">
-        <div class="k">Current mode</div>
+        <div class="k">${esc(tr("raidmgr.convert.current_mode", null, "Current mode"))}</div>
         <input id="poolConvertCurrentModeInp" type="text" readonly>
-        <div class="formHelp">Detected from current pool state</div>
+        <div class="formHelp">${esc(tr("raidmgr.convert.detected_help", null, "Detected from current pool state"))}</div>
       </div>
 
       <div class="formField">
-        <div class="k">Target mode</div>
+        <div class="k">${esc(tr("raidmgr.convert.target_mode", null, "Target mode"))}</div>
         <select id="poolConvertTargetModeSel">
           <option value="single">single</option>
           <option value="raid1">raid1</option>
@@ -809,23 +809,23 @@
       <div class="formField">
         <div class="k">${esc(tr("raidmgr.summary.devices", null, "Devices"))}</div>
         <input id="poolConvertDevicesInp" type="text" readonly>
-        <div class="formHelp">Current member count</div>
+        <div class="formHelp">${esc(tr("raidmgr.convert.member_count_help", null, "Current member count"))}</div>
       </div>
     </div>
 
     <div class="raidDialogInnerCard" style="margin-top:12px; padding:12px;">
-      <h3 style="margin:0 0 8px 0;">Summary</h3>
+      <h3 style="margin:0 0 8px 0;">${esc(tr("raidmgr.section.summary", null, "Summary"))}</h3>
       <div id="poolConvertSummary" class="v" style="white-space:pre-line;"></div>
     </div>
 
     <div class="row" style="gap:10px; margin-top:12px; align-items:center;">
-      <button id="poolConvertPreviewBtn" class="btn secondary" type="button">Preview</button>
-      <button id="poolConvertApplyBtn" class="btn danger" type="button" disabled>Apply</button>
+      <button id="poolConvertPreviewBtn" class="btn secondary" type="button">${esc(tr("raidmgr.action.preview", null, "Preview"))}</button>
+      <button id="poolConvertApplyBtn" class="btn danger" type="button" disabled>${esc(tr("raidmgr.action.apply", null, "Apply"))}</button>
     </div>
 
     <details class="raidDialogInnerCard" style="margin-top:12px; padding:10px 12px;">
-      <summary style="cursor:pointer; font-weight:900;">Advanced</summary>
-      <pre id="poolConvertDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
+      <summary style="cursor:pointer; font-weight:900;">${esc(tr("raidmgr.advanced", null, "Advanced"))}</summary>
+      <pre id="poolConvertDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">${esc(tr("raidmgr.idle", null, "(idle)"))}</pre>
     </details>
   </div>
 </div>`;
@@ -862,30 +862,30 @@
 
             if (modeHint) {
                 if (targetMode === currentMode) {
-                    modeHint.textContent = "Target mode is the same as current mode.";
+                    modeHint.textContent = tr("raidmgr.convert.same_mode", null, "Target mode is the same as current mode.");
                 } else if (targetMode === "raid1" && totalDevices < 2) {
-                    modeHint.textContent = "RAID1 requires at least 2 current member devices.";
+                    modeHint.textContent = tr("raidmgr.convert.raid1_requires_2", null, "RAID1 requires at least 2 current member devices.");
                 } else if (targetMode === "raid1") {
-                    modeHint.textContent = "Converts current data/metadata profiles to RAID1.";
+                    modeHint.textContent = tr("raidmgr.convert.to_raid1_hint", null, "Converts current data/metadata profiles to RAID1.");
                 } else {
-                    modeHint.textContent = "Converts current data/metadata/system profiles to SINGLE.";
+                    modeHint.textContent = tr("raidmgr.convert.to_single_hint", null, "Converts current data/metadata/system profiles to SINGLE.");
                 }
             }
 
-            let text =
-                `Pool: ${mount}\n` +
-                `Current mode: ${currentMode}\n` +
-                `Target mode: ${targetMode}\n` +
-                `Current devices: ${totalDevices}\n\n`;
+            let text = tr(
+                "raidmgr.convert.summary_base",
+                { pool: mount, current: currentMode, target: targetMode, devices: totalDevices },
+                `Pool: ${mount}\nCurrent mode: ${currentMode}\nTarget mode: ${targetMode}\nCurrent devices: ${totalDevices}\n\n`
+            );
 
             if (targetMode === currentMode) {
-                text += "No conversion needed.";
+                text += tr("raidmgr.convert.no_conversion_needed", null, "No conversion needed.");
             } else if (targetMode === "raid1" && totalDevices < 2) {
-                text += "Cannot convert to RAID1 because the pool currently has fewer than 2 devices.";
+                text += tr("raidmgr.convert.cannot_raid1_fewer_2", null, "Cannot convert to RAID1 because the pool currently has fewer than 2 devices.");
             } else if (targetMode === "raid1") {
-                text += "This will run a Btrfs balance to convert data/metadata profiles to RAID1.";
+                text += tr("raidmgr.convert.will_balance_raid1", null, "This will run a Btrfs balance to convert data/metadata profiles to RAID1.");
             } else {
-                text += "This will run a Btrfs balance to convert data/metadata/system profiles to SINGLE.";
+                text += tr("raidmgr.convert.will_balance_single", null, "This will run a Btrfs balance to convert data/metadata/system profiles to SINGLE.");
             }
 
             if (summaryEl) summaryEl.textContent = text;
@@ -897,11 +897,11 @@
             const targetMode = String(targetModeSel.value || "single");
 
             if (targetMode === currentMode) {
-                showToast("warn", "Target mode is already current mode.", 3200);
+                showToast("warn", tr("raidmgr.convert.toast_already_current", null, "Target mode is already current mode."), 3200);
                 return;
             }
             if (targetMode === "raid1" && totalDevices < 2) {
-                showToast("err", "RAID1 requires at least 2 current member devices.", 4200);
+                showToast("err", tr("raidmgr.convert.toast_raid1_requires_2", null, "RAID1 requires at least 2 current member devices."), 4200);
                 return;
             }
 
@@ -909,7 +909,7 @@
                 request: { mount, mode: targetMode }
             }, null, 2);
 
-            showToast("info", "Preparing convert preview…", 1200);
+            showToast("info", tr("raidmgr.convert.preparing_preview", null, "Preparing convert preview…"), 1200);
 
             const { r, j, txt } = await planConvertMode(mount, targetMode);
 
@@ -920,7 +920,7 @@
             }, null, 2);
 
             if (!r.ok || !j || j.ok !== true || !j.plan || !j.plan.plan_id) {
-                showToast("err", `Convert preview failed: ${prettyError(j, r, txt)}`, 5200);
+                showToast("err", tr("raidmgr.convert.preview_failed", { error: prettyError(j, r, txt) }, `Convert preview failed: ${prettyError(j, r, txt)}`), 5200);
                 applyBtn.disabled = true;
                 lastPlan = null;
                 return;
@@ -928,12 +928,12 @@
 
             lastPlan = j.plan;
             applyBtn.disabled = false;
-            showToast("ok", "Preview ready ✓", 1800);
+            showToast("ok", tr("raidmgr.preview_ready", null, "Preview ready ✓"), 1800);
         }
 
         async function doApply() {
             if (!lastPlan || !lastPlan.plan_id) {
-                showToast("warn", "Preview first.", 2200);
+                showToast("warn", tr("raidmgr.preview_first", null, "Preview first."), 2200);
                 return;
             }
 
@@ -951,19 +951,19 @@
                 kind: "add",
                 mount,
                 new_disk: targetMode === "raid1"
-                    ? "Convert existing pool to RAID1"
-                    : "Convert existing pool to SINGLE",
+                    ? tr("raidmgr.convert.existing_to_raid1", null, "Convert existing pool to RAID1")
+                    : tr("raidmgr.convert.existing_to_single", null, "Convert existing pool to SINGLE"),
                 mode: targetMode,
                 pool_device_label: String(pool?.resolved_disk || pool?.resolved_source || "")
             });
 
             if (!ok) {
                 ov.classList.add("show");
-                showToast("info", "Apply cancelled.", 1800);
+                showToast("info", tr("raidmgr.apply_cancelled", null, "Apply cancelled."), 1800);
                 return;
             }
 
-            showToast("info", "Applying RAID conversion…", 1200);
+            showToast("info", tr("raidmgr.convert.applying", null, "Applying RAID conversion…"), 1200);
 
             const { r, j, txt } = await execConvertMode(mount, targetMode, String(lastPlan.plan_id));
 
@@ -980,18 +980,18 @@
             }, null, 2);
 
             if (!r.ok || !j || j.ok !== true) {
-                showToast("err", `Convert apply failed: ${prettyError(j, r, txt)}`, 5200);
+                showToast("err", tr("raidmgr.convert.apply_failed", { error: prettyError(j, r, txt) }, `Convert apply failed: ${prettyError(j, r, txt)}`), 5200);
                 return;
             }
 
             const pid = String(j?.plan_id || j?.plan?.plan_id || lastPlan.plan_id || "");
             if (pid) startExecPolling(pid);
 
-            showToast("ok", "RAID conversion started ✓", 2200);
+            showToast("ok", tr("raidmgr.convert.started", null, "RAID conversion started ✓"), 2200);
             ov.classList.remove("show");
         }
 
-        titleEl.textContent = `Convert RAID • ${poolDisplayName(pool)}`;
+        titleEl.textContent = tr("raidmgr.convert.title_for_pool", { pool: poolDisplayName(pool) }, `Convert RAID • ${poolDisplayName(pool)}`);
         currentModeInp.value = currentMode;
         targetModeSel.value = currentMode === "raid1" ? "single" : "raid1";
         devicesInp.value = String(totalDevices);
@@ -1002,7 +1002,7 @@
         targetModeSel.onchange = updateSummary;
 
         updateSummary();
-        dbg.textContent = "(idle)";
+        dbg.textContent = tr("raidmgr.idle", null, "(idle)");
         ov.classList.add("show");
     }
     // --- Toast (non-layout-shifting notifications) ---
@@ -2053,7 +2053,7 @@
                             force: !!rmForceChk?.checked,
                         });
                         if (!ok) {
-                            showToast("info", "Apply cancelled.", 1800);
+                            showToast("info", tr("raidmgr.apply_cancelled", null, "Apply cancelled."), 1800);
                             return;
                         }
 
@@ -2240,7 +2240,7 @@
                 });
 
                 if (!ok) {
-                    showToast("info", "Apply cancelled.", 1800);
+                    showToast("info", tr("raidmgr.apply_cancelled", null, "Apply cancelled."), 1800);
                     return;
                 }
 
@@ -2365,9 +2365,9 @@
   <div class="raidDialogInnerCard" style="margin-top:10px; padding:14px;">
     <div class="formGrid3">
       <div class="formField">
-        <div class="k">Display name</div>
+        <div class="k">${esc(tr("raidmgr.create.display_name", null, "Display name"))}</div>
         <input id="poolEditDisplayNameInp" type="text">
-        <div class="formHelp">Optional user-facing name</div>
+        <div class="formHelp">${esc(tr("raidmgr.create.display_name_help", null, "Optional user-facing name"))}</div>
       </div>
 
       <div class="formField">
@@ -2380,7 +2380,7 @@
       </div>
 
       <div class="formField">
-        <div class="k">Slot count</div>
+        <div class="k">${esc(tr("raidmgr.create.slot_count", null, "Slot count"))}</div>
         <input id="poolEditSlotCountInp" type="number" min="1" max="16" step="1">
         <div class="formHelp">Adjust visible slots, then update</div>
       </div>
@@ -2394,13 +2394,13 @@
     </div>
 
     <div class="card" style="margin-top:12px;">
-      <h3 style="margin:0 0 8px 0;">Slots</h3>
+      <h3 style="margin:0 0 8px 0;">${esc(tr("raidmgr.section.slots", null, "Slots"))}</h3>
       <div id="poolEditSlotsHost"></div>
       <div class="v" id="poolEditSlotHint" style="opacity:.75; margin-top:8px;"></div>
     </div>
 
     <details class="card" style="margin-top:12px;">
-      <summary style="cursor:pointer; font-weight:900;">Advanced</summary>
+      <summary style="cursor:pointer; font-weight:900;">${esc(tr("raidmgr.advanced", null, "Advanced"))}</summary>
       <pre id="poolEditSlotsDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
     </details>
   </div>
@@ -2527,13 +2527,13 @@
   ${Array.from({ length: slotCount }, (_, i) => {
                     const current = String(slotValues[i] || "");
                     const options = [
-                        `<option value="">(empty)</option>`,
+                        `<option value="">${esc(tr("raidmgr.slot.empty_paren", null, "(empty)"))}</option>`,
                         ...eligible.map((d) => {
                             const val = String(d.path || d.dev || "");
                             const selected = val === current ? "selected" : "";
                             const usedElsewhere = val && selectedSet.has(val) && val !== current;
                             const disabled = usedElsewhere ? "disabled" : "";
-                            const suffix = usedElsewhere ? " — already selected" : "";
+                            const suffix = usedElsewhere ? tr("raidmgr.create.already_selected_suffix", null, " — already selected") : "";
                             const latestPool = Array.isArray(g_pools)
                                 ? g_pools.find(x => String(x?.mount || "") === String(mount || ""))
                                 : null;
@@ -2557,8 +2557,8 @@
                     return `
 <div class="pqSlotRow pqSlotRowEditable" style="align-items:flex-start;">
   <div class="pqSlotLeft" style="min-width:120px;">
-    <div class="pqSlotTitle">Slot ${i + 1}</div>
-    <div class="pqSlotDev">Choose disk or leave empty</div>
+    <div class="pqSlotTitle">${esc(tr("raidmgr.slot.n", { n: i + 1 }, `Slot ${i + 1}`))}</div>
+    <div class="pqSlotDev">${esc(tr("raidmgr.create.choose_disk", null, "Choose disk or leave empty"))}</div>
   </div>
   <div style="flex:1 1 auto;">
     <select data-slot-index="${i}" style="width:100%; min-height:44px; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);">
@@ -2582,7 +2582,7 @@
 
             async function refreshDisks() {
                 try {
-                    dbg.textContent = "(loading /api/v4/storage/disks …)";
+                    dbg.textContent = tr("raidmgr.create.loading_disks", null, "(loading /api/v4/storage/disks …)");
                     const j = await loadAllDisks();
                     disks = Array.isArray(j?.disks) ? j.disks.slice() : [];
                     dbg.textContent = JSON.stringify({
@@ -2594,7 +2594,7 @@
                     renderSlotSelectors();
                 } catch (e) {
                     dbg.textContent = JSON.stringify({ ok: false, error: String(e && e.message ? e.message : e) }, null, 2);
-                    showToast("err", "Failed to load disks (see Advanced).", 5200);
+                    showToast("err", tr("raidmgr.create.load_disks_failed", null, "Failed to load disks (see Advanced)."), 5200);
                 }
             }
 
@@ -2610,12 +2610,12 @@
                 const devices = slots.map(s => s.device).filter(Boolean);
 
                 if (mode === "raid1" && devices.length < 2) {
-                    showToast("err", "raid1 requires at least 2 assigned slots.", 5200);
+                    showToast("err", tr("raidmgr.create.raid1_requires_2", null, "raid1 requires at least 2 assigned slots."), 5200);
                     return;
                 }
                 const unique = new Set(devices);
                 if (unique.size !== devices.length) {
-                    showToast("err", "The same disk cannot be selected in multiple slots.", 5200);
+                    showToast("err", tr("raidmgr.create.duplicate_disk", null, "The same disk cannot be selected in multiple slots."), 5200);
                     return;
                 }
 
@@ -2983,7 +2983,7 @@
 </div>
 
 <details class="raidDialogInnerCard" style="margin-top:12px; padding:10px 12px;">
-  <summary style="cursor:pointer; font-weight:900;">Advanced</summary>
+  <summary style="cursor:pointer; font-weight:900;">${esc(tr("raidmgr.advanced", null, "Advanced"))}</summary>
   <pre id="poolRemoveDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
 </details>
 </div>
@@ -3058,7 +3058,7 @@
                 lastPlan = j.plan;
                 lastPlanId = String(j.plan.plan_id || "");
                 applyBtn.disabled = !lastPlanId;
-                showToast("ok", "Preview ready ✓", 1800);
+                showToast("ok", tr("raidmgr.preview_ready", null, "Preview ready ✓"), 1800);
             };
 
             applyBtn.onclick = async () => {
@@ -3079,7 +3079,7 @@
 
                 if (!ok) {
                     ov.style.display = "flex";
-                    showToast("info", "Apply cancelled.", 1800);
+                    showToast("info", tr("raidmgr.apply_cancelled", null, "Apply cancelled."), 1800);
                     return;
                 }
 
@@ -3793,8 +3793,8 @@ html[data-theme="win_classic"] .pqTierOk .pqTierStatValue{
 </style>
 
 <div class="row" style="align-items:center; justify-content:space-between; gap:10px;">
-  <div style="font-weight:950;">Storage pools</div>
-  <button class="btn" id="poolCreateBtn" type="button">Create new pool</button>
+  <div style="font-weight:950;">${esc(tr("raidmgr.section.storage_pools", null, "Storage pools"))}</div>
+  <button class="btn" id="poolCreateBtn" type="button">${esc(tr("raidmgr.create.new_pool", null, "Create new pool"))}</button>
 </div>
 
 ${tieringCardHtml}
@@ -3824,22 +3824,22 @@ ${rows}
             ov.innerHTML = `
 <div class="uiDialog raidDialogShell">
   <div class="uiDialogHeader raidDialogHeader">
-    <div style="font-weight:950;">Create storage pool</div>
-    <button id="poolCreateCloseBtn" class="btn secondary" type="button">Close</button>
+    <div style="font-weight:950;">${esc(tr("raidmgr.create.title", null, "Create storage pool"))}</div>
+    <button id="poolCreateCloseBtn" class="btn secondary" type="button">${esc(tr("admin.common.close", null, "Close"))}</button>
   </div>
 
   <div class="raidDialogInnerCard" style="margin-top:10px; padding:14px;">
     <div class="formGrid3">
       <div class="formField">
-        <div class="k">pool_id</div>
+        <div class="k">${esc(tr("raidmgr.create.pool_id", null, "pool_id"))}</div>
         <input id="poolIdInp" type="text" placeholder="raidtest">
-        <div class="formHelp">Allowed: a-z 0-9 _ - (max 32)</div>
+        <div class="formHelp">${esc(tr("raidmgr.create.pool_id_help", null, "Allowed: a-z 0-9 _ - (max 32)"))}</div>
       </div>
 
       <div class="formField">
-        <div class="k">Display name</div>
+        <div class="k">${esc(tr("raidmgr.create.display_name", null, "Display name"))}</div>
         <input id="poolDisplayNameInp" type="text" placeholder="Raid test">
-        <div class="formHelp">Optional user-facing name</div>
+        <div class="formHelp">${esc(tr("raidmgr.create.display_name_help", null, "Optional user-facing name"))}</div>
       </div>
 
       <div class="formField">
@@ -3854,33 +3854,33 @@ ${rows}
 
     <div class="row" style="gap:10px; margin-top:12px; align-items:flex-end; flex-wrap:wrap;">
       <div class="formField" style="min-width:180px; max-width:220px;">
-        <div class="k">Slot count</div>
+        <div class="k">${esc(tr("raidmgr.create.slot_count", null, "Slot count"))}</div>
         <input id="poolSlotCountInp" type="number" min="1" max="16" step="1" value="1">
-        <div class="formHelp">How many drive slots this pool should show</div>
+        <div class="formHelp">${esc(tr("raidmgr.create.slot_count_help", null, "How many drive slots this pool should show"))}</div>
       </div>
 
-      <button id="poolSlotsApplyBtn" class="btn secondary" type="button">Update slots</button>
-      <button id="poolDevsRefreshBtn" class="btn secondary" type="button">Refresh devices</button>
+      <button id="poolSlotsApplyBtn" class="btn secondary" type="button">${esc(tr("raidmgr.create.update_slots", null, "Update slots"))}</button>
+      <button id="poolDevsRefreshBtn" class="btn secondary" type="button">${esc(tr("raidmgr.create.refresh_devices", null, "Refresh devices"))}</button>
 
       <label style="display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:14px; border:1px solid var(--elevated-border2); background:var(--elevated-soft);">
         <input id="poolForceChk" type="checkbox" style="transform:scale(1.1);">
-        <span class="v" style="opacity:.9;">Force wipe (destructive)</span>
+        <span class="v" style="opacity:.9;">${esc(tr("raidmgr.create.force_wipe", null, "Force wipe (destructive)"))}</span>
       </label>
 
       <div style="flex:1 1 auto;"></div>
 
-      <button id="poolCreateDoBtn" class="btn danger" type="button">Create</button>
+      <button id="poolCreateDoBtn" class="btn danger" type="button">${esc(tr("raidmgr.create.create", null, "Create"))}</button>
     </div>
 
     <div class="raidDialogInnerCard" style="margin-top:12px; padding:12px;">
-      <h3 style="margin:0 0 8px 0;">Slots</h3>
+      <h3 style="margin:0 0 8px 0;">${esc(tr("raidmgr.section.slots", null, "Slots"))}</h3>
       <div id="poolSlotsHost"></div>
       <div class="v" id="poolSlotHint" style="opacity:.75; margin-top:8px;"></div>
     </div>
 
     <details class="raidDialogInnerCard" style="margin-top:12px; padding:10px 12px;">
-      <summary style="cursor:pointer; font-weight:900;">Advanced</summary>
-      <pre id="poolCreateDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
+      <summary style="cursor:pointer; font-weight:900;">${esc(tr("raidmgr.advanced", null, "Advanced"))}</summary>
+      <pre id="poolCreateDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">${esc(tr("raidmgr.idle", null, "(idle)"))}</pre>
     </details>
   </div>
 </div>
@@ -4000,7 +4000,7 @@ Optionally it can wipe member disks (VERY destructive).
     </div>
 
     <details class="card" style="margin-top:12px;">
-      <summary style="cursor:pointer; font-weight:900;">Advanced</summary>
+      <summary style="cursor:pointer; font-weight:900;">${esc(tr("raidmgr.advanced", null, "Advanced"))}</summary>
       <pre id="poolDestroyDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
     </details>
   </div>
@@ -4024,7 +4024,7 @@ Optionally it can wipe member disks (VERY destructive).
             mountInp.value = String(mount || "");
             wipeChk.checked = false;
             typeInp.value = "";
-            dbg.textContent = "(idle)";
+            dbg.textContent = tr("raidmgr.idle", null, "(idle)");
 
             const refreshDoEnabled = () => {
                 const okType = String(typeInp.value || "").trim().toUpperCase() === "DESTROY";
@@ -4173,13 +4173,13 @@ Optionally it can wipe member disks (VERY destructive).
   ${Array.from({ length: count }, (_, i) => {
                     const current = String(slotValues[i] || "");
                     const options = [
-                        `<option value="">(empty)</option>`,
+                        `<option value="">${esc(tr("raidmgr.slot.empty_paren", null, "(empty)"))}</option>`,
                         ...eligible.map((d) => {
                             const val = String(d.path || d.dev || "");
                             const selected = (val === current) ? "selected" : "";
                             const usedElsewhere = val && selectedSet.has(val) && val !== current;
                             const disabled = usedElsewhere ? "disabled" : "";
-                            const suffix = usedElsewhere ? " — already selected" : "";
+                            const suffix = usedElsewhere ? tr("raidmgr.create.already_selected_suffix", null, " — already selected") : "";
                             return `<option value="${esc(val)}" ${selected} ${disabled}>${esc(diskOptionLabel(d) + suffix)}</option>`;
                         })
                     ].join("");
@@ -4187,8 +4187,8 @@ Optionally it can wipe member disks (VERY destructive).
                     return `
 <div class="pqSlotRow" style="align-items:flex-start;">
   <div class="pqSlotLeft" style="min-width:120px;">
-    <div class="pqSlotTitle">Slot ${i + 1}</div>
-    <div class="pqSlotDev">Choose disk or leave empty</div>
+    <div class="pqSlotTitle">${esc(tr("raidmgr.slot.n", { n: i + 1 }, `Slot ${i + 1}`))}</div>
+    <div class="pqSlotDev">${esc(tr("raidmgr.create.choose_disk", null, "Choose disk or leave empty"))}</div>
   </div>
   <div style="flex:1 1 auto;">
     <select data-slot-index="${i}" style="width:100%; min-height:44px; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);">
@@ -4218,19 +4218,18 @@ Optionally it can wipe member disks (VERY destructive).
                 if (modeHint) {
                     modeHint.textContent =
                         mode === "raid1"
-                            ? "RAID1 needs at least 2 assigned slots."
-                            : "Single uses one or more drives without redundancy.";
+                            ? tr("raidmgr.create.raid1_hint", null, "RAID1 needs at least 2 assigned slots.")
+                            : tr("raidmgr.create.single_hint", null, "Single uses one or more drives without redundancy.");
                 }
 
                 if (slotHint) {
-                    slotHint.textContent =
-                        `Assigned devices: ${devices.length}. Empty slots are allowed and become visible placeholders in Pool Manager.`;
+                    slotHint.textContent = tr("raidmgr.create.assigned_devices", { count: devices.length }, `Assigned devices: ${devices.length}. Empty slots are allowed and become visible placeholders in Pool Manager.`);
                 }
             }
 
             async function refreshDisks() {
                 try {
-                    dbg.textContent = "(loading /api/v4/storage/disks …)";
+                    dbg.textContent = tr("raidmgr.create.loading_disks", null, "(loading /api/v4/storage/disks …)");
                     const j = await loadAllDisks();
 
                     let arr = Array.isArray(j?.disks) ? j.disks : [];
@@ -4253,7 +4252,7 @@ Optionally it can wipe member disks (VERY destructive).
                         ok: false,
                         error: String(e && e.message ? e.message : e)
                     }, null, 2);
-                    showToast("err", "Failed to load disks (see Advanced).", 5200);
+                    showToast("err", tr("raidmgr.create.load_disks_failed", null, "Failed to load disks (see Advanced)."), 5200);
                 }
             }
 
@@ -4274,28 +4273,28 @@ Optionally it can wipe member disks (VERY destructive).
                 const devices = slots.map(s => s.device).filter(Boolean);
 
                 if (!/^[a-z0-9_-]{1,32}$/.test(pool_id)) {
-                    showToast("err", "bad pool_id (allowed: a-z 0-9 _ - , max 32)", 5200);
+                    showToast("err", tr("raidmgr.create.bad_pool_id", null, "bad pool_id (allowed: a-z 0-9 _ - , max 32)"), 5200);
                     return;
                 }
 
                 if (mode !== "single" && mode !== "raid1") {
-                    showToast("err", "mode must be single or raid1", 5200);
+                    showToast("err", tr("raidmgr.create.bad_mode", null, "mode must be single or raid1"), 5200);
                     return;
                 }
 
                 if (!devices.length) {
-                    showToast("err", "Assign at least one disk to a slot.", 4200);
+                    showToast("err", tr("raidmgr.create.assign_one_disk", null, "Assign at least one disk to a slot."), 4200);
                     return;
                 }
 
                 if (mode === "raid1" && devices.length < 2) {
-                    showToast("err", "raid1 requires at least 2 assigned slots.", 5200);
+                    showToast("err", tr("raidmgr.create.raid1_requires_2", null, "raid1 requires at least 2 assigned slots."), 5200);
                     return;
                 }
 
                 const unique = new Set(devices);
                 if (unique.size !== devices.length) {
-                    showToast("err", "The same disk cannot be selected in multiple slots.", 5200);
+                    showToast("err", tr("raidmgr.create.duplicate_disk", null, "The same disk cannot be selected in multiple slots."), 5200);
                     return;
                 }
 
@@ -4479,7 +4478,7 @@ Optionally it can wipe member disks (VERY destructive).
                                 mode
                             });
                             if (!ok) {
-                                showToast("info", "Apply cancelled.", 1800);
+                                showToast("info", tr("raidmgr.apply_cancelled", null, "Apply cancelled."), 1800);
                                 return;
                             }
 
@@ -4533,7 +4532,7 @@ Optionally it can wipe member disks (VERY destructive).
                                 force: false
                             });
                             if (!ok) {
-                                showToast("info", "Apply cancelled.", 1800);
+                                showToast("info", tr("raidmgr.apply_cancelled", null, "Apply cancelled."), 1800);
                                 return;
                             }
 
