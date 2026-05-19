@@ -9,21 +9,41 @@
         return String(fallback ?? key);
     }
 
+    function escapeHtml(s) {
+        return String(s ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+    }
+
     async function forceSelectedLanguage() {
         const api = window.PQNAS_I18N;
         if (!api) return;
 
         let lang = "";
+
         try {
-            lang = String(localStorage.getItem("pqnas_lang") || "").trim();
+            const qs = new URLSearchParams(window.location.search || "");
+            lang = String(qs.get("lang") || qs.get("l") || "").trim();
         } catch (_) {}
 
-        if (!lang && typeof api.getLanguage === "function") {
-            try { lang = String(api.getLanguage() || "").trim(); } catch (_) {}
+        if (!lang) {
+            try {
+                lang = String(localStorage.getItem("pqnas_lang") || "").trim();
+            } catch (_) {}
         }
 
         if (!lang) {
-            try { lang = String(navigator.language || "").trim(); } catch (_) {}
+            try {
+                const nav = String(navigator.language || navigator.userLanguage || "").trim().toLowerCase();
+                if (nav.startsWith("fi")) lang = "fi";
+            } catch (_) {}
+        }
+
+        if (!lang && typeof api.getLanguage === "function") {
+            try { lang = String(api.getLanguage() || "").trim(); } catch (_) {}
         }
 
         if (!lang) lang = "en";
