@@ -6,6 +6,22 @@
 
     const el = (id) => document.getElementById(id);
 
+    function statsT(key, params, fallback) {
+        try {
+            const api = window.PQNAS_I18N;
+            if (api && typeof api.t === "function") {
+                return api.t(key, params || null, fallback);
+            }
+        } catch (_) {}
+
+        let out = String(fallback || key || "");
+        const p = params || {};
+        for (const name of Object.keys(p)) {
+            out = out.split(`{${name}}`).join(String(p[name]));
+        }
+        return out;
+    }
+
     const statsBtn = el("statsBtn");
     const statsModal = el("statsModal");
     const statsClose = el("statsClose");
@@ -63,11 +79,13 @@
         const now = Date.now();
 
         if (statsSub) {
-            statsSub.textContent = path ? `Under /${path}` : "Whole library";
+            statsSub.textContent = path
+                ? statsT("photogallery.stats.under_path", { path }, "Under /{path}")
+                : statsT("photogallery.stats.whole_library", null, "Whole library");
         }
 
         if (statsStatus) {
-            statsStatus.textContent = "Loading statistics…";
+            statsStatus.textContent = statsT("photogallery.stats.loading_statistics", null, "Loading statistics…");
         }
 
         let stats = null;
@@ -76,28 +94,31 @@
         if (!force && cached && (now - cached.ts) < CACHE_MS) {
             stats = cached.data;
         } else {
-            PG.setBadge?.("warn", "stats…");
-            PG.setStatus?.("Loading photo statistics…");
+            PG.setBadge?.("warn", statsT("photogallery.badge.stats", null, "stats…"));
+            PG.setStatus?.(statsT("photogallery.stats.loading_photo_statistics", null, "Loading photo statistics…"));
             stats = await PG.statsApi.fetchStats({ path });
             cache.set(key, { ts: now, data: stats });
         }
 
         PG.statsCharts.renderSummary(statsSummary, stats);
-        PG.statsCharts.renderTopList(statsTopCameras, stats.topCameras, "No camera data.");
-        PG.statsCharts.renderTopList(statsTopLenses, stats.topLenses, "No lens data.");
-        PG.statsCharts.renderChart(statsIsoChart, stats.iso, "No ISO data.");
-        PG.statsCharts.renderChart(statsApertureChart, stats.aperture, "No aperture data.");
-        PG.statsCharts.renderChart(statsShutterChart, stats.shutter, "No shutter speed data.");
-        PG.statsCharts.renderChart(statsFocalChart, stats.focal, "No focal length data.");
-        PG.statsCharts.renderChart(statsByMonthChart, stats.byMonth, "No date histogram data.");
+        PG.statsCharts.renderTopList(statsTopCameras, stats.topCameras, statsT("photogallery.stats.no_camera_data", null, "No camera data."));
+        PG.statsCharts.renderTopList(statsTopLenses, stats.topLenses, statsT("photogallery.stats.no_lens_data", null, "No lens data."));
+        PG.statsCharts.renderChart(statsIsoChart, stats.iso, statsT("photogallery.stats.no_iso_data", null, "No ISO data."));
+        PG.statsCharts.renderChart(statsApertureChart, stats.aperture, statsT("photogallery.stats.no_aperture_data", null, "No aperture data."));
+        PG.statsCharts.renderChart(statsShutterChart, stats.shutter, statsT("photogallery.stats.no_shutter_data", null, "No shutter speed data."));
+        PG.statsCharts.renderChart(statsFocalChart, stats.focal, statsT("photogallery.stats.no_focal_data", null, "No focal length data."));
+        PG.statsCharts.renderChart(statsByMonthChart, stats.byMonth, statsT("photogallery.stats.no_date_histogram_data", null, "No date histogram data."));
 
         if (statsStatus) {
             statsStatus.textContent =
-                `${PG.statsCharts.fmtInt(stats.totalPhotos)} photos • ${PG.statsCharts.fmtBytes(stats.totalBytes)} total`;
+                statsT("photogallery.stats.status_summary", {
+                    photos: PG.statsCharts.fmtInt(stats.totalPhotos),
+                    bytes: PG.statsCharts.fmtBytes(stats.totalBytes)
+                }, "{photos} photos • {bytes} total");
         }
 
-        PG.setBadge?.("ok", "ready");
-        PG.setStatus?.("Photo statistics ready.");
+        PG.setBadge?.("ok", statsT("common.ready_badge", null, "ready"));
+        PG.setStatus?.(statsT("photogallery.stats.ready_status", null, "Photo statistics ready."));
     }
 
     async function openAndLoad(force = false) {
@@ -109,10 +130,12 @@
         } catch (e) {
             clearOutputs();
             if (statsStatus) {
-                statsStatus.textContent = `Failed to load statistics: ${String(e && e.message ? e.message : e)}`;
+                statsStatus.textContent = statsT("photogallery.stats.failed_to_load_with_error", {
+                    error: String(e && e.message ? e.message : e)
+                }, "Failed to load statistics: {error}");
             }
-            PG.setBadge?.("err", "error");
-            PG.setStatus?.("Photo statistics failed.");
+            PG.setBadge?.("err", statsT("common.error_badge", null, "error"));
+            PG.setStatus?.(statsT("photogallery.stats.failed_status", null, "Photo statistics failed."));
         }
     }
 

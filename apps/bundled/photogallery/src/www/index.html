@@ -1422,7 +1422,7 @@
                 <select
                         id="ratingFilter"
                         class="input"
-                        title="Filter by star rating" data-i18n-title="photogallery.filter_by_star_rating"
+                        title="Suodata tähtiarvion mukaan" data-i18n-title="photogallery.filter_by_star_rating"
                         style="min-width:150px; width:auto;"
                 >
                     <option value="-1" data-i18n="photogallery.all_ratings">All ratings</option>
@@ -1437,7 +1437,7 @@
                 <select
                         id="thumbSizeSelect"
                         class="input"
-                        title="Thumbnail size" data-i18n-title="photogallery.thumbnail_size"
+                        title="Pikkukuvan koko" data-i18n-title="photogallery.thumbnail_size"
                         style="min-width:140px; width:auto;"
                 >
                     <option value="120" data-i18n="photogallery.thumbs_small">Thumbs: Small</option>
@@ -1446,13 +1446,13 @@
                     <option value="300" data-i18n="photogallery.thumbs_xl">Thumbs: XL</option>
                 </select>
 
-                <button class="btn secondary" id="slideshowBtn" type="button" data-i18n="photogallery.slideshow">Slideshow</button>
-                <button class="btn secondary" id="statsBtn" type="button" data-i18n="photogallery.stats">Stats</button>
-                <button class="btn secondary active" id="gridBtn" type="button" data-i18n="photogallery.grid">Grid</button>
-                <button class="btn secondary" id="mapBtn" type="button" data-i18n="photogallery.map">Map</button>
-                <button class="btn secondary" id="albumsBtn" type="button" data-i18n="photogallery.albums">Albums</button>
-                <button class="btn secondary" id="upBtn" type="button" data-i18n="common.up">Up</button>
-                <button class="btn" id="refreshBtn" type="button" data-i18n="common.refresh">Refresh</button>
+                <button class="btn secondary" id="slideshowBtn" type="button" data-i18n="photogallery.slideshow" title="Aloita diaesitys" aria-label="Aloita diaesitys" data-i18n-title="photogallery.start_slideshow" data-i18n-aria-label="photogallery.start_slideshow">Diaesitys</button>
+                <button class="btn secondary" id="statsBtn" type="button" data-i18n="photogallery.stats" title="Näytä kuvatilastot" aria-label="Näytä kuvatilastot" data-i18n-title="photogallery.stats_tooltip" data-i18n-aria-label="photogallery.stats_tooltip">Tilastot</button>
+                <button class="btn secondary active" id="gridBtn" type="button" data-i18n="photogallery.grid" title="Siirry ruudukkonäkymään" aria-label="Siirry ruudukkonäkymään" data-i18n-title="photogallery.switch_to_grid_view" data-i18n-aria-label="photogallery.switch_to_grid_view">Ruudukko</button>
+                <button class="btn secondary" id="mapBtn" type="button" data-i18n="photogallery.map" title="Siirry karttanäkymään" aria-label="Siirry karttanäkymään" data-i18n-title="photogallery.switch_to_map_view" data-i18n-aria-label="photogallery.switch_to_map_view">Kartta</button>
+                <button class="btn secondary" id="albumsBtn" type="button" data-i18n="photogallery.albums" title="Siirry albumeihin" aria-label="Siirry albumeihin" data-i18n-title="photogallery.switch_to_albums_view" data-i18n-aria-label="photogallery.switch_to_albums_view">Albumit</button>
+                <button class="btn secondary" id="upBtn" type="button" data-i18n="common.up" title="Ylös kansiotasolla" aria-label="Ylös kansiotasolla" data-i18n-title="photogallery.up_tooltip" data-i18n-aria-label="photogallery.up_tooltip">Up</button>
+                <button class="btn" id="refreshBtn" type="button" data-i18n="common.refresh" title="Päivitä" aria-label="Päivitä" data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh">Refresh</button>
             </div>
         </div>
 
@@ -1697,7 +1697,7 @@
                     </select>
                 </div>
 
-                <div class="label">Options</div>
+                <div class="label" data-i18n="photogallery.options">Asetukset</div>
                 <div style="display:flex; flex-direction:column; gap:10px;">
                     <label style="display:flex; align-items:center; gap:10px; cursor:pointer;">
                         <input id="slideshowShuffle" type="checkbox">
@@ -1764,8 +1764,8 @@
     <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="statsTitle" style="width:min(1100px, calc(100vw - 24px));">
         <div class="modalHead">
             <div>
-                <div id="statsTitle" class="modalTitle" data-i18n="photogallery.photo_statistics">Photo statistics</div>
-                <div id="statsSub" class="modalSub" data-i18n="photogallery.current_library">Current library</div>
+                <div id="statsTitle" class="modalTitle" data-i18n="photogallery.photo_statistics">Kuvatilastot</div>
+                <div id="statsSub" class="modalSub" data-i18n="photogallery.current_library">Nykyinen kirjasto</div>
             </div>
             <button id="statsClose" class="btn secondary" type="button" data-i18n="common.close">Close</button>
         </div>
@@ -1776,12 +1776,12 @@
             <div id="statsSummary" class="pgStatsSummary"></div>
 
             <div class="pgStatsSection">
-                <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.top_cameras">Top cameras</div>
+                <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.top_cameras">Suosituimmat kamerat</div>
                 <div id="statsTopCameras" class="pgStatsList"></div>
             </div>
 
             <div class="pgStatsSection">
-                <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.top_lenses">Top lenses</div>
+                <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.top_lenses">Suosituimmat objektiivit</div>
                 <div id="statsTopLenses" class="pgStatsList"></div>
             </div>
 
@@ -1792,23 +1792,23 @@
                 </div>
 
                 <div class="pgStatsSection">
-                    <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.aperture">Aperture</div>
+                    <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.aperture">Aukko</div>
                     <div id="statsApertureChart" class="pgStatsChart"></div>
                 </div>
 
                 <div class="pgStatsSection">
-                    <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.shutter_speed">Shutter speed</div>
+                    <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.shutter_speed">Suljinaika</div>
                     <div id="statsShutterChart" class="pgStatsChart"></div>
                 </div>
 
                 <div class="pgStatsSection">
-                    <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.focal_length">Focal length</div>
+                    <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.focal_length">Polttoväli</div>
                     <div id="statsFocalChart" class="pgStatsChart"></div>
                 </div>
             </div>
 
             <div class="pgStatsSection">
-                <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.photos_by_month">Photos by month</div>
+                <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.photos_by_month">Kuvat kuukausittain</div>
                 <div id="statsByMonthChart" class="pgStatsChart"></div>
             </div>
         </div>
@@ -1834,7 +1834,7 @@
 <script src="./gallery_embedded_meta.js"></script>
 <script src="./bursts.js?v=4"></script>
 <script src="/static/pqnas_folder_picker.js?v=3"></script>
-<script src="./app.js?v=20260519-pg-custom-move-modals-menu-i18n-2"></script>
+<script src="./app.js?v=20260519-pg-force-fi-topbar-switch-1"></script>
 <script src="./gallery_exif_search.js?v=20260519-pg-exif-i18n-1"></script>
 <script src="./albums_picker.js?v=20260519-pg-native-dialogs-2"></script>
 <script src="./gallery_upload.js?v=1"></script>
@@ -1843,8 +1843,8 @@
 <script src="./compare_view.js"></script>
 <script src="./albums_view.js?v=20260519-pg-albums-view-i18n-1"></script>
 <script src="./stats_api.js"></script>
-<script src="./stats_charts.js"></script>
-<script src="./stats_modal.js"></script>
+<script src="./stats_charts.js?v=20260519-pg-stats-i18n-1"></script>
+<script src="./stats_modal.js?v=20260519-pg-stats-i18n-1"></script>
 <script src="./gallery_map.js?v=1"></script>
     <script src="/static/onboarding.js?v=guided-tours-clean-v1"></script>
 </body>

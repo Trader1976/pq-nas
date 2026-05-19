@@ -3,6 +3,22 @@
 
     const PG = window.PQNAS_PHOTOGALLERY = window.PQNAS_PHOTOGALLERY || {};
 
+    function statsT(key, params, fallback) {
+        try {
+            const api = window.PQNAS_I18N;
+            if (api && typeof api.t === "function") {
+                return api.t(key, params || null, fallback);
+            }
+        } catch (_) {}
+
+        let out = String(fallback || key || "");
+        const p = params || {};
+        for (const name of Object.keys(p)) {
+            out = out.split(`{${name}}`).join(String(p[name]));
+        }
+        return out;
+    }
+
     function clear(el) {
         if (el) el.replaceChildren();
     }
@@ -66,14 +82,20 @@
         const rangeText =
             stats.firstTakenAt || stats.lastTakenAt
                 ? `${stats.firstTakenAt || "?"} → ${stats.lastTakenAt || "?"}`
-                : "No capture date data";
+                : statsT("photogallery.stats.no_capture_date_data", null, "No capture date data");
 
-        el.appendChild(makeCard("Photos", fmtInt(stats.totalPhotos)));
-        el.appendChild(makeCard("Total size", fmtBytes(stats.totalBytes), `${stats.totalMegabytes.toFixed(1)} MB`));
-        el.appendChild(makeCard("Photos with EXIF", fmtInt(stats.photosWithExif)));
-        el.appendChild(makeCard("Unique cameras", fmtInt(stats.uniqueCameras)));
-        el.appendChild(makeCard("Unique lenses", fmtInt(stats.uniqueLenses)));
-        el.appendChild(makeCard("Date range", stats.firstTakenAt || stats.lastTakenAt ? "Available" : "Unknown", rangeText));
+        el.appendChild(makeCard(statsT("photogallery.stats.photos", null, "Photos"), fmtInt(stats.totalPhotos)));
+        el.appendChild(makeCard(statsT("photogallery.stats.total_size", null, "Total size"), fmtBytes(stats.totalBytes), `${stats.totalMegabytes.toFixed(1)} MB`));
+        el.appendChild(makeCard(statsT("photogallery.stats.photos_with_exif", null, "Photos with EXIF"), fmtInt(stats.photosWithExif)));
+        el.appendChild(makeCard(statsT("photogallery.stats.unique_cameras", null, "Unique cameras"), fmtInt(stats.uniqueCameras)));
+        el.appendChild(makeCard(statsT("photogallery.stats.unique_lenses", null, "Unique lenses"), fmtInt(stats.uniqueLenses)));
+        el.appendChild(makeCard(
+            statsT("photogallery.stats.date_range", null, "Date range"),
+            stats.firstTakenAt || stats.lastTakenAt
+                ? statsT("photogallery.stats.available", null, "Available")
+                : statsT("photogallery.stats.unknown", null, "Unknown"),
+            rangeText
+        ));
     }
 
     function renderBars(el, items, opts = {}) {
@@ -82,7 +104,7 @@
 
         const list = Array.isArray(items) ? items.slice(0, opts.maxItems || 12) : [];
         if (!list.length) {
-            addEmpty(el, opts.emptyText || "No data.");
+            addEmpty(el, opts.emptyText || statsT("photogallery.stats.no_data", null, "No data."));
             return;
         }
 
@@ -125,10 +147,10 @@
         fmtBytes,
         fmtInt,
         renderSummary,
-        renderTopList(el, items, emptyText = "No data.") {
+        renderTopList(el, items, emptyText = statsT("photogallery.stats.no_data", null, "No data.")) {
             renderBars(el, items, { maxItems: 8, emptyText });
         },
-        renderChart(el, items, emptyText = "No data.") {
+        renderChart(el, items, emptyText = statsT("photogallery.stats.no_data", null, "No data.")) {
             renderBars(el, items, { maxItems: 16, emptyText });
         }
     };
