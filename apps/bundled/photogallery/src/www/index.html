@@ -7,6 +7,7 @@
 
     <link rel="stylesheet" href="/static/theme.css">
     <script src="/static/theme.js"></script>
+<script src="/static/i18n.js?v=20260519-photogallery-visible-i18n-1"></script>
 
     <style>
         :root{
@@ -1409,14 +1410,14 @@
     <div class="panel">
         <div class="bar">
             <div class="left">
-                <div class="title" id="titleLine"><span>Photo Gallery</span><span id="appVersion" class="appVersion"></span></div>
+                <div class="title" id="titleLine"><span data-i18n="photogallery.title">Photo Gallery</span><span id="appVersion" class="appVersion"></span></div>
                 <div id="pathLine" aria-label="Breadcrumb path">/</div>
             </div>
 
             <div class="actions">
-                <span class="badge warn" id="badge">loading…</span>
+                <span class="badge warn" id="badge" data-i18n="common.loading">loading…</span>
 
-                <input id="filterInput" class="input" type="text" placeholder="Search names, tags, EXIF: Panasonic, ISO 200, lens…">
+                <input id="filterInput" class="input" type="text" placeholder="Search names, tags, EXIF: Panasonic, ISO 200, lens…" data-i18n-placeholder="photogallery.search_placeholder">
 
                 <select
                         id="ratingFilter"
@@ -1424,8 +1425,8 @@
                         title="Filter by star rating"
                         style="min-width:150px; width:auto;"
                 >
-                    <option value="-1">All ratings</option>
-                    <option value="0">Unrated</option>
+                    <option value="-1" data-i18n="photogallery.all_ratings">All ratings</option>
+                    <option value="0" data-i18n="photogallery.unrated">Unrated</option>
                     <option value="1">1★</option>
                     <option value="2">2★</option>
                     <option value="3">3★</option>
@@ -1439,27 +1440,27 @@
                         title="Thumbnail size"
                         style="min-width:140px; width:auto;"
                 >
-                    <option value="120">Thumbs: Small</option>
-                    <option value="160" selected>Thumbs: Medium</option>
-                    <option value="220">Thumbs: Large</option>
-                    <option value="300">Thumbs: XL</option>
+                    <option value="120" data-i18n="photogallery.thumbs_small">Thumbs: Small</option>
+                    <option value="160" selected data-i18n="photogallery.thumbs_medium">Thumbs: Medium</option>
+                    <option value="220" data-i18n="photogallery.thumbs_large">Thumbs: Large</option>
+                    <option value="300" data-i18n="photogallery.thumbs_xl">Thumbs: XL</option>
                 </select>
 
-                <button class="btn secondary" id="slideshowBtn" type="button">Slideshow</button>
-                <button class="btn secondary" id="statsBtn" type="button">Stats</button>
-                <button class="btn secondary active" id="gridBtn" type="button">Grid</button>
-                <button class="btn secondary" id="mapBtn" type="button">Map</button>
-                <button class="btn secondary" id="albumsBtn" type="button">Albums</button>
-                <button class="btn secondary" id="upBtn" type="button">Up</button>
-                <button class="btn" id="refreshBtn" type="button">Refresh</button>
+                <button class="btn secondary" id="slideshowBtn" type="button" data-i18n="photogallery.slideshow">Slideshow</button>
+                <button class="btn secondary" id="statsBtn" type="button" data-i18n="photogallery.stats">Stats</button>
+                <button class="btn secondary active" id="gridBtn" type="button" data-i18n="photogallery.grid">Grid</button>
+                <button class="btn secondary" id="mapBtn" type="button" data-i18n="photogallery.map">Map</button>
+                <button class="btn secondary" id="albumsBtn" type="button" data-i18n="photogallery.albums">Albums</button>
+                <button class="btn secondary" id="upBtn" type="button" data-i18n="common.up">Up</button>
+                <button class="btn" id="refreshBtn" type="button" data-i18n="common.refresh">Refresh</button>
             </div>
         </div>
 
         <div class="gridWrap" id="gridWrap">
             <div class="dropOverlay" id="dropOverlay" aria-hidden="true">
                 <div>
-                    <div class="big">Drop photos or folders to upload</div>
-                    <div class="small">Uploads into the current folder</div>
+                    <div class="big" data-i18n="photogallery.drop_photos">Drop photos or folders to upload</div>
+                    <div class="small" data-i18n="photogallery.uploads_current_folder">Uploads into the current folder</div>
                 </div>
             </div>
             <div id="grid" class="grid"></div>
@@ -1472,20 +1473,20 @@
         <div class="gridWrap hidden" id="albumsWrap" aria-hidden="true"></div>
 
         <div class="footer">
-            <div id="status" class="mono">Ready.</div>
+            <div id="status" class="mono" data-i18n="common.ready">Ready.</div>
             <div style="flex:1 1 auto;"></div>
-            <div id="footerStats" class="mono" style="opacity:.82;">Items: 0</div>
+            <div id="footerStats" class="mono" style="opacity:.82;" data-i18n="photogallery.items_zero">Items: 0</div>
             <div class="mono">DNA-Nexus bundled app • photogallery 1.0.0</div>
 
             <div id="uploadProg" style="display:none" aria-hidden="true">
                 <div class="upRow">
                     <div class="upLeft">
-                        <div id="uploadProgText" class="upText">Uploading…</div>
+                        <div id="uploadProgText" class="upText" data-i18n="common.uploading">Uploading…</div>
                         <span id="uploadProgPill" class="upPill hidden"></span>
                     </div>
                     <div id="uploadProgPct" class="upPct">0%</div>
                 </div>
-                <button id="uploadCancelBtn" class="btn secondary hidden" type="button">Cancel</button>
+                <button id="uploadCancelBtn" class="btn secondary hidden" type="button" data-i18n="common.cancel">Cancel</button>
                 <div class="upBar">
                     <div id="uploadProgFill" class="upFill" style="width:0%"></div>
                 </div>
@@ -1497,48 +1498,48 @@
     <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="uploadConflictTitle">
         <div class="modalHead">
             <div>
-                <div id="uploadConflictTitle" class="modalTitle">File already exists</div>
+                <div id="uploadConflictTitle" class="modalTitle" data-i18n="photogallery.upload_conflict.title">File already exists</div>
                 <div id="uploadConflictPath" class="modalSub">/</div>
             </div>
-            <button id="uploadConflictClose" class="btn secondary" type="button">Close</button>
+            <button id="uploadConflictClose" class="btn secondary" type="button" data-i18n="common.close">Close</button>
         </div>
 
         <div class="modalBody">
             <div class="formGrid">
-                <div class="label">Existing file</div>
+                <div class="label" data-i18n="photogallery.existing_file">Existing file</div>
                 <div id="uploadConflictExisting" class="mono" style="opacity:.9;"></div>
 
-                <div class="label">New file</div>
+                <div class="label" data-i18n="photogallery.new_file">New file</div>
                 <div id="uploadConflictIncoming" class="mono" style="opacity:.9;"></div>
 
-                <div class="label">Choice</div>
+                <div class="label" data-i18n="photogallery.choice">Choice</div>
                 <div style="display:grid; gap:10px;">
                     <label style="display:flex; gap:10px; align-items:flex-start;">
                         <input type="radio" name="uploadConflictChoice" id="uploadConflictKeepOld" value="keep_old" checked>
                         <span>
-                            <strong>Keep existing</strong><br>
-                            <span style="opacity:.82;">Skip this upload and keep the file already stored.</span>
+                            <strong data-i18n="photogallery.keep_existing">Keep existing</strong><br>
+                            <span style="opacity:.82;" data-i18n="photogallery.keep_existing_help">Skip this upload and keep the file already stored.</span>
                         </span>
                     </label>
 
                     <label style="display:flex; gap:10px; align-items:flex-start;">
                         <input type="radio" name="uploadConflictChoice" id="uploadConflictReplace" value="replace">
                         <span>
-                            <strong>Replace with new</strong><br>
-                            <span style="opacity:.82;">Upload the new file and replace the existing one.</span>
+                            <strong data-i18n="photogallery.replace_with_new">Replace with new</strong><br>
+                            <span style="opacity:.82;" data-i18n="photogallery.replace_with_new_help">Upload the new file and replace the existing one.</span>
                         </span>
                     </label>
 
                     <label style="display:flex; gap:10px; align-items:center; margin-top:8px;">
                         <input type="checkbox" id="uploadConflictApplyAll">
-                        <span>Use this choice for all remaining conflicts in this upload</span>
+                        <span data-i18n="photogallery.apply_choice_all_conflicts">Use this choice for all remaining conflicts in this upload</span>
                     </label>
                 </div>
 
-                <div class="label">Action</div>
+                <div class="label" data-i18n="photogallery.action">Action</div>
                 <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                    <button id="uploadConflictOkBtn" class="btn" type="button">Continue</button>
-                    <button id="uploadConflictCancelBtn" class="btn secondary" type="button">Cancel upload</button>
+                    <button id="uploadConflictOkBtn" class="btn" type="button" data-i18n="common.continue">Continue</button>
+                    <button id="uploadConflictCancelBtn" class="btn secondary" type="button" data-i18n="photogallery.cancel_upload">Cancel upload</button>
                 </div>
             </div>
         </div>
@@ -1549,25 +1550,25 @@
          style="width:min(760px, calc(100vw - 24px)); position:absolute; left:50%; top:110px; transform:translateX(-50%);">
         <div id="metaHead" class="modalHead" style="cursor:move; user-select:none;">
             <div>
-                <div id="metaTitle" class="modalTitle">Image metadata</div>
+                <div id="metaTitle" class="modalTitle" data-i18n="photogallery.image_metadata">Image metadata</div>
                 <div id="metaPath" class="modalSub">/</div>
             </div>
-            <button id="metaClose" class="btn secondary" type="button">Close</button>
+            <button id="metaClose" class="btn secondary" type="button" data-i18n="common.close">Close</button>
         </div>
 
         <div class="modalBody">
             <div class="formGrid">
-                <div class="label">Rating</div>
+                <div class="label" data-i18n="photogallery.rating">Rating</div>
                 <div id="metaStars" class="starRow"></div>
 
-                <div class="label">Keywords</div>
+                <div class="label" data-i18n="photogallery.keywords">Keywords</div>
                 <div>
-                    <input id="metaTags" class="field" type="text" placeholder="cat black sofa sunset">
+                    <input id="metaTags" class="field" type="text" placeholder="cat black sofa sunset" data-i18n-placeholder="photogallery.keywords_placeholder">
                 </div>
 
-                <div class="label">Description</div>
+                <div class="label" data-i18n="photogallery.description">Description</div>
                 <div>
-                    <textarea id="metaNotes" class="textarea" placeholder="Optional notes or caption"></textarea>
+                    <textarea id="metaNotes" class="textarea" placeholder="Optional notes or caption" data-i18n-placeholder="photogallery.description_placeholder"></textarea>
                 </div>
                 <div
                         id="metaApplySelWrap"
@@ -1600,23 +1601,23 @@
                     display:block;
                     white-space:nowrap;
                 "
-                        >Apply to selected photos</span>
+                         data-i18n="photogallery.apply_to_selected_photos">Apply to selected photos</span>
                     </label>
                 </div>
-                <div class="label">Info</div>
+                <div class="label" data-i18n="photogallery.info">Info</div>
                 <div id="metaInfo" class="mono" style="opacity:.84;"></div>
             </div>
-            <div class="label">Embedded</div>
+            <div class="label" data-i18n="photogallery.embedded">Embedded</div>
             <div>
                 <details id="metaEmbeddedDetails" class="embeddedDetails">
                     <summary>
-                        <span>Embedded image metadata (EXIF / IPTC / XMP)</span>
-                        <span id="metaEmbeddedState" class="embeddedState">Hidden</span>
+                        <span data-i18n="photogallery.embedded_image_metadata">Embedded image metadata (EXIF / IPTC / XMP)</span>
+                        <span id="metaEmbeddedState" class="embeddedState" data-i18n="photogallery.hidden">Hidden</span>
                     </summary>
 
                     <div id="metaEmbeddedBody" class="embeddedBody">
                         <div class="mono" style="opacity:.75;">
-                            Open this section to load metadata stored inside the image file itself.
+                            <span data-i18n="photogallery.embedded_load_help">Open this section to load metadata stored inside the image file itself.</span>
                         </div>
                     </div>
                 </details>
@@ -1624,9 +1625,9 @@
         </div>
 
         <div class="modalFoot">
-            <div id="metaStatus" class="mono" style="opacity:.84;">Ready.</div>
+            <div id="metaStatus" class="mono" style="opacity:.84;" data-i18n="common.ready">Ready.</div>
             <div style="flex:1 1 auto;"></div>
-            <button id="metaSaveBtn" class="btn" type="button" title="Save metadata (Ctrl+S / Cmd+S)">Save</button>
+            <button id="metaSaveBtn" class="btn" type="button" title="Save metadata (Ctrl+S / Cmd+S)" data-i18n-title="photogallery.save_metadata_title" data-i18n="common.save">Save</button>
         </div>
     </div>
 </div>
@@ -1634,36 +1635,36 @@
     <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="shareTitle">
         <div class="modalHead">
             <div>
-                <div id="shareTitle" class="modalTitle">Share link</div>
+                <div id="shareTitle" class="modalTitle" data-i18n="photogallery.share_link">Share link</div>
                 <div id="sharePath" class="modalSub">/</div>
             </div>
-            <button id="shareClose" class="btn secondary" type="button">Close</button>
+            <button id="shareClose" class="btn secondary" type="button" data-i18n="common.close">Close</button>
         </div>
 
         <div class="modalBody">
             <div class="formGrid">
-                <div class="label">Expiry</div>
+                <div class="label" data-i18n="photogallery.expiry">Expiry</div>
                 <div>
                     <select id="shareExpiry" class="field mono">
-                        <option value="1h">1 hour</option>
-                        <option value="24h" selected>24 hours</option>
-                        <option value="7d">7 days</option>
-                        <option value="never">Never</option>
+                        <option value="1h" data-i18n="photogallery.expiry.1h">1 hour</option>
+                        <option value="24h" selected data-i18n="photogallery.expiry.24h">24 hours</option>
+                        <option value="7d" data-i18n="photogallery.expiry.7d">7 days</option>
+                        <option value="never" data-i18n="photogallery.expiry.never">Never</option>
                     </select>
                 </div>
 
-                <div class="label">Action</div>
+                <div class="label" data-i18n="photogallery.action">Action</div>
                 <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
-                    <button id="shareCreateBtn" class="btn" type="button">Create link</button>
-                    <button id="shareRevokeBtn" class="btn secondary" type="button" style="display:none;">Revoke</button>
+                    <button id="shareCreateBtn" class="btn" type="button" data-i18n="photogallery.create_link">Create link</button>
+                    <button id="shareRevokeBtn" class="btn secondary" type="button" style="display:none;" data-i18n="photogallery.revoke">Revoke</button>
                     <div id="shareStatus" class="mono" style="opacity:.84;">&nbsp;</div>
                 </div>
 
                 <div id="shareOutWrap" style="display:none; grid-column:1 / -1;">
-                    <div class="label" style="margin-bottom:8px;">Link</div>
+                    <div class="label" style="margin-bottom:8px;" data-i18n="photogallery.link">Link</div>
                     <div style="display:flex; gap:10px; align-items:center;">
                         <input id="shareOut" class="field mono" type="text" readonly style="flex:1 1 auto; min-width:0;">
-                        <button id="shareCopyBtn" class="btn secondary" type="button">Copy</button>
+                        <button id="shareCopyBtn" class="btn secondary" type="button" data-i18n="common.copy">Copy</button>
                     </div>
                 </div>
             </div>
@@ -1674,25 +1675,25 @@
     <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="slideshowTitle">
         <div class="modalHead">
             <div>
-                <div id="slideshowTitle" class="modalTitle">Start slideshow</div>
-                <div id="slideshowSub" class="modalSub">Using current filtered view</div>
+                <div id="slideshowTitle" class="modalTitle" data-i18n="photogallery.start_slideshow">Start slideshow</div>
+                <div id="slideshowSub" class="modalSub" data-i18n="photogallery.using_current_filtered_view">Using current filtered view</div>
             </div>
-            <button id="slideshowClose" class="btn secondary" type="button">Close</button>
+            <button id="slideshowClose" class="btn secondary" type="button" data-i18n="common.close">Close</button>
         </div>
 
         <div class="modalBody">
             <div class="formGrid">
-                <div class="label">Source</div>
-                <div id="slideshowCount" class="mono" style="opacity:.92;">0 photos</div>
+                <div class="label" data-i18n="photogallery.source">Source</div>
+                <div id="slideshowCount" class="mono" style="opacity:.92;" data-i18n="photogallery.zero_photos">0 photos</div>
 
-                <div class="label">Seconds / image</div>
+                <div class="label" data-i18n="photogallery.seconds_per_image">Seconds / image</div>
                 <div>
                     <select id="slideshowInterval" class="field mono">
-                        <option value="2000">2 seconds</option>
-                        <option value="3000">3 seconds</option>
-                        <option value="5000" selected>5 seconds</option>
-                        <option value="10000">10 seconds</option>
-                        <option value="15000">15 seconds</option>
+                        <option value="2000" data-i18n="photogallery.seconds.2">2 seconds</option>
+                        <option value="3000" data-i18n="photogallery.seconds.3">3 seconds</option>
+                        <option value="5000" selected data-i18n="photogallery.seconds.5">5 seconds</option>
+                        <option value="10000" data-i18n="photogallery.seconds.10">10 seconds</option>
+                        <option value="15000" data-i18n="photogallery.seconds.15">15 seconds</option>
                     </select>
                 </div>
 
@@ -1700,31 +1701,31 @@
                 <div style="display:flex; flex-direction:column; gap:10px;">
                     <label style="display:flex; align-items:center; gap:10px; cursor:pointer;">
                         <input id="slideshowShuffle" type="checkbox">
-                        <span>Shuffle</span>
+                        <span data-i18n="photogallery.shuffle">Shuffle</span>
                     </label>
 
                     <label style="display:flex; align-items:center; gap:10px; cursor:pointer;">
                         <input id="slideshowLoop" type="checkbox" checked>
-                        <span>Loop</span>
+                        <span data-i18n="photogallery.loop">Loop</span>
                     </label>
 
                     <label style="display:flex; align-items:center; gap:10px; cursor:pointer;">
                         <input id="slideshowFullscreen" type="checkbox" checked>
-                        <span>Enter fullscreen when slideshow starts</span>
+                        <span data-i18n="photogallery.enter_fullscreen_when_slideshow_starts">Enter fullscreen when slideshow starts</span>
                     </label>
 
                     <label style="display:flex; align-items:center; gap:10px; cursor:pointer;">
                         <input id="slideshowShowMeta" type="checkbox">
-                        <span>Show metadata during slideshow</span>
+                        <span data-i18n="photogallery.show_metadata_during_slideshow">Show metadata during slideshow</span>
                     </label>
                 </div>
             </div>
         </div>
 
         <div class="modalFoot">
-            <div id="slideshowStatus" class="mono" style="opacity:.84;">Ready.</div>
+            <div id="slideshowStatus" class="mono" style="opacity:.84;" data-i18n="common.ready">Ready.</div>
             <div style="flex:1 1 auto;"></div>
-            <button id="slideshowStartBtn" class="btn" type="button">Start slideshow</button>
+            <button id="slideshowStartBtn" class="btn" type="button" data-i18n="photogallery.start_slideshow">Start slideshow</button>
         </div>
     </div>
 </div>
@@ -1732,24 +1733,23 @@
     <div id="previewCard" class="modalCard previewCard">
         <div id="previewHead" class="modalHead previewHead">
             <div>
-                <div class="modalTitle">Image preview</div>
+                <div class="modalTitle" data-i18n="photogallery.image_preview">Image preview</div>
                 <div id="previewPath" class="modalSub">/</div>
             </div>
             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 <button id="previewPrevBtn" class="btn secondary" type="button">←</button>
                 <button id="previewNextBtn" class="btn secondary" type="button">→</button>
-                <button id="previewFitBtn" class="btn secondary" type="button">Fit</button>
+                <button id="previewFitBtn" class="btn secondary" type="button" data-i18n="photogallery.fit">Fit</button>
                 <button id="previewActualBtn" class="btn secondary" type="button">100%</button>
-                <button id="previewMetaBtn" class="btn secondary" type="button">Metadata</button>
-                <button id="previewShareBtn" class="btn secondary" type="button">Share</button>
-                <button id="previewFullscreenBtn" class="btn secondary" type="button">Fullscreen</button>
+                <button id="previewMetaBtn" class="btn secondary" type="button" data-i18n="photogallery.metadata">Metadata</button>
+                <button id="previewShareBtn" class="btn secondary" type="button" data-i18n="photogallery.share">Jaa</button><button id="previewFullscreenBtn" class="btn secondary" type="button" data-i18n="photogallery.fullscreen">Koko näyttö</button>
 
-                <button id="previewClose" class="btn secondary" type="button">Close</button>
+                <button id="previewClose" class="btn secondary" type="button" data-i18n="common.close">Close</button>
             </div>
         </div>
 
         <div class="modalFoot" style="border-top:0; border-bottom:1px solid var(--border2);">
-            <div id="previewInfo" class="mono" style="opacity:.84;">Loading…</div>
+            <div id="previewInfo" class="mono" style="opacity:.84;" data-i18n="common.loading">Loading…</div>
         </div>
 
         <div class="previewBody">
@@ -1764,51 +1764,51 @@
     <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="statsTitle" style="width:min(1100px, calc(100vw - 24px));">
         <div class="modalHead">
             <div>
-                <div id="statsTitle" class="modalTitle">Photo statistics</div>
-                <div id="statsSub" class="modalSub">Current library</div>
+                <div id="statsTitle" class="modalTitle" data-i18n="photogallery.photo_statistics">Photo statistics</div>
+                <div id="statsSub" class="modalSub" data-i18n="photogallery.current_library">Current library</div>
             </div>
-            <button id="statsClose" class="btn secondary" type="button">Close</button>
+            <button id="statsClose" class="btn secondary" type="button" data-i18n="common.close">Close</button>
         </div>
 
         <div class="modalBody">
-            <div id="statsStatus" class="mono" style="opacity:.84; margin-bottom:14px;">Loading…</div>
+            <div id="statsStatus" class="mono" style="opacity:.84; margin-bottom:14px;" data-i18n="common.loading">Loading…</div>
 
             <div id="statsSummary" class="pgStatsSummary"></div>
 
             <div class="pgStatsSection">
-                <div class="pgStatsSectionTitle">Top cameras</div>
+                <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.top_cameras">Top cameras</div>
                 <div id="statsTopCameras" class="pgStatsList"></div>
             </div>
 
             <div class="pgStatsSection">
-                <div class="pgStatsSectionTitle">Top lenses</div>
+                <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.top_lenses">Top lenses</div>
                 <div id="statsTopLenses" class="pgStatsList"></div>
             </div>
 
             <div class="pgStatsGrid2">
                 <div class="pgStatsSection">
-                    <div class="pgStatsSectionTitle">ISO</div>
+                    <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.iso">ISO</div>
                     <div id="statsIsoChart" class="pgStatsChart"></div>
                 </div>
 
                 <div class="pgStatsSection">
-                    <div class="pgStatsSectionTitle">Aperture</div>
+                    <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.aperture">Aperture</div>
                     <div id="statsApertureChart" class="pgStatsChart"></div>
                 </div>
 
                 <div class="pgStatsSection">
-                    <div class="pgStatsSectionTitle">Shutter speed</div>
+                    <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.shutter_speed">Shutter speed</div>
                     <div id="statsShutterChart" class="pgStatsChart"></div>
                 </div>
 
                 <div class="pgStatsSection">
-                    <div class="pgStatsSectionTitle">Focal length</div>
+                    <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.focal_length">Focal length</div>
                     <div id="statsFocalChart" class="pgStatsChart"></div>
                 </div>
             </div>
 
             <div class="pgStatsSection">
-                <div class="pgStatsSectionTitle">Photos by month</div>
+                <div class="pgStatsSectionTitle" data-i18n="photogallery.stats.photos_by_month">Photos by month</div>
                 <div id="statsByMonthChart" class="pgStatsChart"></div>
             </div>
         </div>
@@ -1834,7 +1834,7 @@
 <script src="./gallery_embedded_meta.js"></script>
 <script src="./bursts.js?v=4"></script>
 <script src="/static/pqnas_folder_picker.js?v=3"></script>
-<script src="./app.js?v=14"></script>
+<script src="./app.js?v=20260519-pg-safe-preview-labels-1"></script>
 <script src="./gallery_exif_search.js?v=1"></script>
 <script src="./albums_picker.js?v=7"></script>
 <script src="./gallery_upload.js?v=1"></script>

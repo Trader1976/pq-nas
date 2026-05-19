@@ -3,6 +3,22 @@
     window.PQNAS_PHOTOGALLERY = window.PQNAS_PHOTOGALLERY || {};
     const el = (id) => document.getElementById(id);
 
+    function pgT(key, params, fallback) {
+        try {
+            const api = window.PQNAS_I18N;
+            if (api && typeof api.t === "function") {
+                return api.t(key, params || null, fallback);
+            }
+        } catch (_) {}
+
+        let out = String(fallback || key || "");
+        const p = params || {};
+        for (const name of Object.keys(p)) {
+            out = out.split(`{${name}}`).join(String(p[name]));
+        }
+        return out;
+    }
+
     try {
         if (window.self !== window.top) document.body.classList.add("embedded");
     } catch (_) {
@@ -58,6 +74,36 @@
     const previewClose = el("previewClose");
     const previewShareBtn = el("previewShareBtn");
     const previewFullscreenBtn = el("previewFullscreenBtn");
+
+    function applyPreviewButtonTranslations() {
+        if (previewShareBtn) {
+            const txt = pgT("photogallery.share", null, "Share");
+            previewShareBtn.setAttribute("data-i18n", "photogallery.share");
+            if (previewShareBtn.textContent !== txt) previewShareBtn.textContent = txt;
+        }
+
+        if (previewFullscreenBtn) {
+            const isFullscreen = document.fullscreenElement === previewCard;
+            const key = isFullscreen ? "photogallery.exit_fullscreen" : "photogallery.fullscreen";
+            const fallback = isFullscreen ? "Exit fullscreen" : "Fullscreen";
+            const txt = pgT(key, null, fallback);
+            previewFullscreenBtn.setAttribute("data-i18n", key);
+            if (previewFullscreenBtn.textContent !== txt) previewFullscreenBtn.textContent = txt;
+        }
+    }
+
+    applyPreviewButtonTranslations();
+
+    function schedulePreviewButtonTranslations() {
+        applyPreviewButtonTranslations();
+        window.setTimeout(applyPreviewButtonTranslations, 50);
+        window.setTimeout(applyPreviewButtonTranslations, 250);
+        window.setTimeout(applyPreviewButtonTranslations, 1000);
+    }
+
+    schedulePreviewButtonTranslations();
+    window.addEventListener("load", schedulePreviewButtonTranslations);
+    document.addEventListener("fullscreenchange", applyPreviewButtonTranslations);
 
     const metaCard = el("metaCard");
     const metaHead = el("metaHead");
