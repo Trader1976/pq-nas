@@ -1178,6 +1178,114 @@ html[data-theme="orange"] .pgTopModeBtnActive{
         });
     }
 
+    async function pgAlertModal(opts) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+
+            const modal = document.createElement("div");
+            modal.className = "modal show";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "modalCard";
+            card.style.width = "min(560px, calc(100vw - 24px))";
+
+            const head = document.createElement("div");
+            head.className = "modalHead";
+
+            const headText = document.createElement("div");
+
+            const title = document.createElement("div");
+            title.className = "modalTitle";
+            title.textContent = options.title || pgT("common.notice", null, "Notice");
+
+            const sub = document.createElement("div");
+            sub.className = "modalSub";
+            sub.textContent = options.subtitle || "";
+
+            headText.appendChild(title);
+            if (sub.textContent) headText.appendChild(sub);
+            head.appendChild(headText);
+
+            const body = document.createElement("div");
+            body.className = "modalBody";
+            body.style.gridTemplateColumns = "130px 1fr";
+
+            const rows = Array.isArray(options.rows) ? options.rows : [];
+            for (const row of rows) {
+                const k = document.createElement("div");
+                k.className = "k";
+                k.textContent = String(row.label || "");
+
+                const v = document.createElement("div");
+                v.className = row.mono ? "v mono" : "v";
+                v.textContent = String(row.value || "");
+
+                body.appendChild(k);
+                body.appendChild(v);
+            }
+
+            if (options.note) {
+                const note = document.createElement("div");
+                note.className = "v";
+                note.style.gridColumn = "1 / -1";
+                note.style.opacity = "0.9";
+                note.style.whiteSpace = "pre-wrap";
+                note.textContent = String(options.note || "");
+                body.appendChild(note);
+            }
+
+            const foot = document.createElement("div");
+            foot.className = "modalFoot";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = options.confirmText || pgT("common.ok", null, "OK");
+
+            if (options.danger) {
+                okBtn.style.borderColor = "rgba(var(--fail-rgb),0.45)";
+                okBtn.style.background = "rgba(var(--fail-rgb),0.14)";
+                okBtn.style.color = "var(--fg)";
+            }
+
+            foot.appendChild(spacer);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            if (rows.length || options.note) card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = () => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(true);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape" || ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish();
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish();
+            });
+            okBtn.addEventListener("click", finish);
+
+            window.setTimeout(() => okBtn.focus(), 0);
+        });
+    }
+
     async function renameImage(item) {
         if (!item || item.type !== "file") return;
 
@@ -1475,24 +1583,33 @@ html[data-theme="orange"] .pgTopModeBtnActive{
 
         const more = affected.length > 8 ? `\n…plus ${affected.length - 8} more` : "";
 
-        return confirm(
-            `Warning: this move affects ${affected.length} existing share link(s).\n\n` +
-            `${shown}${more}\n\n` +
-            `Those path-based share links will no longer find the moved content after the move.\n\n` +
-            `Continue?`
-        );
+        return await pgConfirmModal({
+            title: pgT("photogallery.move.share_warning_title", null, "Move affects share links"),
+            subtitle: pgT("photogallery.move.share_warning_subtitle", { count: affected.length }, "{count} existing share link(s) may break."),
+            rows: [
+                { label: pgT("photogallery.move.affected", null, "Affected"), value: String(affected.length), mono: true },
+            ],
+            note: `${shown}${more}\n\n${pgT("photogallery.move.share_warning_note", null, "Those path-based share links will no longer find the moved content after the move.")}`,
+            confirmText: pgT("common.continue", null, "Continue"),
+            cancelText: pgT("common.cancel", null, "Cancel"),
+            danger: true,
+        });
     }
 
 
     async function pickMoveDestination(options) {
         const o = options || {};
-        const fallbackPrompt = () => {
-            const raw = prompt(
-                `${o.title || "Move"} to which folder?\n\n` +
-                `Enter destination folder path relative to My Files.\n` +
-                `Leave empty for root.`,
-                o.initialPath || ""
-            );
+        const fallbackPrompt = async () => {
+            const raw = await pgPromptModal({
+                title: o.title || pgT("photogallery.move.title", null, "Move"),
+                subtitle: pgT("photogallery.move.prompt_destination_subtitle", null, "Enter destination folder path relative to My Files."),
+                label: pgT("photogallery.move.destination_folder", null, "Destination folder"),
+                value: o.initialPath || "",
+                help: pgT("photogallery.move.leave_empty_for_root", null, "Leave empty for root."),
+                confirmText: pgT("photogallery.move.move_here", null, "Move here"),
+                cancelText: pgT("common.cancel", null, "Cancel"),
+                required: false,
+            });
             return raw === null ? null : normalizeRelPath(raw);
         };
 
@@ -1503,12 +1620,12 @@ html[data-theme="orange"] .pgTopModeBtnActive{
 
         try {
             const picked = await picker.open({
-                title: o.title || "Move",
-                subtitle: "Choose destination folder",
+                title: o.title || pgT("photogallery.move.title", null, "Move"),
+                subtitle: pgT("photogallery.move.choose_destination_folder", null, "Choose destination folder"),
                 source: o.source || "",
                 initialPath: o.initialPath || "",
                 blockedPaths: Array.isArray(o.blockedPaths) ? o.blockedPaths : [],
-                chooseLabel: o.chooseLabel || "Move here",
+                chooseLabel: o.chooseLabel || pgT("photogallery.move.move_here", null, "Move here"),
                 canCreate: true
             });
             return picked === null ? null : normalizeRelPath(picked);
@@ -1529,75 +1646,91 @@ html[data-theme="orange"] .pgTopModeBtnActive{
 
         const currentParent = parentPath(fromRel);
         const destDir = await pickMoveDestination({
-            title: `Move ${item.type === "dir" ? "folder" : "image"}`,
+            title: pgT("photogallery.move.move_kind", {
+                kind: item.type === "dir"
+                    ? pgT("photogallery.folder", null, "folder")
+                    : pgT("photogallery.image", null, "image")
+            }, "Move {kind}"),
             source: fromRel,
             initialPath: currentParent,
             blockedPaths: item.type === "dir" ? [fromRel] : [],
-            chooseLabel: "Move here"
+            chooseLabel: pgT("photogallery.move.move_here", null, "Move here")
         });
 
         if (destDir === null) {
-            setStatus("Move cancelled.");
+            setStatus(pgT("photogallery.move.cancelled", null, "Move cancelled."));
             return;
         }
         const toRel = destDir ? joinPath(destDir, name) : name;
 
         if (!toRel || toRel === fromRel) {
-            setStatus("Move cancelled: destination is the same.");
+            setStatus(pgT("photogallery.move.cancelled_same_destination", null, "Move cancelled: destination is the same."));
             return;
         }
 
         if (item.type === "dir" && isSameOrUnderPath(destDir, fromRel)) {
-            alert("Cannot move a folder into itself.");
-            setStatus("Move cancelled: destination is inside source folder.");
+            await pgAlertModal({
+                title: pgT("photogallery.move.cannot_move_folder_into_itself", null, "Cannot move a folder into itself."),
+                confirmText: pgT("common.ok", null, "OK"),
+                danger: true,
+            });
+            setStatus(pgT("photogallery.move.cancelled_inside_source", null, "Move cancelled: destination is inside source folder."));
             return;
         }
 
         const targets = [{ from: fromRel, to: toRel, type: item.type || "file" }];
         if (!(await confirmMoveMayBreakShares(targets))) {
-            setStatus("Move cancelled.");
+            setStatus(pgT("photogallery.move.cancelled", null, "Move cancelled."));
             return;
         }
 
-        if (!confirm(`Move?\n\nFrom: ${fromRel}\nTo:   ${toRel}`)) {
-            setStatus("Move cancelled.");
+        if (!(await pgConfirmModal({
+            title: pgT("photogallery.move.confirm_single_title", null, "Move item?"),
+            rows: [
+                { label: pgT("photogallery.move.from", null, "From"), value: fromRel, mono: true },
+                { label: pgT("photogallery.move.to", null, "To"), value: toRel, mono: true },
+            ],
+            confirmText: pgT("photogallery.move.move_here", null, "Move here"),
+            cancelText: pgT("common.cancel", null, "Cancel"),
+        }))) {
+            setStatus(pgT("photogallery.move.cancelled", null, "Move cancelled."));
             return;
         }
 
         try {
             setBadge("warn", "moving…");
-            setStatus(`Moving ${name}…`);
+            setStatus(pgT("photogallery.move.moving_name", { name }, "Moving {name}…"));
             await movePathApi(fromRel, toRel);
 
             selectedRelPaths.delete(fromRel);
             selectedRelPaths.add(toRel);
             selectionAnchorRelPath = toRel;
 
-            setStatus(`Moved: ${fromRel} → ${toRel}`);
+            setStatus(pgT("photogallery.move.moved_from_to", { from: fromRel, to: toRel }, "Moved: {from} → {to}"));
             await load(true);
         } catch (e) {
-            setBadge("err", "move failed");
-            setStatus(`Move failed: ${String(e && e.message ? e.message : e)}`);
+            setBadge("err", pgT("photogallery.badge.move_failed", null, "move failed"));
+            setStatus(pgT("photogallery.move.failed", { error: String(e && e.message ? e.message : e) }, "Move failed: {error}"));
         }
     }
 
     async function moveSelection() {
         const paths = dedupeSelectedMovePaths(selectedRelPathsList());
         if (!paths.length) {
-            setStatus("Nothing selected.");
+            setStatus(pgT("photogallery.nothing_selected", null, "Nothing selected."));
             return;
         }
 
         const destDir = await pickMoveDestination({
-            title: `Move ${paths.length} selected item(s)`,
-            source: `${paths.length} selected item(s)`,
+            title: pgT("photogallery.move.move_selected_count", { count: paths.length }, "Move {count} selected item(s)"),
+            source: pgT("photogallery.selected_item_count", { count: paths.length }, "{count} selected item(s)"),
             initialPath: state.curPath || "",
             blockedPaths: paths.filter((p) => itemTypeForRelPath(p) === "dir"),
-            chooseLabel: "Move here"
+            chooseLabel: pgT("photogallery.move.move_here", null, "Move here")
         });
 
         if (destDir === null) {
-            setStatus("Move cancelled.");
+            setStatus(pgT("photogallery.move.cancelled", null, "Move cancelled."));
             return;
         }
 
@@ -1613,8 +1746,15 @@ html[data-theme="orange"] .pgTopModeBtnActive{
             if (!to || to === from) continue;
 
             if (type === "dir" && isSameOrUnderPath(destDir, from)) {
-                alert(`Cannot move folder into itself:\n\n${from}`);
-                setStatus("Move cancelled.");
+                await pgAlertModal({
+                    title: pgT("photogallery.move.cannot_move_folder_into_itself", null, "Cannot move a folder into itself."),
+                    rows: [
+                        { label: pgT("photogallery.folder", null, "Folder"), value: from, mono: true },
+                    ],
+                    confirmText: pgT("common.ok", null, "OK"),
+                    danger: true,
+                });
+                setStatus(pgT("photogallery.move.cancelled", null, "Move cancelled."));
                 return;
             }
 
@@ -1622,35 +1762,47 @@ html[data-theme="orange"] .pgTopModeBtnActive{
         }
 
         if (!targets.length) {
-            setStatus("Move cancelled: everything is already in that destination.");
+            setStatus(pgT("photogallery.move.cancelled_already_there", null, "Move cancelled: everything is already in that destination."));
             return;
         }
 
         const seenDest = new Set();
         for (const t of targets) {
             if (seenDest.has(t.to)) {
-                alert(`Move cancelled: multiple selected items would land on the same destination:\n\n${t.to}`);
-                setStatus("Move cancelled: duplicate destination.");
+                await pgAlertModal({
+                    title: pgT("photogallery.move.duplicate_destination_title", null, "Duplicate destination"),
+                    subtitle: pgT("photogallery.move.duplicate_destination_subtitle", null, "Multiple selected items would land on the same destination."),
+                    rows: [
+                        { label: pgT("photogallery.move.destination_folder", null, "Destination folder"), value: t.to, mono: true },
+                    ],
+                    confirmText: pgT("common.ok", null, "OK"),
+                    danger: true,
+                });
+                setStatus(pgT("photogallery.move.cancelled_duplicate_destination", null, "Move cancelled: duplicate destination."));
                 return;
             }
             seenDest.add(t.to);
         }
 
         if (!(await confirmMoveMayBreakShares(targets))) {
-            setStatus("Move cancelled.");
+            setStatus(pgT("photogallery.move.cancelled", null, "Move cancelled."));
             return;
         }
 
-        if (!confirm(
-            `Move ${targets.length} selected item(s)?\n\n` +
-            `Destination folder: ${destDir || "/"}`
-        )) {
-            setStatus("Move cancelled.");
+        if (!(await pgConfirmModal({
+            title: pgT("photogallery.move.confirm_selected_title", { count: targets.length }, "Move {count} selected item(s)?"),
+            rows: [
+                { label: pgT("photogallery.move.destination_folder", null, "Destination folder"), value: destDir || "/", mono: true },
+            ],
+            confirmText: pgT("photogallery.move.move_here", null, "Move here"),
+            cancelText: pgT("common.cancel", null, "Cancel"),
+        }))) {
+            setStatus(pgT("photogallery.move.cancelled", null, "Move cancelled."));
             return;
         }
 
         setBadge("warn", "moving…");
-        setStatus(`Moving ${targets.length} selected item(s)…`);
+        setStatus(pgT("photogallery.move.moving_selected_count", { count: targets.length }, "Moving {count} selected item(s)…"));
 
         let done = 0;
         const failed = [];
@@ -1676,16 +1828,18 @@ html[data-theme="orange"] .pgTopModeBtnActive{
 
         if (failed.length) {
             console.warn("Photo Gallery moveSelection failures:", failed);
-            setBadge("warn", "partial move");
-            setStatus(`Moved ${done}/${targets.length}. Failed: ${failed.length}`);
-            alert(
-                `Moved ${done}/${targets.length} item(s).\n\n` +
-                `Failed:\n` +
-                failed.slice(0, 8).map((f) => `• ${f.from}: ${f.error}`).join("\n")
-            );
+            setBadge("warn", pgT("photogallery.badge.partial_move", null, "partial move"));
+            setStatus(pgT("photogallery.move.partial_result", { done, total: targets.length, failed: failed.length }, "Moved {done}/{total}. Failed: {failed}"));
+            await pgAlertModal({
+                title: pgT("photogallery.move.partial_move_title", null, "Partial move"),
+                subtitle: pgT("photogallery.move.partial_alert_header", { done, total: targets.length }, "Moved {done}/{total} item(s)."),
+                note: failed.slice(0, 8).map((f) => `• ${f.from}: ${f.error}`).join("\n"),
+                confirmText: pgT("common.ok", null, "OK"),
+                danger: true,
+            });
         } else {
-            setBadge("ok", "moved");
-            setStatus(`Moved ${done} selected item(s).`);
+            setBadge("ok", pgT("photogallery.badge.moved", null, "moved"));
+            setStatus(pgT("photogallery.move.moved_selected_count", { count: done }, "Moved {count} selected item(s)."));
         }
     }
 
@@ -1694,11 +1848,21 @@ html[data-theme="orange"] .pgTopModeBtnActive{
         if (!item || item.type !== "dir") return;
 
         const rel = currentRelPathFor(item);
-        const ok = confirm(`Move folder to trash?\n\n${rel}\n\nThis moves the folder and its contents to Trash. You can restore it later.`);
+        const ok = await pgConfirmModal({
+            title: pgT("photogallery.trash.confirm_folder_title", null, "Move folder to trash?"),
+            subtitle: pgT("photogallery.trash.confirm_folder_subtitle", null, "This moves the folder and its contents to Trash."),
+            rows: [
+                { label: pgT("photogallery.folder", null, "Folder"), value: rel, mono: true },
+            ],
+            note: pgT("photogallery.trash.restore_later_note", null, "You can restore it later from Trash."),
+            confirmText: pgT("photogallery.trash.move_to_trash", null, "Move to trash"),
+            cancelText: pgT("common.cancel", null, "Cancel"),
+            danger: true,
+        });
         if (!ok) return;
 
         setBadge("warn", "working…");
-        setStatus(`Moving folder ${item.name} to trash…`);
+        setStatus(pgT("photogallery.trash.moving_folder", { name: item.name }, "Moving folder {name} to trash…"));
 
         try {
             const r = await fetch(
@@ -1719,14 +1883,14 @@ html[data-theme="orange"] .pgTopModeBtnActive{
             }
 
             setBadge("ok", "ready");
-            setStatus(`Moved folder to trash: ${item.name}`);
+            setStatus(pgT("photogallery.trash.moved_folder", { name: item.name }, "Moved folder to trash: {name}"));
             clearFolderListCache();
             resetTreeStats();
             invalidateSearchCache();
             await load(true);
         } catch (e) {
             setBadge("err", "error");
-            setStatus(`Folder move to trash failed: ${String(e && e.message ? e.message : e)}`);
+            setStatus(pgT("photogallery.trash.folder_failed", { error: String(e && e.message ? e.message : e) }, "Folder move to trash failed: {error}"));
         }
     }
     async function createFolder(basePath = state.curPath) {
@@ -1798,16 +1962,16 @@ html[data-theme="orange"] .pgTopModeBtnActive{
                 window.PQNAS_PHOTOGALLERY &&
                 window.PQNAS_PHOTOGALLERY.compareView &&
                 typeof window.PQNAS_PHOTOGALLERY.compareView.open === "function") {
-                ctxMenu.appendChild(menuItem("Compare side by side", () => {
+                ctxMenu.appendChild(menuItem(pgT("photogallery.menu.compare_side_by_side", null, "Compare side by side"), () => {
                     window.PQNAS_PHOTOGALLERY.compareView.open(imageTargets);
                 }));
             }
 
-            ctxMenu.appendChild(menuItem("Add selected photos to album…", () => {
+            ctxMenu.appendChild(menuItem(pgT("photogallery.menu.add_selected_to_album", null, "Add selected photos to album…"), () => {
                 addSelectedImagesToAlbum();
             }));
 
-            ctxMenu.appendChild(menuItem("Edit metadata for selected photos…", () => {
+            ctxMenu.appendChild(menuItem(pgT("photogallery.menu.edit_selected_metadata", null, "Edit metadata for selected photos…"), () => {
                 const preferred =
                     state.activeTilePath && imageTargets.includes(state.activeTilePath)
                         ? state.activeTilePath
@@ -1818,15 +1982,15 @@ html[data-theme="orange"] .pgTopModeBtnActive{
             ctxMenu.appendChild(menuSep());
         }
 
-        ctxMenu.appendChild(menuItem("Download selected", () => downloadSelectionZip()));
-        ctxMenu.appendChild(menuItem("Export selected with metadata…", () => exportSelectionZip()));
-        ctxMenu.appendChild(menuItem("Move selected…", () => moveSelection()));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.download_selected", null, "Download selected"), () => downloadSelectionZip()));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.export_selected_metadata", null, "Export selected with metadata…"), () => exportSelectionZip()));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.move_selected", null, "Move selected…"), () => moveSelection()));
         ctxMenu.appendChild(menuSep());
-        ctxMenu.appendChild(menuItem("Clear selection", () => {
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.clear_selection", null, "Clear selection"), () => {
             clearSelection();
-            setStatus("Selection cleared.");
+            setStatus(pgT("photogallery.selection_cleared", null, "Selection cleared."));
         }));
-        ctxMenu.appendChild(menuItem("Move selected to trash…", () => deleteSelection(), { danger: true }));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.move_selected_to_trash", null, "Move selected to trash…"), () => deleteSelection(), { danger: true }));
 
         placeContextMenu(x, y);
     }
@@ -1834,19 +1998,19 @@ html[data-theme="orange"] .pgTopModeBtnActive{
         if (!ctxMenu || !item || item.type !== "dir") return;
 
         ctxMenu.innerHTML = "";
-        ctxMenu.appendChild(menuItem("Open", () => {
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.open", null, "Open"), () => {
             setCurrentPath(currentRelPathFor(item), "folder-context-open");
             load();
         }));
-        ctxMenu.appendChild(menuItem("New folder here…", () => {
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.new_folder_here", null, "New folder here…"), () => {
             createFolder(currentRelPathFor(item));
         }));
-        ctxMenu.appendChild(menuItem("Download zip", () => downloadSingleFolderZip(item)));
-        ctxMenu.appendChild(menuItem("Export with metadata…", () => exportSingleItemZip(item)));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.download_zip", null, "Download zip"), () => downloadSingleFolderZip(item)));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.export_metadata", null, "Export with metadata…"), () => exportSingleItemZip(item)));
         ctxMenu.appendChild(menuSep());
-        ctxMenu.appendChild(menuItem("Move…", () => moveItem(item)));
-        ctxMenu.appendChild(menuItem("Rename…", () => renameFolder(item)));
-        ctxMenu.appendChild(menuItem("Move to trash…", () => deleteFolder(item), { danger: true }));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.move", null, "Move…"), () => moveItem(item)));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.rename", null, "Rename…"), () => renameFolder(item)));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.move_to_trash", null, "Move to trash…"), () => deleteFolder(item), { danger: true }));
 
         placeContextMenu(x, y);
     }
@@ -1855,7 +2019,7 @@ html[data-theme="orange"] .pgTopModeBtnActive{
 
         ctxMenu.innerHTML = "";
 
-        ctxMenu.appendChild(menuItem("Upload files…", () => {
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.upload_files", null, "Upload files…"), () => {
             if (window.PQNAS_PHOTOGALLERY?.upload?.pickFiles) {
                 window.PQNAS_PHOTOGALLERY.upload.pickFiles();
                 return;
@@ -1865,10 +2029,10 @@ html[data-theme="orange"] .pgTopModeBtnActive{
                 return;
             }
             setBadge("err", "error");
-            setStatus("Upload module not loaded.");
+            setStatus(pgT("photogallery.upload_module_not_loaded", null, "Upload module not loaded."));
         }));
 
-        ctxMenu.appendChild(menuItem("Upload folder…", () => {
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.upload_folder", null, "Upload folder…"), () => {
             if (window.PQNAS_PHOTOGALLERY?.upload?.pickFolder) {
                 window.PQNAS_PHOTOGALLERY.upload.pickFolder();
                 return;
@@ -1878,17 +2042,17 @@ html[data-theme="orange"] .pgTopModeBtnActive{
                 return;
             }
             setBadge("err", "error");
-            setStatus("Upload module not loaded.");
+            setStatus(pgT("photogallery.upload_module_not_loaded", null, "Upload module not loaded."));
         }));
 
         ctxMenu.appendChild(menuSep());
 
-        ctxMenu.appendChild(menuItem("New folder…", () => {
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.new_folder", null, "New folder…"), () => {
             createFolder(state.curPath);
         }));
 
         if (state.curPath) {
-            ctxMenu.appendChild(menuItem("Up", () => {
+            ctxMenu.appendChild(menuItem(pgT("common.up", null, "Up"), () => {
                 setCurrentPath(parentPath(state.curPath), "background-context-up");
                 clearSelection();
                 load();
@@ -1896,7 +2060,7 @@ html[data-theme="orange"] .pgTopModeBtnActive{
         }
 
         ctxMenu.appendChild(menuSep());
-        ctxMenu.appendChild(menuItem("Refresh", () => load(true)));
+        ctxMenu.appendChild(menuItem(pgT("common.refresh", null, "Refresh"), () => load(true)));
 
         placeContextMenu(x, y);
     }
@@ -1910,24 +2074,24 @@ html[data-theme="orange"] .pgTopModeBtnActive{
 
         ctxMenu.innerHTML = "";
         ctxMenu.innerHTML = "";
-        ctxMenu.appendChild(menuItem("Open preview", () => openPreviewFor(item)));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.open_preview", null, "Open preview"), () => openPreviewFor(item)));
 
-        ctxMenu.appendChild(menuItem("Add to album…", () => {
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.add_to_album", null, "Add to album…"), () => {
             const rel = currentRelPathFor(item);
             setSingleSelection(rel);
             addSelectedImagesToAlbum();
         }));
 
-        ctxMenu.appendChild(menuItem("Edit metadata…", () => openMetaFor(item)));
-        ctxMenu.appendChild(menuItem("Download", () => downloadSingleImage(item)));
-        ctxMenu.appendChild(menuItem("Export with metadata…", () => exportSingleItemZip(item)));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.edit_metadata", null, "Edit metadata…"), () => openMetaFor(item)));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.download", null, "Download"), () => downloadSingleImage(item)));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.export_metadata", null, "Export with metadata…"), () => exportSingleItemZip(item)));
         ctxMenu.appendChild(menuItem(shareLabel, () => {
             window.PQNAS_PHOTOGALLERY_SHARES?.openForItem(item);
         }));
         ctxMenu.appendChild(menuSep());
-        ctxMenu.appendChild(menuItem("Move…", () => moveItem(item)));
-        ctxMenu.appendChild(menuItem("Rename…", () => renameImage(item)));
-        ctxMenu.appendChild(menuItem("Move to trash…", () => deleteImage(item), { danger: true }));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.move", null, "Move…"), () => moveItem(item)));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.rename", null, "Rename…"), () => renameImage(item)));
+        ctxMenu.appendChild(menuItem(pgT("photogallery.menu.move_to_trash", null, "Move to trash…"), () => deleteImage(item), { danger: true }));
 
         placeContextMenu(x, y);
     }
@@ -2479,7 +2643,7 @@ html[data-theme="orange"] .pgTopModeBtnActive{
     async function exportSelectionZip() {
         const paths = selectedRelPathsList();
         if (!paths.length) {
-            setStatus("Nothing selected.");
+            setStatus(pgT("photogallery.nothing_selected", null, "Nothing selected."));
             return;
         }
 
@@ -2523,7 +2687,7 @@ html[data-theme="orange"] .pgTopModeBtnActive{
     async function downloadSelectionZip() {
         const paths = selectedRelPathsList();
         if (!paths.length) {
-            setStatus("Nothing selected.");
+            setStatus(pgT("photogallery.nothing_selected", null, "Nothing selected."));
             return;
         }
 
@@ -2539,17 +2703,21 @@ html[data-theme="orange"] .pgTopModeBtnActive{
     async function deleteSelection() {
         const paths = selectedRelPathsList();
         if (!paths.length) {
-            setStatus("Nothing selected.");
+            setStatus(pgT("photogallery.nothing_selected", null, "Nothing selected."));
             return;
         }
 
-        const ok = confirm(
-            `Move ${paths.length} selected item(s) to trash?\n\nYou can restore them later from Trash.`
-        );
+        const ok = await pgConfirmModal({
+            title: pgT("photogallery.trash.confirm_selected_title", { count: paths.length }, "Move {count} selected item(s) to trash?"),
+            note: pgT("photogallery.trash.restore_them_later_note", null, "You can restore them later from Trash."),
+            confirmText: pgT("photogallery.trash.move_to_trash", null, "Move to trash"),
+            cancelText: pgT("common.cancel", null, "Cancel"),
+            danger: true,
+        });
         if (!ok) return;
 
         setBadge("warn", "working…");
-        setStatus(`Moving ${paths.length} item(s) to trash…`);
+        setStatus(pgT("photogallery.trash.moving_selected", { count: paths.length }, "Moving {count} item(s) to trash…"));
 
         let done = 0;
         const failed = [];
@@ -2590,11 +2758,11 @@ html[data-theme="orange"] .pgTopModeBtnActive{
 
         if (failed.length) {
             setBadge("warn", "partial");
-            setStatus(`Moved to trash ${done}/${paths.length}. Failed: ${failed.length}`);
+            setStatus(pgT("photogallery.trash.partial_result", { done, total: paths.length, failed: failed.length }, "Moved to trash {done}/{total}. Failed: {failed}"));
             console.warn("Photo Gallery deleteSelection failures:", failed);
         } else {
             setBadge("ok", "ready");
-            setStatus(`Moved to trash ${done} item(s).`);
+            setStatus(pgT("photogallery.trash.moved_selected", { count: done }, "Moved to trash {count} item(s)."));
         }
     }
     const marquee = document.createElement("div");
@@ -4806,7 +4974,7 @@ html[data-theme="orange"] .pgTopModeBtnActive{
     deleteSelBtn?.addEventListener("click", deleteSelection);
     clearSelBtn?.addEventListener("click", () => {
         clearSelection();
-        setStatus("Selection cleared.");
+        setStatus(pgT("photogallery.selection_cleared", null, "Selection cleared."));
     });
 
 
