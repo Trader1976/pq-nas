@@ -8,6 +8,27 @@
 
   const el = (id) => document.getElementById(id);
 
+  function echoT(key, params, fallback) {
+    try {
+      const api = window.PQNAS_I18N;
+      if (api && typeof api.t === "function") {
+        return api.t(key, params || null, fallback);
+      }
+    } catch (_) {}
+
+    let out = String(fallback || key || "");
+    const p = params || {};
+    for (const name of Object.keys(p)) {
+      out = out.split(`{${name}}`).join(String(p[name]));
+    }
+    return out;
+  }
+
+  function echoCount(key, count, fallback) {
+    return echoT(key, { count: Number(count || 0) }, fallback);
+  }
+
+
   function loadViewMode() {
     try {
       const v = localStorage.getItem(VIEW_MODE_KEY);
@@ -65,7 +86,7 @@
     }
 
     versionEl.textContent = `v${ver}`;
-    versionEl.title = `Echo Stack ${ver}`;
+    versionEl.title = echoT("echostack.version_title", { version: ver }, "Echo Stack {version}");
     versionEl.hidden = false;
   }
 
@@ -98,10 +119,10 @@
 
 
   function showEchoConfirm(options = {}) {
-    const title = String(options.title || "Are you sure?");
+    const title = String(options.title || echoT("echostack.are_you_sure", null, "Are you sure?"));
     const message = String(options.message || "");
-    const confirmText = String(options.confirmText || "OK");
-    const cancelText = String(options.cancelText || "Cancel");
+    const confirmText = String(options.confirmText || echoT("common.ok", null, "OK"));
+    const cancelText = String(options.cancelText || echoT("common.cancel", null, "Cancel"));
     const danger = Boolean(options.danger);
 
     return new Promise((resolve) => {
@@ -286,14 +307,14 @@
     const html = String(htmlText || "");
 
     if (!/NETSCAPE-Bookmark-file-1/i.test(html) && !/<a\s+[^>]*href\s*=/i.test(html)) {
-      throw new Error("This does not look like a browser bookmarks HTML export.");
+      throw new Error(echoT("echostack.import.not_bookmarks_html", null, "This does not look like a browser bookmarks HTML export."));
     }
 
     const doc = new DOMParser().parseFromString(html, "text/html");
     const root = doc.querySelector("dl");
 
     if (!root) {
-      throw new Error("No bookmark list found in this file.");
+      throw new Error(echoT("echostack.import.no_bookmark_list", null, "No bookmark list found in this file."));
     }
 
     const bookmarks = [];
@@ -306,7 +327,7 @@
       seenInFile.add(url);
 
       const title = cleanBookmarkText(anchor.textContent) || url;
-      const collection = folders.filter(Boolean).join(" / ") || "Imported bookmarks";
+      const collection = folders.filter(Boolean).join(" / ") || echoT("echostack.imported_bookmarks", null, "Imported bookmarks");
       const addDateRaw = String(anchor.getAttribute("ADD_DATE") || "").trim();
       const addedEpoch = /^\d+$/.test(addDateRaw) ? Number(addDateRaw) : 0;
 
@@ -417,19 +438,19 @@
   }
 
   function bookmarkExportTitle(item) {
-    return cleanBookmarkText(item.title || item.url || "Untitled") || "Untitled";
+    return cleanBookmarkText(item.title || item.url || echoT("common.untitled", null, "Untitled")) || echoT("common.untitled", null, "Untitled");
   }
 
   function bookmarkExportFolderPath(item) {
     const raw = cleanBookmarkText(item.collection || "");
-    if (!raw) return ["Echo Stack"];
+    if (!raw) return [echoT("echostack.title", null, "Echo Stack")];
 
     const parts = raw
       .split(/\s+\/\s+/)
       .map((part) => cleanBookmarkText(part))
       .filter(Boolean);
 
-    return parts.length ? parts : ["Echo Stack"];
+    return parts.length ? parts : [echoT("echostack.title", null, "Echo Stack")];
   }
 
   function makeBookmarkTree(items) {
@@ -566,17 +587,17 @@
     if (btn) {
       btn.disabled = true;
       btn.classList.add("exporting");
-      btn.textContent = "Exporting";
+      btn.textContent = echoT("echostack.exporting", null, "Exporting");
     }
 
     try {
-      setStatus("Preparing bookmark export…", "working");
+      setStatus(echoT("echostack.export.preparing", null, "Preparing bookmark export…"), "working");
 
       const j = await api("/items?limit=500");
       const items = Array.isArray(j.items) ? j.items : [];
 
       if (!items.length) {
-        setStatus("No links to export.", "bad");
+        setStatus(echoT("echostack.export.no_links", null, "No links to export."), "bad");
         return;
       }
 
@@ -587,12 +608,12 @@
       downloadTextFile(filename, html, "text/html;charset=utf-8");
 
       const exportedLinks = (items || []).filter((item) => bookmarkExportUrl(item.url || "")).length;
-      setStatus(`Exported ${exportedLinks} bookmarks to ${filename}.`, "good");
+      setStatus(echoT("echostack.export.done", { count: exportedLinks, filename }, "Exported {count} bookmarks to {filename}."), "good");
     } finally {
       if (btn) {
         btn.disabled = false;
         btn.classList.remove("exporting");
-        btn.textContent = "Export bookmarks";
+        btn.textContent = echoT("echostack.export_bookmarks", null, "Export bookmarks");
       }
     }
   }
@@ -606,7 +627,7 @@
       site_name: "",
       favicon_url: faviconFromUrl(bookmark.url),
       preview_image_url: "",
-      collection: bookmark.collection || "Imported bookmarks",
+      collection: bookmark.collection || echoT("echostack.imported_bookmarks", null, "Imported bookmarks"),
       tags_text: BOOKMARK_IMPORT_TAG,
       notes: "",
       read_state: "unread"
@@ -617,10 +638,10 @@
     const parsed = parseBookmarkHtmlImport(htmlText);
 
     if (!parsed.length) {
-      throw new Error("No HTTP/HTTPS bookmarks found in this file.");
+      throw new Error(echoT("echostack.import.no_http_bookmarks", null, "No HTTP/HTTPS bookmarks found in this file."));
     }
 
-    const folderCount = new Set(parsed.map((b) => b.collection || "Imported bookmarks")).size;
+    const folderCount = new Set(parsed.map((b) => b.collection || echoT("echostack.imported_bookmarks", null, "Imported bookmarks"))).size;
 
     let existingItems = [];
     try {
@@ -640,24 +661,24 @@
     const skippedExisting = parsed.length - toImport.length;
 
     if (!toImport.length) {
-      setStatus(`Bookmark import found ${parsed.length} links, but all already exist.`, "good");
+      setStatus(echoT("echostack.import.all_existing", { count: parsed.length }, "Bookmark import found {count} links, but all already exist."), "good");
       return;
     }
 
     const ok = await showEchoConfirm({
-      title: "Import bookmarks?",
+      title: echoT("echostack.import.confirm_title", null, "Import bookmarks?"),
       message:
-        `File: ${filename || "selected file"}\n\n` +
-        `Found: ${parsed.length} bookmarks in ${folderCount} folder/collection groups\n` +
-        `Will import: ${toImport.length}\n` +
-        `Will skip existing: ${skippedExisting}\n\n` +
-        `Imported links will get tag "${BOOKMARK_IMPORT_TAG}".`,
-      confirmText: "Import",
-      cancelText: "Cancel"
+        echoT("echostack.import.file_line", { filename: filename || echoT("echostack.import.selected_file", null, "selected file") }, "File: {filename}") + "\n\n" +
+        echoT("echostack.import.found_line", { count: parsed.length, folders: folderCount }, "Found: {count} bookmarks in {folders} folder/collection groups") + "\n" +
+        echoT("echostack.import.will_import_line", { count: toImport.length }, "Will import: {count}") + "\n" +
+        echoT("echostack.import.skip_existing_line", { count: skippedExisting }, "Will skip existing: {count}") + "\n\n" +
+        echoT("echostack.import.tag_line", { tag: BOOKMARK_IMPORT_TAG }, "Imported links will get tag \"{tag}\"."),
+      confirmText: echoT("echostack.import_action", null, "Import"),
+      cancelText: echoT("common.cancel", null, "Cancel")
     });
 
     if (!ok) {
-      setStatus("Bookmark import cancelled.");
+      setStatus(echoT("echostack.import.cancelled", null, "Bookmark import cancelled."));
       return;
     }
 
@@ -665,7 +686,7 @@
     if (importBtn) {
       importBtn.disabled = true;
       importBtn.classList.add("importing");
-      importBtn.textContent = "Importing";
+      importBtn.textContent = echoT("echostack.importing", null, "Importing");
     }
 
     let imported = 0;
@@ -675,7 +696,7 @@
       for (let i = 0; i < toImport.length; i++) {
         const bookmark = toImport[i];
 
-        setStatus(`Importing bookmarks ${i + 1}/${toImport.length}`, "working");
+        setStatus(echoT("echostack.import.progress", { current: i + 1, total: toImport.length }, "Importing bookmarks {current}/{total}"), "working");
 
         try {
           await api("/items/create", {
@@ -698,7 +719,7 @@
       if (importBtn) {
         importBtn.disabled = false;
         importBtn.classList.remove("importing");
-        importBtn.textContent = "Import bookmarks";
+        importBtn.textContent = echoT("echostack.import_bookmarks", null, "Import bookmarks");
       }
     }
 
@@ -707,9 +728,9 @@
     const search = el("searchInput");
     if (search) search.value = "";
 
-    const failedText = failed ? `, ${failed} failed` : "";
+    const failedText = failed ? echoT("echostack.import.failed_suffix", { count: failed }, ", {count} failed") : "";
     setStatus(
-      `Bookmark import finished: ${imported} imported, ${skippedExisting} skipped as existing${failedText}.`,
+      echoT("echostack.import.finished", { imported, skipped: skippedExisting, failedText }, "Bookmark import finished: {imported} imported, {skipped} skipped as existing{failedText}."),
       failed ? "bad" : "good"
     );
 
@@ -720,10 +741,10 @@
     if (!file) return;
 
     if (file.size > BOOKMARK_IMPORT_MAX_FILE_BYTES) {
-      throw new Error("Bookmark file is too large for browser-side import.");
+      throw new Error(echoT("echostack.import.file_too_large", null, "Bookmark file is too large for browser-side import."));
     }
 
-    setStatus("Reading bookmark file…", "working");
+    setStatus(echoT("echostack.import.reading_file", null, "Reading bookmark file…"), "working");
     const text = await file.text();
     await importBookmarksFromText(text, file.name || "bookmarks.html");
   }
@@ -752,32 +773,32 @@
     const collection = String(state.collection || "").trim();
 
     if (q || collection) {
-      out.textContent = `${count} ${pluralLocal(count, "result", "results")}`;
-      out.title = `${count} ${pluralLocal(count, "result", "results")}` +
-        (collection ? ` in ${collection}` : "") +
-        (q ? ` for “${q}”` : "");
+      out.textContent = echoCount("echostack.result_count", count, "{count} result(s)");
+      out.title = echoCount("echostack.result_count", count, "{count} result(s)") +
+        (collection ? echoT("echostack.in_collection", { collection }, " in {collection}") : "") +
+        (q ? echoT("echostack.for_query", { query: q }, " for “{query}”") : "");
       return;
     }
 
-    out.textContent = `${count} ${pluralLocal(count, "link", "links")}`;
-    out.title = `${count} ${pluralLocal(count, "saved link", "saved links")}`;
+    out.textContent = echoCount("echostack.link_count", count, "{count} link(s)");
+    out.title = echoCount("echostack.saved_link_count", count, "{count} saved link(s)");
   }
 
   function metaLine(item) {
     const parts = [];
 
     if (item.site_name) parts.push(item.site_name);
-    if (item.collection) parts.push(`Collection: ${item.collection}`);
-    if (item.tags_text) parts.push(`Tags: ${item.tags_text}`);
-    if (item.favorite) parts.push("Favorite");
+    if (item.collection) parts.push(echoT("echostack.meta.collection", { collection: item.collection }, "Collection: {collection}"));
+    if (item.tags_text) parts.push(echoT("echostack.meta.tags", { tags: item.tags_text }, "Tags: {tags}"));
+    if (item.favorite) parts.push(echoT("echostack.favorite", null, "Favorite"));
 
     const archive = item.archive_status || "none";
     if (archive === "none") {
-      parts.push("Saved link");
+      parts.push(echoT("echostack.saved_link", null, "Saved link"));
     } else if (archive === "failed" && item.archive_error) {
-      parts.push(`Archive: failed — ${item.archive_error}`);
+      parts.push(echoT("echostack.archive_failed_meta", { error: item.archive_error }, "Archive: failed — {error}"));
     } else {
-      parts.push(`Archive: ${archive}`);
+      parts.push(echoT("echostack.archive_status_meta", { status: archive }, "Archive: {status}"));
     }
 
     const archiveBytes = fmtBytes(item.archive_bytes);
@@ -792,7 +813,7 @@
 
   function collectionLabel(item) {
     const value = String(item?.collection || "").trim();
-    return value || "No collection";
+    return value || echoT("echostack.no_collection", null, "No collection");
   }
 
   function itemMatchesQuery(item, query) {
@@ -834,8 +855,8 @@
     return Array.from(stats.entries())
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => {
-        if (a.name === "No collection") return 1;
-        if (b.name === "No collection") return -1;
+        if (a.name === echoT("echostack.no_collection", null, "No collection")) return 1;
+        if (b.name === echoT("echostack.no_collection", null, "No collection")) return -1;
         return a.name.localeCompare(b.name);
       });
   }
@@ -878,7 +899,7 @@
       root.appendChild(btn);
     };
 
-    makeButton("All links", total, "");
+    makeButton(echoT("echostack.all_links", null, "All links"), total, "");
 
     for (const row of stats) {
       makeButton(row.name, row.count, row.name);
@@ -1128,59 +1149,59 @@
 
     menu.innerHTML = "";
 
-    menu.appendChild(contextMenuButton("Open link", () => {
+    menu.appendChild(contextMenuButton(echoT("echostack.open_link", null, "Open link"), () => {
       if (item.url) {
         window.open(item.url, "_blank", "noopener,noreferrer");
       }
     }, { disabled: !hasUrl }));
 
     if (isArchived) {
-      menu.appendChild(contextMenuButton("Open archive", () => {
+      menu.appendChild(contextMenuButton(echoT("echostack.open_archive", null, "Open archive"), () => {
         window.open(`${API}/archive/view?id=${encodeURIComponent(item.id)}`, "_blank", "noopener,noreferrer");
       }));
     }
 
     menu.appendChild(document.createElement("hr"));
 
-    menu.appendChild(contextMenuButton("Edit", () => {
+    menu.appendChild(contextMenuButton(echoT("common.edit", null, "Edit"), () => {
       const notes = node.querySelector(".itemNotes");
       openInlineEditor(item, node, notes);
     }));
 
     menu.appendChild(contextMenuButton(
-      item.read_state === "read" ? "Mark unread" : "Mark read",
+      item.read_state === "read" ? echoT("echostack.mark_unread", null, "Mark unread") : echoT("echostack.mark_read", null, "Mark read"),
       () => updateItem(item.id, {
         read_state: item.read_state === "read" ? "unread" : "read"
       })
     ));
 
     menu.appendChild(contextMenuButton(
-      item.favorite ? "Remove favorite" : "Add favorite",
+      item.favorite ? echoT("echostack.remove_favorite", null, "Remove favorite") : echoT("echostack.add_favorite", null, "Add favorite"),
       () => updateItem(item.id, { favorite: !item.favorite })
     ));
 
-    menu.appendChild(contextMenuButton("Copy URL", async () => {
+    menu.appendChild(contextMenuButton(echoT("echostack.copy_url", null, "Copy URL"), async () => {
       await copyTextToClipboard(item.url || "");
-      setStatus("URL copied.", "good");
+      setStatus(echoT("echostack.url_copied", null, "URL copied."), "good");
     }, { disabled: !hasUrl }));
 
     menu.appendChild(document.createElement("hr"));
 
     if (isArchiving) {
-      menu.appendChild(contextMenuButton("Archiving…", () => {}, { disabled: true }));
+      menu.appendChild(contextMenuButton(echoT("echostack.archiving_ellipsis", null, "Archiving…"), () => {}, { disabled: true }));
     } else if (!isArchived) {
       menu.appendChild(contextMenuButton(
-        archiveStatus === "failed" ? "Retry archive" : "Archive",
+        archiveStatus === "failed" ? echoT("echostack.retry_archive", null, "Retry archive") : echoT("echostack.archive", null, "Archive"),
         () => archiveItem(item.id)
       ));
     }
 
-    menu.appendChild(contextMenuButton("Delete", async () => {
+    menu.appendChild(contextMenuButton(echoT("common.delete", null, "Delete"), async () => {
       const ok = await showEchoConfirm({
-        title: "Delete Echo Stack item?",
-        message: "This removes the saved link from Echo Stack. The original website is not affected.",
-        confirmText: "Delete",
-        cancelText: "Cancel",
+        title: echoT("echostack.delete_confirm_title", null, "Delete Echo Stack item?"),
+        message: echoT("echostack.delete_confirm_message", null, "This removes the saved link from Echo Stack. The original website is not affected."),
+        confirmText: echoT("common.delete", null, "Delete"),
+        cancelText: echoT("common.cancel", null, "Cancel"),
         danger: true
       });
       if (!ok) return;
@@ -1225,7 +1246,7 @@
     if (!state.items.length) {
       const empty = document.createElement("div");
       empty.className = "empty";
-      empty.textContent = "No links saved yet. Paste a URL above to start your stack.";
+      empty.textContent = echoT("echostack.empty_links", null, "No links saved yet. Paste a URL above to start your stack.");
       root.appendChild(empty);
       return;
     }
@@ -1266,7 +1287,7 @@
       const editBtn = document.createElement("button");
       editBtn.type = "button";
       editBtn.className = "editBtn";
-      editBtn.textContent = "Edit";
+      editBtn.textContent = echoT("common.edit", null, "Edit");
       node.querySelector(".itemActions").insertBefore(editBtn, favBtn);
 
       const head = document.createElement("div");
@@ -1291,11 +1312,11 @@
       const titleWrap = document.createElement("div");
       titleWrap.className = "itemTitleWrap";
 
-      title.textContent = item.title || item.url || "Untitled";
+      title.textContent = item.title || item.url || echoT("common.untitled", null, "Untitled");
 
       const stateBadge = document.createElement("span");
       stateBadge.className = `readBadge ${item.read_state === "read" ? "read" : "unread"}`;
-      stateBadge.textContent = item.read_state === "read" ? "Read" : "Unread";
+      stateBadge.textContent = item.read_state === "read" ? echoT("echostack.read", null, "Read") : echoT("echostack.unread", null, "Unread");
 
       titleWrap.appendChild(title);
       titleWrap.appendChild(stateBadge);
@@ -1343,8 +1364,8 @@
       meta.textContent = metaLine(item);
       notes.value = item.notes || "";
 
-      favBtn.textContent = item.favorite ? "★ Favorite" : "☆ Favorite";
-      readBtn.textContent = item.read_state === "read" ? "Mark unread" : "Mark read";
+      favBtn.textContent = item.favorite ? echoT("echostack.favorite_star", null, "★ Favorite") : echoT("echostack.favorite_empty", null, "☆ Favorite");
+      readBtn.textContent = item.read_state === "read" ? echoT("echostack.mark_unread", null, "Mark unread") : echoT("echostack.mark_read", null, "Mark read");
 
       editBtn.addEventListener("click", () => {
         openInlineEditor(item, node, notes);
@@ -1364,7 +1385,7 @@
         const openArchiveBtn = document.createElement("button");
         openArchiveBtn.type = "button";
         openArchiveBtn.className = "archiveAction archived";
-        openArchiveBtn.textContent = "Open archive";
+        openArchiveBtn.textContent = echoT("echostack.open_archive", null, "Open archive");
         openArchiveBtn.addEventListener("click", () => {
           window.open(`${API}/archive/view?id=${encodeURIComponent(item.id)}`, "_blank", "noopener,noreferrer");
         });
@@ -1373,14 +1394,14 @@
         const archivingBtn = document.createElement("button");
         archivingBtn.type = "button";
         archivingBtn.className = "archiveAction archiving";
-        archivingBtn.textContent = "Archiving";
+        archivingBtn.textContent = echoT("echostack.archiving", null, "Archiving");
         archivingBtn.disabled = true;
         node.querySelector(".itemActions").insertBefore(archivingBtn, saveBtn);
       } else {
         const archiveBtn = document.createElement("button");
         archiveBtn.type = "button";
         archiveBtn.className = "archiveAction ready";
-        archiveBtn.textContent = archiveStatus === "failed" ? "Retry archive" : "Archive";
+        archiveBtn.textContent = archiveStatus === "failed" ? echoT("echostack.retry_archive", null, "Retry archive") : echoT("echostack.archive", null, "Archive");
         archiveBtn.addEventListener("click", () => {
           archiveItem(item.id, archiveBtn);
         });
@@ -1392,10 +1413,10 @@
 
       deleteBtn.addEventListener("click", async () => {
         const ok = await showEchoConfirm({
-          title: "Delete Echo Stack item?",
-          message: "This removes the saved link from Echo Stack. The original website is not affected.",
-          confirmText: "Delete",
-          cancelText: "Cancel",
+          title: echoT("echostack.delete_confirm_title", null, "Delete Echo Stack item?"),
+          message: echoT("echostack.delete_confirm_message", null, "This removes the saved link from Echo Stack. The original website is not affected."),
+          confirmText: echoT("common.delete", null, "Delete"),
+          cancelText: echoT("common.cancel", null, "Cancel"),
           danger: true
         });
         if (!ok) return;
@@ -1451,18 +1472,18 @@
       type: "url",
       placeholder: "https://example.com/article"
     });
-    const titleField = makeEditInput("Title", item.title || "", {
-      placeholder: "Title"
+    const titleField = makeEditInput(echoT("common.title", null, "Title"), item.title || "", {
+      placeholder: echoT("common.title", null, "Title")
     });
-    const collectionField = makeEditInput("Collection", item.collection || "", {
-      placeholder: "Collection / Folder"
+    const collectionField = makeEditInput(echoT("echostack.collection", null, "Collection"), item.collection || "", {
+      placeholder: echoT("echostack.collection_folder", null, "Collection / Folder")
     });
-    const tagsField = makeEditInput("Tags", item.tags_text || "", {
-      placeholder: "tag1, tag2"
+    const tagsField = makeEditInput(echoT("common.tags", null, "Tags"), item.tags_text || "", {
+      placeholder: echoT("echostack.tags_example", null, "tag1, tag2")
     });
-    const notesField = makeEditInput("Notes", notesEl?.value || item.notes || "", {
+    const notesField = makeEditInput(echoT("common.notes", null, "Notes"), notesEl?.value || item.notes || "", {
       textarea: true,
-      placeholder: "Notes"
+      placeholder: echoT("common.notes", null, "Notes")
     });
 
     const grid = document.createElement("div");
@@ -1477,11 +1498,11 @@
 
     const save = document.createElement("button");
     save.type = "button";
-    save.textContent = "Save edit";
+    save.textContent = echoT("echostack.save_edit", null, "Save edit");
 
     const cancel = document.createElement("button");
     cancel.type = "button";
-    cancel.textContent = "Cancel";
+    cancel.textContent = echoT("common.cancel", null, "Cancel");
 
     actions.appendChild(save);
     actions.appendChild(cancel);
@@ -1501,13 +1522,13 @@
 
       const url = String(urlField.input.value || "").trim();
       if (!url) {
-        setStatus("URL cannot be empty.", "bad");
+        setStatus(echoT("echostack.url_empty", null, "URL cannot be empty."), "bad");
         urlField.input.focus();
         return;
       }
 
       save.disabled = true;
-      save.textContent = "Saving…";
+      save.textContent = echoT("common.saving_ellipsis", null, "Saving…");
 
       try {
         await updateItem(item.id, {
@@ -1519,7 +1540,7 @@
         });
       } catch (err) {
         save.disabled = false;
-        save.textContent = "Save edit";
+        save.textContent = echoT("echostack.save_edit", null, "Save edit");
         setStatus(err.message || String(err), "bad");
       }
     };
@@ -1561,11 +1582,11 @@
     const notes = (el("notesInput")?.value || "").trim();
 
     if (!url) {
-      setStatus("Paste a URL first.", "bad");
+      setStatus(echoT("echostack.paste_url_first", null, "Paste a URL first."), "bad");
       return;
     }
 
-    setStatus("Fetching preview…");
+    setStatus(echoT("echostack.fetching_preview", null, "Fetching preview…"));
 
     let preview = {};
     try {
@@ -1578,7 +1599,7 @@
       preview = {};
     }
 
-    setStatus("Saving…");
+    setStatus(echoT("common.saving_ellipsis", null, "Saving…"));
 
     await api("/items/create", {
       method: "POST",
@@ -1602,38 +1623,38 @@
     el("notesInput").value = "";
 
     updateComposerExpanded();
-    setStatus("Saved.", "good");
+    setStatus(echoT("common.saved_dot", null, "Saved."), "good");
     await loadItems();
   }
 
   async function updateItem(id, patch) {
-    setStatus("Saving changes…");
+    setStatus(echoT("echostack.saving_changes", null, "Saving changes…"));
     await api("/items/update", {
       method: "POST",
       body: JSON.stringify({ id, ...patch })
     });
-    setStatus("Updated.", "good");
+    setStatus(echoT("common.updated_dot", null, "Updated."), "good");
     await loadItems();
   }
 
   async function deleteItem(id) {
-    setStatus("Deleting…");
+    setStatus(echoT("common.deleting_ellipsis", null, "Deleting…"));
     await api("/items/delete", {
       method: "POST",
       body: JSON.stringify({ id })
     });
-    setStatus("Deleted.", "good");
+    setStatus(echoT("common.deleted_dot", null, "Deleted."), "good");
     await loadItems();
   }
 
   async function archiveItem(id, archiveBtn) {
     if (archiveBtn) {
       archiveBtn.className = "archiveAction archiving";
-      archiveBtn.textContent = "Archiving";
+      archiveBtn.textContent = echoT("echostack.archiving", null, "Archiving");
       archiveBtn.disabled = true;
     }
 
-    setStatus("Archiving page snapshot", "working");
+    setStatus(echoT("echostack.archiving_snapshot", null, "Archiving page snapshot"), "working");
 
     try {
       const j = await api("/items/archive", {
@@ -1653,17 +1674,17 @@
 
       if (j.already_archived) {
         setStatus(
-          deepIndexed ? "Already archived. Deep Search index refreshed." : "Already archived.",
+          deepIndexed ? echoT("echostack.already_archived_index_refreshed", null, "Already archived. Deep Search index refreshed.") : echoT("echostack.already_archived", null, "Already archived."),
           "good"
         );
       } else {
         setStatus(
-          deepIndexed ? "Archived and indexed for Deep Search." : "Archived.",
+          deepIndexed ? echoT("echostack.archived_and_indexed", null, "Archived and indexed for Deep Search.") : echoT("echostack.archived_dot", null, "Archived."),
           "good"
         );
       }
     } catch (e) {
-      setStatus(`Archive failed: ${e.message || String(e)}`, "bad");
+      setStatus(echoT("echostack.archive_failed_status", { error: e.message || String(e) }, "Archive failed: {error}"), "bad");
     } finally {
       try {
         await loadItems();
@@ -1678,11 +1699,11 @@
     if (!btn) return;
 
     if (state.viewMode === "grid") {
-      btn.textContent = "List view";
-      btn.title = "Switch to full list view";
+      btn.textContent = echoT("echostack.list_view", null, "List view");
+      btn.title = echoT("echostack.switch_to_list", null, "Switch to full list view");
     } else {
-      btn.textContent = "Grid view";
-      btn.title = "Switch to compact grid view";
+      btn.textContent = echoT("echostack.grid_view", null, "Grid view");
+      btn.title = echoT("echostack.switch_to_grid", null, "Switch to compact grid view");
     }
   }
 
@@ -1729,7 +1750,7 @@
     if (btn) {
       btn.classList.toggle("active", isOpen);
       btn.setAttribute("aria-expanded", isOpen ? "true" : "false");
-      btn.textContent = isOpen ? "Hide Deep Search" : "Deep Search";
+      btn.textContent = isOpen ? echoT("echostack.hide_deep_search", null, "Hide Deep Search") : echoT("echostack.deep_search", null, "Deep Search");
     }
 
     if (isOpen) {
@@ -1781,7 +1802,7 @@
         if (importBtn) {
           importBtn.disabled = false;
           importBtn.classList.remove("importing");
-          importBtn.textContent = "Import bookmarks";
+          importBtn.textContent = echoT("echostack.import_bookmarks", null, "Import bookmarks");
         }
       });
     });

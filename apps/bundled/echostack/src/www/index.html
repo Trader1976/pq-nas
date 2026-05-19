@@ -7,21 +7,22 @@
   <link rel="stylesheet" href="./style.css">
   <link rel="stylesheet" href="./fulltext_search.css">
   <link rel="stylesheet" href="./background.css">
+  <script src="/static/i18n.js?v=20260519-echostack-i18n-1"></script>
 </head>
 <body>
   <div class="shell">
     <header class="top">
       <div>
         <div class="eyebrow">DNA-Nexus</div>
-        <h1>Echo Stack <span id="appVersion" class="appVersion"></span></h1>
-        <p>Save links, notes, tags, and research trails on your own NAS.</p>
+        <h1><span data-i18n="echostack.title">Echo Stack</span> <span id="appVersion" class="appVersion"></span></h1>
+        <p data-i18n="echostack.subtitle">Tallenna linkit, muistiinpanot, tagit ja tutkimuspolut omalle NAS-palvelimellesi.</p>
       </div>
-      <div class="topActions" aria-label="Echo Stack actions">
-        <div class="badge">Save the signal before it fades.</div>
-        <button id="viewModeBtn" type="button">Grid view</button>
-        <button id="deepSearchToggleBtn" type="button" aria-expanded="false" aria-controls="deepSearchPanel">Deep Search</button>
-        <button id="importBookmarksBtn" type="button">Import bookmarks</button>
-        <button id="exportBookmarksBtn" type="button">Export bookmarks</button>
+      <div class="topActions" aria-label="Echo Stack -toiminnot" data-i18n-aria-label="echostack.actions_aria">
+        <div class="badge" data-i18n="echostack.badge">Tallenna signaali ennen kuin se katoaa.</div>
+        <button id="viewModeBtn" type="button" data-i18n="echostack.grid_view">Ruudukkonäkymä</button>
+        <button id="deepSearchToggleBtn" type="button" aria-expanded="false" aria-controls="deepSearchPanel" data-i18n="echostack.deep_search">Syvähaku</button>
+        <button id="importBookmarksBtn" type="button" data-i18n="echostack.import_bookmarks">Tuo kirjanmerkit</button>
+        <button id="exportBookmarksBtn" type="button" data-i18n="echostack.export_bookmarks">Vie kirjanmerkit</button>
         <input id="bookmarkImportFile" type="file" accept=".html,.htm,text/html" hidden>
       </div>
     </header>
@@ -29,50 +30,50 @@
     <section class="composer">
       <div class="row">
         <input id="urlInput" type="url" placeholder="https://example.com/article">
-        <button id="saveBtn" type="button">Save link</button>
+        <button id="saveBtn" type="button" data-i18n="echostack.save_link">Tallenna linkki</button>
       </div>
 
       <div class="grid2">
-        <input id="titleInput" type="text" placeholder="Optional title">
-        <input id="collectionInput" type="text" placeholder="Collection, e.g. NAS docs">
+        <input id="titleInput" type="text" placeholder="Valinnainen otsikko" data-i18n-placeholder="echostack.optional_title">
+        <input id="collectionInput" type="text" placeholder="Kokoelma, esim. NAS-ohjeet" data-i18n-placeholder="echostack.collection_placeholder">
       </div>
 
       <div class="grid1">
-        <input id="tagsInput" type="text" placeholder="Tags, e.g. nas, crypto, research">
+        <input id="tagsInput" type="text" placeholder="Tagit, esim. nas, kryptografia, tutkimus" data-i18n-placeholder="echostack.tags_placeholder">
       </div>
 
-      <textarea id="notesInput" placeholder="Notes"></textarea>
-      <div id="status" class="status">Ready.</div>
+      <textarea id="notesInput" placeholder="Muistiinpanot" data-i18n-placeholder="common.notes"></textarea>
+      <div id="status" class="status" data-i18n="common.ready_dot">Valmis.</div>
     </section>
 
     <section class="toolbar">
-      <input id="searchInput" type="search" placeholder="Search links, notes, tags, collections">
-      <div id="resultCount" class="resultCount" aria-live="polite">0 links</div>
-      <button id="refreshBtn" type="button">Refresh</button>
+      <input id="searchInput" type="search" placeholder="Hae linkeistä, muistiinpanoista, tageista ja kokoelmista" data-i18n-placeholder="echostack.search_placeholder">
+      <div id="resultCount" class="resultCount" aria-live="polite">0 linkkiä</div>
+      <button id="refreshBtn" type="button" data-i18n="common.refresh">Päivitä</button>
     </section>
 
     <section class="deepSearch collapsed" id="deepSearchPanel" hidden>
       <div class="deepSearchTop">
         <div class="deepSearchTitleBlock">
-          <h2>Deep Search</h2>
-          <p>Search inside archived page snapshots, not just link titles and tags.</p>
+          <h2 data-i18n="echostack.deep_search">Syvähaku</h2>
+          <p data-i18n="echostack.deep_search_help">Hae arkistoitujen sivukopioiden sisältä, ei vain linkkien otsikoista ja tageista.</p>
         </div>
-        <button id="deepReindexAllBtn" type="button" title="Build or refresh the Deep Search index for pages that have already been archived. Saved links that are not archived yet will be skipped." aria-label="Index archived pages for Deep Search">Re-index archives</button>
+        <button id="deepReindexAllBtn" type="button" title="Rakenna tai päivitä syvähaun indeksi jo arkistoiduille sivuille. Vielä arkistoimattomat linkit ohitetaan." data-i18n-title="echostack.reindex_archives_title" aria-label="Indeksoi arkistoidut sivut syvähakua varten" data-i18n-aria-label="echostack.reindex_archives_aria" data-i18n="echostack.reindex_archives">Indeksoi arkistot uudelleen</button>
       </div>
       <div class="deepSearchRow">
-        <input id="deepSearchInput" type="search" placeholder="Example: muscle gain in 50s">
-        <button id="deepSearchBtn" type="button" title="Search inside the saved text of archived pages. This finds words from page content, not only titles, tags, or notes." aria-label="Search inside archived page text">Deep Search</button>
+        <input id="deepSearchInput" type="search" placeholder="Esimerkki: lihaskasvu viisikymppisenä" data-i18n-placeholder="echostack.deep_search_placeholder">
+        <button id="deepSearchBtn" type="button" title="Hae arkistoitujen sivujen tallennetusta tekstistä. Tämä löytää sanoja sivun sisällöstä, ei vain otsikoista, tageista tai muistiinpanoista." data-i18n-title="echostack.deep_search_button_title" aria-label="Hae arkistoidun sivun tekstistä" data-i18n-aria-label="echostack.deep_search_button_aria" data-i18n="echostack.deep_search">Syvähaku</button>
       </div>
-      <div id="deepSearchStatus" class="deepSearchStatus">Type a phrase to search inside archived page text.</div>
+      <div id="deepSearchStatus" class="deepSearchStatus" data-i18n="echostack.deep_search_type_phrase">Kirjoita lause hakeaksesi arkistoitujen sivujen tekstistä.</div>
       <div id="deepSearchResults" class="deepSearchResults"></div>
     </section>
 
     <section class="contentShell">
-      <aside id="collectionsPane" class="collectionsPane" aria-label="Collections">
+      <aside id="collectionsPane" class="collectionsPane" aria-label="Kokoelmat" data-i18n-aria-label="echostack.collections">
         <div class="collectionsHead">
           <div>
-            <div class="collectionsEyebrow">Library</div>
-            <h2>Collections</h2>
+            <div class="collectionsEyebrow" data-i18n="echostack.library">Kirjasto</div>
+            <h2 data-i18n="echostack.collections">Kokoelmat</h2>
           </div>
         </div>
         <div id="collectionsList" class="collectionsList"></div>
@@ -88,18 +89,18 @@
         <div class="itemTitle"></div>
         <a class="itemUrl" href="#" target="_blank" rel="noopener noreferrer"></a>
         <div class="itemMeta"></div>
-        <textarea class="itemNotes" placeholder="Notes"></textarea>
+        <textarea class="itemNotes" placeholder="Muistiinpanot" data-i18n-placeholder="common.notes"></textarea>
       </div>
       <div class="itemActions">
         <button class="favBtn" type="button"></button>
         <button class="readBtn" type="button"></button>
-        <button class="saveItemBtn" type="button">Save</button>
-        <button class="deleteBtn danger" type="button">Delete</button>
+        <button class="saveItemBtn" type="button" data-i18n="common.save">Tallenna</button>
+        <button class="deleteBtn danger" type="button" data-i18n="common.delete">Poista</button>
       </div>
     </article>
   </template>
 
-  <script src="./fulltext_search.js"></script>
-  <script src="./app.js"></script>
+  <script src="./fulltext_search.js?v=20260519-echostack-repair-1"></script>
+  <script src="./app.js?v=20260519-echostack-repair-1"></script>
 </body>
 </html>
