@@ -1215,7 +1215,7 @@
     <div id="confirmSummary" class="v" style="margin-bottom:10px;"></div>
 
     <details id="confirmDetails" class="raidDialogInnerCard" style="margin-top:10px; padding:10px 12px;">
-      <summary style="cursor:pointer; font-weight:900;">Advanced details (plan)</summary>
+      <summary style="cursor:pointer; font-weight:900;">${esc(tr("raidmgr.advanced_plan", null, "Advanced details (plan)"))}</summary>
       <pre id="confirmPre" style="
         max-height:46vh;
         margin-top:10px;
@@ -1228,7 +1228,7 @@
 
     <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:12px;">
       <button id="confirmCancelBtn" class="btn secondary" type="button">Cancel</button>
-      <button id="confirmOkBtn" class="btn danger" type="button">Apply now</button>
+      <button id="confirmOkBtn" class="btn danger" type="button">${esc(tr("raidmgr.action.apply_now", null, "Apply now"))}</button>
     </div>
   </div>
 </div>
@@ -1648,7 +1648,7 @@
   <div id="rmBlock"></div>
 
   <details class="card" id="advancedDetails" style="margin-top:12px;">
-    <summary style="cursor:pointer; font-weight:900;">Preview / Apply output (advanced)</summary>
+    <summary style="cursor:pointer; font-weight:900;">${esc(tr("raidmgr.preview_apply_output", null, "Preview / Apply output (advanced)"))}</summary>
     <pre id="actionOut" style="margin-top:10px;">(no actions yet)</pre>
   </details>
 
@@ -1708,15 +1708,15 @@
         }
 
         function showPlanMismatchHint(kind, extra) {
-            showToast("warn", "Plan changed — please Preview again (auto refresh).", 4200);
+            showToast("warn", tr("raidmgr.plan.changed_preview_again_auto", null, "Plan changed — please Preview again (auto refresh)."), 4200);
 
             const msg = {
                 ok: false,
                 error: "plan_changed",
                 message:
                     kind === "remove"
-                        ? "The storage pool changed since your Preview. Please Preview again (we will do it automatically)."
-                        : "The storage pool changed since your Preview. Please Preview again (we will do it automatically).",
+                        ? tr("raidmgr.plan.changed_auto_detail", null, "The storage pool changed since your Preview. Please Preview again (we will do it automatically).")
+                        : tr("raidmgr.plan.changed_auto_detail", null, "The storage pool changed since your Preview. Please Preview again (we will do it automatically)."),
                 ...extra,
             };
             setActionOut(msg);
@@ -1990,7 +1990,7 @@
 
                 rmPlanBtn?.addEventListener("click", async () => {
                     try {
-                        setActionOut({ note: "Preview remove clicked…", ts: new Date().toISOString() });
+                        setActionOut({ note: tr("raidmgr.preview_remove_clicked", null, "Preview remove clicked…"), ts: new Date().toISOString() });
 
                         if (rmExecBtn) rmExecBtn.disabled = true;
                         lastRmPlan = null;
@@ -2014,22 +2014,22 @@
 
                         if (r.status === 401 || r.status === 403) return;
                         if (!j || j.ok !== true || !j.plan) {
-                            showToast("err", "Preview failed. See advanced output.", 4500);
+                            showToast("err", tr("raidmgr.preview_failed_advanced", null, "Preview failed. See advanced output."), 4500);
                             return;
                         }
 
                         if (j && j.error === "already_executed") {
-                            showToast("warn", "This exact plan was already executed. Click Preview again to generate a new plan.", 5200);
+                            showToast("warn", tr("raidmgr.plan.already_executed_preview_again", null, "This exact plan was already executed. Click Preview again to generate a new plan."), 5200);
                         }
 
                         lastRmPlan = j.plan;
                         lastRmPlanId = String(lastRmPlan?.plan_id || "");
                         if (rmExecBtn) rmExecBtn.disabled = !(lastRmPlan && lastRmPlanId);
 
-                        showToast("ok", "Preview ready ✓", 2200);
+                        showToast("ok", tr("raidmgr.preview_ready", null, "Preview ready ✓"), 2200);
                     } catch (e) {
                         setActionOut({ error: `Preview remove error: ${String(e && e.stack ? e.stack : e)}` });
-                        showToast("err", "Preview crashed. See advanced output.", 5000);
+                        showToast("err", tr("raidmgr.preview_crashed_advanced", null, "Preview crashed. See advanced output."), 5000);
                     }
                 });
 
@@ -2040,7 +2040,7 @@
 
                         // 🔒 HARD SAFETY GUARD
                         if (mount !== g_selectedMount) {
-                            showToast("err", "Storage pool changed. Please Preview again.", 4000);
+                            showToast("err", tr("raidmgr.plan.changed_preview_again", null, "Storage pool changed. Please Preview again."), 4000);
                             rmExecBtn.disabled = true;
                             return;
                         }
@@ -2061,7 +2061,7 @@
                             return;
                         }
 
-                        showToast("info", "Applying…", 2000);
+                        showToast("info", tr("raidmgr.applying", null, "Applying…"), 2000);
 
                         const body = {
                             mount,
@@ -2084,7 +2084,7 @@
                         });
 
                         if (r.ok) showToast("ok", "Applied ✓ Watching exec record…", 2400);
-                        else showToast("err", "Apply failed. See advanced output.", 4500);
+                        else showToast("err", tr("raidmgr.apply_failed_advanced", null, "Apply failed. See advanced output."), 4500);
 
                         const pid = j && (j.plan_id || (j.plan && j.plan.plan_id)) ? (j.plan_id || j.plan.plan_id) : "";
                         if (pid) startExecPolling(pid);
@@ -2093,7 +2093,7 @@
                         setTimeout(() => probe(), 900);
                     } catch (e) {
                         setActionOut({ error: `Apply remove error: ${String(e && e.stack ? e.stack : e)}` });
-                        showToast("err", "Apply crashed. See advanced output.", 5000);
+                        showToast("err", tr("raidmgr.apply_crashed_advanced", null, "Apply crashed. See advanced output."), 5000);
                     }
                 });
             }
@@ -2128,8 +2128,8 @@
                 lastPlanId = pid;
                 lastPlanNonce = pnonce;
                 execBtn.disabled = false;
-                setActionOut({ note: "Preview refreshed automatically.", endpoint: "plan/add-device", http: r.status, request: body, response: j });
-                showToast("ok", "Preview refreshed ✓", 1800);
+                setActionOut({ note: tr("raidmgr.preview_refreshed_auto", null, "Preview refreshed automatically."), endpoint: "plan/add-device", http: r.status, request: body, response: j });
+                showToast("ok", tr("raidmgr.preview_refreshed", null, "Preview refreshed ✓"), 1800);
                 return true;
             }
 
@@ -2141,7 +2141,7 @@
                 response: j ?? txt,
                 note: "missing plan_id or plan_nonce",
             });
-            showToast("err", "Preview failed. See advanced output.", 4500);
+            showToast("err", tr("raidmgr.preview_failed_advanced", null, "Preview failed. See advanced output."), 4500);
             return false;
         }
 
@@ -2156,7 +2156,7 @@
 
         planBtn?.addEventListener("click", async () => {
             try {
-                setActionOut({ note: "Preview clicked…", ts: new Date().toISOString() });
+                setActionOut({ note: tr("raidmgr.preview_clicked", null, "Preview clicked…"), ts: new Date().toISOString() });
 
                 execBtn.disabled = true;
                 lastPlanId = "";
@@ -2197,14 +2197,14 @@
                     lastPlanId = pid;
                     lastPlanNonce = pnonce;
                     execBtn.disabled = false;
-                    showToast("ok", "Preview ready ✓", 2200);
+                    showToast("ok", tr("raidmgr.preview_ready", null, "Preview ready ✓"), 2200);
                 } else {
-                    showToast("err", "Preview failed. See advanced output.", 4500);
+                    showToast("err", tr("raidmgr.preview_failed_advanced", null, "Preview failed. See advanced output."), 4500);
                     execBtn.disabled = true;
                 }
             } catch (e) {
-                setActionOut({ error: "Preview handler crashed", detail: String(e && e.stack ? e.stack : e) });
-                showToast("err", "Preview crashed. See advanced output.", 5000);
+                setActionOut({ error: tr("raidmgr.preview_handler_crashed", null, "Preview handler crashed"), detail: String(e && e.stack ? e.stack : e) });
+                showToast("err", tr("raidmgr.preview_crashed_advanced", null, "Preview crashed. See advanced output."), 5000);
             }
         });
 
@@ -2215,7 +2215,7 @@
 
                 // 🔒 HARD SAFETY GUARD
                 if (mount !== g_selectedMount) {
-                    showToast("err", "Storage pool changed. Please Preview again.", 4000);
+                    showToast("err", tr("raidmgr.plan.changed_preview_again", null, "Storage pool changed. Please Preview again."), 4000);
                     execBtn.disabled = true;
                     return;
                 }
@@ -2227,7 +2227,7 @@
 
                 if (!lastPlan || !lastPlanId || !lastPlanNonce) {
                     setActionOut({
-                        error: "no valid preview loaded — click Preview first",
+                        error: tr("raidmgr.no_valid_preview", null, "no valid preview loaded — click Preview first"),
                         have_plan: !!lastPlan,
                         plan_id: lastPlanId,
                         plan_nonce: lastPlanNonce,
@@ -2259,14 +2259,14 @@
                     confirm: true,
                 };
 
-                showToast("info", "Applying…", 2000);
+                showToast("info", tr("raidmgr.applying", null, "Applying…"), 2000);
                 setActionOut({ note: "Applying add…", ts: new Date().toISOString(), request: body });
 
                 const { r, j, txt } = await postJson("/api/v4/raid/execute/add-device", body);
 
                 if (!r.ok && looksLikePlanMismatch(r, j, txt)) {
                     showPlanMismatchHint("add", { http: r.status, response: j ?? txt });
-                    showToast("warn", "Plan changed. Refreshing preview…", 3200);
+                    showToast("warn", tr("raidmgr.plan.changed_refreshing_preview", null, "Plan changed. Refreshing preview…"), 3200);
                     await runAddPreviewSilently();
                     return;
                 }
@@ -2280,7 +2280,7 @@
                 });
 
                 if (r.ok) showToast("ok", "Applied ✓ Watching exec record…", 2400);
-                else showToast("err", "Apply failed. See advanced output.", 4500);
+                else showToast("err", tr("raidmgr.apply_failed_advanced", null, "Apply failed. See advanced output."), 4500);
 
                 const pid = j && (j.plan_id || (j.plan && j.plan.plan_id)) ? (j.plan_id || j.plan.plan_id) : "";
                 if (pid) startExecPolling(pid);
@@ -2289,7 +2289,7 @@
                 setTimeout(() => probe(), 900);
             } catch (e) {
                 setActionOut({ error: `Apply add error: ${String(e && e.stack ? e.stack : e)}` });
-                showToast("err", "Apply crashed. See advanced output.", 5000);
+                showToast("err", tr("raidmgr.apply_crashed_advanced", null, "Apply crashed. See advanced output."), 5000);
             }
         });
     }
@@ -3105,7 +3105,7 @@
                 }, null, 2);
 
                 if (!r.ok || !j || j.ok !== true) {
-                    showToast("err", `Apply failed: ${prettyError(j, r, txt)}`, 5200);
+                    showToast("err", tr("raidmgr.apply_failed", { error: prettyError(j, r, txt) }, `Apply failed: ${prettyError(j, r, txt)}`), 5200);
                     ov.style.display = "flex";
                     return;
                 }
@@ -4486,7 +4486,7 @@ ${esc(tr("raidmgr.destroy.warning_body", null, "This will unmount the pool and r
                             const mode = String(p?.mode || "single");
                             const new_disk = String(toAdd[0] || "").trim();
 
-                            showToast("info", "Preparing add-device plan…", 1200);
+                            showToast("info", tr("raidmgr.apply_layout.preparing_add", null, "Preparing add-device plan…"), 1200);
 
                             const planResp = await postJson("/api/v4/raid/plan/add-device", {
                                 mount,
@@ -4513,7 +4513,7 @@ ${esc(tr("raidmgr.destroy.warning_body", null, "This will unmount the pool and r
                                 return;
                             }
 
-                            showToast("info", "Applying add-device…", 1200);
+                            showToast("info", tr("raidmgr.apply_layout.applying_add", null, "Applying add-device…"), 1200);
 
                             const execResp = await postJson("/api/v4/raid/execute/add-device", {
                                 mount,
@@ -4527,7 +4527,7 @@ ${esc(tr("raidmgr.destroy.warning_body", null, "This will unmount the pool and r
                             });
 
                             if (!execResp.r.ok || !execResp.j || execResp.j.ok !== true) {
-                                showToast("err", `Apply add-device failed: ${prettyError(execResp.j, execResp.r, execResp.txt)}`, 5200);
+                                showToast("err", tr("raidmgr.apply_layout.add_failed", { error: prettyError(execResp.j, execResp.r, execResp.txt) }, `Apply add-device failed: ${prettyError(execResp.j, execResp.r, execResp.txt)}`), 5200);
                                 return;
                             }
 
@@ -4541,7 +4541,7 @@ ${esc(tr("raidmgr.destroy.warning_body", null, "This will unmount the pool and r
                         if (toRemove.length === 1) {
                             const remove_device = String(toRemove[0] || "").trim();
 
-                            showToast("info", "Preparing remove-device plan…", 1200);
+                            showToast("info", tr("raidmgr.apply_layout.preparing_remove", null, "Preparing remove-device plan…"), 1200);
 
                             const planResp = await postJson("/api/v4/raid/plan/remove-device", {
                                 mount,
@@ -4567,7 +4567,7 @@ ${esc(tr("raidmgr.destroy.warning_body", null, "This will unmount the pool and r
                                 return;
                             }
 
-                            showToast("info", "Applying remove-device…", 1200);
+                            showToast("info", tr("raidmgr.apply_layout.applying_remove", null, "Applying remove-device…"), 1200);
 
                             const execResp = await postJson("/api/v4/raid/execute/remove-device", {
                                 mount,
@@ -4579,7 +4579,7 @@ ${esc(tr("raidmgr.destroy.warning_body", null, "This will unmount the pool and r
                             });
 
                             if (!execResp.r.ok || !execResp.j || execResp.j.ok !== true) {
-                                showToast("err", `Apply remove-device failed: ${prettyError(execResp.j, execResp.r, execResp.txt)}`, 5200);
+                                showToast("err", tr("raidmgr.apply_layout.remove_failed", { error: prettyError(execResp.j, execResp.r, execResp.txt) }, `Apply remove-device failed: ${prettyError(execResp.j, execResp.r, execResp.txt)}`), 5200);
                                 return;
                             }
 
@@ -4592,7 +4592,7 @@ ${esc(tr("raidmgr.destroy.warning_body", null, "This will unmount the pool and r
 
                         showToast("err", "Only one add or one remove can be applied at a time right now.", 5200);
                     } catch (e) {
-                        showToast("err", `Apply layout crashed: ${String(e && e.message ? e.message : e)}`, 5200);
+                        showToast("err", tr("raidmgr.apply_layout.crashed", { error: String(e && e.message ? e.message : e) }, `Apply layout crashed: ${String(e && e.message ? e.message : e)}`), 5200);
                     }
                     return;
                 }
@@ -4686,7 +4686,7 @@ ${esc(tr("raidmgr.destroy.warning_body", null, "This will unmount the pool and r
                         }
                         await openConvertRaidModal(p);
                     } catch (e) {
-                        showToast("err", `Convert RAID UI crashed: ${String(e && e.message ? e.message : e)}`, 5200);
+                        showToast("err", tr("raidmgr.convert.ui_crashed", { error: String(e && e.message ? e.message : e) }, `Convert RAID UI crashed: ${String(e && e.message ? e.message : e)}`), 5200);
                     }
                     return;
                 }
@@ -4699,7 +4699,7 @@ ${esc(tr("raidmgr.destroy.warning_body", null, "This will unmount the pool and r
                 const current = String(p?.display_name || "").trim();
 
                 const name = window.prompt(
-                    `Rename pool:\n${mount}\n\nEnter a display name (empty = reset to label):`,
+                    tr("raidmgr.rename.prompt", { pool: mount }, `Rename pool:\n${mount}\n\nEnter a display name (empty = reset to label):`),
                     current
                 );
 
