@@ -2839,5 +2839,15 @@
   "photogallery.stats.no_aperture_data": "Aukkotietoja ei ole.",
   "photogallery.stats.no_shutter_data": "Suljinaikatietoja ei ole.",
   "photogallery.stats.no_focal_data": "Polttovälitietoja ei ole.",
-  "photogallery.stats.no_date_histogram_data": "Päivämääräjakauman tietoja ei ole."
+  "photogallery.stats.no_date_histogram_data": "Päivämääräjakauman tietoja ei ole.",
+  "photogallery.map.title": "Kartta",
+  "photogallery.map.gps_photos_current_view": "GPS-kuvia nykyisessä näkymässä: {count}",
+  "photogallery.map.no_capture_time": "ei kuvausaikaa",
+  "photogallery.map.altitude": "Korkeus: {altitude}",
+  "photogallery.map.no_photo_selected": "Kuvaa ei ole valittu.",
+  "photogallery.map.thumbnail_not_available": "Pikkukuvaa ei ole saatavilla.",
+  "photogallery.map.no_photos_with_location": "Ei sijaintitietoja sisältäviä kuvia",
+  "photogallery.map.no_gps_in_current_view": "Nykyisessä näkymässä ei ole vielä GPS-koordinaatteja.",
+  "photogallery.map.unnamed": "(nimetön)",
+  "photogallery.map.photo_alt": "kuva"
 }

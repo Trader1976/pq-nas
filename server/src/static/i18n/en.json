@@ -2822,5 +2822,15 @@
   "photogallery.stats.no_aperture_data": "No aperture data.",
   "photogallery.stats.no_shutter_data": "No shutter speed data.",
   "photogallery.stats.no_focal_data": "No focal length data.",
-  "photogallery.stats.no_date_histogram_data": "No date histogram data."
+  "photogallery.stats.no_date_histogram_data": "No date histogram data.",
+  "photogallery.map.title": "Map",
+  "photogallery.map.gps_photos_current_view": "GPS photos in current view: {count}",
+  "photogallery.map.no_capture_time": "no capture time",
+  "photogallery.map.altitude": "Altitude: {altitude}",
+  "photogallery.map.no_photo_selected": "No photo selected.",
+  "photogallery.map.thumbnail_not_available": "Thumbnail not available.",
+  "photogallery.map.no_photos_with_location": "No photos with location",
+  "photogallery.map.no_gps_in_current_view": "Nothing in the current view has GPS coordinates yet.",
+  "photogallery.map.unnamed": "(unnamed)",
+  "photogallery.map.photo_alt": "photo"
 }

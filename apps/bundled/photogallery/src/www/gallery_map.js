@@ -3,6 +3,22 @@
 
     window.PQNAS_PHOTOGALLERY = window.PQNAS_PHOTOGALLERY || {};
 
+    function mapT(key, params, fallback) {
+        try {
+            const api = window.PQNAS_I18N;
+            if (api && typeof api.t === "function") {
+                return api.t(key, params || null, fallback);
+            }
+        } catch (_) {}
+
+        let out = String(fallback || key || "");
+        const p = params || {};
+        for (const name of Object.keys(p)) {
+            out = out.split(`{${name}}`).join(String(p[name]));
+        }
+        return out;
+    }
+
     const mod = {
         runtime: {
             leafletPromise: null,
@@ -92,7 +108,7 @@
 
                 const name = document.createElement("div");
                 name.className = "mapPhotoName";
-                name.textContent = item.name || "(unnamed)";
+                name.textContent = item.name || mapT("photogallery.map.unnamed", null, "(unnamed)");
 
                 const path = document.createElement("div");
                 path.className = "mapPhotoPath";
@@ -104,7 +120,7 @@
 
                 const time = document.createElement("div");
                 time.className = "mapPhotoTime";
-                time.textContent = deps.fmtTime(item.capture_time_unix || 0) || "no capture time";
+                time.textContent = deps.fmtTime(item.capture_time_unix || 0) || mapT("photogallery.map.no_capture_time", null, "no capture time");
 
                 main.appendChild(name);
                 main.appendChild(path);
@@ -138,7 +154,7 @@
 
             if (!item) {
                 card.innerHTML = `
-                    <div class="mapSelectionPlaceholder">No photo selected.</div>
+                    <div class="mapSelectionPlaceholder">${mod.escapeHtml(mapT("photogallery.map.no_photo_selected", null, "No photo selected."))}</div>
                 `;
                 return card;
             }
@@ -150,13 +166,13 @@
 
             const img = document.createElement("img");
             img.className = "mapSelectionThumb";
-            img.alt = item.name || "photo";
+            img.alt = item.name || mapT("photogallery.map.photo_alt", null, "photo");
             img.loading = "eager";
             img.decoding = "async";
             img.src = deps.galleryThumbUrl(rel, 640, item.mtime_unix || 0);
             img.onerror = () => {
                 img.onerror = null;
-                thumbWrap.innerHTML = `<div class="mapSelectionPlaceholder">Thumbnail not available.</div>`;
+                thumbWrap.innerHTML = `<div class="mapSelectionPlaceholder">${mod.escapeHtml(mapT("photogallery.map.thumbnail_not_available", null, "Thumbnail not available."))}</div>`;
             };
 
             thumbWrap.appendChild(img);
@@ -166,7 +182,7 @@
 
             const title = document.createElement("div");
             title.className = "mapSelectionTitle";
-            title.textContent = item.name || "(unnamed)";
+            title.textContent = item.name || mapT("photogallery.map.unnamed", null, "(unnamed)");
 
             const path = document.createElement("div");
             path.className = "mapSelectionPath";
@@ -178,7 +194,7 @@
 
             const time = document.createElement("div");
             time.className = "mapSelectionTime";
-            time.textContent = deps.fmtTime(item.capture_time_unix || 0) || "no capture time";
+            time.textContent = deps.fmtTime(item.capture_time_unix || 0) || mapT("photogallery.map.no_capture_time", null, "no capture time");
 
             body.appendChild(title);
             body.appendChild(path);
@@ -188,7 +204,7 @@
             if (item.gps_altitude != null) {
                 const alt = document.createElement("div");
                 alt.className = "mapSelectionAlt";
-                alt.textContent = `Altitude: ${item.gps_altitude}`;
+                alt.textContent = mapT("photogallery.map.altitude", { altitude: item.gps_altitude }, "Altitude: {altitude}");
                 body.appendChild(alt);
             }
 
@@ -198,7 +214,7 @@
             const openBtn = document.createElement("button");
             openBtn.type = "button";
             openBtn.className = "btn";
-            openBtn.textContent = "Open preview";
+            openBtn.textContent = mapT("photogallery.menu.open_preview", null, "Open preview");
             openBtn.addEventListener("click", () => {
                 deps.openPreviewFor(item);
             });
@@ -220,8 +236,8 @@
                 const empty = document.createElement("div");
                 empty.className = "emptyState";
                 empty.innerHTML = `
-                    <div class="h">No photos with location</div>
-                    <div class="p">Nothing in the current view has GPS coordinates yet.</div>
+                    <div class="h">${mod.escapeHtml(mapT("photogallery.map.no_photos_with_location", null, "No photos with location"))}</div>
+                    <div class="p">${mod.escapeHtml(mapT("photogallery.map.no_gps_in_current_view", null, "Nothing in the current view has GPS coordinates yet."))}</div>
                 `;
                 mapCanvas.appendChild(empty);
                 deps.refreshFooterStats?.();
@@ -244,8 +260,8 @@
             const summary = document.createElement("div");
             summary.className = "mapSummary";
             summary.innerHTML = `
-                <div class="h">Map</div>
-                <div class="p">GPS photos in current view: ${items.length}</div>
+                <div class="h">${mod.escapeHtml(mapT("photogallery.map.title", null, "Map"))}</div>
+                <div class="p">${mod.escapeHtml(mapT("photogallery.map.gps_photos_current_view", { count: items.length }, "GPS photos in current view: {count}"))}</div>
             `;
 
             side.appendChild(summary);
@@ -317,10 +333,10 @@
 
                     const popupHtml = `
                         <div class="mapLeafletPopup">
-                            <div class="mapLeafletPopupTitle">${mod.escapeHtml(item.name || "(unnamed)")}</div>
+                            <div class="mapLeafletPopupTitle">${mod.escapeHtml(item.name || mapT("photogallery.map.unnamed", null, "(unnamed)"))}</div>
                             <div class="mapLeafletPopupMeta">
                                 <div>${mod.escapeHtml("/" + rel)}</div>
-                                <div>${mod.escapeHtml(deps.fmtTime(item.capture_time_unix || 0) || "no capture time")}</div>
+                                <div>${mod.escapeHtml(deps.fmtTime(item.capture_time_unix || 0) || mapT("photogallery.map.no_capture_time", null, "no capture time"))}</div>
                                 <div>${mod.escapeHtml(lat.toFixed(6) + ", " + lon.toFixed(6))}</div>
                             </div>
                         </div>
