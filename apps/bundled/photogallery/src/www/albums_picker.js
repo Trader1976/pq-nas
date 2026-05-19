@@ -3,6 +3,22 @@
 
     window.PQNAS_PHOTOGALLERY = window.PQNAS_PHOTOGALLERY || {};
 
+    function albumT(key, params, fallback) {
+        try {
+            const api = window.PQNAS_I18N;
+            if (api && typeof api.t === "function") {
+                return api.t(key, params || null, fallback);
+            }
+        } catch (_) {}
+
+        let out = String(fallback || key || "");
+        const p = params || {};
+        for (const name of Object.keys(p)) {
+            out = out.split(`{${name}}`).join(String(p[name]));
+        }
+        return out;
+    }
+
     function escapeHtml(s) {
         return String(s || "")
             .replace(/&/g, "&amp;")
@@ -59,23 +75,23 @@
                 <div class="pgAlbumPickerCard" role="dialog" aria-modal="true">
                     <div class="pgAlbumPickerHead">
                         <div>
-                            <div class="pgAlbumPickerTitle">Add to album</div>
-                            <div class="pgAlbumPickerSub">${photoCount} selected photo(s)</div>
+                            <div class="pgAlbumPickerTitle">${escapeHtml(albumT("photogallery.albums.add_to_album", null, "Add to album"))}</div>
+                            <div class="pgAlbumPickerSub">${escapeHtml(albumT("photogallery.albums.selected_photo_count", { count: photoCount }, "{count} selected photo(s)"))}</div>
                         </div>
-                        <button class="btn secondary" type="button" data-pg-album-close>Close</button>
+                        <button class="btn secondary" type="button" data-pg-album-close>${escapeHtml(albumT("common.close", null, "Close"))}</button>
                     </div>
 
                     <div class="pgAlbumPickerBody">
                         <div class="pgAlbumPickerCreate">
-                            <button class="btn secondary" type="button" data-pg-album-create-open>Create new album…</button>
+                            <button class="btn secondary" type="button" data-pg-album-create-open>${escapeHtml(albumT("photogallery.albums.create_new", null, "Create new album…"))}</button>
                         </div>
 
                         <div class="pgAlbumPickerList" data-pg-album-list></div>
                     </div>
 
                     <div class="pgAlbumPickerFoot">
-                        <button class="btn secondary" type="button" data-pg-album-cancel>Cancel</button>
-                        <button class="btn" type="button" data-pg-album-use ${selectedAlbum ? "" : "disabled"}>Add here</button>
+                        <button class="btn secondary" type="button" data-pg-album-cancel>${escapeHtml(albumT("common.cancel", null, "Cancel"))}</button>
+                        <button class="btn" type="button" data-pg-album-use ${selectedAlbum ? "" : "disabled"}>${escapeHtml(albumT("photogallery.albums.add_here", null, "Add here"))}</button>
                     </div>
                 </div>
             `;
@@ -91,7 +107,7 @@
                 if (!albums.length) {
                     listEl.innerHTML = `
                         <div class="pgAlbumPickerEmpty">
-                            No albums yet. Create one above.
+                            ${escapeHtml(albumT("photogallery.albums.none_yet", null, "No albums yet. Create one above."))}
                         </div>
                     `;
                     return;
@@ -109,9 +125,9 @@
                             <div class="pgAlbumPickerThumb">${thumbHtml}</div>
                             <div class="pgAlbumPickerText">
                                 <div class="pgAlbumPickerName">${escapeHtml(a.name || a.album_id)}</div>
-                                <div class="pgAlbumPickerDesc">${escapeHtml(a.description || "No description")}</div>
+                                <div class="pgAlbumPickerDesc">${escapeHtml(a.description || albumT("photogallery.albums.no_description", null, "No description"))}</div>
                             </div>
-                            <div class="pgAlbumPickerCount">${Number(a.item_count || 0)} photo(s)</div>
+                            <div class="pgAlbumPickerCount">${escapeHtml(albumT("photogallery.albums.photo_count", { count: Number(a.item_count || 0) }, "{count} photo(s)"))}</div>
                         </button>
                     `;
                 }).join("");
@@ -126,27 +142,27 @@
             <div class="pgAlbumCreateCard" role="dialog" aria-modal="true">
                 <div class="pgAlbumCreateHead">
                     <div>
-                        <div class="pgAlbumPickerTitle">Create new album</div>
-                        <div class="pgAlbumPickerSub">Create an album, then add the selected photos to it.</div>
+                        <div class="pgAlbumPickerTitle">${escapeHtml(albumT("photogallery.albums.create_new_title", null, "Create new album"))}</div>
+                        <div class="pgAlbumPickerSub">${escapeHtml(albumT("photogallery.albums.create_new_sub", null, "Create an album, then add the selected photos to it."))}</div>
                     </div>
-                    <button class="btn secondary" type="button" data-pg-create-close>Close</button>
+                    <button class="btn secondary" type="button" data-pg-create-close>${escapeHtml(albumT("common.close", null, "Close"))}</button>
                 </div>
 
                 <div class="pgAlbumCreateBody">
                     <label class="pgAlbumCreateLabel">
-                        <span>Name</span>
-                        <input class="field" type="text" data-pg-create-name placeholder="Album name">
+                        <span>${escapeHtml(albumT("photogallery.albums.name", null, "Name"))}</span>
+                        <input class="field" type="text" data-pg-create-name placeholder="${escapeHtml(albumT("photogallery.albums.album_name_placeholder", null, "Album name"))}">
                     </label>
 
                     <label class="pgAlbumCreateLabel">
-                        <span>Description</span>
-                        <textarea class="textarea pgAlbumCreateTextarea" data-pg-create-desc placeholder="Optional description"></textarea>
+                        <span>${escapeHtml(albumT("photogallery.description", null, "Description"))}</span>
+                        <textarea class="textarea pgAlbumCreateTextarea" data-pg-create-desc placeholder="${escapeHtml(albumT("photogallery.description_placeholder", null, "Optional description"))}"></textarea>
                     </label>
                 </div>
 
                 <div class="pgAlbumCreateFoot">
-                    <button class="btn secondary" type="button" data-pg-create-cancel>Cancel</button>
-                    <button class="btn" type="button" data-pg-create-ok>Create album</button>
+                    <button class="btn secondary" type="button" data-pg-create-cancel>${escapeHtml(albumT("common.cancel", null, "Cancel"))}</button>
+                    <button class="btn" type="button" data-pg-create-ok>${escapeHtml(albumT("photogallery.albums.create_album", null, "Create album"))}</button>
                 </div>
             </div>
         `;
@@ -199,7 +215,7 @@
                                 close(created.album || null);
                             } catch (e) {
                                 if (okBtn) okBtn.disabled = false;
-                                alert(`Create album failed: ${String(e && e.message ? e.message : e)}`);
+                                alert(albumT("photogallery.albums.create_failed", { error: String(e && e.message ? e.message : e) }, "Create album failed: {error}"));
                             }
                         }
                     });

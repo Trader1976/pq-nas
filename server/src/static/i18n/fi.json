@@ -2606,5 +2606,18 @@
   "photogallery.share.revoked_for_path": "Jako peruttu: {path}",
   "common.copied": "Kopioitu.",
   "common.copy_failed": "Kopiointi epäonnistui.",
-  "common.error_with_message": "Virhe: {error}"
+  "common.error_with_message": "Virhe: {error}",
+  "photogallery.albums.add_to_album": "Lisää albumiin",
+  "photogallery.albums.selected_photo_count": "{count} valittua kuvaa",
+  "photogallery.albums.create_new": "Luo uusi albumi…",
+  "photogallery.albums.add_here": "Lisää tähän",
+  "photogallery.albums.none_yet": "Albumeita ei vielä ole. Luo albumi yllä.",
+  "photogallery.albums.no_description": "Ei kuvausta",
+  "photogallery.albums.photo_count": "{count} kuvaa",
+  "photogallery.albums.create_new_title": "Luo uusi albumi",
+  "photogallery.albums.create_new_sub": "Luo albumi ja lisää sitten valitut kuvat siihen.",
+  "photogallery.albums.name": "Nimi",
+  "photogallery.albums.album_name_placeholder": "Albumin nimi",
+  "photogallery.albums.create_album": "Luo albumi",
+  "photogallery.albums.create_failed": "Albumin luonti epäonnistui: {error}"
 }

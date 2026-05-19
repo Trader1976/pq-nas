@@ -2589,5 +2589,18 @@
   "photogallery.share.revoked_for_path": "Share revoked: {path}",
   "common.copied": "Copied.",
   "common.copy_failed": "Copy failed.",
-  "common.error_with_message": "Error: {error}"
+  "common.error_with_message": "Error: {error}",
+  "photogallery.albums.add_to_album": "Add to album",
+  "photogallery.albums.selected_photo_count": "{count} selected photo(s)",
+  "photogallery.albums.create_new": "Create new album…",
+  "photogallery.albums.add_here": "Add here",
+  "photogallery.albums.none_yet": "No albums yet. Create one above.",
+  "photogallery.albums.no_description": "No description",
+  "photogallery.albums.photo_count": "{count} photo(s)",
+  "photogallery.albums.create_new_title": "Create new album",
+  "photogallery.albums.create_new_sub": "Create an album, then add the selected photos to it.",
+  "photogallery.albums.name": "Name",
+  "photogallery.albums.album_name_placeholder": "Album name",
+  "photogallery.albums.create_album": "Create album",
+  "photogallery.albums.create_failed": "Create album failed: {error}"
 }
