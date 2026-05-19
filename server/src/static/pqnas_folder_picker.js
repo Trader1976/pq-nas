@@ -12,6 +12,227 @@
         return fallback || key;
     }
 
+    function localizePickerText(value) {
+        const txt = String(value || "");
+        if (!txt) return "";
+
+        if (txt === "Move") return tr("folderpicker.move", null, "Move");
+        if (txt === "Copy") return tr("folderpicker.copy", null, "Copy");
+        if (txt === "Move here") return tr("folderpicker.move_here", null, "Move here");
+        if (txt === "Copy here") return tr("folderpicker.copy_here", null, "Copy here");
+        if (txt === "Select destination folder") return tr("folderpicker.select_destination_folder", null, "Select destination folder");
+        if (txt === "Workspace") return tr("folderpicker.scope_workspace", null, "Workspace");
+
+        if (txt.startsWith("Move: ")) {
+            const path = txt.slice("Move: ".length);
+            return tr("folderpicker.move_source", { path }, `Move: ${path}`);
+        }
+
+        if (txt.startsWith("Copy: ")) {
+            const path = txt.slice("Copy: ".length);
+            return tr("folderpicker.copy_source", { path }, `Copy: ${path}`);
+        }
+
+        return txt;
+    }
+
+    function ensureFolderPickerPromptCss() {
+        if (document.getElementById("pqnasFolderPickerPromptCss")) return;
+
+        const style = document.createElement("style");
+        style.id = "pqnasFolderPickerPromptCss";
+        style.textContent = `
+.pqnasFolderPickerPromptBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:100000;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(0,0,0,.55);
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+}
+.pqnasFolderPickerPromptCard{
+    width:min(560px, calc(100vw - 24px));
+    border:1px solid var(--border2, rgba(120,120,120,.42));
+    border-radius:18px;
+    overflow:hidden;
+    background:linear-gradient(180deg, var(--panel2, #f8f8f8), var(--panel, #eeeeee));
+    color:var(--fg, #111);
+    box-shadow:0 18px 70px rgba(0,0,0,.42);
+}
+.pqnasFolderPickerPromptHead{
+    padding:14px 16px;
+    border-bottom:1px solid var(--border2, rgba(120,120,120,.32));
+    background:rgba(0,0,0,.08);
+}
+.pqnasFolderPickerPromptTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+}
+.pqnasFolderPickerPromptSub{
+    margin-top:4px;
+    font-size:12px;
+    color:var(--fg-dim, rgba(0,0,0,.66));
+    word-break:break-all;
+}
+.pqnasFolderPickerPromptBody{
+    padding:16px;
+    display:grid;
+    gap:10px;
+}
+.pqnasFolderPickerPromptLabel{
+    font-weight:850;
+    color:var(--fg-dim, rgba(0,0,0,.70));
+}
+.pqnasFolderPickerPromptInput{
+    width:100%;
+    box-sizing:border-box;
+    padding:10px 12px;
+    border-radius:12px;
+    border:1px solid var(--border2, rgba(120,120,120,.45));
+    background:rgba(0,0,0,.18);
+    color:var(--fg, #111);
+    font:inherit;
+}
+.pqnasFolderPickerPromptNote{
+    padding:10px 12px;
+    border-radius:14px;
+    border:1px solid rgba(var(--warn-rgb, 180,120,20),.35);
+    background:rgba(var(--warn-rgb, 180,120,20),.10);
+    font-size:13px;
+}
+.pqnasFolderPickerPromptFoot{
+    display:flex;
+    justify-content:flex-end;
+    gap:10px;
+    padding:12px 16px;
+    border-top:1px solid var(--border2, rgba(120,120,120,.32));
+    background:rgba(0,0,0,.08);
+}
+html[data-theme="bright"] .pqnasFolderPickerPromptCard{
+    background:linear-gradient(180deg, #fff, #f2f4f7) !important;
+    color:#111827 !important;
+}
+html[data-theme="bright"] .pqnasFolderPickerPromptInput{
+    background:#fff !important;
+    color:#111827 !important;
+}
+`;
+        document.head.appendChild(style);
+    }
+
+    function openFolderPickerPromptModal(opts = {}) {
+        ensureFolderPickerPromptCss();
+
+        return new Promise((resolve) => {
+            const options = opts || {};
+            const modal = document.createElement("div");
+            modal.className = "pqnasFolderPickerPromptBackdrop";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "pqnasFolderPickerPromptCard";
+
+            const head = document.createElement("div");
+            head.className = "pqnasFolderPickerPromptHead";
+
+            const title = document.createElement("div");
+            title.className = "pqnasFolderPickerPromptTitle";
+            title.textContent = options.title || tr("folderpicker.prompt_title", null, "New folder");
+
+            const sub = document.createElement("div");
+            sub.className = "pqnasFolderPickerPromptSub";
+            sub.textContent = options.subtitle || "";
+
+            head.appendChild(title);
+            if (sub.textContent) head.appendChild(sub);
+
+            const body = document.createElement("div");
+            body.className = "pqnasFolderPickerPromptBody";
+
+            const label = document.createElement("label");
+            label.className = "pqnasFolderPickerPromptLabel";
+            label.textContent = options.label || tr("folderpicker.folder_name", null, "Folder name");
+
+            const input = document.createElement("input");
+            input.type = "text";
+            input.className = "pqnasFolderPickerPromptInput";
+            input.value = options.value || "";
+            input.placeholder = options.placeholder || "";
+            input.autocomplete = "off";
+            input.spellcheck = false;
+
+            body.appendChild(label);
+            body.appendChild(input);
+
+            if (options.note) {
+                const note = document.createElement("div");
+                note.className = "pqnasFolderPickerPromptNote";
+                note.textContent = String(options.note || "");
+                body.appendChild(note);
+            }
+
+            const foot = document.createElement("div");
+            foot.className = "pqnasFolderPickerPromptFoot";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || tr("common.cancel", null, "Cancel");
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = options.confirmText || tr("folderpicker.create_folder", null, "Create folder");
+
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(value);
+            };
+
+            const submit = () => finish(String(input.value || ""));
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(null);
+                }
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    submit();
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish(null);
+            });
+            cancelBtn.addEventListener("click", () => finish(null));
+            okBtn.addEventListener("click", submit);
+
+            window.setTimeout(() => {
+                input.focus();
+                input.select();
+            }, 0);
+        });
+    }
+
     let overlay = null;
     let cardEl = null;
     let dragHandleEl = null;
@@ -203,7 +424,7 @@
 
     function activeScopeRootLabel() {
         const sc = activeScope();
-        return sc && sc.label ? String(sc.label) : tr("filemgr.my_files", null, "My Files");
+        return sc && sc.label ? localizePickerText(sc.label) : tr("filemgr.my_files", null, "My Files");
     }
 
     function listUrl(path) {
@@ -1063,7 +1284,9 @@ function ensureModal() {
             const scopeProblem = sc && sc.canChoose === false ? tr("folderpicker.read_only", null, "Destination location is read-only.") : "";
             const finalProblem = scopeProblem || problem;
             chooseBtn.disabled = busy || !!finalProblem;
-            chooseBtn.textContent = opts.chooseLabel || tr("folderpicker.choose_folder", null, "Choose folder");
+            chooseBtn.textContent = opts.chooseLabel
+                ? localizePickerText(opts.chooseLabel)
+                : tr("folderpicker.choose_folder", null, "Choose folder");
             chooseBtn.title = finalProblem || tr("folderpicker.choose_title", { scope: activeScopeRootLabel(), path: shown }, `Choose ${activeScopeRootLabel()} ${shown}`);
         }
 
@@ -1241,13 +1464,22 @@ function ensureModal() {
         }
 
         const shown = currentPath ? `/${currentPath}` : "/";
-        const raw = prompt(tr("folderpicker.new_folder_prompt", { path: shown }, `New folder name in ${shown}:`), tr("folderpicker.default_folder_name", null, "New Folder"));
-        if (!raw) return;
+        const raw = await openFolderPickerPromptModal({
+            title: tr("folderpicker.new_folder_title", null, "New folder"),
+            subtitle: tr("folderpicker.new_folder_subtitle", { path: shown }, `Location: ${shown}`),
+            label: tr("folderpicker.folder_name", null, "Folder name"),
+            value: tr("folderpicker.default_folder_name", null, "New Folder"),
+            placeholder: tr("folderpicker.folder_name", null, "Folder name"),
+            note: tr("folderpicker.new_folder_note", null, "Use a simple folder name without path separators."),
+            confirmText: tr("folderpicker.create_folder", null, "Create folder"),
+            cancelText: tr("common.cancel", null, "Cancel")
+        });
+        if (raw == null) return;
 
         const name = String(raw).trim();
         if (!name) return;
         if (name.includes("/") || name.includes("\\")) {
-            alert(tr("folderpicker.name_no_separators", null, "Name cannot contain '/' or '\\'.") );
+            setStatus(tr("folderpicker.name_no_separators", null, "Name cannot contain '/' or '\\'."));
             return;
         }
 
@@ -1322,9 +1554,11 @@ function ensureModal() {
 
         refreshStaticLabels();
 
-        if (titleEl) titleEl.textContent = opts.title || tr("folderpicker.choose_folder", null, "Choose folder");
-        if (subEl) subEl.textContent = opts.subtitle || "";
-        if (sourceEl) sourceEl.textContent = opts.source ? String(opts.source) : "";
+        if (titleEl) titleEl.textContent = opts.title
+            ? localizePickerText(opts.title)
+            : tr("folderpicker.choose_folder", null, "Choose folder");
+        if (subEl) subEl.textContent = opts.subtitle ? localizePickerText(opts.subtitle) : "";
+        if (sourceEl) sourceEl.textContent = opts.source ? localizePickerText(opts.source) : "";
 
         overlay.classList.add("show");
         overlay.setAttribute("aria-hidden", "false");

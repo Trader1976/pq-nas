@@ -186,11 +186,11 @@
     <div class="extPickerCard" role="dialog" aria-modal="true" aria-labelledby="extPickerTitle">
         <div class="extPickerHead">
             <div>
-                <div class="extPickerKicker">DNA-Nexus folder picker</div>
-                <div class="extPickerTitle" id="extPickerTitle">Move</div>
-                <div class="extPickerSub" id="extPickerSub">Select destination folder</div>
+                <div class="extPickerKicker" data-i18n="external.picker.kicker">DNA-Nexus folder picker</div>
+                <div class="extPickerTitle" id="extPickerTitle" data-i18n="external.picker.move">Move</div>
+                <div class="extPickerSub" id="extPickerSub" data-i18n="external.picker.select_destination">Select destination folder</div>
             </div>
-            <button class="extPickerClose" id="extPickerClose" type="button">Close</button>
+            <button class="extPickerClose" id="extPickerClose" type="button" data-i18n="external.modal.close">Close</button>
         </div>
 
         <div class="extPickerSource" id="extPickerSource">Move: /</div>
@@ -200,10 +200,10 @@
         <div class="extPickerStatus" id="extPickerStatus"></div>
 
         <div class="extPickerActions">
-            <button class="btn secondary" id="extPickerNewFolder" type="button">New folder here...</button>
+            <button class="btn secondary" id="extPickerNewFolder" type="button" data-i18n="external.picker.new_folder_here">New folder here...</button>
             <div class="extPickerActionGroup">
-                <button class="btn secondary" id="extPickerCancel" type="button">Cancel</button>
-                <button class="btn" id="extPickerChoose" type="button">Move here</button>
+                <button class="btn secondary" id="extPickerCancel" type="button" data-i18n="external.modal.cancel">Cancel</button>
+                <button class="btn" id="extPickerChoose" type="button" data-i18n="external.picker.move_here">Move here</button>
             </div>
         </div>
     </div>

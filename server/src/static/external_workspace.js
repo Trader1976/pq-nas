@@ -3038,7 +3038,7 @@ resetMarqueeVisual();
     }
 
     function pickerDestLabel() {
-        return `Destination: Workspace ${pickerPath ? "/" + pickerPath : "/"}`;
+        return externalPickerDestinationLabel(pickerPath);
     }
 
     function renderPickerCrumbs() {
@@ -3099,7 +3099,7 @@ resetMarqueeVisual();
             rows.push(`
                 <button class="extPickerDirRow" type="button" data-path="${escapeHtml(rel)}" ${disabled ? "disabled" : ""}>
                     <span class="extPickerDirName">${escapeHtml(name)}</span>
-                    <span class="extPickerDirMeta">Folder</span>
+                    <span class="extPickerDirMeta">${escapeHtml(tr("external.picker.folder", null, "Folder"))}</span>
                 </button>
             `);
         }
@@ -3119,21 +3119,23 @@ resetMarqueeVisual();
             pickerItem = opts.item || null;
             pickerPath = normalizeRelPath(opts.initialPath || currentPath || "");
 
-            if (extPickerTitle) extPickerTitle.textContent = pickerMode === "copy" ? "Copy" : "Move";
-            if (extPickerSub) extPickerSub.textContent = "Select destination folder";
+            if (extPickerTitle) extPickerTitle.textContent = externalPickerModeLabel(pickerMode);
+            if (extPickerSub) extPickerSub.textContent = tr("external.picker.select_destination", null, "Select destination folder");
             if (extPickerSource) {
                 const rel = pickerItem && pickerItem.rel ? pickerItem.rel : "";
-                extPickerSource.textContent = `${pickerMode === "copy" ? "Copy" : "Move"}: /${rel}`;
+                extPickerSource.textContent = externalPickerSourceLabel(pickerMode, rel);
             }
-            if (extPickerChoose) extPickerChoose.textContent = pickerMode === "copy" ? "Copy here" : "Move here";
+            if (extPickerChoose) extPickerChoose.textContent = externalPickerHereLabel(pickerMode);
             if (extPickerStatus) extPickerStatus.textContent = "";
 
-            extPickerOverlay.classList.add("show");
-            extPickerOverlay.setAttribute("aria-hidden", "false");
+            syncExternalPickerStaticLabels();
+        extPickerOverlay.classList.add("show");
+            syncExternalPickerStaticLabels();
+        extPickerOverlay.setAttribute("aria-hidden", "false");
             resetFolderPickerPosition();
 
             loadPickerFolder(pickerPath).catch((e) => {
-                if (extPickerStatus) extPickerStatus.textContent = `Folder list failed: ${e.message || e}`;
+                if (extPickerStatus) extPickerStatus.textContent = tr("external.picker.folder_list_failed", { error: String(e && e.message ? e.message : e) }, `Folder list failed: ${e.message || e}`);
             });
         });
     }
@@ -3886,6 +3888,42 @@ resetMarqueeVisual();
         } else {
             setStatus(`Moved ${done} item${done === 1 ? "" : "s"} to trash.`, "good");
         }
+    }
+
+    function externalPickerModeLabel(mode) {
+        return mode === "copy"
+            ? tr("external.picker.copy", null, "Copy")
+            : tr("external.picker.move", null, "Move");
+    }
+
+    function externalPickerHereLabel(mode) {
+        return mode === "copy"
+            ? tr("external.picker.copy_here", null, "Copy here")
+            : tr("external.picker.move_here", null, "Move here");
+    }
+
+    function externalPickerSourceLabel(mode, rel) {
+        const path = "/" + normalizeRelPath(rel || "");
+        return mode === "copy"
+            ? tr("external.picker.copy_source", { path }, `Copy: ${path}`)
+            : tr("external.picker.move_source", { path }, `Move: ${path}`);
+    }
+
+    function externalPickerDestinationLabel(path) {
+        const shown = "/" + normalizeRelPath(path || "");
+        return tr("external.picker.destination", { path: shown }, `Destination: Workspace ${shown}`);
+    }
+
+    function syncExternalPickerStaticLabels() {
+        const set = (el, key, fallback) => {
+            if (!el) return;
+            el.setAttribute("data-i18n", key);
+            el.textContent = tr(key, null, fallback);
+        };
+
+        set(extPickerClose, "external.modal.close", "Close");
+        set(extPickerCancel, "external.modal.cancel", "Cancel");
+        set(extPickerNewFolder, "external.picker.new_folder_here", "New folder here...");
     }
 
     function syncExternalItemContextDynamicLabels() {
