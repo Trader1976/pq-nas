@@ -5,6 +5,26 @@
 
     const el = (id) => document.getElementById(id);
 
+    function tr(key, params, fallback) {
+        const ui = window.NEONWAVE_UI;
+        if (ui && typeof ui.t === "function") return ui.t(key, params || null, fallback);
+        return String(fallback || key || "");
+    }
+
+    async function nwAlert(message, title) {
+        const ui = window.NEONWAVE_UI;
+        const fn = ui && ui["alert"];
+        if (typeof fn === "function") {
+            await fn({
+                title: title || tr("neonwave.dialog.title", null, "NeonWave"),
+                message,
+                okText: tr("neonwave.dialog.ok", null, "OK")
+            });
+        } else {
+            console.warn(message);
+        }
+    }
+
     let listEl = null;
     let inputEl = null;
     let clearBtn = null;
@@ -122,14 +142,17 @@
         const api = window.PQNAS_NEONWAVE_APP;
 
         if (!api || typeof api.scanCurrent !== "function") {
-            alert("NeonWave scanner is not ready yet.");
+            await nwAlert(
+                tr("neonwave.search.scanner_not_ready", null, "NeonWave scanner is not ready yet."),
+                tr("neonwave.search.title", null, "Search")
+            );
             return;
         }
 
         try {
             if (deepBtn) {
                 deepBtn.disabled = true;
-                deepBtn.textContent = "Scanning…";
+                deepBtn.textContent = tr("neonwave.search.scanning", null, "Scanning…");
             }
 
             await api.scanCurrent();
@@ -137,11 +160,14 @@
             // MutationObserver usually handles this, but this makes it immediate.
             applySearch();
         } catch (e) {
-            alert(String(e && e.message ? e.message : e));
+            await nwAlert(
+                String(e && e.message ? e.message : e),
+                tr("neonwave.error_title", null, "Error")
+            );
         } finally {
             if (deepBtn) {
                 deepBtn.disabled = false;
-                deepBtn.textContent = "Deep";
+                deepBtn.textContent = tr("neonwave.deep", null, "Deep");
             }
         }
     }

@@ -22,6 +22,36 @@
         }[c]));
     }
 
+    function tr(key, params, fallback) {
+        const ui = window.NEONWAVE_UI;
+        if (ui && typeof ui.t === "function") return ui.t(key, params || null, fallback);
+        let out = String(fallback || key || "");
+        const p = params || {};
+        for (const name of Object.keys(p)) out = out.split(`{${name}}`).join(String(p[name]));
+        return out;
+    }
+
+    async function nwAlert(message) {
+        const ui = window.NEONWAVE_UI;
+        const fn = ui && ui["alert"];
+        if (typeof fn === "function") {
+            await fn({
+                title: tr("neonwave.dialog.title", null, "NeonWave"),
+                message,
+                okText: tr("neonwave.dialog.ok", null, "OK")
+            });
+        } else {
+            console.warn(message);
+        }
+    }
+
+    async function nwConfirm(opts) {
+        const ui = window.NEONWAVE_UI;
+        const fn = ui && ui["confirm"];
+        if (typeof fn !== "function") return false;
+        return !!(await fn(opts || {}));
+    }
+
     function normPath(p) {
         p = String(p || "").trim();
         if (!p) return "";
@@ -163,7 +193,7 @@
             return;
         }
 
-        alert("NeonWave player API is not ready yet.");
+        nwAlert(tr("neonwave.player_api_not_ready", null, "NeonWave player API is not ready yet."));
     }
 
     function queueTrack(t) {
@@ -173,7 +203,7 @@
             return;
         }
 
-        alert("NeonWave player API is not ready yet.");
+        nwAlert(tr("neonwave.player_api_not_ready", null, "NeonWave player API is not ready yet."));
     }
 
     function renderCover(track) {
@@ -192,7 +222,7 @@
         const rows = sortedTracks();
 
         if (!rows.length) {
-            listEl.innerHTML = `<div class="empty">No listening history yet.</div>`;
+            listEl.innerHTML = `<div class="empty">${esc(tr("neonwave.history_empty", null, "No listening history yet."))}</div>`;
             return;
         }
 
@@ -209,8 +239,8 @@
                     <div class="historyStats">${esc(`${t.plays} play${t.plays === 1 ? "" : "s"} · ${timeAgo(t.lastPlayed)}`)}</div>
                 </div>
                 <div class="historyActions">
-                    <button class="pillBtn small" type="button" data-act="play">Play</button>
-                    <button class="pillBtn small" type="button" data-act="queue">Queue</button>
+                    <button class="pillBtn small" type="button" data-act="play">${esc(tr("neonwave.play", null, "Play"))}</button>
+                    <button class="pillBtn small" type="button" data-act="queue">${esc(tr("neonwave.queue", null, "Queue"))}</button>
                 </div>
             `;
 
@@ -221,8 +251,14 @@
         }
     }
 
-    function clearHistory() {
-        if (!confirm("Clear NeonWave listening history in this browser?")) return;
+    async function clearHistory() {
+        if (!(await nwConfirm({
+            title: tr("neonwave.history.clear.title", null, "Clear history?"),
+            message: tr("neonwave.history.clear.message", null, "Clear NeonWave listening history in this browser?"),
+            okText: tr("neonwave.clear", null, "Clear"),
+            cancelText: tr("neonwave.dialog.cancel", null, "Cancel"),
+            danger: true
+        }))) return;
         saveHistory({});
         render();
     }

@@ -7,26 +7,27 @@
     <link rel="stylesheet" href="/static/theme.css">
     <link rel="stylesheet" href="./app.css">
     <script src="/static/theme.js"></script>
+    <script src="/static/i18n.js?v=20260519-neonwave-i18n-1"></script>
 </head>
 <body>
 <div class="musicApp">
     <header class="topbar">
         <div>
-            <h1>NeonWave</h1>
-            <div class="sub">Browse, scan, queue and play your audio library <span id="appVersion" class="appVersion"></span></div>
+            <h1 data-i18n="neonwave.title">NeonWave</h1>
+            <div class="sub"><span data-i18n="neonwave.subtitle">Browse, scan, queue and play your audio library</span> <span id="appVersion" class="appVersion"></span></div>
         </div>
 
         <div class="topActions">
-            <button id="musicFolderBtn" class="pillBtn" type="button">Music folder</button>
-            <button id="favoritesBtn" class="pillBtn" type="button">Favorites</button>
-            <button id="scanBtn" class="pillBtn" type="button">Scan audio</button>
+            <button id="musicFolderBtn" class="pillBtn" type="button" data-i18n="neonwave.music_folder">Music folder</button>
+            <button id="favoritesBtn" class="pillBtn" type="button" data-i18n="neonwave.favorites">Favorites</button>
+            <button id="scanBtn" class="pillBtn" type="button" data-i18n="neonwave.scan_audio">Scan audio</button>
 
             <label class="toggle">
                 <input id="audioOnlyToggle" type="checkbox" checked>
-                <span>Audio only</span>
+                <span data-i18n="neonwave.audio_only">Audio only</span>
             </label>
 
-            <button id="refreshBtn" class="pillBtn" type="button">Refresh</button>
+            <button id="refreshBtn" class="pillBtn" type="button" data-i18n="neonwave.refresh">Refresh</button>
         </div>
     </header>
 
@@ -34,27 +35,27 @@
         <section class="panel libraryPanel">
             <div class="panelHead">
                 <div>
-                    <div class="panelTitle">Library</div>
+                    <div class="panelTitle" data-i18n="neonwave.library">Library</div>
                     <div id="pathLine" class="pathLine">/</div>
                 </div>
-                <button id="upBtn" class="pillBtn small" type="button">Up</button>
+                <button id="upBtn" class="pillBtn small" type="button" data-i18n="neonwave.up">Up</button>
             </div>
 
             <div class="librarySearchBox">
                 <div class="librarySearchInputWrap">
                     <span class="librarySearchIcon">⌕</span>
                     <input id="librarySearch" class="librarySearchInput" type="search"
-                           placeholder="Search current folder or scanned results…"
+                           placeholder="Search current folder or scanned results…" data-i18n-placeholder="neonwave.search_placeholder"
                            autocomplete="off" spellcheck="false">
-                    <button id="librarySearchDeep" class="librarySearchDeep" type="button" title="Deep scan from current folder">Deep</button>
-                    <button id="librarySearchClear" class="librarySearchClear" type="button" title="Clear search">×</button>
+                    <button id="librarySearchDeep" class="librarySearchDeep" type="button" title="Deep scan from current folder" data-i18n-title="neonwave.deep_scan_title" data-i18n="neonwave.deep">Deep</button>
+                    <button id="librarySearchClear" class="librarySearchClear" type="button" title="Clear search" data-i18n-title="neonwave.clear_search_title">×</button>
                 </div>
                 <div id="librarySearchCount" class="librarySearchCount">0</div>
             </div>
 
-            <div id="librarySearchEmpty" class="empty librarySearchEmpty" hidden>No matching tracks, folders or cover images.</div>
+            <div id="librarySearchEmpty" class="empty librarySearchEmpty" hidden data-i18n="neonwave.no_search_matches">No matching tracks, folders or cover images.</div>
 
-            <div id="statusLine" class="statusLine">Loading…</div>
+            <div id="statusLine" class="statusLine" data-i18n="common.loading">Loading…</div>
             <div id="list" class="list"></div>
         </section>
 
@@ -62,65 +63,65 @@
             <div class="nowPlaying">
                 <div id="nowCover" class="cover"><span>♪</span></div>
                 <div class="nowText">
-                    <div id="nowTitle" class="nowTitle">Nothing playing</div>
-                    <div id="nowSub" class="nowSub">Choose an audio file</div>
+                    <div id="nowTitle" class="nowTitle" data-i18n="neonwave.nothing_playing">Nothing playing</div>
+                    <div id="nowSub" class="nowSub" data-i18n="neonwave.choose_audio_file">Choose an audio file</div>
                 </div>
             </div>
 
             <audio id="audio" controls preload="metadata"></audio>
             <div class="sleepBox">
                 <div class="sleepHead">
-                    <div class="panelTitle">Sleep timer</div>
-                    <div id="sleepState" class="sleepState">Off</div>
+                    <div class="panelTitle" data-i18n="neonwave.sleep_timer">Sleep timer</div>
+                    <div id="sleepState" class="sleepState" data-i18n="neonwave.off">Off</div>
                 </div>
 
                 <div class="sleepActions">
                     <button class="pillBtn small" type="button" data-sleep-min="15">15 min</button>
                     <button class="pillBtn small" type="button" data-sleep-min="30">30 min</button>
                     <button class="pillBtn small" type="button" data-sleep-min="60">60 min</button>
-                    <button id="sleepTrackBtn" class="pillBtn small" type="button">End of track</button>
-                    <button id="sleepStopBtn" class="pillBtn small dangerSoft" type="button">Off</button>
+                    <button id="sleepTrackBtn" class="pillBtn small" type="button" data-i18n="neonwave.end_of_track">End of track</button>
+                    <button id="sleepStopBtn" class="pillBtn small dangerSoft" type="button" data-i18n="neonwave.off">Off</button>
                 </div>
             </div>
             <div class="transportBar">
-                <button id="prevBtn" class="pillBtn small" type="button">Prev</button>
-                <button id="nextBtn" class="pillBtn small" type="button">Next</button>
+                <button id="prevBtn" class="pillBtn small" type="button" data-i18n="neonwave.prev">Prev</button>
+                <button id="nextBtn" class="pillBtn small" type="button" data-i18n="neonwave.next">Next</button>
 
                 <label class="toggle transportToggle">
                     <input id="shuffleToggle" type="checkbox">
-                    <span>Shuffle</span>
+                    <span data-i18n="neonwave.shuffle">Shuffle</span>
                 </label>
 
-                <button id="repeatBtn" class="pillBtn small" type="button" data-mode="off">Repeat: off</button>
+                <button id="repeatBtn" class="pillBtn small" type="button" data-mode="off" data-i18n="neonwave.repeat_off">Repeat: off</button>
             </div>
 
             <div class="playlistBox">
                 <div class="playlistHead">
-                    <div class="panelTitle">Playlists</div>
-                    <button id="playlistNewBtn" class="pillBtn small" type="button">New</button>
+                    <div class="panelTitle" data-i18n="neonwave.playlists">Playlists</div>
+                    <button id="playlistNewBtn" class="pillBtn small" type="button" data-i18n="neonwave.new">New</button>
                 </div>
 
                 <div class="playlistControls">
                     <select id="playlistSelect" class="playlistSelect"></select>
-                    <input id="playlistNameInput" class="playlistNameInput" type="text" placeholder="Playlist name">
+                    <input id="playlistNameInput" class="playlistNameInput" type="text" placeholder="Playlist name" data-i18n-placeholder="neonwave.playlist_name">
                 </div>
 
                 <div class="playlistActions">
-                    <button id="playlistSaveQueueBtn" class="pillBtn small" type="button">Save queue</button>
-                    <button id="playlistLoadBtn" class="pillBtn small" type="button">Load</button>
-                    <button id="playlistDeleteBtn" class="pillBtn small dangerSoft" type="button">Delete</button>
+                    <button id="playlistSaveQueueBtn" class="pillBtn small" type="button" data-i18n="neonwave.save_queue">Save queue</button>
+                    <button id="playlistLoadBtn" class="pillBtn small" type="button" data-i18n="neonwave.load">Load</button>
+                    <button id="playlistDeleteBtn" class="pillBtn small dangerSoft" type="button" data-i18n="neonwave.delete">Delete</button>
                 </div>
 
-                <div id="playlistStatus" class="playlistStatus">Playlists are stored in this browser.</div>
+                <div id="playlistStatus" class="playlistStatus" data-i18n="neonwave.playlists_browser_status">Playlists are stored in this browser.</div>
             </div>
             <div class="vizBox">
                 <div class="vizHead">
-                    <div class="panelTitle">Visualizer</div>
+                    <div class="panelTitle" data-i18n="neonwave.visualizer">Visualizer</div>
                     <select id="vizStyle" class="vizSelect">
-                        <option value="bars">Neon bars</option>
-                        <option value="wave">Waveform</option>
-                        <option value="rings">Pulse rings</option>
-                        <option value="off">Off</option>
+                        <option value="bars" data-i18n="neonwave.viz.neon_bars">Neon bars</option>
+                        <option value="wave" data-i18n="neonwave.viz.waveform">Waveform</option>
+                        <option value="rings" data-i18n="neonwave.viz.pulse_rings">Pulse rings</option>
+                        <option value="off" data-i18n="neonwave.off">Off</option>
                     </select>
                 </div>
 
@@ -128,16 +129,16 @@
             </div>
             <div class="eqBox">
                 <div class="eqHead">
-                    <div class="panelTitle">Equalizer</div>
+                    <div class="panelTitle" data-i18n="neonwave.equalizer">Equalizer</div>
                     <label class="eqPower">
                         <input id="eqEnabled" type="checkbox" checked>
-                        <span>On</span>
+                        <span data-i18n="neonwave.on">On</span>
                     </label>
                 </div>
 
                 <div class="eqControls">
                     <select id="eqPreset" class="eqPreset"></select>
-                    <button id="eqResetBtn" class="pillBtn small" type="button">Reset</button>
+                    <button id="eqResetBtn" class="pillBtn small" type="button" data-i18n="neonwave.reset">Reset</button>
                 </div>
 
                 <div id="eqGrid" class="eqGrid"></div>
@@ -145,20 +146,20 @@
 
             <div class="historyBox">
                 <div class="historyHead">
-                    <div class="panelTitle">History</div>
-                    <button id="historyClearBtn" class="pillBtn small dangerSoft" type="button">Clear</button>
+                    <div class="panelTitle" data-i18n="neonwave.history">History</div>
+                    <button id="historyClearBtn" class="pillBtn small dangerSoft" type="button" data-i18n="neonwave.clear">Clear</button>
                 </div>
 
                 <div class="historyModeRow">
-                    <button id="historyRecentBtn" class="historyModeBtn active" type="button">Recently played</button>
-                    <button id="historyMostBtn" class="historyModeBtn" type="button">Most played</button>
+                    <button id="historyRecentBtn" class="historyModeBtn active" type="button" data-i18n="neonwave.recently_played">Recently played</button>
+                    <button id="historyMostBtn" class="historyModeBtn" type="button" data-i18n="neonwave.most_played">Most played</button>
                 </div>
 
                 <div id="historyList" class="historyList"></div>
             </div>
             <div class="queueHead">
-                <div class="panelTitle">Queue</div>
-                <button id="clearQueueBtn" class="pillBtn small" type="button">Clear</button>
+                <div class="panelTitle" data-i18n="neonwave.queue">Queue</div>
+                <button id="clearQueueBtn" class="pillBtn small" type="button" data-i18n="neonwave.clear">Clear</button>
             </div>
 
             <div id="queueList" class="queueList"></div>
@@ -166,6 +167,7 @@
     </main>
 </div>
 
+<script src="./neonwave_dialogs.js?v=20260519-neonwave-dialogs-1"></script>
 <script src="./neonwave_search.js"></script>
 <script src="./neonwave_favorites.js"></script>
 <script src="./app.js"></script>

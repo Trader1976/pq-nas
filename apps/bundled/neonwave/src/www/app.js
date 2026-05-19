@@ -191,6 +191,34 @@
         statusLine.textContent = msg;
     }
 
+    function tr(key, params, fallback) {
+        const ui = window.NEONWAVE_UI;
+        if (ui && typeof ui.t === "function") {
+            return ui.t(key, params || null, fallback);
+        }
+
+        let out = String(fallback || key || "");
+        const p = params || {};
+        for (const name of Object.keys(p)) {
+            out = out.split(`{${name}}`).join(String(p[name]));
+        }
+        return out;
+    }
+
+    async function nwConfirm(opts) {
+        const ui = window.NEONWAVE_UI;
+        const fn = ui && ui["confirm"];
+        if (typeof fn !== "function") return false;
+        return !!(await fn(opts || {}));
+    }
+
+    async function nwPrompt(opts) {
+        const ui = window.NEONWAVE_UI;
+        const fn = ui && ui["prompt"];
+        if (typeof fn !== "function") return null;
+        return await fn(opts || {});
+    }
+
     function normPath(p) {
         p = String(p || "/").trim();
         if (!p) return "/";
@@ -489,7 +517,7 @@
         state.mode = "folder";
         state.path = normPath(path);
         pathLine.textContent = state.path;
-        setStatus("Loading music library…");
+        setStatus(tr("neonwave.loading_library", null, "Loading music library…"));
         listEl.innerHTML = "";
 
         try {
@@ -497,12 +525,12 @@
             state.items = extractItems(j);
             rememberCoverFromItems(state.path, state.items);
             renderList();
-            setStatus("Ready.");
+            setStatus(tr("neonwave.ready", null, "Ready."));
             prefetchVisibleFolderCovers().catch(() => {});
         } catch (e) {
             state.items = [];
             renderList();
-            setStatus(`Load failed: ${String(e && e.message ? e.message : e)}`);
+            setStatus(tr("neonwave.load_failed", { error: String(e && e.message ? e.message : e) }, `Load failed: ${String(e && e.message ? e.message : e)}`));
         }
     }
 
@@ -529,11 +557,11 @@
         listEl.innerHTML = "";
 
         if (!rows.length) {
-            listEl.innerHTML = `<div class="empty">${
+            listEl.innerHTML = `<div class="empty">${esc(
                 state.mode === "scan"
-                    ? "No audio files found."
-                    : "No items to show."
-            }</div>`;
+                    ? tr("neonwave.no_audio_found", null, "No audio files found.")
+                    : tr("neonwave.no_items_to_show", null, "No items to show.")
+            )}</div>`;
             return;
         }
 
@@ -575,7 +603,7 @@
             const mid = document.createElement("div");
             mid.innerHTML = `
                 <div class="itemName">${esc(name || path)}</div>
-                <div class="itemMeta">${esc(dir ? "folder" : (audioFile ? "audio" : (imageFile ? "cover image" : "file")))}${size ? " · " + esc(size) : ""}${it.__scanTrack ? " · " + esc(path) : ""}</div>
+                <div class="itemMeta">${esc(dir ? tr("neonwave.kind.folder", null, "folder") : (audioFile ? tr("neonwave.kind.audio", null, "audio") : (imageFile ? tr("neonwave.kind.cover_image", null, "cover image") : tr("neonwave.kind.file", null, "file"))))}${size ? " · " + esc(size) : ""}${it.__scanTrack ? " · " + esc(path) : ""}</div>
             `;
 
             const actions = document.createElement("div");
@@ -585,27 +613,27 @@
                 const open = document.createElement("button");
                 open.className = "pillBtn small";
                 open.type = "button";
-                open.textContent = "Open";
+                open.textContent = tr("neonwave.open", null, "Open");
                 open.addEventListener("click", () => loadPath(path));
                 actions.appendChild(open);
             } else if (audioFile) {
                 const play = document.createElement("button");
                 play.className = "pillBtn small";
                 play.type = "button";
-                play.textContent = "Play";
+                play.textContent = tr("neonwave.play", null, "Play");
                 play.addEventListener("click", () => playTrack({ name, path, cover: coverPath }));
 
                 const queue = document.createElement("button");
                 queue.className = "pillBtn small";
                 queue.type = "button";
-                queue.textContent = "Queue";
+                queue.textContent = tr("neonwave.queue", null, "Queue");
                 queue.addEventListener("click", () => addToQueue({ name, path, cover: coverPath }));
 
                 const playlist = document.createElement("button");
                 playlist.className = "pillBtn small";
                 playlist.type = "button";
-                playlist.textContent = "Playlist";
-                playlist.title = "Add to selected playlist";
+                playlist.textContent = tr("neonwave.playlist", null, "Playlist");
+                playlist.title = tr("neonwave.add_to_selected_playlist", null, "Add to selected playlist");
                 playlist.addEventListener("click", () => addToSelectedPlaylist({ name, path, cover: coverPath }));
 
                 actions.appendChild(play);
@@ -633,6 +661,13 @@
 
     function setPlaylistStatus(msg) {
         if (playlistStatus) playlistStatus.textContent = msg;
+    }
+
+    function trackCountText(count) {
+        const n = Number(count || 0);
+        return n === 1
+            ? tr("neonwave.track_count_one", { count: n }, "1 track")
+            : tr("neonwave.track_count_many", { count: n }, `${n} tracks`);
     }
 
     function makePlaylistId() {
@@ -685,7 +720,7 @@
                 playlists: state.playlists || []
             }));
         } catch {
-            setPlaylistStatus("Could not save playlists. Browser storage may be full or blocked.");
+            setPlaylistStatus(tr("neonwave.playlist_storage_failed", null, "Could not save playlists. Browser storage may be full or blocked."));
         }
     }
 
@@ -702,11 +737,11 @@
         if (!state.playlists.length) {
             const opt = document.createElement("option");
             opt.value = "";
-            opt.textContent = "(no playlists)";
+            opt.textContent = tr("neonwave.no_playlists_option", null, "(no playlists)");
             playlistSelect.appendChild(opt);
             state.activePlaylistId = "";
             if (playlistNameInput) playlistNameInput.value = "";
-            setPlaylistStatus("Create a playlist, then save queue or add tracks.");
+            setPlaylistStatus(tr("neonwave.playlist_create_hint", null, "Create a playlist, then save queue or add tracks."));
             return;
         }
 
@@ -726,11 +761,11 @@
 
         const p = selectedPlaylist();
         if (playlistNameInput) playlistNameInput.value = p ? p.name : "";
-        if (p) setPlaylistStatus(`${p.name}: ${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"}.`);
+        if (p) setPlaylistStatus(tr("neonwave.playlist_track_status", { name: p.name, count: p.tracks.length, tracks: trackCountText(p.tracks.length) }, `${p.name}: ${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"}.`));
     }
 
     function createPlaylist(name) {
-        const cleanName = String(name || "").trim().slice(0, 80) || `Playlist ${state.playlists.length + 1}`;
+        const cleanName = String(name || "").trim().slice(0, 80) || tr("neonwave.playlist_auto_name", { number: state.playlists.length + 1 }, `Playlist ${state.playlists.length + 1}`);
         const p = {
             id: makePlaylistId(),
             name: cleanName,
@@ -741,7 +776,7 @@
         state.activePlaylistId = p.id;
         savePlaylistsToStorage();
         renderPlaylists();
-        setPlaylistStatus(`Created playlist: ${cleanName}`);
+        setPlaylistStatus(tr("neonwave.playlist_created", { name: cleanName }, `Created playlist: ${cleanName}`));
         return p;
     }
 
@@ -750,7 +785,7 @@
 
         const typed = playlistNameInput ? playlistNameInput.value.trim() : "";
         if (!p) {
-            p = createPlaylist(typed || "My playlist");
+            p = createPlaylist(typed || tr("neonwave.playlist.default_name", null, "My playlist"));
         }
 
         if (typed) p.name = typed.slice(0, 80);
@@ -759,13 +794,13 @@
         state.activePlaylistId = p.id;
         savePlaylistsToStorage();
         renderPlaylists();
-        setPlaylistStatus(`Saved ${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"} to ${p.name}.`);
+        setPlaylistStatus(tr("neonwave.playlist_saved_tracks", { count: p.tracks.length, tracks: trackCountText(p.tracks.length), name: p.name }, `Saved ${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"} to ${p.name}.`));
     }
 
     function loadSelectedPlaylistToQueue() {
         const p = selectedPlaylist();
         if (!p) {
-            setPlaylistStatus("No playlist selected.");
+            setPlaylistStatus(tr("neonwave.no_playlist_selected", null, "No playlist selected."));
             return;
         }
 
@@ -776,33 +811,47 @@
         if (state.queue.length) {
             playQueueIndex(0);
         } else {
-            setPlaylistStatus(`${p.name} is empty.`);
+            setPlaylistStatus(tr("neonwave.playlist_empty_named", { name: p.name }, `${p.name} is empty.`));
         }
 
-        setPlaylistStatus(`Loaded ${p.name}: ${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"}.`);
+        setPlaylistStatus(tr("neonwave.playlist_loaded_tracks", { name: p.name, count: p.tracks.length, tracks: trackCountText(p.tracks.length) }, `Loaded ${p.name}: ${p.tracks.length} track${p.tracks.length === 1 ? "" : "s"}.`));
     }
 
-    function deleteSelectedPlaylist() {
+    async function deleteSelectedPlaylist() {
         const p = selectedPlaylist();
         if (!p) {
-            setPlaylistStatus("No playlist selected.");
+            setPlaylistStatus(tr("neonwave.no_playlist_selected", null, "No playlist selected."));
             return;
         }
 
-        if (!confirm(`Delete playlist "${p.name}"?`)) return;
+        if (!(await nwConfirm({
+            title: tr("neonwave.playlist.delete.title", null, "Delete playlist?"),
+            message: tr("neonwave.playlist.delete.message", { name: p.name }, `Delete playlist "${p.name}"?`),
+            okText: tr("neonwave.delete", null, "Delete"),
+            cancelText: tr("neonwave.dialog.cancel", null, "Cancel"),
+            danger: true
+        }))) return;
 
         state.playlists = state.playlists.filter((x) => x.id !== p.id);
         state.activePlaylistId = state.playlists[0]?.id || "";
         savePlaylistsToStorage();
         renderPlaylists();
-        setPlaylistStatus(`Deleted playlist: ${p.name}`);
+        setPlaylistStatus(tr("neonwave.playlist_deleted", { name: p.name }, `Deleted playlist: ${p.name}`));
     }
 
-    function addToSelectedPlaylist(track) {
+    async function addToSelectedPlaylist(track) {
         let p = selectedPlaylist();
 
         if (!p) {
-            const name = prompt("Playlist name?", "My playlist");
+            const name = await nwPrompt({
+                title: tr("neonwave.playlist.name_prompt.title", null, "Playlist name"),
+                message: tr("neonwave.playlist.name_prompt.message", null, "Name this new playlist."),
+                defaultValue: tr("neonwave.playlist.default_name", null, "My playlist"),
+                placeholder: tr("neonwave.playlist_name", null, "Playlist name"),
+                okText: tr("neonwave.dialog.ok", null, "OK"),
+                cancelText: tr("neonwave.dialog.cancel", null, "Cancel"),
+                maxLength: 80
+            });
             if (name === null) return;
             p = createPlaylist(name);
         }
@@ -810,7 +859,7 @@
         const clean = cleanTrackForPlaylist(track);
 
         if (!clean.path || clean.path === "/") {
-            setPlaylistStatus("Could not add track: missing path.");
+            setPlaylistStatus(tr("neonwave.playlist_missing_path", null, "Could not add track: missing path."));
             return;
         }
 
@@ -822,8 +871,8 @@
         renderPlaylists();
 
         setPlaylistStatus(already
-            ? `Already in ${p.name}: ${clean.name}`
-            : `Added to ${p.name}: ${clean.name}`);
+            ? tr("neonwave.already_in_playlist", { playlist: p.name, track: clean.name }, `Already in ${p.name}: ${clean.name}`)
+            : tr("neonwave.added_to_playlist", { playlist: p.name, track: clean.name }, `Added to ${p.name}: ${clean.name}`));
     }
 
     function audioUrlCandidates(path) {
@@ -1653,8 +1702,8 @@
         audio.pause();
         audio.removeAttribute("src");
         audio.load();
-        nowTitle.textContent = "Nothing playing";
-        nowSub.textContent = "Choose an audio file";
+        nowTitle.textContent = tr("neonwave.nothing_playing", null, "Nothing playing");
+        nowSub.textContent = tr("neonwave.choose_audio_file", null, "Choose an audio file");
         renderQueue();
     });
 
@@ -1685,8 +1734,19 @@
         renderPlaylists();
     });
 
-    playlistNewBtn?.addEventListener("click", () => {
-        const name = playlistNameInput?.value?.trim() || prompt("Playlist name?", "My playlist");
+    playlistNewBtn?.addEventListener("click", async () => {
+        let name = playlistNameInput?.value?.trim() || "";
+        if (!name) {
+            name = await nwPrompt({
+                title: tr("neonwave.playlist.name_prompt.title", null, "Playlist name"),
+                message: tr("neonwave.playlist.name_prompt.message", null, "Name this new playlist."),
+                defaultValue: tr("neonwave.playlist.default_name", null, "My playlist"),
+                placeholder: tr("neonwave.playlist_name", null, "Playlist name"),
+                okText: tr("neonwave.dialog.ok", null, "OK"),
+                cancelText: tr("neonwave.dialog.cancel", null, "Cancel"),
+                maxLength: 80
+            });
+        }
         if (name === null) return;
         createPlaylist(name);
     });

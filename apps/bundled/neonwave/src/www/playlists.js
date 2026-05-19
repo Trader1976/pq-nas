@@ -20,6 +20,22 @@
         if (s) s.textContent = msg;
     }
 
+    function tr(key, params, fallback) {
+        const ui = window.NEONWAVE_UI;
+        if (ui && typeof ui.t === "function") return ui.t(key, params || null, fallback);
+        let out = String(fallback || key || "");
+        const p = params || {};
+        for (const name of Object.keys(p)) out = out.split(`{${name}}`).join(String(p[name]));
+        return out;
+    }
+
+    async function nwConfirm(opts) {
+        const ui = window.NEONWAVE_UI;
+        const fn = ui && ui["confirm"];
+        if (typeof fn !== "function") return false;
+        return !!(await fn(opts || {}));
+    }
+
     function makeId() {
         return "pl_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
     }
@@ -84,7 +100,7 @@
         if (!playlists.length) {
             const empty = document.createElement("div");
             empty.className = "empty playlistEmpty";
-            empty.textContent = "No saved playlists yet.";
+            empty.textContent = tr("neonwave.playlists_empty", null, "No saved playlists yet.");
             listEl.appendChild(empty);
             return;
         }
@@ -113,44 +129,50 @@
             const play = document.createElement("button");
             play.className = "pillBtn small";
             play.type = "button";
-            play.textContent = "Play";
+            play.textContent = tr("neonwave.play", null, "Play");
             play.addEventListener("click", () => {
                 const a = api();
                 if (!a || typeof a.setQueue !== "function") {
-                    status("Playlist API not ready. Reload NeonWave.");
+                    status(tr("neonwave.playlist_api_not_ready", null, "Playlist API not ready. Reload NeonWave."));
                     return;
                 }
 
                 a.setQueue(pl.tracks, true);
-                status(`Playing playlist: ${pl.name}`);
+                status(tr("neonwave.playing_playlist", { name: pl.name }, `Playing playlist: ${pl.name}`));
             });
 
             const add = document.createElement("button");
             add.className = "pillBtn small";
             add.type = "button";
-            add.textContent = "Add";
+            add.textContent = tr("neonwave.add", null, "Add");
             add.addEventListener("click", () => {
                 const a = api();
                 if (!a || typeof a.addToQueueMany !== "function") {
-                    status("Playlist API not ready. Reload NeonWave.");
+                    status(tr("neonwave.playlist_api_not_ready", null, "Playlist API not ready. Reload NeonWave."));
                     return;
                 }
 
                 a.addToQueueMany(pl.tracks, false);
-                status(`Added playlist to queue: ${pl.name}`);
+                status(tr("neonwave.playlist_added_to_queue", { name: pl.name }, `Added playlist to queue: ${pl.name}`));
             });
 
             const del = document.createElement("button");
             del.className = "pillBtn small dangerMini";
             del.type = "button";
-            del.textContent = "Delete";
-            del.addEventListener("click", () => {
-                if (!confirm(`Delete playlist "${pl.name}"?`)) return;
+            del.textContent = tr("neonwave.delete", null, "Delete");
+            del.addEventListener("click", async () => {
+                if (!(await nwConfirm({
+                    title: tr("neonwave.playlist.delete.title", null, "Delete playlist?"),
+                    message: tr("neonwave.playlist.delete.message", { name: pl.name }, `Delete playlist "${pl.name}"?`),
+                    okText: tr("neonwave.delete", null, "Delete"),
+                    cancelText: tr("neonwave.dialog.cancel", null, "Cancel"),
+                    danger: true
+                }))) return;
 
                 const next = loadPlaylists().filter((x) => x.id !== pl.id);
                 savePlaylists(next);
                 renderPlaylists();
-                status(`Deleted playlist: ${pl.name}`);
+                status(tr("neonwave.playlist_deleted", { name: pl.name }, `Deleted playlist: ${pl.name}`));
             });
 
             actions.appendChild(play);
@@ -166,13 +188,13 @@
     saveBtn?.addEventListener("click", () => {
         const a = api();
         if (!a || typeof a.getQueue !== "function") {
-            status("Playlist API not ready. Reload NeonWave.");
+            status(tr("neonwave.playlist_api_not_ready", null, "Playlist API not ready. Reload NeonWave."));
             return;
         }
 
         const queue = a.getQueue().map(cleanTrack).filter(Boolean);
         if (!queue.length) {
-            status("Queue is empty. Add or play tracks before saving a playlist.");
+            status(tr("neonwave.queue_empty_save_playlist", null, "Queue is empty. Add or play tracks before saving a playlist."));
             return;
         }
 
@@ -191,7 +213,7 @@
 
         if (nameInput) nameInput.value = "";
         renderPlaylists();
-        status(`Saved playlist: ${name}`);
+        status(tr("neonwave.playlist_saved", { name }, `Saved playlist: ${name}`));
     });
 
     renderPlaylists();

@@ -5,6 +5,29 @@
 
     const el = (id) => document.getElementById(id);
 
+    function tr(key, params, fallback) {
+        const ui = window.NEONWAVE_UI;
+        if (ui && typeof ui.t === "function") return ui.t(key, params || null, fallback);
+        let out = String(fallback || key || "");
+        const p = params || {};
+        for (const name of Object.keys(p)) out = out.split(`{${name}}`).join(String(p[name]));
+        return out;
+    }
+
+    async function nwAlert(message) {
+        const ui = window.NEONWAVE_UI;
+        const fn = ui && ui["alert"];
+        if (typeof fn === "function") {
+            await fn({
+                title: tr("neonwave.dialog.title", null, "NeonWave"),
+                message,
+                okText: tr("neonwave.dialog.ok", null, "OK")
+            });
+        } else {
+            console.warn(message);
+        }
+    }
+
     let favoritesBtn = null;
     let listEl = null;
 
@@ -65,14 +88,16 @@
     function updateFavoritesButton() {
         if (!favoritesBtn) return;
         const n = loadFavorites().length;
-        favoritesBtn.textContent = n > 0 ? `Favorites ${n}` : "Favorites";
+        favoritesBtn.textContent = n > 0
+            ? tr("neonwave.favorites_count", { count: n }, `Favorites ${n}`)
+            : tr("neonwave.favorites", null, "Favorites");
     }
 
     function makeStar(track) {
         const btn = document.createElement("button");
         btn.className = "favBtn";
         btn.type = "button";
-        btn.title = "Add/remove favorite";
+        btn.title = tr("neonwave.favorite_toggle", null, "Add/remove favorite");
 
         const paint = () => {
             const on = isFavorite(track.path);
@@ -134,7 +159,7 @@
         const favs = loadFavorites();
 
         if (!api || typeof api.showFavorites !== "function") {
-            alert("NeonWave is still loading. Try again in a moment.");
+            nwAlert(tr("neonwave.still_loading", null, "NeonWave is still loading. Try again in a moment."));
             return;
         }
 
