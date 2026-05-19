@@ -6,6 +6,22 @@
 
     const el = (id) => document.getElementById(id);
 
+    function shareT(key, params, fallback) {
+        try {
+            const api = window.PQNAS_I18N;
+            if (api && typeof api.t === "function") {
+                return api.t(key, params || null, fallback);
+            }
+        } catch (_) {}
+
+        let out = String(fallback || key || "");
+        const p = params || {};
+        for (const name of Object.keys(p)) {
+            out = out.split(`{${name}}`).join(String(p[name]));
+        }
+        return out;
+    }
+
     const shareModal = el("shareModal");
     const shareClose = el("shareClose");
     const sharePath = el("sharePath");
@@ -173,7 +189,9 @@
             tileEl.appendChild(b);
         }
         b.className = "shareBadge" + (expired ? " expired" : "");
-        b.title = expired ? "Share link expired" : "Shared";
+        b.title = expired
+            ? shareT("photogallery.share.expired_badge_title", null, "Share link expired")
+            : shareT("photogallery.share.shared_badge_title", null, "Shared");
         b.textContent = expired ? "⏰" : "🔗";
     }
 
@@ -203,19 +221,25 @@
         const rel = PG.getPreviewPath ? PG.getPreviewPath() : "";
         if (!rel) {
             previewShareBtn.disabled = true;
-            previewShareBtn.textContent = "Share";
+            previewShareBtn.textContent = shareT("photogallery.share", null, "Share");
             return;
         }
 
         previewShareBtn.disabled = false;
         const existing = existingShareFor(rel, "file");
-        previewShareBtn.textContent = existing ? "Manage share" : "Share";
+        previewShareBtn.textContent = existing
+            ? shareT("photogallery.manage_share", null, "Manage share")
+            : shareT("photogallery.share", null, "Share");
     }
 
     function menuLabelForRelPath(relPath, type) {
-        const s = existingShareFor(relPath, type);
-        if (!s) return "Create share link…";
-        return isShareExpired(s) ? "Manage share link… (expired)" : "Manage share link…";
+        const share = existingShareFor(relPath, type);
+        if (!share) {
+            return shareT("photogallery.create_share_link_menu", null, "Create share link…");
+        }
+        return isShareExpired(share)
+            ? shareT("photogallery.manage_share_link_expired_menu", null, "Manage share link… (expired)")
+            : shareT("photogallery.manage_share_link_menu", null, "Manage share link…");
     }
 
     function populateModalFromExisting(relPath, type, label = "") {
@@ -223,7 +247,7 @@
 
         if (sharePath) {
             sharePath.textContent = normalizeShareType(type) === "album"
-                ? `Album: ${label || relPath}`
+                ? shareT("photogallery.share.album_path", { album: label || relPath }, "Album: {album}")
                 : "/" + relPath;
         }
         if (shareStatus) shareStatus.textContent = "";
@@ -238,16 +262,16 @@
             if (shareOutWrap) shareOutWrap.style.display = "";
             if (shareRevokeBtn) shareRevokeBtn.style.display = "";
             if (shareCreateBtn) {
-                shareCreateBtn.textContent = "Create new link (rotate)…";
+                shareCreateBtn.textContent = shareT("photogallery.share.create_new_rotate", null, "Create new link (rotate)…");
             }
 
             const exp = existing.expires_at
-                ? `Already shared • expires ${existing.expires_at}`
-                : "Already shared • no expiry";
+                ? shareT("photogallery.share.already_shared_expires", { expires_at: existing.expires_at }, "Already shared • expires {expires_at}")
+                : shareT("photogallery.share.already_shared_no_expiry", null, "Already shared • no expiry");
             if (shareStatus) shareStatus.textContent = exp;
         } else {
             if (shareCreateBtn) {
-                shareCreateBtn.textContent = "Create link";
+                shareCreateBtn.textContent = shareT("photogallery.create_link", null, "Create link");
             }
         }
     }
@@ -285,7 +309,7 @@
         if (!rel) return;
 
         try {
-            if (shareStatus) shareStatus.textContent = "Creating…";
+            if (shareStatus) shareStatus.textContent = shareT("photogallery.share.creating", null, "Creating…");
 
             const existing = existingShareFor(rel, type);
             if (existing && existing.token) {
@@ -298,7 +322,9 @@
             const outUrl = fullShareUrl(j.url, j.token);
             if (shareOut) shareOut.value = outUrl;
             if (shareOutWrap) shareOutWrap.style.display = "";
-            if (shareStatus) shareStatus.textContent = existing ? "New link created (old revoked)." : "Link created.";
+            if (shareStatus) shareStatus.textContent = existing
+                ? shareT("photogallery.share.new_link_created_old_revoked", null, "New link created (old revoked).")
+                : shareT("photogallery.share.link_created", null, "Link created.");
             if (shareRevokeBtn) shareRevokeBtn.style.display = "";
 
             await refreshSharesCache(true);
@@ -306,9 +332,9 @@
             updatePreviewShareButton();
 
             PG.setBadge?.("ok", "ready");
-            PG.setStatus?.(`Share ready: ${rel}`);
+            PG.setStatus?.(shareT("photogallery.share.ready_for_path", { path: rel }, "Share ready: {path}"));
         } catch (e) {
-            if (shareStatus) shareStatus.textContent = `Error: ${String(e && e.message ? e.message : e)}`;
+            if (shareStatus) shareStatus.textContent = shareT("common.error_with_message", { error: String(e && e.message ? e.message : e) }, "Error: {error}");
             PG.setBadge?.("err", "error");
         }
     });
@@ -319,11 +345,11 @@
         const existing = existingShareFor(rel, type);
         if (!existing || !existing.token) return;
 
-        const ok = confirm("Revoke this share link?\n\nThis will invalidate the URL immediately.");
+        const ok = confirm(shareT("photogallery.share.revoke_confirm", null, "Revoke this share link?\n\nThis will invalidate the URL immediately."));
         if (!ok) return;
 
         try {
-            if (shareStatus) shareStatus.textContent = "Revoking…";
+            if (shareStatus) shareStatus.textContent = shareT("photogallery.share.revoking", null, "Revoking…");
             await revokeShare(existing.token);
 
             await refreshSharesCache(true);
@@ -332,16 +358,18 @@
             populateModalFromExisting(rel, type);
 
             PG.setBadge?.("ok", "ready");
-            PG.setStatus?.(`Share revoked: ${rel}`);
+            PG.setStatus?.(shareT("photogallery.share.revoked_for_path", { path: rel }, "Share revoked: {path}"));
         } catch (e) {
-            if (shareStatus) shareStatus.textContent = `Error: ${String(e && e.message ? e.message : e)}`;
+            if (shareStatus) shareStatus.textContent = shareT("common.error_with_message", { error: String(e && e.message ? e.message : e) }, "Error: {error}");
             PG.setBadge?.("err", "error");
         }
     });
 
     shareCopyBtn?.addEventListener("click", async () => {
         const ok = await copyText(shareOut ? shareOut.value : "");
-        if (shareStatus) shareStatus.textContent = ok ? "Copied." : "Copy failed.";
+        if (shareStatus) shareStatus.textContent = ok
+            ? shareT("common.copied", null, "Copied.")
+            : shareT("common.copy_failed", null, "Copy failed.");
     });
 
     previewShareBtn?.addEventListener("click", () => {
