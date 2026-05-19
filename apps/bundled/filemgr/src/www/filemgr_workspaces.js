@@ -13,6 +13,106 @@
         return fallback || key;
     }
 
+    function openWorkspaceMessageModal(opts = {}) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+
+            const modal = document.createElement("div");
+            modal.className = "modal show";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "modalCard";
+            card.style.width = "min(560px, calc(100vw - 24px))";
+
+            const head = document.createElement("div");
+            head.className = "modalHead";
+
+            const title = document.createElement("div");
+            title.className = "modalTitle";
+            title.textContent = options.title || tr("filemgr.confirm", null, "Confirm");
+
+            const sub = document.createElement("div");
+            sub.className = "modalSub";
+            sub.textContent = options.subtitle || "";
+
+            const headText = document.createElement("div");
+            headText.appendChild(title);
+            if (sub.textContent) headText.appendChild(sub);
+            head.appendChild(headText);
+
+            const body = document.createElement("div");
+            body.className = "modalBody";
+            body.style.gridTemplateColumns = "1fr";
+
+            const msg = document.createElement("div");
+            msg.className = "v";
+            msg.style.whiteSpace = "pre-wrap";
+            msg.style.lineHeight = "1.45";
+            msg.textContent = options.message || "";
+            body.appendChild(msg);
+
+            const foot = document.createElement("div");
+            foot.className = "modalFoot";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || tr("filemgr.cancel", null, "Cancel");
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = options.danger ? "btn danger" : "btn";
+            okBtn.textContent = options.confirmText || tr("filemgr.ok", null, "OK");
+
+            foot.appendChild(spacer);
+            if (!options.hideCancel) foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(!!value);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(false);
+                    return;
+                }
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(true);
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish(false);
+            });
+            cancelBtn.addEventListener("click", () => finish(false));
+            okBtn.addEventListener("click", () => finish(true));
+
+            setTimeout(() => {
+                if (options.danger && !options.hideCancel) cancelBtn.focus();
+                else okBtn.focus();
+            }, 0);
+        });
+    }
+
     function workspaceRoleLabel(role) {
         const r = String(role || "").toLowerCase();
         if (r === "viewer") return tr("filemgr.ws.role.viewer", null, "viewer");
@@ -2072,7 +2172,13 @@
             if (FM.clearSelection) FM.clearSelection();
             if (FM.setPathAndLoad) FM.setPathAndLoad("");
         } catch (e) {
-            alert(tr("filemgr.ws.create_failed", { error: String(e && e.message ? e.message : e) }, "Create Shared Space failed:\\n" + String(e && e.message ? e.message : e)));
+            await openWorkspaceMessageModal({
+                title: tr("filemgr.ws.create_failed_title", null, "Create Shared Space failed"),
+                message: tr("filemgr.ws.create_failed", { error: String(e && e.message ? e.message : e) }, "Create Shared Space failed:\n" + String(e && e.message ? e.message : e)),
+                confirmText: tr("filemgr.ok", null, "OK"),
+                hideCancel: true,
+                danger: true
+            });
         } finally {
             workspaceCreateSharedBtn.disabled = false;
             workspaceCreateSharedBtn.textContent = old;
@@ -2097,11 +2203,18 @@
         const workspaceName = FM.scope.workspaceName || workspaceId;
         if (!workspaceId) return;
 
-        const ok = confirm(tr(
-            "filemgr.ws.leave_confirm",
-            { name: workspaceName },
-            `Leave workspace?\n\nWorkspace: ${workspaceName}\n\nAfter leaving, it will disappear from the Location dropdown.`
-        ));
+        const ok = await openWorkspaceMessageModal({
+            title: tr("filemgr.ws.leave_title", null, "Leave workspace?"),
+            subtitle: workspaceName,
+            message: tr(
+                "filemgr.ws.leave_confirm",
+                { name: workspaceName },
+                `Leave workspace?\n\nWorkspace: ${workspaceName}\n\nAfter leaving, it will disappear from the Location dropdown.`
+            ),
+            confirmText: tr("filemgr.ws.leave", null, "Leave"),
+            cancelText: tr("filemgr.cancel", null, "Cancel"),
+            danger: true
+        });
         if (!ok) return;
 
         const old = workspaceLeaveBtn.textContent;
@@ -2118,7 +2231,12 @@
             if (FM.clearSelection) FM.clearSelection();
             if (FM.setPathAndLoad) FM.setPathAndLoad("");
 
-            alert(tr("filemgr.ws.left_workspace", { name: workspaceName }, `You left workspace: ${workspaceName}`));
+            await openWorkspaceMessageModal({
+                title: tr("filemgr.ws.left_workspace_title", null, "Workspace left"),
+                message: tr("filemgr.ws.left_workspace", { name: workspaceName }, `You left workspace: ${workspaceName}`),
+                confirmText: tr("filemgr.ok", null, "OK"),
+                hideCancel: true
+            });
         } catch (e) {
             if (workspaceMembersStatus) {
                 workspaceMembersStatus.textContent =

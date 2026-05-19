@@ -2182,5 +2182,15 @@
   "external.upload.preparing": "Preparing upload…",
   "external.upload.continue": "Continue",
   "external.upload.already_exists_at": "Already exists: {path}",
-  "external.upload.starting": "Starting…"
+  "external.upload.starting": "Starting…",
+  "filemgr.ok": "OK",
+  "filemgr.confirm": "Confirm",
+  "filemgr.ws.create_failed_title": "Create Shared Space failed",
+  "filemgr.ws.leave_title": "Leave workspace?",
+  "filemgr.ws.leave": "Leave",
+  "filemgr.ws.left_workspace_title": "Workspace left",
+  "filemgr.locks.unlock": "Unlock",
+  "filemgr.locks.force_unlock_title": "Force unlock this item?",
+  "filemgr.locks.force_unlock_note": "This removes another user's lock.",
+  "filemgr.locks.force_unlock": "Force unlock"
 }

@@ -2199,5 +2199,15 @@
   "external.upload.preparing": "Valmistellaan latausta…",
   "external.upload.continue": "Jatka",
   "external.upload.already_exists_at": "On jo olemassa: {path}",
-  "external.upload.starting": "Aloitetaan…"
+  "external.upload.starting": "Aloitetaan…",
+  "filemgr.ok": "OK",
+  "filemgr.confirm": "Vahvista",
+  "filemgr.ws.create_failed_title": "Jaetun tilan luonti epäonnistui",
+  "filemgr.ws.leave_title": "Poistutaanko työtilasta?",
+  "filemgr.ws.leave": "Poistu",
+  "filemgr.ws.left_workspace_title": "Työtilasta poistuttu",
+  "filemgr.locks.unlock": "Avaa lukitus",
+  "filemgr.locks.force_unlock_title": "Pakotetaanko kohteen lukitus auki?",
+  "filemgr.locks.force_unlock_note": "Tämä poistaa toisen käyttäjän lukituksen.",
+  "filemgr.locks.force_unlock": "Pakota lukitus auki"
 }

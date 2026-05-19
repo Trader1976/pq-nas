@@ -18,6 +18,112 @@
     }[c]));
   }
 
+  function tr(key, vars = null, fallback = "") {
+    try {
+      if (window.PQNAS_I18N && typeof window.PQNAS_I18N.t === "function") {
+        return window.PQNAS_I18N.t(key, vars, fallback || key);
+      }
+    } catch (_) {}
+    return fallback || key;
+  }
+
+  function openFileLockConfirmModal(opts = {}) {
+    return new Promise((resolve) => {
+      const options = opts || {};
+
+      const modal = document.createElement("div");
+      modal.className = "modal show";
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+
+      const card = document.createElement("div");
+      card.className = "modalCard";
+      card.style.width = "min(560px, calc(100vw - 24px))";
+
+      const head = document.createElement("div");
+      head.className = "modalHead";
+
+      const title = document.createElement("div");
+      title.className = "modalTitle";
+      title.textContent = options.title || tr("filemgr.confirm", null, "Confirm");
+
+      const sub = document.createElement("div");
+      sub.className = "modalSub";
+      sub.textContent = options.subtitle || "";
+
+      const headText = document.createElement("div");
+      headText.appendChild(title);
+      if (sub.textContent) headText.appendChild(sub);
+      head.appendChild(headText);
+
+      const body = document.createElement("div");
+      body.className = "modalBody";
+      body.style.gridTemplateColumns = "1fr";
+
+      const msg = document.createElement("div");
+      msg.className = "v";
+      msg.style.whiteSpace = "pre-wrap";
+      msg.style.lineHeight = "1.45";
+      msg.textContent = options.message || "";
+      body.appendChild(msg);
+
+      const foot = document.createElement("div");
+      foot.className = "modalFoot";
+
+      const spacer = document.createElement("div");
+      spacer.style.flex = "1 1 auto";
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "btn secondary";
+      cancelBtn.textContent = options.cancelText || tr("filemgr.cancel", null, "Cancel");
+
+      const okBtn = document.createElement("button");
+      okBtn.type = "button";
+      okBtn.className = options.danger ? "btn danger" : "btn";
+      okBtn.textContent = options.confirmText || tr("filemgr.ok", null, "OK");
+
+      foot.appendChild(spacer);
+      foot.appendChild(cancelBtn);
+      foot.appendChild(okBtn);
+
+      card.appendChild(head);
+      card.appendChild(body);
+      card.appendChild(foot);
+      modal.appendChild(card);
+      document.body.appendChild(modal);
+
+      const finish = (value) => {
+        document.removeEventListener("keydown", onKey, true);
+        modal.remove();
+        resolve(!!value);
+      };
+
+      const onKey = (ev) => {
+        if (ev.key === "Escape") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          finish(false);
+          return;
+        }
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          finish(true);
+        }
+      };
+
+      document.addEventListener("keydown", onKey, true);
+      modal.addEventListener("click", (ev) => {
+        if (ev.target === modal) finish(false);
+      });
+      cancelBtn.addEventListener("click", () => finish(false));
+      okBtn.addEventListener("click", () => finish(true));
+
+      setTimeout(() => cancelBtn.focus(), 0);
+    });
+  }
+
   function installStyle() {
     if ($(STYLE_ID)) return;
 
@@ -351,10 +457,16 @@
     });
 
     unlockBtn.addEventListener("click", async () => {
-      const label = unlockBtn.textContent || "Unlock";
-      if (label.toLowerCase().includes("force") &&
-          !confirm("Force unlock this item?\n\nThis removes another user's lock.")) {
-        return;
+      const label = unlockBtn.textContent || tr("filemgr.locks.unlock", null, "Unlock");
+      if (label.toLowerCase().includes("force")) {
+        const ok = await openFileLockConfirmModal({
+          title: tr("filemgr.locks.force_unlock_title", null, "Force unlock this item?"),
+          message: tr("filemgr.locks.force_unlock_note", null, "This removes another user's lock."),
+          confirmText: tr("filemgr.locks.force_unlock", null, "Force unlock"),
+          cancelText: tr("filemgr.cancel", null, "Cancel"),
+          danger: true
+        });
+        if (!ok) return;
       }
 
       const old = unlockBtn.textContent;
