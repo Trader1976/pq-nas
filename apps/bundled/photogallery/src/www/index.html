@@ -1410,14 +1410,14 @@
     <div class="panel">
         <div class="bar">
             <div class="left">
-                <div class="title" id="titleLine"><span data-i18n="photogallery.title">Photo Gallery</span><span id="appVersion" class="appVersion"></span></div>
+                <div class="title" id="titleLine"><span data-i18n="photogallery.title">Kuvagalleria</span><span id="appVersion" class="appVersion"></span></div>
                 <div id="pathLine" aria-label="Breadcrumb path">/</div>
             </div>
 
             <div class="actions">
                 <span class="badge warn" id="badge" data-i18n="common.loading">loading…</span>
 
-                <input id="filterInput" class="input" type="text" placeholder="Search names, tags, EXIF: Panasonic, ISO 200, lens…" data-i18n-placeholder="photogallery.search_placeholder">
+                <input id="filterInput" class="input" type="text" placeholder="Hae nimistä, tageista, EXIF-tiedoista: Panasonic, ISO 200, objektiivi…" data-i18n-placeholder="photogallery.search_placeholder">
 
                 <select
                         id="ratingFilter"
@@ -1451,8 +1451,8 @@
                 <button class="btn secondary active" id="gridBtn" type="button" data-i18n="photogallery.grid" title="Siirry ruudukkonäkymään" aria-label="Siirry ruudukkonäkymään" data-i18n-title="photogallery.switch_to_grid_view" data-i18n-aria-label="photogallery.switch_to_grid_view">Ruudukko</button>
                 <button class="btn secondary" id="mapBtn" type="button" data-i18n="photogallery.map" title="Siirry karttanäkymään" aria-label="Siirry karttanäkymään" data-i18n-title="photogallery.switch_to_map_view" data-i18n-aria-label="photogallery.switch_to_map_view">Kartta</button>
                 <button class="btn secondary" id="albumsBtn" type="button" data-i18n="photogallery.albums" title="Siirry albumeihin" aria-label="Siirry albumeihin" data-i18n-title="photogallery.switch_to_albums_view" data-i18n-aria-label="photogallery.switch_to_albums_view">Albumit</button>
-                <button class="btn secondary" id="upBtn" type="button" data-i18n="common.up" title="Ylös kansiotasolla" aria-label="Ylös kansiotasolla" data-i18n-title="photogallery.up_tooltip" data-i18n-aria-label="photogallery.up_tooltip">Up</button>
-                <button class="btn" id="refreshBtn" type="button" data-i18n="common.refresh" title="Päivitä" aria-label="Päivitä" data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh">Refresh</button>
+                <button class="btn secondary" id="upBtn" type="button" data-i18n="common.up" title="Ylös kansiotasolla" aria-label="Ylös kansiotasolla" data-i18n-title="photogallery.up_tooltip" data-i18n-aria-label="photogallery.up_tooltip">Ylös</button>
+                <button class="btn" id="refreshBtn" type="button" data-i18n="common.refresh" title="Päivitä" aria-label="Päivitä" data-i18n-title="common.refresh" data-i18n-aria-label="common.refresh">Päivitä</button>
             </div>
         </div>
 
@@ -1517,7 +1517,7 @@
                     <label style="display:flex; gap:10px; align-items:flex-start;">
                         <input type="radio" name="uploadConflictChoice" id="uploadConflictKeepOld" value="keep_old" checked>
                         <span>
-                            <strong data-i18n="photogallery.keep_existing">Keep existing</strong><br>
+                            <strong data-i18n="photogallery.keep_existing">Pidä nykyinen</strong><br>
                             <span style="opacity:.82;" data-i18n="photogallery.keep_existing_help">Skip this upload and keep the file already stored.</span>
                         </span>
                     </label>
@@ -1525,7 +1525,7 @@
                     <label style="display:flex; gap:10px; align-items:flex-start;">
                         <input type="radio" name="uploadConflictChoice" id="uploadConflictReplace" value="replace">
                         <span>
-                            <strong data-i18n="photogallery.replace_with_new">Replace with new</strong><br>
+                            <strong data-i18n="photogallery.replace_with_new">Korvaa uudella</strong><br>
                             <span style="opacity:.82;" data-i18n="photogallery.replace_with_new_help">Upload the new file and replace the existing one.</span>
                         </span>
                     </label>
@@ -1563,12 +1563,12 @@
 
                 <div class="label" data-i18n="photogallery.keywords">Keywords</div>
                 <div>
-                    <input id="metaTags" class="field" type="text" placeholder="cat black sofa sunset" data-i18n-placeholder="photogallery.keywords_placeholder">
+                    <input id="metaTags" class="field" type="text" placeholder="kissa musta sohva auringonlasku" data-i18n-placeholder="photogallery.keywords_placeholder">
                 </div>
 
                 <div class="label" data-i18n="photogallery.description">Description</div>
                 <div>
-                    <textarea id="metaNotes" class="textarea" placeholder="Optional notes or caption" data-i18n-placeholder="photogallery.description_placeholder"></textarea>
+                    <textarea id="metaNotes" class="textarea" placeholder="Valinnaiset muistiinpanot tai kuvateksti" data-i18n-placeholder="photogallery.description_placeholder"></textarea>
                 </div>
                 <div
                         id="metaApplySelWrap"
@@ -1627,7 +1627,7 @@
         <div class="modalFoot">
             <div id="metaStatus" class="mono" style="opacity:.84;" data-i18n="common.ready">Ready.</div>
             <div style="flex:1 1 auto;"></div>
-            <button id="metaSaveBtn" class="btn" type="button" title="Save metadata (Ctrl+S / Cmd+S)" data-i18n-title="photogallery.save_metadata_title" data-i18n="common.save">Save</button>
+            <button id="metaSaveBtn" class="btn" type="button" title="Tallenna metatiedot (Ctrl+S / Cmd+S)" data-i18n-title="photogallery.save_metadata_title" data-i18n="common.save">Tallenna</button>
         </div>
     </div>
 </div>

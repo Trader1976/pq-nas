@@ -2520,7 +2520,7 @@
   "photogallery.keywords": "Keywords",
   "photogallery.keywords_placeholder": "cat black sofa sunset",
   "photogallery.description": "Description",
-  "photogallery.description_placeholder": "Optional description",
+  "photogallery.description_placeholder": "Optional notes or caption",
   "photogallery.apply_to_selected_photos": "Apply to selected photos",
   "photogallery.info": "Info",
   "photogallery.embedded": "Embedded",
