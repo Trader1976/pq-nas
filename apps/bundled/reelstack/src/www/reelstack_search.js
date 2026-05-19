@@ -8,6 +8,22 @@
   let applyCb = null;
   let clearCb = null;
 
+  function searchT(key, params, fallback) {
+    try {
+      const api = window.PQNAS_I18N;
+      if (api && typeof api.t === "function") {
+        return api.t(key, params || null, fallback);
+      }
+    } catch (_) {}
+
+    let out = String(fallback || key || "");
+    const p = params || {};
+    for (const name of Object.keys(p)) {
+      out = out.split(`{${name}}`).join(String(p[name]));
+    }
+    return out;
+  }
+
   function ensureModal() {
     if (backdrop) return backdrop;
 
@@ -16,28 +32,28 @@
     backdrop.hidden = true;
 
     backdrop.innerHTML = `
-      <div class="rsSearchCard" role="dialog" aria-modal="true" aria-label="Search Reel Stack">
+      <div class="rsSearchCard" role="dialog" aria-modal="true" aria-label="${searchT("reelstack.search.aria", null, "Search Reel Stack")}">
         <div class="rsSearchHead">
           <div>
-            <div class="rsSearchKicker">Reel Stack search</div>
-            <h2>Search videos</h2>
-            <p>Use one or more terms. Every term must match. Searches filenames, paths, titles, tags, notes, and loaded technical metadata.</p>
+            <div class="rsSearchKicker">${searchT("reelstack.search.kicker", null, "Reel Stack search")}</div>
+            <h2>${searchT("reelstack.search.title", null, "Search videos")}</h2>
+            <p>${searchT("reelstack.search.help", null, "Use one or more terms. Every term must match. Searches filenames, paths, titles, tags, notes, and loaded technical metadata.")}</p>
           </div>
-          <button id="rsSearchClose" class="rsBtn" type="button">Close</button>
+          <button id="rsSearchClose" class="rsBtn" type="button">${searchT("common.close", null, "Close")}</button>
         </div>
 
         <label class="rsSearchField">
-          <span>Search terms</span>
-          <input id="rsSearchInput" class="rsInput" type="search" placeholder="family h265 4k archive">
+          <span>${searchT("reelstack.search.terms", null, "Search terms")}</span>
+          <input id="rsSearchInput" class="rsInput" type="search" placeholder="${searchT("reelstack.search.placeholder", null, "family h265 4k archive")}">
         </label>
 
         <div class="rsSearchHints">
-          Examples: <code>family</code>, <code>4k h265</code>, <code>#archive watched</code>
+          ${searchT("reelstack.search.examples", null, "Examples:")} <code>family</code>, <code>4k h265</code>, <code>#archive watched</code>
         </div>
 
         <div class="rsSearchActions">
-          <button id="rsSearchClear" class="rsBtn" type="button">Clear</button>
-          <button id="rsSearchApply" class="rsBtn primary" type="button">Search</button>
+          <button id="rsSearchClear" class="rsBtn" type="button">${searchT("common.clear", null, "Clear")}</button>
+          <button id="rsSearchApply" class="rsBtn primary" type="button">${searchT("common.search", null, "Search")}</button>
         </div>
       </div>
     `;

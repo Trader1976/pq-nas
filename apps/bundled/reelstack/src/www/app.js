@@ -9,16 +9,37 @@
   const WATCH_PROGRESS_KEY = "pqnas_reelstack_watch_progress_v1";
 
   const VIEW_MODES = new Map([
-    ["all", "All videos"],
-    ["folders", "By folder"],
-    ["recent_added", "Recently added"],
-    ["recent_watched", "Recently watched"],
-    ["favorites", "Favorites"],
-    ["unrated", "Unrated"],
-    ["missing_thumbnails", "Missing thumbnails"]
+    ["all", "reelstack.view.all"],
+    ["folders", "reelstack.view.folders"],
+    ["recent_added", "reelstack.view.recent_added"],
+    ["recent_watched", "reelstack.view.recent_watched"],
+    ["favorites", "reelstack.view.favorites"],
+    ["unrated", "reelstack.view.unrated"],
+    ["missing_thumbnails", "reelstack.view.missing_thumbnails"]
   ]);
 
   const el = (id) => document.getElementById(id);
+
+  function reelT(key, params, fallback) {
+    try {
+      const api = window.PQNAS_I18N;
+      if (api && typeof api.t === "function") {
+        return api.t(key, params || null, fallback);
+      }
+    } catch (_) {}
+
+    let out = String(fallback || key || "");
+    const p = params || {};
+    for (const name of Object.keys(p)) {
+      out = out.split(`{${name}}`).join(String(p[name]));
+    }
+    return out;
+  }
+
+  function reelVideoCount(n) {
+    n = Number(n || 0);
+    return reelT("reelstack.video_count", { count: n }, "{count} video(s)");
+  }
 
   const grid = el("grid");
   const emptyState = el("emptyState");
@@ -334,7 +355,8 @@
   }
 
   function viewModeLabel(mode) {
-    return VIEW_MODES.get(normalizeViewMode(mode)) || "All videos";
+    const key = VIEW_MODES.get(normalizeViewMode(mode)) || "reelstack.view.all";
+    return reelT(key, null, key === "reelstack.view.all" ? "All videos" : key);
   }
 
   function syncViewModeSelect() {
@@ -351,7 +373,10 @@
     render();
 
     const n = filteredVideos().length;
-    setStatus(`View: ${viewModeLabel(currentViewMode)} · ${n} video${n === 1 ? "" : "s"}`);
+    setStatus(reelT("reelstack.status.view_summary", {
+      view: viewModeLabel(currentViewMode),
+      count: n
+    }, "View: {view} · {count} video(s)"));
   }
 
   function sortableTitle(v) {
@@ -604,18 +629,18 @@
   function dateBucketForMs(ms) {
     ms = Number(ms || 0);
     if (!Number.isFinite(ms) || ms <= 0) {
-      return { key: "unknown", label: "Unknown date" };
+      return { key: "unknown", label: reelT("reelstack.date.unknown", null, "Unknown date") };
     }
 
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const day = 24 * 60 * 60 * 1000;
 
-    if (ms >= today) return { key: "today", label: "Today" };
-    if (ms >= today - day) return { key: "yesterday", label: "Yesterday" };
-    if (ms >= today - 7 * day) return { key: "this_week", label: "This week" };
-    if (ms >= today - 30 * day) return { key: "this_month", label: "This month" };
-    return { key: "older", label: "Older" };
+    if (ms >= today) return { key: "today", label: reelT("reelstack.date.today", null, "Today") };
+    if (ms >= today - day) return { key: "yesterday", label: reelT("reelstack.date.yesterday", null, "Yesterday") };
+    if (ms >= today - 7 * day) return { key: "this_week", label: reelT("reelstack.date.this_week", null, "This week") };
+    if (ms >= today - 30 * day) return { key: "this_month", label: reelT("reelstack.date.this_month", null, "This month") };
+    return { key: "older", label: reelT("reelstack.date.older", null, "Older") };
   }
 
   function videoGroupInfo(v, mode) {
@@ -653,7 +678,7 @@
 
   function groupCountLabel(n) {
     n = Number(n || 0);
-    return `${n} video${n === 1 ? "" : "s"}`;
+    return reelVideoCount(n);
   }
 
 
@@ -853,7 +878,7 @@
   function videoDisplayTitle(v) {
     const u = userMetaForVideo(v);
     const title = String(u.title || "").trim();
-    return title || String(v && v.name || basename(v && v.path || "") || "Video");
+    return title || String(v && v.name || basename(v && v.path || "") || reelT("reelstack.video", null, "Video"));
   }
 
   function userMetaSummaryBits(v) {
@@ -861,7 +886,7 @@
     const bits = [];
 
     // favorite is shown as the top-left badge, so do not repeat it in the summary line.
-    if (u.watched) bits.push("watched");
+    if (u.watched) bits.push(reelT("reelstack.watched", null, "watched"));
     if (u.rating > 0) bits.push("★".repeat(Math.max(0, Math.min(5, Math.round(u.rating)))));
 
     if (u.tags && u.tags.length) {
@@ -881,16 +906,16 @@
       if (value) lines.push({ label, value });
     };
 
-    add("Duration", m.duration_text || (m.duration_seconds ? `${Math.round(Number(m.duration_seconds))} sec` : ""));
-    add("Resolution", m.resolution || ((m.width && m.height) ? `${m.width}x${m.height}` : ""));
-    add("FPS", m.fps ? fmtFps(m.fps).replace(/ fps$/i, "") : "");
-    add("Video codec", [m.video_codec ? String(m.video_codec).toUpperCase() : "", m.video_codec_long].filter(Boolean).join(" — "));
-    add("Audio codec", [m.audio_codec ? String(m.audio_codec).toUpperCase() : "", m.audio_codec_long].filter(Boolean).join(" — "));
-    add("Bitrate", m.bit_rate ? fmtBitrate(m.bit_rate) : "");
-    add("Format", m.format_long || m.format || "");
-    add("Size", fmtBytes(m.size_bytes || v.size_bytes || 0));
-    add("Path", "/" + String(v.path || ""));
-    if (u.updated_epoch) add("User metadata updated", new Date(Number(u.updated_epoch) * 1000).toLocaleString());
+    add(reelT("reelstack.meta.duration", null, "Duration"), m.duration_text || (m.duration_seconds ? reelT("reelstack.seconds", { count: Math.round(Number(m.duration_seconds)) }, "{count} sec") : ""));
+    add(reelT("reelstack.meta.resolution", null, "Resolution"), m.resolution || ((m.width && m.height) ? `${m.width}x${m.height}` : ""));
+    add(reelT("reelstack.meta.fps", null, "FPS"), m.fps ? fmtFps(m.fps).replace(/ fps$/i, "") : "");
+    add(reelT("reelstack.meta.video_codec", null, "Video codec"), [m.video_codec ? String(m.video_codec).toUpperCase() : "", m.video_codec_long].filter(Boolean).join(" — "));
+    add(reelT("reelstack.meta.audio_codec", null, "Audio codec"), [m.audio_codec ? String(m.audio_codec).toUpperCase() : "", m.audio_codec_long].filter(Boolean).join(" — "));
+    add(reelT("reelstack.meta.bitrate", null, "Bitrate"), m.bit_rate ? fmtBitrate(m.bit_rate) : "");
+    add(reelT("reelstack.meta.format", null, "Format"), m.format_long || m.format || "");
+    add(reelT("reelstack.meta.size", null, "Size"), fmtBytes(m.size_bytes || v.size_bytes || 0));
+    add(reelT("common.path", null, "Path"), "/" + String(v.path || ""));
+    if (u.updated_epoch) add(reelT("reelstack.meta.user_metadata_updated", null, "User metadata updated"), new Date(Number(u.updated_epoch) * 1000).toLocaleString());
 
     return lines;
   }
@@ -905,7 +930,7 @@
     if (!lines.length) {
       const empty = document.createElement("div");
       empty.className = "rsMetaTechEmpty";
-      empty.textContent = "Technical metadata is not available yet.";
+      empty.textContent = reelT("reelstack.meta.unavailable_yet", null, "Technical metadata is not available yet.");
       box.appendChild(empty);
       return;
     }
@@ -931,19 +956,19 @@
 
   function videoMetaSummary(v) {
     const m = metaForVideo(v);
-    if (!m) return "Metadata loading…";
-    if (m._error) return `Metadata unavailable: ${m._error}`;
+    if (!m) return reelT("reelstack.metadata_loading", null, "Metadata loading…");
+    if (m._error) return reelT("reelstack.metadata_unavailable_error", { error: m._error }, "Metadata unavailable: {error}");
 
     const parts = [];
     if (m.resolution) parts.push(m.resolution);
     if (m.fps) parts.push(fmtFps(m.fps));
     if (m.video_codec) parts.push(String(m.video_codec).toUpperCase());
-    if (m.audio_codec) parts.push(`audio ${String(m.audio_codec).toUpperCase()}`);
+    if (m.audio_codec) parts.push(reelT("reelstack.audio_codec_summary", { codec: String(m.audio_codec).toUpperCase() }, "audio {codec}"));
     if (m.bit_rate) parts.push(fmtBitrate(m.bit_rate));
 
     const tech = parts.filter(Boolean).join(" · ");
     const userBits = userMetaSummaryBits(v);
-    return [userBits, tech].filter(Boolean).join(" · ") || "No metadata";
+    return [userBits, tech].filter(Boolean).join(" · ") || reelT("reelstack.no_metadata", null, "No metadata");
   }
 
   function durationBadgeText(v) {
@@ -954,7 +979,7 @@
 
   function favoriteBadgeText(v) {
     const u = userMetaForVideo(v);
-    return u.favorite ? "★ favorite" : "";
+    return u.favorite ? reelT("reelstack.favorite_badge", null, "★ favorite") : "";
   }
 
 
@@ -1034,7 +1059,7 @@
     const removed = allVideos.length !== before;
     if (removed) {
       render();
-      setStatus(`Removed stale missing video from Reel Stack: /${path}`);
+      setStatus(reelT("reelstack.status.removed_stale", { path }, "Removed stale missing video from Reel Stack: /{path}"));
       console.warn("Reel Stack removed stale missing video", { path, reason });
     }
 
@@ -1170,42 +1195,45 @@
     const truncated = !!stats.truncated;
 
     if (!generated && !items.length) {
-      setStatus("No saved Reel Stack index yet. Click Refresh index.");
+      setStatus(reelT("reelstack.status.no_saved_index", null, "No saved Reel Stack index yet. Click Refresh index."));
       return;
     }
 
     const parts = [
-      `${verb || "Loaded"} ${items.length} video${items.length === 1 ? "" : "s"}`
+      reelT("reelstack.status.loaded_count", {
+        verb: verb || reelT("reelstack.loaded", null, "Loaded"),
+        count: items.length
+      }, "{verb} {count} video(s)")
     ];
 
     if (Number.isFinite(Number(stats.files_seen)) && Number(stats.files_seen) > 0) {
-      parts.push(`checked ${Number(stats.files_seen)} file${Number(stats.files_seen) === 1 ? "" : "s"}`);
+      parts.push(reelT("reelstack.status.checked_files", { count: Number(stats.files_seen) }, "checked {count} file(s)"));
     }
 
     if (generated > 0) {
-      parts.push(`indexed ${new Date(generated * 1000).toLocaleString()}`);
+      parts.push(reelT("reelstack.status.indexed_at", { time: new Date(generated * 1000).toLocaleString() }, "indexed {time}"));
     }
 
-    if (truncated) parts.push("truncated");
-    if (warningCount) parts.push(`${warningCount} warning${warningCount === 1 ? "" : "s"}`);
+    if (truncated) parts.push(reelT("reelstack.status.truncated", null, "truncated"));
+    if (warningCount) parts.push(reelT("reelstack.status.warning_count", { count: warningCount }, "{count} warning(s)"));
 
     setStatus(parts.join(" · "));
   }
 
   async function loadIndex() {
-    setStatus("Loading saved Reel Stack index…");
+    setStatus(reelT("reelstack.status.loading_saved_index", null, "Loading saved Reel Stack index…"));
     const j = await apiJson("/api/v4/reelstack/index");
-    applyIndexResponse(j, "Loaded");
+    applyIndexResponse(j, reelT("reelstack.loaded", null, "Loaded"));
   }
 
   async function scanVideos() {
     if (scanBtn) {
       scanBtn.disabled = true;
-      scanBtn.textContent = "Refreshing…";
+      scanBtn.textContent = reelT("reelstack.refreshing", null, "Refreshing…");
     }
 
     try {
-      setStatus("Refreshing Reel Stack index…");
+      setStatus(reelT("reelstack.status.refreshing_index", null, "Refreshing Reel Stack index…"));
 
       const j = await apiJson("/api/v4/reelstack/scan", {
         method: "POST",
@@ -1216,13 +1244,13 @@
         body: "{}"
       });
 
-      applyIndexResponse(j, "Refreshed");
+      applyIndexResponse(j, reelT("reelstack.refreshed", null, "Refreshed"));
     } catch (e) {
-      setStatus(`Refresh failed: ${e && e.message ? e.message : String(e)}`);
+      setStatus(reelT("reelstack.status.refresh_failed", { error: e && e.message ? e.message : String(e) }, "Refresh failed: {error}"));
     } finally {
       if (scanBtn) {
         scanBtn.disabled = false;
-        scanBtn.textContent = "Refresh index";
+        scanBtn.textContent = reelT("reelstack.refresh_index", null, "Refresh index");
       }
     }
   }
@@ -1290,9 +1318,9 @@
     render();
 
     if (q) {
-      setStatus(`Search "${q}" · ${videos.length} video${videos.length === 1 ? "" : "s"}`);
+      setStatus(reelT("reelstack.status.search_summary", { query: q, count: videos.length }, "Search \"{query}\" · {count} video(s)"));
     } else {
-      setStatus(`Search cleared · ${allVideos.length} video${allVideos.length === 1 ? "" : "s"}`);
+      setStatus(reelT("reelstack.status.search_cleared", { count: allVideos.length }, "Search cleared · {count} video(s)"));
     }
   }
 
@@ -1317,7 +1345,7 @@
     ensureSelectionForVideos(videos);
 
     if (countText) {
-      countText.textContent = `${videos.length} video${videos.length === 1 ? "" : "s"}`;
+      countText.textContent = reelVideoCount(videos.length);
     }
 
     if (!grid) return;
@@ -1384,7 +1412,7 @@ if (emptyState) {
       play.className = "rsPlay";
       play.type = "button";
       play.textContent = "▶";
-      play.title = "Play";
+      play.title = reelT("reelstack.play", null, "Play");
       play.addEventListener("click", () => openPlayer(v));
 
       thumb.appendChild(img);
@@ -1440,25 +1468,25 @@ if (emptyState) {
       const openBtn = document.createElement("button");
       openBtn.className = "rsBtn";
       openBtn.type = "button";
-      openBtn.textContent = "Play";
+      openBtn.textContent = reelT("reelstack.play", null, "Play");
       openBtn.addEventListener("click", () => openPlayer(v));
 
       const dl = document.createElement("a");
       dl.className = "rsBtn";
-      dl.textContent = "Download";
+      dl.textContent = reelT("common.download", null, "Download");
       dl.href = fileDownloadUrl(v.path);
       dl.download = v.name;
 
       const editBtn = document.createElement("button");
       editBtn.className = "rsBtn";
       editBtn.type = "button";
-      editBtn.textContent = "Edit";
+      editBtn.textContent = reelT("common.edit", null, "Edit");
       editBtn.addEventListener("click", () => editVideoMetadata(v));
 
       const delBtn = document.createElement("button");
       delBtn.className = "rsBtn";
       delBtn.type = "button";
-      delBtn.textContent = "Delete";
+      delBtn.textContent = reelT("common.delete", null, "Delete");
       delBtn.addEventListener("click", () => deleteVideo(v));
 
       actions.appendChild(openBtn);
@@ -1475,8 +1503,8 @@ if (emptyState) {
       if (hasActiveRegularShare(v.path)) {
         const shared = document.createElement("div");
         shared.className = "rsShareBadge";
-        shared.textContent = "↗ SHARED";
-        shared.title = "Regular share link active";
+        shared.textContent = reelT("reelstack.shared_badge", null, "↗ SHARED");
+        shared.title = reelT("reelstack.regular_share_active", null, "Regular share link active");
         thumb.appendChild(shared);
       }
 
@@ -1498,7 +1526,7 @@ if (emptyState) {
     player.removeAttribute("src");
     player.load();
 
-    playerTitle.textContent = v.name || "Video";
+    playerTitle.textContent = v.name || reelT("reelstack.video", null, "Video");
     playerPath.textContent = "/" + (v.path || "");
 
     const source = document.createElement("source");
@@ -1536,33 +1564,33 @@ if (emptyState) {
     card.className = "rsMetaEditorCard";
     card.setAttribute("role", "dialog");
     card.setAttribute("aria-modal", "true");
-    card.setAttribute("aria-label", "Edit Reel Stack metadata");
+    card.setAttribute("aria-label", reelT("reelstack.edit_metadata_aria", null, "Edit Reel Stack metadata"));
 
     card.innerHTML = `
       <div class="rsMetaEditorHead">
         <div>
-          <div class="rsMetaEditorKicker">Reel Stack metadata</div>
-          <h2>Edit video</h2>
+          <div class="rsMetaEditorKicker">${reelT("reelstack.metadata", null, "Reel Stack metadata")}</div>
+          <h2>${reelT("reelstack.edit_video", null, "Edit video")}</h2>
           <p id="rsMetaEditorPath"></p>
         </div>
-        <button id="rsMetaEditorClose" class="rsBtn" type="button">Close</button>
+        <button id="rsMetaEditorClose" class="rsBtn" type="button">${reelT("common.close", null, "Close")}</button>
       </div>
 
       <div class="rsMetaEditorGrid">
         <label class="rsField rsFieldWide">
-          <span>Title</span>
-          <input id="rsMetaTitle" class="rsInput" type="text" maxlength="240" placeholder="Blank = filename">
+          <span>${reelT("common.title", null, "Title")}</span>
+          <input id="rsMetaTitle" class="rsInput" type="text" maxlength="240" placeholder="${reelT("reelstack.placeholder.blank_filename", null, "Blank = filename")}">
         </label>
 
         <label class="rsField rsFieldWide">
-          <span>Tags</span>
-          <input id="rsMetaTags" class="rsInput" type="text" maxlength="1000" placeholder="family, archive, drone">
+          <span>${reelT("common.tags", null, "Tags")}</span>
+          <input id="rsMetaTags" class="rsInput" type="text" maxlength="1000" placeholder="${reelT("reelstack.placeholder.tags", null, "family, archive, drone")}">
         </label>
 
         <label class="rsField">
-          <span>Rating</span>
+          <span>${reelT("common.rating", null, "Rating")}</span>
           <select id="rsMetaRating" class="rsInput">
-            <option value="0">No rating</option>
+            <option value="0">${reelT("reelstack.no_rating", null, "No rating")}</option>
             <option value="1">★</option>
             <option value="2">★★</option>
             <option value="3">★★★</option>
@@ -1573,28 +1601,28 @@ if (emptyState) {
 
         <label class="rsCheckField">
           <input id="rsMetaFavorite" type="checkbox">
-          <span>Favorite</span>
+          <span>${reelT("reelstack.favorite", null, "Favorite")}</span>
         </label>
 
         <label class="rsCheckField">
           <input id="rsMetaWatched" type="checkbox">
-          <span>Watched</span>
+          <span>${reelT("reelstack.watched_label", null, "Watched")}</span>
         </label>
 
         <label class="rsField rsFieldWide">
-          <span>Notes</span>
-          <textarea id="rsMetaNotes" class="rsInput" maxlength="8000" rows="7" placeholder="Add notes about this video…"></textarea>
+          <span>${reelT("common.notes", null, "Notes")}</span>
+          <textarea id="rsMetaNotes" class="rsInput" maxlength="8000" rows="7" placeholder="${reelT("reelstack.placeholder.notes", null, "Add notes about this video…")}"></textarea>
         </label>
       </div>
 
-        <section class="rsMetaTechPanel rsFieldWide" aria-label="Technical video metadata">
-          <div class="rsMetaTechTitle">Technical metadata</div>
+        <section class="rsMetaTechPanel rsFieldWide" aria-label="${reelT("reelstack.technical_video_metadata", null, "Technical video metadata")}">
+          <div class="rsMetaTechTitle">${reelT("reelstack.technical_metadata", null, "Technical metadata")}</div>
           <div id="rsMetaTechnical" class="rsMetaTechGrid"></div>
         </section>
 
       <div class="rsMetaEditorActions">
-        <button id="rsMetaEditorCancel" class="rsBtn" type="button">Cancel</button>
-        <button id="rsMetaEditorSave" class="rsBtn primary" type="button" title="Save metadata (Ctrl+S)" aria-keyshortcuts="Control+S Meta+S">Save metadata</button>
+        <button id="rsMetaEditorCancel" class="rsBtn" type="button">${reelT("common.cancel", null, "Cancel")}</button>
+        <button id="rsMetaEditorSave" class="rsBtn primary" type="button" title="${reelT("reelstack.save_metadata_title", null, "Save metadata (Ctrl+S)")}" aria-keyshortcuts="Control+S Meta+S">${reelT("reelstack.save_metadata", null, "Save metadata")}</button>
       </div>
     `;
 
@@ -1671,7 +1699,7 @@ if (emptyState) {
 
     try {
       if (saveBtn) saveBtn.disabled = true;
-      setStatus(`Saving metadata for /${v.path}…`);
+      setStatus(reelT("reelstack.status.saving_metadata_for", { path: v.path }, "Saving metadata for /{path}…"));
 
       const j = await apiJson(fileUserMetaSetUrl(), {
         method: "POST",
@@ -1700,9 +1728,9 @@ if (emptyState) {
       closeMetaEditor();
       updateMetaEls(v.path);
       render();
-      setStatus(`Saved metadata for /${v.path}`);
+      setStatus(reelT("reelstack.status.saved_metadata_for", { path: v.path }, "Saved metadata for /{path}"));
     } catch (e) {
-      setStatus(`Metadata save failed: ${e && e.message ? e.message : String(e)}`);
+      setStatus(reelT("reelstack.status.metadata_save_failed", { error: e && e.message ? e.message : String(e) }, "Metadata save failed: {error}"));
     } finally {
       if (saveBtn) saveBtn.disabled = false;
     }
@@ -1716,7 +1744,7 @@ if (emptyState) {
       await ensureVideoMeta(v);
       openMetaEditorFor(v);
     } catch (e) {
-      setStatus(`Metadata load failed: ${e && e.message ? e.message : String(e)}`);
+      setStatus(reelT("reelstack.status.metadata_load_failed", { error: e && e.message ? e.message : String(e) }, "Metadata load failed: {error}"));
     }
   }
 
@@ -1814,31 +1842,31 @@ if (emptyState) {
         <div class="rsShareModalHead">
           <div>
             <div class="rsShareModalKicker">Reel Stack</div>
-            <h2 id="rsShareTitle">Share link</h2>
+            <h2 id="rsShareTitle">${reelT("reelstack.share_link", null, "Share link")}</h2>
             <p id="rsSharePath"></p>
           </div>
-          <button id="rsShareClose" class="rsBtn" type="button">Close</button>
+          <button id="rsShareClose" class="rsBtn" type="button">${reelT("common.close", null, "Close")}</button>
         </div>
 
         <div class="rsShareModalBody">
           <label class="rsShareField">
-            <span>Expiry</span>
+            <span>${reelT("reelstack.expiry", null, "Expiry")}</span>
             <select id="rsShareExpiry" class="rsShareInput">
-              <option value="1h">1 hour</option>
-              <option value="24h" selected>24 hours</option>
-              <option value="7d">7 days</option>
-              <option value="never">Never</option>
+              <option value="1h">${reelT("common.expiry.1h", null, "1 hour")}</option>
+              <option value="24h" selected>${reelT("common.expiry.24h", null, "24 hours")}</option>
+              <option value="7d">${reelT("common.expiry.7d", null, "7 days")}</option>
+              <option value="never">${reelT("common.never", null, "Never")}</option>
             </select>
           </label>
 
           <div class="rsShareActions">
-            <button id="rsShareCreateBtn" class="rsBtn primary" type="button">Create link</button>
-            <button id="rsShareCopyBtn" class="rsBtn" type="button" disabled>Copy link</button>
+            <button id="rsShareCreateBtn" class="rsBtn primary" type="button">${reelT("reelstack.create_link", null, "Create link")}</button>
+            <button id="rsShareCopyBtn" class="rsBtn" type="button" disabled>${reelT("reelstack.copy_link", null, "Copy link")}</button>
           </div>
 
           <div id="rsShareOutWrap" class="rsShareOutWrap" hidden>
             <label class="rsShareField">
-              <span>Link</span>
+              <span>${reelT("reelstack.link", null, "Link")}</span>
               <input id="rsShareOut" class="rsShareInput mono" type="text" readonly>
             </label>
           </div>
@@ -1873,7 +1901,7 @@ if (emptyState) {
         copyBtn.disabled = true;
         shareDialogState.lastUrl = "";
 
-        if (statusEl) statusEl.textContent = `Creating share link for /${v.path}…`;
+        if (statusEl) statusEl.textContent = reelT("reelstack.status.creating_share_for", { path: v.path }, "Creating share link for /{path}…");
         if (outWrap) outWrap.hidden = true;
         if (outEl) outEl.value = "";
 
@@ -1894,7 +1922,7 @@ if (emptyState) {
 
         const rawUrl = extractShareUrl(j);
         if (!rawUrl) {
-          if (statusEl) statusEl.textContent = "Share created, but response did not include a link/token.";
+          if (statusEl) statusEl.textContent = reelT("reelstack.status.share_created_missing_link", null, "Share created, but response did not include a link/token.");
           return;
         }
 
@@ -1904,14 +1932,14 @@ if (emptyState) {
         if (outEl) outEl.value = fullUrl;
         if (outWrap) outWrap.hidden = false;
         if (copyBtn) copyBtn.disabled = false;
-        if (statusEl) statusEl.textContent = "Link created. Use Copy link to copy it.";
+        if (statusEl) statusEl.textContent = reelT("reelstack.status.link_created_copy_hint", null, "Link created. Use Copy link to copy it.");
         await refreshShareBadges(true);
         render();
-        setStatus(`Share link created for /${v.path}.`);
+        setStatus(reelT("reelstack.status.share_link_created_for", { path: v.path }, "Share link created for /{path}."));
       } catch (e) {
         const msg = e && e.message ? e.message : String(e);
-        if (statusEl) statusEl.textContent = `Error: ${msg}`;
-        setStatus(`Share failed: ${msg}`);
+        if (statusEl) statusEl.textContent = reelT("common.error_with_message", { error: msg }, "Error: {error}");
+        setStatus(reelT("reelstack.status.share_failed", { error: msg }, "Share failed: {error}"));
       } finally {
         createBtn.disabled = false;
       }
@@ -1921,8 +1949,8 @@ if (emptyState) {
       const link = outEl ? outEl.value : shareDialogState.lastUrl;
       const ok = link ? await copyTextToClipboard(link) : false;
 
-      if (statusEl) statusEl.textContent = ok ? "Copied." : "Copy failed.";
-      if (ok) setStatus("Share link copied.");
+      if (statusEl) statusEl.textContent = ok ? reelT("common.copied", null, "Copied.") : reelT("common.copy_failed", null, "Copy failed.");
+      if (ok) setStatus(reelT("reelstack.status.share_link_copied", null, "Share link copied."));
     });
 
     document.addEventListener("keydown", (ev) => {
@@ -1956,7 +1984,7 @@ if (emptyState) {
     if (outWrap) outWrap.hidden = true;
     if (outEl) outEl.value = "";
     if (copyBtn) copyBtn.disabled = true;
-    if (statusEl) statusEl.textContent = "Choose expiry, then create a regular share link.";
+    if (statusEl) statusEl.textContent = reelT("reelstack.status.choose_expiry", null, "Choose expiry, then create a regular share link.");
 
     dialog.hidden = false;
     dialog.setAttribute("aria-hidden", "false");
@@ -1968,12 +1996,230 @@ if (emptyState) {
   }
 
 
+  function reelTextInputModal(opts = {}) {
+    return new Promise((resolve) => {
+      const options = opts || {};
+
+      const backdrop = document.createElement("div");
+      backdrop.className = "rsShareModalBackdrop";
+      backdrop.setAttribute("role", "dialog");
+      backdrop.setAttribute("aria-modal", "true");
+
+      const card = document.createElement("div");
+      card.className = "rsShareModalCard";
+
+      const head = document.createElement("div");
+      head.className = "rsShareModalHead";
+
+      const titleWrap = document.createElement("div");
+
+      const title = document.createElement("h2");
+      title.textContent = String(options.title || reelT("reelstack.input_title", null, "Input"));
+
+      const sub = document.createElement("p");
+      sub.textContent = String(options.message || "");
+
+      titleWrap.appendChild(title);
+      if (sub.textContent) titleWrap.appendChild(sub);
+
+      const closeBtn = document.createElement("button");
+      closeBtn.className = "rsBtn";
+      closeBtn.type = "button";
+      closeBtn.textContent = reelT("common.close", null, "Close");
+
+      head.appendChild(titleWrap);
+      head.appendChild(closeBtn);
+
+      const body = document.createElement("div");
+      body.className = "rsShareModalBody";
+
+      const label = document.createElement("label");
+      label.className = "rsShareField";
+
+      const labelText = document.createElement("span");
+      labelText.textContent = String(options.label || reelT("common.name", null, "Name"));
+
+      const input = document.createElement("input");
+      input.className = "rsShareInput";
+      input.type = "text";
+      input.value = String(options.value || "");
+      input.placeholder = String(options.placeholder || "");
+
+      label.appendChild(labelText);
+      label.appendChild(input);
+      body.appendChild(label);
+
+      const actions = document.createElement("div");
+      actions.className = "rsShareActions";
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.className = "rsBtn";
+      cancelBtn.type = "button";
+      cancelBtn.textContent = reelT("common.cancel", null, "Cancel");
+
+      const okBtn = document.createElement("button");
+      okBtn.className = "rsBtn primary";
+      okBtn.type = "button";
+      okBtn.textContent = String(options.confirmText || reelT("common.ok", null, "OK"));
+
+      actions.appendChild(cancelBtn);
+      actions.appendChild(okBtn);
+      body.appendChild(actions);
+
+      card.appendChild(head);
+      card.appendChild(body);
+      backdrop.appendChild(card);
+      document.body.appendChild(backdrop);
+
+      const close = (value) => {
+        document.removeEventListener("keydown", onKey, true);
+        try { backdrop.remove(); } catch (_) {}
+        resolve(value);
+      };
+
+      const save = () => close(String(input.value || ""));
+
+      const onKey = (ev) => {
+        if (ev.key === "Escape") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          close(null);
+          return;
+        }
+
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          save();
+        }
+      };
+
+      document.addEventListener("keydown", onKey, true);
+
+      backdrop.addEventListener("click", (ev) => {
+        if (ev.target === backdrop) close(null);
+      });
+
+      closeBtn.addEventListener("click", () => close(null));
+      cancelBtn.addEventListener("click", () => close(null));
+      okBtn.addEventListener("click", save);
+
+      window.setTimeout(() => {
+        try {
+          input.focus();
+          input.select();
+        } catch (_) {}
+      }, 0);
+    });
+  }
+
+  function reelConfirmModal(opts = {}) {
+    return new Promise((resolve) => {
+      const options = opts || {};
+
+      const backdrop = document.createElement("div");
+      backdrop.className = "rsShareModalBackdrop";
+      backdrop.setAttribute("role", "dialog");
+      backdrop.setAttribute("aria-modal", "true");
+
+      const card = document.createElement("div");
+      card.className = "rsShareModalCard";
+
+      const head = document.createElement("div");
+      head.className = "rsShareModalHead";
+
+      const titleWrap = document.createElement("div");
+
+      const title = document.createElement("h2");
+      title.textContent = String(options.title || reelT("reelstack.confirm_title", null, "Confirm"));
+
+      const sub = document.createElement("p");
+      sub.textContent = String(options.message || "");
+      sub.style.whiteSpace = "pre-wrap";
+
+      titleWrap.appendChild(title);
+      if (sub.textContent) titleWrap.appendChild(sub);
+      head.appendChild(titleWrap);
+
+      const body = document.createElement("div");
+      body.className = "rsShareModalBody";
+
+      if (options.warning) {
+        const warn = document.createElement("div");
+        warn.className = "rsShareStatus mono";
+        warn.textContent = String(options.warning);
+        body.appendChild(warn);
+      }
+
+      const actions = document.createElement("div");
+      actions.className = "rsShareActions";
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.className = "rsBtn";
+      cancelBtn.type = "button";
+      cancelBtn.textContent = reelT("common.cancel", null, "Cancel");
+
+      const okBtn = document.createElement("button");
+      okBtn.className = "rsBtn primary";
+      okBtn.type = "button";
+      okBtn.textContent = String(options.confirmText || reelT("common.ok", null, "OK"));
+
+      actions.appendChild(cancelBtn);
+      actions.appendChild(okBtn);
+      body.appendChild(actions);
+
+      card.appendChild(head);
+      card.appendChild(body);
+      backdrop.appendChild(card);
+      document.body.appendChild(backdrop);
+
+      const close = (value) => {
+        document.removeEventListener("keydown", onKey, true);
+        try { backdrop.remove(); } catch (_) {}
+        resolve(!!value);
+      };
+
+      const onKey = (ev) => {
+        if (ev.key === "Escape") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          close(false);
+          return;
+        }
+
+        if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          close(true);
+        }
+      };
+
+      document.addEventListener("keydown", onKey, true);
+
+      backdrop.addEventListener("click", (ev) => {
+        if (ev.target === backdrop) close(false);
+      });
+
+      cancelBtn.addEventListener("click", () => close(false));
+      okBtn.addEventListener("click", () => close(true));
+
+      window.setTimeout(() => okBtn.focus(), 0);
+    });
+  }
+
   async function renameVideo(v) {
     if (!v || !v.path) return;
 
     const oldPath = String(v.path || "");
     const oldName = basename(oldPath);
-    const nextNameRaw = prompt("Rename video", oldName);
+    const nextNameRaw = await reelTextInputModal({
+      title: reelT("reelstack.rename_video", null, "Rename video"),
+      message: reelT("reelstack.rename_video_help", null, "Enter a new filename for this video."),
+      label: reelT("reelstack.filename", null, "Filename"),
+      value: oldName,
+      placeholder: reelT("reelstack.filename_placeholder", null, "video.mp4"),
+      confirmText: reelT("reelstack.rename", null, "Rename")
+    });
 
     if (nextNameRaw === null) return;
 
@@ -1981,7 +2227,7 @@ if (emptyState) {
     if (!nextName || nextName === oldName) return;
 
     if (nextName.includes("/") || nextName.includes("\\")) {
-      setStatus("Rename failed: filename must not contain slashes.");
+      setStatus(reelT("reelstack.status.rename_no_slashes", null, "Rename failed: filename must not contain slashes."));
       return;
     }
 
@@ -1991,7 +2237,7 @@ if (emptyState) {
     if (nextPath === oldPath) return;
 
     try {
-      setStatus(`Renaming /${oldPath}…`);
+      setStatus(reelT("reelstack.status.renaming_path", { path: oldPath }, "Renaming /{path}…"));
 
       await apiJson(fileMoveUrl(oldPath, nextPath), { method: "POST" });
 
@@ -2007,10 +2253,10 @@ if (emptyState) {
       setSelectedPath(nextPath);
       render();
 
-      setStatus(`Renamed to /${nextPath}. Refreshing index…`);
+      setStatus(reelT("reelstack.status.renamed_refreshing", { path: nextPath }, "Renamed to /{path}. Refreshing index…"));
       await scanVideos();
     } catch (e) {
-      setStatus(`Rename failed: ${e && e.message ? e.message : String(e)}`);
+      setStatus(reelT("reelstack.status.rename_failed", { error: e && e.message ? e.message : String(e) }, "Rename failed: {error}"));
     }
   }
 
@@ -2021,16 +2267,22 @@ if (emptyState) {
   async function deleteVideo(v) {
     if (!v || !v.path) return;
 
-    if (!confirm(`Move this video to trash?\n\n/${v.path}`)) return;
+    const deleteOk = await reelConfirmModal({
+      title: reelT("reelstack.delete_video_title", null, "Move video to trash?"),
+      message: reelT("reelstack.confirm.move_to_trash", { path: v.path }, "Move this video to trash?\n\n/{path}"),
+      warning: reelT("reelstack.delete_video_warning", null, "You can restore it later from Trash."),
+      confirmText: reelT("reelstack.move_to_trash", null, "Move to trash")
+    });
+    if (!deleteOk) return;
 
     try {
-      setStatus(`Deleting /${v.path}…`);
+      setStatus(reelT("reelstack.status.deleting_path", { path: v.path }, "Deleting /{path}…"));
       await apiJson(fileDeleteUrl(v.path), { method: "POST" });
       allVideos = allVideos.filter(x => x.path !== v.path);
-      setStatus(`Moved to trash: ${v.name}`);
+      setStatus(reelT("reelstack.status.moved_to_trash", { name: v.name }, "Moved to trash: {name}"));
       render();
     } catch (e) {
-      setStatus(`Delete failed: ${e && e.message ? e.message : String(e)}`);
+      setStatus(reelT("reelstack.status.delete_failed", { error: e && e.message ? e.message : String(e) }, "Delete failed: {error}"));
     }
   }
 
@@ -2059,7 +2311,7 @@ if (emptyState) {
   }));
 
   loadIndex().catch((e) => {
-    setStatus(`Could not load saved index: ${e && e.message ? e.message : String(e)}`);
+    setStatus(reelT("reelstack.status.could_not_load_saved_index", { error: e && e.message ? e.message : String(e) }, "Could not load saved index: {error}"));
     render();
   });
 
@@ -2082,6 +2334,6 @@ if (emptyState) {
 
   document.addEventListener("keydown", handleReelStackKeydown, true);
 
-  setStatus("Ready.");
+  setStatus(reelT("common.ready_dot", null, "Ready."));
   render();
 })();

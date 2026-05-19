@@ -7,8 +7,9 @@
 
   <link rel="stylesheet" href="/static/theme.css">
   <link rel="stylesheet" href="app.css">
-    <link rel="stylesheet" href="reelstack_search.css">
+    <link rel="stylesheet" href="reelstack_search.css?v=20260519-reelstack-search-light-clarity-1">
 <script src="/static/theme.js"></script>
+<script src="/static/i18n.js?v=20260519-reelstack-i18n-1"></script>
   <link rel="stylesheet" href="reelstack_context_menu.css">
 </head>
 <body>
@@ -17,40 +18,40 @@
       <div class="rsBrand">
         <img src="icon.svg" alt="">
         <div>
-          <h1>Reel Stack</h1>
-          <p>Video gallery for DNA-Nexus Server <span id="rsManifestVersion" class="rsVersionBadge" aria-label="App version"></span></p>
+          <h1 data-i18n="reelstack.title">Reel Stack</h1>
+          <p><span data-i18n="reelstack.subtitle">Videogalleria DNA-Nexus Serverille</span> <span id="rsManifestVersion" class="rsVersionBadge" aria-label="Sovelluksen versio" data-i18n-aria-label="reelstack.app_version"></span></p>
         </div>
       </div>
 
       <div class="rsActions">
         <label class="rsViewModeLabel" for="viewModeSelect">
-          <span class="rsViewModeLabelText">View</span>
+          <span class="rsViewModeLabelText" data-i18n="reelstack.view">Näkymä</span>
           <select id="viewModeSelect" class="rsInput rsSelect">
-            <option value="all">All videos</option>
-            <option value="folders">By folder</option>
-            <option value="recent_added">Recently added</option>
-            <option value="recent_watched">Recently watched</option>
-            <option value="favorites">Favorites</option>
-            <option value="unrated">Unrated</option>
-            <option value="missing_thumbnails">Missing thumbnails</option>
+            <option value="all" data-i18n="reelstack.view.all">Kaikki videot</option>
+            <option value="folders" data-i18n="reelstack.view.folders">Kansioittain</option>
+            <option value="recent_added" data-i18n="reelstack.view.recent_added">Viimeksi lisätyt</option>
+            <option value="recent_watched" data-i18n="reelstack.view.recent_watched">Viimeksi katsotut</option>
+            <option value="favorites" data-i18n="reelstack.view.favorites">Suosikit</option>
+            <option value="unrated" data-i18n="reelstack.view.unrated">Arvioimattomat</option>
+            <option value="missing_thumbnails" data-i18n="reelstack.view.missing_thumbnails">Puuttuvat pikkukuvat</option>
           </select>
         </label>
-        <input id="filterInput" class="rsInput" type="search" placeholder="Filter videos…">
-                <button id="searchBtn" class="rsBtn" type="button" title="Open search">Search</button>
-<button id="scanBtn" class="rsBtn primary" type="button">Refresh index</button>
+        <input id="filterInput" class="rsInput" type="search" placeholder="Suodata videoita…" data-i18n-placeholder="reelstack.filter_placeholder">
+                <button id="searchBtn" class="rsBtn" type="button" title="Avaa haku" data-i18n-title="reelstack.open_search" data-i18n="common.search">Haku</button>
+<button id="scanBtn" class="rsBtn primary" type="button" data-i18n="reelstack.refresh_index">Päivitä indeksi</button>
       </div>
     </header>
 
     <section class="rsStatus">
-      <span id="statusText">Ready.</span>
-      <span id="countText">0 videos</span>
+      <span id="statusText" data-i18n="common.ready_dot">Valmis.</span>
+      <span id="countText">0 videota</span>
     </section>
 
     <section id="grid" class="rsGrid"></section>
 
     <div id="emptyState" class="rsEmpty">
-      <h2>No videos loaded yet</h2>
-      <p>Click <b>Refresh index</b> to search your files for movies and video clips.</p>
+      <h2 data-i18n="reelstack.empty_title">Videoita ei ole vielä ladattu</h2>
+      <p><span data-i18n="reelstack.empty_help_before">Napsauta</span> <b data-i18n="reelstack.refresh_index">Päivitä indeksi</b> <span data-i18n="reelstack.empty_help_after">etsiäksesi tiedostoistasi elokuvia ja videoleikkeitä.</span></p>
     </div>
   </main>
 
@@ -58,18 +59,18 @@
     <div class="rsModalCard">
       <div class="rsModalHead">
         <div>
-          <strong id="playerTitle">Video</strong>
+          <strong id="playerTitle" data-i18n="reelstack.video">Video</strong>
           <div id="playerPath" class="rsMuted"></div>
         </div>
-        <button id="closePlayerBtn" class="rsBtn" type="button">Close</button>
+        <button id="closePlayerBtn" class="rsBtn" type="button" data-i18n="common.close">Sulje</button>
       </div>
       <video id="player" controls playsinline></video>
     </div>
-  </div>  <script src="reelstack_search.js"></script>  <script src="reelstack_manifest.js"></script>
+  </div>  <script src="reelstack_search.js?v=20260519-reelstack-dialogs-i18n-2"></script>  <script src="reelstack_manifest.js?v=20260519-reelstack-i18n-1"></script>
 
 
 
-  <script src="app.js"></script>
-  <script src="reelstack_context_menu.js"></script>
+  <script src="app.js?v=20260519-reelstack-dialogs-i18n-2"></script>
+  <script src="reelstack_context_menu.js?v=20260519-reelstack-i18n-1"></script>
 </body>
 </html>
