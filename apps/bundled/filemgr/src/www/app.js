@@ -4062,7 +4062,8 @@ window.PQNAS_FILEMGR = window.PQNAS_FILEMGR || {};
     if (!newName) return;
 
     if (newName.includes("/") || newName.includes("\\")) {
-      alert(tr("filemgr.rename.path_separators", null, "Name cannot contain path separators."));
+      setBadge("err", "error");
+      status.textContent = tr("filemgr.rename.path_separators", null, "Name cannot contain path separators.");
       return;
     }
 
@@ -5113,7 +5114,8 @@ function describeMoveItems(items) {
     if (!name) return;
 
     if (name.includes("/") || name.includes("\\")) {
-      alert(tr("filemgr.mkdir.path_separators", null, "Folder name cannot contain path separators."));
+      setBadge("err", "error");
+      status.textContent = tr("filemgr.mkdir.path_separators", null, "Folder name cannot contain path separators.");
       return;
     }
 
@@ -6762,7 +6764,14 @@ function describeMoveItems(items) {
         btnRevoke.type = "button";
         btnRevoke.textContent = tr("filemgr.props.revoke", null, "Revoke");
         btnRevoke.onclick = async () => {
-          const ok = confirm(tr("filemgr.props.revoke_confirm", null, "Revoke this share link?\n\nThis will invalidate the URL immediately."));
+          const ok = await fmConfirmModal({
+            title: tr("filemgr.props.revoke_title", null, "Revoke share link?"),
+            subtitle: tr("filemgr.props.revoke_subtitle", null, "This will invalidate the URL immediately."),
+            warning: tr("filemgr.props.revoke_warning", null, "Anyone with this link will lose access immediately."),
+            confirmText: tr("filemgr.props.revoke", null, "Revoke"),
+            cancelText: tr("filemgr.cancel", null, "Cancel"),
+            danger: true
+          });
           if (!ok) return;
 
           btnRevoke.disabled = true;

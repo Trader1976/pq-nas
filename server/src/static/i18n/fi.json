@@ -2087,5 +2087,8 @@
   "external.picker.copy_source": "Kopioi: {path}",
   "external.picker.destination": "Kohde: Työtila {path}",
   "external.picker.folder": "Kansio",
-  "external.picker.folder_list_failed": "Kansiolistan lataus epäonnistui: {error}"
+  "external.picker.folder_list_failed": "Kansiolistan lataus epäonnistui: {error}",
+  "filemgr.props.revoke_title": "Kumotaanko jakolinkki?",
+  "filemgr.props.revoke_subtitle": "Tämä mitätöi URL-osoitteen heti.",
+  "filemgr.props.revoke_warning": "Kaikki linkin saaneet menettävät pääsyn heti."
 }

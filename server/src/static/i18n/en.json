@@ -2070,5 +2070,8 @@
   "external.picker.copy_source": "Copy: {path}",
   "external.picker.destination": "Destination: Workspace {path}",
   "external.picker.folder": "Folder",
-  "external.picker.folder_list_failed": "Folder list failed: {error}"
+  "external.picker.folder_list_failed": "Folder list failed: {error}",
+  "filemgr.props.revoke_title": "Revoke share link?",
+  "filemgr.props.revoke_subtitle": "This will invalidate the URL immediately.",
+  "filemgr.props.revoke_warning": "Anyone with this link will lose access immediately."
 }
