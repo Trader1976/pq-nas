@@ -135,6 +135,56 @@ let signedIn = false;
         return String(fallback ?? key);
     }
 
+    async function ensureExternalWorkspaceLanguage() {
+        const api = window.PQNAS_I18N;
+        if (!api || typeof api.setLanguage !== "function") return;
+
+        let lang = "";
+        try {
+            const qs = new URLSearchParams(window.location.search || "");
+            lang = String(qs.get("lang") || qs.get("l") || "").trim().toLowerCase();
+        } catch (_) {}
+
+        if (!lang) {
+            try {
+                lang = String(window.localStorage.getItem("pqnas_lang") || "").trim().toLowerCase();
+            } catch (_) {}
+        }
+
+        if (!lang) {
+            try {
+                const nav = String(navigator.language || navigator.userLanguage || "").trim().toLowerCase();
+                if (nav.startsWith("fi")) lang = "fi";
+            } catch (_) {}
+        }
+
+        if (lang !== "fi" && lang !== "en") return;
+
+        try {
+            await api.setLanguage(lang);
+        } catch (_) {}
+    }
+
+    function applyStaticI18n() {
+        const api = window.PQNAS_I18N;
+        if (api && typeof api.apply === "function") {
+            api.apply(document);
+        }
+        syncExternalContextMenuLabels();
+    }
+
+    function syncExternalContextMenuLabels() {
+        const set = (selector, key, fallback) => {
+            const btn = document.querySelector(selector);
+            if (!btn) return;
+            btn.setAttribute("data-i18n", key);
+            btn.textContent = tr(key, null, fallback);
+        };
+
+        set('#itemContextMenu [data-action="preview"]', "external.menu.open_edit_text", "Open / edit text?");
+        set('#itemContextMenu [data-action="download"]', "external.menu.download", "Download");
+    }
+
     function setStatus(text, kind) {
         statusEl.textContent = text || "";
         statusEl.classList.toggle("good", kind === "good");
@@ -180,13 +230,19 @@ let signedIn = false;
         if (filesEl) filesEl.classList.toggle("listView", externalViewMode === "list");
 
         if (btnViewMode) {
-            btnViewMode.textContent = externalViewMode === "list" ? "Grid" : "List";
-            btnViewMode.title = externalViewMode === "list" ? "Switch to grid view" : "Switch to list view";
+            btnViewMode.textContent = externalViewMode === "list"
+                ? tr("external.view.grid", null, "Grid")
+                : tr("external.view.list", null, "List");
+            btnViewMode.title = externalViewMode === "list"
+                ? tr("external.view.switch_grid", null, "Switch to grid view")
+                : tr("external.view.switch_list", null, "Switch to list view");
         }
 
         if (btnDirsFirst) {
             btnDirsFirst.classList.toggle("active", !!externalDirsFirst);
-            btnDirsFirst.title = externalDirsFirst ? "Folders first is on" : "Folders first is off";
+            btnDirsFirst.title = externalDirsFirst
+                ? tr("external.view.dirs_first_on", null, "Folders first is on")
+                : tr("external.view.dirs_first_off", null, "Folders first is off");
         }
 
         if (sortModeSelect && sortModeSelect.value !== externalSortMode) {
@@ -1783,7 +1839,9 @@ html[data-theme="bright"] .externalDialogInput{
         if (previewBtn) {
             previewBtn.classList.remove("hidden");
             previewBtn.style.display = "";
-            previewBtn.textContent = isText ? "Open / edit text?" : "Open preview";
+            previewBtn.textContent = isText
+                ? tr("external.menu.open_edit_text", null, "Open / edit text?")
+                : tr("external.menu.open_preview", null, "Open preview");
             previewBtn.disabled = item.isDir || !isText;
         }
 
@@ -3830,6 +3888,21 @@ resetMarqueeVisual();
         }
     }
 
+    function syncExternalItemContextDynamicLabels() {
+        const previewBtn = itemContextMenu && itemContextMenu.querySelector('[data-action="preview"]');
+        const downloadBtn = itemContextMenu && itemContextMenu.querySelector('[data-action="download"]');
+
+        if (previewBtn) {
+            previewBtn.setAttribute("data-i18n", "external.menu.open_edit_text");
+            previewBtn.textContent = tr("external.menu.open_edit_text", null, "Open / edit text?");
+        }
+
+        if (downloadBtn && downloadBtn.textContent.trim() === "Download") {
+            downloadBtn.setAttribute("data-i18n", "external.menu.download");
+            downloadBtn.textContent = tr("external.menu.download", null, "Download");
+        }
+    }
+
     function showSelectionContextMenu(x, y) {
         if (!selectionContextMenu) return;
 
@@ -3913,26 +3986,25 @@ resetMarqueeVisual();
             const previewBtn = itemContextMenu.querySelector('[data-action="preview"]');
             const editorOnly = itemContextMenu.querySelectorAll('[data-action="copy"], [data-action="move"], [data-action="rename"], [data-action="trash-item"]');
             if (contextItem.isDir) {
-                if (openBtn) openBtn.textContent = "Open folder";
-                if (downloadBtn) downloadBtn.textContent = "Download folder (zip)";
+                if (openBtn) openBtn.textContent = tr("external.menu.open_folder", null, "Open folder");
+                if (downloadBtn) downloadBtn.textContent = tr("external.menu.download_folder_zip", null, "Download folder (zip)");
                 if (previewBtn) {
-                    previewBtn.innerHTML = "Open / edit text?";
+                    previewBtn.textContent = tr("external.menu.open_edit_text", null, "Open / edit text?");
                     previewBtn.disabled = true;
                 }
             } else {
                 const canTextPreview = isTextPreviewableName(contextItem.name || contextItem.rel || "");
-                if (openBtn) openBtn.textContent = "Open original";
-                if (downloadBtn) downloadBtn.textContent = "Download";
+                if (openBtn) openBtn.textContent = tr("external.menu.open_original", null, "Open original");
+                if (downloadBtn) downloadBtn.textContent = tr("external.menu.download", null, "Download");
                 if (previewBtn) {
-                    previewBtn.innerHTML = canTextPreview
-                        ? "Open / edit text?"
-                        : "Open / edit text?";
+                    previewBtn.textContent = tr("external.menu.open_edit_text", null, "Open / edit text?");
                     previewBtn.disabled = !canTextPreview;
                 }
             }
 
             editorOnly.forEach((btn) => { btn.disabled = !canEdit; });
             configureExternalItemContextMenu(contextItem);
+            syncExternalItemContextDynamicLabels();
             placeContextMenu(itemContextMenu, ev.clientX, ev.clientY);
             return;
         }
@@ -4284,16 +4356,14 @@ resetMarqueeVisual();
             if (contextItem && contextItem.isDir) {
                 openBtn.textContent = "Open folder";
                 downloadBtn.textContent = "Download folder (zip)";
-                previewBtn.innerHTML = "Open / edit text?";
+                previewBtn.textContent = tr("external.menu.open_edit_text", null, "Open / edit text?");
                 previewBtn.disabled = true;
                 downloadBtn.disabled = false;
             } else {
                 const canTextPreview = isTextPreviewableName(contextItem && (contextItem.name || contextItem.rel) || "");
                 openBtn.textContent = "Open original";
                 downloadBtn.textContent = "Download";
-                previewBtn.innerHTML = canTextPreview
-                    ? "Open / edit text?"
-                    : "Open / edit text?";
+                previewBtn.textContent = tr("external.menu.open_edit_text", null, "Open / edit text?");
                 previewBtn.disabled = !canTextPreview;
                 downloadBtn.disabled = false;
             }
@@ -4890,6 +4960,26 @@ resetMarqueeVisual();
     }, true);
     /* /external-trash-detached-modal-v2 */
 
+
+    window.addEventListener("pqnas-language-changed", () => {
+        applyStaticI18n();
+        applyExternalViewPrefs();
+    });
+
+    if (window.PQNAS_I18N && typeof window.PQNAS_I18N.ready === "function") {
+        window.PQNAS_I18N.ready()
+            .then(() => ensureExternalWorkspaceLanguage())
+            .then(() => {
+                applyStaticI18n();
+                applyExternalViewPrefs();
+            })
+            .catch(() => {
+                applyStaticI18n();
+                applyExternalViewPrefs();
+            });
+    } else {
+        applyStaticI18n();
+    }
 
     window.addEventListener("resize", hideContextMenus);
     window.addEventListener("scroll", hideContextMenus, true);

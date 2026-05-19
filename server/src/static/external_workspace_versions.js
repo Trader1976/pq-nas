@@ -7,6 +7,14 @@ window.ExternalWorkspaceVersions = window.ExternalWorkspaceVersions || {};
 
     const api = window.ExternalWorkspaceVersions;
 
+    function tr(key, vars, fallback) {
+        const i18n = window.PQNAS_I18N;
+        if (i18n && typeof i18n.t === "function") {
+            return i18n.t(key, vars || null, fallback);
+        }
+        return String(fallback ?? key);
+    }
+
     const state = {
         item: null,
         ctx: null,
@@ -27,6 +35,201 @@ window.ExternalWorkspaceVersions = window.ExternalWorkspaceVersions || {};
     let refreshBtn = null;
     let closeBtn = null;
     let closeAfterRestoreCb = null;
+
+    function ensureVersionsDialogCss() {
+        if (document.getElementById("externalWorkspaceVersionsDialogCss")) return;
+
+        const style = document.createElement("style");
+        style.id = "externalWorkspaceVersionsDialogCss";
+        style.textContent = `
+.externalVersionsDialogBackdrop{
+    position:fixed;
+    inset:0;
+    z-index:100000;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:18px;
+    background:rgba(0,0,0,.55);
+    backdrop-filter:blur(6px);
+    -webkit-backdrop-filter:blur(6px);
+}
+.externalVersionsDialogCard{
+    width:min(660px, calc(100vw - 24px));
+    border:1px solid rgba(255,255,255,.16);
+    border-radius:18px;
+    overflow:hidden;
+    background:var(--card-bg,var(--panel,#171717));
+    color:var(--fg,#f3f3f3);
+    box-shadow:0 18px 70px rgba(0,0,0,.50);
+}
+.externalVersionsDialogHead{
+    padding:14px 16px;
+    border-bottom:1px solid rgba(255,255,255,.10);
+    background:rgba(255,255,255,.06);
+}
+.externalVersionsDialogTitle{
+    font-weight:950;
+    letter-spacing:.2px;
+}
+.externalVersionsDialogSub{
+    margin-top:4px;
+    font-size:12px;
+    opacity:.78;
+    word-break:break-all;
+}
+.externalVersionsDialogBody{
+    padding:16px;
+    display:grid;
+    gap:10px;
+}
+.externalVersionsDialogNote{
+    padding:10px 12px;
+    border-radius:14px;
+    border:1px solid rgba(255,190,90,.35);
+    background:rgba(255,190,90,.10);
+    white-space:pre-wrap;
+}
+.externalVersionsDialogRows{
+    display:grid;
+    gap:6px;
+}
+.externalVersionsDialogRow{
+    display:grid;
+    grid-template-columns:110px minmax(0,1fr);
+    gap:10px;
+    font-size:13px;
+}
+.externalVersionsDialogLabel{
+    opacity:.72;
+    font-weight:800;
+}
+.externalVersionsDialogValue{
+    min-width:0;
+    word-break:break-all;
+}
+.externalVersionsDialogFoot{
+    display:flex;
+    justify-content:flex-end;
+    gap:10px;
+    padding:12px 16px;
+    border-top:1px solid rgba(255,255,255,.10);
+    background:rgba(255,255,255,.06);
+}
+`;
+        document.head.appendChild(style);
+    }
+
+    function openVersionsConfirmModal(opts = {}) {
+        ensureVersionsDialogCss();
+
+        return new Promise((resolve) => {
+            const options = opts || {};
+            const modal = document.createElement("div");
+            modal.className = "externalVersionsDialogBackdrop";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "externalVersionsDialogCard";
+
+            const head = document.createElement("div");
+            head.className = "externalVersionsDialogHead";
+
+            const title = document.createElement("div");
+            title.className = "externalVersionsDialogTitle";
+            title.textContent = options.title || tr("external.versions.confirm_title", null, "Confirm version action");
+
+            const sub = document.createElement("div");
+            sub.className = "externalVersionsDialogSub";
+            sub.textContent = options.subtitle || "";
+
+            head.appendChild(title);
+            if (sub.textContent) head.appendChild(sub);
+
+            const body = document.createElement("div");
+            body.className = "externalVersionsDialogBody";
+
+            const rowsWrap = document.createElement("div");
+            rowsWrap.className = "externalVersionsDialogRows";
+
+            (options.rows || []).forEach((row) => {
+                const el = document.createElement("div");
+                el.className = "externalVersionsDialogRow";
+
+                const label = document.createElement("div");
+                label.className = "externalVersionsDialogLabel";
+                label.textContent = row.label || "";
+
+                const value = document.createElement("div");
+                value.className = "externalVersionsDialogValue";
+                value.textContent = row.value || "";
+
+                el.appendChild(label);
+                el.appendChild(value);
+                rowsWrap.appendChild(el);
+            });
+
+            if ((options.rows || []).length) body.appendChild(rowsWrap);
+
+            if (options.message) {
+                const note = document.createElement("div");
+                note.className = "externalVersionsDialogNote";
+                note.textContent = String(options.message || "");
+                body.appendChild(note);
+            }
+
+            const foot = document.createElement("div");
+            foot.className = "externalVersionsDialogFoot";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || tr("external.modal.cancel", null, "Cancel");
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = options.danger ? "btn danger" : "btn";
+            okBtn.textContent = options.confirmText || tr("external.modal.continue", null, "Continue");
+
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const finish = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(!!value);
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(false);
+                }
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    finish(true);
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) finish(false);
+            });
+            cancelBtn.addEventListener("click", () => finish(false));
+            okBtn.addEventListener("click", () => finish(true));
+
+            window.setTimeout(() => cancelBtn.focus(), 0);
+        });
+    }
 
     function injectCss() {
         if (document.getElementById("externalWorkspaceVersionsCss")) return;
@@ -1538,23 +1741,22 @@ window.ExternalWorkspaceVersions = window.ExternalWorkspaceVersions || {};
         const flagCount = Number(row.flag_count || 0);
 
 
-        const ok = window.confirm(
-
-            `Delete this preserved version permanently?\n\n` +
-
-            `Path: ${state.relPath}\n` +
-
-            `Kind: ${label}\n` +
-
-            `Created: ${row.created_at || ""}\n` +
-
-            `Size: ${fmtSize(row.bytes || 0)}\n` +
-
-            (flagCount > 0 ? `\nWarning: this version is flagged by ${flagCount} user(s).\n` : "") +
-
-            `\nThis cannot be undone.`
-
-        );
+        const ok = await openVersionsConfirmModal({
+            title: tr("external.versions.delete_title", null, "Delete this preserved version permanently?"),
+            subtitle: state.relPath || "",
+            rows: [
+                { label: tr("external.versions.path", null, "Path"), value: state.relPath || "" },
+                { label: tr("external.versions.kind", null, "Kind"), value: label },
+                { label: tr("external.versions.created", null, "Created"), value: row.created_at || "" },
+                { label: tr("external.versions.size", null, "Size"), value: fmtSize(row.bytes || 0) },
+            ],
+            message: flagCount > 0
+                ? tr("external.versions.delete_flagged_note", { count: flagCount }, "Warning: this version is flagged by {count} user(s).\n\nThis cannot be undone.")
+                : tr("external.versions.delete_note", null, "This cannot be undone."),
+            confirmText: tr("external.versions.delete_permanently", null, "Delete permanently"),
+            cancelText: tr("external.modal.cancel", null, "Cancel"),
+            danger: true
+        });
 
         if (!ok) return;
 
@@ -1633,12 +1835,18 @@ window.ExternalWorkspaceVersions = window.ExternalWorkspaceVersions || {};
         }
 
         const label = kindLabel(row);
-        const ok = window.confirm(
-            `Restore this version?\n\n` +
-            `Path: /${state.relPath}\n` +
-            `Kind: ${label}\n` +
-            `Created: ${(row && row.created_at) || ""}`
-        );
+        const ok = await openVersionsConfirmModal({
+            title: tr("external.versions.restore_title", null, "Restore this version?"),
+            subtitle: "/" + state.relPath,
+            rows: [
+                { label: tr("external.versions.path", null, "Path"), value: "/" + state.relPath },
+                { label: tr("external.versions.kind", null, "Kind"), value: label },
+                { label: tr("external.versions.created", null, "Created"), value: (row && row.created_at) || "" },
+            ],
+            message: tr("external.versions.restore_note", null, "The selected version will be restored as the current file contents."),
+            confirmText: tr("external.versions.restore", null, "Restore version"),
+            cancelText: tr("external.modal.cancel", null, "Cancel")
+        });
         if (!ok) return;
 
         state.restoringVersionId = row.version_id;

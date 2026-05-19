@@ -13,11 +13,11 @@
     <script defer src="/static/external_workspace_footer.js?v=external-footer-20260510"></script>
     <script defer src="/static/external_workspace_breadcrumbs.js?v=external-breadcrumbs-20260510"></script>
     <script defer src="/static/external_workspace_topbar.js?v=external-topbar-20260510-header-actions2"></script>
-    <script defer src="/static/external_workspace_versions.js?v=external-versions-20260513-compare7"></script>
+    <script defer src="/static/external_workspace_versions.js?v=external-versions-20260519-i18n-dialogs1"></script>
     <script defer src="/static/external_workspace_image_preview.js?v=external-image-preview-20260510-modalfix4"></script>
 
     <script defer src="/static/external_workspace_pdf_preview.js?v=external-pdf-preview-20260510-blob1"></script>
-    <script defer src="/static/external_workspace.js?v=external-main-20260519-i18n-dialogs1"></script>
+    <script defer src="/static/external_workspace.js?v=external-main-20260519-i18n-dialogs2"></script>
     <script defer src="/static/external_workspace_selection_properties.js?v=external-selection-properties-20260510-1"></script>
 </head>
 <body>
@@ -53,7 +53,7 @@
             <div class="topLine externalWorkspaceTopLine">
                 <div class="externalWorkspaceFilesTitleBlock">
                     <h1 class="externalWorkspaceFilesTitle">
-                        <span>Workspace files</span>
+                        <span data-i18n="external.files.title">Workspace files</span>
                         <span class="pill readonly externalRolePill" id="externalRolePill">Role: —</span>
                     </h1>
                     <p class="sub" id="fileSub">After login, files you can access will appear here.</p>
@@ -65,10 +65,10 @@
         <div class="cardBody">
             <div class="toolbar">
                 <div class="toolbarGroup fileToolbarMain">
-                    <span class="toolbarBadge" id="topReadyBadge">ready</span>
-                    <button class="btn secondary" id="btnUp" type="button">⬆ Up</button>
-                    <button class="btn secondary" id="btnViewMode" type="button" title="Toggle grid/list view">List</button>
-                    <button class="btn secondary" id="btnDirsFirst" type="button" title="Keep folders first">☷ Dirs</button>
+                    <span class="toolbarBadge" id="topReadyBadge" data-i18n="external.status.ready">ready</span>
+                    <button class="btn secondary" id="btnUp" type="button" data-i18n="external.action.up">⬆ Up</button>
+                    <button class="btn secondary" id="btnViewMode" type="button" title="Toggle grid/list view" data-i18n="external.view.list" data-i18n-title="external.view.toggle">List</button>
+                    <button class="btn secondary" id="btnDirsFirst" type="button" title="Keep folders first" data-i18n="external.view.dirs">☷ Dirs</button>
                     <select class="input toolbarSelect" id="sortMode" title="Sort files">
                         <option value="name-asc">Name ↑</option>
                         <option value="name-desc">Name ↓</option>
@@ -77,7 +77,7 @@
                         <option value="size-desc">Size ↓</option>
                         <option value="size-asc">Size ↑</option>
                     </select>
-                    <button class="btn secondary" id="btnReload" type="button">Refresh</button>
+                    <button class="btn secondary" id="btnReload" type="button" data-i18n="common.refresh">Refresh</button>
                 </div>
 
                 <div class="toolbarGroup hidden" id="editorTools">
@@ -210,39 +210,39 @@
 </div>
 
 <div class="contextMenu hidden" id="emptyContextMenu" role="menu">
-    <button type="button" data-action="upload">Upload files...</button>
-    <button type="button" data-action="upload-folder">Upload folder...</button>
+    <button type="button" data-action="upload" data-i18n="external.menu.upload_files">Upload files...</button>
+    <button type="button" data-action="upload-folder" data-i18n="external.menu.upload_folder">Upload folder...</button>
     <div class="contextSep"></div>
-    <button type="button" data-action="zip-folder">Download current folder (zip)</button>
-    <button type="button" data-action="new-folder">New folder...</button>
+    <button type="button" data-action="zip-folder" data-i18n="external.menu.download_current_folder_zip">Download current folder (zip)</button>
+    <button type="button" data-action="new-folder" data-i18n="external.menu.new_folder">New folder...</button>
     <div class="contextSep"></div>
-    <button type="button" data-action="trash">Open trash</button>
-    <button type="button" data-action="refresh">Refresh</button>
+    <button type="button" data-action="trash" data-i18n="external.menu.open_trash">Open trash</button>
+    <button type="button" data-action="refresh" data-i18n="common.refresh">Refresh</button>
 </div>
 
 <div class="contextMenu hidden" id="itemContextMenu" role="menu">
-    <button type="button" data-action="preview">Open / edit text?</button>
-    <button type="button" data-action="open">Open original</button>
-    <button type="button" data-action="download">Download</button>
-    <button type="button" data-action="versions">Versions...</button>
+    <button type="button" data-action="preview" data-i18n="external.menu.open_edit_text">Open / edit text?</button>
+    <button type="button" data-action="open" data-i18n="external.menu.open_original">Open original</button>
+    <button type="button" data-action="download" data-i18n="external.menu.download">Download</button>
+    <button type="button" data-action="versions" data-i18n="external.menu.versions">Versions...</button>
     <div class="contextSep"></div>
-    <button type="button" data-action="copy">Copy to...</button>
-    <button type="button" data-action="move">Move...</button>
-    <button type="button" data-action="rename">Rename...</button>
-    <button type="button" data-action="trash-item">Move to trash...</button>
+    <button type="button" data-action="copy" data-i18n="external.menu.copy_to">Copy to...</button>
+    <button type="button" data-action="move" data-i18n="external.menu.move">Move...</button>
+    <button type="button" data-action="rename" data-i18n="external.menu.rename">Rename...</button>
+    <button type="button" data-action="trash-item" data-i18n="external.menu.move_to_trash">Move to trash...</button>
     <div class="contextSep"></div>
-    <button type="button" data-action="properties">Properties...</button>
+    <button type="button" data-action="properties" data-i18n="external.menu.properties">Properties...</button>
 </div>
 
 <div class="contextMenu hidden" id="selectionContextMenu" role="menu">
-    <button type="button" data-action="multi-open">Open selected <span class="contextHint">single only</span></button>
-    <button type="button" data-action="multi-download">Download selection (zip)</button>
+    <button type="button" data-action="multi-open" data-i18n="external.menu.open_selected">Open selected (single only)</button>
+    <button type="button" data-action="multi-download" data-i18n="external.menu.download_selection_zip">Download selection (zip)</button>
     <div class="contextSep"></div>
-    <button type="button" data-action="multi-copy">Copy selected...</button>
-    <button type="button" data-action="multi-move">Move selected...</button>
-    <button type="button" data-action="multi-trash">Move selected to trash...</button>
+    <button type="button" data-action="multi-copy" data-i18n="external.menu.copy_selected">Copy selected...</button>
+    <button type="button" data-action="multi-move" data-i18n="external.menu.move_selected">Move selected...</button>
+    <button type="button" data-action="multi-trash" data-i18n="external.menu.move_selected_to_trash">Move selected to trash...</button>
     <div class="contextSep"></div>
-    <button type="button" data-action="multi-clear">Clear selection</button>
+    <button type="button" data-action="multi-clear" data-i18n="external.menu.clear_selection">Clear selection</button>
 </div>
 </body>
 </html>
