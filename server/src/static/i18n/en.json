@@ -2567,5 +2567,7 @@
   "photogallery.stats.photos_by_month": "Photos by month",
   "common.continue": "Continue",
   "common.save": "Save",
-  "photogallery.exit_fullscreen": "Exit fullscreen"
+  "photogallery.exit_fullscreen": "Exit fullscreen",
+  "photogallery.windowed": "Windowed",
+  "photogallery.enter_fullscreen": "Enter fullscreen"
 }

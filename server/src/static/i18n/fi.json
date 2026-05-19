@@ -2584,5 +2584,7 @@
   "photogallery.stats.photos_by_month": "Kuvat kuukausittain",
   "common.continue": "Jatka",
   "common.save": "Tallenna",
-  "photogallery.exit_fullscreen": "Poistu koko näytöstä"
+  "photogallery.exit_fullscreen": "Poistu koko näytöstä",
+  "photogallery.windowed": "Poistu koko näytöstä",
+  "photogallery.enter_fullscreen": "Siirry koko näytön tilaan"
 }

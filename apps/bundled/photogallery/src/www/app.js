@@ -76,33 +76,20 @@
     const previewFullscreenBtn = el("previewFullscreenBtn");
 
     function applyPreviewButtonTranslations() {
-        if (previewShareBtn) {
-            const txt = pgT("photogallery.share", null, "Share");
-            previewShareBtn.setAttribute("data-i18n", "photogallery.share");
-            if (previewShareBtn.textContent !== txt) previewShareBtn.textContent = txt;
-        }
+        if (!previewFullscreenBtn) return;
 
-        if (previewFullscreenBtn) {
-            const isFullscreen = document.fullscreenElement === previewCard;
-            const key = isFullscreen ? "photogallery.exit_fullscreen" : "photogallery.fullscreen";
-            const fallback = isFullscreen ? "Exit fullscreen" : "Fullscreen";
-            const txt = pgT(key, null, fallback);
-            previewFullscreenBtn.setAttribute("data-i18n", key);
-            if (previewFullscreenBtn.textContent !== txt) previewFullscreenBtn.textContent = txt;
-        }
+        const isFullscreen = document.fullscreenElement === previewCard;
+        const key = isFullscreen ? "photogallery.exit_fullscreen" : "photogallery.fullscreen";
+        const fallback = isFullscreen
+            ? "Poistu koko näytöstä"
+            : (previewFullscreenBtn.textContent || "Koko näyttö");
+
+        previewFullscreenBtn.setAttribute("data-i18n", key);
+        previewFullscreenBtn.textContent = pgT(key, null, fallback);
     }
 
-    applyPreviewButtonTranslations();
 
-    function schedulePreviewButtonTranslations() {
-        applyPreviewButtonTranslations();
-        window.setTimeout(applyPreviewButtonTranslations, 50);
-        window.setTimeout(applyPreviewButtonTranslations, 250);
-        window.setTimeout(applyPreviewButtonTranslations, 1000);
-    }
 
-    schedulePreviewButtonTranslations();
-    window.addEventListener("load", schedulePreviewButtonTranslations);
     document.addEventListener("fullscreenchange", applyPreviewButtonTranslations);
 
     const metaCard = el("metaCard");
@@ -3490,8 +3477,15 @@ html[data-theme="orange"] .pgTopModeBtnActive{
         }
 
         if (previewFullscreenBtn) {
-            previewFullscreenBtn.textContent = on ? "Windowed" : "Fullscreen";
-            previewFullscreenBtn.title = on ? "Exit fullscreen" : "Enter fullscreen";
+            const labelKey = on ? "photogallery.windowed" : "photogallery.fullscreen";
+            const titleKey = on ? "photogallery.exit_fullscreen" : "photogallery.enter_fullscreen";
+            const labelFallback = on ? "Poistu koko näytöstä" : "Koko näyttö";
+            const titleFallback = on ? "Poistu koko näytöstä" : "Siirry koko näytön tilaan";
+
+            previewFullscreenBtn.setAttribute("data-i18n", labelKey);
+            previewFullscreenBtn.setAttribute("data-i18n-title", titleKey);
+            previewFullscreenBtn.textContent = pgT(labelKey, null, labelFallback);
+            previewFullscreenBtn.title = pgT(titleKey, null, titleFallback);
         }
     }
 
