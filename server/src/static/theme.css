@@ -98,11 +98,14 @@ html[data-theme="bright"]{
     --fg-dim: rgba(11,16,32,0.72);
     --ui_is_dark: 0;
 
-    --panel: rgba(0,0,0,0.03);
-    --panel2: rgba(0,0,0,0.06);
+    /* Bright theme clarity:
+       keep the light CPUNK look, but make surfaces readable over documents,
+       spreadsheets, previews and app iframes. */
+    --panel: rgba(255,255,255,0.92);
+    --panel2: rgba(255,255,255,0.97);
 
-    --border: rgba(0,0,0,0.16);
-    --border2: rgba(0,0,0,0.10);
+    --border: rgba(0,0,0,0.20);
+    --border2: rgba(0,0,0,0.13);
 
     --shadow: 0 14px 50px rgba(0,0,0,0.12);
 
@@ -145,34 +148,49 @@ html[data-theme="bright"] body{
             linear-gradient(180deg, rgba(255,255,255,0.06), var(--bg)) !important;
 }
 
-/* make “glass” a bit more solid, but NOT win-classic opaque */
+/* Bright theme: solid enough to read over documents/previews.
+   Other themes keep their glass/transparency behavior. */
 html[data-theme="bright"] .sidebar,
 html[data-theme="bright"] .workspace,
 html[data-theme="bright"] .pane,
 html[data-theme="bright"] .statusCard,
-html[data-theme="bright"] .tableWrap{
-    background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(0,0,0,0.12)) !important;
-    border-color: rgba(var(--fg-rgb),0.18) !important;
-    box-shadow: 0 18px 70px rgba(0,0,0,0.38) !important;
+html[data-theme="bright"] .tableWrap,
+html[data-theme="bright"] .card,
+html[data-theme="bright"] .modalCard,
+html[data-theme="bright"] .ctxMenu,
+html[data-theme="bright"] .appFrameDock,
+html[data-theme="bright"] .appFrameWrap,
+html[data-theme="bright"] .homeContent,
+html[data-theme="bright"] .desktopSurface{
+    background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(246,248,255,0.94)) !important;
+    border-color: rgba(var(--fg-rgb),0.20) !important;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.18) !important;
 }
 
-/* headers should lift slightly (still dark glass) */
+/* App iframe itself should not be transparent in Bright mode. */
+html[data-theme="bright"] .appFrame{
+    background: #f8faff !important;
+}
+
+/* Headers should be readable, not smoky. */
 html[data-theme="bright"] .topbar,
+html[data-theme="bright"] .modalHead,
+html[data-theme="bright"] .cardTitle,
 html[data-theme="bright"] thead th{
-    background: rgba(0,0,0,0.16) !important;
-    border-bottom-color: rgba(var(--fg-rgb),0.12) !important;
+    background: rgba(255,255,255,0.98) !important;
+    border-bottom-color: rgba(var(--fg-rgb),0.16) !important;
 }
 
-/* keep buttons glassy */
+/* Buttons stay light, but stop showing content through them. */
 html[data-theme="bright"] .btn:not(.danger),
 html[data-theme="bright"] .navbtn{
-    background: rgba(0,0,0,0.16) !important;
-    border-color: rgba(var(--fg-rgb),0.18) !important;
+    background: rgba(255,255,255,0.94) !important;
+    border-color: rgba(var(--fg-rgb),0.22) !important;
 }
 html[data-theme="bright"] .btn:not(.danger):hover,
 html[data-theme="bright"] .navbtn:hover{
-    background: rgba(var(--fg-rgb),0.08) !important;
-    border-color: rgba(var(--fg-rgb),0.26) !important;
+    background: rgba(255,255,255,1) !important;
+    border-color: rgba(var(--fg-rgb),0.32) !important;
 }
 
 
