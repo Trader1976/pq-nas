@@ -643,10 +643,10 @@
             if (capacityEl) capacityEl.textContent = fmtBytes(capacityBytes);
             if (totalBytesEl) totalBytesEl.textContent = fmtBytes(totalBytes);
 
-            if (landingFilesEl) landingFilesEl.textContent = `${landingFiles} files`;
-            if (migratingFilesEl) migratingFilesEl.textContent = `${migratingFiles} files`;
-            if (capacityFilesEl) capacityFilesEl.textContent = `${capacityFiles} files`;
-            if (totalFilesEl) totalFilesEl.textContent = `${totalFiles} files`;
+            if (landingFilesEl) landingFilesEl.textContent = tr("raidmgr.files_count", { count: landingFiles }, `${landingFiles} files`);
+            if (migratingFilesEl) migratingFilesEl.textContent = tr("raidmgr.files_count", { count: migratingFiles }, `${migratingFiles} files`);
+            if (capacityFilesEl) capacityFilesEl.textContent = tr("raidmgr.files_count", { count: capacityFiles }, `${capacityFiles} files`);
+            if (totalFilesEl) totalFilesEl.textContent = tr("raidmgr.files_count", { count: totalFiles }, `${totalFiles} files`);
 
             let rate = 0;
             if (g_tieringPrev) {
@@ -700,19 +700,19 @@
             if (landingBarEl) landingBarEl.style.width = `${pctOf(landingBytes, totalBytes)}%`;
             if (capacityBarEl) capacityBarEl.style.width = `${pctOf(capacityBytes, totalBytes)}%`;
 
-            if (flowLeftEl) flowLeftEl.textContent = `Landing ${fmtBytes(landingBytes)}`;
-            if (flowRightEl) flowRightEl.textContent = `Capacity ${fmtBytes(capacityBytes)}`;
+            if (flowLeftEl) flowLeftEl.textContent = tr("raidmgr.tiering.landing_size", { size: fmtBytes(landingBytes) }, `Landing ${fmtBytes(landingBytes)}`);
+            if (flowRightEl) flowRightEl.textContent = tr("raidmgr.tiering.capacity_size", { size: fmtBytes(capacityBytes) }, `Capacity ${fmtBytes(capacityBytes)}`);
 
             if (barEl) barEl.classList.toggle("pqTierFlowActive", rate > 0);
 
             if (flowStatusEl) {
                 if (rate > 0) {
                     flowStatusEl.textContent =
-                        `Migrating ${migratingFiles} file${migratingFiles === 1 ? "" : "s"} at ${fmtBytes(rate)}/s`;
+                        tr("raidmgr.tiering.migrating_at", { count: migratingFiles, rate: fmtBytes(rate) }, `Migrating ${migratingFiles} file${migratingFiles === 1 ? "" : "s"} at ${fmtBytes(rate)}/s`);
                 } else if (landingBytes > 0) {
-                    flowStatusEl.textContent = `Waiting in landing tier: ${fmtBytes(landingBytes)}`;
+                    flowStatusEl.textContent = tr("raidmgr.tiering.waiting_landing", { size: fmtBytes(landingBytes) }, `Waiting in landing tier: ${fmtBytes(landingBytes)}`);
                 } else {
-                    flowStatusEl.textContent = "No landing-tier backlog";
+                    flowStatusEl.textContent = tr("raidmgr.tiering.no_backlog", null, "No landing-tier backlog");
                 }
             }
         } catch (_) {}
@@ -1429,7 +1429,7 @@
         return `<span class="pqPill ${cls || ""}">${esc(text)}</span>`;
     }
     function yesNo(v) {
-        return v ? "Yes" : "No";
+        return v ? tr("raidmgr.yes", null, "Yes") : tr("raidmgr.no", null, "No");
     }
     function pctOf(part, total) {
         const p = Number(part || 0);
@@ -3210,8 +3210,8 @@ Tip: these are the Btrfs member devices that form this pool.
             if (!tier || !tier.ok || !tier.data) {
                 return `
 <div class="card" style="margin-top:12px;">
-  <div style="font-weight:950; margin-bottom:8px;">Tiering</div>
-  <div class="v" style="opacity:.8;">Tiering status unavailable.</div>
+  <div style="font-weight:950; margin-bottom:8px;">${esc(tr("raidmgr.tiering.title", null, "Tiering"))}</div>
+  <div class="v" style="opacity:.8;">${esc(tr("raidmgr.tiering.unavailable", null, "Tiering status unavailable."))}</div>
 </div>`;
             }
 
@@ -3224,45 +3224,45 @@ Tip: these are the Btrfs member devices that form this pool.
 <div class="card" style="margin-top:12px;">
   <div class="row" style="align-items:flex-start; justify-content:space-between; gap:12px;">
     <div style="min-width:260px;">
-      <div style="font-weight:950;">Tiering-managed files</div>
+      <div style="font-weight:950;">${esc(tr("raidmgr.tiering.managed_files", null, "Tiering-managed files"))}</div>
       <div class="v" style="opacity:.8; margin-top:2px;">
-        Landing pool: ${esc(String(d.landing_pool_id || "-"))}
+        ${esc(tr("raidmgr.tiering.landing_pool", null, "Landing pool:"))} ${esc(String(d.landing_pool_id || "-"))}
       </div>
           <div class="v" style="opacity:.72; margin-top:6px;">
-      Shows tiering-managed files only. Workspace files are currently excluded.
+      ${esc(tr("raidmgr.tiering.note", null, "Shows tiering-managed files only. Workspace files are currently excluded."))}
     </div>
       <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
-        ${tierPill(`enabled: ${yesNo(!!d.tiering_enabled)}`, !!d.tiering_enabled ? "pqTierOk" : "pqTierWarn")}
-        ${tierPill(`worker: ${yesNo(!!worker.enabled)}`, !!worker.enabled ? "pqTierOk" : "pqTierWarn")}
-        ${tierPill(`interval: ${Number(worker.interval_sec || 0)}s`, "pqTierNeutral")}
-        ${tierPill(`min age: ${Number(worker.min_age_sec || 0)}s`, "pqTierNeutral")}
-        ${tierPill(`max/pass: ${Number(worker.max_candidates_per_pass || 0)}`, "pqTierNeutral")}
+        ${tierPill(`${tr("raidmgr.tiering.enabled", null, "enabled")}: ${yesNo(!!d.tiering_enabled)}`, !!d.tiering_enabled ? "pqTierOk" : "pqTierWarn")}
+        ${tierPill(`${tr("raidmgr.tiering.worker", null, "worker")}: ${yesNo(!!worker.enabled)}`, !!worker.enabled ? "pqTierOk" : "pqTierWarn")}
+        ${tierPill(`${tr("raidmgr.tiering.interval", null, "interval")}: ${Number(worker.interval_sec || 0)}s`, "pqTierNeutral")}
+        ${tierPill(`${tr("raidmgr.tiering.min_age", null, "min age")}: ${Number(worker.min_age_sec || 0)}s`, "pqTierNeutral")}
+        ${tierPill(`${tr("raidmgr.tiering.max_pass", null, "max/pass")}: ${Number(worker.max_candidates_per_pass || 0)}`, "pqTierNeutral")}
       </div>
     </div>
 
     <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px; flex:1 1 auto;">
       <div id="tierLandingCard" class="card pqTierStat ${tierToneClass("landing", counts.landing_files)}">
-        <div class="k">Landing</div>
-        <div class="pqTierStatValue">${Number(counts.landing_files || 0)} files</div>
+        <div class="k">${esc(tr("raidmgr.tiering.landing", null, "Landing"))}</div>
+        <div class="pqTierStatValue">${esc(tr("raidmgr.files_count", { count: Number(counts.landing_files || 0) }, `${Number(counts.landing_files || 0)} files`))}</div>
         <div id="tierLandingBytes" class="v pqTierStatSub">${fmtBytes(Number(bytes.landing_bytes || 0))}</div>
       </div>
 
       <div id="tierMigratingCard" class="card pqTierStat ${tierToneClass("migrating", counts.migrating_files)}">
-        <div class="k">Migrating</div>
-        <div id="tierMigratingFiles" class="pqTierStatValue">${Number(counts.migrating_files || 0)} files</div>
+        <div class="k">${esc(tr("raidmgr.tiering.migrating", null, "Migrating"))}</div>
+        <div id="tierMigratingFiles" class="pqTierStatValue">${esc(tr("raidmgr.files_count", { count: Number(counts.migrating_files || 0) }, `${Number(counts.migrating_files || 0)} files`))}</div>
         <div id="tierMigratingBytes" class="v pqTierStatSub">${fmtBytes(Number(bytes.migrating_bytes || 0))}</div>
         <div id="tierMigratingRate" class="v pqTierRate"></div>
       </div>
 
       <div id="tierCapacityCard" class="card pqTierStat ${tierToneClass("capacity", counts.capacity_files)}">
-        <div class="k">Capacity</div>
-        <div class="pqTierStatValue">${Number(counts.capacity_files || 0)} files</div>
+        <div class="k">${esc(tr("raidmgr.tiering.capacity", null, "Capacity"))}</div>
+        <div class="pqTierStatValue">${esc(tr("raidmgr.files_count", { count: Number(counts.capacity_files || 0) }, `${Number(counts.capacity_files || 0)} files`))}</div>
         <div id="tierCapacityBytes" class="v pqTierStatSub">${fmtBytes(Number(bytes.capacity_bytes || 0))}</div>
       </div>
 
       <div class="card pqTierStat pqTierNeutral">
-        <div class="k">Tiering total</div>
-        <div id="tierTotalFiles" class="pqTierStatValue">${Number(counts.total_files || 0)} files</div>
+        <div class="k">${esc(tr("raidmgr.tiering.total", null, "Tiering total"))}</div>
+        <div id="tierTotalFiles" class="pqTierStatValue">${esc(tr("raidmgr.files_count", { count: Number(counts.total_files || 0) }, `${Number(counts.total_files || 0)} files`))}</div>
         <div id="tierTotalBytes" class="v pqTierStatSub">${fmtBytes(Number(bytes.total_bytes || 0))}</div>
       </div>
     </div>
@@ -3275,8 +3275,8 @@ Tip: these are the Btrfs member devices that form this pool.
     </div>
 
     <div class="pqTierFlowMeta">
-      <div id="tierFlowLeft">Landing ${fmtBytes(Number(bytes.landing_bytes || 0))}</div>
-      <div id="tierFlowRight">Capacity ${fmtBytes(Number(bytes.capacity_bytes || 0))}</div>
+      <div id="tierFlowLeft">${esc(tr("raidmgr.tiering.landing_size", { size: fmtBytes(Number(bytes.landing_bytes || 0)) }, `Landing ${fmtBytes(Number(bytes.landing_bytes || 0))}`))}</div>
+      <div id="tierFlowRight">${esc(tr("raidmgr.tiering.capacity_size", { size: fmtBytes(Number(bytes.capacity_bytes || 0)) }, `Capacity ${fmtBytes(Number(bytes.capacity_bytes || 0))}`))}</div>
     </div>
 
     <div id="tierFlowStatus" class="pqTierFlowStatus">
