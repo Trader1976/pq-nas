@@ -1329,9 +1329,29 @@ async function submitMigrationFromModal() {
         return;
     }
 
-    if (!confirm(`Migrate user storage to pool "${pool_id}"?\n\nThis will create an async job. The worker will copy data, verify it, then switch the user's storage mapping.`)) {
-        return;
-    }
+    const dstPool = (gPools || []).find(x => x.id === pool_id);
+    const dstName = dstPool?.name || pool_id;
+    const userLabel = String(cur.name || cur.email || cur.username || fp || "");
+
+    const ok = await openAdminUsersConfirmModal({
+        title: tr("admin.users.migrate_confirm_title", { pool: dstName }, `Migrate user storage to pool "${dstName}"?`),
+        subtitle: tr("admin.users.migrate_confirm_subtitle", null, "This will create an async storage migration job."),
+        rows: [
+            { label: tr("admin.users.user", null, "User"), value: userLabel || fp, mono: true },
+            { label: tr("admin.users.from", null, "From"), value: curPoolId || "default", mono: true },
+            { label: tr("admin.users.to", null, "To"), value: dstName, mono: true },
+        ],
+        note: tr(
+            "admin.users.migrate_confirm_note",
+            null,
+            "The worker will copy data, verify it, then switch the user's storage mapping. The old copy is kept until cleanup."
+        ),
+        confirmText: tr("admin.users.start_migration", null, "Start migration"),
+        cancelText: tr("admin.users.cancel", null, "Cancel"),
+        danger: false
+    });
+
+    if (!ok) return;
 
     try {
         setMigrateError("");
@@ -1346,9 +1366,6 @@ async function submitMigrationFromModal() {
         if (!jobId) {
             throw new Error(tr("admin.users.migration_job_missing", null, "Migration job_id missing from server response"));
         }
-
-        const dstPool = (gPools || []).find(x => x.id === pool_id);
-        const dstName = dstPool?.name || pool_id;
 
         showToast(
             tr("admin.users.migration_queued_toast", { job: jobId, user: fp, to: dstName }, `Storage migration queued\nJob: ${jobId}\nUser: ${fp}\nTo: ${dstName}`)
@@ -1419,11 +1436,26 @@ async function submitCleanupOldCopy(fp) {
         return;
     }
 
-    const ok = confirm(tr(
-        "admin.users.cleanup_confirm",
-        { user: fp, active: activePoolId, old: oldPoolId },
-        `Delete old inactive storage copy?\n\nUser: ${fp}\nActive pool: ${activePoolId}\nOld pool to delete: ${oldPoolId}\n\nThis deletes the old user subtree from the old pool.`
-    ));
+    const cleanupUserLabel = String(cur.name || cur.email || cur.username || fp || "");
+
+    const ok = await openAdminUsersConfirmModal({
+        title: tr("admin.users.cleanup_confirm_title", null, "Delete old inactive storage copy?"),
+        subtitle: tr("admin.users.cleanup_confirm_subtitle", null, "This removes the old passive copy after a successful storage migration."),
+        rows: [
+            { label: tr("admin.users.user", null, "User"), value: cleanupUserLabel || fp, mono: true },
+            { label: tr("admin.users.active_pool", null, "Active pool"), value: activePoolId, mono: true },
+            { label: tr("admin.users.old_pool", null, "Old pool"), value: oldPoolId, mono: true },
+        ],
+        note: tr(
+            "admin.users.cleanup_confirm_note",
+            null,
+            "This deletes the old user subtree from the old pool. The currently active pool is protected."
+        ),
+        confirmText: tr("admin.users.delete_old_copy", null, "Delete old copy"),
+        cancelText: tr("admin.users.cancel", null, "Cancel"),
+        danger: true
+    });
+
     if (!ok) return;
 
     try {

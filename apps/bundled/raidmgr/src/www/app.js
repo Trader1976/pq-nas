@@ -234,6 +234,10 @@
     async function planPoolLayout(mount) {
         return await postJson("/api/v4/poolmgr/plan-layout", { mount });
     }
+
+    async function planCreatePool(body) {
+        return await postJson("/api/v4/raid/plan/create-pool", body);
+    }
     async function pollExecOnce() {
         const st = gstate();
         if (!st.execPlanId) return;
@@ -1164,13 +1168,13 @@
     </marker>
   </defs>
 
-  <text x="24" y="34" font-size="22" font-weight="800" fill="var(--fg)">Remove drive from storage pool</text>
+  <text x="24" y="34" font-size="22" font-weight="800" fill="var(--fg)">${esc(tr("raidmgr.remove.svg_title", null, "Remove drive from storage pool"))}</text>
   <text x="24" y="60" font-size="14" fill="var(--fg)" opacity="0.75">${esc(poolLabel || "")}</text>
 
   <rect x="24" y="84" width="320" height="70" rx="16"
         fill="rgba(255,255,255,0.10)" stroke="var(--raid-border, rgba(0,0,0,0.14))"/>
-  <text x="44" y="112" font-size="14" fill="var(--fg)" opacity="0.75">Drive to remove</text>
-  <text x="44" y="137" font-size="16" font-weight="800" fill="var(--fg)">${esc(removeDevLabel || "Select a drive")}</text>
+  <text x="44" y="112" font-size="14" fill="var(--fg)" opacity="0.75">${esc(tr("raidmgr.remove.drive_to_remove", null, "Drive to remove"))}</text>
+  <text x="44" y="137" font-size="16" font-weight="800" fill="var(--fg)">${esc(removeDevLabel || tr("raidmgr.remove.select_drive", null, "Select a drive"))}</text>
 
   <line x1="360" y1="119" x2="560" y2="119"
         stroke="var(--raid-arrow, rgba(0,140,255,0.65))" stroke-width="2"
@@ -1183,10 +1187,10 @@
   <rect x="576" y="84" width="320" height="8" rx="16"
         fill="var(--raid-accent, rgba(0,140,255,0.35))" opacity="0.95"/>
 
-  <text x="596" y="112" font-size="14" fill="var(--fg)" opacity="0.75">What happens</text>
-  <text x="596" y="137" font-size="16" font-weight="800" fill="var(--fg)">Data migrates off → drive removed</text>
+  <text x="596" y="112" font-size="14" fill="var(--fg)" opacity="0.75">${esc(tr("raidmgr.remove.what_happens", null, "What happens"))}</text>
+  <text x="596" y="137" font-size="16" font-weight="800" fill="var(--fg)">${esc(tr("raidmgr.remove.data_migrates", null, "Data migrates off → drive removed"))}</text>
 
-  <text x="24" y="173" font-size="13" fill="var(--fg)" opacity="0.75">This may take a long time depending on how much data must move.</text>
+  <text x="24" y="173" font-size="13" fill="var(--fg)" opacity="0.75">${esc(tr("raidmgr.remove.long_time", null, "This may take a long time depending on how much data must move."))}</text>
 </svg>`;
     }
 
@@ -1623,7 +1627,7 @@
       </div>
 
       <div class="card" style="margin-top:12px;">
-        <h3 style="margin:0 0 8px 0;">Visual preview</h3>
+        <h3 style="margin:0 0 8px 0;">${esc(tr("raidmgr.visual_preview", null, "Visual preview"))}</h3>
         <div id="addViz"></div>
       </div>
 
@@ -1905,7 +1909,7 @@
                 rmHost.innerHTML = `
   <div class="row" style="gap:10px; align-items:flex-start; margin-top:6px;">
     <div style="flex:1 1 520px; min-width:260px;">
-      <div class="k" style="margin-bottom:6px;">Drive in pool</div>
+      <div class="k" style="margin-bottom:6px;">${esc(tr("raidmgr.remove.drive_in_pool", null, "Drive in pool"))}</div>
       <select id="rmDevSel" style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);">
         ${bdevs
                     .map((d) => {
@@ -1913,7 +1917,7 @@
                         const pd = String(d?.parent_disk || "");
                         const size = d?.size_bytes ? fmtBytes(Number(d.size_bytes)) : "";
                         const used = d?.used_bytes ? fmtBytes(Number(d.used_bytes)) : "";
-                        const label = [mp, pd && pd !== mp ? `(${pd})` : "", size ? `• ${size}` : "", used ? `• used ${used}` : ""]
+                        const label = [mp, pd && pd !== mp ? `(${pd})` : "", size ? `• ${size}` : "", used ? `• ${tr("raidmgr.meta.used", null, "used")} ${used}` : ""]
                             .filter(Boolean)
                             .join(" ");
                         return `<option value="${mp}">${label}</option>`;
@@ -1924,15 +1928,15 @@
       <div style="margin-top:10px;">
         <label style="display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18);">
           <input id="rmForceChk" type="checkbox" style="transform:scale(1.1);">
-          <span class="v" style="opacity:.9;">Force (allow removing the currently-used pool drive)</span>
+          <span class="v" style="opacity:.9;">${esc(tr("raidmgr.remove.force_label", null, "Force (allow removing the currently-used pool drive)"))}</span>
         </label>
         <div class="v" id="rmForceWarn" style="opacity:.75; margin-top:6px;">
-          Keep OFF unless you know exactly why you need it.
+          ${esc(tr("raidmgr.remove.keep_off", null, "Keep OFF unless you know exactly why you need it."))}
         </div>
       </div>
 
       <div class="card" style="margin-top:12px;">
-        <h3 style="margin:0 0 8px 0;">Visual preview</h3>
+        <h3 style="margin:0 0 8px 0;">${esc(tr("raidmgr.visual_preview", null, "Visual preview"))}</h3>
         <div id="rmViz"></div>
       </div>
 
@@ -1973,8 +1977,8 @@
                 rmForceChk?.addEventListener("change", () => {
                     if (!rmForceWarn) return;
                     rmForceWarn.textContent = rmForceChk.checked
-                        ? "WARNING: force enabled — you may be removing the drive currently hosting the pool."
-                        : "Keep OFF unless you know exactly why you need it.";
+                        ? tr("raidmgr.remove.force_warning", null, "WARNING: force enabled — you may be removing the drive currently hosting the pool.")
+                        : tr("raidmgr.remove.keep_off", null, "Keep OFF unless you know exactly why you need it.");
 
                     if (rmExecBtn) rmExecBtn.disabled = true;
                     lastRmPlan = null;
@@ -2358,8 +2362,8 @@
             ov.innerHTML = `
 <div class="uiDialog raidDialogShell">
   <div class="uiDialogHeader raidDialogHeader">
-    <div id="poolEditSlotsTitle" style="font-weight:950;">Edit pool slots</div>
-    <button id="poolEditSlotsCloseBtn" class="btn secondary" type="button">Close</button>
+    <div id="poolEditSlotsTitle" style="font-weight:950;">${esc(tr("raidmgr.edit_slots.title", null, "Edit pool slots"))}</div>
+    <button id="poolEditSlotsCloseBtn" class="btn secondary" type="button">${esc(tr("admin.common.close", null, "Close"))}</button>
   </div>
 
   <div class="raidDialogInnerCard" style="margin-top:10px; padding:14px;">
@@ -2382,15 +2386,15 @@
       <div class="formField">
         <div class="k">${esc(tr("raidmgr.create.slot_count", null, "Slot count"))}</div>
         <input id="poolEditSlotCountInp" type="number" min="1" max="16" step="1">
-        <div class="formHelp">Adjust visible slots, then update</div>
+        <div class="formHelp">${esc(tr("raidmgr.edit_slots.slot_count_help", null, "Adjust visible slots, then update"))}</div>
       </div>
     </div>
 
     <div class="row" style="gap:10px; margin-top:12px; align-items:flex-end; flex-wrap:wrap;">
-      <button id="poolEditSlotsApplyCountBtn" class="btn secondary" type="button">Update slots</button>
-      <button id="poolEditSlotsRefreshBtn" class="btn secondary" type="button">Refresh devices</button>
+      <button id="poolEditSlotsApplyCountBtn" class="btn secondary" type="button">${esc(tr("raidmgr.create.update_slots", null, "Update slots"))}</button>
+      <button id="poolEditSlotsRefreshBtn" class="btn secondary" type="button">${esc(tr("raidmgr.create.refresh_devices", null, "Refresh devices"))}</button>
       <div style="flex:1 1 auto;"></div>
-      <button id="poolEditSlotsSaveBtn" class="btn danger" type="button">Save layout</button>
+      <button id="poolEditSlotsSaveBtn" class="btn danger" type="button">${esc(tr("raidmgr.edit_slots.save_layout", null, "Save layout"))}</button>
     </div>
 
     <div class="card" style="margin-top:12px;">
@@ -2401,7 +2405,7 @@
 
     <details class="card" style="margin-top:12px;">
       <summary style="cursor:pointer; font-weight:900;">${esc(tr("raidmgr.advanced", null, "Advanced"))}</summary>
-      <pre id="poolEditSlotsDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
+      <pre id="poolEditSlotsDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">${esc(tr("raidmgr.idle", null, "(idle)"))}</pre>
     </details>
   </div>
 </div>`;
@@ -2460,7 +2464,7 @@
                         byPath.set(dev, {
                             path: dev,
                             name: dev.replace("/dev/", ""),
-                            model: "Saved slot device",
+                            model: tr("raidmgr.edit_slots.saved_slot_device", null, "Saved slot device"),
                             size_bytes: 0
                         });
                     }
@@ -2479,7 +2483,7 @@
                         byPath.set(dev, {
                             path: dev,
                             name: dev.replace("/dev/", ""),
-                            model: "Runtime member",
+                            model: tr("raidmgr.edit_slots.runtime_member", null, "Runtime member"),
                             size_bytes: 0
                         });
                     }
@@ -2510,9 +2514,9 @@
             function updateHints() {
                 const devices = slotValues.filter(Boolean);
                 modeHint.textContent = modeSel.value === "raid1"
-                    ? "RAID1 needs at least 2 assigned slots."
-                    : "Single uses one or more drives without redundancy.";
-                slotHint.textContent = `Assigned devices: ${devices.length}. Empty slots stay as placeholders.`;
+                    ? tr("raidmgr.create.raid1_hint", null, "RAID1 needs at least 2 assigned slots.")
+                    : tr("raidmgr.create.single_hint", null, "Single uses one or more drives without redundancy.");
+                slotHint.textContent = tr("raidmgr.edit_slots.assigned_devices", { count: devices.length }, `Assigned devices: ${devices.length}. Empty slots stay as placeholders.`);
             }
 
             function renderSlotSelectors() {
@@ -2546,8 +2550,8 @@
                             const isRuntimeMember = runtimeMembers.includes(val);
 
                             const marks = [];
-                            if (isCurrentAssigned) marks.push("saved");
-                            if (isRuntimeMember) marks.push("member");
+                            if (isCurrentAssigned) marks.push(tr("raidmgr.edit_slots.mark_saved", null, "saved"));
+                            if (isRuntimeMember) marks.push(tr("raidmgr.edit_slots.mark_member", null, "member"));
 
                             const markText = marks.length ? " — " + marks.join(", ") : "";
                             return `<option value="${esc(val)}" ${selected} ${disabled}>${esc(diskLabel(d) + markText + suffix)}</option>`;
@@ -2628,7 +2632,7 @@
                 };
 
                 dbg.textContent = JSON.stringify({ request: body }, null, 2);
-                showToast("info", "Saving layout…", 1200);
+                showToast("info", tr("raidmgr.edit_slots.saving_layout", null, "Saving layout…"), 1200);
 
                 const { r, j, txt } = await setPoolLayout(body);
 
@@ -2639,17 +2643,17 @@
                 }, null, 2);
 
                 if (!r.ok || !j || j.ok !== true) {
-                    showToast("err", `Save layout failed: ${prettyError(j, r, txt)}`, 5200);
+                    showToast("err", tr("raidmgr.edit_slots.save_failed", { error: prettyError(j, r, txt) }, `Save layout failed: ${prettyError(j, r, txt)}`), 5200);
                     return;
                 }
 
-                showToast("ok", "Layout saved ✓", 1800);
+                showToast("ok", tr("raidmgr.edit_slots.layout_saved", null, "Layout saved ✓"), 1800);
                 ov.classList.remove("show");
                 await refreshPoolsState();
                 await renderPoolsTab();
             }
 
-            titleEl.textContent = `Edit slots • ${mount}`;
+            titleEl.textContent = tr("raidmgr.edit_slots.title_for_pool", { pool: mount }, `Edit slots • ${mount}`);
             displayNameInp.value = String(pool?.display_name || "");
             modeSel.value = String(pool?.mode || "single");
             slotCountInp.value = String(slotCount);
@@ -2921,14 +2925,14 @@
             const mount = String(pool?.mount || "").trim();
             if (!mount) return;
 
-            title.textContent = `Remove drive • ${mount}`;
-            body.innerHTML = `<div class="v" style="opacity:.8;">Loading…</div>`;
+            title.textContent = tr("raidmgr.remove.title_for_pool", { pool: mount }, `Remove drive • ${mount}`);
+            body.innerHTML = `<div class="v" style="opacity:.8;">${esc(tr("common.loading", null, "Loading…"))}</div>`;
             closeBtn.onclick = () => { ov.style.display = "none"; };
             ov.style.display = "flex";
 
             const disc = await loadPoolDiscoveryOnce(mount);
             if (!disc) {
-                body.innerHTML = `<div class="v" style="opacity:.85;">Discovery failed.</div>`;
+                body.innerHTML = `<div class="v" style="opacity:.85;">${esc(tr("raidmgr.discovery_failed_plain", null, "Discovery failed."))}</div>`;
                 return;
             }
 
@@ -2936,22 +2940,22 @@
             const totalDevs = Number(disc?.btrfs?.total_devices) || bdevs.length || 0;
 
             if (totalDevs <= 1) {
-                body.innerHTML = `<div class="v" style="opacity:.85;">Cannot remove a drive: pool has only ${totalDevs} device(s).</div>`;
+                body.innerHTML = `<div class="v" style="opacity:.85;">${esc(tr("raidmgr.remove.cannot_only_devices", { count: totalDevs }, `Cannot remove a drive: pool has only ${totalDevs} device(s).`))}</div>`;
                 return;
             }
 
             body.innerHTML = `
 <div class="card">
-  <h3 style="margin:0 0 8px 0;">Remove drive</h3>
+  <h3 style="margin:0 0 8px 0;">${esc(tr("raidmgr.action.remove_drive", null, "Remove drive"))}</h3>
 
-  <div class="k" style="margin-bottom:6px;">Drive in pool</div>
+  <div class="k" style="margin-bottom:6px;">${esc(tr("raidmgr.remove.drive_in_pool", null, "Drive in pool"))}</div>
   <select id="poolRemoveDevSel" style="width:100%; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18); color:var(--fg);">
     ${bdevs.map((d) => {
                 const mp = String(d?.path || "");
                 const pd = String(d?.parent_disk || "");
                 const size = d?.size_bytes ? fmtBytes(Number(d.size_bytes)) : "";
                 const used = d?.used_bytes ? fmtBytes(Number(d.used_bytes)) : "";
-                const label = [mp, pd && pd !== mp ? `(${pd})` : "", size ? `• ${size}` : "", used ? `• used ${used}` : ""]
+                const label = [mp, pd && pd !== mp ? `(${pd})` : "", size ? `• ${size}` : "", used ? `• ${tr("raidmgr.meta.used", null, "used")} ${used}` : ""]
                     .filter(Boolean)
                     .join(" ");
                 return `<option value="${mp}">${label}</option>`;
@@ -2961,30 +2965,30 @@
   <div style="margin-top:12px;">
     <label style="display:flex; gap:10px; align-items:center; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.14); background:rgba(0,0,0,0.18);">
       <input id="poolRemoveForceChk" type="checkbox" style="transform:scale(1.1);">
-      <span class="v" style="opacity:.9;">Force (allow removing the currently-used pool drive)</span>
+      <span class="v" style="opacity:.9;">${esc(tr("raidmgr.remove.force_label", null, "Force (allow removing the currently-used pool drive)"))}</span>
     </label>
     <div id="poolRemoveForceWarn" class="v" style="opacity:.75; margin-top:6px;">
-      Keep OFF unless you know exactly why you need it.
+      ${esc(tr("raidmgr.remove.keep_off", null, "Keep OFF unless you know exactly why you need it."))}
     </div>
   </div>
 
   <div class="card" style="margin-top:12px;">
-    <h3 style="margin:0 0 8px 0;">Visual preview</h3>
+    <h3 style="margin:0 0 8px 0;">${esc(tr("raidmgr.visual_preview", null, "Visual preview"))}</h3>
     <div id="poolRemoveViz"></div>
   </div>
 
 <div class="row" style="margin-top:12px; gap:10px;">
-  <button class="btn secondary" id="poolRemovePreviewBtn" type="button">Preview</button>
-  <button class="btn danger" id="poolRemoveApplyBtn" type="button" disabled>Apply</button>
+  <button class="btn secondary" id="poolRemovePreviewBtn" type="button">${esc(tr("raidmgr.action.preview", null, "Preview"))}</button>
+  <button class="btn danger" id="poolRemoveApplyBtn" type="button" disabled>${esc(tr("raidmgr.action.apply", null, "Apply"))}</button>
 </div>
 
 <div class="v" style="opacity:.75; margin-top:8px;">
-  Click Preview first to enable Apply.
+  ${esc(tr("raidmgr.remove.preview_first_to_apply", null, "Click Preview first to enable Apply."))}
 </div>
 
 <details class="raidDialogInnerCard" style="margin-top:12px; padding:10px 12px;">
   <summary style="cursor:pointer; font-weight:900;">${esc(tr("raidmgr.advanced", null, "Advanced"))}</summary>
-  <pre id="poolRemoveDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">(idle)</pre>
+  <pre id="poolRemoveDebug" style="margin-top:10px; max-height:45vh; overflow:auto;">${esc(tr("raidmgr.idle", null, "(idle)"))}</pre>
 </details>
 </div>
 `;
@@ -3004,7 +3008,7 @@
             function updateViz() {
                 const removeDev = String(rmSel?.value || "");
                 rmViz.innerHTML = svgRemovePreview({
-                    poolLabel: mount ? `Storage pool: ${mount}` : "",
+                    poolLabel: mount ? tr("raidmgr.remove.storage_pool_label", { pool: mount }, `Storage pool: ${mount}`) : "",
                     removeDevLabel: removeDev
                 });
             }
@@ -3020,8 +3024,8 @@
 
             rmForceChk?.addEventListener("change", () => {
                 rmForceWarn.textContent = rmForceChk.checked
-                    ? "WARNING: force enabled — you may be removing the drive currently hosting the pool."
-                    : "Keep OFF unless you know exactly why you need it.";
+                    ? tr("raidmgr.remove.force_warning", null, "WARNING: force enabled — you may be removing the drive currently hosting the pool.")
+                    : tr("raidmgr.remove.keep_off", null, "Keep OFF unless you know exactly why you need it.");
                 lastPlan = null;
                 lastPlanId = "";
                 applyBtn.disabled = true;
@@ -3048,7 +3052,7 @@
                 }, null, 2);
 
                 if (!r.ok || !j || j.ok !== true || !j.plan || !j.plan.plan_id) {
-                    showToast("err", `Preview failed: ${prettyError(j, r, txt)}`, 5200);
+                    showToast("err", tr("raidmgr.preview_failed", { error: prettyError(j, r, txt) }, `Preview failed: ${prettyError(j, r, txt)}`), 5200);
                     applyBtn.disabled = true;
                     lastPlan = null;
                     lastPlanId = "";
@@ -3063,7 +3067,7 @@
 
             applyBtn.onclick = async () => {
                 if (!lastPlan || !lastPlanId) {
-                    showToast("warn", "Preview first. Click Preview before Apply.", 2800);
+                    showToast("warn", tr("raidmgr.remove.preview_first_before_apply", null, "Preview first. Click Preview before Apply."), 2800);
                     return;
                 }
 
@@ -4298,13 +4302,7 @@ Optionally it can wipe member disks (VERY destructive).
                     return;
                 }
 
-                const plan_id = randHex(32);
-                const plan_nonce = randHex(16);
-
-                const body = {
-                    plan_id,
-                    plan_nonce,
-                    confirm: true,
+                const planReq = {
                     pool_id,
                     display_name,
                     mode,
@@ -4314,23 +4312,57 @@ Optionally it can wipe member disks (VERY destructive).
                     devices
                 };
 
-                dbg.textContent = JSON.stringify({ request: body }, null, 2);
-                showToast("info", "Creating pool…", 2200);
+                dbg.textContent = JSON.stringify({ phase: "plan", request: planReq }, null, 2);
+                showToast("info", tr("raidmgr.create.preparing_plan", null, "Preparing create plan…"), 1600);
+
+                const planResp = await planCreatePool(planReq);
+                const planJ = planResp.j;
+
+                dbg.textContent = JSON.stringify({
+                    phase: "plan",
+                    http: planResp.r.status,
+                    response: planJ ?? planResp.txt,
+                    request: planReq
+                }, null, 2);
+
+                const plan = planJ && typeof planJ === "object"
+                    ? (planJ.plan && typeof planJ.plan === "object" ? planJ.plan : planJ)
+                    : null;
+
+                const plan_id = String(plan?.plan_id || "");
+                const plan_nonce = String(plan?.plan_nonce || "");
+
+                if (!planResp.r.ok || !planJ || planJ.ok !== true || !plan_id || !plan_nonce) {
+                    showToast("err", tr("raidmgr.create.plan_failed", { error: prettyError(planJ, planResp.r, planResp.txt) }, `Create plan failed: ${prettyError(planJ, planResp.r, planResp.txt)}`), 6500);
+                    return;
+                }
+
+                const body = {
+                    ...planReq,
+                    plan_id,
+                    plan_nonce,
+                    confirm: true
+                };
+
+                dbg.textContent = JSON.stringify({ phase: "execute", request: body, plan: planJ }, null, 2);
+                showToast("info", tr("raidmgr.create.creating", null, "Creating pool…"), 2200);
 
                 const { r, j, txt } = await postJson("/api/v4/raid/execute/create-pool", body);
 
                 dbg.textContent = JSON.stringify({
+                    phase: "execute",
                     http: r.status,
                     response: j ?? txt,
-                    request: body
+                    request: body,
+                    plan: planJ
                 }, null, 2);
 
                 if (!r.ok || !j || j.ok !== true) {
-                    showToast("err", `Create pool failed: ${prettyError(j, r, txt)}`, 6500);
+                    showToast("err", tr("raidmgr.create.failed", { error: prettyError(j, r, txt) }, `Create pool failed: ${prettyError(j, r, txt)}`), 6500);
                     return;
                 }
 
-                showToast("ok", "Create started ✓ Watching exec record…", 2600);
+                showToast("ok", tr("raidmgr.create.started", null, "Create started ✓ Watching exec record…"), 2600);
                 const pid = (j && j.plan_id) ? String(j.plan_id) : String(plan_id);
                 startExecPolling(pid);
 
