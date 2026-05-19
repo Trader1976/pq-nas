@@ -10,6 +10,35 @@
 
     const el = (id) => document.getElementById(id);
 
+    function tr(key, vars, fallback) {
+        const api = window.PQNAS_I18N;
+        if (api && typeof api.t === "function") {
+            return api.t(key, vars || null, fallback);
+        }
+        return String(fallback ?? key);
+    }
+
+    function applyStaticI18n() {
+        const api = window.PQNAS_I18N;
+        if (api && typeof api.apply === "function") {
+            api.apply(document);
+        }
+    }
+
+    function refreshChromeText() {
+        if (titleLine) {
+            titleLine.textContent = appVer
+                ? tr("raidmgr.title_version", { version: appVer }, `Storage Manager • ${appVer}`)
+                : tr("raidmgr.title", null, "Storage Manager");
+        }
+        if (subLine) subLine.textContent = tr("raidmgr.subtitle", null, "Manage storage pools");
+        if (refreshBtn) refreshBtn.textContent = tr("common.refresh", null, "Refresh");
+        if (helpBtn) helpBtn.textContent = tr("common.help", null, "Help");
+        if (badge && /loading/i.test(String(badge.textContent || ""))) {
+            badge.textContent = tr("common.loading", null, "loading…");
+        }
+    }
+
     const badge = el("badge");
     const subLine = el("subLine");
     const titleLine = el("titleLine");
@@ -378,7 +407,7 @@
         if (!eligible.length) {
             const opt = document.createElement("option");
             opt.value = "";
-            opt.textContent = "(No eligible disks found)";
+            opt.textContent = tr("raidmgr.no_eligible_disks", null, "(No eligible disks found)");
             opt.disabled = true;
             opt.selected = true;
             selectEl.appendChild(opt);
@@ -431,7 +460,7 @@
             const parts = mount.replace(/\/+$/, "").split("/");
             return parts[parts.length - 1] || mount;
         }
-        return "(pool)";
+        return tr("raidmgr.pool_fallback", null, "(pool)");
     }
 
     function poolDisplayName(p) {
@@ -445,7 +474,7 @@
             const parts = mount.replace(/\/+$/, "").split("/");
             return parts[parts.length - 1] || mount;
         }
-        return "(pool)";
+        return tr("raidmgr.pool_fallback", null, "(pool)");
     }
 
 // MOVE fmtPoolMode HERE (top-level)
@@ -496,7 +525,22 @@
     }
 
     const appVer = detectVersionFromUrl();
-    if (titleLine && appVer) titleLine.textContent = `Storage Manager • ${appVer}`;
+    if (window.PQNAS_I18N && typeof window.PQNAS_I18N.ready === "function") {
+        window.PQNAS_I18N.ready().then(() => {
+            applyStaticI18n();
+            refreshChromeText();
+        }).catch(refreshChromeText);
+    } else {
+        refreshChromeText();
+    }
+
+    window.addEventListener("pqnas-language-changed", () => {
+        applyStaticI18n();
+        refreshChromeText();
+        if (g_tab === "pools") {
+            renderPoolsTab().catch(() => {});
+        }
+    });
 
     async function fetchJson(url) {
         const r = await fetch(url, { credentials: "include", cache: "no-store" });

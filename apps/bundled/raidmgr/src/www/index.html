@@ -2,12 +2,13 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>PQ-NAS • Storage Manager</title>
+    <title data-i18n="raidmgr.page_title">PQ-NAS • Storage Manager</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
 
     <!-- Use PQ-NAS global themes -->
     <link rel="stylesheet" href="/static/theme.css">
     <script src="/static/theme.js"></script>
+    <script src="/static/i18n.js?v=20260519-raidmgr-i18n-1"></script>
 
     <style>
         * { box-sizing: border-box; }
@@ -447,14 +448,14 @@
     <div class="panel">
         <div class="bar">
             <div class="left">
-                <div class="title" id="titleLine">Storage Manager</div>
-                <div class="sub" id="subLine">Manage storage pools</div>
+                <div class="title" id="titleLine" data-i18n="raidmgr.title">Storage Manager</div>
+                <div class="sub" id="subLine" data-i18n="raidmgr.subtitle">Manage storage pools</div>
             </div>
 
             <div class="actions">
-                <span class="badge warn" id="badge">loading…</span>
-                <button class="btn secondary" id="helpBtn" type="button">Help</button>
-                <button class="btn secondary" id="refreshBtn" type="button">Refresh</button>
+                <span class="badge warn" id="badge" data-i18n="common.loading">loading…</span>
+                <button class="btn secondary" id="helpBtn" type="button" data-i18n="common.help">Help</button>
+                <button class="btn secondary" id="refreshBtn" type="button" data-i18n="common.refresh">Refresh</button>
             </div>
         </div>
 
@@ -466,6 +467,6 @@
     </div>
 </div>
 
-<script src="./app.js"></script>
+<script src="./app.js?v=20260519-raidmgr-i18n-1"></script>
 </body>
 </html>

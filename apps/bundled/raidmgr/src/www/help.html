@@ -2,11 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>PQ-NAS • Storage Manager Help</title>
+    <title data-i18n="raidmgr.help.page_title">PQ-NAS • Storage Manager Help</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
 
     <link rel="stylesheet" href="/static/theme.css">
     <script src="/static/theme.js"></script>
+    <script src="/static/i18n.js?v=20260519-raidmgr-i18n-1"></script>
 
     <style>
         * { box-sizing: border-box; }
@@ -101,13 +102,13 @@
 <div class="wrap">
     <div class="hero">
         <div>
-            <h1 class="title">Storage Manager Help</h1>
-            <div class="sub">Manage storage pools, slots, drives, and RAID mode in PQ-NAS.</div>
+            <h1 class="title" data-i18n="raidmgr.help.title">Storage Manager Help</h1>
+            <div class="sub" data-i18n="raidmgr.help.subtitle">Manage storage pools, slots, drives, and RAID mode in PQ-NAS.</div>
         </div>
     </div>
 
     <div class="card">
-        <h2>What this page is for</h2>
+        <h2 data-i18n="raidmgr.help.what_title">What this page is for</h2>
         <p>
             Storage Manager is used to create and maintain storage pools in PQ-NAS.
             It shows all pools, their slots, current member drives, usage summary, and management actions.
@@ -115,22 +116,22 @@
     </div>
 
     <div class="card">
-        <h2>Main actions</h2>
+        <h2 data-i18n="raidmgr.help.actions_title">Main actions</h2>
         <ul>
-            <li><b>Create new pool</b> creates a new editable PQ-NAS pool.</li>
-            <li><b>Edit slots</b> changes the saved slot layout and pool mode metadata.</li>
-            <li><b>Add slot</b> adds one more empty visible slot.</li>
-            <li><b>Remove empty slot</b> removes one unused empty slot.</li>
-            <li><b>Apply layout</b> applies one pending membership change from the saved slot layout to the real Btrfs pool.</li>
-            <li><b>Remove drive</b> removes a current member drive from the pool.</li>
-            <li><b>Rename</b> changes the display name of the pool.</li>
-            <li><b>Convert RAID</b> converts between <code>single</code> and <code>raid1</code>.</li>
-            <li><b>Destroy</b> removes the pool from PQ-NAS and can optionally wipe member drives.</li>
+            <li data-i18n="raidmgr.help.action_create_pool">Create new pool creates a new editable PQ-NAS pool.</li>
+            <li data-i18n="raidmgr.help.action_edit_slots">Edit slots changes the saved slot layout and pool mode metadata.</li>
+            <li data-i18n="raidmgr.help.action_add_slot">Add slot adds one more empty visible slot.</li>
+            <li data-i18n="raidmgr.help.action_remove_slot">Remove empty slot removes one unused empty slot.</li>
+            <li data-i18n="raidmgr.help.action_apply_layout">Apply layout applies one pending membership change from the saved slot layout to the real Btrfs pool.</li>
+            <li data-i18n="raidmgr.help.action_remove_drive">Remove drive removes a current member drive from the pool.</li>
+            <li data-i18n="raidmgr.help.action_rename">Rename changes the display name of the pool.</li>
+            <li data-i18n="raidmgr.help.action_convert">Convert RAID converts between single and raid1.</li>
+            <li data-i18n="raidmgr.help.action_destroy">Destroy removes the pool from PQ-NAS and can optionally wipe member drives.</li>
         </ul>
     </div>
 
     <div class="card">
-        <h2>Slots vs member drives</h2>
+        <h2 data-i18n="raidmgr.help.slots_title">Slots vs member drives</h2>
         <p>
             Slots are the saved PQ-NAS layout. Member drives are the drives currently attached to the live Btrfs pool.
         </p>
@@ -141,31 +142,41 @@
     </div>
 
     <div class="card">
-        <h2>Single and RAID1</h2>
-        <img src="./raid-single-raid1-help.svg" alt="Diagram showing Single mode and RAID1 mirroring" style="width:100%; height:auto; border-radius:16px; border:1px solid var(--border2); background:var(--panel2);">
-        <p><span class="pill">Single</span> Capacity-focused mode with no redundancy.</p>
-        <p><span class="pill">RAID1</span> Mirror-focused mode with redundancy across at least two devices.</p>
-        <p>Converting RAID mode may run a Btrfs balance and can take a long time depending on pool size and device speed.</p>
+        <h2 data-i18n="raidmgr.help.raid_title">Single and RAID1</h2>
+        <img src="./raid-single-raid1-help.svg" alt="Diagram showing Single mode and RAID1 mirroring" data-i18n-aria-label="raidmgr.help.diagram_alt" style="width:100%; height:auto; border-radius:16px; border:1px solid var(--border2); background:var(--panel2);">
+        <p data-i18n="raidmgr.help.single_body">Single: Capacity-focused mode with no redundancy.</p>
+        <p data-i18n="raidmgr.help.raid1_body">RAID1: Mirror-focused mode with redundancy across at least two devices.</p>
+        <p data-i18n="raidmgr.help.convert_warning">Converting RAID mode may run a Btrfs balance and can take a long time depending on pool size and device speed.</p>
     </div>
 
     <div class="card">
-        <h2>Important warnings</h2>
-        <p><span class="pill warn">Long-running operations</span> Add, remove, and convert operations may take a long time.</p>
-        <p><span class="pill warn">Preview first</span> When an action uses Preview and Apply, always preview before applying.</p>
-        <p><span class="pill danger">Destructive wipe</span> Force wipe or destroy with wipe enabled can permanently erase data.</p>
-        <p><span class="pill danger">Be careful with old Btrfs signatures</span> A disk that still contains old Btrfs metadata may look like a pool member even when it is no longer active.</p>
+        <h2 data-i18n="raidmgr.help.warnings_title">Important warnings</h2>
+        <p data-i18n="raidmgr.help.warn_long">Long-running operations: Add, remove, and convert operations may take a long time.</p>
+        <p data-i18n="raidmgr.help.warn_preview">Preview first: When an action uses Preview and Apply, always preview before applying.</p>
+        <p data-i18n="raidmgr.help.warn_wipe">Destructive wipe: Force wipe or destroy with wipe enabled can permanently erase data.</p>
+        <p data-i18n="raidmgr.help.warn_old_btrfs">Be careful with old Btrfs signatures: A disk that still contains old Btrfs metadata may look like a pool member even when it is no longer active.</p>
     </div>
 
     <div class="card">
-        <h2>Recommended workflow</h2>
+        <h2 data-i18n="raidmgr.help.workflow_title">Recommended workflow</h2>
         <ol>
-            <li>Create a pool with the desired initial mode.</li>
-            <li>Adjust slot count if needed.</li>
-            <li>Assign drives or add/remove them through the pool actions.</li>
-            <li>Use Apply layout when saved slots and live membership differ.</li>
-            <li>Use Convert RAID only when the current device count supports the target mode.</li>
+            <li data-i18n="raidmgr.help.workflow_1">Create a pool with the desired initial mode.</li>
+            <li data-i18n="raidmgr.help.workflow_2">Adjust slot count if needed.</li>
+            <li data-i18n="raidmgr.help.workflow_3">Assign drives or add/remove them through the pool actions.</li>
+            <li data-i18n="raidmgr.help.workflow_4">Use Apply layout when saved slots and live membership differ.</li>
+            <li data-i18n="raidmgr.help.workflow_5">Use Convert RAID only when the current device count supports the target mode.</li>
         </ol>
     </div>
 </div>
+<script>
+if (window.PQNAS_I18N && typeof window.PQNAS_I18N.ready === "function") {
+    window.PQNAS_I18N.ready().then(() => window.PQNAS_I18N.apply(document)).catch(() => {});
+}
+window.addEventListener("pqnas-language-changed", () => {
+    if (window.PQNAS_I18N && typeof window.PQNAS_I18N.apply === "function") {
+        window.PQNAS_I18N.apply(document);
+    }
+});
+</script>
 </body>
 </html>
