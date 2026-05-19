@@ -69,6 +69,37 @@
     let selectedSnap = null;  // {id, path, created_utc, readonly}
     let lastSnapListMeta = null; // { snap_root, volume, count }
 
+    function tr(key, params, fallback) {
+        try {
+            const api = window.PQNAS_I18N;
+            if (api && typeof api.t === "function") {
+                return api.t(key, params || null, fallback);
+            }
+        } catch (_) {}
+
+        let out = String(fallback || key || "");
+        const p = params || {};
+        for (const name of Object.keys(p)) {
+            out = out.split(`{${name}}`).join(String(p[name]));
+        }
+        return out;
+    }
+
+    function snapshotText(text) {
+        const s = String(text || "");
+        const map = {
+            "ready": ["snapshotmgr.badge.ready", "ready"],
+            "loading…": ["snapshotmgr.badge.loading", "loading…"],
+            "disabled": ["snapshotmgr.badge.disabled", "disabled"],
+            "working…": ["snapshotmgr.badge.working", "working…"],
+            "done": ["snapshotmgr.badge.done", "done"],
+            "error": ["snapshotmgr.badge.error", "error"],
+            "restoring…": ["snapshotmgr.badge.restoring", "restoring…"]
+        };
+        const hit = map[s];
+        return hit ? tr(hit[0], null, hit[1]) : s;
+    }
+
     // ---- badge lock (prevents late errors from overwriting badge) ----
     let badgeLockUntil = 0;
     function setBadge(kind, text) {
@@ -78,7 +109,7 @@
             return;
         }
         badge.className = `badge ${kind}`;
-        badge.textContent = text;
+        badge.textContent = snapshotText(text);
     }
     function lockBadge(ms) {
         badgeLockUntil = Date.now() + Math.max(0, ms || 0);
@@ -144,7 +175,7 @@
             console.error("Modal DOM missing:", { modalOverlay, modalBody, modalTitle });
             return;
         }
-        modalTitle.textContent = title || "Details";
+        modalTitle.textContent = title || tr("snapshotmgr.details", null, "Details");
         modalBody.innerHTML = html || "";
         modalOverlay.style.display = "flex";
         modalOverlay.setAttribute("aria-hidden", "false");
@@ -164,7 +195,7 @@
 
     function setModalHtml(title, html) {
         if (!isModalOpen()) return;
-        if (modalTitle) modalTitle.textContent = title || (modalTitle.textContent || "Details");
+        if (modalTitle) modalTitle.textContent = title || (modalTitle.textContent || tr("snapshotmgr.details", null, "Details"));
         if (modalBody) modalBody.innerHTML = html || "";
     }
 
@@ -261,7 +292,7 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
             const isSel = selectedVol && selectedVol.name === v.name;
             const d = row(
                 v.name,
-                v.enabled ? "enabled" : "disabled",
+                v.enabled ? tr("snapshotmgr.enabled", null, "enabled") : tr("snapshotmgr.disabled", null, "disabled"),
                 `${v.source_subvolume}  |  ${v.snap_root}`,
                 isSel
             );
@@ -271,7 +302,7 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
                 renderVolumes();
 
                 if (v.enabled === false) {
-                    status.textContent = `Volume ${v.name} is disabled for new snapshots. Loading existing snapshots…`;
+                    status.textContent = tr("snapshotmgr.status.volume_disabled_loading", { volume: v.name }, "Volume {volume} is disabled for new snapshots. Loading existing snapshots…");
                 }
 
                 loadSnapshotsForSelectedVol().catch(() => {});
@@ -294,10 +325,10 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
             // Right-side label logic
             let right = "";
-            if (isLatest) right = "latest";
+            if (isLatest) right = tr("snapshotmgr.latest", null, "latest");
             else if (probe === "no_privs") right = "⚠";
-            else if (!isSub) right = "junk";
-            else right = (s.readonly ? "ro" : "rw");
+            else if (!isSub) right = tr("snapshotmgr.junk", null, "junk");
+            else right = (s.readonly ? tr("snapshotmgr.readonly_short", null, "ro") : tr("snapshotmgr.readwrite_short", null, "rw"));
 
             const sub = s.created_utc || s.path || "";
 
@@ -309,11 +340,12 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
             const rightEl = d.querySelector(".top .mono");
             if (rightEl) {
                 if (probe === "no_privs") {
-                    rightEl.innerHTML = `<span class="pillWarn" title="No sudo privileges to verify btrfs subvolume (sudo -n failed)">⚠</span>`;
+                    const tip = escapeHtml(tr("snapshotmgr.tooltip.no_sudo", null, "No sudo privileges to verify btrfs subvolume (sudo -n failed)"));
+                    rightEl.innerHTML = `<span class="pillWarn" title="${tip}">⚠</span>`;
                 } else if (!isSub) {
-                    rightEl.title = "This folder is not a btrfs snapshot subvolume (junk under snap_root)";
+                    rightEl.title = tr("snapshotmgr.tooltip.junk", null, "This folder is not a btrfs snapshot subvolume (junk under snap_root)");
                 } else if (isLatest) {
-                    rightEl.title = "Newest snapshot (server sorted newest-first)";
+                    rightEl.title = tr("snapshotmgr.tooltip.latest", null, "Newest snapshot (server sorted newest-first)");
                 }
             }
 
@@ -327,11 +359,11 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
                 updateButtons();
 
                 if (probe === "no_privs") {
-                    status.textContent = `Selected: ${s.id} (cannot verify btrfs subvolume; sudo rule missing)`;
+                    status.textContent = tr("snapshotmgr.status.selected_no_sudo", { id: s.id }, "Selected: {id} (cannot verify btrfs subvolume; sudo rule missing)");
                 } else if (!isSub) {
-                    status.textContent = `Selected: ${s.id} (NOT a btrfs snapshot subvolume)`;
+                    status.textContent = tr("snapshotmgr.status.selected_not_subvolume", { id: s.id }, "Selected: {id} (NOT a btrfs snapshot subvolume)");
                 } else {
-                    status.textContent = `Selected snapshot: ${s.id}`;
+                    status.textContent = tr("snapshotmgr.status.selected_snapshot", { id: s.id }, "Selected snapshot: {id}");
                 }
             });
 
@@ -339,7 +371,7 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         }
 
         if (!snapshots.length) {
-            const d = row("(no snapshots found)", "", "Check snap_root path and snapshot runner output.", false);
+            const d = row(tr("snapshotmgr.no_snapshots_found", null, "(no snapshots found)"), "", tr("snapshotmgr.no_snapshots_hint", null, "Check snap_root path and snapshot runner output."), false);
             d.style.cursor = "default";
             snapList.appendChild(d);
         }
@@ -347,7 +379,7 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
     async function loadVolumes() {
         setBadge("warn", "loading…");
-        status.textContent = "Loading volumes…";
+        status.textContent = tr("snapshotmgr.status.loading_volumes", null, "Loading volumes…");
 
         const j = await apiGet("/api/v4/snapshots/volumes");
 
@@ -363,7 +395,7 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
         renderVolumes();
         setBadge("ok", "ready");
-        status.textContent = "Volumes loaded.";
+        status.textContent = tr("snapshotmgr.status.volumes_loaded", null, "Volumes loaded.");
     }
 
     async function loadSnapshotsForSelectedVol() {
@@ -376,7 +408,7 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         }
 
         setBadge("warn", "loading…");
-        status.textContent = `Loading snapshots for ${selectedVol.name}…`;
+        status.textContent = tr("snapshotmgr.status.loading_snapshots_for_volume", { volume: selectedVol.name }, "Loading snapshots for {volume}…");
 
         const qs = new URLSearchParams({ volume: selectedVol.name });
         const j = await apiGet(`/api/v4/snapshots/list?${qs.toString()}`);
@@ -393,25 +425,23 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         const volEnabled = !!(selectedVol && selectedVol.enabled);
 
         if (!volEnabled) {
-            showBanner(
-                `⚠ Snapshots are <b>disabled</b> for volume <span class="mono">${escapeHtml(selectedVol.name)}</span> ` +
-                `in Admin Settings. Existing snapshots can still be viewed, but <b>Snapshot now</b> is unavailable.`
-            );
+            showBanner(tr("snapshotmgr.banner.snapshots_disabled_html", {
+                volume: `<span class="mono">${escapeHtml(selectedVol.name)}</span>`
+            }, `⚠ Snapshots are <b>disabled</b> for volume <span class="mono">${escapeHtml(selectedVol.name)}</span> in Admin Settings. Existing snapshots can still be viewed, but <b>Snapshot now</b> is unavailable.`));
         } else if (noPrivsCount > 0) {
-            showBanner(
-                `⚠ Snapshot verification needs sudo privileges on this host. ` +
-                `${noPrivsCount} item(s) could not be verified. ` +
-                `<a href="#" id="sudoHelpLink">Show sudo setup</a>`
-            );
+            showBanner(tr("snapshotmgr.banner.sudo_required_html", {
+                count: noPrivsCount,
+                link: `<a href="#" id="sudoHelpLink">${escapeHtml(tr("snapshotmgr.show_sudo_setup", null, "Show sudo setup"))}</a>`
+            }, `⚠ Snapshot verification needs sudo privileges on this host. ${noPrivsCount} item(s) could not be verified. <a href="#" id="sudoHelpLink">Show sudo setup</a>`));
             setTimeout(() => {
                 const a = document.getElementById("sudoHelpLink");
                 a?.addEventListener("click", (ev) => {
                     ev.preventDefault();
-                    openModal("Sudo setup", sudoSetupHtml());
+                    openModal(tr("snapshotmgr.sudo_setup", null, "Sudo setup"), sudoSetupHtml());
                 });
             }, 0);
         } else if (junkCount > 0) {
-            showBanner(`Note: ${junkCount} item(s) under snap_root are not btrfs snapshot subvolumes (junk folders).`);
+            showBanner(tr("snapshotmgr.banner.junk_items", { count: junkCount }, "Note: {count} item(s) under snap_root are not btrfs snapshot subvolumes (junk folders)."));
         } else {
             showBanner("");
         }
@@ -424,9 +454,9 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
         setBadge("ok", "ready");
         if (selectedVol && selectedVol.enabled === false) {
-            status.textContent = `Snapshots loaded for ${selectedVol.name}. Snapshots are disabled for this volume, so manual create is unavailable.`;
+            status.textContent = tr("snapshotmgr.status.snapshots_loaded_disabled", { volume: selectedVol.name }, "Snapshots loaded for {volume}. Snapshots are disabled for this volume, so manual create is unavailable.");
         } else {
-            status.textContent = `Snapshots loaded for ${selectedVol.name}.`;
+            status.textContent = tr("snapshotmgr.status.snapshots_loaded", { volume: selectedVol.name }, "Snapshots loaded for {volume}.");
         }
         updateButtons();
     }
@@ -435,7 +465,7 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         if (!selectedVol || !selectedSnap) return;
         try {
             setBadge("warn", "loading…");
-            status.textContent = "Loading details…";
+            status.textContent = tr("snapshotmgr.status.loading_details", null, "Loading details…");
 
             const qs = new URLSearchParams({ volume: selectedVol.name, id: selectedSnap.id });
             const j = await apiGet(`/api/v4/snapshots/info?${qs.toString()}`);
@@ -448,18 +478,17 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
             if (needsSudo) {
                 openModal(
-                    `Snapshot details: ${selectedSnap.id}`,
+                    tr("snapshotmgr.details.title_for_id", { id: selectedSnap.id }, `Snapshot details: ${selectedSnap.id}`),
                     `
       <div class="modalGrid">
         <div class="modalPanel">
-          <h3><span class="warnIcon">⚠</span> Details require sudo privileges</h3>
+          <h3><span class="warnIcon">⚠</span> ${escapeHtml(tr("snapshotmgr.details.sudo_required_title", null, "Details require sudo privileges"))}</h3>
           <div class="modalNote">
-            Snapshot Manager calls <span class="mono">sudo -n btrfs subvolume show ...</span>.
-            If sudo prompts for a password, probing becomes <b>no-privs</b> and restore stays disabled.
+            ${tr("snapshotmgr.details.sudo_required_body_html", null, "Snapshot Manager calls <span class=\"mono\">sudo -n btrfs subvolume show ...</span>. If sudo prompts for a password, probing becomes <b>no-privs</b> and restore stays disabled.")}
           </div>
 
           <div class="modalNote">
-            <a href="#" id="sudoInlineLink">Show sudo setup instructions</a>
+            <a href="#" id="sudoInlineLink">${escapeHtml(tr("snapshotmgr.details.show_sudo_setup_instructions", null, "Show sudo setup instructions"))}</a>
           </div>
 
           <div id="sudoBlock" style="display:none;">
@@ -468,7 +497,7 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         </div>
 
         <div class="modalPanel">
-          <h3>Raw JSON</h3>
+          <h3>${escapeHtml(tr("snapshotmgr.raw_json", null, "Raw JSON"))}</h3>
           <pre class="mono">${escapeHtml(raw)}</pre>
         </div>
       </div>
@@ -488,10 +517,10 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
                 }, 0);
             } else {
                 openModal(
-                    `Snapshot details: ${selectedSnap.id}`,
+                    tr("snapshotmgr.details.title_for_id", { id: selectedSnap.id }, `Snapshot details: ${selectedSnap.id}`),
                     `<div class="modalGrid">
        <div class="modalPanel">
-         <h3>Raw JSON</h3>
+         <h3>${escapeHtml(tr("snapshotmgr.raw_json", null, "Raw JSON"))}</h3>
          <pre class="mono">${escapeHtml(raw)}</pre>
        </div>
      </div>`
@@ -499,10 +528,10 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
             }
 
             setBadge("ok", "ready");
-            status.textContent = "Ready.";
+            status.textContent = tr("snapshotmgr.ready", null, "Ready.");
         } catch (e) {
             setBadge("err", "error");
-            status.textContent = `Details failed: ${String(e && e.message ? e.message : e)}`;
+            status.textContent = tr("snapshotmgr.status.details_failed", { error: String(e && e.message ? e.message : e) }, "Details failed: {error}");
         }
     }
 
@@ -865,11 +894,133 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         return false;
     }
 
+    function openSnapshotNameModal(opts = {}) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+            const modal = document.createElement("div");
+            modal.className = "modalOverlay snapshotNameOverlay";
+            modal.style.display = "flex";
+            modal.setAttribute("role", "dialog");
+            modal.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "modalCard";
+            card.style.width = "min(560px, calc(100vw - 24px))";
+
+            const head = document.createElement("div");
+            head.className = "modalHead";
+
+            const headText = document.createElement("div");
+
+            const title = document.createElement("div");
+            title.className = "modalTitle";
+            title.textContent = options.title || tr("snapshotmgr.snapshot_now.title", null, "Snapshot now");
+
+            const sub = document.createElement("div");
+            sub.className = "modalSub";
+            sub.textContent = options.subtitle || "";
+
+            headText.appendChild(title);
+            if (sub.textContent) headText.appendChild(sub);
+            head.appendChild(headText);
+
+            const body = document.createElement("div");
+            body.className = "modalBody";
+            body.style.gridTemplateColumns = "1fr";
+
+            const note = document.createElement("div");
+            note.className = "v";
+            note.textContent = options.note || tr("snapshotmgr.snapshot_now.name_help", null, "Optional name. Leave empty for automatic snapshot ID.");
+            body.appendChild(note);
+
+            const input = document.createElement("input");
+            input.type = "text";
+            input.autocomplete = "off";
+            input.spellcheck = false;
+            input.maxLength = 160;
+            input.value = String(options.defaultValue || "");
+            input.placeholder = tr("snapshotmgr.snapshot_now.placeholder", null, "Snapshot name");
+            input.style.width = "100%";
+            input.style.padding = "10px 12px";
+            input.style.borderRadius = "12px";
+            input.style.border = "1px solid var(--border2)";
+            input.style.background = "rgba(0,0,0,0.22)";
+            input.style.color = "var(--fg)";
+            input.style.font = "inherit";
+            input.style.fontFamily = "var(--mono)";
+            body.appendChild(input);
+
+            const foot = document.createElement("div");
+            foot.className = "modalFoot";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn secondary";
+            cancelBtn.textContent = options.cancelText || tr("common.cancel", null, "Cancel");
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = options.confirmText || tr("snapshotmgr.snapshot_now.create", null, "Create snapshot");
+
+            foot.appendChild(spacer);
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            const close = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                modal.remove();
+                resolve(value);
+            };
+
+            const submit = () => {
+                close(String(input.value || "").trim());
+            };
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    close(null);
+                    return;
+                }
+
+                if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    submit();
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+            modal.addEventListener("click", (ev) => {
+                if (ev.target === modal) close(null);
+            });
+
+            cancelBtn.addEventListener("click", () => close(null));
+            okBtn.addEventListener("click", submit);
+
+            window.setTimeout(() => {
+                input.focus();
+                input.select();
+            }, 0);
+        });
+    }
+
     async function doSnapshotNow() {
         if (!selectedVol) return;
         if (selectedVol.enabled === false) {
             setBadge("warn", "disabled");
-            status.textContent = `Snapshots are disabled for ${selectedVol.name} in Admin Settings.`;
+            status.textContent = tr("snapshotmgr.status.snapshots_disabled_for_volume", { volume: selectedVol.name }, "Snapshots are disabled for {volume} in Admin Settings.");
             return;
         }
 
@@ -877,11 +1028,18 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
         // Optional name; empty means server auto-generates ID
         const suggested = `MANUAL_${new Date().toISOString().replaceAll(":", "-")}`;
-        const name = prompt(`Snapshot now\n\nVolume: ${vol}\n\nOptional name (leave empty for automatic):`, suggested);
+        const name = await openSnapshotNameModal({
+            title: tr("snapshotmgr.snapshot_now.title", null, "Snapshot now"),
+            subtitle: tr("snapshotmgr.snapshot_now.volume", { volume: vol }, "Volume: {volume}"),
+            note: tr("snapshotmgr.snapshot_now.name_help", null, "Optional name. Leave empty for automatic snapshot ID."),
+            defaultValue: suggested,
+            confirmText: tr("snapshotmgr.snapshot_now.create", null, "Create snapshot"),
+            cancelText: tr("common.cancel", null, "Cancel")
+        });
         if (name === null) return; // user cancelled
 
         setBadge("warn", "working…");
-        status.textContent = `Creating snapshot for ${vol}…`;
+        status.textContent = tr("snapshotmgr.status.creating_snapshot", { volume: vol }, "Creating snapshot for {volume}…");
 
         try {
             // TODO: replace endpoint + body once we confirm your actual API
@@ -898,7 +1056,9 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
                         "";
 
             setBadge("ok", "done");
-            status.textContent = newId ? `✅ Snapshot created: ${newId}` : "✅ Snapshot created.";
+            status.textContent = newId
+                ? tr("snapshotmgr.status.snapshot_created_id", { id: newId }, "✅ Snapshot created: {id}")
+                : tr("snapshotmgr.status.snapshot_created", null, "✅ Snapshot created.");
 
             // Refresh list and select new snapshot if we know its id
             await loadSnapshotsForSelectedVol();
@@ -912,15 +1072,15 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
             }
 
             setBadge("ok", "ready");
-            status.textContent = "Ready.";
+            status.textContent = tr("snapshotmgr.ready", null, "Ready.");
         } catch (e) {
             const msg = String(e && e.message ? e.message : e);
             if (msg.toLowerCase().includes("disabled")) {
                 setBadge("warn", "disabled");
-                status.textContent = `Snapshots are disabled for ${vol} in Admin Settings.`;
+                status.textContent = tr("snapshotmgr.status.snapshots_disabled_for_volume", { volume: vol }, "Snapshots are disabled for {volume} in Admin Settings.");
             } else {
                 setBadge("err", "error");
-                status.textContent = `Snapshot now failed: ${msg}`;
+                status.textContent = tr("snapshotmgr.status.snapshot_now_failed", { error: msg }, "Snapshot now failed: {error}");
             }
         } finally {
             updateButtons();
@@ -935,43 +1095,43 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
         const isSub = (selectedSnap && selectedSnap.is_btrfs_subvolume === true);
         const probe = String((selectedSnap && selectedSnap.probe) || "ok");
         if (!isSub || probe === "no_privs") {
-            status.textContent = "Restore disabled: snapshot not verified as a btrfs subvolume (or sudo missing).";
+            status.textContent = tr("snapshotmgr.restore.disabled_not_verified", null, "Restore disabled: snapshot not verified as a btrfs subvolume (or sudo missing).");
             return;
         }
 
         const phrase = `RESTORE ${vol} ${id}`;
 
         const ok1 = await openSnapshotConfirmModal({
-            title: "Restore snapshot?",
-            subtitle: "This will replace the live volume content.",
+            title: tr("snapshotmgr.restore.confirm1.title", null, "Restore snapshot?"),
+            subtitle: tr("snapshotmgr.restore.confirm1.subtitle", null, "This will replace the live volume content."),
             rows: [
-                { label: "Volume", value: vol, mono: true },
-                { label: "Snapshot", value: id, mono: true },
+                { label: tr("snapshotmgr.volume", null, "Volume"), value: vol, mono: true },
+                { label: tr("snapshotmgr.snapshot", null, "Snapshot"), value: id, mono: true },
             ],
-            warning: "This will REPLACE the live volume content. Downtime required.",
-            note: "A restore job will stop and restart PQ-NAS while the volume is swapped.",
-            confirmText: "Continue",
-            cancelText: "Cancel",
+            warning: tr("snapshotmgr.restore.confirm1.warning", null, "This will REPLACE the live volume content. Downtime required."),
+            note: tr("snapshotmgr.restore.confirm1.note", null, "A restore job will stop and restart PQ-NAS while the volume is swapped."),
+            confirmText: tr("snapshotmgr.restore.continue", null, "Continue"),
+            cancelText: tr("common.cancel", null, "Cancel"),
             danger: true,
         });
         if (!ok1) return;
 
         const typedOk = await openSnapshotTypedConfirmModal({
-            title: "Confirm restore",
-            subtitle: "Typed confirmation is required before restore can continue.",
+            title: tr("snapshotmgr.restore.confirm2.title", null, "Confirm restore"),
+            subtitle: tr("snapshotmgr.restore.confirm2.subtitle", null, "Typed confirmation is required before restore can continue."),
             expected: phrase,
-            warning: `You are restoring snapshot ${id} into live volume ${vol}.`,
-            note: "This prevents accidental restores.",
-            confirmText: "Continue restore",
-            cancelText: "Cancel",
+            warning: tr("snapshotmgr.restore.confirm2.warning", { id, volume: vol }, `You are restoring snapshot ${id} into live volume ${vol}.`),
+            note: tr("snapshotmgr.restore.confirm2.note", null, "This prevents accidental restores."),
+            confirmText: tr("snapshotmgr.restore.continue_restore", null, "Continue restore"),
+            cancelText: tr("common.cancel", null, "Cancel"),
         });
         if (!typedOk) {
-            status.textContent = "Restore canceled.";
+            status.textContent = tr("snapshotmgr.restore.canceled", null, "Restore canceled.");
             return;
         }
 
         setBadge("warn", "working…");
-        status.textContent = "Preparing restore…";
+        status.textContent = tr("snapshotmgr.restore.preparing", null, "Preparing restore…");
 
         try {
             const prep = await apiPost("/api/v4/snapshots/restore/prepare", {
@@ -983,27 +1143,27 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
             const planText = JSON.stringify(prep.plan || {}, null, 2);
             const ok2 = await openSnapshotConfirmModal({
-                title: "Proceed with restore plan?",
-                subtitle: "Server has prepared the restore plan.",
+                title: tr("snapshotmgr.restore.confirm3.title", null, "Proceed with restore plan?"),
+                subtitle: tr("snapshotmgr.restore.confirm3.subtitle", null, "Server has prepared the restore plan."),
                 rows: [
-                    { label: "Volume", value: vol, mono: true },
-                    { label: "Snapshot", value: id, mono: true },
-                    { label: "Plan", value: planText, mono: true },
+                    { label: tr("snapshotmgr.volume", null, "Volume"), value: vol, mono: true },
+                    { label: tr("snapshotmgr.snapshot", null, "Snapshot"), value: id, mono: true },
+                    { label: tr("snapshotmgr.plan", null, "Plan"), value: planText, mono: true },
                 ],
-                warning: "Proceeding starts the restore job now.",
-                note: "PQ-NAS may be temporarily unreachable during restore.",
-                confirmText: "Start restore",
-                cancelText: "Cancel",
+                warning: tr("snapshotmgr.restore.confirm3.warning", null, "Proceeding starts the restore job now."),
+                note: tr("snapshotmgr.restore.confirm3.note", null, "PQ-NAS may be temporarily unreachable during restore."),
+                confirmText: tr("snapshotmgr.restore.start", null, "Start restore"),
+                cancelText: tr("common.cancel", null, "Cancel"),
                 danger: true,
             });
             if (!ok2) {
                 setBadge("ok", "ready");
-                status.textContent = "Restore canceled.";
+                status.textContent = tr("snapshotmgr.restore.canceled", null, "Restore canceled.");
                 return;
             }
 
             setBadge("warn", "working…");
-            status.textContent = "Starting restore job…";
+            status.textContent = tr("snapshotmgr.restore.starting_job", null, "Starting restore job…");
 
             const done = await apiPost("/api/v4/snapshots/restore/confirm", {
                 confirm_id: prep.confirm_id,
@@ -1011,12 +1171,12 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
             });
 
             const jobId = String((done && done.job_id) || "");
-            if (!jobId) throw new Error("Restore started but server did not return job_id");
+            if (!jobId) throw new Error(tr("snapshotmgr.restore.no_job_id", null, "Restore started but server did not return job_id"));
 
-            openModal("Restore", restoreProgressModalHtml(jobId, "queued", ""));
+            openModal(tr("snapshotmgr.restore.title", null, "Restore"), restoreProgressModalHtml(jobId, tr("snapshotmgr.restore.queued", null, "queued"), ""));
 
             setBadge("warn", "restoring…");
-            status.textContent = `Restoring… (job ${jobId})`;
+            status.textContent = tr("snapshotmgr.restore.restoring_job", { job_id: jobId }, `Restoring… (job ${jobId})`);
 
             const pollEveryMs = 1200;
             const timeoutMs = 10 * 60 * 1000;
@@ -1026,7 +1186,7 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
 
             while (true) {
                 if (Date.now() - t0 > timeoutMs) {
-                    throw new Error(`Restore timed out waiting for result (job ${jobId})`);
+                    throw new Error(tr("snapshotmgr.restore.timeout", { job_id: jobId }, `Restore timed out waiting for result (job ${jobId})`));
                 }
 
                 let st;
@@ -1035,8 +1195,8 @@ ${user} ALL=(root) NOPASSWD: /usr/bin/btrfs subvolume show *</pre>
                 } catch (e) {
                     const inGrace = (Date.now() - tGraceStart) < graceMs;
                     if (inGrace && isRetryableDuringRestore(e)) {
-                        status.textContent = `Restoring… (job ${jobId}) restarting server…`;
-                        setModalHtml("Restore", restoreProgressModalHtml(jobId, "restarting server…", "Waiting for PQ-NAS to come back online (temporary 502 is expected)."));
+                        status.textContent = tr("snapshotmgr.restore.restarting_server_job", { job_id: jobId }, `Restoring… (job ${jobId}) restarting server…`);
+                        setModalHtml(tr("snapshotmgr.restore.title", null, "Restore"), restoreProgressModalHtml(jobId, tr("snapshotmgr.restore.restarting_server", null, "restarting server…"), tr("snapshotmgr.restore.waiting_online", null, "Waiting for PQ-NAS to come back online (temporary 502 is expected).")));
                         // IMPORTANT: do NOT set badge to err on retryable errors during restore
                         setBadge("warn", "restoring…");
                         await new Promise(r => setTimeout(r, pollEveryMs));

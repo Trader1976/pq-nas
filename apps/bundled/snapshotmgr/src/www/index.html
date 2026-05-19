@@ -5,6 +5,7 @@
     <title>PQ-NAS • Snapshot Manager</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <script src="/static/theme.js"></script>
+    <script src="/static/i18n.js?v=20260519-snapshotmgr-i18n-1"></script>
     <link rel="stylesheet" href="/static/theme.css">
     <style>
         * { box-sizing: border-box; }
@@ -312,12 +313,12 @@
 <div class="app">
     <div class="topbar">
         <div class="title" id="titleLine">
-            Snapshot Manager <span id="appVersion" class="ver"></span>
+            <span data-i18n="snapshotmgr.title">Snapshot Manager</span> <span id="appVersion" class="ver"></span>
         </div>
         <div style="display:flex; gap:10px; align-items:center;">
-            <span class="badge ok" id="badge">ready</span>
-            <button class="btn" id="refreshBtn">Refresh</button>
-            <button class="btn" id="snapNowBtn">Snapshot now</button>
+            <span class="badge ok" id="badge" data-i18n="snapshotmgr.badge.ready">ready</span>
+            <button class="btn" id="refreshBtn" type="button" data-i18n="common.refresh">Refresh</button>
+            <button class="btn" id="snapNowBtn" type="button" data-i18n="snapshotmgr.snapshot_now">Snapshot now</button>
 
         </div>
     </div>
@@ -327,7 +328,7 @@
     <div class="main">
         <div class="card">
             <div class="cardHead">
-                <span>Volumes</span>
+                <span data-i18n="snapshotmgr.volumes">Volumes</span>
                 <span class="hint mono" id="volHint"></span>
             </div>
             <div class="list" id="volList"></div>
@@ -335,7 +336,7 @@
 
         <div class="card">
             <div class="cardHead">
-                <span>Snapshots</span>
+                <span data-i18n="snapshotmgr.snapshots">Snapshots</span>
                 <span class="hint mono" id="snapHint"></span>
             </div>
             <div class="list" id="snapList"></div>
@@ -343,10 +344,10 @@
     </div>
 
     <div class="footer">
-        <div id="status" class="hint">Ready.</div>
+        <div id="status" class="hint" data-i18n="snapshotmgr.ready">Ready.</div>
         <div style="display:flex; gap:10px; align-items:center;">
-            <button class="btn" id="detailsBtn" disabled>Details</button>
-            <button class="btn danger" id="restoreBtn" disabled>Restore…</button>
+            <button class="btn" id="detailsBtn" type="button" disabled data-i18n="snapshotmgr.details">Details</button>
+            <button class="btn danger" id="restoreBtn" type="button" disabled data-i18n="snapshotmgr.restore">Restore…</button>
         </div>
     </div>
 </div>
@@ -355,8 +356,8 @@
 <div id="modalOverlay" class="modalOverlay" aria-hidden="true" style="display:none;">
     <div class="modalCard" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
         <div class="modalHead">
-            <div class="modalTitle" id="modalTitle">Details</div>
-            <button class="btn" id="modalCloseBtn">Close</button>
+            <div class="modalTitle" id="modalTitle" data-i18n="snapshotmgr.details">Details</div>
+            <button class="btn" id="modalCloseBtn" type="button" data-i18n="common.close">Close</button>
         </div>
         <div id="modalBody" class="modalBody"></div>
     </div>
