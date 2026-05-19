@@ -3,6 +3,22 @@
 
     const $ = (id) => document.getElementById(id);
 
+    function sharesT(key, params, fallback) {
+        try {
+            const api = window.PQNAS_I18N;
+            if (api && typeof api.t === "function") {
+                return api.t(key, params || null, fallback);
+            }
+        } catch (_) {}
+
+        let out = String(fallback || key || "");
+        const p = params || {};
+        for (const name of Object.keys(p)) {
+            out = out.split(`{${name}}`).join(String(p[name]));
+        }
+        return out;
+    }
+
     const appVersionEl = $("appVersion");
 
     const btnRefresh = $("btnRefresh");
@@ -108,7 +124,7 @@
             r = await fetch(url, opts);
         } catch (e) {
             const msg = (e && e.message) ? e.message : String(e);
-            if (statusLine) statusLine.textContent = `Network error calling ${url}: ${msg}`;
+            if (statusLine) statusLine.textContent = sharesT("sharesmgr.network_error_calling", { url, msg }, "Network error calling {url}: {msg}");
             console.error("fetch failed:", url, e);
             throw e;
         }
@@ -149,7 +165,7 @@
             }
 
             appVersionEl.textContent = ` • v${ver}`;
-            appVersionEl.title = `Shares Manager ${ver}`;
+            appVersionEl.title = sharesT("sharesmgr.version_title", { version: ver }, "Shares Manager {version}");
             appVersionEl.hidden = false;
         } catch (e) {
             console.warn("version lookup failed:", e);
@@ -238,12 +254,12 @@
 
     function pqStateBadgeHtml(s) {
         const st = pqStateOf(s);
-        if (st === "active") return `<span class="badge badgeOk">active</span>`;
-        if (st === "pending" || st === "pending_enrollment") return `<span class="badge badgeWarn">pending</span>`;
-        if (st === "claimed") return `<span class="badge badgeOk">claimed</span>`;
-        if (st === "revoked") return `<span class="badge badgeDanger">revoked</span>`;
-        if (st === "expired") return `<span class="badge badgeDanger">expired</span>`;
-        return `<span class="badge">${escapeHtml(st || "unknown")}</span>`;
+        if (st === "active") return `<span class="badge badgeOk">${escapeHtml(sharesT("sharesmgr.active_one", null, "active"))}</span>`;
+        if (st === "pending" || st === "pending_enrollment") return `<span class="badge badgeWarn">${escapeHtml(sharesT("sharesmgr.pending", null, "pending"))}</span>`;
+        if (st === "claimed") return `<span class="badge badgeOk">${escapeHtml(sharesT("sharesmgr.claimed", null, "claimed"))}</span>`;
+        if (st === "revoked") return `<span class="badge badgeDanger">${escapeHtml(sharesT("sharesmgr.revoked_one", null, "revoked"))}</span>`;
+        if (st === "expired") return `<span class="badge badgeDanger">${escapeHtml(sharesT("sharesmgr.expired_one", null, "expired"))}</span>`;
+        return `<span class="badge">${escapeHtml(st || sharesT("common.unknown", null, "unknown"))}</span>`;
     }
     function shortenMiddle(s, max = 24) {
         s = String(s || "");
@@ -288,7 +304,7 @@
         }
 
         if (kem === "ML-KEM-768") {
-            html += `<div><span class="badge badgeOk">Post-Quantum</span> <span class="badge">${escapeHtml(kem)}</span></div>`;
+            html += `<div><span class="badge badgeOk">${escapeHtml(sharesT("sharesmgr.post_quantum", null, "Post-Quantum"))}</span> <span class="badge">${escapeHtml(kem)}</span></div>`;
         } else if (kem) {
             html += `<div><span class="badge badgeWarn">${escapeHtml(kem)}</span></div>`;
         }
@@ -298,20 +314,20 @@
         }
 
         if (rid) {
-            html += `<div style="font-size:12px;color:var(--fg-dim, #9aa4b2)" class="mono">recipient ${escapeHtml(shortenMiddle(rid, 26))}</div>`;
+            html += `<div style="font-size:12px;color:var(--fg-dim, #9aa4b2)" class="mono">${escapeHtml(sharesT("sharesmgr.recipient", null, "recipient"))} ${escapeHtml(shortenMiddle(rid, 26))}</div>`;
         }
 
         if (extraCount > 0) {
-            html += `<div style="font-size:12px;color:var(--fg-dim, #9aa4b2)">+${extraCount} more recipient${extraCount === 1 ? "" : "s"}</div>`;
+            html += `<div style="font-size:12px;color:var(--fg-dim, #9aa4b2)">${escapeHtml(sharesT("sharesmgr.more_recipients", { count: extraCount }, "+{count} more recipient(s)"))}</div>`;
         }
 
         html += `</div>`;
         return html;
     }
     function normalStateBadgeHtml(s) {
-        if (isExpired(s)) return `<span class="badge badgeDanger">expired</span>`;
-        if (s.expires_at) return `<span class="badge">active</span>`;
-        return `<span class="badge badgeDim">no expiry</span>`;
+        if (isExpired(s)) return `<span class="badge badgeDanger">${escapeHtml(sharesT("sharesmgr.expired_one", null, "expired"))}</span>`;
+        if (s.expires_at) return `<span class="badge">${escapeHtml(sharesT("sharesmgr.active_one", null, "active"))}</span>`;
+        return `<span class="badge badgeDim">${escapeHtml(sharesT("sharesmgr.no_expiry_one", null, "no expiry"))}</span>`;
     }
 
     function getStoredBool(key, defv) {
@@ -337,7 +353,7 @@
         const txt = btnEl.querySelector(".txt");
 
         if (chev) chev.textContent = open ? "▾" : "▸";
-        if (txt) txt.textContent = open ? "Hide" : "Show";
+        if (txt) txt.textContent = open ? sharesT("common.hide", null, "Hide") : sharesT("common.show", null, "Show");
 
         if (persistKey) setStoredBool(persistKey, open);
     }
@@ -368,7 +384,7 @@
     }
 
     async function loadShares() {
-        if (statusLine) statusLine.textContent = "Loading shares…";
+        if (statusLine) statusLine.textContent = sharesT("sharesmgr.loading_shares", null, "Loading shares…");
 
         const { r, j } = await apiJson("GET", "/api/v4/shares/list");
         if (!r.ok || !j || !j.ok || !Array.isArray(j.shares)) {
@@ -377,11 +393,11 @@
 
             if (statusLine) {
                 if (r.status === 403) {
-                    statusLine.textContent = "Not allowed (403). This app needs share list access for your account.";
+                    statusLine.textContent = sharesT("sharesmgr.not_allowed", null, "Not allowed (403). This app needs share list access for your account.");
                 } else if (r.status === 401) {
-                    statusLine.textContent = "Not signed in (401). Open PQ-NAS and sign in.";
+                    statusLine.textContent = sharesT("sharesmgr.not_signed_in", null, "Not signed in (401). Open PQ-NAS and sign in.");
                 } else {
-                    statusLine.textContent = `Failed to load shares (${r.status}).`;
+                    statusLine.textContent = sharesT("sharesmgr.failed_to_load_status", { status: r.status }, "Failed to load shares ({status}).");
                 }
             }
 
@@ -399,7 +415,7 @@
         if (!r.ok || !j || !j.ok) {
             const msg = (j && (j.message || j.error))
                 ? `${j.error || ""} ${j.message || ""}`.trim()
-                : `revoke failed (${r.status})`;
+                : sharesT("sharesmgr.revoke_failed_status", { status: r.status }, "revoke failed ({status})");
             throw new Error(msg);
         }
     }
@@ -420,7 +436,7 @@
         if (!r.ok || !j || !j.ok) {
             const msg = (j && (j.message || j.error))
                 ? `${j.error || ""} ${j.message || ""}`.trim()
-                : `recipient update failed (${r.status})`;
+                : sharesT("sharesmgr.recipient_update_failed_status", { status: r.status }, "recipient update failed ({status})");
             throw new Error(msg);
         }
         return j.recipient || null;
@@ -445,7 +461,7 @@
 
             const title = document.createElement("div");
             title.className = "sharesConfirmTitle";
-            title.textContent = options.title || "Confirm action";
+            title.textContent = options.title || sharesT("sharesmgr.confirm_action", null, "Confirm action");
 
             const sub = document.createElement("div");
             sub.className = "sharesConfirmSub";
@@ -475,7 +491,7 @@
             if (options.examples) {
                 const label = document.createElement("div");
                 label.className = "sharesConfirmKey";
-                label.textContent = "Examples";
+                label.textContent = sharesT("sharesmgr.examples", null, "Examples");
 
                 const value = document.createElement("div");
                 value.className = "sharesConfirmValue mono";
@@ -501,12 +517,12 @@
             const cancelBtn = document.createElement("button");
             cancelBtn.type = "button";
             cancelBtn.className = "btn btnGhost";
-            cancelBtn.textContent = options.cancelText || "Cancel";
+            cancelBtn.textContent = options.cancelText || sharesT("common.cancel", null, "Cancel");
 
             const okBtn = document.createElement("button");
             okBtn.type = "button";
             okBtn.className = options.danger ? "btn btnDanger" : "btn";
-            okBtn.textContent = options.confirmText || "OK";
+            okBtn.textContent = options.confirmText || sharesT("common.ok", null, "OK");
 
             foot.appendChild(spacer);
             foot.appendChild(cancelBtn);
@@ -552,6 +568,140 @@
                 if (options.danger) cancelBtn.focus();
                 else okBtn.focus();
             }, 0);
+        });
+    }
+
+    function sharesRecipientEditModal(opts = {}) {
+        return new Promise((resolve) => {
+            const options = opts || {};
+
+            const backdrop = document.createElement("div");
+            backdrop.className = "sharesConfirmBackdrop";
+            backdrop.setAttribute("role", "dialog");
+            backdrop.setAttribute("aria-modal", "true");
+
+            const card = document.createElement("div");
+            card.className = "sharesConfirmCard";
+
+            const head = document.createElement("div");
+            head.className = "sharesConfirmHead";
+
+            const titleWrap = document.createElement("div");
+
+            const title = document.createElement("div");
+            title.className = "sharesConfirmTitle";
+            title.textContent = sharesT("sharesmgr.rename_recipient", null, "Rename recipient");
+
+            const sub = document.createElement("div");
+            sub.className = "sharesConfirmSub";
+            sub.textContent = sharesT("sharesmgr.rename_recipient_help", null, "Update the label and note shown for this PQ recipient.");
+
+            titleWrap.appendChild(title);
+            titleWrap.appendChild(sub);
+            head.appendChild(titleWrap);
+
+            const body = document.createElement("div");
+            body.className = "sharesConfirmBody";
+
+            const labelK = document.createElement("div");
+            labelK.className = "sharesConfirmKey";
+            labelK.textContent = sharesT("sharesmgr.recipient_label", null, "Recipient label");
+
+            const labelWrap = document.createElement("div");
+            labelWrap.className = "sharesConfirmValue";
+
+            const labelInput = document.createElement("input");
+            labelInput.className = "inp";
+            labelInput.type = "text";
+            labelInput.value = String(options.label || "");
+            labelInput.placeholder = sharesT("sharesmgr.recipient_label_placeholder", null, "Name shown for this recipient");
+
+            labelWrap.appendChild(labelInput);
+
+            const noteK = document.createElement("div");
+            noteK.className = "sharesConfirmKey";
+            noteK.textContent = sharesT("sharesmgr.recipient_note", null, "Recipient note");
+
+            const noteWrap = document.createElement("div");
+            noteWrap.className = "sharesConfirmValue";
+
+            const noteInput = document.createElement("textarea");
+            noteInput.className = "inp";
+            noteInput.rows = 4;
+            noteInput.value = String(options.note || "");
+            noteInput.placeholder = sharesT("sharesmgr.recipient_note_placeholder", null, "Optional private note");
+            noteInput.style.resize = "vertical";
+            noteInput.style.minHeight = "92px";
+
+            noteWrap.appendChild(noteInput);
+
+            body.appendChild(labelK);
+            body.appendChild(labelWrap);
+            body.appendChild(noteK);
+            body.appendChild(noteWrap);
+
+            const foot = document.createElement("div");
+            foot.className = "sharesConfirmFoot";
+
+            const spacer = document.createElement("div");
+            spacer.style.flex = "1 1 auto";
+
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "btn btnGhost";
+            cancelBtn.textContent = sharesT("common.cancel", null, "Cancel");
+
+            const okBtn = document.createElement("button");
+            okBtn.type = "button";
+            okBtn.className = "btn";
+            okBtn.textContent = sharesT("common.save", null, "Save");
+
+            foot.appendChild(spacer);
+            foot.appendChild(cancelBtn);
+            foot.appendChild(okBtn);
+
+            card.appendChild(head);
+            card.appendChild(body);
+            card.appendChild(foot);
+            backdrop.appendChild(card);
+            document.body.appendChild(backdrop);
+
+            const close = (value) => {
+                document.removeEventListener("keydown", onKey, true);
+                try { backdrop.remove(); } catch (_) {}
+                resolve(value);
+            };
+
+            const save = () => close({
+                label: String(labelInput.value || ""),
+                note: String(noteInput.value || "")
+            });
+
+            const onKey = (ev) => {
+                if (ev.key === "Escape") {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    close(null);
+                    return;
+                }
+
+                if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    save();
+                }
+            };
+
+            document.addEventListener("keydown", onKey, true);
+
+            backdrop.addEventListener("click", (ev) => {
+                if (ev.target === backdrop) close(null);
+            });
+
+            cancelBtn.addEventListener("click", () => close(null));
+            okBtn.addEventListener("click", save);
+
+            window.setTimeout(() => labelInput.focus(), 0);
         });
     }
 
@@ -658,7 +808,7 @@ html[data-theme="bright"] .sharesConfirmBackdrop{
         const exp = expiredShares(shares);
 
         if (!exp.length) {
-            toast("ok", "No expired shares to revoke.");
+            toast("ok", sharesT("sharesmgr.no_expired_to_revoke", null, "No expired shares to revoke."));
             return;
         }
 
@@ -666,15 +816,15 @@ html[data-theme="bright"] .sharesConfirmBackdrop{
         injectSharesConfirmCss();
 
         const ok = await sharesConfirmModal({
-            title: "Revoke expired shares?",
-            subtitle: "This will immediately invalidate expired share URLs.",
+            title: sharesT("sharesmgr.revoke_expired_title", null, "Revoke expired shares?"),
+            subtitle: sharesT("sharesmgr.revoke_expired_subtitle", null, "This will immediately invalidate expired share URLs."),
             rows: [
-                { label: "Expired shares", value: String(exp.length) },
+                { label: sharesT("sharesmgr.expired_shares", null, "Expired shares"), value: String(exp.length) },
             ],
-            examples: sample + (exp.length > 5 ? `\n… +${exp.length - 5} more` : ""),
-            note: "Revoked links cannot be used again.",
-            confirmText: `Revoke expired (${exp.length})`,
-            cancelText: "Cancel",
+            examples: sample + (exp.length > 5 ? `\n… ${sharesT("sharesmgr.more_count", { count: exp.length - 5 }, "+{count} more")}` : ""),
+            note: sharesT("sharesmgr.revoked_links_note", null, "Revoked links cannot be used again."),
+            confirmText: sharesT("sharesmgr.revoke_expired_count", { count: exp.length }, "Revoke expired ({count})"),
+            cancelText: sharesT("common.cancel", null, "Cancel"),
             danger: true,
         });
 
@@ -696,8 +846,8 @@ html[data-theme="bright"] .sharesConfirmBackdrop{
                 }
             }
 
-            if (okCount) toast("ok", `Revoked ${okCount} expired share(s).`);
-            if (failCount) toast("err", `Failed to revoke ${failCount} expired share(s).`);
+            if (okCount) toast("ok", sharesT("sharesmgr.revoked_expired_count", { count: okCount }, "Revoked {count} expired share(s)."));
+            if (failCount) toast("err", sharesT("sharesmgr.failed_revoke_expired_count", { count: failCount }, "Failed to revoke {count} expired share(s)."));
 
             await loadShares();
         } finally {
@@ -814,7 +964,7 @@ html[data-theme="bright"] .sharesConfirmBackdrop{
         tbodyStandard.innerHTML = "";
 
         if (!list.length) {
-            renderEmpty(tbodyStandard, shares.length ? "No normal shares match the current filter." : "No shares yet.", showTok ? 8 : 7);
+            renderEmpty(tbodyStandard, shares.length ? sharesT("sharesmgr.no_normal_match", null, "No normal shares match the current filter.") : sharesT("sharesmgr.no_shares_yet", null, "No shares yet."), showTok ? 8 : 7);
             return;
         }
 
@@ -853,17 +1003,17 @@ html[data-theme="bright"] .sharesConfirmBackdrop{
             const wrap = document.createElement("div");
             wrap.className = "actions";
 
-            wrap.appendChild(makeActionButton("Copy link", "btn", async () => {
+            wrap.appendChild(makeActionButton(sharesT("sharesmgr.copy_link", null, "Copy link"), "btn", async () => {
                 const ok = await copyText(urlAbs);
-                toast(ok ? "ok" : "err", ok ? "Copied link." : "Copy failed.");
+                toast(ok ? "ok" : "err", ok ? sharesT("sharesmgr.copied_link", null, "Copied link.") : sharesT("sharesmgr.copy_failed", null, "Copy failed."));
             }));
 
-            wrap.appendChild(makeActionButton("Revoke", "btn btnDanger", async (e) => {
+            wrap.appendChild(makeActionButton(sharesT("sharesmgr.revoke", null, "Revoke"), "btn btnDanger", async (e) => {
                 const btn = e.currentTarget;
                 btn.disabled = true;
                 try {
                     await revokeShare(s.token);
-                    toast("ok", "Revoked.");
+                    toast("ok", sharesT("sharesmgr.revoked", null, "Revoked."));
                     await loadShares();
                 } catch (err) {
                     toast("err", String(err && err.message ? err.message : err));
@@ -887,8 +1037,8 @@ html[data-theme="bright"] .sharesConfirmBackdrop{
             renderEmpty(
                 tbodyWorkspace,
                 shares.some(isWorkspaceShare)
-                    ? "No workspace shares match the current filter."
-                    : "No workspace shares.",
+                    ? sharesT("sharesmgr.no_workspace_match", null, "No workspace shares match the current filter.")
+                    : sharesT("sharesmgr.no_workspace_shares", null, "No workspace shares."),
                 showTok ? 8 : 7
             );
             return;
@@ -902,7 +1052,7 @@ html[data-theme="bright"] .sharesConfirmBackdrop{
             const pathHtml =
                 `${escapeHtml(s.path || "")}` +
                 `<div style="margin-top:6px">` +
-                `<span class="badge badgeWarn">workspace</span>` +
+                `<span class="badge badgeWarn">${escapeHtml(sharesT("sharesmgr.workspace", null, "workspace"))}</span>` +
                 (wsName ? ` <span class="badge">${escapeHtml(wsName)}</span>` : "") +
                 ` ${normalStateBadgeHtml(s)}` +
                 `</div>`;
@@ -933,17 +1083,17 @@ html[data-theme="bright"] .sharesConfirmBackdrop{
             const wrap = document.createElement("div");
             wrap.className = "actions";
 
-            wrap.appendChild(makeActionButton("Copy link", "btn", async () => {
+            wrap.appendChild(makeActionButton(sharesT("sharesmgr.copy_link", null, "Copy link"), "btn", async () => {
                 const ok = await copyText(urlAbs);
-                toast(ok ? "ok" : "err", ok ? "Copied link." : "Copy failed.");
+                toast(ok ? "ok" : "err", ok ? sharesT("sharesmgr.copied_link", null, "Copied link.") : sharesT("sharesmgr.copy_failed", null, "Copy failed."));
             }));
 
-            wrap.appendChild(makeActionButton("Revoke", "btn btnDanger", async (e) => {
+            wrap.appendChild(makeActionButton(sharesT("sharesmgr.revoke", null, "Revoke"), "btn btnDanger", async (e) => {
                 const btn = e.currentTarget;
                 btn.disabled = true;
                 try {
                     await revokeShare(s.token);
-                    toast("ok", "Revoked.");
+                    toast("ok", sharesT("sharesmgr.revoked", null, "Revoked."));
                     await loadShares();
                 } catch (err) {
                     toast("err", String(err && err.message ? err.message : err));
@@ -966,7 +1116,7 @@ html[data-theme="bright"] .sharesConfirmBackdrop{
         if (!list.length) {
             renderEmpty(
                 tbodyPq,
-                "No Post-Quantum shares yet.",
+                sharesT("sharesmgr.no_pq_shares_yet", null, "No Post-Quantum shares yet."),
                 showTok ? 8 : 7
             );
             return;
@@ -1020,16 +1170,20 @@ html[data-theme="bright"] .sharesConfirmBackdrop{
 
             const recipient = firstPqRecipient(s);
             if (recipient && recipient.recipient_device_id) {
-                wrap.appendChild(makeActionButton("Rename recipient", "btn", async (e) => {
+                wrap.appendChild(makeActionButton(sharesT("sharesmgr.rename_recipient", null, "Rename recipient"), "btn", async (e) => {
                     const btn = e.currentTarget;
                     const curLabel = String(recipient.label || "").trim();
                     const curNote = String(recipient.note || "").trim();
 
-                    const newLabel = prompt("Recipient label", curLabel);
-                    if (newLabel === null) return;
+                    injectSharesConfirmCss();
+                    const edit = await sharesRecipientEditModal({
+                        label: curLabel,
+                        note: curNote
+                    });
+                    if (!edit) return;
 
-                    const newNote = prompt("Recipient note", curNote);
-                    if (newNote === null) return;
+                    const newLabel = edit.label;
+                    const newNote = edit.note;
 
                     btn.disabled = true;
                     try {
@@ -1037,7 +1191,7 @@ html[data-theme="bright"] .sharesConfirmBackdrop{
                             label: String(newLabel),
                             note: String(newNote)
                         });
-                        toast("ok", "Recipient updated.");
+                        toast("ok", sharesT("sharesmgr.recipient_updated", null, "Recipient updated."));
                         await loadShares();
                     } catch (err) {
                         toast("err", String(err && err.message ? err.message : err));
@@ -1048,18 +1202,18 @@ html[data-theme="bright"] .sharesConfirmBackdrop{
             }
 
             if (inviteAbs) {
-                wrap.appendChild(makeActionButton("Copy invite", "btn", async () => {
+                wrap.appendChild(makeActionButton(sharesT("sharesmgr.copy_invite", null, "Copy invite"), "btn", async () => {
                     const ok = await copyText(inviteAbs);
-                    toast(ok ? "ok" : "err", ok ? "Copied invite link." : "Copy failed.");
+                    toast(ok ? "ok" : "err", ok ? sharesT("sharesmgr.copied_invite", null, "Copied invite link.") : sharesT("sharesmgr.copy_failed", null, "Copy failed."));
                 }));
             }
 
-            wrap.appendChild(makeActionButton("Revoke", "btn btnDanger", async (e) => {
+            wrap.appendChild(makeActionButton(sharesT("sharesmgr.revoke", null, "Revoke"), "btn btnDanger", async (e) => {
                 const btn = e.currentTarget;
                 btn.disabled = true;
                 try {
                     await revokeShare(s.token);
-                    toast("ok", "Revoked.");
+                    toast("ok", sharesT("sharesmgr.revoked", null, "Revoked."));
                     await loadShares();
                 } catch (err) {
                     toast("err", String(err && err.message ? err.message : err));
@@ -1100,16 +1254,14 @@ html[data-theme="bright"] .sharesConfirmBackdrop{
 
         if (btnRevokeExpired) {
             const nExp = expiredShares(shares).length;
-            btnRevokeExpired.textContent = nExp ? `Revoke expired (${nExp})` : "Revoke expired";
+            btnRevokeExpired.textContent = nExp ? sharesT("sharesmgr.revoke_expired_count", { count: nExp }, "Revoke expired ({count})") : sharesT("sharesmgr.revoke_expired", null, "Revoke expired");
             btnRevokeExpired.disabled = (nExp === 0);
         }
 
         if (lastLoadedAt && statusLine) {
             const ageSec = Math.round((Date.now() - lastLoadedAt) / 1000);
             statusLine.textContent =
-                `Showing ${groups.standard.length + groups.workspace.length + groups.pq.length}/${shares.length}. ` +
-                `My shares ${groups.standard.length}. Workspace shares ${groups.workspace.length}. PQ shares ${groups.pq.length}. ` +
-                `Last refresh ${ageSec}s ago.`;
+                sharesT("sharesmgr.status_summary", { shown: groups.standard.length + groups.workspace.length + groups.pq.length, total: shares.length, standard: groups.standard.length, workspace: groups.workspace.length, pq: groups.pq.length, age: ageSec }, "Showing {shown}/{total}. My shares {standard}. Workspace shares {workspace}. PQ shares {pq}. Last refresh {age}s ago.");
         }
     }
 
@@ -1134,7 +1286,7 @@ html[data-theme="bright"] .sharesConfirmBackdrop{
     initSectionToggles();
     loadVersion();
     loadShares().catch(() => {
-        if (statusLine) statusLine.textContent = "Failed to load (network error).";
+        if (statusLine) statusLine.textContent = sharesT("sharesmgr.failed_network", null, "Failed to load (network error).");
         render();
     });
 })();

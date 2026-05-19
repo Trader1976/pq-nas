@@ -8,6 +8,7 @@
 
     <link rel="stylesheet" href="/static/theme.css" />
     <script src="/static/theme.js"></script>
+    <script src="/static/i18n.js?v=20260519-sharesmgr-i18n-1"></script>
 
     <link rel="stylesheet" href="./app.css" />
 </head>
@@ -17,18 +18,18 @@
         <div class="brand">
             <div class="logo">PQ</div>
             <div class="titles">
-                <div class="h1">Shares Manager</div>
+                <div class="h1" data-i18n="sharesmgr.title">Jakojen hallinta</div>
                 <div class="sub">
-                    Manage your share links.
+                    <span data-i18n="sharesmgr.subtitle">Hallitse jakolinkkejäsi.</span>
                     <span class="muted" id="appVersion"></span>
                 </div>
             </div>
         </div>
 
         <div class="topActions">
-            <button class="btn" id="btnRefresh">Refresh</button>
-            <button class="btn" id="btnRevokeExpired">Revoke expired</button>
-            <button class="btn btnGhost" id="btnClear">Clear</button>
+            <button class="btn" id="btnRefresh" data-i18n="common.refresh">Päivitä</button>
+            <button class="btn" id="btnRevokeExpired" data-i18n="sharesmgr.revoke_expired">Peru vanhentuneet</button>
+            <button class="btn btnGhost" id="btnClear" data-i18n="common.clear">Tyhjennä</button>
         </div>
     </header>
 
@@ -36,41 +37,41 @@
         <section class="card">
             <div class="cardTitle">
                 <div class="cardTitleLeft">
-                    <div class="cardTitleMain">Filters</div>
-                    <div class="cardTitleSub">These filters affect both sections below.</div>
+                    <div class="cardTitleMain" data-i18n="sharesmgr.filters">Suodattimet</div>
+                    <div class="cardTitleSub" data-i18n="sharesmgr.filters_help">Nämä suodattimet vaikuttavat kaikkiin alla oleviin osioihin.</div>
                 </div>
             </div>
 
             <div class="cardBody">
                 <div class="toolbar">
                     <div class="tool">
-                        <label class="lblSmall">Search</label>
-                        <input class="inp" id="q" placeholder="Filter by path, token, invite…" autocomplete="off" />
+                        <label class="lblSmall" data-i18n="common.search">Haku</label>
+                        <input class="inp" id="q" placeholder="Suodata polun, tokenin tai kutsun mukaan…" data-i18n-placeholder="sharesmgr.search_placeholder" autocomplete="off" />
                     </div>
 
                     <div class="tool">
-                        <label class="lblSmall">State</label>
+                        <label class="lblSmall" data-i18n="sharesmgr.state">Tila</label>
                         <select class="sel" id="state">
-                            <option value="all" selected>All</option>
-                            <option value="active">Active</option>
-                            <option value="expired">Expired</option>
-                            <option value="noexpiry">No expiry</option>
+                            <option value="all" selected data-i18n="common.all">Kaikki</option>
+                            <option value="active" data-i18n="sharesmgr.active">Aktiiviset</option>
+                            <option value="expired" data-i18n="sharesmgr.expired">Vanhentuneet</option>
+                            <option value="noexpiry" data-i18n="sharesmgr.no_expiry">Ei vanhenemista</option>
                         </select>
                     </div>
 
                     <div class="tool">
-                        <label class="lblSmall">Sort</label>
+                        <label class="lblSmall" data-i18n="common.sort">Järjestys</label>
                         <select class="sel" id="sort">
-                            <option value="created_desc" selected>Created (newest)</option>
-                            <option value="created_asc">Created (oldest)</option>
-                            <option value="expires_asc">Expires (soonest)</option>
-                            <option value="downloads_desc">Downloads (most)</option>
-                            <option value="path_asc">Path (A→Z)</option>
+                            <option value="created_desc" selected data-i18n="sharesmgr.sort.created_desc">Luotu (uusin)</option>
+                            <option value="created_asc" data-i18n="sharesmgr.sort.created_asc">Luotu (vanhin)</option>
+                            <option value="expires_asc" data-i18n="sharesmgr.sort.expires_asc">Vanhenee (pian ensin)</option>
+                            <option value="downloads_desc" data-i18n="sharesmgr.sort.downloads_desc">Lataukset (eniten)</option>
+                            <option value="path_asc" data-i18n="sharesmgr.sort.path_asc">Polku (A→Z)</option>
                         </select>
                     </div>
 
                     <div class="tool toolRight">
-                        <label class="lblSmall" for="showToken">Show token</label>
+                        <label class="lblSmall" for="showToken" data-i18n="sharesmgr.show_token">Näytä token</label>
                         <input type="checkbox" id="showToken" />
                     </div>
                 </div>
@@ -86,15 +87,15 @@
         <section class="card" id="standardCard">
             <div class="cardTitle">
                 <div class="cardTitleLeft">
-                    <div class="cardTitleMain">My shares</div>
-                    <div class="cardTitleSub">Regular share links using /s/&lt;token&gt;.</div>
+                    <div class="cardTitleMain" data-i18n="sharesmgr.my_shares">Omat jaot</div>
+                    <div class="cardTitleSub" data-i18n="sharesmgr.my_shares_help">Tavalliset jakolinkit muodossa /s/&lt;token&gt;.</div>
                 </div>
 
                 <div class="cardTitleRight">
                     <span class="pill" id="countPillStandard">0</span>
                     <button class="btn sectionToggle" id="btnToggleStandard" type="button" aria-expanded="true">
                         <span class="chev">▾</span>
-                        <span class="txt">Hide</span>
+                        <span class="txt" data-i18n="common.hide">Piilota</span>
                     </button>
                 </div>
             </div>
@@ -104,18 +105,18 @@
                     <table class="tbl">
                         <thead>
                         <tr>
-                            <th class="colPath">Path</th>
-                            <th class="colType">Type</th>
-                            <th class="colExp">Expires</th>
-                            <th class="colDl">Downloads</th>
-                            <th class="colCreated">Created</th>
-                            <th class="colUrl">URL</th>
-                            <th class="colToken hidden" id="thTokenStandard">Token</th>
-                            <th class="colAct">Actions</th>
+                            <th class="colPath"><span data-i18n="common.path">Polku</span></th>
+                            <th class="colType"><span data-i18n="common.type">Tyyppi</span></th>
+                            <th class="colExp"><span data-i18n="sharesmgr.expires">Vanhenee</span></th>
+                            <th class="colDl"><span data-i18n="sharesmgr.downloads">Lataukset</span></th>
+                            <th class="colCreated"><span data-i18n="common.created">Luotu</span></th>
+                            <th class="colUrl"><span data-i18n="sharesmgr.url">URL</span></th>
+                            <th class="colToken hidden" id="thTokenStandard"><span data-i18n="sharesmgr.token">Token</span></th>
+                            <th class="colAct"><span data-i18n="common.actions">Toiminnot</span></th>
                         </tr>
                         </thead>
                         <tbody id="tbodyStandard">
-                        <tr><td colspan="8" class="empty">Loading…</td></tr>
+                        <tr><td colspan="8" class="empty" data-i18n="common.loading">Ladataan…</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -124,15 +125,15 @@
         <section class="card hidden" id="workspaceCard">
             <div class="cardTitle">
                 <div class="cardTitleLeft">
-                    <div class="cardTitleMain">Workspace shares</div>
-                    <div class="cardTitleSub">Regular share links created from shared workspaces.</div>
+                    <div class="cardTitleMain" data-i18n="sharesmgr.workspace_shares">Työtilajaot</div>
+                    <div class="cardTitleSub" data-i18n="sharesmgr.workspace_shares_help">Jaetuista työtiloista luodut tavalliset jakolinkit.</div>
                 </div>
 
                 <div class="cardTitleRight">
                     <span class="pill" id="countPillWorkspace">0</span>
                     <button class="btn sectionToggle" id="btnToggleWorkspace" type="button" aria-expanded="true">
                         <span class="chev">▾</span>
-                        <span class="txt">Hide</span>
+                        <span class="txt" data-i18n="common.hide">Piilota</span>
                     </button>
                 </div>
             </div>
@@ -142,18 +143,18 @@
                     <table class="tbl">
                         <thead>
                         <tr>
-                            <th class="colPath">Path</th>
-                            <th class="colType">Type</th>
-                            <th class="colExp">Expires</th>
-                            <th class="colDl">Downloads</th>
-                            <th class="colCreated">Created</th>
-                            <th class="colUrl">URL</th>
-                            <th class="colToken hidden" id="thTokenWorkspace">Token</th>
-                            <th class="colAct">Actions</th>
+                            <th class="colPath"><span data-i18n="common.path">Polku</span></th>
+                            <th class="colType"><span data-i18n="common.type">Tyyppi</span></th>
+                            <th class="colExp"><span data-i18n="sharesmgr.expires">Vanhenee</span></th>
+                            <th class="colDl"><span data-i18n="sharesmgr.downloads">Lataukset</span></th>
+                            <th class="colCreated"><span data-i18n="common.created">Luotu</span></th>
+                            <th class="colUrl"><span data-i18n="sharesmgr.url">URL</span></th>
+                            <th class="colToken hidden" id="thTokenWorkspace"><span data-i18n="sharesmgr.token">Token</span></th>
+                            <th class="colAct"><span data-i18n="common.actions">Toiminnot</span></th>
                         </tr>
                         </thead>
                         <tbody id="tbodyWorkspace">
-                        <tr><td colspan="8" class="empty">Loading…</td></tr>
+                        <tr><td colspan="8" class="empty" data-i18n="common.loading">Ladataan…</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -162,15 +163,15 @@
         <section class="card" id="pqCard">
             <div class="cardTitle">
                 <div class="cardTitleLeft">
-                    <div class="cardTitleMain">PQ shares</div>
-                    <div class="cardTitleSub">Recipient-enrolled secure shares and invite links.</div>
+                    <div class="cardTitleMain" data-i18n="sharesmgr.pq_shares">PQ-jaot</div>
+                    <div class="cardTitleSub" data-i18n="sharesmgr.pq_shares_help">Vastaanottajalle rekisteröidyt suojatut jaot ja kutsulinkit.</div>
                 </div>
 
                 <div class="cardTitleRight">
                     <span class="pill" id="countPillPq">0</span>
                     <button class="btn sectionToggle" id="btnTogglePq" type="button" aria-expanded="true">
                         <span class="chev">▾</span>
-                        <span class="txt">Hide</span>
+                        <span class="txt" data-i18n="common.hide">Piilota</span>
                     </button>
                 </div>
             </div>
@@ -180,18 +181,18 @@
                     <table class="tbl">
                         <thead>
                         <tr>
-                            <th class="colPath">Path</th>
-                            <th class="colState">PQ state</th>
-                            <th class="colExp">Expires</th>
-                            <th class="colCreated">Created</th>
-                            <th class="colInvite">Invite URL</th>
-                            <th class="colUrl">Share URL</th>
-                            <th class="colToken hidden" id="thTokenPq">Token</th>
-                            <th class="colAct">Actions</th>
+                            <th class="colPath"><span data-i18n="common.path">Polku</span></th>
+                            <th class="colState"><span data-i18n="sharesmgr.pq_state">PQ-tila</span></th>
+                            <th class="colExp"><span data-i18n="sharesmgr.expires">Vanhenee</span></th>
+                            <th class="colCreated"><span data-i18n="common.created">Luotu</span></th>
+                            <th class="colInvite"><span data-i18n="sharesmgr.invite_url">Kutsu-URL</span></th>
+                            <th class="colUrl"><span data-i18n="sharesmgr.share_url">Jako-URL</span></th>
+                            <th class="colToken hidden" id="thTokenPq"><span data-i18n="sharesmgr.token">Token</span></th>
+                            <th class="colAct"><span data-i18n="common.actions">Toiminnot</span></th>
                         </tr>
                         </thead>
                         <tbody id="tbodyPq">
-                        <tr><td colspan="8" class="empty">Loading…</td></tr>
+                        <tr><td colspan="8" class="empty" data-i18n="common.loading">Ladataan…</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -200,6 +201,6 @@
     </main>
 </div>
 
-<script src="./app.js" defer></script>
+<script src="./app.js?v=20260519-sharesmgr-recipient-modal-2" defer></script>
 </body>
 </html>
