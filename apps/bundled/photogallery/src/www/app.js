@@ -2264,7 +2264,7 @@ html[data-theme="orange"] .pgTopModeBtnActive{
             }
 
             const s = document.createElement("script");
-            s.src = "./albums_view.js?v=11";
+            s.src = "./albums_view.js?v=20260519-pg-albums-view-i18n-1";
             s.async = false;
             s.dataset.pqnasAlbumsView = "1";
 

@@ -12,6 +12,22 @@
         opts: {}
     };
 
+    function albumT(key, params, fallback) {
+        try {
+            const api = window.PQNAS_I18N;
+            if (api && typeof api.t === "function") {
+                return api.t(key, params || null, fallback);
+            }
+        } catch (_) {}
+
+        let out = String(fallback || key || "");
+        const p = params || {};
+        for (const name of Object.keys(p)) {
+            out = out.split(`{${name}}`).join(String(p[name]));
+        }
+        return out;
+    }
+
     function escapeHtml(s) {
         return String(s || "")
             .replace(/&/g, "&amp;")
@@ -300,21 +316,21 @@
 
         const name = album.name || album.album_id;
         const ok = await openAlbumConfirmModal({
-            title: "Delete album?",
-            subtitle: "This removes the album collection only.",
+            title: albumT("photogallery.albums.delete_album_title", null, "Delete album?"),
+            subtitle: albumT("photogallery.albums.delete_album_subtitle", null, "This removes the album collection only."),
             rows: [
-                { label: "Album", value: name, mono: true },
+                { label: albumT("photogallery.albums.album", null, "Album"), value: name, mono: true },
             ],
-            note: "Photos stay in your gallery. Only the album container is deleted.",
-            confirmText: "Delete album",
-            cancelText: "Cancel",
+            note: albumT("photogallery.albums.delete_album_note", null, "Photos stay in your gallery. Only the album container is deleted."),
+            confirmText: albumT("photogallery.albums.delete_album", null, "Delete album"),
+            cancelText: albumT("common.cancel", null, "Cancel"),
             danger: true,
         });
         if (!ok) return;
 
         try {
             setBadge("warn", "working…");
-            setStatus(`Deleting album: ${name}…`);
+            setStatus(albumT("photogallery.albums.deleting_album", { album: name }, "Deleting album: {album}…"));
 
             await deleteAlbum(album.album_id);
 
@@ -326,10 +342,10 @@
             renderList(host);
 
             setBadge("ok", "ready");
-            setStatus(`Deleted album: ${name}`);
+            setStatus(albumT("photogallery.albums.deleted_album", { album: name }, "Deleted album: {album}"));
         } catch (e) {
             setBadge("err", "error");
-            setStatus(`Delete album failed: ${String(e && e.message ? e.message : e)}`);
+            setStatus(albumT("photogallery.albums.delete_failed", { error: String(e && e.message ? e.message : e) }, "Delete album failed: {error}"));
         }
     }
 
@@ -338,7 +354,7 @@
 
         try {
             setBadge("warn", "working…");
-            setStatus(`Setting album cover: ${basename(rel)}…`);
+            setStatus(albumT("photogallery.albums.setting_cover", { name: basename(rel) }, "Setting album cover: {name}…"));
 
             const r = await setCover(album.album_id, rel);
 
@@ -356,10 +372,10 @@
             renderAlbum(host);
 
             setBadge("ok", "ready");
-            setStatus(`Album cover set: ${basename(rel)}`);
+            setStatus(albumT("photogallery.albums.cover_set", { name: basename(rel) }, "Album cover set: {name}"));
         } catch (e) {
             setBadge("err", "error");
-            setStatus(`Set cover failed: ${String(e && e.message ? e.message : e)}`);
+            setStatus(albumT("photogallery.albums.set_cover_failed", { error: String(e && e.message ? e.message : e) }, "Set cover failed: {error}"));
         }
     }
     function existingAlbumShare(album) {
@@ -390,8 +406,8 @@
             shares.isShareExpired(share);
 
         return `
-        <div class="pgAlbumSharedBadge ${expired ? "expired" : ""}" title="${expired ? "Album share link expired" : "Album is shared"}">
-            ${expired ? "⏰ Expired" : "🔗 Shared"}
+        <div class="pgAlbumSharedBadge ${expired ? "expired" : ""}" title="${escapeHtml(expired ? albumT("photogallery.albums.share_expired_title", null, "Album share link expired") : albumT("photogallery.albums.shared_title", null, "Album is shared"))}">
+            ${escapeHtml(expired ? albumT("photogallery.albums.expired", null, "⏰ Expired") : albumT("photogallery.albums.shared", null, "🔗 Shared"))}
         </div>
     `;
     }
@@ -400,7 +416,7 @@
 
         const shares = window.PQNAS_PHOTOGALLERY?.shares;
         if (!shares || typeof shares.openForRelPath !== "function") {
-            setStatus("Share module is not loaded.");
+            setStatus(albumT("photogallery.share_module_not_loaded", null, "Share module is not loaded."));
             return;
         }
 
@@ -414,21 +430,21 @@
         if (!album || !album.album_id || !rel) return;
 
         const ok = await openAlbumConfirmModal({
-            title: "Remove from album?",
-            subtitle: "This removes the photo from this album only.",
+            title: albumT("photogallery.albums.remove_from_album_title", null, "Remove from album?"),
+            subtitle: albumT("photogallery.albums.remove_from_album_subtitle", null, "This removes the photo from this album only."),
             rows: [
-                { label: "Photo", value: rel, mono: true },
+                { label: albumT("photogallery.photo", null, "Photo"), value: rel, mono: true },
             ],
-            note: "The original photo stays in your gallery.",
-            confirmText: "Remove from album",
-            cancelText: "Cancel",
+            note: albumT("photogallery.albums.original_stays_note", null, "The original photo stays in your gallery."),
+            confirmText: albumT("photogallery.albums.remove_from_album", null, "Remove from album"),
+            cancelText: albumT("common.cancel", null, "Cancel"),
             danger: true,
         });
         if (!ok) return;
 
         try {
             setBadge("warn", "working…");
-            setStatus(`Removing ${basename(rel)} from album…`);
+            setStatus(albumT("photogallery.albums.removing_from_album", { name: basename(rel) }, "Removing {name} from album…"));
 
             await removeItems(album.album_id, [rel]);
             state.currentItems = await listItems(album.album_id);
@@ -440,10 +456,10 @@
             renderAlbum(host);
 
             setBadge("ok", "ready");
-            setStatus(`Removed from album: ${basename(rel)}`);
+            setStatus(albumT("photogallery.albums.removed_from_album_status", { name: basename(rel) }, "Removed from album: {name}"));
         } catch (e) {
             setBadge("err", "error");
-            setStatus(`Remove failed: ${String(e && e.message ? e.message : e)}`);
+            setStatus(albumT("photogallery.albums.remove_failed", { error: String(e && e.message ? e.message : e) }, "Remove failed: {error}"));
         }
     }
 
@@ -451,8 +467,8 @@
         const menu = ensureAlbumContextMenu();
         menu.innerHTML = "";
 
-        menu.appendChild(albumMenuItem("Create album…", () => createAlbumFromUi(host)));
-        menu.appendChild(albumMenuItem("Refresh albums", () => render(host, { force: true })));
+        menu.appendChild(albumMenuItem(albumT("photogallery.albums.create_album_ellipsis", null, "Create album…"), () => createAlbumFromUi(host)));
+        menu.appendChild(albumMenuItem(albumT("photogallery.albums.refresh_albums", null, "Refresh albums"), () => render(host, { force: true })));
 
         placeAlbumContextMenu(x, y);
     }
@@ -461,10 +477,10 @@
         const menu = ensureAlbumContextMenu();
         menu.innerHTML = "";
 
-        menu.appendChild(albumMenuItem("Open album", () => openAlbum(host, album)));
-        menu.appendChild(albumMenuItem("Share album…", () => shareAlbumFromUi(album)));
+        menu.appendChild(albumMenuItem(albumT("photogallery.albums.open_album", null, "Open album"), () => openAlbum(host, album)));
+        menu.appendChild(albumMenuItem(albumT("photogallery.albums.share_album", null, "Share album…"), () => shareAlbumFromUi(album)));
         menu.appendChild(albumMenuSep());
-        menu.appendChild(albumMenuItem("Delete album…", () => deleteAlbumFromUi(host, album), { danger: true }));
+        menu.appendChild(albumMenuItem(albumT("photogallery.albums.delete_album_ellipsis", null, "Delete album…"), () => deleteAlbumFromUi(host, album), { danger: true }));
 
         placeAlbumContextMenu(x, y);
     }
@@ -473,13 +489,13 @@
         const menu = ensureAlbumContextMenu();
         menu.innerHTML = "";
 
-        menu.appendChild(albumMenuItem("Back to albums", () => backToAlbumList(host)));
-        menu.appendChild(albumMenuItem("Refresh album", () => render(host, { force: true })));
+        menu.appendChild(albumMenuItem(albumT("photogallery.albums.back_to_albums", null, "Back to albums"), () => backToAlbumList(host)));
+        menu.appendChild(albumMenuItem(albumT("photogallery.albums.refresh_album", null, "Refresh album"), () => render(host, { force: true })));
 
         if (album && album.album_id) {
             menu.appendChild(albumMenuSep());
-            menu.appendChild(albumMenuItem("Share album…", () => shareAlbumFromUi(album)));
-            menu.appendChild(albumMenuItem("Delete album…", () => deleteAlbumFromUi(host, album), { danger: true }));
+            menu.appendChild(albumMenuItem(albumT("photogallery.albums.share_album", null, "Share album…"), () => shareAlbumFromUi(album)));
+            menu.appendChild(albumMenuItem(albumT("photogallery.albums.delete_album_ellipsis", null, "Delete album…"), () => deleteAlbumFromUi(host, album), { danger: true }));
         }
 
         placeAlbumContextMenu(x, y);
@@ -492,16 +508,16 @@
         const cover = album?.cover_path || album?.cover_logical_rel_path || "";
         const isCover = !!cover && cover === rel;
 
-        menu.appendChild(albumMenuItem("Open preview", () => openPreview(rel)));
+        menu.appendChild(albumMenuItem(albumT("photogallery.menu.open_preview", null, "Open preview"), () => openPreview(rel)));
 
         if (isCover) {
-            menu.appendChild(albumMenuItem("Cover photo", () => {}, { disabled: true }));
+            menu.appendChild(albumMenuItem(albumT("photogallery.albums.cover_photo", null, "Cover photo"), () => {}, { disabled: true }));
         } else {
-            menu.appendChild(albumMenuItem("Set as album cover", () => setAlbumCoverFromUi(host, album, rel)));
+            menu.appendChild(albumMenuItem(albumT("photogallery.albums.set_as_album_cover", null, "Set as album cover"), () => setAlbumCoverFromUi(host, album, rel)));
         }
 
         menu.appendChild(albumMenuSep());
-        menu.appendChild(albumMenuItem("Remove from album…", () => removeAlbumItemFromUi(host, album, rel), { danger: true }));
+        menu.appendChild(albumMenuItem(albumT("photogallery.albums.remove_from_album_ellipsis", null, "Remove from album…"), () => removeAlbumItemFromUi(host, album, rel), { danger: true }));
 
         placeAlbumContextMenu(x, y);
     }
@@ -600,7 +616,7 @@
             return;
         }
 
-        setStatus("Preview is not available from Albums view.");
+        setStatus(albumT("photogallery.albums.preview_not_available", null, "Preview is not available from Albums view."));
     }
 
     function toolbarHtml(title, sub, back = false, canDelete = false) {
@@ -611,11 +627,11 @@
                 <div class="pgAlbumsSub">${escapeHtml(sub || "")}</div>
             </div>
             <div class="pgAlbumsActions">
-                ${back ? `<button class="btn secondary" type="button" data-pg-albums-back="1">Albums</button>` : ""}
-                ${back ? `<button class="btn secondary" type="button" data-pg-albums-share="1">Share album…</button>` : ""}
-                <button class="btn secondary" type="button" data-pg-albums-refresh="1">Refresh</button>
-                <button class="btn" type="button" data-pg-albums-create="1">Create album…</button>
-                ${canDelete ? `<button class="btn secondary pgAlbumDangerBtn" type="button" data-pg-albums-delete="1">Delete album…</button>` : ""}
+                ${back ? `<button class="btn secondary" type="button" data-pg-albums-back="1">${escapeHtml(albumT("photogallery.albums.albums", null, "Albums"))}</button>` : ""}
+                ${back ? `<button class="btn secondary" type="button" data-pg-albums-share="1">${escapeHtml(albumT("photogallery.albums.share_album", null, "Share album…"))}</button>` : ""}
+                <button class="btn secondary" type="button" data-pg-albums-refresh="1">${escapeHtml(albumT("common.refresh", null, "Refresh"))}</button>
+                <button class="btn" type="button" data-pg-albums-create="1">${escapeHtml(albumT("photogallery.albums.create_album_ellipsis", null, "Create album…"))}</button>
+                ${canDelete ? `<button class="btn secondary pgAlbumDangerBtn" type="button" data-pg-albums-delete="1">${escapeHtml(albumT("photogallery.albums.delete_album_ellipsis", null, "Delete album…"))}</button>` : ""}
             </div>
         </div>
     `;
@@ -623,7 +639,7 @@
 
     function renderEmpty(host, title, msg) {
         host.innerHTML = `
-            ${toolbarHtml("Albums", "Saved photo collections")}
+            ${toolbarHtml(albumT("photogallery.albums.albums", null, "Albums"), albumT("photogallery.albums.saved_photo_collections", null, "Saved photo collections"))}
             <div class="pgAlbumsEmpty">
                 <div class="h">${escapeHtml(title)}</div>
                 <div class="p">${escapeHtml(msg)}</div>
@@ -635,11 +651,11 @@
     }
 
     function albumCardHtml(album) {
-        const name = album.name || "Untitled album";
+        const name = album.name || albumT("photogallery.albums.untitled_album", null, "Untitled album");
         const desc = album.description || "";
         const count = Number(album.item_count || 0);
         const cover = album.cover_path || album.cover_logical_rel_path || "";
-        const photoLabel = `${count} photo${count === 1 ? "" : "s"}`;
+        const photoLabel = albumT("photogallery.albums.photo_count", { count }, "{count} photo(s)");
 
         const emptySvg = `
             <span class="pgAlbumCoverEmpty">
@@ -651,7 +667,7 @@
                     <path class="pgAlbumSvgMountain" d="M42 82 L68 58 L86 74 L102 52 L130 82 Z"></path>
                     <path class="pgAlbumSvgLine" d="M48 101 H132"></path>
                 </svg>
-                <span class="pgAlbumCoverHint">Empty album</span>
+                <span class="pgAlbumCoverHint">${escapeHtml(albumT("photogallery.albums.empty_album", null, "Empty album"))}</span>
             </span>
         `;
 
@@ -665,15 +681,15 @@
             <span class="pgAlbumCardInner">
                 <span class="pgAlbumCover">
                     ${coverHtml}
-                    <span class="pgAlbumCoverType">Album</span>
+                    <span class="pgAlbumCoverType">${escapeHtml(albumT("photogallery.albums.album", null, "Album"))}</span>
                     <span class="pgAlbumCoverCount">▦ ${escapeHtml(photoLabel)}</span>
                 </span>
     
                 <span class="pgAlbumCardBody">
-                    <span class="pgAlbumKicker">Photo album</span>
+                    <span class="pgAlbumKicker">${escapeHtml(albumT("photogallery.albums.photo_album", null, "Photo album"))}</span>
                     <span class="pgAlbumName">${escapeHtml(shorten(name, 80))}</span>
-                    <span class="pgAlbumDesc">${escapeHtml(shorten(desc || "No description", 120))}</span>
-                    <span class="pgAlbumMeta">${escapeHtml(photoLabel)} · collection</span>
+                    <span class="pgAlbumDesc">${escapeHtml(shorten(desc || albumT("photogallery.albums.no_description", null, "No description"), 120))}</span>
+                    <span class="pgAlbumMeta">${escapeHtml(albumT("photogallery.albums.meta_collection", { count: photoLabel }, "{count} · collection"))}</span>
                 </span>
             </span>
         </button>
@@ -682,12 +698,12 @@
 
     function renderList(host) {
         if (!state.albums.length) {
-            renderEmpty(host, "No albums yet", "Create an album, then add selected photos into it.");
+            renderEmpty(host, albumT("photogallery.albums.none_yet_title", null, "No albums yet"), albumT("photogallery.albums.none_yet_help", null, "Create an album, then add selected photos into it."));
             return;
         }
 
         host.innerHTML = `
-            ${toolbarHtml("Albums", `${state.albums.length} album${state.albums.length === 1 ? "" : "s"}`)}
+            ${toolbarHtml(albumT("photogallery.albums.albums", null, "Albums"), albumT("photogallery.albums.album_count", { count: state.albums.length }, "{count} album(s)"))}
             <div class="pgAlbumsGrid">
                 ${state.albums.map(albumCardHtml).join("")}
             </div>
@@ -714,7 +730,7 @@
             <div class="pgAlbumPhoto" data-pg-album-path="${escapeHtml(rel)}">
                 <button class="pgAlbumThumbBtn" type="button" data-pg-open-photo="${escapeHtml(rel)}">
                     <img class="pgAlbumThumb" src="${escapeHtml(thumbUrl(rel))}" alt="">
-                    ${isCover ? `<span class="pgAlbumCoverBadge">Cover</span>` : ""}
+                    ${isCover ? `<span class="pgAlbumCoverBadge">${escapeHtml(albumT("photogallery.albums.cover", null, "Cover"))}</span>` : ""}
                 </button>
                 <div class="pgAlbumPhotoBody">
                     <div class="pgAlbumPhotoName" title="${escapeHtml(rel)}">${escapeHtml(shorten(basename(rel), 48))}</div>
@@ -725,8 +741,8 @@
                             type="button"
                             data-pg-set-cover="${escapeHtml(rel)}"
                             ${isCover ? "disabled" : ""}
-                        >${isCover ? "Cover photo" : "Set as cover"}</button>
-                        <button class="btn secondary pgAlbumRemoveBtn" type="button" data-pg-remove-photo="${escapeHtml(rel)}">Remove</button>
+                        >${escapeHtml(isCover ? albumT("photogallery.albums.cover_photo", null, "Cover photo") : albumT("photogallery.albums.set_as_cover", null, "Set as cover"))}</button>
+                        <button class="btn secondary pgAlbumRemoveBtn" type="button" data-pg-remove-photo="${escapeHtml(rel)}">${escapeHtml(albumT("photogallery.albums.remove", null, "Remove"))}</button>
                     </div>
                 </div>
             </div>
@@ -744,11 +760,11 @@
         }
 
         host.innerHTML = `
-            ${toolbarHtml(album.name || "Album", `${items.length} photo${items.length === 1 ? "" : "s"} · ${album.description || ""}`, true, true)}
+            ${toolbarHtml(album.name || albumT("photogallery.albums.album", null, "Album"), albumT("photogallery.albums.detail_subtitle", { count: items.length, description: album.description || "" }, "{count} photo(s) · {description}"), true, true)}
             ${
             items.length
                 ? `<div class="pgAlbumPhotos">${items.map((item) => albumItemHtml(item, album)).join("")}</div>`
-                : `<div class="pgAlbumsEmpty"><div class="h">Album is empty</div><div class="p">Select photos in Grid view and choose “Add selected to album…”.</div></div>`
+                : `<div class="pgAlbumsEmpty"><div class="h">${escapeHtml(albumT("photogallery.albums.album_is_empty", null, "Album is empty"))}</div><div class="p">${escapeHtml(albumT("photogallery.albums.empty_album_help", null, "Select photos in Grid view and choose “Add selected to album…”."))}</div></div>`
         }
         `;
 
@@ -777,7 +793,7 @@
         });
     }
     function openCreateAlbumModal(opts = {}) {
-        const defaultName = String(opts.defaultName || "New album");
+        const defaultName = String(opts.defaultName || albumT("photogallery.albums.new_album", null, "New album"));
 
         return new Promise((resolve) => {
             const backdrop = document.createElement("div");
@@ -786,31 +802,31 @@
             <div class="pgAlbumPickerCard" role="dialog" aria-modal="true">
                 <div class="pgAlbumPickerHead">
                     <div>
-                        <div class="pgAlbumPickerTitle">Create album</div>
-                        <div class="pgAlbumPickerSub">Create a new photo collection</div>
+                        <div class="pgAlbumPickerTitle">${escapeHtml(albumT("photogallery.albums.create_album", null, "Create album"))}</div>
+                        <div class="pgAlbumPickerSub">${escapeHtml(albumT("photogallery.albums.create_new_photo_collection", null, "Create a new photo collection"))}</div>
                     </div>
-                    <button class="btn secondary" type="button" data-pg-create-close>Close</button>
+                    <button class="btn secondary" type="button" data-pg-create-close>${escapeHtml(albumT("common.close", null, "Close"))}</button>
                 </div>
 
                 <div class="pgAlbumPickerBody">
                     <div class="formGrid">
-                        <div class="label">Name</div>
+                        <div class="label">${escapeHtml(albumT("photogallery.albums.name", null, "Name"))}</div>
                         <div>
                             <input
                                 class="field"
                                 type="text"
                                 data-pg-create-name
-                                placeholder="Album name"
+                                placeholder="${escapeHtml(albumT("photogallery.albums.album_name_placeholder", null, "Album name"))}"
                                 value="${escapeHtml(defaultName)}"
                             >
                         </div>
 
-                        <div class="label">Description</div>
+                        <div class="label">${escapeHtml(albumT("photogallery.description", null, "Description"))}</div>
                         <div>
                             <textarea
                                 class="textarea"
                                 data-pg-create-description
-                                placeholder="Optional description"
+                                placeholder="${escapeHtml(albumT("photogallery.description_placeholder", null, "Optional description"))}"
                                 style="min-height:90px;"
                             ></textarea>
                         </div>
@@ -818,8 +834,8 @@
                 </div>
 
                 <div class="pgAlbumPickerFoot">
-                    <button class="btn secondary" type="button" data-pg-create-cancel>Cancel</button>
-                    <button class="btn" type="button" data-pg-create-ok>Create album</button>
+                    <button class="btn secondary" type="button" data-pg-create-cancel>${escapeHtml(albumT("common.cancel", null, "Cancel"))}</button>
+                    <button class="btn" type="button" data-pg-create-ok>${escapeHtml(albumT("photogallery.albums.create_album", null, "Create album"))}</button>
                 </div>
             </div>
         `;
@@ -909,16 +925,16 @@
     async function openAlbum(host, album) {
         try {
             setBadge("warn", "loading…");
-            setStatus(`Opening album: ${album.name || album.album_id}`);
+            setStatus(albumT("photogallery.albums.opening_album", { album: album.name || album.album_id }, "Opening album: {album}"));
             state.mode = "album";
             state.currentAlbum = album;
             state.currentItems = await listItems(album.album_id);
             renderAlbum(host);
             setBadge("ok", "ready");
-            setStatus(`Album: ${album.name || album.album_id}`);
+            setStatus(albumT("photogallery.albums.album_status", { album: album.name || album.album_id }, "Album: {album}"));
         } catch (e) {
             setBadge("err", "error");
-            setStatus(`Album load failed: ${String(e && e.message ? e.message : e)}`);
+            setStatus(albumT("photogallery.albums.load_failed_status", { error: String(e && e.message ? e.message : e) }, "Album load failed: {error}"));
         }
     }
 
@@ -932,8 +948,8 @@
 
         host.innerHTML = `
             <div class="pgAlbumsEmpty">
-                <div class="h">Loading albums…</div>
-                <div class="p">Reading saved photo collections.</div>
+                <div class="h">${escapeHtml(albumT("photogallery.albums.loading", null, "Loading albums…"))}</div>
+                <div class="p">${escapeHtml(albumT("photogallery.albums.reading_saved_collections", null, "Reading saved photo collections."))}</div>
             </div>
         `;
 
@@ -970,16 +986,16 @@
             }
 
             setBadge("ok", "ready");
-            setStatus("Albums ready.");
+            setStatus(albumT("photogallery.albums.ready", null, "Albums ready."));
         } catch (e) {
             host.innerHTML = `
                 <div class="pgAlbumsEmpty">
-                    <div class="h">Albums failed to load</div>
+                    <div class="h">${escapeHtml(albumT("photogallery.albums.failed_to_load", null, "Albums failed to load"))}</div>
                     <div class="p">${escapeHtml(String(e && e.message ? e.message : e))}</div>
                 </div>
             `;
             setBadge("err", "error");
-            setStatus(`Albums failed: ${String(e && e.message ? e.message : e)}`);
+            setStatus(albumT("photogallery.albums.failed_status", { error: String(e && e.message ? e.message : e) }, "Albums failed: {error}"));
         } finally {
             state.loading = false;
         }
@@ -988,48 +1004,32 @@
     async function addSelected(paths) {
         paths = Array.isArray(paths) ? paths.filter(Boolean) : [];
         if (!paths.length) {
-            setStatus("Select one or more photos first.");
+            setStatus(albumT("photogallery.albums.select_photos_first", null, "Select one or more photos first."));
             return;
         }
 
         try {
-            let albums = await listAlbums();
+            let album = null;
 
-            if (!albums.length) {
-                const name = prompt("No albums yet. Create album name:", "New album");
-                if (!name || !name.trim()) return;
-
-                const created = await createAlbum(name.trim(), "");
-                if (created && created.album) {
-                    albums = [created.album];
-                } else {
-                    albums = await listAlbums();
-                }
+            if (window.PQNAS_PHOTOGALLERY?.albumsPicker?.open) {
+                album = await window.PQNAS_PHOTOGALLERY.albumsPicker.open({
+                    photoCount: paths.length
+                });
+            } else {
+                throw new Error(albumT("photogallery.albums.picker_not_loaded", null, "albums picker module not loaded"));
             }
 
-            const lines = albums.map((a, i) => `${i + 1}. ${a.name || a.album_id}`).join("\n");
-            const choice = prompt(
-                `Add ${paths.length} photo${paths.length === 1 ? "" : "s"} to which album?\n\n${lines}\n\nType number, or type a new album name:`,
-                "1"
-            );
-
-            if (!choice || !choice.trim()) return;
-
-            let album = null;
-            const n = Number(choice.trim());
-            if (Number.isInteger(n) && n >= 1 && n <= albums.length) {
-                album = albums[n - 1];
-            } else {
-                const created = await createAlbum(choice.trim(), "");
-                album = created.album || null;
+            if (!album) {
+                setStatus(albumT("photogallery.albums.add_cancelled", null, "Add to album cancelled."));
+                return;
             }
 
             if (!album || !album.album_id) {
-                throw new Error("album not selected");
+                throw new Error(albumT("photogallery.albums.album_not_selected", null, "album not selected"));
             }
 
             setBadge("warn", "working…");
-            setStatus(`Adding ${paths.length} photo${paths.length === 1 ? "" : "s"} to album…`);
+            setStatus(albumT("photogallery.albums.adding_to_album", { count: paths.length }, "Adding {count} photo(s) to album…"));
 
             await addItems(album.album_id, paths);
 
@@ -1040,10 +1040,10 @@
             }
 
             setBadge("ok", "ready");
-            setStatus(`Added ${paths.length} photo${paths.length === 1 ? "" : "s"} to album: ${album.name || album.album_id}`);
+            setStatus(albumT("photogallery.albums.added_to_album", { count: paths.length, album: album.name || album.album_id }, "Added {count} photo(s) to album: {album}"));
         } catch (e) {
             setBadge("err", "error");
-            setStatus(`Add to album failed: ${String(e && e.message ? e.message : e)}`);
+            setStatus(albumT("photogallery.albums.add_failed", { error: String(e && e.message ? e.message : e) }, "Add to album failed: {error}"));
         }
     }
 
