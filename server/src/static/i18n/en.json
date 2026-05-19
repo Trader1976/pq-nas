@@ -1888,5 +1888,19 @@
   "raidmgr.destroy.type_destroy_to_confirm": "Type DESTROY to confirm.",
   "raidmgr.destroy.started": "Destroy started…",
   "raidmgr.destroy.failed": "Destroy failed: {error}",
-  "raidmgr.destroy.ui_crashed": "Destroy UI crashed: {error}"
+  "raidmgr.destroy.ui_crashed": "Destroy UI crashed: {error}",
+  "admin.users.cleanup_prompt_subtitle": "User is currently active on {pool}. Choose the old pool copy to remove.",
+  "admin.users.old_pool_placeholder_default": "default or old pool id",
+  "admin.users.cleanup_prompt_note": "Enter the inactive old pool id to delete. The active pool is protected.",
+  "admin.users.cleanup_failed_detail": "Cleanup failed: {error}",
+  "admin.users.already_allocated_title": "Storage is already allocated",
+  "admin.users.already_allocated_subtitle": "Change this user's storage pool or quota anyway?",
+  "admin.users.new_pool": "New pool",
+  "admin.users.already_allocated_note": "This updates an existing storage allocation instead of creating a new one.",
+  "admin.users.change_storage": "Change storage",
+  "admin.users.avatar_remove_confirm_title": "Remove this user's avatar?",
+  "admin.users.avatar_remove_confirm_subtitle": "The profile will return to the default generated avatar.",
+  "admin.users.avatar_remove_confirm_note": "This removes the uploaded avatar image reference from this user profile.",
+  "admin.users.remove_avatar": "Remove avatar",
+  "admin.users.selected_user": "Selected user"
 }

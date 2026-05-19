@@ -1905,5 +1905,19 @@
   "raidmgr.destroy.type_destroy_to_confirm": "Kirjoita DESTROY vahvistaaksesi.",
   "raidmgr.destroy.started": "Tuhoaminen käynnistetty…",
   "raidmgr.destroy.failed": "Tuhoaminen epäonnistui: {error}",
-  "raidmgr.destroy.ui_crashed": "Tuhoamisikkuna kaatui: {error}"
+  "raidmgr.destroy.ui_crashed": "Tuhoamisikkuna kaatui: {error}",
+  "admin.users.cleanup_prompt_subtitle": "Käyttäjä on tällä hetkellä aktiivinen poolissa {pool}. Valitse poistettava vanha poolikopio.",
+  "admin.users.old_pool_placeholder_default": "default tai vanha poolin tunnus",
+  "admin.users.cleanup_prompt_note": "Anna poistettavan passiivisen vanhan poolin tunnus. Aktiivinen pooli on suojattu.",
+  "admin.users.cleanup_failed_detail": "Siivous epäonnistui: {error}",
+  "admin.users.already_allocated_title": "Tallennus on jo varattu",
+  "admin.users.already_allocated_subtitle": "Muutetaanko tämän käyttäjän tallennuspoolia tai kiintiötä silti?",
+  "admin.users.new_pool": "Uusi pooli",
+  "admin.users.already_allocated_note": "Tämä päivittää olemassa olevan tallennusvarauksen uuden luomisen sijaan.",
+  "admin.users.change_storage": "Muuta tallennusta",
+  "admin.users.avatar_remove_confirm_title": "Poistetaanko tämän käyttäjän avatar?",
+  "admin.users.avatar_remove_confirm_subtitle": "Profiili palaa oletuksena luotuun avatariin.",
+  "admin.users.avatar_remove_confirm_note": "Tämä poistaa ladatun avatar-kuvan viittauksen käyttäjäprofiilista.",
+  "admin.users.remove_avatar": "Poista avatar",
+  "admin.users.selected_user": "Valittu käyttäjä"
 }

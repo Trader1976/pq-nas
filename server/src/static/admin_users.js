@@ -1382,7 +1382,7 @@ async function submitMigrationFromModal() {
 async function submitCleanupOldCopy(fp) {
     const cur = allUsers.find(x => String(x.fingerprint || "") === String(fp)) || {};
     if (String(cur.storage_state || "").toLowerCase() !== "allocated") {
-        alert(tr("admin.users.storage_required_migration", null, "Storage must be allocated before cleanup."));
+        showToast(tr("admin.users.storage_required_migration", null, "Storage must be allocated before cleanup."), 7000);
         return;
     }
 
@@ -1398,14 +1398,14 @@ async function submitCleanupOldCopy(fp) {
             null;
         const cleanupActivePool = cleanupUser ? storagePoolIdForUser(cleanupUser) : "default";
         const cleanupUserLabel = cleanupUser
-            ? String(cleanupUser.name || cleanupUser.email || cleanupUser.fingerprint || "Selected user")
-            : ((typeof fp !== "undefined" && fp) ? String(fp) : "Selected user");
+            ? String(cleanupUser.name || cleanupUser.email || cleanupUser.fingerprint || tr("admin.users.selected_user", null, "Selected user"))
+            : ((typeof fp !== "undefined" && fp) ? String(fp) : tr("admin.users.selected_user", null, "Selected user"));
 
         oldPoolId = await openAdminUsersPromptModal({
             title: tr("admin.users.cleanup_title", null, "Cleanup old storage copy?"),
             subtitle: tr("admin.users.cleanup_sub", null, "Choose the old pool copy to remove for this user."),
             rows: [
-                { label: "User", value: cleanupUserLabel, mono: true },
+                { label: tr("admin.users.user", null, "User"), value: cleanupUserLabel, mono: true },
                 { label: tr("admin.users.active_pool", null, "Active pool"), value: cleanupActivePool, mono: true },
             ],
             label: tr("admin.users.old_pool_id", null, "Old pool id"),
@@ -1422,17 +1422,33 @@ async function submitCleanupOldCopy(fp) {
             },
         }) || "";
     } else {
-        oldPoolId = prompt(
-            tr("admin.users.cleanup_prompt", { pool: activePoolId }, `Cleanup old copy from which pool?\n\nUser is currently active on ${activePoolId}.\nEnter old pool id to delete, or use "default" if the stale copy is there.`),
-            "default"
-        ) || "";
+        oldPoolId = await openAdminUsersPromptModal({
+            title: tr("admin.users.cleanup_title", null, "Cleanup old storage copy?"),
+            subtitle: tr("admin.users.cleanup_prompt_subtitle", { pool: activePoolId }, `User is currently active on ${activePoolId}. Choose the old pool copy to remove.`),
+            rows: [
+                { label: tr("admin.users.user", null, "User"), value: String(cur.name || cur.email || cur.username || fp || ""), mono: true },
+                { label: tr("admin.users.active_pool", null, "Active pool"), value: activePoolId, mono: true },
+            ],
+            label: tr("admin.users.old_pool_id", null, "Old pool id"),
+            value: "default",
+            placeholder: tr("admin.users.old_pool_placeholder_default", null, "default or old pool id"),
+            note: tr("admin.users.cleanup_prompt_note", null, "Enter the inactive old pool id to delete. The active pool is protected."),
+            confirmText: tr("admin.users.continue_cleanup", null, "Continue cleanup"),
+            cancelText: tr("admin.users.cancel", null, "Cancel"),
+            warn: true,
+            validate(value) {
+                if (value === activePoolId) return tr("admin.users.old_pool_active_error", null, "Old pool id cannot be the active pool.");
+                if (value.includes("/") || value.includes("\\")) return tr("admin.users.pool_id_not_path", null, "Use a pool id, not a path.");
+                return "";
+            },
+        }) || "";
     }
 
     oldPoolId = String(oldPoolId).trim();
     if (!oldPoolId) return;
 
     if (oldPoolId === activePoolId) {
-        alert(tr("admin.users.old_pool_must_differ", null, "Old pool must differ from the active pool."));
+        showToast(tr("admin.users.old_pool_must_differ", null, "Old pool must differ from the active pool."), 7000);
         return;
     }
 
@@ -1477,7 +1493,7 @@ async function submitCleanupOldCopy(fp) {
         setMsg(tr("admin.users.cleanup_queued", null, "Cleanup queued"));
         await pollCleanupJob(jobId, fp);
     } catch (e) {
-        alert(tr("admin.users.cleanup_failed", null, "Cleanup failed") + ": " + (e?.message || e));
+        showToast(tr("admin.users.cleanup_failed_detail", { error: e?.message || e }, "Cleanup failed: " + (e?.message || e)), 15000);
         setMsg("Error: " + (e?.message || e));
     }
 }
@@ -1502,7 +1518,21 @@ async function submitAllocationFromModal() {
     const force = isAllocated;
 
     if (isAllocated) {
-        if (!confirm(tr("admin.users.already_allocated_confirm", null, "Storage is already allocated for this user.\n\nChange pool/quota anyway?"))) return;
+        const targetUser = allUsers.find(x => String(x.fingerprint || "") === fp) || {};
+        const ok = await openAdminUsersConfirmModal({
+            title: tr("admin.users.already_allocated_title", null, "Storage is already allocated"),
+            subtitle: tr("admin.users.already_allocated_subtitle", null, "Change this user's storage pool or quota anyway?"),
+            rows: [
+                { label: tr("admin.users.user", null, "User"), value: String(targetUser.name || targetUser.email || fp), mono: true },
+                { label: tr("admin.users.current_pool", null, "Current pool"), value: storagePoolIdForUser(targetUser), mono: true },
+                { label: tr("admin.users.new_pool", null, "New pool"), value: pool_id || "default", mono: true },
+            ],
+            note: tr("admin.users.already_allocated_note", null, "This updates an existing storage allocation instead of creating a new one."),
+            confirmText: tr("admin.users.change_storage", null, "Change storage"),
+            cancelText: tr("admin.users.cancel", null, "Cancel"),
+            danger: false,
+        });
+        if (!ok) return;
     }
 
     try {
@@ -1848,7 +1878,7 @@ ${detailRow}
 
             const isSelf = actorFp && fp === actorFp;
             if (isSelf && (act === "enable" || act === "disable" || act === "revoke" || act === "delete")) {
-                alert(tr("admin.users.refuse_self", null, "Refusing to modify your own admin entry (prevents lockout or role change)."));
+                showToast(tr("admin.users.refuse_self", null, "Refusing to modify your own admin entry (prevents lockout or role change)."), 9000);
                 return;
             }
 
@@ -1890,7 +1920,7 @@ ${detailRow}
                     setMsg(tr("admin.users.enabled", null, "Enabled"));
                     showToast(tr("admin.users.user_enabled", null, "User enabled"));
                 } catch (e) {
-                    alert(tr("admin.users.failed", { error: e.message }, "Failed: " + e.message));
+                    showToast(tr("admin.users.failed", { error: e.message }, "Failed: " + e.message), 15000);
                     setMsg(tr("admin.users.error", { error: e.message }, "Error: " + e.message));
                 }
                 return;
@@ -1904,7 +1934,7 @@ ${detailRow}
             if (act === "migrate") {
                 const cur = allUsers.find(x => String(x.fingerprint || "") === String(fp)) || {};
                 if (String(cur.storage_state || "").toLowerCase() !== "allocated") {
-                    alert(tr("admin.users.storage_required_migration", null, "Storage must be allocated before migration."));
+                    showToast(tr("admin.users.storage_required_migration", null, "Storage must be allocated before migration."), 7000);
                     return;
                 }
                 openMigrateModal(fp, cur);
@@ -1945,7 +1975,7 @@ ${detailRow}
                 setMsg(tr("admin.users.saved", null, "Saved"));
                 showToast(tr("admin.users.status_saved", { status: statusLabel(status) }, `User status: ${status}`));
             } catch (e) {
-                alert(tr("admin.users.failed", { error: e.message }, "Failed: " + e.message));
+                showToast(tr("admin.users.failed", { error: e.message }, "Failed: " + e.message), 15000);
                 setMsg(tr("admin.users.error", { error: e.message }, "Error: " + e.message));
             }
         });
@@ -2032,7 +2062,19 @@ window.addEventListener("load", async () => {
     });
     $("avatarRemoveBtn")?.addEventListener("click", async () => {
         if (!avatarModalFp) return;
-        if (!confirm("Remove this user's avatar?")) return;
+
+        const ok = await openAdminUsersConfirmModal({
+            title: tr("admin.users.avatar_remove_confirm_title", null, "Remove this user's avatar?"),
+            subtitle: tr("admin.users.avatar_remove_confirm_subtitle", null, "The profile will return to the default generated avatar."),
+            rows: [
+                { label: tr("admin.users.fingerprint", null, "Fingerprint"), value: avatarModalFp, mono: true },
+            ],
+            note: tr("admin.users.avatar_remove_confirm_note", null, "This removes the uploaded avatar image reference from this user profile."),
+            confirmText: tr("admin.users.remove_avatar", null, "Remove avatar"),
+            cancelText: tr("admin.users.cancel", null, "Cancel"),
+            danger: true,
+        });
+        if (!ok) return;
 
         try {
             setMsg(tr("admin.users.removing_avatar", null, "Removing avatar…"));
@@ -2043,7 +2085,7 @@ window.addEventListener("load", async () => {
             showToast(tr("admin.users.avatar_removed", null, "Avatar removed"));
         } catch (e) {
             setMsg(tr("admin.users.error", { error: e.message }, "Error: " + e.message));
-            alert(tr("admin.users.remove_failed", { error: e.message }, "Remove failed: " + e.message));
+            showToast(tr("admin.users.remove_failed", { error: e.message }, "Remove failed: " + e.message), 15000);
         }
     });
 
@@ -2088,7 +2130,6 @@ window.addEventListener("load", async () => {
         } catch (e) {
             const msg = tr("admin.users.upload_failed", { error: e?.message || e }, "Upload failed: " + (e?.message || e));
             setMsg("Error: " + (e?.message || e));
-            alert(msg);
             showToast(msg, 15000);
         } finally {
             $("avatar_file").value = "";
