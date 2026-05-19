@@ -4,32 +4,33 @@
   <meta charset="utf-8">
   <title>DNA-Nexus • Drop Zone</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="/static/i18n.js?v=20260519-dropzone-i18n-1"></script>
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
 <main class="dzShell">
   <section class="dzHero">
     <div>
-      <div class="dzKicker">DNA-Nexus Server</div>
+      <div class="dzKicker" data-i18n="dropzone.kicker">DNA-Nexus Server</div>
       <h1>Drop Zone <span id="appVersion" class="appVersion"></span></h1>
-      <p>
+      <p data-i18n="dropzone.hero_text">
         Secure one-way upload links for outsiders. They can upload files,
         but they cannot browse, download, rename, or delete anything.
       </p>
     </div>
 
     <button id="createBtn" class="dzPrimary" type="button">
-      Create Drop Zone
+      <span data-i18n="dropzone.create">Create Drop Zone</span>
     </button>
   </section>
 
   <section class="dzPanel">
     <div class="dzPanelHead">
       <div>
-        <h2>Active Drop Zones</h2>
-        <p id="statusLine">Loading…</p>
+        <h2 data-i18n="dropzone.active_title">Active Drop Zones</h2>
+        <p id="statusLine" data-i18n="common.loading">Loading…</p>
       </div>
-      <button id="refreshBtn" class="dzGhost" type="button">Refresh</button>
+      <button id="refreshBtn" class="dzGhost" type="button" data-i18n="common.refresh">Refresh</button>
     </div>
 
     <div id="zonesList" class="dzList"></div>
@@ -42,45 +43,45 @@
   <section class="dzModalCard" role="dialog" aria-modal="true" aria-labelledby="createTitle">
     <div class="dzModalHead">
       <div>
-        <h2 id="createTitle">Create Drop Zone</h2>
-        <p>Generate a secure one-way upload link.</p>
+        <h2 id="createTitle" data-i18n="dropzone.create">Create Drop Zone</h2>
+        <p data-i18n="dropzone.create_help">Generate a secure one-way upload link.</p>
       </div>
-      <button id="modalCloseBtn" class="dzIconBtn" type="button" aria-label="Close">×</button>
+      <button id="modalCloseBtn" class="dzIconBtn" type="button" aria-label="Close" data-i18n-aria-label="dropzone.close">×</button>
     </div>
 
     <form id="createForm" class="dzForm">
       <label>
-        Name
-        <input id="zoneNameInput" name="name" type="text" maxlength="120" placeholder="Customer files">
+        <span data-i18n="dropzone.name">Name</span>
+        <input id="zoneNameInput" name="name" type="text" maxlength="120" placeholder="Customer files" data-i18n-placeholder="dropzone.placeholder.customer_files">
       </label>
 
       <label>
-        Destination folder
-        <input id="destInput" name="destination_path" type="text" placeholder="Incoming/Drop Zones/Customer files">
+        <span data-i18n="dropzone.destination_folder">Destination folder</span>
+        <input id="destInput" name="destination_path" type="text" placeholder="Incoming/Drop Zones/Customer files" data-i18n-placeholder="dropzone.placeholder.destination">
       </label>
 
       <div class="dzGrid2">
         <label>
-          Expires in
+          <span data-i18n="dropzone.expires_in">Expires in</span>
           <select id="expiryInput" name="expires_in_seconds">
-            <option value="3600">1 hour</option>
-            <option value="86400" selected>24 hours</option>
-            <option value="604800">7 days</option>
-            <option value="2592000">30 days</option>
+            <option value="3600" data-i18n="dropzone.expiry.1h">1 hour</option>
+            <option value="86400" selected data-i18n="dropzone.expiry.24h">24 hours</option>
+            <option value="604800" data-i18n="dropzone.expiry.7d">7 days</option>
+            <option value="2592000" data-i18n="dropzone.expiry.30d">30 days</option>
           </select>
         </label>
 
         <label>
-          Password <span class="dzHint">optional</span>
-          <input id="passwordInput" name="password" type="password" placeholder="Not wired for public uploads yet">
+          <span data-i18n="dropzone.password">Password</span> <span class="dzHint" data-i18n="dropzone.optional">optional</span>
+          <input id="passwordInput" name="password" type="password" placeholder="Not wired for public uploads yet" data-i18n-placeholder="dropzone.placeholder.password">
         </label>
       </div>
 
       <div class="dzGrid2">
         <label>
-          Max file size
+          <span data-i18n="dropzone.max_file_size">Max file size</span>
           <select id="maxFileInput" name="max_file_bytes">
-            <option value="0" selected>No limit</option>
+            <option value="0" selected data-i18n="dropzone.no_limit">No limit</option>
             <option value="104857600">100 MiB</option>
             <option value="1073741824">1 GiB</option>
             <option value="5368709120">5 GiB</option>
@@ -89,9 +90,9 @@
         </label>
 
         <label>
-          Max total upload
+          <span data-i18n="dropzone.max_total_upload">Max total upload</span>
           <select id="maxTotalInput" name="max_total_bytes">
-            <option value="0" selected>No limit</option>
+            <option value="0" selected data-i18n="dropzone.no_limit">No limit</option>
             <option value="1073741824">1 GiB</option>
             <option value="5368709120">5 GiB</option>
             <option value="10737418240">10 GiB</option>
@@ -103,13 +104,13 @@
       <div id="createResult" class="dzCreateResult hidden"></div>
 
       <div class="dzModalActions">
-        <button id="cancelCreateBtn" class="dzGhost" type="button">Cancel</button>
-        <button id="submitCreateBtn" class="dzPrimary" type="submit">Create link</button>
+        <button id="cancelCreateBtn" class="dzGhost" type="button" data-i18n="dropzone.cancel">Cancel</button>
+        <button id="submitCreateBtn" class="dzPrimary" type="submit" data-i18n="dropzone.create_link">Create link</button>
       </div>
     </form>
   </section>
 </div>
 
-<script src="./app.js"></script>
+<script src="./app.js?v=20260519-dropzone-full-i18n-1"></script>
 </body>
 </html>

@@ -3186,6 +3186,7 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
   <meta charset="utf-8">
   <title>DNA-Nexus • Drop Zone</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="/static/i18n.js?v=20260519-dz-public-i18n-1"></script>
   <style>
     :root {
       color-scheme: dark;
@@ -3334,6 +3335,40 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
       margin-top: 16px;
     }
 
+    .fileInputNative {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .filePickerRow {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: center;
+      text-align: left;
+    }
+
+    .filePickerButton {
+      margin-top: 0;
+      white-space: nowrap;
+    }
+
+    .filePickerName {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 11px 12px;
+      background: rgba(0,0,0,.25);
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     button {
       margin-top: 16px;
       border: 0;
@@ -3426,9 +3461,9 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
 <body>
   <main class="shell">
     <section class="hero">
-      <div class="kicker">DNA-Nexus Drop Zone</div>
-      <h1>Secure upload area</h1>
-      <p class="sub">
+      <div class="kicker" data-i18n="dropzone.public.kicker">DNA-Nexus Drop Zone</div>
+      <h1 data-i18n="dropzone.public.title">Secure upload area</h1>
+      <p class="sub" data-i18n="dropzone.public.hero_text">
         You can upload files here. You cannot browse, download, rename,
         or delete anything on this server.
       </p>
@@ -3436,41 +3471,45 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
 
     <section class="body">
       <div id="status" class="status">
-        <div class="title">Checking Drop Zone…</div>
-        <div class="meta">Please wait.</div>
+        <div class="title" data-i18n="dropzone.public.checking">Checking Drop Zone…</div>
+        <div class="meta" data-i18n="dropzone.public.please_wait">Please wait.</div>
       </div>
 
       <div id="uploadBox" class="uploadBox" style="display:none">
-        <strong>Select files to upload</strong>
-        <span>Files are uploaded one-by-one into this Drop Zone.</span>
+        <strong data-i18n="dropzone.public.select_files">Select files to upload</strong>
+        <span data-i18n="dropzone.public.upload_help">Files are uploaded one-by-one into this Drop Zone.</span>
 
         <div id="passwordBox" class="fieldGrid" style="display:none">
           <label>
-            Drop Zone password
-            <input id="zonePassword" type="password" maxlength="200" placeholder="Password">
+            <span data-i18n="dropzone.public.password">Drop Zone password</span>
+            <input id="zonePassword" type="password" maxlength="200" placeholder="Password" data-i18n-placeholder="dropzone.public.password_placeholder">
           </label>
         </div>
 
         <div class="fieldGrid">
           <label>
-            Your name <em>optional</em>
-            <input id="uploaderName" type="text" maxlength="80" placeholder="Name">
+            <span><span data-i18n="dropzone.public.your_name">Your name</span> <em data-i18n="dropzone.optional">optional</em></span>
+            <input id="uploaderName" type="text" maxlength="80" placeholder="Name" data-i18n-placeholder="dropzone.public.name_placeholder">
           </label>
 
           <label>
-            Message <em>optional</em>
-            <input id="uploaderMessage" type="text" maxlength="160" placeholder="Short note">
+            <span><span data-i18n="dropzone.public.message">Message</span> <em data-i18n="dropzone.optional">optional</em></span>
+            <input id="uploaderMessage" type="text" maxlength="160" placeholder="Short note" data-i18n-placeholder="dropzone.public.short_note">
           </label>
         </div>
 
-        <input id="fileInput" class="fileInput" type="file" multiple>
-        <button id="uploadBtn" type="button">Upload selected files</button>
+        <input id="fileInput" class="fileInputNative" type="file" multiple>
+        <div class="filePickerRow">
+          <button id="filePickBtn" class="filePickerButton" type="button" data-i18n="dropzone.public.choose_files">Choose files</button>
+          <span id="filePickName" class="filePickerName" data-i18n="dropzone.public.no_file_chosen">No file chosen</span>
+        </div>
+        <button id="uploadBtn" type="button" data-i18n="dropzone.public.upload_selected">Upload selected files</button>
 
         <div id="uploadLog" class="uploadLog"></div>
 
         <div id="uploadedListBox" class="uploadedListBox">
-          <div class="uploadedListTitle">Already uploaded</div>
-          <div id="uploadedList" class="uploadedList muted">Loading…</div>
+          <div class="uploadedListTitle" data-i18n="dropzone.public.already_uploaded">Already uploaded</div>
+          <div id="uploadedList" class="uploadedList muted" data-i18n="common.loading">Loading…</div>
         </div>
       </div>
     </section>
@@ -3480,9 +3519,44 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
     const TOKEN = ")HTML") + token + R"HTML(";
     let CURRENT_INFO = null;
 
+    function tr(key, params, fallback) {
+      try {
+        const api = window.PQNAS_I18N;
+        if (api && typeof api.t === "function") {
+          return api.t(key, params || null, fallback);
+        }
+      } catch (_) {}
+
+      let out = String(fallback || key || "");
+      const p = params || {};
+      for (const name of Object.keys(p)) {
+        out = out.split(`{${name}}`).join(String(p[name]));
+      }
+      return out;
+    }
+
+    function zoneName(info) {
+      return info && info.name ? info.name : tr("dropzone.default_name", null, "Drop Zone");
+    }
+
+    function publicStatusLines(info) {
+      return [
+        tr("dropzone.public.expires_in_line", { value: fmtRemaining(info && info.seconds_remaining) }, `Expires in: ${fmtRemaining(info && info.seconds_remaining)}`),
+        tr("dropzone.public.max_file_size_line", { value: fmtBytes(info && info.max_file_bytes) }, `Max file size: ${fmtBytes(info && info.max_file_bytes)}`),
+        tr("dropzone.public.total_limit_line", { value: fmtBytes(info && info.max_total_bytes) }, `Total limit: ${fmtBytes(info && info.max_total_bytes)}`),
+        tr("dropzone.public.uploaded_so_far_line", {
+          bytes: fmtBytes(info && info.bytes_uploaded),
+          count: Number(info && info.upload_count || 0)
+        }, `Uploaded so far: ${fmtBytes(info && info.bytes_uploaded)} in ${Number(info && info.upload_count || 0)} file(s)`),
+        info && info.password_required
+          ? tr("dropzone.public.password_required", null, "Password required")
+          : tr("dropzone.public.no_password_required", null, "No password required")
+      ];
+    }
+
     function fmtBytes(n) {
       n = Number(n || 0);
-      if (!Number.isFinite(n) || n <= 0) return "No limit";
+      if (!Number.isFinite(n) || n <= 0) return tr("dropzone.no_limit", null, "No limit");
       const units = ["B", "KB", "MB", "GB", "TB"];
       let i = 0;
       while (n >= 1024 && i < units.length - 1) {
@@ -3494,7 +3568,7 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
 
     function fmtRemaining(sec) {
       sec = Number(sec || 0);
-      if (sec <= 0) return "Expired";
+      if (sec <= 0) return tr("dropzone.public.expired", null, "Expired");
       const d = Math.floor(sec / 86400);
       const h = Math.floor((sec % 86400) / 3600);
       const m = Math.floor((sec % 3600) / 60);
@@ -3529,8 +3603,25 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
     function setUploadBusy(on) {
       const btn = document.getElementById("uploadBtn");
       const input = document.getElementById("fileInput");
+      const pickBtn = document.getElementById("filePickBtn");
       if (btn) btn.disabled = !!on;
       if (input) input.disabled = !!on;
+      if (pickBtn) pickBtn.disabled = !!on;
+    }
+
+    function updateFilePickLabel() {
+      const input = document.getElementById("fileInput");
+      const label = document.getElementById("filePickName");
+      if (!input || !label) return;
+
+      const count = input.files ? input.files.length : 0;
+      if (count <= 0) {
+        label.textContent = tr("dropzone.public.no_file_chosen", null, "No file chosen");
+      } else if (count === 1) {
+        label.textContent = input.files[0] ? input.files[0].name : tr("dropzone.public.one_file_selected", null, "1 file selected");
+      } else {
+        label.textContent = tr("dropzone.public.files_selected", { count }, `${count} files selected`);
+      }
     }
 
     async function postDropZoneUploadJson(url, body) {
@@ -3576,9 +3667,9 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
           else onProgress(e.loaded, blob.size || 0);
         };
 
-        xhr.ontimeout = () => reject(new Error("upload chunk failed: timeout"));
-        xhr.onerror = () => reject(new Error("upload chunk failed: network error"));
-        xhr.onabort = () => reject(new Error("upload chunk aborted"));
+        xhr.ontimeout = () => reject(new Error(tr("dropzone.public.chunk_timeout", null, "upload chunk failed: timeout")));
+        xhr.onerror = () => reject(new Error(tr("dropzone.public.chunk_network", null, "upload chunk failed: network error")));
+        xhr.onabort = () => reject(new Error(tr("dropzone.public.chunk_aborted", null, "upload chunk aborted")));
 
         xhr.onload = () => {
           const status = xhr.status || 0;
@@ -3641,7 +3732,7 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
         const chunksTotal = Math.max(0, Number(start.chunks_total || Math.ceil(size / chunkSize)));
 
         if (!uploadId || chunksTotal < 1) {
-          throw new Error("invalid chunked upload session");
+          throw new Error(tr("dropzone.public.invalid_session", null, "invalid chunked upload session"));
         }
 
         for (let index = 0; index < chunksTotal; index++) {
@@ -3696,12 +3787,12 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
       const log = document.getElementById("uploadLog");
 
       if (!input || !input.files || input.files.length === 0) {
-        appendUploadLog("fail", "Select one or more files first.");
+        appendUploadLog("fail", tr("dropzone.public.select_files_first", null, "Select one or more files first."));
         return;
       }
 
       if (!CURRENT_INFO || CURRENT_INFO.ok === false) {
-        appendUploadLog("fail", "Drop Zone is not ready.");
+        appendUploadLog("fail", tr("dropzone.public.not_ready", null, "Drop Zone is not ready."));
         return;
       }
 
@@ -3712,7 +3803,7 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
       const password = currentPassword();
 
       if (CURRENT_INFO.password_required && !password) {
-        appendUploadLog("fail", "Enter the Drop Zone password first.");
+        appendUploadLog("fail", tr("dropzone.public.enter_password", null, "Enter the Drop Zone password first."));
         return;
       }
 
@@ -3724,32 +3815,32 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
       try {
         for (const file of Array.from(input.files)) {
           if (!file || Number(file.size || 0) <= 0) {
-            appendUploadLog("fail", `${file && file.name ? file.name : "file"}: skipped, empty files are not supported.`);
+            appendUploadLog("fail", tr("dropzone.public.empty_file_skipped", { name: file && file.name ? file.name : tr("dropzone.public.file", null, "file") }, `${file && file.name ? file.name : "file"}: skipped, empty files are not supported.`));
             continue;
           }
 
           if (maxFile > 0 && file.size > maxFile) {
-            appendUploadLog("fail", `${file.name}: skipped, file is larger than ${fmtBytes(maxFile)}.`);
+            appendUploadLog("fail", tr("dropzone.public.file_too_large", { name: file.name, max: fmtBytes(maxFile) }, `${file.name}: skipped, file is larger than ${fmtBytes(maxFile)}.`));
             continue;
           }
 
           if (maxTotal > 0 && localUploaded + file.size > maxTotal) {
-            appendUploadLog("fail", `${file.name}: skipped, total Drop Zone limit would be exceeded.`);
+            appendUploadLog("fail", tr("dropzone.public.total_limit_would_exceed", { name: file.name }, `${file.name}: skipped, total Drop Zone limit would be exceeded.`));
             continue;
           }
 
-          const row = appendUploadLog("", `${file.name}: starting chunked upload…`);
+          const row = appendUploadLog("", tr("dropzone.public.starting_upload", { name: file.name }, `${file.name}: starting chunked upload…`));
 
           try {
             const result = await uploadFileChunkedToDropZone(file, uploader, message, password, (loaded, total, ctx) => {
               const pct = total > 0 ? Math.min(100, Math.max(0, (loaded / total) * 100)) : 0;
               const chunkText = ctx && ctx.chunksTotal
-                ? `chunk ${(ctx.chunkIndex || 0) + 1}/${ctx.chunksTotal}`
-                : "chunk";
+                ? tr("dropzone.public.chunk_progress", { index: (ctx.chunkIndex || 0) + 1, total: ctx.chunksTotal }, `chunk ${(ctx.chunkIndex || 0) + 1}/${ctx.chunksTotal}`)
+                : tr("dropzone.public.chunk", null, "chunk");
 
               if (row) {
                 row.className = "uploadRow";
-                row.textContent = `${file.name}: ${pct.toFixed(1)}% (${fmtBytes(loaded)} / ${fmtBytes(total)}), ${chunkText}`;
+                row.textContent = tr("dropzone.public.upload_progress", { name: file.name, percent: pct.toFixed(1), loaded: fmtBytes(loaded), total: fmtBytes(total), chunk: chunkText }, `${file.name}: ${pct.toFixed(1)}% (${fmtBytes(loaded)} / ${fmtBytes(total)}), ${chunkText}`);
               }
             });
 
@@ -3757,16 +3848,16 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
 
             if (row) {
               row.className = "uploadRow ok";
-              row.textContent = `${file.name}: uploaded as ${result.stored_filename || file.name} (${fmtBytes(result.size_bytes || file.size)})`;
+              row.textContent = tr("dropzone.public.uploaded_as", { name: file.name, stored: result.stored_filename || file.name, size: fmtBytes(result.size_bytes || file.size) }, `${file.name}: uploaded as ${result.stored_filename || file.name} (${fmtBytes(result.size_bytes || file.size)})`);
             } else {
-              appendUploadLog("ok", `${file.name}: uploaded (${fmtBytes(result.size_bytes || file.size)})`);
+              appendUploadLog("ok", tr("dropzone.public.uploaded", { name: file.name, size: fmtBytes(result.size_bytes || file.size) }, `${file.name}: uploaded (${fmtBytes(result.size_bytes || file.size)})`));
             }
           } catch (e) {
             if (row) {
               row.className = "uploadRow fail";
-              row.textContent = `${file.name}: failed — ${e && e.message ? e.message : String(e)}`;
+              row.textContent = tr("dropzone.public.failed", { name: file.name, error: e && e.message ? e.message : String(e) }, `${file.name}: failed — ${e && e.message ? e.message : String(e)}`);
             } else {
-              appendUploadLog("fail", `${file.name}: failed — ${e && e.message ? e.message : String(e)}`);
+              appendUploadLog("fail", tr("dropzone.public.failed", { name: file.name, error: e && e.message ? e.message : String(e) }, `${file.name}: failed — ${e && e.message ? e.message : String(e)}`));
             }
           }
         }
@@ -3779,13 +3870,7 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
 
         if (info && info.ok) {
           CURRENT_INFO = info;
-          setStatus("good", info.name || "Drop Zone", [
-            `Expires in: ${fmtRemaining(info.seconds_remaining)}`,
-            `Max file size: ${fmtBytes(info.max_file_bytes)}`,
-            `Total limit: ${fmtBytes(info.max_total_bytes)}`,
-            `Uploaded so far: ${fmtBytes(info.bytes_uploaded)} in ${info.upload_count || 0} file(s)`,
-            info.password_required ? "Password required" : "No password required"
-          ]);
+          setStatus("good", zoneName(info), publicStatusLines(info));
         }
 
         await refreshUploadedList();
@@ -3814,7 +3899,7 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
       if (CURRENT_INFO && CURRENT_INFO.password_required) {
         const pwd = currentPassword();
         if (!pwd) {
-          box.textContent = "Enter password to show uploaded files.";
+          box.textContent = tr("dropzone.public.enter_password_to_show", null, "Enter password to show uploaded files.");
           return;
         }
         headers["X-DropZone-Password"] = pwd;
@@ -3828,7 +3913,7 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
         const json = await res.json().catch(() => null);
 
         if (!res.ok || !json || json.ok === false) {
-          box.textContent = "Could not load uploaded file list.";
+          box.textContent = tr("dropzone.public.uploaded_list_failed", null, "Could not load uploaded file list.");
           return;
         }
 
@@ -3836,7 +3921,7 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
         box.innerHTML = "";
 
         if (!uploads.length) {
-          box.textContent = "No files uploaded yet.";
+          box.textContent = tr("dropzone.public.no_files_uploaded", null, "No files uploaded yet.");
           return;
         }
 
@@ -3845,7 +3930,7 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
           row.className = "uploadedItem";
 
           const name = document.createElement("strong");
-          name.textContent = item.stored_filename || "uploaded file";
+          name.textContent = item.stored_filename || tr("dropzone.public.uploaded_file", null, "uploaded file");
 
           const meta = document.createElement("span");
           const parts = [];
@@ -3855,7 +3940,7 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
           if (when) parts.push(when);
 
           if (item.uploader_name) {
-            parts.push(`from ${item.uploader_name}`);
+            parts.push(tr("dropzone.public.from_uploader", { name: item.uploader_name }, `from ${item.uploader_name}`));
           }
 
           meta.textContent = parts.join(" • ");
@@ -3865,7 +3950,7 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
           box.appendChild(row);
         }
       } catch (e) {
-        box.textContent = "Could not load uploaded file list.";
+        box.textContent = tr("dropzone.public.uploaded_list_failed", null, "Could not load uploaded file list.");
       }
     }
 
@@ -3899,17 +3984,11 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
             ? (json.message || json.error)
             : `HTTP ${res.status}`;
 
-          setStatus("bad", "Drop Zone unavailable", [msg]);
+          setStatus("bad", tr("dropzone.public.unavailable", null, "Drop Zone unavailable"), [msg]);
           return;
         }
 
-        setStatus("good", json.name || "Drop Zone", [
-          `Expires in: ${fmtRemaining(json.seconds_remaining)}`,
-          `Max file size: ${fmtBytes(json.max_file_bytes)}`,
-          `Total limit: ${fmtBytes(json.max_total_bytes)}`,
-          `Uploaded so far: ${fmtBytes(json.bytes_uploaded)} in ${json.upload_count || 0} file(s)`,
-          json.password_required ? "Password required" : "No password required"
-        ]);
+        setStatus("good", zoneName(json), publicStatusLines(json));
 
         CURRENT_INFO = json;
         document.getElementById("uploadBox").style.display = "";
@@ -3919,14 +3998,19 @@ srv.Put(R"(/api/public/dropzones/([A-Za-z0-9_-]{20,160})/uploads/chunk)",
         }
         await refreshUploadedList();
       } catch (e) {
-        setStatus("bad", "Could not load Drop Zone", [
+        setStatus("bad", tr("dropzone.public.load_failed", null, "Could not load Drop Zone"), [
           String(e && e.message ? e.message : e)
         ]);
       }
     }
 
+    document.getElementById("filePickBtn")?.addEventListener("click", () => {
+      document.getElementById("fileInput")?.click();
+    });
+    document.getElementById("fileInput")?.addEventListener("change", updateFilePickLabel);
     document.getElementById("uploadBtn")?.addEventListener("click", uploadSelectedFiles);
 
+    updateFilePickLabel();
     main();
   </script>
 </body>
