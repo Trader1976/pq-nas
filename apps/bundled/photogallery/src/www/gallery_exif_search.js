@@ -4,6 +4,31 @@
     const PG = window.PQNAS_PHOTOGALLERY || {};
     const el = (id) => document.getElementById(id);
 
+    function exifT(key, params, fallback) {
+        try {
+            const api = window.PQNAS_I18N;
+            if (api && typeof api.t === "function") {
+                return api.t(key, params || null, fallback);
+            }
+        } catch (_) {}
+
+        let out = String(fallback || key || "");
+        const p = params || {};
+        for (const name of Object.keys(p)) {
+            out = out.split(`{${name}}`).join(String(p[name]));
+        }
+        return out;
+    }
+
+    function escapeHtml(s) {
+        return String(s || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
     const filterInput = el("filterInput");
     if (!filterInput || typeof PG.registerSearchFilterProvider !== "function") return;
 
@@ -15,7 +40,7 @@
     btn.type = "button";
     btn.className = "btn secondary";
     btn.textContent = "EXIF";
-    btn.title = "Advanced EXIF search";
+    btn.title = exifT("photogallery.exif.advanced_search", null, "Advanced EXIF search");
 
     if (anchor && anchor.parentNode) {
         anchor.parentNode.insertBefore(btn, anchor);
@@ -29,49 +54,49 @@
     panel.innerHTML = `
         <div class="exifSearchHead">
             <div>
-                <div class="exifSearchTitle">Advanced EXIF search</div>
-                <div class="exifSearchSub">Filter photos by camera, lens, ISO, GPS, and capture date.</div>
+                <div class="exifSearchTitle">${escapeHtml(exifT("photogallery.exif.advanced_search", null, "Advanced EXIF search"))}</div>
+                <div class="exifSearchSub">${escapeHtml(exifT("photogallery.exif.search_subtitle", null, "Filter photos by camera, lens, ISO, GPS, and capture date."))}</div>
             </div>
-            <button id="exifSearchClearBtn" class="btn secondary" type="button">Clear EXIF filters</button>
+            <button id="exifSearchClearBtn" class="btn secondary" type="button">${escapeHtml(exifT("photogallery.exif.clear_filters", null, "Clear EXIF filters"))}</button>
         </div>
 
         <div class="exifSearchGrid">
             <label>
-                <span>Camera make</span>
-                <input id="exifMakeInput" class="input" type="text" placeholder="Panasonic, Samsung, Canon…">
+                <span>${escapeHtml(exifT("photogallery.exif.camera_make", null, "Camera make"))}</span>
+                <input id="exifMakeInput" class="input" type="text" placeholder="${escapeHtml(exifT("photogallery.exif.placeholder.make", null, "Panasonic, Samsung, Canon…"))}">
             </label>
 
             <label>
-                <span>Camera model</span>
-                <input id="exifModelInput" class="input" type="text" placeholder="DMC-G7, GT-I9505…">
+                <span>${escapeHtml(exifT("photogallery.exif.camera_model", null, "Camera model"))}</span>
+                <input id="exifModelInput" class="input" type="text" placeholder="${escapeHtml(exifT("photogallery.exif.placeholder.model", null, "DMC-G7, GT-I9505…"))}">
             </label>
 
             <label>
-                <span>Lens</span>
-                <input id="exifLensInput" class="input" type="text" placeholder="Lumix, 25mm, Leica…">
+                <span>${escapeHtml(exifT("photogallery.exif.lens", null, "Lens"))}</span>
+                <input id="exifLensInput" class="input" type="text" placeholder="${escapeHtml(exifT("photogallery.exif.placeholder.lens", null, "Lumix, 25mm, Leica…"))}">
             </label>
 
             <label>
-                <span>ISO</span>
-                <input id="exifIsoInput" class="input" type="text" placeholder="200 or 100-800 or 200,400">
+                <span>${escapeHtml(exifT("photogallery.exif.iso", null, "ISO"))}</span>
+                <input id="exifIsoInput" class="input" type="text" placeholder="${escapeHtml(exifT("photogallery.exif.placeholder.iso", null, "200 or 100-800 or 200,400"))}">
             </label>
 
             <label>
-                <span>GPS</span>
+                <span>${escapeHtml(exifT("photogallery.exif.gps", null, "GPS"))}</span>
                 <select id="exifGpsSelect" class="input">
-                    <option value="">Any</option>
-                    <option value="yes">Has GPS</option>
-                    <option value="no">No GPS</option>
+                    <option value="">${escapeHtml(exifT("photogallery.exif.gps_any", null, "Any"))}</option>
+                    <option value="yes">${escapeHtml(exifT("photogallery.exif.gps_yes", null, "Has GPS"))}</option>
+                    <option value="no">${escapeHtml(exifT("photogallery.exif.gps_no", null, "No GPS"))}</option>
                 </select>
             </label>
 
             <label>
-                <span>Taken from</span>
+                <span>${escapeHtml(exifT("photogallery.exif.taken_from", null, "Taken from"))}</span>
                 <input id="exifDateFromInput" class="input" type="date">
             </label>
 
             <label>
-                <span>Taken to</span>
+                <span>${escapeHtml(exifT("photogallery.exif.taken_to", null, "Taken to"))}</span>
                 <input id="exifDateToInput" class="input" type="date">
             </label>
         </div>
@@ -162,13 +187,13 @@
         const v = getValues();
         const bits = [];
 
-        if (v.make) bits.push(`make:${v.make}`);
-        if (v.model) bits.push(`model:${v.model}`);
-        if (v.lens) bits.push(`lens:${v.lens}`);
-        if (v.iso) bits.push(`ISO:${v.iso}`);
-        if (v.gps === "yes") bits.push("GPS");
-        if (v.gps === "no") bits.push("no GPS");
-        if (v.from || v.to) bits.push(`date:${v.from || "…"}–${v.to || "…"}`);
+        if (v.make) bits.push(`${exifT("photogallery.exif.summary.make", null, "make")}:${v.make}`);
+        if (v.model) bits.push(`${exifT("photogallery.exif.summary.model", null, "model")}:${v.model}`);
+        if (v.lens) bits.push(`${exifT("photogallery.exif.summary.lens", null, "lens")}:${v.lens}`);
+        if (v.iso) bits.push(`${exifT("photogallery.exif.summary.iso", null, "ISO")}:${v.iso}`);
+        if (v.gps === "yes") bits.push(exifT("photogallery.exif.summary.gps", null, "GPS"));
+        if (v.gps === "no") bits.push(exifT("photogallery.exif.summary.no_gps", null, "no GPS"));
+        if (v.from || v.to) bits.push(`${exifT("photogallery.exif.summary.date", null, "date")}:${v.from || "…"}–${v.to || "…"}`);
 
         return bits.length ? `EXIF ${bits.join(" ")}` : "";
     }
